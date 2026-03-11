@@ -140,7 +140,18 @@ async def notify_kevin(submission: dict, qualify_result: dict):
                         "Content-Type": "application/json",
                         "Prefer": "return=minimal"
                     },
-                    json=notification
+                    json={
+                        "client_name": notification.get("client_name"),
+                        "client_email": notification.get("client_email"),
+                        "organization": submission.get("organization", ""),
+                        "business_type": submission.get("business_type", ""),
+                        "readiness_score": qualify_result.get("readinessScore", 0),
+                        "draft_email": qualify_result.get("responseBody", ""),
+                        "internal_notes": qualify_result.get("internalNotes", ""),
+                        "urgency": qualify_result.get("urgencySignals", [""]),
+                        "status": "pending",
+                        "raw_answers": submission
+                    }
                 )
         except Exception as e:
             print(f"Supabase write failed: {e}")
@@ -170,7 +181,13 @@ async def netlify_form_webhook(request: Request, background_tasks: BackgroundTas
     if not submission:
         raise HTTPException(status_code=400, detail="No form data received")
     
-    print(f"📬 New form submission: {submission.get('name', 'Unknown')}")
+    # Normalize field names from preflight form
+    if 'client_name' in submission and 'name' not in submission:
+        submission['name'] = submission['client_name']
+    if 'email' not in submission and 'client_email' in submission:
+        submission['email'] = submission['client_email']
+
+    print(f"📬 New form submission: {submission.get('name', submission.get('client_name', 'Unknown'))}")
     
     # Run qualification in background — don't make Netlify wait
     background_tasks.add_task(process_lead, dict(submission))
@@ -326,6 +343,246 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     scheduler.shutdown()
+
+
+
+# ─────────────────────────────────────────────────────────────
+# STRATEGIC PULSE — live web research briefing
+# ─────────────────────────────────────────────────────────────
+
+@app.post("/pulse")
+async def run_pulse(request: Request):
+    """
+    Strategic Pulse Agent v2 — with live web search + observation context.
+    Called automatically by Solutionist Studio on app open (morning window).
+    Reads accumulated observations from the observer layer.
+    Returns full briefing JSON.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    owner_name      = data.get("ownerName", "Kevin")
+    business_name   = data.get("businessName", "KMJ Creative Solutions")
+    income_this_month   = data.get("incomeThisMonth", 0)
+    income_goal         = data.get("incomeGoal", 7000)
+    active_projects     = data.get("activeProjects", 0)
+    total_projects      = data.get("totalProjects", 0)
+    completed_projects  = data.get("completedProjects", 0)
+    pending_proposals   = data.get("pendingProposals", 0)
+    pending_invoices    = data.get("pendingInvoices", 0)
+    invoices_past_due   = data.get("invoicesPastDue", 0)
+    queue_item_count    = data.get("queueItemCount", 0)
+    high_urgency_count  = data.get("highUrgencyCount", 0)
+    recent_clients      = data.get("recentClients", [])
+    top_package         = data.get("topPackage", "")
+    avg_project_value   = data.get("avgProjectValue", 0)
+    days_into_month     = data.get("daysIntoMonth", 1)
+    api_calls_this_month = data.get("totalApiCallsThisMonth", 0)
+    current_month       = data.get("currentMonth", "")
+    day_of_week         = data.get("dayOfWeek", "")
+    observations        = data.get("observations", [])  # from pulseObserver
+
+    days_left    = 30 - days_into_month
+    pct_to_goal  = round((income_this_month / income_goal * 100)) if income_goal > 0 else 0
+    pace_needed  = round((income_goal - income_this_month) / max(days_left, 1))
+
+    # Format observations for context
+    obs_text = ""
+    if observations:
+        critical = [o for o in observations if o.get("severity") == "critical"]
+        warnings = [o for o in observations if o.get("severity") == "warning"]
+        info     = [o for o in observations if o.get("severity") == "info"]
+        obs_lines = []
+        for o in critical:
+            obs_lines.append(f"  🔴 CRITICAL: {o.get('note', '')}")
+        for o in warnings:
+            obs_lines.append(f"  🟡 WARNING: {o.get('note', '')}")
+        for o in info[:3]:
+            obs_lines.append(f"  ℹ️ INFO: {o.get('note', '')}")
+        obs_text = "\n".join(obs_lines)
+    else:
+        obs_text = "  No observations logged yet."
+
+    system = f"""You are the Strategic Pulse Agent for {business_name}, run by {owner_name}.
+{owner_name} is a Solutionist who builds AI-powered tools, websites, and automation for small businesses, churches, and nonprofits in Muskegon, MI.
+
+HIS FULL STACK:
+- Solutionist Studio — AI client pipeline (proposals, invoices, content, docs)
+- WiseStat — prop firm trading analytics + AI coach
+- Sermon Studio — AI sermon prep for pastors
+- Mina — church accounting with OCR
+- MT5 EAs — automated trading bots (Hunter, Sniper, Trapper, First Strike, etc.)
+- Services: Web presence, brand kits, marketing engines, ministry packages, business systems
+- Income goal: $7–15K/month (services + trading + productized tools)
+
+YOUR ROLE: Act as his overnight chief of staff who:
+1. Reviewed the observations his monitoring system flagged
+2. Did web research on market trends and opportunities
+3. Is now delivering a morning briefing that is specific, honest, and actionable
+
+SEARCH THESE TOPICS WITH web_search (do all 5 before writing JSON):
+1. "AI tools small business 2025 2026 trends"
+2. "church management software AI automation 2025"
+3. "website builder AI competition pricing 2026"
+4. "productized service business pricing models 2025"
+5. One search specifically relevant to the most critical observation below
+
+Be direct, warm, punchy — not corporate. Reference real tool names and prices from your searches.
+
+RESPOND ONLY IN VALID JSON after completing all searches:
+{{
+  "greeting": "2-sentence punchy opener — reference the day + something specific from observations or data",
+  "energyRead": "building | momentum | plateau | reset",
+  "energyLabel": "short phrase like Gaining Speed or Time to Push",
+  "incomeSnapshot": {{
+    "thisMonthTotal": {income_this_month},
+    "goalAmount": {income_goal},
+    "percentToGoal": {pct_to_goal},
+    "projectedEOM": 0,
+    "gap": 0,
+    "verdict": "1 honest sentence on income trajectory"
+  }},
+  "pipelineHealth": {{
+    "activeCount": {active_projects},
+    "stuckCount": 0,
+    "proposalsPending": {pending_proposals},
+    "urgentFollowUps": ["client — specific reason"],
+    "verdict": "1 honest sentence on pipeline health"
+  }},
+  "observationSummary": {{
+    "criticalCount": 0,
+    "warningCount": 0,
+    "topFlags": ["2-3 most important things the observer flagged"],
+    "verdict": "1 sentence on overall system health from observations"
+  }},
+  "researchBrief": [
+    {{
+      "topic": "topic that was searched",
+      "finding": "2-3 sentences with SPECIFIC real tool names, prices, trends found",
+      "relevance": "why this matters to Kevin right now",
+      "source": "tool name or publication"
+    }}
+  ],
+  "systemImprovements": [
+    {{
+      "system": "WiseStat | Sermon Studio | Mina | Solutionist Studio | Trading EAs | Services",
+      "issue": "specific gap identified",
+      "suggestion": "specific improvement with detail",
+      "impact": "high | medium | low",
+      "effort": "quick | weekend | project"
+    }}
+  ],
+  "addOnOpportunities": [
+    {{
+      "title": "short bold title",
+      "description": "2 sentences — what it is and why Kevin is positioned to offer it now",
+      "estimatedValue": "$X–$Y per client or /month",
+      "whyNow": "specific reason this window is open",
+      "action": "exact first step"
+    }}
+  ],
+  "costWatch": {{
+    "estimatedMonthlyCost": "$X–$Y estimate based on usage",
+    "biggestCostDriver": "what agent/feature uses most tokens",
+    "savingOpportunity": "specific way to reduce cost",
+    "verdict": "1 sentence cost health read"
+  }},
+  "relevanceScore": {{
+    "score": 0,
+    "label": "Cutting Edge | Ahead of Curve | Current | Falling Behind",
+    "strengths": ["specific things Kevin does that are ahead of market"],
+    "threats": ["specific tools or trends that could displace services"],
+    "nextMove": "1 bold move to extend his lead"
+  }},
+  "weeklyBoldPlays": [
+    {{"day": "Today", "play": "specific action", "why": "why today", "value": "$X or outcome"}},
+    {{"day": "Tomorrow", "play": "specific action", "why": "why", "value": "outcome"}},
+    {{"day": "This Week", "play": "strategic action", "why": "strategic reason", "value": "impact"}}
+  ],
+  "topOpportunity": {{
+    "title": "bold title",
+    "description": "1-2 sentences",
+    "estimatedValue": "$X–$Y",
+    "action": "exact next step"
+  }},
+  "blindSpot": {{
+    "title": "bold title",
+    "description": "1-2 sentences",
+    "fix": "specific fix"
+  }},
+  "boldMove": {{
+    "title": "bold title",
+    "why": "1 sentence",
+    "how": "2-3 sentences exactly how to execute",
+    "timeToExecute": "time estimate"
+  }},
+  "focusBlocks": [
+    {{"time": "Morning", "task": "specific task", "why": "why this matters"}},
+    {{"time": "Midday", "task": "specific task", "why": "why"}},
+    {{"time": "Afternoon", "task": "specific task", "why": "why"}}
+  ],
+  "closingWord": "1 punchy line to send Kevin into the day with intention"
+}}"""
+
+    user_msg = f"""Today: {day_of_week}, {current_month}
+Day {days_into_month} of ~30 ({days_left} days left)
+
+INCOME:
+- This month: ${income_this_month:,}
+- Goal: ${income_goal:,} | {pct_to_goal}% complete
+- Need ${pace_needed:,}/day to hit goal
+- Avg project value: ${avg_project_value:,}
+
+PIPELINE:
+- Active: {active_projects} | Completed: {completed_projects} | Total: {total_projects}
+- Proposals pending: {pending_proposals}
+- Invoices: {pending_invoices} pending, {invoices_past_due} past due
+- Queue: {queue_item_count} items ({high_urgency_count} high urgency)
+- Recent clients: {", ".join(recent_clients) or "none yet"}
+- Top package: {top_package or "none yet"}
+
+API USAGE: ~{api_calls_this_month} calls this month
+
+OBSERVER FLAGS (what the system noticed since last briefing):
+{obs_text}
+
+Now search the 5 topics, factor in the observer flags, and generate the full briefing."""
+
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4000,
+            system=system,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            messages=[{"role": "user", "content": user_msg}]
+        )
+
+        # Extract all text blocks (web search produces multiple content blocks)
+        full_text = ""
+        for block in response.content:
+            if hasattr(block, "type") and block.type == "text":
+                full_text += block.text
+
+        full_text = full_text.replace("```json", "").replace("```", "").strip()
+
+        # Find JSON in response
+        start_idx = full_text.find("{")
+        end_idx   = full_text.rfind("}") + 1
+        if start_idx == -1 or end_idx == 0:
+            raise ValueError("No JSON found in response")
+
+        json_str  = full_text[start_idx:end_idx]
+        briefing  = json.loads(json_str)
+        return briefing
+
+    except json.JSONDecodeError as e:
+        print(f"Pulse JSON parse error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse briefing: {str(e)}")
+    except Exception as e:
+        print(f"Pulse agent error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/health")
