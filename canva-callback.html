@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Connecting to Canva...</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0f0f14;
+      color: #fff;
+      font-family: system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid #333;
+      border-top-color: #a855f7;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    p { color: #888; font-size: 14px; margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="spinner"></div>
+  <p>Connecting Canva to KMJ Studio...</p>
+  <script>
+    // Grab everything from the current URL and relay to the local Tauri app
+    const params = window.location.search; // ?code=...&state=...
+    const DEV_URL  = 'http://localhost:5173/canva-callback';
+    const PROD_URL = 'http://127.0.0.1:1420/canva-callback';
+
+    // Try dev first, fall back to prod
+    window.location.href = DEV_URL + params;
+  </script>
+</body>
+</html>
