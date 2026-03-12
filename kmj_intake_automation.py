@@ -585,6 +585,45 @@ Now search the 5 topics, factor in the observer flags, and generate the full bri
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/canva-callback")
+async def canva_callback(request: Request):
+    """
+    Relay Canva OAuth callback to the local Tauri/dev app.
+    Canva redirects here → we immediately redirect to localhost with the same params.
+    """
+    from fastapi.responses import HTMLResponse
+    params = str(request.url.query)
+    query = f"?{params}" if params else ""
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Connecting Canva...</title>
+  <style>
+    body {{ margin:0; background:#0f0f14; color:#fff; font-family:system-ui,sans-serif;
+           display:flex; align-items:center; justify-content:center; height:100vh;
+           flex-direction:column; gap:16px; }}
+    .spinner {{ width:40px; height:40px; border:3px solid #333;
+                border-top-color:#a855f7; border-radius:50%;
+                animation:spin 0.8s linear infinite; }}
+    @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
+    p {{ color:#888; font-size:14px; margin:0; }}
+  </style>
+</head>
+<body>
+  <div class="spinner"></div>
+  <p>Connecting Canva to KMJ Studio...</p>
+  <script>
+    var DEV  = 'http://localhost:5173/canva-callback{query}';
+    var PROD = 'http://127.0.0.1:1420/canva-callback{query}';
+    window.location.href = DEV;
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
 @app.get("/health")
 async def health():
     return {
