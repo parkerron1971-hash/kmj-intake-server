@@ -20,9 +20,13 @@ from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from anthropic import Anthropic
+from ai_proxy import router as ai_proxy_router
+from intake_endpoint import router as intake_router
 
 app = FastAPI(title="KMJ Intake Automation")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(ai_proxy_router)
+app.include_router(intake_router)
 
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 OWNER_EMAIL = os.getenv("OWNER_EMAIL", "kevin@kmjcreative.com")
