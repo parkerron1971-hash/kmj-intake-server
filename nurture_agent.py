@@ -283,9 +283,10 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=threshold_days)).isoformat()
 
-    # Get contacts needing attention
+    # Get contacts needing attention — exclude only churned/inactive,
+    # include everyone else (active, lead, vip, and any other status)
     contacts = await _sb(client, "GET",
-        f"/contacts?business_id=eq.{biz_id}&status=in.(active,lead,vip)"
+        f"/contacts?business_id=eq.{biz_id}&status=not.in.(churned,inactive)"
         f"&or=(last_interaction.is.null,last_interaction.lt.{cutoff})"
         f"&order=health_score.asc&limit=20"
     ) or []
