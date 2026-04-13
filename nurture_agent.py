@@ -283,13 +283,14 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=threshold_days)).isoformat()
 
-    # DEBUG: unfiltered query — do ANY contacts exist for this business?
-    all_contacts = await _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&limit=50") or []
+    # Debug: fetch ALL contacts for this business (unfiltered) so response shows raw state
+    all_contacts = await _sb(client, "GET",
+        f"/contacts?business_id=eq.{biz_id}&select=id,name,status,health_score,last_interaction&limit=50"
+    ) or []
 
-    # Get contacts needing attention — exclude only churned/inactive,
-    # include everyone else (active, lead, vip, and any other status)
+    # Get contacts needing attention
     contacts = await _sb(client, "GET",
-        f"/contacts?business_id=eq.{biz_id}&status=not.in.(churned,inactive)"
+        f"/contacts?business_id=eq.{biz_id}&status=in.(active,lead,vip)"
         f"&or=(last_interaction.is.null,last_interaction.lt.{cutoff})"
         f"&order=health_score.asc&limit=20"
     ) or []
@@ -335,13 +336,10 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
         "contacts_checked": len(contacts),
         "drafts_created": drafts_created,
         "flagged": flagged,
-        # DEBUG — temporary, remove after fixing
         "debug_cutoff": str(cutoff),
-        "debug_threshold_days": threshold_days,
         "debug_business_type": biz_type,
-        "debug_all_contacts_count": len(all_contacts),
-        "debug_all_contacts_statuses": [c.get("status") for c in all_contacts[:10]],
-        "debug_all_contacts_last_interaction": [c.get("last_interaction") for c in all_contacts[:10]],
+        "debug_threshold_days": threshold_days,
+        "debug_all_contacts": all_contacts,
         "debug_filtered_count": len(contacts),
     }
 
