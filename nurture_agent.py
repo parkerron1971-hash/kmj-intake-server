@@ -283,26 +283,16 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=threshold_days)).isoformat()
 
-    # DEBUG: simple query first — do ANY contacts exist for this business?
-    simple_url = f"/contacts?business_id=eq.{biz_id}&limit=20"
-    simple_contacts = await _sb(client, "GET", simple_url) or []
-    print(f"[NURTURE DEBUG] Simple query URL: {simple_url}")
-    print(f"[NURTURE DEBUG] Simple query returned: {len(simple_contacts)} contacts")
-    if simple_contacts:
-        print(f"[NURTURE DEBUG] Sample statuses: {[c.get('status') for c in simple_contacts[:5]]}")
-        print(f"[NURTURE DEBUG] Sample last_interaction: {[c.get('last_interaction') for c in simple_contacts[:5]]}")
+    # DEBUG: unfiltered query — do ANY contacts exist for this business?
+    all_contacts = await _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&limit=50") or []
 
     # Get contacts needing attention — exclude only churned/inactive,
     # include everyone else (active, lead, vip, and any other status)
-    filtered_url = (
+    contacts = await _sb(client, "GET",
         f"/contacts?business_id=eq.{biz_id}&status=not.in.(churned,inactive)"
         f"&or=(last_interaction.is.null,last_interaction.lt.{cutoff})"
         f"&order=health_score.asc&limit=20"
-    )
-    contacts = await _sb(client, "GET", filtered_url) or []
-    print(f"[NURTURE DEBUG] Filtered query URL: {filtered_url}")
-    print(f"[NURTURE DEBUG] Cutoff: {cutoff} (threshold_days={threshold_days}, biz_type={biz_type})")
-    print(f"[NURTURE DEBUG] Filtered query returned: {len(contacts)} contacts — {contacts[:3]}")
+    ) or []
 
     drafts_created = 0
     flagged = []
@@ -345,6 +335,14 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
         "contacts_checked": len(contacts),
         "drafts_created": drafts_created,
         "flagged": flagged,
+        # DEBUG — temporary, remove after fixing
+        "debug_cutoff": str(cutoff),
+        "debug_threshold_days": threshold_days,
+        "debug_business_type": biz_type,
+        "debug_all_contacts_count": len(all_contacts),
+        "debug_all_contacts_statuses": [c.get("status") for c in all_contacts[:10]],
+        "debug_all_contacts_last_interaction": [c.get("last_interaction") for c in all_contacts[:10]],
+        "debug_filtered_count": len(contacts),
     }
 
 
