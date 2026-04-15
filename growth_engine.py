@@ -48,6 +48,15 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)
 BRIEFING_WINDOW_DAYS = 7
 INSIGHTS_WINDOW_DAYS = 30
 
+# Briefing action-generation caps
+ACTION_CAP_AT_RISK = 3
+ACTION_CAP_INACTIVE = 2
+ACTION_CAP_SESSION_FOLLOWUP = 3
+ACTION_TOTAL_CAP = 8
+ACTION_DEDUP_DAYS = 7
+INACTIVE_THRESHOLD_DAYS = 14
+SESSION_LOOKBACK_DAYS = 14
+
 VALID_CATEGORIES = {"revenue", "engagement", "churn", "opportunity", "operations", "content", "growth", "other"}
 VALID_TYPES = {"observation", "suggestion", "alert", "milestone"}
 VALID_PRIORITIES = {"urgent", "high", "medium", "low"}
@@ -284,6 +293,326 @@ TOP PENDING ITEMS NEEDING REVIEW:
 router = APIRouter(tags=["growth_engine"])
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# BRIEFING ACTION GENERATION
+# ═══════════════════════════════════════════════════════════════════════
+#
+# After the AI writes the briefing, this phase turns the data-driven
+# problems into actual drafts queued for approval. The practitioner
+# reads the letter, then finds the work already waiting for them.
+
+def _money_tone_for(biz_type: str) -> str:
+    if biz_type == "church":
+        return "Be pastoral, never transactional about money. Frame it as stewardship and partnership."
+    if biz_type == "nonprofit":
+        return "Be appreciative and mission-focused."
+    return "Warm but clear about the business relationship. Professional, not stiff."
+
+
+def _days_since(iso_str: Optional[str]) -> Optional[int]:
+    if not iso_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - dt).days
+    except (ValueError, TypeError):
+        return None
+
+
+async def _existing_draft(client: httpx.AsyncClient, biz_id: str, contact_id: str,
+                          agent: str, action_type: str, cutoff_iso: str) -> Optional[Dict]:
+    """Return the most recent matching draft/approved row within the window, or None."""
+    rows = await _sb(client, "GET",
+        f"/agent_queue?business_id=eq.{biz_id}&contact_id=eq.{contact_id}"
+        f"&agent=eq.{agent}&action_type=eq.{action_type}"
+        f"&status=in.(draft,approved)&created_at=gte.{cutoff_iso}"
+        f"&order=created_at.desc&limit=1&select=id,created_at"
+    )
+    return rows[0] if rows else None
+
+
+async def _draft_nurture_check_in(client: httpx.AsyncClient, biz: Dict, contact: Dict,
+                                  kind: str) -> Optional[Dict]:
+    """kind = 'at-risk' or 'inactive'. Returns {subject, body, reasoning} or None."""
+    biz_name = biz.get("name", "")
+    biz_type = biz.get("type", "general")
+    voice = biz.get("voice_profile") or {}
+    practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
+    tone = voice.get("tone", "warm and professional")
+    money_tone = _money_tone_for(biz_type)
+
+    name = contact.get("name", "there")
+    role = contact.get("role") or ""
+    health = contact.get("health_score") or 0
+    days = _days_since(contact.get("last_interaction"))
+    days_str = f"{days} days ago" if days is not None else "quite some time ago"
+
+    system_prompt = f"""You are the Nurture Agent for {biz_name}. Draft a short re-engagement check-in from {practitioner} to {name}.
+
+{money_tone}
+
+Voice: "{tone}". Keep it under 4 sentences. Don't be aggressive or guilt-inducing. Sign off as {practitioner}."""
+
+    if kind == "at-risk":
+        user_msg = (f"Contact: {name}{f' ({role})' if role else ''}\n"
+                    f"Health score is {health} (at-risk). Last interaction was {days_str}.\n\n"
+                    f"Draft a gentle, low-pressure check-in to re-open the conversation.")
+    else:
+        user_msg = (f"Contact: {name}{f' ({role})' if role else ''}\n"
+                    f"Last interaction was {days_str}. Nothing urgent, but worth staying connected.\n\n"
+                    f"Draft a brief, warm check-in.")
+
+    body = await _call_claude(client, system_prompt, user_msg, max_tokens=400)
+    if not body:
+        return None
+
+    subject = (f"Following up — {name}" if kind == "at-risk"
+               else f"Thinking of you, {name}")
+    reasoning = (f"{kind} nurture: health={health}, last_interaction={days_str}. "
+                 f"Drafted by Growth Engine during weekly briefing.")
+    return {"subject": subject, "body": body, "reasoning": reasoning}
+
+
+async def _draft_session_followup(client: httpx.AsyncClient, biz: Dict, contact: Dict,
+                                  session: Dict) -> Optional[Dict]:
+    biz_name = biz.get("name", "")
+    biz_type = biz.get("type", "general")
+    voice = biz.get("voice_profile") or {}
+    practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
+    tone = voice.get("tone", "warm and professional")
+    money_tone = _money_tone_for(biz_type)
+
+    name = contact.get("name", "there")
+    session_title = session.get("title") or "our recent session"
+    session_notes = (session.get("notes") or "")[:400]
+
+    system_prompt = f"""You are the Session Agent for {biz_name}. Draft a follow-up message from {practitioner} to {name} after the session they just completed.
+
+{money_tone}
+
+Voice: "{tone}". Keep it under 5 sentences. Reference the session concretely. Include one specific next step or question. Sign off as {practitioner}."""
+
+    user_msg = (f"Contact: {name}\n"
+                f"Session: {session_title}\n"
+                f"Session notes: {session_notes or '(none recorded)'}\n\n"
+                f"Draft a follow-up message.")
+
+    body = await _call_claude(client, system_prompt, user_msg, max_tokens=400)
+    if not body:
+        return None
+
+    return {
+        "subject": f"Following up on {session_title}",
+        "body": body,
+        "reasoning": f"Session follow-up generated by Growth Engine during weekly briefing. Session: {session_title}.",
+    }
+
+
+async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Dict:
+    """Generate drafts for actionable items. Returns action records + counts."""
+    biz_id = biz["id"]
+    now = datetime.now(timezone.utc)
+    dedup_cutoff = (now - timedelta(days=ACTION_DEDUP_DAYS)).isoformat()
+
+    actions: List[Dict] = []
+    total_created = 0
+    total_skipped = 0
+
+    def _cap_reached() -> bool:
+        return (total_created + total_skipped) >= ACTION_TOTAL_CAP
+
+    # ── 1. At-risk contacts (health < 40) ─────────────────────────────
+    at_risk = await _sb(client, "GET",
+        f"/contacts?business_id=eq.{biz_id}&health_score=lt.40"
+        f"&status=in.(active,lead,vip)&order=health_score.asc&limit={ACTION_CAP_AT_RISK}"
+        f"&select=id,name,role,health_score,last_interaction"
+    ) or []
+
+    for c in at_risk:
+        if _cap_reached(): break
+        existing = await _existing_draft(client, biz_id, c["id"], "nurture", "check_in", dedup_cutoff)
+        if existing:
+            actions.append({
+                "kind": "already_queued", "agent": "nurture", "action_type": "check_in",
+                "contact_id": c["id"], "contact_name": c["name"],
+                "queue_id": existing["id"], "existing_created_at": existing["created_at"],
+                "reason": f"health {c.get('health_score')}",
+            })
+            total_skipped += 1
+            continue
+
+        draft = await _draft_nurture_check_in(client, biz, c, kind="at-risk")
+        if not draft:
+            logger.warning(f"Draft failed for at-risk contact {c.get('name')}")
+            continue
+
+        priority = "high" if (c.get("health_score") or 0) < 20 else "medium"
+        inserted = await _sb(client, "POST", "/agent_queue", {
+            "business_id": biz_id, "contact_id": c["id"],
+            "agent": "nurture", "action_type": "check_in",
+            "subject": draft["subject"], "body": draft["body"],
+            "channel": "email", "status": "draft",
+            "priority": priority,
+            "ai_reasoning": draft["reasoning"], "ai_model": BRIEFING_MODEL,
+        })
+        if inserted and isinstance(inserted, list) and inserted:
+            actions.append({
+                "kind": "created", "agent": "nurture", "action_type": "check_in",
+                "contact_id": c["id"], "contact_name": c["name"],
+                "queue_id": inserted[0]["id"],
+                "reason": f"health {c.get('health_score')}",
+            })
+            total_created += 1
+
+    # ── 2. Inactive contacts (health >= 40, no contact in 14+ days) ───
+    inactive_cutoff = (now - timedelta(days=INACTIVE_THRESHOLD_DAYS)).isoformat()
+    inactive = await _sb(client, "GET",
+        f"/contacts?business_id=eq.{biz_id}&health_score=gte.40"
+        f"&status=in.(active,lead,vip)"
+        f"&last_interaction=lt.{inactive_cutoff}"
+        f"&order=last_interaction.asc&limit={ACTION_CAP_INACTIVE}"
+        f"&select=id,name,role,health_score,last_interaction"
+    ) or []
+
+    for c in inactive:
+        if _cap_reached(): break
+        existing = await _existing_draft(client, biz_id, c["id"], "nurture", "check_in", dedup_cutoff)
+        if existing:
+            actions.append({
+                "kind": "already_queued", "agent": "nurture", "action_type": "check_in",
+                "contact_id": c["id"], "contact_name": c["name"],
+                "queue_id": existing["id"], "existing_created_at": existing["created_at"],
+                "reason": f"{_days_since(c.get('last_interaction'))}d inactive",
+            })
+            total_skipped += 1
+            continue
+
+        draft = await _draft_nurture_check_in(client, biz, c, kind="inactive")
+        if not draft:
+            logger.warning(f"Draft failed for inactive contact {c.get('name')}")
+            continue
+
+        inserted = await _sb(client, "POST", "/agent_queue", {
+            "business_id": biz_id, "contact_id": c["id"],
+            "agent": "nurture", "action_type": "check_in",
+            "subject": draft["subject"], "body": draft["body"],
+            "channel": "email", "status": "draft", "priority": "medium",
+            "ai_reasoning": draft["reasoning"], "ai_model": BRIEFING_MODEL,
+        })
+        if inserted and isinstance(inserted, list) and inserted:
+            actions.append({
+                "kind": "created", "agent": "nurture", "action_type": "check_in",
+                "contact_id": c["id"], "contact_name": c["name"],
+                "queue_id": inserted[0]["id"],
+                "reason": f"{_days_since(c.get('last_interaction'))}d inactive",
+            })
+            total_created += 1
+
+    # ── 3. Completed sessions needing follow-ups ──────────────────────
+    session_cutoff = (now - timedelta(days=SESSION_LOOKBACK_DAYS)).isoformat()
+    sessions = await _sb(client, "GET",
+        f"/sessions?business_id=eq.{biz_id}&status=eq.completed"
+        f"&scheduled_for=gte.{session_cutoff}"
+        f"&order=scheduled_for.desc&limit={ACTION_CAP_SESSION_FOLLOWUP}"
+        f"&select=id,title,scheduled_for,contact_id,notes"
+    ) or []
+
+    for s in sessions:
+        if _cap_reached(): break
+        cid = s.get("contact_id")
+        if not cid:
+            continue
+
+        existing = await _existing_draft(client, biz_id, cid, "session", "follow_up", dedup_cutoff)
+        if existing:
+            # Need the contact name for display
+            contact_rows = await _sb(client, "GET",
+                f"/contacts?id=eq.{cid}&select=id,name&limit=1") or []
+            name = contact_rows[0]["name"] if contact_rows else "a contact"
+            actions.append({
+                "kind": "already_queued", "agent": "session", "action_type": "follow_up",
+                "contact_id": cid, "contact_name": name,
+                "queue_id": existing["id"], "existing_created_at": existing["created_at"],
+                "reason": s.get("title") or "session",
+            })
+            total_skipped += 1
+            continue
+
+        contact_rows = await _sb(client, "GET",
+            f"/contacts?id=eq.{cid}&select=id,name,role&limit=1") or []
+        if not contact_rows:
+            continue
+        contact = contact_rows[0]
+
+        draft = await _draft_session_followup(client, biz, contact, s)
+        if not draft:
+            logger.warning(f"Session follow-up draft failed for {contact.get('name')}")
+            continue
+
+        inserted = await _sb(client, "POST", "/agent_queue", {
+            "business_id": biz_id, "contact_id": cid,
+            "agent": "session", "action_type": "follow_up",
+            "subject": draft["subject"], "body": draft["body"],
+            "channel": "email", "status": "draft", "priority": "medium",
+            "ai_reasoning": draft["reasoning"], "ai_model": BRIEFING_MODEL,
+        })
+        if inserted and isinstance(inserted, list) and inserted:
+            actions.append({
+                "kind": "created", "agent": "session", "action_type": "follow_up",
+                "contact_id": cid, "contact_name": contact["name"],
+                "queue_id": inserted[0]["id"],
+                "reason": s.get("title") or "completed session",
+            })
+            total_created += 1
+
+    # ── 4. Pending proposals — count only ─────────────────────────────
+    pending = await _sb(client, "GET",
+        f"/agent_queue?business_id=eq.{biz_id}&agent=eq.contract"
+        f"&action_type=eq.proposal&status=eq.draft&select=id&limit=50"
+    ) or []
+
+    return {
+        "actions": actions,
+        "total_created": total_created,
+        "total_skipped": total_skipped,
+        "pending_proposals_count": len(pending),
+    }
+
+
+def _format_actions_section(actions: List[Dict], pending_proposals_count: int) -> str:
+    """Programmatically build the 'Actions I've Queued For You' markdown section.
+    Returns '' when there's nothing to show."""
+    if not actions and pending_proposals_count == 0:
+        return ""
+
+    lines = ["## Actions I've Queued For You"]
+    for a in actions:
+        name = a.get("contact_name") or "a contact"
+        if a["kind"] == "created":
+            if a["agent"] == "nurture":
+                detail = f" ({a['reason']})" if a.get("reason") else ""
+                lines.append(f"- Drafted a check-in email for {name}{detail} → waiting in your Queue")
+            elif a["agent"] == "session":
+                lines.append(f"- Drafted a follow-up for your session with {name} → waiting in your Queue")
+            else:
+                lines.append(f"- Drafted a {a.get('action_type', 'message')} for {name} → waiting in your Queue")
+        elif a["kind"] == "already_queued":
+            existing_days = _days_since(a.get("existing_created_at"))
+            when = (f"{existing_days}d ago" if existing_days and existing_days > 0
+                    else "earlier today")
+            verb = "follow-up" if a.get("action_type") == "follow_up" else "check-in"
+            lines.append(f"- A {verb} for {name} is already in your Queue from {when}")
+
+    if pending_proposals_count > 0:
+        s = "s" if pending_proposals_count != 1 else ""
+        verb = "are" if pending_proposals_count != 1 else "is"
+        lines.append(f"- {pending_proposals_count} proposal{s} {verb} already in your Queue from earlier this week")
+
+    lines.append("")
+    lines.append("Open your Queue to review and approve these actions.")
+    return "\n".join(lines)
+
+
 @router.post("/agents/growth/briefing")
 async def growth_briefing(req: GrowthRequest):
     async with httpx.AsyncClient() as client:
@@ -336,12 +665,29 @@ Rules:
         user_msg = _format_briefing_data_for_ai(stats)
         body = await _call_claude(client, system_prompt, user_msg, model=BRIEFING_MODEL, max_tokens=1400)
 
-        if not body:
-            body = (f"## The Headline\nThe AI briefing could not be generated right now — check the Anthropic connection.\n\n"
-                    f"## By The Numbers\n- New contacts: {stats['new_contact_count']}\n"
-                    f"- At-risk contacts: {len(stats['at_risk'])}\n"
-                    f"- Sessions completed: {stats['sessions_completed_count']}\n"
-                    f"- Pending drafts: {len(stats['pending_items'])}\n")
+        body_fallback = not body
+        if body_fallback:
+            body = ("## The Headline\n"
+                    "Briefing text unavailable — but here are the actions I've queued based on your data.\n\n"
+                    "## By The Numbers\n"
+                    f"- **New contacts:** {stats['new_contact_count']}\n"
+                    f"- **At-risk contacts:** {len(stats['at_risk'])}\n"
+                    f"- **Sessions completed:** {stats['sessions_completed_count']}\n"
+                    f"- **Pending drafts:** {len(stats['pending_items'])}\n")
+
+        # ── Action generation phase ───────────────────────────────────
+        try:
+            action_result = await _generate_briefing_actions(client, biz)
+        except Exception as e:
+            logger.exception(f"Action generation failed: {e}")
+            action_result = {"actions": [], "total_created": 0, "total_skipped": 0, "pending_proposals_count": 0}
+
+        actions_section = _format_actions_section(
+            action_result["actions"],
+            action_result["pending_proposals_count"],
+        )
+        if actions_section:
+            body = body.rstrip() + "\n\n" + actions_section + "\n"
 
         title = f"Weekly Briefing — {date_range}"
         insight = await _sb(client, "POST", "/insights", {
@@ -355,6 +701,7 @@ Rules:
                 "kind": "weekly_briefing",
                 "window_start": stats["window_start"],
                 "window_end": stats["window_end"],
+                "body_fallback": body_fallback,
                 "stats": {
                     "new_contacts": stats["new_contact_count"],
                     "at_risk": len(stats["at_risk"]),
@@ -365,6 +712,10 @@ Rules:
                     "event_counts": stats["event_counts"],
                     "drafts_by_agent": stats["drafts_by_agent"],
                 },
+                "actions_generated": action_result["actions"],
+                "total_actions_created": action_result["total_created"],
+                "total_actions_skipped": action_result["total_skipped"],
+                "pending_proposals_count": action_result["pending_proposals_count"],
             },
         })
 
@@ -375,6 +726,10 @@ Rules:
             "body": body,
             "date_range": date_range,
             "stats": stats,
+            "actions_generated": action_result["total_created"],
+            "actions_skipped": action_result["total_skipped"],
+            "pending_proposals": action_result["pending_proposals_count"],
+            "actions": action_result["actions"],
         }
 
 
