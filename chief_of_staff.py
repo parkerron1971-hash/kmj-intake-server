@@ -27,6 +27,8 @@ Action format (JSON inside brackets, not pipe-delimited):
     [ACTION:{"type":"create_session","contact_id":"uuid","title":"...","scheduled_for":"2026-04-20T14:00:00Z"}]
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
