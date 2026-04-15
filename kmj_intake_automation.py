@@ -27,6 +27,7 @@ from session_agent import router as session_router
 from contract_agent import router as contract_router
 from payment_agent import router as payment_router
 from growth_engine import router as growth_router
+from module_agent import router as module_router
 
 app = FastAPI(title="KMJ Intake Automation")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -37,6 +38,7 @@ app.include_router(session_router)
 app.include_router(contract_router)
 app.include_router(payment_router)
 app.include_router(growth_router)
+app.include_router(module_router)
 
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 OWNER_EMAIL = os.getenv("OWNER_EMAIL", "kevin@kmjcreative.com")
