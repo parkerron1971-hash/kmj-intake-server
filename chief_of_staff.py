@@ -767,6 +767,42 @@ async def handle_generate_insights(client, biz, action) -> Dict:
     return await handle_run_agent(client, biz, {"agent": "insights"})
 
 
+async def handle_navigate(client, biz, action) -> Dict:
+    """Pass-through — the frontend actually performs the navigation.
+    We just validate the shape and produce a nice label + nav payload."""
+    tab = (action.get("tab") or "").lower().strip()
+    if tab not in {"build", "operate", "grow"}:
+        return _fail("navigate", f"Unknown tab '{tab}'")
+
+    sub = action.get("sub")
+    page = action.get("page")
+    contact_id = action.get("contact_id")
+
+    nav = {"tab": tab}
+    if sub: nav["sub"] = sub
+    if page: nav["page"] = page
+    if contact_id: nav["contactId"] = contact_id
+
+    # Build a human label
+    label_parts = [tab.upper()]
+    if sub: label_parts.append(sub)
+    if page: label_parts.append(page)
+    label = " → ".join(label_parts)
+
+    if contact_id:
+        rows = await _sb(client, "GET",
+            f"/contacts?id=eq.{contact_id}&business_id=eq.{biz['id']}&limit=1&select=name")
+        if rows:
+            label += f" → {rows[0].get('name')}"
+
+    return {
+        "type": "navigate",
+        "result": "opened",
+        "label": f"Opened {label}",
+        "nav": nav,
+    }
+
+
 ACTION_HANDLERS = {
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
@@ -778,6 +814,7 @@ ACTION_HANDLERS = {
     "create_contact":        handle_create_contact,
     "generate_briefing":     handle_generate_briefing,
     "generate_insights":     handle_generate_insights,
+    "navigate":              handle_navigate,
 }
 
 
@@ -799,33 +836,165 @@ async def _execute_actions(client, biz, actions: List[Dict]) -> List[Dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# CURRENT-VIEW DETAIL FETCH
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _fetch_view_detail(client, biz_id: str, view: Optional[CurrentContext]) -> Dict[str, Any]:
+    """Pull the specific entity the practitioner is looking at, plus recent
+    related rows. Returns an empty dict when nothing is being viewed."""
+    if not view:
+        return {}
+
+    out: Dict[str, Any] = {"tab": view.tab, "sub_tab": view.sub_tab}
+    tasks = []
+
+    if view.viewing_contact_id:
+        tasks.append(("contact", _sb(client, "GET",
+            f"/contacts?id=eq.{view.viewing_contact_id}&business_id=eq.{biz_id}"
+            f"&limit=1&select=*")))
+        tasks.append(("contact_queue", _sb(client, "GET",
+            f"/agent_queue?contact_id=eq.{view.viewing_contact_id}&business_id=eq.{biz_id}"
+            f"&order=created_at.desc&limit=5"
+            f"&select=agent,action_type,subject,status,priority,created_at")))
+        tasks.append(("contact_events", _sb(client, "GET",
+            f"/events?contact_id=eq.{view.viewing_contact_id}&business_id=eq.{biz_id}"
+            f"&order=created_at.desc&limit=5&select=event_type,data,created_at")))
+
+    if view.viewing_module_id:
+        tasks.append(("module", _sb(client, "GET",
+            f"/custom_modules?id=eq.{view.viewing_module_id}&business_id=eq.{biz_id}"
+            f"&limit=1&select=*")))
+        tasks.append(("module_entries", _sb(client, "GET",
+            f"/module_entries?module_id=eq.{view.viewing_module_id}&status=eq.active"
+            f"&order=updated_at.desc&limit=10&select=id,data,updated_at")))
+
+    if view.viewing_session_id:
+        tasks.append(("session", _sb(client, "GET",
+            f"/sessions?id=eq.{view.viewing_session_id}&business_id=eq.{biz_id}"
+            f"&limit=1&select=*,contacts(name)")))
+
+    if not tasks:
+        return out
+
+    keys = [k for k, _ in tasks]
+    results = await asyncio.gather(*[t for _, t in tasks])
+    for k, v in zip(keys, results):
+        out[k] = v
+
+    return out
+
+
+def _format_view_block(view: Optional[CurrentContext], detail: Dict[str, Any]) -> str:
+    """Prominent 'CURRENTLY VIEWING' section for the system prompt."""
+    if not view:
+        return ""
+
+    path_parts = []
+    if view.tab: path_parts.append(view.tab.upper())
+    if view.sub_tab: path_parts.append(view.sub_tab)
+    path = " → ".join(path_parts) if path_parts else "(unknown)"
+
+    lines = [f"CURRENTLY VIEWING: {path}"]
+
+    contact_rows = detail.get("contact") or []
+    if contact_rows:
+        c = contact_rows[0]
+        days = _days_since(c.get("last_interaction"))
+        lines.append(
+            f"  CONTACT: {c.get('name')} [id={c.get('id')}]"
+            f" · status={c.get('status')} · health={c.get('health_score')}"
+            f" · lead_score={c.get('lead_score')}"
+            f" · last_interaction={f'{days}d ago' if days is not None else 'never'}"
+        )
+        if c.get("role"):
+            lines.append(f"    role: {c.get('role')}")
+        if c.get("email"):
+            lines.append(f"    email: {c.get('email')}")
+
+        queue = detail.get("contact_queue") or []
+        if queue:
+            lines.append(f"    Recent queue items ({len(queue)}):")
+            for q in queue[:5]:
+                lines.append(
+                    f"      - [{q.get('priority')}] {q.get('agent')}/{q.get('action_type')}: "
+                    f"{q.get('subject') or '(no subject)'} · {q.get('status')}"
+                )
+
+        events = detail.get("contact_events") or []
+        if events:
+            lines.append(f"    Recent events ({len(events)}):")
+            for ev in events[:5]:
+                d = _days_since(ev.get("created_at"))
+                lines.append(f"      - {d}d ago: {ev.get('event_type')}")
+
+    module_rows = detail.get("module") or []
+    if module_rows:
+        m = module_rows[0]
+        entries = detail.get("module_entries") or []
+        lines.append(
+            f"  MODULE: {m.get('name')} [id={m.get('id')}]"
+            f" · {len(entries)} recent active entries"
+        )
+        if m.get("description"):
+            lines.append(f"    description: {m.get('description')}")
+        for e in entries[:5]:
+            d = (e.get("data") or {})
+            title = d.get("title") or d.get("deliverable_name") or d.get("name") or "(untitled)"
+            status = d.get("status") or d.get((m.get("schema") or {}).get("board_column") or "") or ""
+            lines.append(f"      - {title} [id={e.get('id')}]{f' · {status}' if status else ''}")
+
+    session_rows = detail.get("session") or []
+    if session_rows:
+        s = session_rows[0]
+        cname = (s.get("contacts") or {}).get("name") or ""
+        lines.append(
+            f"  SESSION: {s.get('title')} [id={s.get('id')}]"
+            f" · {s.get('status')} · scheduled {s.get('scheduled_for', '')[:16]}"
+            + (f" · with {cname}" if cname else "")
+        )
+        if s.get("notes"):
+            lines.append(f"    notes: {str(s['notes'])[:200]}")
+
+    lines.append("")
+    lines.append("When the practitioner says 'him'/'her'/'this one'/'it'/'this contact'/'this entry',")
+    lines.append("they are referring to the entity in CURRENTLY VIEWING above.")
+
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # SYSTEM PROMPT
 # ═══════════════════════════════════════════════════════════════════════
 
-def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool) -> str:
+def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
+                         view: Optional[CurrentContext] = None,
+                         view_detail: Optional[Dict] = None) -> str:
     biz = ctx.get("business") or {}
     biz_name = biz.get("name", "the business")
     practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
     voice = biz.get("voice_profile") or {}
 
     context_block = _format_context_for_prompt(ctx)
+    view_block = _format_view_block(view, view_detail or {})
 
     greeting_clause = ""
     if is_greeting:
         greeting_clause = """
 
 OPENING GREETING MODE:
-This is your first turn in a fresh conversation. Give a concise briefing (2-4 sentences) based on the most important things in the data RIGHT NOW. Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. End with ONE question or a specific proactive suggestion. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting."""
+This is your first turn in a fresh conversation. Give a concise briefing (2-4 sentences) based on the most important things in the data RIGHT NOW. Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. End with ONE question or a specific proactive suggestion. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate)."""
 
     return f"""You are the Chief of Staff for {biz_name}. You are {practitioner}'s operational partner — you see everything happening in their business and help them manage it through conversation.
 
 REAL-TIME BUSINESS DATA (fresh every message):
 
 {context_block}
+{view_block}
 
 CAPABILITIES:
 - ANSWER questions with specific data from above (names, numbers, dates, IDs).
 - TAKE ACTIONS by embedding JSON tags in your response.
+- NAVIGATE the practitioner to relevant pages while explaining what you're showing.
 - SUGGEST proactive next steps based on the data.
 - BRIEF the practitioner on what needs attention now.
 
@@ -842,12 +1011,28 @@ Available action types:
   [ACTION:{{"type":"create_contact","name":"...","email":"...","status":"lead"}}]
   [ACTION:{{"type":"generate_briefing"}}]
   [ACTION:{{"type":"generate_insights"}}]
+  [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"queue|contacts|sessions|agents|briefing|health|insights","contact_id":"<uuid-optional>","page":"<page-id-for-build-tab-optional>"}}]
+
+NAVIGATION EXAMPLES:
+  - Show the queue:        [ACTION:{{"type":"navigate","tab":"operate","sub":"queue"}}]
+  - Show a contact detail: [ACTION:{{"type":"navigate","tab":"operate","sub":"contacts","contact_id":"<uuid>"}}]
+  - Show the briefing:     [ACTION:{{"type":"navigate","tab":"grow","sub":"briefing"}}]
+  - Show a custom module:  [ACTION:{{"type":"navigate","tab":"build","page":"custom-module-<uuid>"}}]
+  - Show module builder:   [ACTION:{{"type":"navigate","tab":"build","page":"module-builder"}}]
 
 ACTION RULES:
-- Use EXACT UUIDs from the CONTACT LOOKUP / CUSTOM MODULES sections. Never invent IDs.
+- Use EXACT UUIDs from the CONTACT LOOKUP / CUSTOM MODULES / CURRENTLY VIEWING sections. Never invent IDs.
 - Don't emit actions unless the practitioner explicitly asks you to do something OR you're taking an obvious next step they've agreed to.
+- Navigate is encouraged when it helps — "Let me show you his profile" paired with a navigate action feels natural. The panel stays open while navigating.
 - Emit at most {MAX_ACTIONS_PER_TURN} actions per turn.
-- Confirm in plain language what you're doing ("Drafting a check-in for Deacon Harris now.") — the system will show a separate actions card below your message.
+- Confirm in plain language what you're doing ("Drafting a check-in for Deacon Harris now. Taking you to his profile.") — the system shows a separate actions card below your message.
+
+CONVERSATIONAL RULES — SMART NEXT STEPS:
+After answering a question or taking an action, propose 1-2 natural next steps framed as yes/no questions. Keep each to one sentence. Examples:
+  - After queue status: "Want me to approve all the low-priority items, or should we go through them one by one?"
+  - After drafting a message: "Should I also schedule a follow-up session?"
+  - After running an agent: "Want me to summarize the new drafts?"
+EXCEPTION: Skip the next-step question when the answer is purely factual ("what's her health score?") or during the opening greeting.
 
 VOICE:
 Direct, warm, operational. Match {practitioner}'s communication style (voice profile: {json.dumps(voice)[:400]}). Reference specific names and numbers from the data. No generic advice. Lead with the answer, then offer to go deeper if useful.
@@ -867,10 +1052,19 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class CurrentContext(BaseModel):
+    tab: Optional[str] = None
+    sub_tab: Optional[str] = None
+    viewing_contact_id: Optional[str] = None
+    viewing_module_id: Optional[str] = None
+    viewing_session_id: Optional[str] = None
+
+
 class ChatRequest(BaseModel):
     business_id: str
     message: str
     conversation_history: Optional[List[ChatMessage]] = None
+    current_context: Optional[CurrentContext] = None
 
 
 @router.post("/agents/chief/chat")
@@ -879,13 +1073,17 @@ async def chief_chat(req: ChatRequest):
         raise HTTPException(400, "message is required")
 
     async with httpx.AsyncClient() as client:
-        ctx = await _gather_context(client, req.business_id)
+        # Gather global context + view-specific detail in parallel
+        ctx_task = _gather_context(client, req.business_id)
+        view_task = _fetch_view_detail(client, req.business_id, req.current_context)
+        ctx, view_detail = await asyncio.gather(ctx_task, view_task)
+
         if not ctx:
             raise HTTPException(404, "Business not found")
         biz = ctx["business"]
 
         is_greeting = req.message.strip() == OPENING_SENTINEL
-        system = _build_system_prompt(ctx, is_greeting)
+        system = _build_system_prompt(ctx, is_greeting, req.current_context, view_detail)
 
         # Build API messages — trim history and drop sentinel from the visible trail
         history = (req.conversation_history or [])[-MAX_HISTORY:]
