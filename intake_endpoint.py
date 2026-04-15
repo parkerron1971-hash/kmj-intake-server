@@ -203,6 +203,120 @@ class IntakeSubmission(BaseModel):
 router = APIRouter(tags=["intake"])
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# MODULE ROUTING HELPERS
+# ═══════════════════════════════════════════════════════════════════════
+
+def _render_template(template, submission, contact_id=None):
+    """Substitute {{key}} with submission[key]. Unmatched placeholders stay put.
+    Non-string values pass through unchanged."""
+    if not isinstance(template, str) or "{{" not in template:
+        return template
+    out = template
+    for k, v in (submission or {}).items():
+        out = out.replace("{{" + str(k) + "}}", "" if v is None else str(v))
+    if contact_id:
+        out = out.replace("{{contact_id}}", str(contact_id))
+    return out
+
+
+def _map_submission_to_module_data(submission, field_map, module_schema, contact_id=None):
+    """Build module_entries.data from an intake submission.
+
+    Order of precedence for each module field:
+      1. explicit entry in field_map (literal value or {{template}})
+      2. direct name match between module field and submission key
+      3. skipped
+
+    field_map format:
+      {"title": "name"}                 → copy submission["name"] to data["title"]
+      {"title": "Interest from {{name}}"} → template substitution
+      {"status": "new"}                  → literal (no {{ }} and key not in submission)
+    """
+    data = {}
+    field_map = field_map or {}
+    schema_fields = (module_schema or {}).get("fields") or []
+    schema_field_names = {f.get("name"): f for f in schema_fields if isinstance(f, dict)}
+
+    for module_field_name in schema_field_names.keys():
+        if module_field_name in field_map:
+            raw = field_map[module_field_name]
+            if isinstance(raw, str) and "{{" in raw:
+                data[module_field_name] = _render_template(raw, submission, contact_id)
+            elif isinstance(raw, str) and raw in (submission or {}):
+                # raw is a pointer to a submission key
+                data[module_field_name] = submission[raw]
+            else:
+                data[module_field_name] = raw
+        elif module_field_name in (submission or {}):
+            data[module_field_name] = submission[module_field_name]
+
+    # Always attach contact_id if the module has a contact_link field
+    for f in schema_fields:
+        if isinstance(f, dict) and f.get("type") == "contact_link" and contact_id:
+            data[f["name"]] = contact_id
+            break
+
+    return data
+
+
+async def _create_module_entry_from_submission(
+    client, business_id, module_id, submission, form_id, contact_id, field_map
+):
+    """Create a module_entries row from an intake submission. Returns entry id or None."""
+    modules = await supabase_request(
+        client, "GET",
+        f"/custom_modules?id=eq.{module_id}&limit=1&select=*",
+    )
+    if not modules:
+        logger.warning(f"linked_module_id {module_id} not found for form {form_id}")
+        return None
+    module = modules[0]
+    if not module.get("is_active", True):
+        logger.info(f"Skipping inactive module {module_id}")
+        return None
+
+    data = _map_submission_to_module_data(
+        submission, field_map, module.get("schema"), contact_id=contact_id,
+    )
+
+    inserted = await supabase_request(client, "POST", "/module_entries", {
+        "module_id": module_id,
+        "business_id": business_id,
+        "data": data,
+        "status": "active",
+        "created_by": "intake_form",
+        "source": "intake_form",
+        "source_form_id": form_id,
+    })
+    entry_id = inserted[0]["id"] if (inserted and isinstance(inserted, list)) else None
+    if entry_id:
+        await supabase_request(client, "POST", "/events", {
+            "business_id": business_id,
+            "contact_id": contact_id,
+            "event_type": "module_entry_from_intake",
+            "data": {
+                "module_id": module_id,
+                "entry_id": entry_id,
+                "form_id": form_id,
+            },
+            "source": "intake_form",
+        })
+        logger.info(f"Created module_entry {entry_id} in module {module_id} from form {form_id}")
+    return entry_id
+
+
+def _route_condition_matches(route, submission):
+    """A route fires when submission[route.field] == route.value (stringified)."""
+    field = route.get("field")
+    want = route.get("value")
+    if not field:
+        return False
+    got = (submission or {}).get(field)
+    # Support booleans, strings, and numbers — compare as strings
+    return str(got).lower() == str(want).lower() if got is not None else False
+
+
 @router.post("/intake/submit")
 async def submit_intake(req: IntakeSubmission):
     """
@@ -293,6 +407,43 @@ async def submit_intake(req: IntakeSubmission):
             },
             "source": "intake_form",
         })
+
+        # ── 4b. Route to custom module(s) ─────────────────────────────
+        # Two paths:
+        #   settings.linked_module_id  → every submission creates one module entry
+        #   settings.field_routes      → per-rule routing based on field values
+        module_entries_created = []
+        settings = form_config.get("settings") or {}
+
+        linked_module_id = settings.get("linked_module_id")
+        if linked_module_id:
+            try:
+                entry_id = await _create_module_entry_from_submission(
+                    client, req.business_id, linked_module_id,
+                    submission_data, req.form_id, contact_id,
+                    settings.get("field_map") or {},
+                )
+                if entry_id:
+                    module_entries_created.append({"module_id": linked_module_id, "entry_id": entry_id})
+            except Exception as e:
+                logger.exception(f"linked_module routing failed: {e}")
+
+        for route in (settings.get("field_routes") or []):
+            try:
+                if not _route_condition_matches(route, submission_data):
+                    continue
+                target_module_id = route.get("create_module_entry")
+                if not target_module_id:
+                    continue
+                entry_id = await _create_module_entry_from_submission(
+                    client, req.business_id, target_module_id,
+                    submission_data, req.form_id, contact_id,
+                    route.get("map_fields") or {},
+                )
+                if entry_id:
+                    module_entries_created.append({"module_id": target_module_id, "entry_id": entry_id})
+            except Exception as e:
+                logger.exception(f"field_routes rule failed: {e}")
 
         # ── 5. AI: Score the lead ─────────────────────────────────────
         lead_score = 50  # default if AI fails
@@ -405,6 +556,7 @@ RESPOND ONLY WITH VALID JSON:
             "contact_id": contact_id,
             "lead_score": lead_score,
             "priority": priority,
+            "module_entries_created": module_entries_created,
         }
 
 

@@ -106,6 +106,80 @@ def _hours_until(iso_str: str) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# MODULE SESSION LINK
+# ═══════════════════════════════════════════════════════════════════════
+# When a session is completed, create pre-filled entries in any custom
+# modules that have agent_config.session_linked = true.
+# Dedup key: events.event_type = 'module_session_linked' with
+# data.session_id + data.module_id. Both this code AND module_agent.py's
+# _handle_session_linked check the same key, so enabling both is safe.
+
+async def _session_linked_modules(client, business_id):
+    """Custom modules for this business that want session-linked entries."""
+    rows = await _sb(client, "GET",
+        f"/custom_modules?business_id=eq.{business_id}"
+        f"&is_active=eq.true&select=id,name,schema,agent_config&limit=50"
+    ) or []
+    return [
+        m for m in rows
+        if ((m.get("agent_config") or {}).get("enabled", True))
+        and ((m.get("agent_config") or {}).get("session_linked") is True)
+    ]
+
+
+async def _link_session_to_modules(client, business_id, session):
+    """Call this after a session is marked completed. Creates one pre-filled
+    module_entries row per session-linked module, deduping by event."""
+    modules = await _session_linked_modules(client, business_id)
+    if not modules:
+        return
+
+    for m in modules:
+        # Dedup -- has this session already been linked to this module?
+        existing = await _sb(client, "GET",
+            f"/events?business_id=eq.{business_id}&event_type=eq.module_session_linked"
+            f"&data->>session_id=eq.{session['id']}&data->>module_id=eq.{m['id']}"
+            f"&select=id&limit=1"
+        )
+        if existing:
+            continue
+
+        schema_fields = {f.get("name") for f in (m.get("schema") or {}).get("fields") or [] if isinstance(f, dict)}
+        data = {}
+        if "title" in schema_fields:
+            data["title"] = f"Session: {session.get('title') or 'completed'}"
+        if "deliverable_name" in schema_fields:
+            data["deliverable_name"] = session.get("title") or "Session notes"
+        if "session_id" in schema_fields:
+            data["session_id"] = session["id"]
+        if "contact_id" in schema_fields and session.get("contact_id"):
+            data["contact_id"] = session["contact_id"]
+        if "status" in schema_fields:
+            data["status"] = "new"
+        if "notes" in schema_fields and session.get("notes"):
+            data["notes"] = session["notes"]
+
+        inserted = await _sb(client, "POST", "/module_entries", {
+            "module_id": m["id"],
+            "business_id": business_id,
+            "data": data,
+            "status": "active",
+            "created_by": "session_agent",
+            "source": "session_link",
+        })
+        entry_id = inserted[0]["id"] if (inserted and isinstance(inserted, list)) else None
+        if entry_id:
+            await _sb(client, "POST", "/events", {
+                "business_id": business_id,
+                "contact_id": session.get("contact_id"),
+                "event_type": "module_session_linked",
+                "data": {"module_id": m["id"], "entry_id": entry_id, "session_id": session["id"]},
+                "source": "session_agent",
+            })
+            logger.info(f"Linked session {session['id']} to module {m['name']} (entry {entry_id})")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # PREP BRIEF
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -127,12 +201,12 @@ async def _prep_one_session(client: httpx.AsyncClient, business: Dict, session: 
         f"/agent_queue?contact_id=eq.{contact_id}&order=created_at.desc&limit=5&select=agent,action_type,subject,status,created_at") or []
 
     event_summary = "\n".join(
-        f"- {e.get('event_type')} ({e.get('source', '?')}) — {e.get('created_at', '?')[:10]}"
+        f"- {e.get('event_type')} ({e.get('source', '?')}) -- {e.get('created_at', '?')[:10]}"
         for e in events[:10]
     ) or "No events recorded"
 
     outreach_summary = "\n".join(
-        f"- [{q.get('status')}] {q.get('agent')}: {q.get('subject', q.get('action_type'))} — {q.get('created_at', '?')[:10]}"
+        f"- [{q.get('status')}] {q.get('agent')}: {q.get('subject', q.get('action_type'))} -- {q.get('created_at', '?')[:10]}"
         for q in queue_items[:5]
     ) or "No prior outreach"
 
@@ -185,7 +259,7 @@ Prior outreach:
         "contact_id": contact_id,
         "agent": "session",
         "action_type": "other",
-        "subject": f"Session Prep: {contact_name} — {session_dt}",
+        "subject": f"Session Prep: {contact_name} -- {session_dt}",
         "body": brief_text,
         "channel": "in_app",
         "status": "draft",
@@ -248,7 +322,7 @@ Draft the follow-up message."""
 
     draft_body = await _call_claude(client, system_prompt, user_msg)
     if not draft_body:
-        draft_body = f"Hi {contact_name}, thanks for our session. Looking forward to our next meeting. — {practitioner}"
+        draft_body = f"Hi {contact_name}, thanks for our session. Looking forward to our next meeting. -- {practitioner}"
 
     subject = f"Following up on our session, {contact_name}"
 
@@ -274,6 +348,9 @@ Draft the follow-up message."""
         "source": "session_agent",
     })
 
+    # Link completed session to any session-linked custom modules
+    await _link_session_to_modules(client, business["id"], session)
+
     logger.info(f"Follow-up drafted for session {session['id']} ({contact_name})")
     return {"session_id": session["id"], "contact_name": contact_name, "subject": subject}
 
@@ -296,13 +373,13 @@ async def _noshow_one_session(client: httpx.AsyncClient, business: Dict, session
 
     system_prompt = f"""You are the Session Agent for {biz_name}. Draft a gentle, non-judgmental reschedule message from {practitioner} to {contact_name} who missed their {session.get('session_type', 'session')} on {session_dt}.
 
-Be understanding — life happens. Don't guilt them. Offer to reschedule. Keep it under 4 sentences. Sign off as {practitioner}. Tone: "{tone}"."""
+Be understanding -- life happens. Don't guilt them. Offer to reschedule. Keep it under 4 sentences. Sign off as {practitioner}. Tone: "{tone}"."""
 
     user_msg = f"Contact: {contact_name}\nMissed session: {session.get('title')}\nScheduled for: {session_dt}\n\nDraft a warm reschedule message."
 
     draft_body = await _call_claude(client, system_prompt, user_msg, max_tokens=300)
     if not draft_body:
-        draft_body = f"Hi {contact_name}, I noticed we missed our session. No worries at all — let's find another time that works. — {practitioner}"
+        draft_body = f"Hi {contact_name}, I noticed we missed our session. No worries at all -- let's find another time that works. -- {practitioner}"
 
     await _sb(client, "POST", "/agent_queue", {
         "business_id": business["id"],
@@ -332,7 +409,7 @@ Be understanding — life happens. Don't guilt them. Offer to reschedule. Keep i
         "source": "session_agent",
     })
 
-    logger.info(f"No-show handled for session {session['id']} ({contact_name}), health {health} → {new_health}")
+    logger.info(f"No-show handled for session {session['id']} ({contact_name}), health {health} -> {new_health}")
     return {"session_id": session["id"], "contact_name": contact_name, "health_before": health, "health_after": new_health}
 
 
@@ -378,7 +455,7 @@ async def session_followup(req: SessionRequest):
             raise HTTPException(404, "Business not found")
         biz = businesses[0]
 
-        # Completed sessions — check if follow-up already exists
+        # Completed sessions -- check if follow-up already exists
         completed = await _sb(client, "GET",
             f"/sessions?business_id=eq.{req.business_id}&status=eq.completed"
             f"&order=scheduled_for.desc&limit=10"

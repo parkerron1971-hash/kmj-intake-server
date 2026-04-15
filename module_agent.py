@@ -302,6 +302,173 @@ async def _handle_overdue(client, biz, module, trigger, cap_remaining: int) -> L
     return results
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# INTERNAL CONNECTION HANDLERS (session-linked / contact-linked / scheduled)
+# ═══════════════════════════════════════════════════════════════════════
+# These run regardless of agent_config.triggers. They create module_entries
+# rather than agent_queue drafts, so they don't count against PER_RUN_DRAFT_CAP.
+
+SCHEDULE_INTERVALS = {
+    "daily": timedelta(days=1),
+    "weekly": timedelta(days=7),
+    "biweekly": timedelta(days=14),
+    "monthly": timedelta(days=30),
+}
+
+
+async def _handle_session_linked(client, biz, module) -> List[Dict]:
+    """For modules flagged session_linked, create one module_entry per recently
+    completed session that hasn't been linked yet (dedup via event)."""
+    results = []
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    sessions = await _sb(client, "GET",
+        f"/sessions?business_id=eq.{biz['id']}&status=eq.completed"
+        f"&scheduled_for=gte.{cutoff}&order=scheduled_for.desc&limit=20&select=*"
+    ) or []
+
+    for s in sessions:
+        dedup = await _sb(client, "GET",
+            f"/events?business_id=eq.{biz['id']}&event_type=eq.module_session_linked"
+            f"&data->>session_id=eq.{s['id']}&data->>module_id=eq.{module['id']}"
+            f"&select=id&limit=1"
+        )
+        if dedup:
+            continue
+
+        # Pre-fill a module entry with session basics. The practitioner can add notes via DynamicModule.
+        schema_field_names = {f.get("name") for f in (module.get("schema") or {}).get("fields") or [] if isinstance(f, dict)}
+        data: Dict[str, Any] = {}
+        if "title" in schema_field_names:
+            data["title"] = f"Session: {s.get('title') or 'completed'}"
+        if "deliverable_name" in schema_field_names:
+            data["deliverable_name"] = s.get("title") or "Session notes"
+        if "session_id" in schema_field_names:
+            data["session_id"] = s["id"]
+        if "contact_id" in schema_field_names and s.get("contact_id"):
+            data["contact_id"] = s["contact_id"]
+        if "status" in schema_field_names:
+            data["status"] = "new"
+        if "notes" in schema_field_names and s.get("notes"):
+            data["notes"] = s["notes"]
+
+        inserted = await _sb(client, "POST", "/module_entries", {
+            "module_id": module["id"], "business_id": biz["id"],
+            "data": data, "status": "active",
+            "created_by": "session_agent", "source": "session_link",
+        })
+        if inserted and isinstance(inserted, list) and inserted:
+            eid = inserted[0]["id"]
+            await _sb(client, "POST", "/events", {
+                "business_id": biz["id"], "contact_id": s.get("contact_id"),
+                "event_type": "module_session_linked",
+                "data": {"module_id": module["id"], "entry_id": eid, "session_id": s["id"]},
+                "source": "module_agent",
+            })
+            results.append({"module": module["name"], "trigger": "session_linked", "entry_id": eid, "session_id": s["id"]})
+    return results
+
+
+async def _handle_contact_linked(client, biz, module) -> List[Dict]:
+    """Create a module_entry when a contact's status transitions match."""
+    results = []
+    cfg = ((module.get("agent_config") or {}).get("contact_linked") or {})
+    to_status = cfg.get("to")
+    from_status = cfg.get("from")
+    if not to_status:
+        return results
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    events = await _sb(client, "GET",
+        f"/events?business_id=eq.{biz['id']}&event_type=eq.contact_status_changed"
+        f"&created_at=gte.{cutoff}&order=created_at.desc&limit=100&select=*"
+    ) or []
+
+    for ev in events:
+        d = ev.get("data") or {}
+        if str(d.get("to")) != str(to_status):
+            continue
+        if from_status is not None and str(d.get("from")) != str(from_status):
+            continue
+
+        dedup = await _sb(client, "GET",
+            f"/events?business_id=eq.{biz['id']}&event_type=eq.module_contact_linked"
+            f"&data->>source_event_id=eq.{ev['id']}&data->>module_id=eq.{module['id']}"
+            f"&select=id&limit=1"
+        )
+        if dedup:
+            continue
+
+        contact_id = ev.get("contact_id")
+        schema_field_names = {f.get("name") for f in (module.get("schema") or {}).get("fields") or [] if isinstance(f, dict)}
+        data: Dict[str, Any] = {}
+        if "contact_id" in schema_field_names and contact_id:
+            data["contact_id"] = contact_id
+        if "title" in schema_field_names:
+            contact_name = await _resolve_contact_name(client, contact_id) or "contact"
+            data["title"] = f"{contact_name} → {to_status}"
+        if "status" in schema_field_names:
+            data["status"] = "new"
+
+        inserted = await _sb(client, "POST", "/module_entries", {
+            "module_id": module["id"], "business_id": biz["id"],
+            "data": data, "status": "active",
+            "created_by": "contact_link", "source": "contact_link",
+        })
+        if inserted and isinstance(inserted, list) and inserted:
+            eid = inserted[0]["id"]
+            await _sb(client, "POST", "/events", {
+                "business_id": biz["id"], "contact_id": contact_id,
+                "event_type": "module_contact_linked",
+                "data": {"module_id": module["id"], "entry_id": eid, "source_event_id": ev["id"]},
+                "source": "module_agent",
+            })
+            results.append({"module": module["name"], "trigger": "contact_linked", "entry_id": eid, "contact_id": contact_id})
+    return results
+
+
+async def _handle_scheduled(client, biz, module) -> List[Dict]:
+    """Create a periodic blank entry if the interval has elapsed since the last one."""
+    results = []
+    cfg = ((module.get("agent_config") or {}).get("schedule") or {})
+    interval_key = str(cfg.get("interval", "weekly")).lower()
+    delta = SCHEDULE_INTERVALS.get(interval_key)
+    if not delta:
+        return results
+
+    # Find the most recent scheduled entry
+    last = await _sb(client, "GET",
+        f"/module_entries?module_id=eq.{module['id']}&source=eq.schedule"
+        f"&order=created_at.desc&limit=1&select=id,created_at"
+    ) or []
+
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(last[0]["created_at"].replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) - last_dt < delta:
+                return results  # not yet due
+        except (ValueError, TypeError, KeyError):
+            pass
+
+    schema_field_names = {f.get("name") for f in (module.get("schema") or {}).get("fields") or [] if isinstance(f, dict)}
+    data: Dict[str, Any] = {}
+    if "title" in schema_field_names:
+        label_map = {"daily": "Daily", "weekly": "Weekly", "biweekly": "Biweekly", "monthly": "Monthly"}
+        label = label_map.get(interval_key, "Scheduled")
+        data["title"] = f"{label} — {datetime.now(timezone.utc).strftime('%b %d, %Y')}"
+    if "status" in schema_field_names:
+        data["status"] = "new"
+
+    inserted = await _sb(client, "POST", "/module_entries", {
+        "module_id": module["id"], "business_id": biz["id"],
+        "data": data, "status": "active",
+        "created_by": "schedule", "source": "schedule",
+    })
+    if inserted and isinstance(inserted, list) and inserted:
+        eid = inserted[0]["id"]
+        results.append({"module": module["name"], "trigger": "schedule", "entry_id": eid, "interval": interval_key})
+    return results
+
+
 async def _handle_field_change(client, biz, module, trigger, cap_remaining: int) -> List[Dict]:
     results = []
     field = trigger.get("field")
@@ -391,17 +558,18 @@ async def module_check(req: ModuleCheckRequest):
         per_module_stats: List[Dict] = []
         cap_remaining = PER_RUN_DRAFT_CAP
 
+        entries_created_total = 0  # separate counter for internal-connection entries
+
         for module in modules:
             agent_config = module.get("agent_config") or {}
             if not agent_config.get("enabled", True):
                 per_module_stats.append({"module": module["name"], "drafts_created": 0, "skipped_reason": "disabled"})
                 continue
-            triggers = agent_config.get("triggers") or []
-            if not triggers:
-                per_module_stats.append({"module": module["name"], "drafts_created": 0, "skipped_reason": "no_triggers"})
-                continue
 
             module_results: List[Dict] = []
+
+            # ── Draft-producing triggers ──────────────────────────────
+            triggers = agent_config.get("triggers") or []
             for trigger in triggers:
                 if cap_remaining <= 0:
                     break
@@ -420,14 +588,38 @@ async def module_check(req: ModuleCheckRequest):
                 except Exception as e:
                     logger.exception(f"Trigger {trigger.get('type')} on module {module['name']} failed: {e}")
 
-            per_module_stats.append({"module": module["name"], "drafts_created": len(module_results)})
+            # ── Internal-connection handlers (create entries, not drafts) ──
+            internal_results: List[Dict] = []
+            try:
+                if agent_config.get("session_linked"):
+                    internal_results.extend(await _handle_session_linked(client, biz, module))
+                if agent_config.get("contact_linked"):
+                    internal_results.extend(await _handle_contact_linked(client, biz, module))
+                if agent_config.get("schedule"):
+                    internal_results.extend(await _handle_scheduled(client, biz, module))
+            except Exception as e:
+                logger.exception(f"Internal connection on module {module['name']} failed: {e}")
+
+            entries_created_total += len(internal_results)
+            module_results.extend(internal_results)
+
+            per_module_stats.append({
+                "module": module["name"],
+                "drafts_created": len([r for r in module_results if r.get("trigger") in ("new_entry", "overdue", "field_change")]),
+                "entries_created": len(internal_results),
+            })
             all_results.extend(module_results)
 
-        logger.info(f"Module check for {biz.get('name')}: {len(all_results)} drafts across {len(modules)} modules")
+        drafts_count = len(all_results) - entries_created_total
+        logger.info(
+            f"Module check for {biz.get('name')}: {drafts_count} drafts, "
+            f"{entries_created_total} auto-entries across {len(modules)} modules"
+        )
         return {
             "business_id": req.business_id,
             "modules_checked": len(modules),
-            "drafts_created": len(all_results),
+            "drafts_created": drafts_count,
+            "entries_created": entries_created_total,
             "per_module": per_module_stats,
             "results": all_results,
         }
