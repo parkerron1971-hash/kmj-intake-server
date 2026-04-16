@@ -193,8 +193,12 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
             f"/chief_memories?business_id=eq.{biz_id}&is_active=eq.true"
             f"&order=importance.desc,created_at.desc&limit=50"
             f"&select=id,category,content,importance,source,created_at,last_referenced_at"),
+        _sb(client, "GET",
+            f"/chief_notifications?business_id=eq.{biz_id}&status=eq.unread"
+            f"&order=created_at.desc&limit=5"
+            f"&select=id,type,title,body,priority,suggested_action,created_at"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -237,6 +241,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "modules": modules or [],
         "module_counts": module_counts,
         "memories": memories or [],
+        "notifications": notifications or [],
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
@@ -312,6 +317,17 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         for m in (ctx.get("memories") or [])
     ]
 
+    # Recent unread notifications
+    notif_lines = []
+    for n in (ctx.get("notifications") or []):
+        days = _days_since(n.get("created_at"))
+        when = f"{days}d ago" if days and days >= 1 else "today"
+        suggestion = f" → suggested: {n['suggested_action']}" if n.get("suggested_action") else ""
+        notif_lines.append(
+            f"  - [{(n.get('type') or '').upper()} {n.get('priority', 'normal')}] "
+            f"\"{n.get('title')}\" ({when}){suggestion}"
+        )
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
   Voice profile: {json.dumps(biz.get('voice_profile') or {})[:500]}
@@ -339,6 +355,9 @@ RECENT EVENTS:
 
 PRACTITIONER MEMORIES (ALWAYS honor these — they override defaults):
 {chr(10).join(memory_lines) if memory_lines else '  (none stored yet)'}
+
+RECENT UNREAD NOTIFICATIONS:
+{chr(10).join(notif_lines) if notif_lines else '  (none)'}
 
 CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
 {chr(10).join(contact_ref_lines) if contact_ref_lines else '  (no contacts)'}
@@ -1217,6 +1236,9 @@ NAVIGATION IS MANDATORY. When the practitioner says ANY of these, ALWAYS include
   "show me", "take me to", "open", "go to", "pull up", "let me see", "where is", "I want to see", or when they mention a specific contact, module, session, or page by name or say "that"/"this one."
 Pair navigation with one short sentence of context: "Pulling up Deacon Harris — he's been declining for 3 weeks." + the navigate action.
 The panel stays open after navigation so the practitioner can keep talking while viewing the target.
+
+UNREAD NOTIFICATIONS:
+You can see the practitioner's RECENT UNREAD NOTIFICATIONS above. When relevant, reference them naturally — e.g., "I see you haven't read this morning's brief yet — want me to summarize it?" Don't force a mention; only bring them up when they connect to the conversation or when the practitioner asks what's been happening.
 
 MEMORY HANDLING:
 - The PRACTITIONER MEMORIES section above is your long-term memory. ALWAYS honor those memories — they override defaults. If a memory conflicts with a request you're about to fulfill, point it out and propose an alternative. Example: scheduling on a Tuesday when a PATTERN memory says "Tuesdays blocked" — say "I see Tuesdays are blocked for you — how about Thursday at 2pm instead?"
