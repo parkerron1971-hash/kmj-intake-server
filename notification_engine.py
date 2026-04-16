@@ -178,6 +178,8 @@ async def _insert_notification(client, biz_id: str, payload: Dict) -> Optional[D
     inserted = await _sb(client, "POST", "/chief_notifications", payload)
     if inserted and isinstance(inserted, list) and inserted:
         return inserted[0]
+    # Surface the failure so it doesn't silently turn into "created:false"
+    logger.error(f"Notification insert failed. Payload keys: {sorted(payload.keys())}")
     return None
 
 
@@ -264,7 +266,10 @@ def _format_data_for_prompt(data: Dict) -> str:
 async def _ai_generate_notification(
     client, biz: Dict, system_prompt: str, data_summary: str, fallback_title: str, fallback_body: str
 ) -> Dict:
-    """Returns {title, body, priority, suggested_action_text, action_payload}."""
+    """Returns a dict whose keys match chief_notifications columns:
+    {title, body, priority, suggested_action, action_payload}.
+    The AI is prompted with 'suggested_action_text' for clarity but we
+    map it to the DB column name before returning."""
     user_msg = f"DATA:\n{data_summary}\n\nReturn ONLY JSON inside ```json fences with this shape:\n" + (
         '{"title": "...", "body": "...", "priority": "normal|high|urgent|low", '
         '"suggested_action_text": "Yes, do that" | null, '
@@ -277,14 +282,14 @@ async def _ai_generate_notification(
             "title": fallback_title,
             "body": fallback_body,
             "priority": "normal",
-            "suggested_action_text": None,
+            "suggested_action": None,
             "action_payload": None,
         }
     return {
         "title": str(parsed["title"])[:200],
         "body": str(parsed["body"])[:2000],
         "priority": _normalize_priority(parsed.get("priority", "normal")),
-        "suggested_action_text": (str(parsed["suggested_action_text"])[:200] if parsed.get("suggested_action_text") else None),
+        "suggested_action": (str(parsed["suggested_action_text"])[:200] if parsed.get("suggested_action_text") else None),
         "action_payload": parsed.get("action_payload") if isinstance(parsed.get("action_payload"), dict) else None,
     }
 
