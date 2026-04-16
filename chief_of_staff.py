@@ -189,8 +189,12 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         _sb(client, "GET",
             f"/custom_modules?business_id=eq.{biz_id}&is_active=eq.true"
             f"&select=id,name,description&limit=50"),
+        _sb(client, "GET",
+            f"/chief_memories?business_id=eq.{biz_id}&is_active=eq.true"
+            f"&order=importance.desc,created_at.desc&limit=50"
+            f"&select=id,category,content,importance,source,created_at,last_referenced_at"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -232,6 +236,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "insights": insights or [],
         "modules": modules or [],
         "module_counts": module_counts,
+        "memories": memories or [],
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
@@ -301,6 +306,12 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         for c in ctx["contacts_lookup"][:60]
     ]
 
+    # Practitioner memories — sorted desc by importance (already sorted in query)
+    memory_lines = [
+        f"  - [{(m.get('category') or 'other').upper()} ★{m.get('importance', 5)}] {m.get('content')}"
+        for m in (ctx.get("memories") or [])
+    ]
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
   Voice profile: {json.dumps(biz.get('voice_profile') or {})[:500]}
@@ -325,6 +336,9 @@ CUSTOM MODULES:
 
 RECENT EVENTS:
 {chr(10).join(event_lines) if event_lines else '  (none)'}
+
+PRACTITIONER MEMORIES (ALWAYS honor these — they override defaults):
+{chr(10).join(memory_lines) if memory_lines else '  (none stored yet)'}
 
 CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
 {chr(10).join(contact_ref_lines) if contact_ref_lines else '  (no contacts)'}
@@ -805,6 +819,124 @@ async def handle_navigate(client, biz, action) -> Dict:
     }
 
 
+VALID_MEMORY_CATEGORIES = {"preference", "pattern", "context", "decision", "boundary", "goal", "other"}
+
+# Stop words excluded from memory dedup signature
+_MEMORY_STOPWORDS = {
+    "i", "me", "my", "we", "our", "you", "your", "he", "she", "it", "they", "them",
+    "the", "a", "an", "and", "or", "but", "to", "of", "for", "in", "on", "at",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "should", "can", "could", "may", "might",
+    "this", "that", "these", "those", "with", "as", "from", "by", "into", "about",
+    "than", "then", "so", "too", "very", "just", "not", "no",
+}
+
+
+def _memory_signature(content: str) -> set:
+    """Lowercase non-stopword tokens of a memory's content."""
+    if not content:
+        return set()
+    cleaned = "".join(c.lower() if c.isalnum() else " " for c in content)
+    tokens = [t for t in cleaned.split() if t and t not in _MEMORY_STOPWORDS and len(t) > 1]
+    return set(tokens)
+
+
+async def _find_duplicate_memory(client, biz_id: str, content: str) -> Optional[Dict]:
+    """Return an existing memory if 80%+ of `content`'s significant words are
+    contained in it. Skips dedup for very short content (<3 sig words)."""
+    new_sig = _memory_signature(content)
+    if len(new_sig) < 3:
+        return None
+    existing = await _sb(client, "GET",
+        f"/chief_memories?business_id=eq.{biz_id}&is_active=eq.true"
+        f"&select=id,content&limit=200")
+    if not existing:
+        return None
+    for row in existing:
+        old_sig = _memory_signature(row.get("content") or "")
+        if not old_sig:
+            continue
+        overlap = len(new_sig & old_sig) / len(new_sig)
+        if overlap >= 0.80:
+            return row
+    return None
+
+
+async def handle_remember(client, biz, action) -> Dict:
+    """Store a memory about the practitioner."""
+    content = (action.get("content") or "").strip()
+    if not content:
+        return _fail("remember", "no content provided")
+    category = (action.get("category") or "other").lower().strip()
+    if category not in VALID_MEMORY_CATEGORIES:
+        category = "other"
+    try:
+        importance = max(1, min(10, int(action.get("importance", 5))))
+    except (TypeError, ValueError):
+        importance = 5
+
+    # Word-overlap dedup
+    dup = await _find_duplicate_memory(client, biz["id"], content)
+    if dup:
+        return {
+            "type": "remember",
+            "result": "already remembered",
+            "label": f"Memory exists: {(dup.get('content') or '')[:60]}",
+            "nav": _nav("operate"),  # no specific destination
+        }
+
+    inserted = await _sb(client, "POST", "/chief_memories", {
+        "business_id": biz["id"],
+        "category": category,
+        "content": content[:2000],
+        "source": "user_stated",
+        "importance": importance,
+    })
+    if not inserted:
+        return _fail("remember", "insert failed")
+
+    label = f"Remembered ({category}): {content[:80]}"
+    return {"type": "remember", "result": "stored", "label": label, "nav": None}
+
+
+async def handle_forget(client, biz, action) -> Dict:
+    """Deactivate a memory whose content matches the supplied phrase."""
+    target = (action.get("memory_content") or action.get("content") or "").strip()
+    if not target:
+        return _fail("forget", "no memory_content provided")
+
+    target_sig = _memory_signature(target)
+    if not target_sig:
+        return _fail("forget", "couldn't parse memory_content")
+
+    existing = await _sb(client, "GET",
+        f"/chief_memories?business_id=eq.{biz['id']}&is_active=eq.true"
+        f"&select=id,content&limit=200") or []
+
+    best = None
+    best_score = 0.0
+    for row in existing:
+        old_sig = _memory_signature(row.get("content") or "")
+        if not old_sig:
+            continue
+        score = len(target_sig & old_sig) / max(len(target_sig), 1)
+        if score > best_score:
+            best_score = score
+            best = row
+
+    if not best or best_score < 0.5:
+        return {"type": "forget", "result": "couldn't find that memory", "label": target[:60], "nav": None}
+
+    await _sb(client, "PATCH", f"/chief_memories?id=eq.{best['id']}",
+              {"is_active": False})
+    return {
+        "type": "forget",
+        "result": "forgotten",
+        "label": f"Forgot: {(best.get('content') or '')[:60]}",
+        "nav": None,
+    }
+
+
 ACTION_HANDLERS = {
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
@@ -817,7 +949,34 @@ ACTION_HANDLERS = {
     "generate_briefing":     handle_generate_briefing,
     "generate_insights":     handle_generate_insights,
     "navigate":              handle_navigate,
+    "remember":              handle_remember,
+    "forget":                handle_forget,
 }
+
+
+async def _mark_referenced_memories(client, biz_id: str, memories: List[Dict], response_text: str) -> None:
+    """Best-effort: PATCH last_referenced_at for memories whose distinctive
+    words appear in the AI response. Runs after the response — non-blocking."""
+    if not memories or not response_text:
+        return
+    response_lower = response_text.lower()
+    referenced_ids: List[str] = []
+    for m in memories:
+        sig = _memory_signature(m.get("content") or "")
+        if len(sig) < 2:
+            continue
+        # Pick the 3 longest tokens (most distinctive)
+        top = sorted(sig, key=len, reverse=True)[:3]
+        if all(tok in response_lower for tok in top):
+            referenced_ids.append(m["id"])
+    if not referenced_ids:
+        return
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # PATCH each — small batch, fire-and-forget
+    await asyncio.gather(*[
+        _sb(client, "PATCH", f"/chief_memories?id=eq.{mid}", {"last_referenced_at": now_iso})
+        for mid in referenced_ids
+    ], return_exceptions=True)
 
 
 async def _execute_actions(client, biz, actions: List[Dict]) -> List[Dict]:
@@ -1038,6 +1197,8 @@ Available action types:
   [ACTION:{{"type":"generate_briefing"}}]
   [ACTION:{{"type":"generate_insights"}}]
   [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"queue|contacts|sessions|agents|briefing|health|insights","contact_id":"<uuid-optional>","page":"<page-id-for-build-tab-optional>"}}]
+  [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|other","content":"the fact to remember","importance":1-10}}]
+  [ACTION:{{"type":"forget","memory_content":"snippet of the memory to deactivate"}}]
 
 NAVIGATION EXAMPLES:
   - Show the queue:        [ACTION:{{"type":"navigate","tab":"operate","sub":"queue"}}]
@@ -1056,6 +1217,12 @@ NAVIGATION IS MANDATORY. When the practitioner says ANY of these, ALWAYS include
   "show me", "take me to", "open", "go to", "pull up", "let me see", "where is", "I want to see", or when they mention a specific contact, module, session, or page by name or say "that"/"this one."
 Pair navigation with one short sentence of context: "Pulling up Deacon Harris — he's been declining for 3 weeks." + the navigate action.
 The panel stays open after navigation so the practitioner can keep talking while viewing the target.
+
+MEMORY HANDLING:
+- The PRACTITIONER MEMORIES section above is your long-term memory. ALWAYS honor those memories — they override defaults. If a memory conflicts with a request you're about to fulfill, point it out and propose an alternative. Example: scheduling on a Tuesday when a PATTERN memory says "Tuesdays blocked" — say "I see Tuesdays are blocked for you — how about Thursday at 2pm instead?"
+- When the practitioner states a NEW preference, pattern, boundary, goal, decision, or important context (about themselves or a specific contact), capture it with a [ACTION:remember] tag and confirm naturally ("Got it — I'll remember you prefer calls."). Be selective: only remember things that would matter in future conversations. Skip transient facts ("I'm tired today", "I had coffee").
+- When the practitioner says something like "forget that" / "scratch that" / "I don't do X anymore" / "that's not true anymore", emit a [ACTION:forget] referencing the obsolete memory.
+- Pick importance thoughtfully: 9-10 = hard rules / boundaries, 7-8 = strong preferences / goals, 4-6 = useful context, 1-3 = nice-to-know.
 
 CONVERSATIONAL RULES — SMART NEXT STEPS:
 After answering a question or taking an action, propose 1-2 natural next steps framed as yes/no questions. Keep each to one sentence. Examples:
@@ -1162,9 +1329,12 @@ async def chief_chat(req: ChatRequest):
         actions, clean = _extract_actions_and_clean(raw)
         taken = await _execute_actions(client, biz, actions) if actions else []
 
+        # Best-effort: mark memories referenced in the response
+        await _mark_referenced_memories(client, biz["id"], ctx.get("memories") or [], clean or raw)
+
         logger.info(
             f"Chief chat for {biz.get('name')}: message_len={len(req.message)} "
-            f"actions={len(taken)} greeting={is_greeting}"
+            f"actions={len(taken)} greeting={is_greeting} memories={len(ctx.get('memories') or [])}"
         )
 
         return {
