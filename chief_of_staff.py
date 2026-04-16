@@ -27,8 +27,6 @@ Action format (JSON inside brackets, not pipe-delimited):
     [ACTION:{"type":"create_session","contact_id":"uuid","title":"...","scheduled_for":"2026-04-20T14:00:00Z"}]
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -59,7 +57,7 @@ FALLBACK_BASE = os.environ.get(
 )
 
 MAX_HISTORY = 30
-OPENING_SENTINEL = "[SYSTEM:opening_greeting]"
+OPENING_SENTINEL_PREFIX = "[SYSTEM:opening_greeting"  # may have :morning/:afternoon/:evening suffix
 MAX_ACTIONS_PER_TURN = 8  # safety cap in case the AI goes wild
 
 VALID_CONTACT_STATUSES = {"active", "lead", "vip", "inactive", "churned"}
@@ -970,7 +968,9 @@ def _format_view_block(view: Optional[CurrentContext], detail: Dict[str, Any]) -
 
 def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          view: Optional[CurrentContext] = None,
-                         view_detail: Optional[Dict] = None) -> str:
+                         view_detail: Optional[Dict] = None,
+                         time_of_day: Optional[str] = None,
+                         resume_note: Optional[ResumeNote] = None) -> str:
     biz = ctx.get("business") or {}
     biz_name = biz.get("name", "the business")
     practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
@@ -979,12 +979,34 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     context_block = _format_context_for_prompt(ctx)
     view_block = _format_view_block(view, view_detail or {})
 
+    # Time-of-day tailoring for greeting
+    tod_guidance = ""
+    if time_of_day == "morning":
+        tod_guidance = f" Start with 'Good morning, {practitioner}.' Focus on what to prioritize TODAY."
+    elif time_of_day == "afternoon":
+        tod_guidance = f" Start with 'Good afternoon.' Focus on what's still pending from the morning."
+    elif time_of_day == "evening":
+        tod_guidance = f" Start with 'Evening, {practitioner}.' Focus on what happened today and what carries to tomorrow."
+    elif time_of_day == "night":
+        tod_guidance = f" Start with 'Hey {practitioner}.' Keep it very brief — just the one most important thing."
+
+    # Resumed conversation context
+    resume_clause = ""
+    if resume_note and resume_note.gap_minutes and resume_note.gap_minutes > 0:
+        gap_str = (f"{resume_note.gap_minutes}m" if resume_note.gap_minutes < 60
+                   else f"{round(resume_note.gap_minutes / 60, 1)}h")
+        changes = resume_note.changes_summary or "nothing notable changed"
+        resume_clause = f"""
+
+CONVERSATION RESUMED: The practitioner last spoke with you {gap_str} ago. Since then: {changes}.
+Pick up naturally — don't re-introduce yourself. If they reference something from earlier, you have the full conversation history."""
+
     greeting_clause = ""
     if is_greeting:
-        greeting_clause = """
+        greeting_clause = f"""
 
 OPENING GREETING MODE:
-This is your first turn in a fresh conversation. Give a concise briefing (2-4 sentences) based on the most important things in the data RIGHT NOW. Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. End with ONE question or a specific proactive suggestion. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate)."""
+This is your first turn in a fresh conversation. Give a concise briefing (2-4 sentences) based on the most important things in the data RIGHT NOW.{tod_guidance} Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. End with ONE question or a specific proactive suggestion. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate)."""
 
     return f"""You are the Chief of Staff for {biz_name}. You are {practitioner}'s operational partner — you see everything happening in their business and help them manage it through conversation.
 
@@ -1025,9 +1047,13 @@ NAVIGATION EXAMPLES:
 ACTION RULES:
 - Use EXACT UUIDs from the CONTACT LOOKUP / CUSTOM MODULES / CURRENTLY VIEWING sections. Never invent IDs.
 - Don't emit actions unless the practitioner explicitly asks you to do something OR you're taking an obvious next step they've agreed to.
-- Navigate is encouraged when it helps — "Let me show you his profile" paired with a navigate action feels natural. The panel stays open while navigating.
 - Emit at most {MAX_ACTIONS_PER_TURN} actions per turn.
 - Confirm in plain language what you're doing ("Drafting a check-in for Deacon Harris now. Taking you to his profile.") — the system shows a separate actions card below your message.
+
+NAVIGATION IS MANDATORY. When the practitioner says ANY of these, ALWAYS include a navigate action — don't just describe where something is. Take them there:
+  "show me", "take me to", "open", "go to", "pull up", "let me see", "where is", "I want to see", or when they mention a specific contact, module, session, or page by name or say "that"/"this one."
+Pair navigation with one short sentence of context: "Pulling up Deacon Harris — he's been declining for 3 weeks." + the navigate action.
+The panel stays open after navigation so the practitioner can keep talking while viewing the target.
 
 CONVERSATIONAL RULES — SMART NEXT STEPS:
 After answering a question or taking an action, propose 1-2 natural next steps framed as yes/no questions. Keep each to one sentence. Examples:
@@ -1039,7 +1065,7 @@ EXCEPTION: Skip the next-step question when the answer is purely factual ("what'
 VOICE:
 Direct, warm, operational. Match {practitioner}'s communication style (voice profile: {json.dumps(voice)[:400]}). Reference specific names and numbers from the data. No generic advice. Lead with the answer, then offer to go deeper if useful.
 
-Keep responses concise unless asked for depth. If the practitioner asks a factual question, answer in one or two sentences. If they want analysis, give the analysis then stop.{greeting_clause}"""
+Keep responses concise unless asked for depth. If the practitioner asks a factual question, answer in one or two sentences. If they want analysis, give the analysis then stop.{greeting_clause}{resume_clause}"""
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1062,11 +1088,32 @@ class CurrentContext(BaseModel):
     viewing_session_id: Optional[str] = None
 
 
+class ResumeNote(BaseModel):
+    gap_minutes: Optional[int] = None
+    changes_summary: Optional[str] = None
+
+
 class ChatRequest(BaseModel):
     business_id: str
     message: str
     conversation_history: Optional[List[ChatMessage]] = None
     current_context: Optional[CurrentContext] = None
+    resume_note: Optional[ResumeNote] = None
+
+
+def _is_greeting(msg: str) -> bool:
+    return msg.strip().startswith(OPENING_SENTINEL_PREFIX)
+
+
+def _parse_greeting_tod(msg: str) -> Optional[str]:
+    """Extract time-of-day suffix from [SYSTEM:opening_greeting:morning] etc."""
+    s = msg.strip()
+    if not s.startswith(OPENING_SENTINEL_PREFIX):
+        return None
+    rest = s[len(OPENING_SENTINEL_PREFIX):]
+    if rest.startswith(":") and rest.endswith("]"):
+        return rest[1:-1].strip().lower() or None
+    return None
 
 
 @router.post("/agents/chief/chat")
@@ -1084,16 +1131,20 @@ async def chief_chat(req: ChatRequest):
             raise HTTPException(404, "Business not found")
         biz = ctx["business"]
 
-        is_greeting = req.message.strip() == OPENING_SENTINEL
-        system = _build_system_prompt(ctx, is_greeting, req.current_context, view_detail)
+        is_greeting = _is_greeting(req.message)
+        tod = _parse_greeting_tod(req.message) if is_greeting else None
+        system = _build_system_prompt(
+            ctx, is_greeting, req.current_context, view_detail,
+            time_of_day=tod, resume_note=req.resume_note,
+        )
 
         # Build API messages — trim history and drop sentinel from the visible trail
         history = (req.conversation_history or [])[-MAX_HISTORY:]
         api_messages: List[Dict[str, str]] = []
         for m in history:
             role = "assistant" if m.role == "assistant" else "user"
-            # Filter out any accidental sentinel echoes in history
-            if m.content.strip() == OPENING_SENTINEL:
+            # Filter out any sentinel echoes in history
+            if _is_greeting(m.content):
                 continue
             api_messages.append({"role": role, "content": m.content})
 
