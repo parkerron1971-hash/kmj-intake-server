@@ -38,7 +38,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -144,7 +144,8 @@ class TTSRequest(BaseModel):
 
 @router.post("/ai/tts/speak")
 async def text_to_speech(req: TTSRequest):
-    """Proxy OpenAI TTS. Returns raw mp3 audio (binary)."""
+    """Proxy OpenAI TTS. Streams raw mp3 audio back to the client for
+    faster time-to-first-byte playback."""
     key = _openai_key()
     if not key:
         raise HTTPException(500, "OPENAI_API_KEY not configured on server")
@@ -163,9 +164,14 @@ async def text_to_speech(req: TTSRequest):
     if model not in (TTS_MODEL_DEFAULT, TTS_MODEL_HD):
         model = TTS_MODEL_DEFAULT
 
+    # Use httpx streaming so we forward chunks as OpenAI produces them,
+    # instead of buffering the entire mp3 in memory first.
+    client = httpx.AsyncClient(timeout=TTS_TIMEOUT)
+
     try:
-        async with httpx.AsyncClient(timeout=TTS_TIMEOUT) as client:
-            resp = await client.post(
+        upstream = await client.send(
+            client.build_request(
+                "POST",
                 OPENAI_TTS_URL,
                 headers={
                     "Authorization": f"Bearer {key}",
@@ -177,22 +183,37 @@ async def text_to_speech(req: TTSRequest):
                     "voice": voice,
                     "response_format": "mp3",
                 },
-            )
+            ),
+            stream=True,
+        )
     except httpx.TimeoutException:
+        await client.aclose()
         logger.warning("TTS request timed out")
         raise HTTPException(504, "TTS API timed out")
     except httpx.HTTPError as e:
+        await client.aclose()
         logger.error(f"TTS request failed: {e}")
         raise HTTPException(502, f"TTS request failed: {e}")
 
-    if resp.status_code >= 400:
-        body = resp.text[:300]
-        logger.warning(f"TTS {resp.status_code}: {body}")
-        raise HTTPException(resp.status_code, f"TTS error: {body}")
+    if upstream.status_code >= 400:
+        body = (await upstream.aread()).decode("utf-8", errors="replace")[:300]
+        await upstream.aclose()
+        await client.aclose()
+        logger.warning(f"TTS {upstream.status_code}: {body}")
+        raise HTTPException(upstream.status_code, f"TTS error: {body}")
 
-    logger.info(f"TTS ok: chars={len(text)} voice={voice} model={model} bytes={len(resp.content)}")
-    return Response(
-        content=resp.content,
+    logger.info(f"TTS streaming: chars={len(text)} voice={voice} model={model}")
+
+    async def _stream():
+        try:
+            async for chunk in upstream.aiter_bytes(chunk_size=4096):
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        _stream(),
         media_type="audio/mpeg",
         headers={"Cache-Control": "no-store"},
     )
