@@ -385,6 +385,237 @@ async def get_widget(module_id: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# LINK PAGE ENDPOINT
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@router.get("/public/link/{slug}")
+async def link_page_html(slug: str):
+    """Render a Linktree-style link page."""
+    if not _check_rate(f"link-{slug}"):
+        raise HTTPException(429, "Rate limit exceeded")
+
+    async with httpx.AsyncClient() as client:
+        # Find business by link_page slug
+        biz_rows = await _sb(client, "/businesses?select=id,name,type,settings&limit=200")
+        biz = None
+        for b in (biz_rows or []):
+            lp = (b.get("settings") or {}).get("link_page") or {}
+            if lp.get("slug") == slug and lp.get("enabled"):
+                biz = b
+                break
+        if not biz:
+            raise HTTPException(404, "Link page not found")
+
+        brand = (biz.get("settings") or {}).get("brand_kit") or {}
+        lp = (biz.get("settings") or {}).get("link_page") or {}
+        colors = brand.get("colors") or _palette_for(biz.get("type", "general"))
+        biz_name = biz.get("name", "")
+        tagline = brand.get("tagline", "")
+        practitioner = (biz.get("settings") or {}).get("practitioner_name", biz_name)
+
+        layout = lp.get("layout", "stack")
+        bg_style = lp.get("background", "gradient")
+        primary = colors.get("primary", "#333")
+        secondary = colors.get("secondary", "#666")
+        bg = colors.get("background", "#faf8f5")
+        text_color = colors.get("text", "#1a1a2e")
+
+        if bg_style == "gradient":
+            bg_css = f"linear-gradient(135deg, {primary}22, {secondary}22)"
+        elif bg_style == "dark":
+            bg_css = "#0d0d12"
+            text_color = "#E8E4DD"
+        else:
+            bg_css = bg
+
+        # Gather links
+        biz_id = biz["id"]
+        sites, forms, modules = await asyncio.gather(
+            _sb(client, f"/business_sites?business_id=eq.{biz_id}&limit=1&select=slug"),
+            _sb(client, f"/intake_forms?business_id=eq.{biz_id}&is_active=eq.true&select=id,name&limit=20"),
+            _sb(client, f"/custom_modules?business_id=eq.{biz_id}&is_active=eq.true&select=id,name,icon,public_display&limit=20"),
+        )
+
+        links_html = ""
+        auto_links = []
+        site_slug = sites[0]["slug"] if sites else None
+        if site_slug:
+            auto_links.append(("🌐", "Website", f"/public/site/{site_slug}"))
+        booking = (biz.get("settings") or {}).get("booking") or {}
+        if booking.get("enabled") and site_slug:
+            auto_links.append(("📅", "Book a Session", f"/public/booking/{site_slug}"))
+        for f in (forms or []):
+            auto_links.append(("📥", f["name"], "#"))
+        for m in (modules or []):
+            if (m.get("public_display") or {}).get("enabled"):
+                auto_links.append((m.get("icon", "🧩"), m["name"], f"/public/widget/{m['id']}"))
+        for cl in (lp.get("custom_links") or []):
+            auto_links.append((cl.get("icon", "🔗"), cl.get("label", "Link"), cl.get("url", "#")))
+
+        btn_style = (
+            f"display:block;width:100%;padding:14px 20px;margin-bottom:10px;background:#fff;"
+            f"border:1.5px solid {primary}30;border-radius:10px;text-decoration:none;"
+            f"color:{text_color};font-weight:600;font-size:0.95em;text-align:center;"
+            f"transition:transform 0.15s,box-shadow 0.15s;"
+        )
+        for icon, label, url in auto_links:
+            links_html += f'<a href="{url}" style="{btn_style}" onmouseover="this.style.transform=\'translateY(-2px)\';this.style.boxShadow=\'0 4px 12px rgba(0,0,0,0.1)\'" onmouseout="this.style.transform=\'\';this.style.boxShadow=\'\'">{icon} {label}</a>\n'
+
+        # Social icons
+        socials = lp.get("social_profiles") or {}
+        social_html = ""
+        social_map = {"instagram": "📸", "facebook": "📘", "youtube": "📺", "twitter": "🐦", "linkedin": "💼", "tiktok": "🎵"}
+        for platform, handle in socials.items():
+            if not handle:
+                continue
+            social_html += f'<span style="font-size:1.4em;cursor:pointer;" title="{platform}: {handle}">{social_map.get(platform, "🔗")}</span> '
+
+        html = f"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{practitioner} — {biz_name}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box;}}
+body{{font-family:'Inter',sans-serif;background:{bg_css};color:{text_color};min-height:100vh;display:flex;justify-content:center;padding:40px 20px;}}
+.container{{max-width:420px;width:100%;text-align:center;}}
+.avatar{{width:80px;height:80px;border-radius:50%;background:{primary};color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:2em;font-weight:700;margin-bottom:12px;}}
+h1{{font-size:1.4em;font-weight:700;margin-bottom:4px;}}
+.tagline{{color:{primary};font-size:0.9em;margin-bottom:24px;font-style:italic;}}
+.socials{{margin-top:20px;display:flex;gap:12px;justify-content:center;}}
+.footer{{margin-top:30px;font-size:0.7em;color:{text_color}55;}}
+</style></head>
+<body><div class="container">
+<div class="avatar">{biz_name[0] if biz_name else '?'}</div>
+<h1>{practitioner}</h1>
+{f'<p class="tagline">{tagline}</p>' if tagline else f'<p class="tagline">{biz_name}</p>'}
+{links_html}
+{f'<div class="socials">{social_html}</div>' if social_html else ''}
+<div class="footer">Powered by The Solutionist System</div>
+</div></body></html>"""
+        return HTMLResponse(content=html)
+
+
+@router.post("/public/link/{slug}/track")
+async def track_link_click(slug: str, link_id: str = "", referrer: str = ""):
+    """Log a link page click event."""
+    if not _check_rate(f"link-track-{slug}"):
+        raise HTTPException(429, "Rate limit exceeded")
+    async with httpx.AsyncClient() as client:
+        biz_rows = await _sb(client, "/businesses?select=id,settings&limit=200")
+        biz_id = None
+        for b in (biz_rows or []):
+            if ((b.get("settings") or {}).get("link_page") or {}).get("slug") == slug:
+                biz_id = b["id"]
+                break
+        if not biz_id:
+            raise HTTPException(404, "Business not found")
+        await _sb_post(client, "/events", {
+            "business_id": biz_id,
+            "event_type": "link_page_click",
+            "data": {"link_id": link_id, "referrer": referrer, "slug": slug},
+            "source": "link_page",
+        })
+        return {"tracked": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# RESOURCE LIBRARY ENDPOINT
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@router.get("/public/resources/{slug}")
+async def resource_library_html(slug: str):
+    """Render a public resource library page."""
+    if not _check_rate(f"resources-{slug}"):
+        raise HTTPException(429, "Rate limit exceeded")
+
+    async with httpx.AsyncClient() as client:
+        sites = await _sb(client, f"/business_sites?slug=eq.{slug}&limit=1&select=business_id")
+        if not sites:
+            raise HTTPException(404, "Business not found")
+        biz_id = sites[0]["business_id"]
+
+        biz_rows, modules = await asyncio.gather(
+            _sb(client, f"/businesses?id=eq.{biz_id}&select=name,type,settings&limit=1"),
+            _sb(client, f"/custom_modules?business_id=eq.{biz_id}&name=eq.Resources&is_active=eq.true&limit=1&select=id"),
+        )
+        biz = biz_rows[0] if biz_rows else {}
+        brand = (biz.get("settings") or {}).get("brand_kit") or {}
+        colors = brand.get("colors") or _palette_for(biz.get("type", "general"))
+        module_id = modules[0]["id"] if modules else None
+
+        if not module_id:
+            raise HTTPException(404, "No resource library")
+
+        entries = await _sb(client,
+            f"/module_entries?module_id=eq.{module_id}&status=eq.active&order=created_at.desc&limit=50&select=id,data") or []
+
+        primary = colors.get("primary", "#333")
+        bg = colors.get("background", "#faf8f5")
+        biz_name = biz.get("name", "")
+
+        cards_html = ""
+        for e in entries:
+            d = e.get("data") or {}
+            title = d.get("title", "(untitled)")
+            desc = d.get("description", "")
+            cat = d.get("category", "")
+            access_type = d.get("access", "free")
+            url = d.get("resource_url", "")
+            is_gated = access_type == "gated"
+
+            icon = "🔒" if is_gated else "📄"
+            btn = f'<a href="{url}" target="_blank" style="display:inline-block;margin-top:10px;padding:8px 16px;background:{primary};color:#fff;border-radius:6px;text-decoration:none;font-size:0.85em;font-weight:600;">View Resource</a>' if url and not is_gated else '<span style="display:inline-block;margin-top:10px;padding:8px 16px;background:#ddd;color:#888;border-radius:6px;font-size:0.85em;">Contact us to access</span>'
+
+            cards_html += f'''<div style="background:#fff;border:1px solid #e8e4dd;border-radius:10px;padding:18px;">
+<div style="font-size:0.75em;text-transform:uppercase;letter-spacing:1px;color:{primary};font-weight:600;margin-bottom:6px;">{icon} {cat}</div>
+<div style="font-size:1.05em;font-weight:600;margin-bottom:4px;">{title}</div>
+{f'<div style="font-size:0.85em;color:#666;line-height:1.5;margin-bottom:4px;">{desc}</div>' if desc else ''}
+{btn}
+</div>'''
+
+        html = f"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Resources — {biz_name}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box;}}
+body{{font-family:'Inter',sans-serif;background:{bg};color:#1a1a2e;padding:40px 20px;}}
+.container{{max-width:800px;margin:0 auto;}}
+h1{{font-size:1.8em;font-weight:700;margin-bottom:8px;}}
+.sub{{color:#666;margin-bottom:24px;}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;}}
+</style></head>
+<body><div class="container">
+<h1>Resources</h1>
+<p class="sub">{biz_name}</p>
+<div class="grid">{cards_html}</div>
+</div></body></html>"""
+        return HTMLResponse(content=html)
+
+
+@router.post("/public/resources/{slug}/track")
+async def track_resource_download(slug: str, resource_id: str = ""):
+    """Log a resource download event."""
+    if not _check_rate(f"res-track-{slug}"):
+        raise HTTPException(429, "Rate limit exceeded")
+    async with httpx.AsyncClient() as client:
+        sites = await _sb(client, f"/business_sites?slug=eq.{slug}&limit=1&select=business_id")
+        if not sites:
+            raise HTTPException(404, "Business not found")
+        await _sb_post(client, "/events", {
+            "business_id": sites[0]["business_id"],
+            "event_type": "resource_download",
+            "data": {"resource_id": resource_id},
+            "source": "resource_library",
+        })
+        return {"tracked": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # BOOKING ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════
 
