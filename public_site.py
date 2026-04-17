@@ -246,15 +246,22 @@ async def get_site_html(slug: str):
         raise HTTPException(429, "Rate limit exceeded")
 
     async with httpx.AsyncClient() as client:
+        # Accept both draft and published sites so practitioners can preview
         sites = await _sb(client,
-            f"/business_sites?slug=eq.{slug}&limit=1&select=html_content,business_id,status")
+            f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
+            f"&select=html_content,business_id,status")
         if not sites:
             raise HTTPException(404, "Site not found")
         site = sites[0]
         html = site.get("html_content") or ""
         if not html:
             raise HTTPException(404, "Site has no content")
-        return HTMLResponse(content=html)
+        return HTMLResponse(
+            content=html,
+            status_code=200,
+            media_type="text/html",
+            headers={"X-Solutionist-Source": "public-site"},
+        )
 
 
 @router.get("/public/site/{slug}/data")
