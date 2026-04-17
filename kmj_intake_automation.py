@@ -31,6 +31,7 @@ from module_agent import router as module_router
 from chief_of_staff import router as chief_router
 from notification_engine import router as notification_router
 from whisper_proxy import router as whisper_router
+from public_site import router as public_site_router
 
 app = FastAPI(title="KMJ Intake Automation")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -45,6 +46,7 @@ app.include_router(module_router)
 app.include_router(chief_router)
 app.include_router(notification_router)
 app.include_router(whisper_router)
+app.include_router(public_site_router)
 
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 OWNER_EMAIL = os.getenv("OWNER_EMAIL", "kevin@kmjcreative.com")

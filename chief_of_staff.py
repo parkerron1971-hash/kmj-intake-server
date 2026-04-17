@@ -1304,6 +1304,73 @@ async def handle_contact_deep_dive(client, biz, action) -> Dict:
     }
 
 
+async def handle_ensure_module(client, biz, action) -> Dict:
+    """Find or create a module by name. Used for auto-creating Blog, Testimonials, etc."""
+    name = (action.get("module_name") or "").strip()
+    if not name:
+        return _fail("ensure_module", "module_name required")
+
+    existing = await _sb(client, "GET",
+        f"/custom_modules?business_id=eq.{biz['id']}&name=eq.{name}&is_active=eq.true&limit=1&select=id,name")
+    if existing:
+        return {
+            "type": "ensure_module",
+            "result": "already exists",
+            "label": f"Module: {name}",
+            "module_id": existing[0]["id"],
+            "nav": None,
+        }
+
+    # Build a minimal schema
+    schema = action.get("schema") or {
+        "fields": [
+            {"name": "title", "type": "text", "label": "Title", "required": True},
+            {"name": "body", "type": "textarea", "label": "Content"},
+            {"name": "status", "type": "select", "label": "Status", "options": ["draft", "published", "archived"]},
+            {"name": "featured", "type": "checkbox", "label": "Featured"},
+            {"name": "contact_id", "type": "contact_link", "label": "Related Contact"},
+        ],
+        "default_sort": "created_at",
+        "default_view": "list",
+        "views": ["list"],
+    }
+
+    icon = action.get("icon") or "📝"
+    slug = name.lower().replace(" ", "-").replace("'", "")[:60]
+    enable_public = action.get("public_display_enabled", False)
+    display_type = action.get("display_type", "list")
+
+    inserted = await _sb(client, "POST", "/custom_modules", {
+        "business_id": biz["id"],
+        "name": name,
+        "slug": slug,
+        "description": action.get("description") or f"Auto-created {name} module",
+        "icon": icon,
+        "schema": schema,
+        "agent_config": {"enabled": True, "triggers": []},
+        "public_display": {
+            "enabled": enable_public,
+            "display_type": display_type,
+            "title_override": name,
+            "visible_fields": ["title", "body", "status"],
+            "hidden_fields": ["contact_id"],
+            "max_display": 20,
+            "sort_by": "created_at",
+        },
+        "is_active": True,
+    })
+    if not inserted or not isinstance(inserted, list):
+        return _fail("ensure_module", "creation failed")
+
+    return {
+        "type": "ensure_module",
+        "result": "created",
+        "label": f"Created module: {name}",
+        "module_id": inserted[0]["id"],
+        "nav": None,
+    }
+
+
 ACTION_HANDLERS = {
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
@@ -1325,6 +1392,7 @@ ACTION_HANDLERS = {
     "bulk_approve":          handle_bulk_approve,
     "bulk_dismiss":          handle_bulk_dismiss,
     "contact_deep_dive":     handle_contact_deep_dive,
+    "ensure_module":         handle_ensure_module,
 }
 
 
@@ -1617,6 +1685,19 @@ Always honor PRACTITIONER MEMORIES. If a memory conflicts with a request, point 
 
 NOTIFICATIONS:
 Reference RECENT UNREAD NOTIFICATIONS when relevant. Mention un-read morning briefs, urgent alerts. Don't force it.
+
+CONTENT & SITE INTELLIGENCE:
+When the practitioner shares content-worthy information (sermon topic, event recap, fundraiser results, client success story, announcement), offer to publish it:
+  - "Want me to create a blog post about that and put it on your site?"
+  - Use ensure_module to auto-create a "Blog" module if needed, then create_module_entry with a title and AI-written body
+When the practitioner mentions positive feedback from a contact, offer to add it as a testimonial:
+  - "Sandra said your coaching changed her approach to leadership. Want me to add that as a testimonial on your site?"
+  - Use ensure_module for "Testimonials" module, then create_module_entry
+When the practitioner describes a specific event/campaign with dates and details, offer a micro-site:
+  - "Want me to create a landing page for the marriage retreat? I'll include registration and all the details."
+  - A micro-site is a separate entry in business_sites with site_config.type='micro'
+For ensure_module: [ACTION:{{"type":"ensure_module","module_name":"Blog","icon":"📝","public_display_enabled":true,"display_type":"list"}}]
+The ensure_module action creates the module if it doesn't exist, returns the module_id either way. Then use create_module_entry to add content.
 
 AGENT ACTIVITY AWARENESS:
 Reference RECENT AGENT ACTIVITY. If an agent created drafts the practitioner hasn't reviewed, mention it: "The nurture agent drafted a check-in for Deacon Harris earlier — still in your queue. Want me to show it?"
