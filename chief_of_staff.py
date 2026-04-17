@@ -197,8 +197,13 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
             f"/chief_notifications?business_id=eq.{biz_id}&status=eq.unread"
             f"&order=created_at.desc&limit=5"
             f"&select=id,type,title,body,priority,suggested_action,created_at"),
+        _sb(client, "GET",
+            f"/agent_queue?business_id=eq.{biz_id}"
+            f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()}"
+            f"&order=created_at.desc&limit=30"
+            f"&select=id,agent,action_type,subject,status,priority,contact_id,body,created_at"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -242,6 +247,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "module_counts": module_counts,
         "memories": memories or [],
         "notifications": notifications or [],
+        "recent_queue_24h": recent_queue or [],
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
@@ -317,6 +323,26 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         for m in (ctx.get("memories") or [])
     ]
 
+    # Recent agent activity (last 24h queue items, grouped by agent)
+    recent_q = ctx.get("recent_queue_24h") or []
+    agent_activity: Dict[str, Dict[str, int]] = {}
+    for rq in recent_q:
+        ag = rq.get("agent") or "unknown"
+        st = rq.get("status") or "draft"
+        bucket = agent_activity.setdefault(ag, {})
+        bucket[st] = bucket.get(st, 0) + 1
+    activity_lines = []
+    for ag, statuses in agent_activity.items():
+        parts = ", ".join(f"{cnt} {st}" for st, cnt in sorted(statuses.items()))
+        activity_lines.append(f"  - {ag}: {parts}")
+
+    # Standing instructions (from memories)
+    standing = [m for m in (ctx.get("memories") or []) if (m.get("category") or "").lower() == "standing_instruction"]
+    standing_lines = [
+        f"  - [★{m.get('importance', 5)}] {m.get('content')}"
+        for m in standing
+    ]
+
     # Recent unread notifications
     notif_lines = []
     for n in (ctx.get("notifications") or []):
@@ -355,6 +381,12 @@ RECENT EVENTS:
 
 PRACTITIONER MEMORIES (ALWAYS honor these — they override defaults):
 {chr(10).join(memory_lines) if memory_lines else '  (none stored yet)'}
+
+RECENT AGENT ACTIVITY (last 24 hours):
+{chr(10).join(activity_lines) if activity_lines else '  (no agent activity)'}
+
+STANDING INSTRUCTIONS (execute when triggered):
+{chr(10).join(standing_lines) if standing_lines else '  (none set)'}
 
 RECENT UNREAD NOTIFICATIONS:
 {chr(10).join(notif_lines) if notif_lines else '  (none)'}
@@ -700,15 +732,83 @@ async def _loopback_post(path: str, body: Dict) -> Optional[Dict]:
 
 async def handle_run_agent(client, biz, action) -> Dict:
     agent = (action.get("agent") or "").lower().strip()
+    target_contact = action.get("target_contact_id")
+    target_module = action.get("target_module_id")
+    sub = action.get("sub")  # for session: prep / follow-up / no-show
+
+    # ── Targeted mode: call preview endpoint → insert draft directly ──
+    if target_contact and agent in ("nurture", "contract"):
+        contact = await _validate_contact(client, biz["id"], target_contact)
+        if not contact:
+            return _fail("run_agent", f"Contact {target_contact} not found")
+
+        if agent == "nurture":
+            preview_path = "/agents/nurture/preview"
+        else:
+            preview_path = "/agents/contract/preview"
+
+        data = await _loopback_post(preview_path, {
+            "business_id": biz["id"],
+            "contact_id": target_contact,
+        })
+        if not data:
+            return _fail("run_agent", f"{agent} preview unreachable")
+
+        # Preview endpoints return draft content — insert into queue
+        subject = data.get("subject") or f"{agent.title()} draft for {contact.get('name')}"
+        body = data.get("body") or ""
+        action_type = "proposal" if agent == "contract" else "check_in"
+
+        inserted = await _sb(client, "POST", "/agent_queue", {
+            "business_id": biz["id"],
+            "contact_id": target_contact,
+            "agent": agent,
+            "action_type": action_type,
+            "subject": subject,
+            "body": body,
+            "channel": "email" if contact.get("email") else "in_app",
+            "status": "draft",
+            "priority": data.get("priority", "medium"),
+            "ai_reasoning": data.get("ai_reasoning") or f"Targeted {agent} run via Chief of Staff",
+            "ai_model": data.get("ai_model") or CHIEF_MODEL,
+        })
+        queue_id = inserted[0]["id"] if (inserted and isinstance(inserted, list)) else None
+
+        return {
+            "type": "run_agent",
+            "result": "drafted",
+            "label": f"{agent.title()}: {subject}",
+            "nav": _nav("operate", "queue"),
+            "draft_preview": {"subject": subject, "body": body[:800], "queue_id": queue_id},
+        }
+
+    if target_contact and agent.startswith("session"):
+        contact = await _validate_contact(client, biz["id"], target_contact)
+        if not contact:
+            return _fail("run_agent", f"Contact {target_contact} not found")
+        # Session agents work on all matching sessions — pass business_id
+        session_sub = sub or "prep"
+        session_path = AGENT_ENDPOINT_MAP.get(f"session_{session_sub}") or "/agents/session/prep"
+        data = await _loopback_post(session_path, {"business_id": biz["id"]})
+        if not data:
+            return _fail("run_agent", f"session {session_sub} unreachable")
+        count = data.get("briefs_created") or data.get("followups_created") or data.get("drafts_created") or 0
+        return {
+            "type": "run_agent", "result": "completed",
+            "label": f"Session {session_sub}: {count} draft{'s' if count != 1 else ''}",
+            "nav": _nav("operate", "queue"),
+        }
+
+    # ── Batch mode (existing behavior) ────────────────────────────────
     path = AGENT_ENDPOINT_MAP.get(agent)
     if not path:
         return _fail("run_agent", f"Unknown agent '{agent}'. Valid: {', '.join(AGENT_ENDPOINT_MAP)}")
 
-    data = await _loopback_post(path, {"business_id": biz["id"]})
+    body_payload: Dict = {"business_id": biz["id"]}
+    data = await _loopback_post(path, body_payload)
     if not data:
         return _fail("run_agent", f"{agent} endpoint unreachable")
 
-    # Normalize the count across agents
     count = (data.get("drafts_created")
              or data.get("briefs_created")
              or data.get("followups_created")
@@ -838,7 +938,7 @@ async def handle_navigate(client, biz, action) -> Dict:
     }
 
 
-VALID_MEMORY_CATEGORIES = {"preference", "pattern", "context", "decision", "boundary", "goal", "other"}
+VALID_MEMORY_CATEGORIES = {"preference", "pattern", "context", "decision", "boundary", "goal", "standing_instruction", "other"}
 
 # Stop words excluded from memory dedup signature
 _MEMORY_STOPWORDS = {
@@ -956,6 +1056,254 @@ async def handle_forget(client, biz, action) -> Dict:
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# QUEUE MANAGEMENT HANDLERS (approve / dismiss / edit / rewrite / bulk)
+# ═══════════════════════════════════════════════════════════════════════
+
+BULK_CAP = 20
+HEALTH_BUMP_ON_APPROVE = 5
+
+
+async def _do_approve_one(client, biz_id: str, item: Dict) -> bool:
+    """Approve a single queue item: PATCH status, emit event, bump health."""
+    qid = item.get("id")
+    contact_id = item.get("contact_id")
+    if not qid:
+        return False
+    await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {
+        "status": "approved",
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+    })
+    # Emit agent_message_sent event (mirrors ApprovalQueue.tsx)
+    await _sb(client, "POST", "/events", {
+        "business_id": biz_id,
+        "contact_id": contact_id,
+        "event_type": "agent_message_sent",
+        "data": {
+            "agent": item.get("agent"),
+            "action_type": item.get("action_type"),
+            "subject": item.get("subject"),
+            "queue_id": qid,
+        },
+        "source": "chief_of_staff",
+    })
+    # Bump contact health
+    if contact_id:
+        existing = await _sb(client, "GET",
+            f"/contacts?id=eq.{contact_id}&select=health_score&limit=1")
+        if existing:
+            score = min(100, (existing[0].get("health_score") or 50) + HEALTH_BUMP_ON_APPROVE)
+            await _sb(client, "PATCH", f"/contacts?id=eq.{contact_id}", {
+                "health_score": score,
+                "last_interaction": datetime.now(timezone.utc).isoformat(),
+            })
+    return True
+
+
+async def handle_approve_draft(client, biz, action) -> Dict:
+    qid = action.get("queue_id")
+    if not qid:
+        return _fail("approve_draft", "queue_id required")
+    rows = await _sb(client, "GET",
+        f"/agent_queue?id=eq.{qid}&business_id=eq.{biz['id']}&limit=1&select=*")
+    if not rows:
+        return _fail("approve_draft", f"Draft {qid} not found")
+    item = rows[0]
+    if item.get("status") != "draft":
+        return {"type": "approve_draft", "result": f"already {item.get('status')}", "label": item.get("subject") or qid, "nav": None}
+    await _do_approve_one(client, biz["id"], item)
+    return {
+        "type": "approve_draft",
+        "result": "approved",
+        "label": f"Approved: {item.get('subject') or 'draft'}",
+        "nav": _nav("operate", "queue"),
+    }
+
+
+async def handle_dismiss_draft(client, biz, action) -> Dict:
+    qid = action.get("queue_id")
+    if not qid:
+        return _fail("dismiss_draft", "queue_id required")
+    rows = await _sb(client, "GET",
+        f"/agent_queue?id=eq.{qid}&business_id=eq.{biz['id']}&limit=1&select=*")
+    if not rows:
+        return _fail("dismiss_draft", f"Draft {qid} not found")
+    item = rows[0]
+    await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {
+        "status": "dismissed",
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {
+        "type": "dismiss_draft",
+        "result": "dismissed",
+        "label": f"Dismissed: {item.get('subject') or 'draft'}",
+        "nav": _nav("operate", "queue"),
+    }
+
+
+async def handle_edit_draft(client, biz, action) -> Dict:
+    qid = action.get("queue_id")
+    new_body = (action.get("new_body") or "").strip()
+    if not qid:
+        return _fail("edit_draft", "queue_id required")
+    if not new_body:
+        return _fail("edit_draft", "new_body required")
+    rows = await _sb(client, "GET",
+        f"/agent_queue?id=eq.{qid}&business_id=eq.{biz['id']}&limit=1&select=*")
+    if not rows:
+        return _fail("edit_draft", f"Draft {qid} not found")
+    item = rows[0]
+    await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {"body": new_body})
+    await _do_approve_one(client, biz["id"], {**item, "body": new_body})
+    return {
+        "type": "edit_draft",
+        "result": "edited and approved",
+        "label": f"Edited + approved: {item.get('subject') or 'draft'}",
+        "nav": _nav("operate", "queue"),
+        "draft_preview": new_body[:300],
+    }
+
+
+async def handle_rewrite_draft(client, biz, action) -> Dict:
+    qid = action.get("queue_id")
+    instruction = (action.get("instruction") or "").strip()
+    if not qid:
+        return _fail("rewrite_draft", "queue_id required")
+    if not instruction:
+        return _fail("rewrite_draft", "instruction required")
+
+    rows = await _sb(client, "GET",
+        f"/agent_queue?id=eq.{qid}&business_id=eq.{biz['id']}&limit=1&select=*")
+    if not rows:
+        return _fail("rewrite_draft", f"Draft {qid} not found")
+    item = rows[0]
+    old_body = item.get("body") or ""
+
+    voice = biz.get("voice_profile") or {}
+    practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
+    tone = voice.get("tone", "warm and professional")
+
+    system = (f"Rewrite this draft from {practitioner}. Voice: {tone}. "
+              f"Keep the same length and intent but apply the requested change. "
+              f"Return ONLY the rewritten text — no commentary, no preamble.")
+    user_msg = f"CURRENT DRAFT:\n{old_body}\n\nINSTRUCTION: {instruction}"
+
+    rewritten = await _draft_short(client, biz, system, user_msg)
+    if not rewritten:
+        return _fail("rewrite_draft", "AI rewrite failed")
+
+    await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {"body": rewritten})
+    return {
+        "type": "rewrite_draft",
+        "result": "rewritten (not yet approved)",
+        "label": f"Rewrote: {item.get('subject') or 'draft'}",
+        "nav": None,
+        "draft_preview": rewritten[:600],
+        "queue_id": qid,
+    }
+
+
+async def _query_queue_by_filter(client, biz_id: str, filter_str: str) -> List[Dict]:
+    """Parse a simple filter and return matching draft queue items."""
+    base = f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft"
+    f = filter_str.strip().lower()
+    if f.startswith("agent:"):
+        agent_name = f[6:].strip()
+        base += f"&agent=eq.{agent_name}"
+    elif f.startswith("priority:"):
+        prio = f[9:].strip()
+        base += f"&priority=eq.{prio}"
+    # "all" uses the base query without extra filters
+    base += f"&order=priority.asc,created_at.asc&limit={BULK_CAP}&select=*"
+    return await _sb(client, "GET", base) or []
+
+
+async def handle_bulk_approve(client, biz, action) -> Dict:
+    filter_str = action.get("filter", "all")
+    items = await _query_queue_by_filter(client, biz["id"], filter_str)
+    if not items:
+        return {"type": "bulk_approve", "result": "no matching drafts", "label": "Bulk approve", "nav": None}
+    approved = []
+    for item in items:
+        ok = await _do_approve_one(client, biz["id"], item)
+        if ok:
+            approved.append(item.get("subject") or item.get("id"))
+    total_matching_note = f" (capped at {BULK_CAP})" if len(items) == BULK_CAP else ""
+    return {
+        "type": "bulk_approve",
+        "result": f"approved {len(approved)} of {len(items)}{total_matching_note}",
+        "label": f"Bulk approved {len(approved)} draft{'s' if len(approved) != 1 else ''}",
+        "nav": _nav("operate", "queue"),
+        "items": approved[:10],
+    }
+
+
+async def handle_bulk_dismiss(client, biz, action) -> Dict:
+    filter_str = action.get("filter", "all")
+    items = await _query_queue_by_filter(client, biz["id"], filter_str)
+    if not items:
+        return {"type": "bulk_dismiss", "result": "no matching drafts", "label": "Bulk dismiss", "nav": None}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    dismissed = []
+    for item in items:
+        qid = item.get("id")
+        if qid:
+            await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {
+                "status": "dismissed", "reviewed_at": now_iso,
+            })
+            dismissed.append(item.get("subject") or qid)
+    return {
+        "type": "bulk_dismiss",
+        "result": f"dismissed {len(dismissed)} of {len(items)}",
+        "label": f"Bulk dismissed {len(dismissed)} draft{'s' if len(dismissed) != 1 else ''}",
+        "nav": _nav("operate", "queue"),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DEEP CONTACT INTELLIGENCE
+# ═══════════════════════════════════════════════════════════════════════
+
+async def handle_contact_deep_dive(client, biz, action) -> Dict:
+    contact_id = action.get("contact_id")
+    contact = await _validate_contact(client, biz["id"], contact_id)
+    if not contact:
+        return _fail("contact_deep_dive", f"Contact {contact_id} not found")
+
+    # Parallel data pull
+    ev_task = _sb(client, "GET",
+        f"/events?contact_id=eq.{contact_id}&business_id=eq.{biz['id']}"
+        f"&order=created_at.desc&limit=50&select=event_type,data,source,created_at")
+    q_task = _sb(client, "GET",
+        f"/agent_queue?contact_id=eq.{contact_id}&business_id=eq.{biz['id']}"
+        f"&order=created_at.desc&limit=20"
+        f"&select=id,agent,action_type,subject,body,status,priority,created_at")
+    s_task = _sb(client, "GET",
+        f"/sessions?contact_id=eq.{contact_id}&business_id=eq.{biz['id']}"
+        f"&order=scheduled_for.desc&limit=10"
+        f"&select=id,title,session_type,status,scheduled_for,duration_minutes,notes")
+    me_task = _sb(client, "GET",
+        f"/module_entries?business_id=eq.{biz['id']}&status=eq.active"
+        f"&data->>contact_id=eq.{contact_id}&order=created_at.desc&limit=10"
+        f"&select=id,module_id,data,created_at")
+
+    events, queue_history, sessions, module_entries = await asyncio.gather(
+        ev_task, q_task, s_task, me_task
+    )
+
+    return {
+        "type": "contact_deep_dive",
+        "result": "data retrieved",
+        "label": f"Deep dive: {contact.get('name')}",
+        "nav": _nav("operate", "contacts", contact_id),
+        "contact": contact,
+        "events": (events or [])[:50],
+        "queue_history": (queue_history or [])[:20],
+        "sessions": (sessions or [])[:10],
+        "module_entries": (module_entries or [])[:10],
+    }
+
+
 ACTION_HANDLERS = {
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
@@ -970,6 +1318,13 @@ ACTION_HANDLERS = {
     "navigate":              handle_navigate,
     "remember":              handle_remember,
     "forget":                handle_forget,
+    "approve_draft":         handle_approve_draft,
+    "dismiss_draft":         handle_dismiss_draft,
+    "edit_draft":            handle_edit_draft,
+    "rewrite_draft":         handle_rewrite_draft,
+    "bulk_approve":          handle_bulk_approve,
+    "bulk_dismiss":          handle_bulk_dismiss,
+    "contact_deep_dive":     handle_contact_deep_dive,
 }
 
 
@@ -1195,68 +1550,84 @@ REAL-TIME BUSINESS DATA (fresh every message):
 {context_block}
 {view_block}
 
-CAPABILITIES:
-- ANSWER questions with specific data from above (names, numbers, dates, IDs).
-- TAKE ACTIONS by embedding JSON tags in your response.
-- NAVIGATE the practitioner to relevant pages while explaining what you're showing.
-- SUGGEST proactive next steps based on the data.
-- BRIEF the practitioner on what needs attention now.
+YOU ARE THE CENTRAL ORCHESTRATOR. ALL agent operations flow through you. The practitioner never needs to interact with agents directly. When they want something done, you decide which agent handles it and trigger it. When agents create drafts, you show the results. When the practitioner wants to approve, edit, or dismiss, you handle it. You are the single point of contact for the entire system.
 
-ACTION FORMAT — embed JSON inside [ACTION:...] tags anywhere in your response. The system strips them before display.
+ACTION FORMAT — embed JSON inside [ACTION:...] tags. The system strips them before display and executes them.
 
-Available action types:
-  [ACTION:{{"type":"draft_nurture","contact_id":"<uuid from CONTACT LOOKUP>","reason":"why"}}]
+ACTIONS — AGENTS (batch or targeted):
+  [ACTION:{{"type":"run_agent","agent":"nurture|session_prep|session_follow|session_no_show|contract|payment|module|briefing|insights"}}]
+  [ACTION:{{"type":"run_agent","agent":"nurture","target_contact_id":"<uuid>"}}]   — targeted, returns draft content
+  [ACTION:{{"type":"run_agent","agent":"contract","target_contact_id":"<uuid>"}}]  — targeted proposal
+  [ACTION:{{"type":"run_agent","agent":"session","sub":"prep","target_contact_id":"<uuid>"}}]
+
+ACTIONS — QUEUE MANAGEMENT:
+  [ACTION:{{"type":"approve_draft","queue_id":"<uuid from QUEUE>"}}]
+  [ACTION:{{"type":"dismiss_draft","queue_id":"<uuid>"}}]
+  [ACTION:{{"type":"edit_draft","queue_id":"<uuid>","new_body":"rewritten text"}}]  — edit + approve in one step
+  [ACTION:{{"type":"rewrite_draft","queue_id":"<uuid>","instruction":"make it warmer"}}]  — AI rewrites, does NOT auto-approve
+  [ACTION:{{"type":"bulk_approve","filter":"all|agent:nurture|priority:low"}}]  — cap 20
+  [ACTION:{{"type":"bulk_dismiss","filter":"priority:low"}}]  — cap 20
+
+ACTIONS — CONTACTS + SESSIONS + MODULES:
+  [ACTION:{{"type":"draft_nurture","contact_id":"<uuid>","reason":"why"}}]
   [ACTION:{{"type":"draft_email","contact_id":"<uuid>","subject":"...","reason":"..."}}]
-  [ACTION:{{"type":"create_session","contact_id":"<uuid>","title":"Follow-up","scheduled_for":"2026-04-20T14:00:00Z","duration_minutes":60}}]
+  [ACTION:{{"type":"create_session","contact_id":"<uuid>","title":"...","scheduled_for":"2026-04-20T14:00:00Z"}}]
   [ACTION:{{"type":"update_contact_status","contact_id":"<uuid>","new_status":"active|lead|vip|inactive|churned"}}]
   [ACTION:{{"type":"update_contact_health","contact_id":"<uuid>","health_score":75}}]
-  [ACTION:{{"type":"run_agent","agent":"nurture|session_prep|session_follow|session_no_show|contract|payment|module|briefing|insights"}}]
-  [ACTION:{{"type":"create_module_entry","module_id":"<uuid from CUSTOM MODULES>","data":{{...schema-matching keys...}}}}]
   [ACTION:{{"type":"create_contact","name":"...","email":"...","status":"lead"}}]
+  [ACTION:{{"type":"create_module_entry","module_id":"<uuid>","data":{{...}}}}]
+  [ACTION:{{"type":"contact_deep_dive","contact_id":"<uuid>"}}]  — returns full history/events/sessions/queue
+
+ACTIONS — NAVIGATION + MEMORY:
+  [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"queue|contacts|sessions|agents|briefing|health|insights","contact_id":"<uuid-optional>","page":"<page-id-optional>"}}]
+  [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
+  [ACTION:{{"type":"forget","memory_content":"snippet to deactivate"}}]
   [ACTION:{{"type":"generate_briefing"}}]
   [ACTION:{{"type":"generate_insights"}}]
-  [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"queue|contacts|sessions|agents|briefing|health|insights","contact_id":"<uuid-optional>","page":"<page-id-for-build-tab-optional>"}}]
-  [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|other","content":"the fact to remember","importance":1-10}}]
-  [ACTION:{{"type":"forget","memory_content":"snippet of the memory to deactivate"}}]
 
-NAVIGATION EXAMPLES:
-  - Show the queue:        [ACTION:{{"type":"navigate","tab":"operate","sub":"queue"}}]
-  - Show a contact detail: [ACTION:{{"type":"navigate","tab":"operate","sub":"contacts","contact_id":"<uuid>"}}]
-  - Show the briefing:     [ACTION:{{"type":"navigate","tab":"grow","sub":"briefing"}}]
-  - Show a custom module:  [ACTION:{{"type":"navigate","tab":"build","page":"custom-module-<uuid>"}}]
-  - Show module builder:   [ACTION:{{"type":"navigate","tab":"build","page":"module-builder"}}]
+RULES:
+- Use EXACT UUIDs from CONTACT LOOKUP / CUSTOM MODULES / CURRENTLY VIEWING / QUEUE. Never invent IDs.
+- Don't emit actions unless the practitioner asks or agrees. Emit at most {MAX_ACTIONS_PER_TURN} per turn.
+- Confirm in plain language what you're doing. The system renders a card under your message.
 
-ACTION RULES:
-- Use EXACT UUIDs from the CONTACT LOOKUP / CUSTOM MODULES / CURRENTLY VIEWING sections. Never invent IDs.
-- Don't emit actions unless the practitioner explicitly asks you to do something OR you're taking an obvious next step they've agreed to.
-- Emit at most {MAX_ACTIONS_PER_TURN} actions per turn.
-- Confirm in plain language what you're doing ("Drafting a check-in for Deacon Harris now. Taking you to his profile.") — the system shows a separate actions card below your message.
+NAVIGATION IS MANDATORY. "show me", "take me to", "open", "go to", "pull up", "let me see", or naming a contact/module/page → ALWAYS emit navigate. Don't describe — take them there. Panel stays open.
 
-NAVIGATION IS MANDATORY. When the practitioner says ANY of these, ALWAYS include a navigate action — don't just describe where something is. Take them there:
-  "show me", "take me to", "open", "go to", "pull up", "let me see", "where is", "I want to see", or when they mention a specific contact, module, session, or page by name or say "that"/"this one."
-Pair navigation with one short sentence of context: "Pulling up Deacon Harris — he's been declining for 3 weeks." + the navigate action.
-The panel stays open after navigation so the practitioner can keep talking while viewing the target.
+AGENT RESULTS — SHOW THE CONTENT:
+When you run an agent (targeted) and get a draft_preview back, ALWAYS show the subject and body to the practitioner. Don't just say "I drafted something." Show it. Then ask: "Want to approve this, or should I change something?"
+When you run a batch agent, summarize: "Nurture Agent drafted check-ins for 3 contacts: [names]. Want me to show each one, or approve them all?"
 
-UNREAD NOTIFICATIONS:
-You can see the practitioner's RECENT UNREAD NOTIFICATIONS above. When relevant, reference them naturally — e.g., "I see you haven't read this morning's brief yet — want me to summarize it?" Don't force a mention; only bring them up when they connect to the conversation or when the practitioner asks what's been happening.
+QUEUE TRIAGE PROTOCOL:
+When the practitioner asks you to triage, walk through items one-by-one — urgent first. For each: show agent badge, contact name, subject, body excerpt, and your recommendation (approve / dismiss / edit). Ask for their decision. If they say "approve the rest," bulk-approve everything remaining.
+Recommendations: base on contact health (lower = more urgent), time pending, whether the contact has been responsive, the practitioner's memories, and the priority level. Say things like "I'd send this one — his health is at 30" or "this can wait — she replied two days ago."
 
-MEMORY HANDLING:
-- The PRACTITIONER MEMORIES section above is your long-term memory. ALWAYS honor those memories — they override defaults. If a memory conflicts with a request you're about to fulfill, point it out and propose an alternative. Example: scheduling on a Tuesday when a PATTERN memory says "Tuesdays blocked" — say "I see Tuesdays are blocked for you — how about Thursday at 2pm instead?"
-- When the practitioner states a NEW preference, pattern, boundary, goal, decision, or important context (about themselves or a specific contact), capture it with a [ACTION:remember] tag and confirm naturally ("Got it — I'll remember you prefer calls."). Be selective: only remember things that would matter in future conversations. Skip transient facts ("I'm tired today", "I had coffee").
-- When the practitioner says something like "forget that" / "scratch that" / "I don't do X anymore" / "that's not true anymore", emit a [ACTION:forget] referencing the obsolete memory.
-- Pick importance thoughtfully: 9-10 = hard rules / boundaries, 7-8 = strong preferences / goals, 4-6 = useful context, 1-3 = nice-to-know.
+CONVERSATIONAL DRAFT EDITING:
+When the practitioner says "make it shorter," "more personal," "change the tone" etc., use rewrite_draft with the instruction. Show the rewritten version. Ask if they want to approve. They can keep iterating.
 
-CONVERSATIONAL RULES — SMART NEXT STEPS:
-After answering a question or taking an action, propose 1-2 natural next steps framed as yes/no questions. Keep each to one sentence. Examples:
-  - After queue status: "Want me to approve all the low-priority items, or should we go through them one by one?"
-  - After drafting a message: "Should I also schedule a follow-up session?"
-  - After running an agent: "Want me to summarize the new drafts?"
-EXCEPTION: Skip the next-step question when the answer is purely factual ("what's her health score?") or during the opening greeting.
+DEEP CONTACT INTELLIGENCE:
+When asked "tell me about [contact]" or "what's the full story," use contact_deep_dive. You'll get their entire history. Narrate it as a RELATIONSHIP STORY, not a data dump. End with your assessment and a recommended next step.
+
+MULTI-STEP WORKFLOWS:
+When the practitioner gives a compound instruction ("onboard this person, schedule an intro, draft a welcome"), break it into steps. Emit multiple actions. Report after each step. Finish with a summary of everything done.
+
+STANDING INSTRUCTIONS:
+Check the STANDING INSTRUCTIONS section. If one matches the current context (day of week, time of day, recent events), execute it and tell the practitioner. When they set a new one ("from now on, always..."), capture with [ACTION:remember] using category="standing_instruction". Confirm by repeating the trigger and action.
+
+MEMORY:
+Always honor PRACTITIONER MEMORIES. If a memory conflicts with a request, point it out. When the practitioner states new preferences/patterns/boundaries/goals/decisions/context, capture with remember. When they retract, use forget. Importance: 9-10 hard rules, 7-8 strong prefs, 4-6 context, 1-3 nice-to-know.
+
+NOTIFICATIONS:
+Reference RECENT UNREAD NOTIFICATIONS when relevant. Mention un-read morning briefs, urgent alerts. Don't force it.
+
+AGENT ACTIVITY AWARENESS:
+Reference RECENT AGENT ACTIVITY. If an agent created drafts the practitioner hasn't reviewed, mention it: "The nurture agent drafted a check-in for Deacon Harris earlier — still in your queue. Want me to show it?"
+
+SMART NEXT STEPS:
+After every answer or action (except purely factual or greeting), propose 1-2 natural next steps as yes/no questions. Build on what just happened.
 
 VOICE:
-Direct, warm, operational. Match {practitioner}'s communication style (voice profile: {json.dumps(voice)[:400]}). Reference specific names and numbers from the data. No generic advice. Lead with the answer, then offer to go deeper if useful.
+Direct, warm, operational. Match {practitioner}'s voice (profile: {json.dumps(voice)[:400]}). Reference specific names and numbers. No generic advice. Lead with the answer.
 
-Keep responses concise unless asked for depth. If the practitioner asks a factual question, answer in one or two sentences. If they want analysis, give the analysis then stop.{greeting_clause}{resume_clause}"""
+Keep responses concise unless asked for depth.{greeting_clause}{resume_clause}"""
 
 
 # ═══════════════════════════════════════════════════════════════════════
