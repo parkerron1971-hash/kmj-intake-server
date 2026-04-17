@@ -38,15 +38,23 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════
 
 OPENAI_API_URL = "https://api.openai.com/v1/audio/transcriptions"
+OPENAI_TTS_URL = "https://api.openai.com/v1/audio/speech"
 WHISPER_MODEL = "whisper-1"
-MAX_BYTES = 25 * 1024 * 1024  # Whisper server-side limit
+TTS_MODEL_DEFAULT = "tts-1"           # faster, good quality
+TTS_MODEL_HD = "tts-1-hd"             # slower, best quality
+TTS_VOICES = {"nova", "alloy", "echo", "fable", "onyx", "shimmer"}
+TTS_MAX_CHARS = 4096                  # OpenAI's hard limit
+MAX_BYTES = 25 * 1024 * 1024          # Whisper server-side limit
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=10.0)
+TTS_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
 
 logger = logging.getLogger("whisper_proxy")
 if not logger.handlers:
@@ -124,12 +132,85 @@ async def transcribe(
     return result
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# TTS (Text-to-Speech) proxy
+# ═══════════════════════════════════════════════════════════════════════
+
+class TTSRequest(BaseModel):
+    text: str
+    voice: Optional[str] = "nova"
+    model: Optional[str] = TTS_MODEL_DEFAULT
+
+
+@router.post("/ai/tts/speak")
+async def text_to_speech(req: TTSRequest):
+    """Proxy OpenAI TTS. Returns raw mp3 audio (binary)."""
+    key = _openai_key()
+    if not key:
+        raise HTTPException(500, "OPENAI_API_KEY not configured on server")
+
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    if len(text) > TTS_MAX_CHARS:
+        text = text[:TTS_MAX_CHARS]
+
+    voice = (req.voice or "nova").lower()
+    if voice not in TTS_VOICES:
+        voice = "nova"
+
+    model = req.model or TTS_MODEL_DEFAULT
+    if model not in (TTS_MODEL_DEFAULT, TTS_MODEL_HD):
+        model = TTS_MODEL_DEFAULT
+
+    try:
+        async with httpx.AsyncClient(timeout=TTS_TIMEOUT) as client:
+            resp = await client.post(
+                OPENAI_TTS_URL,
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "input": text,
+                    "voice": voice,
+                    "response_format": "mp3",
+                },
+            )
+    except httpx.TimeoutException:
+        logger.warning("TTS request timed out")
+        raise HTTPException(504, "TTS API timed out")
+    except httpx.HTTPError as e:
+        logger.error(f"TTS request failed: {e}")
+        raise HTTPException(502, f"TTS request failed: {e}")
+
+    if resp.status_code >= 400:
+        body = resp.text[:300]
+        logger.warning(f"TTS {resp.status_code}: {body}")
+        raise HTTPException(resp.status_code, f"TTS error: {body}")
+
+    logger.info(f"TTS ok: chars={len(text)} voice={voice} model={model} bytes={len(resp.content)}")
+    return Response(
+        content=resp.content,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# HEALTH
+# ═══════════════════════════════════════════════════════════════════════
+
 @router.get("/ai/whisper/health")
 async def health():
     """Liveness probe — confirms the router is mounted and the key is set."""
     return {
         "status": "ok",
         "key_present": bool(_openai_key()),
-        "model": WHISPER_MODEL,
+        "whisper_model": WHISPER_MODEL,
+        "tts_model": TTS_MODEL_DEFAULT,
+        "tts_voices": sorted(TTS_VOICES),
         "max_bytes": MAX_BYTES,
+        "tts_max_chars": TTS_MAX_CHARS,
     }
