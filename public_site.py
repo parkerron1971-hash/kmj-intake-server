@@ -21,12 +21,13 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -83,6 +84,21 @@ async def _sb(client: httpx.AsyncClient, path: str):
     }
     resp = await client.get(url, headers=headers, timeout=HTTP_TIMEOUT)
     if resp.status_code >= 400:
+        return None
+    text = resp.text
+    return json.loads(text) if text else None
+
+async def _sb_post(client: httpx.AsyncClient, path: str, body: dict):
+    url = f"{_supabase_url()}/rest/v1{path}"
+    headers = {
+        "apikey": _supabase_anon(),
+        "Authorization": f"Bearer {_supabase_anon()}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    resp = await client.post(url, headers=headers, content=json.dumps(body), timeout=HTTP_TIMEOUT)
+    if resp.status_code >= 400:
+        logger.error(f"Supabase POST {path}: {resp.status_code} {resp.text[:200]}")
         return None
     text = resp.text
     return json.loads(text) if text else None
@@ -365,6 +381,330 @@ async def get_widget(module_id: str):
             entries.append(_filter_entry(data, visible, hidden))
 
         html = _build_widget_html(module, entries, biz)
+        return HTMLResponse(content=html)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BOOKING ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@router.get("/public/booking/{slug}/slots")
+async def booking_slots(slug: str, days: int = 14):
+    """Return available time slots for the next N days."""
+    if not _check_rate(f"booking-{slug}"):
+        raise HTTPException(429, "Rate limit exceeded")
+
+    async with httpx.AsyncClient() as client:
+        # Look up business by slug from business_sites
+        sites = await _sb(client, f"/business_sites?slug=eq.{slug}&limit=1&select=business_id")
+        if not sites:
+            raise HTTPException(404, "Business not found")
+        biz_id = sites[0]["business_id"]
+
+        biz_rows = await _sb(client, f"/businesses?id=eq.{biz_id}&select=name,settings&limit=1")
+        if not biz_rows:
+            raise HTTPException(404, "Business not found")
+        biz = biz_rows[0]
+        booking = (biz.get("settings") or {}).get("booking") or {}
+        if not booking.get("enabled"):
+            raise HTTPException(404, "Booking not enabled")
+
+        available_days = set(booking.get("available_days", [1, 2, 3, 4, 5]))
+        hours_start = booking.get("hours", {}).get("start", "09:00")
+        hours_end = booking.get("hours", {}).get("end", "17:00")
+        buffer = booking.get("buffer_minutes", 15)
+        window = min(days, booking.get("booking_window_days", 14))
+        session_types = booking.get("session_types", [])
+        durations = booking.get("durations", {})
+        min_duration = min(durations.values()) if durations else 60
+
+        # Parse hours
+        try:
+            start_h, start_m = int(hours_start.split(":")[0]), int(hours_start.split(":")[1])
+            end_h, end_m = int(hours_end.split(":")[0]), int(hours_end.split(":")[1])
+        except (ValueError, IndexError):
+            start_h, start_m, end_h, end_m = 9, 0, 17, 0
+
+        # Get existing sessions in the window
+        now = datetime.now(timezone.utc)
+        window_end = now + timedelta(days=window)
+        existing = await _sb(client,
+            f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
+            f"&scheduled_for=gte.{now.isoformat()}&scheduled_for=lte.{window_end.isoformat()}"
+            f"&select=scheduled_for,duration_minutes&limit=200") or []
+
+        booked_ranges = []
+        for s in existing:
+            try:
+                sdt = datetime.fromisoformat(s["scheduled_for"].replace("Z", "+00:00"))
+                dur = s.get("duration_minutes") or 60
+                booked_ranges.append((sdt, sdt + timedelta(minutes=dur + buffer)))
+            except (ValueError, TypeError):
+                pass
+
+        # Generate slots
+        slots = []
+        for d in range(window):
+            day = now.date() + timedelta(days=d + 1)
+            # isoweekday: Mon=1 .. Sun=7
+            if day.isoweekday() not in available_days:
+                continue
+
+            day_slots = []
+            t_h, t_m = start_h, start_m
+            while t_h < end_h or (t_h == end_h and t_m < end_m):
+                slot_start = datetime(day.year, day.month, day.day, t_h, t_m, tzinfo=timezone.utc)
+                slot_end = slot_start + timedelta(minutes=min_duration)
+                if slot_end.hour > end_h or (slot_end.hour == end_h and slot_end.minute > end_m):
+                    break
+
+                # Check conflicts
+                conflict = any(bs <= slot_start < be or bs < slot_end <= be for bs, be in booked_ranges)
+                if not conflict:
+                    day_slots.append(f"{t_h:02d}:{t_m:02d}")
+
+                t_m += min_duration + buffer
+                while t_m >= 60:
+                    t_h += 1
+                    t_m -= 60
+
+            if day_slots:
+                slots.append({"date": day.isoformat(), "times": day_slots})
+
+        return {"slots": slots, "session_types": session_types, "durations": durations}
+
+
+class BookingSubmission(BaseModel):
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    session_type: str
+    date: str        # YYYY-MM-DD
+    time: str        # HH:MM
+    message: Optional[str] = None
+
+
+@router.post("/public/booking/{slug}/submit")
+async def booking_submit(slug: str, req: BookingSubmission):
+    """Process a booking: create contact + session."""
+    if not _check_rate(f"booking-{slug}"):
+        raise HTTPException(429, "Rate limit exceeded")
+
+    async with httpx.AsyncClient() as client:
+        sites = await _sb(client, f"/business_sites?slug=eq.{slug}&limit=1&select=business_id")
+        if not sites:
+            raise HTTPException(404, "Business not found")
+        biz_id = sites[0]["business_id"]
+
+        biz_rows = await _sb(client, f"/businesses?id=eq.{biz_id}&select=name,settings&limit=1")
+        if not biz_rows:
+            raise HTTPException(404, "Business not found")
+        biz = biz_rows[0]
+        booking = (biz.get("settings") or {}).get("booking") or {}
+        if not booking.get("enabled"):
+            raise HTTPException(404, "Booking not enabled")
+
+        durations = booking.get("durations") or {}
+        duration = durations.get(req.session_type, 60)
+
+        # Parse scheduled time
+        try:
+            scheduled = datetime.fromisoformat(f"{req.date}T{req.time}:00+00:00")
+        except ValueError:
+            raise HTTPException(400, "Invalid date/time")
+
+        # Conflict check
+        buffer = booking.get("buffer_minutes", 15)
+        slot_end = scheduled + timedelta(minutes=duration + buffer)
+        conflicts = await _sb(client,
+            f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
+            f"&scheduled_for=gte.{(scheduled - timedelta(minutes=duration + buffer)).isoformat()}"
+            f"&scheduled_for=lte.{slot_end.isoformat()}"
+            f"&select=id&limit=1")
+        if conflicts:
+            raise HTTPException(409, "Time slot no longer available")
+
+        # Find or create contact
+        contact_id = None
+        if req.email:
+            existing = await _sb(client,
+                f"/contacts?business_id=eq.{biz_id}&email=eq.{req.email}&limit=1&select=id")
+            if existing:
+                contact_id = existing[0]["id"]
+
+        if not contact_id:
+            new_contact = await _sb_post(client, "/contacts", {
+                "business_id": biz_id,
+                "name": req.name.strip(),
+                "email": req.email or None,
+                "phone": req.phone or None,
+                "status": "lead",
+                "source": "booking_page",
+            })
+            if new_contact and isinstance(new_contact, list):
+                contact_id = new_contact[0]["id"]
+
+        # Create session
+        session_title = f"{req.session_type.replace('_', ' ').title()} with {req.name}"
+        new_session = await _sb_post(client, "/sessions", {
+            "business_id": biz_id,
+            "contact_id": contact_id,
+            "title": session_title,
+            "session_type": req.session_type,
+            "status": "scheduled",
+            "scheduled_for": scheduled.isoformat(),
+            "duration_minutes": duration,
+            "notes": req.message or None,
+        })
+        session_id = new_session[0]["id"] if (new_session and isinstance(new_session, list)) else None
+
+        # Log event
+        await _sb_post(client, "/events", {
+            "business_id": biz_id,
+            "contact_id": contact_id,
+            "event_type": "booking_created",
+            "data": {"session_id": session_id, "session_type": req.session_type, "source": "public_booking_page"},
+            "source": "booking_page",
+        })
+
+        practitioner = (biz.get("settings") or {}).get("practitioner_name", biz.get("name", ""))
+        return {
+            "success": True,
+            "session_id": session_id,
+            "contact_id": contact_id,
+            "message": f"You're booked! {req.session_type.replace('_', ' ').title()} with {practitioner} on {req.date} at {req.time}.",
+        }
+
+
+@router.get("/public/booking/{slug}")
+async def booking_page_html(slug: str):
+    """Return the public booking page HTML."""
+    if not _check_rate(f"booking-{slug}"):
+        raise HTTPException(429, "Rate limit exceeded")
+
+    async with httpx.AsyncClient() as client:
+        sites = await _sb(client, f"/business_sites?slug=eq.{slug}&limit=1&select=business_id")
+        if not sites:
+            raise HTTPException(404, "Business not found")
+        biz_id = sites[0]["business_id"]
+
+        biz_rows = await _sb(client, f"/businesses?id=eq.{biz_id}&select=name,type,settings&limit=1")
+        if not biz_rows:
+            raise HTTPException(404, "Business not found")
+        biz = biz_rows[0]
+        booking = (biz.get("settings") or {}).get("booking") or {}
+        if not booking.get("enabled"):
+            raise HTTPException(404, "Booking not enabled")
+
+        brand = (biz.get("settings") or {}).get("brand_kit") or {}
+        colors = brand.get("colors") or _palette_for(biz.get("type", "general"))
+        practitioner = (biz.get("settings") or {}).get("practitioner_name", biz.get("name", ""))
+        message = booking.get("message", "Pick a time that works for you.")
+        biz_name = biz.get("name", "")
+        primary = colors.get("primary") or colors.get("accent", "#333")
+        bg = colors.get("background", "#faf8f5")
+
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Book with {practitioner} — {biz_name}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box;}}
+body{{font-family:'Inter',sans-serif;background:{bg};color:#1a1a2e;min-height:100vh;display:flex;justify-content:center;padding:40px 20px;}}
+.container{{max-width:480px;width:100%;}}
+h1{{font-size:1.6em;font-weight:700;margin-bottom:4px;}}
+.sub{{color:#666;font-size:0.9em;margin-bottom:24px;line-height:1.5;}}
+.msg{{padding:16px;background:rgba(0,0,0,0.03);border-radius:10px;margin-bottom:24px;font-style:italic;color:#555;line-height:1.5;}}
+#slots{{margin-bottom:24px;}}
+.day-header{{font-weight:600;font-size:0.85em;color:#888;text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px;}}
+.time-grid{{display:flex;flex-wrap:wrap;gap:8px;}}
+.time-btn{{padding:8px 16px;border:1.5px solid {primary}40;border-radius:8px;background:#fff;color:{primary};font-weight:600;cursor:pointer;font-size:0.85em;transition:all 0.15s;}}
+.time-btn:hover,.time-btn.sel{{background:{primary};color:#fff;border-color:{primary};}}
+#form{{display:none;padding:20px;background:#fff;border:1px solid #e8e4dd;border-radius:12px;}}
+.field{{margin-bottom:14px;}}
+.field label{{display:block;font-size:0.75em;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:4px;}}
+.field input,.field select,.field textarea{{width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:6px;font-size:0.9em;font-family:inherit;}}
+.field textarea{{resize:vertical;min-height:60px;}}
+.submit-btn{{width:100%;padding:12px;background:{primary};color:#fff;border:none;border-radius:8px;font-weight:700;font-size:1em;cursor:pointer;margin-top:8px;}}
+.submit-btn:disabled{{opacity:0.5;cursor:default;}}
+#confirm{{display:none;text-align:center;padding:40px 20px;}}
+#confirm h2{{color:{primary};margin-bottom:8px;}}
+.loading{{color:#888;font-style:italic;padding:20px;text-align:center;}}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Book with {practitioner}</h1>
+<p class="sub">{biz_name}</p>
+<div class="msg">{message}</div>
+<div id="slots"><div class="loading">Loading available times…</div></div>
+<div id="form">
+<div class="field"><label>Name</label><input id="f-name" required></div>
+<div class="field"><label>Email</label><input id="f-email" type="email"></div>
+<div class="field"><label>Session Type</label><select id="f-type"></select></div>
+<div class="field"><label>Message (optional)</label><textarea id="f-msg"></textarea></div>
+<button class="submit-btn" id="book-btn" onclick="submitBooking()">Book Now</button>
+</div>
+<div id="confirm"><h2>✓ You're booked!</h2><p id="confirm-msg"></p></div>
+</div>
+<script>
+const BASE='';
+let selectedDate='',selectedTime='';
+async function load(){{
+  try{{
+    const r=await fetch(BASE+'/public/booking/{slug}/slots');
+    const d=await r.json();
+    const c=document.getElementById('slots');
+    if(!d.slots||d.slots.length===0){{c.innerHTML='<p>No available times right now. Please check back later.</p>';return;}}
+    let h='';
+    d.slots.forEach(day=>{{
+      const dt=new Date(day.date+'T00:00:00');
+      h+='<div class="day-header">'+dt.toLocaleDateString(undefined,{{weekday:'long',month:'short',day:'numeric'}})+'</div>';
+      h+='<div class="time-grid">';
+      day.times.forEach(t=>{{h+='<button class="time-btn" onclick="pick(\\''+day.date+'\\',\\''+t+'\\',this)">'+t+'</button>';}});
+      h+='</div>';
+    }});
+    c.innerHTML=h;
+    const sel=document.getElementById('f-type');
+    (d.session_types||[]).forEach(t=>{{const o=document.createElement('option');o.value=t;o.textContent=t.replace(/_/g,' ');sel.appendChild(o);}});
+  }}catch(e){{document.getElementById('slots').innerHTML='<p>Could not load times.</p>';}}
+}}
+function pick(date,time,btn){{
+  selectedDate=date;selectedTime=time;
+  document.querySelectorAll('.time-btn').forEach(b=>b.classList.remove('sel'));
+  btn.classList.add('sel');
+  document.getElementById('form').style.display='block';
+  document.getElementById('form').scrollIntoView({{behavior:'smooth'}});
+}}
+async function submitBooking(){{
+  const btn=document.getElementById('book-btn');btn.disabled=true;btn.textContent='Booking…';
+  try{{
+    const r=await fetch(BASE+'/public/booking/{slug}/submit',{{
+      method:'POST',headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{
+        name:document.getElementById('f-name').value,
+        email:document.getElementById('f-email').value,
+        session_type:document.getElementById('f-type').value,
+        date:selectedDate,time:selectedTime,
+        message:document.getElementById('f-msg').value||null,
+      }})
+    }});
+    const d=await r.json();
+    if(d.success){{
+      document.getElementById('slots').style.display='none';
+      document.getElementById('form').style.display='none';
+      document.getElementById('confirm').style.display='block';
+      document.getElementById('confirm-msg').textContent=d.message;
+    }}else{{btn.disabled=false;btn.textContent='Book Now';alert(d.detail||'Booking failed');}}
+  }}catch(e){{btn.disabled=false;btn.textContent='Book Now';alert('Booking failed');}}
+}}
+load();
+</script>
+</body>
+</html>"""
         return HTMLResponse(content=html)
 
 
