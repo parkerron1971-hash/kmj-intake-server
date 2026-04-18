@@ -47,6 +47,49 @@ TYPE_PALETTES: Dict[str, Dict[str, str]] = {
 }
 DEFAULT_PALETTE = TYPE_PALETTES["consulting"]
 
+# ═══════════════════════════════════════════════════════════════════════
+# SUBDOMAIN DETECTION
+# ═══════════════════════════════════════════════════════════════════════
+
+BASE_DOMAINS = ["solutionist.app", "solutionistsystem.com", "getsolutionist.com", "mysolutionist.com"]
+
+
+def extract_slug_from_host(request: Request) -> Optional[str]:
+    """Extract the business slug from subdomain.
+    embrace-the-shift.solutionist.app → 'embrace-the-shift'
+    www.solutionist.app → None (root)
+    solutionist.app → None (root)
+    kmj-intake-server-production.up.railway.app → None (API domain)
+    """
+    host = (request.headers.get("host") or "").split(":")[0].lower().strip()
+    if not host:
+        return None
+
+    for base in BASE_DOMAINS:
+        if host == base or host == f"www.{base}":
+            return None
+        if host.endswith(f".{base}"):
+            slug = host.replace(f".{base}", "")
+            if slug and slug != "www":
+                return slug
+
+    return None
+
+
+def _inject_canonical(html: str, slug: str) -> str:
+    """Inject canonical URL + OG tags into the HTML head section."""
+    canonical = f"https://{slug}.solutionist.app"
+    tags = (
+        f'\n<link rel="canonical" href="{canonical}" />'
+        f'\n<meta property="og:url" content="{canonical}" />'
+    )
+    if "</head>" in html:
+        return html.replace("</head>", tags + "\n</head>", 1)
+    if "</HEAD>" in html:
+        return html.replace("</HEAD>", tags + "\n</HEAD>", 1)
+    return html
+
+
 logger = logging.getLogger("public_site")
 if not logger.handlers:
     h = logging.StreamHandler()
@@ -256,6 +299,8 @@ async def get_site_html(slug: str):
         html = site.get("html_content") or ""
         if not html:
             raise HTTPException(404, "Site has no content")
+        # Inject canonical URL for SEO
+        html = _inject_canonical(html, slug)
         return HTMLResponse(
             content=html,
             status_code=200,
@@ -953,4 +998,123 @@ async def public_health():
         "supabase_configured": bool(_supabase_url()),
         "rate_limit_per_min": RATE_LIMIT_PER_MIN,
         "palettes": list(TYPE_PALETTES.keys()),
+        "base_domains": BASE_DOMAINS,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SUBDOMAIN ROUTING — Root domain + catch-all
+# ═══════════════════════════════════════════════════════════════════════
+# MUST be registered LAST so they don't shadow API routes.
+# They only fire when the Host header is a solutionist.app subdomain.
+# API calls from kmj-intake-server-production.up.railway.app pass through
+# because extract_slug_from_host returns None → 404 → FastAPI continues.
+
+MARKETING_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>The Solutionist System — AI-Powered Operating System for Your Business</title>
+<meta name="description" content="An AI-powered operating system that runs your contacts, sessions, proposals, payments, and website — so you can focus on the people you serve.">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Inter',sans-serif;background:#0d0d12;color:#E8E4DD;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:40px 24px;}
+.wrap{max-width:600px;text-align:center;}
+.badge{display:inline-block;padding:6px 16px;font-size:10px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#C8973E;border:1px solid rgba(200,151,62,0.3);border-radius:99px;margin-bottom:24px;}
+h1{font-family:'Cormorant Garamond',Georgia,serif;font-size:3em;font-weight:300;line-height:1.1;margin-bottom:16px;letter-spacing:-0.5px;}
+h1 span{color:#C8973E;}
+p{font-size:1.05em;color:#8B8880;line-height:1.7;margin-bottom:32px;}
+.cta{display:inline-block;padding:14px 32px;font-size:14px;font-weight:700;color:#0C1120;background:linear-gradient(135deg,#C8973E,#B8872E);border:none;border-radius:10px;text-decoration:none;box-shadow:0 4px 20px rgba(200,151,62,0.3);transition:transform 0.15s;}
+.cta:hover{transform:translateY(-2px);}
+.footer{margin-top:60px;font-size:11px;color:#4A4F5E;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="badge">The Solutionist System</div>
+<h1>An AI-powered <span>operating system</span> for your business</h1>
+<p>Contacts, sessions, proposals, payments, website, and a Chief of Staff that manages it all — built for pastors, coaches, consultants, and practitioners who serve people.</p>
+<a href="https://kmjcreate.com" class="cta">Get Started</a>
+<div class="footer">Built by KMJ Creative Solutions</div>
+</div>
+</body>
+</html>"""
+
+
+async def _serve_site_by_slug(slug: str) -> HTMLResponse:
+    """Shared logic: look up site by slug and return HTML."""
+    async with httpx.AsyncClient() as client:
+        sites = await _sb(client,
+            f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
+            f"&select=html_content")
+        if not sites or not sites[0].get("html_content"):
+            raise HTTPException(404, "Site not found")
+        html = _inject_canonical(sites[0]["html_content"], slug)
+        return HTMLResponse(content=html, media_type="text/html")
+
+
+async def _serve_site_by_custom_domain(domain: str) -> HTMLResponse:
+    """Look up a site by its custom domain."""
+    async with httpx.AsyncClient() as client:
+        # Search business_sites for a matching custom_domain in site_config
+        sites = await _sb(client,
+            f"/business_sites?site_config->>custom_domain=eq.{domain}"
+            f"&order=updated_at.desc&limit=1"
+            f"&select=html_content,slug")
+        if not sites or not sites[0].get("html_content"):
+            return None  # type: ignore
+        slug = sites[0].get("slug") or domain
+        html = _inject_canonical(sites[0]["html_content"], slug)
+        return HTMLResponse(content=html, media_type="text/html")
+
+
+@router.get("/", include_in_schema=False)
+async def subdomain_root(request: Request):
+    """Handle subdomain requests at the root path."""
+    slug = extract_slug_from_host(request)
+    if slug:
+        if not _check_rate(slug):
+            raise HTTPException(429, "Rate limit exceeded")
+        return await _serve_site_by_slug(slug)
+
+    # Check if this is a custom domain
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host and "." in host and "railway" not in host and "localhost" not in host:
+        for base in BASE_DOMAINS:
+            if host == base or host.endswith(f".{base}"):
+                break
+        else:
+            # Not a known base domain — try custom domain lookup
+            result = await _serve_site_by_custom_domain(host)
+            if result:
+                return result
+
+    # Root domain or unknown — serve marketing page
+    return HTMLResponse(content=MARKETING_HTML, media_type="text/html")
+
+
+@router.get("/{path:path}", include_in_schema=False)
+async def subdomain_catch_all(request: Request, path: str):
+    """Catch-all for subdomain requests. Serves the same single-page site
+    regardless of path (SPA routing). Only fires for subdomain hosts —
+    API domain requests fall through with 404."""
+    slug = extract_slug_from_host(request)
+    if slug:
+        if not _check_rate(slug):
+            raise HTTPException(429, "Rate limit exceeded")
+        return await _serve_site_by_slug(slug)
+
+    # Custom domain check
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host and "." in host and "railway" not in host and "localhost" not in host:
+        for base in BASE_DOMAINS:
+            if host == base or host.endswith(f".{base}"):
+                break
+        else:
+            result = await _serve_site_by_custom_domain(host)
+            if result:
+                return result
+
+    # Not a subdomain/custom domain — let FastAPI return 404
+    raise HTTPException(404, "Not found")

@@ -202,8 +202,12 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
             f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()}"
             f"&order=created_at.desc&limit=30"
             f"&select=id,agent,action_type,subject,status,priority,contact_id,body,created_at"),
+        _sb(client, "GET",
+            f"/business_sites?business_id=eq.{biz_id}"
+            f"&order=updated_at.desc&limit=1"
+            f"&select=slug,status,site_config"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -248,12 +252,28 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "memories": memories or [],
         "notifications": notifications or [],
         "recent_queue_24h": recent_queue or [],
+        "site": (site_rows or [{}])[0] if site_rows else None,
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
             for c in contacts[:200]
         ],
     }
+
+
+def _format_site_info(ctx: Dict[str, Any]) -> str:
+    site = ctx.get("site")
+    if not site or not site.get("slug"):
+        return "  (no site generated yet)"
+    slug = site["slug"]
+    status = site.get("status", "draft")
+    custom = (site.get("site_config") or {}).get("custom_domain")
+    lines = [f"  Live at: https://{slug}.solutionist.app"]
+    lines.append(f"  Status: {status}")
+    if custom:
+        lines.append(f"  Custom domain: {custom}")
+    lines.append(f"  Direct link: /public/site/{slug}")
+    return "\n".join(lines)
 
 
 def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
@@ -390,6 +410,9 @@ STANDING INSTRUCTIONS (execute when triggered):
 
 RECENT UNREAD NOTIFICATIONS:
 {chr(10).join(notif_lines) if notif_lines else '  (none)'}
+
+PRACTITIONER SITE:
+{_format_site_info(ctx)}
 
 CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
 {chr(10).join(contact_ref_lines) if contact_ref_lines else '  (no contacts)'}
