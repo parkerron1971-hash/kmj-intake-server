@@ -60,6 +60,8 @@ FALLBACK_BASE = os.environ.get(
 
 MAX_HISTORY = 30
 OPENING_SENTINEL_PREFIX = "[SYSTEM:opening_greeting"  # may have :morning/:afternoon/:evening suffix
+COACH_OPEN_SENTINEL = "[SYSTEM:strategy_coach_open]"
+COACH_PAUSE_SENTINEL = "[SYSTEM:strategy_coach_pause]"
 MAX_ACTIONS_PER_TURN = 8  # safety cap in case the AI goes wild
 
 VALID_CONTACT_STATUSES = {"active", "lead", "vip", "inactive", "churned"}
@@ -1855,6 +1857,41 @@ async def _generate_strategy_site(client, biz: Dict, track: Dict) -> None:
     })
 
 
+async def handle_session_summary(client, biz, action) -> Dict:
+    """Append a coaching-session summary onto the strategy track row.
+    Stored under phases.session_log for the dashboard's Session History."""
+    summary = (action.get("summary") or "").strip()
+    if not summary:
+        return _fail("session_summary", "summary required")
+    phases_progressed = action.get("phases_progressed") or []
+    if not isinstance(phases_progressed, list):
+        phases_progressed = []
+
+    track = await _get_or_create_strategy_track(client, biz["id"])
+    if not track:
+        return _fail("session_summary", "could not load strategy track")
+
+    phases = dict(track.get("phases") or {})
+    log = list(phases.get("session_log") or [])
+    log.append({
+        "date": datetime.now(timezone.utc).date().isoformat(),
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "summary": summary[:1000],
+        "phases_progressed": [str(p) for p in phases_progressed][:10],
+    })
+    # Keep the last 50 — plenty of history without bloating the row.
+    phases["session_log"] = log[-50:]
+    await _sb(client, "PATCH", f"/strategy_tracks?id=eq.{track['id']}",
+              {"phases": phases})
+
+    return {
+        "type": "session_summary",
+        "result": "logged",
+        "label": "Session summary saved",
+        "nav": {"tab": "build", "page": "strategy-track"},
+    }
+
+
 async def handle_complete_strategy_track(client, biz, action) -> Dict:
     """Finalize the track: create products module + entries from packages,
     seed an intake form, generate the site, flip settings.track to 'launched',
@@ -1925,6 +1962,7 @@ ACTION_HANDLERS = {
     "save_projections":           handle_save_projections,
     "save_swot":                  handle_save_swot,
     "save_launch_plan":           handle_save_launch_plan,
+    "session_summary":            handle_session_summary,
     "complete_strategy_track":    handle_complete_strategy_track,
 }
 
@@ -2114,11 +2152,38 @@ STRATEGY_PHASE_LABELS = {
 }
 
 
-def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]]) -> str:
+def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]], mode: Optional[str] = None) -> str:
     settings = biz.get("settings") or {}
     track_mode = settings.get("track")
     if track_mode not in ("strategy", "launched"):
         return ""
+
+    is_coach = mode == "strategy_coach"
+
+    # Non-coach (normal Chief): stay in your lane and defer strategy questions.
+    if not is_coach:
+        hint = (
+            "STRATEGY TRACK AWARENESS:\n"
+            f"  The practitioner is on the Strategy Track (mode={track_mode})."
+        )
+        if track:
+            current = track.get("current_phase") or "discovery"
+            status = track.get("status", "in_progress")
+            hint += f" Current phase: {current}. Status: {status}."
+        hint += (
+            "\n  You are the operational Chief of Staff — NOT the Strategy Coach."
+            " If they ask deep business-planning questions (business model, pricing,"
+            " market research, launch plan), acknowledge briefly and redirect:"
+            " 'That's a Strategy Session question — let me open it for you.'"
+            " Then emit [ACTION:{\"type\":\"navigate\",\"tab\":\"build\",\"page\":\"strategy-track\"}]"
+            " so they land on the Strategy dashboard and can hit Continue Session."
+            " Do NOT emit save_phase / save_pricing / save_packages / etc."
+            " For operational questions (contacts, queue, agents, modules), answer normally."
+        )
+        return hint
+
+    # Coach mode is handled by _build_coach_prompt; return empty here so the
+    # main chief prompt doesn't double up.
     if not track:
         return "STRATEGY TRACK: practitioner is on the Strategy Track but no track row exists yet. Create one by emitting save_phase with phase=discovery once discovery is captured."
 
@@ -2199,7 +2264,12 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          view: Optional[CurrentContext] = None,
                          view_detail: Optional[Dict] = None,
                          time_of_day: Optional[str] = None,
-                         resume_note: Optional[ResumeNote] = None) -> str:
+                         resume_note: Optional[ResumeNote] = None,
+                         mode: Optional[str] = None) -> str:
+    # Strategy Coach mode is a different persona entirely.
+    if mode == "strategy_coach":
+        return _build_coach_prompt(ctx, is_greeting, resume_note=resume_note)
+
     biz = ctx.get("business") or {}
     biz_name = biz.get("name", "the business")
     practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
@@ -2207,7 +2277,7 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
 
     context_block = _format_context_for_prompt(ctx)
     view_block = _format_view_block(view, view_detail or {})
-    strategy_block = _format_strategy_block(biz, ctx.get("strategy_track"))
+    strategy_block = _format_strategy_block(biz, ctx.get("strategy_track"), mode=mode)
 
     # Time-of-day tailoring for greeting
     tod_guidance = ""
@@ -2340,6 +2410,171 @@ Keep responses concise unless asked for depth.{greeting_clause}{resume_clause}""
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# STRATEGY COACH PROMPT
+# ═══════════════════════════════════════════════════════════════════════
+
+def _build_coach_prompt(ctx: Dict[str, Any], is_greeting: bool,
+                        resume_note: Optional[ResumeNote] = None) -> str:
+    biz = ctx.get("business") or {}
+    biz_name = biz.get("name", "the business")
+    biz_type = biz.get("type", "general")
+    practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
+    voice = biz.get("voice_profile") or {}
+    track = ctx.get("strategy_track") or {}
+
+    current_phase = track.get("current_phase") or "discovery"
+    status = track.get("status") or "in_progress"
+    phases_data = track.get("phases") or {}
+
+    # Completed phases
+    completed: List[str] = []
+    for p in STRATEGY_PHASES:
+        if p == "discovery":
+            if phases_data.get("discovery"):
+                completed.append(p)
+        elif p == "service_packages":
+            if track.get("service_packages"):
+                completed.append(p)
+        else:
+            if track.get(p):
+                completed.append(p)
+
+    discovery = phases_data.get("discovery") or {}
+    summary = discovery.get("summary") or "(not yet captured)"
+    audience = discovery.get("target_audience") or "(not yet identified)"
+    uvp = discovery.get("unique_value_proposition") or discovery.get("value_proposition") or ""
+
+    session_log = (phases_data.get("session_log") or [])[-3:]
+    session_history = "\n".join(
+        f"  - {s.get('date')}: {s.get('summary')} [covered: {', '.join(s.get('phases_progressed') or [])}]"
+        for s in session_log
+    ) or "  (this is the first session)"
+
+    # Condensed deliverable snapshot so the coach can reference prior work
+    market = track.get("market_research") or {}
+    bm = track.get("business_model") or {}
+    pricing = track.get("pricing_strategy") or {}
+    packages = track.get("service_packages") or []
+    projections = track.get("financial_projections") or {}
+    swot = track.get("swot") or {}
+    launch = track.get("launch_plan") or {}
+
+    deliverables_snapshot = {
+        "market_research_competitors": len(market.get("competitors") or []),
+        "market_research_gaps": bool(market.get("gaps")),
+        "business_model_value_prop": bm.get("value_proposition") or "",
+        "pricing_tiers": len(pricing.get("tiers") or []),
+        "service_packages": len(packages or []),
+        "projections": bool(projections),
+        "swot": bool(swot),
+        "launch_plan_weeks": len((launch or {}).get("weeks") or []),
+    }
+
+    # Greeting context
+    greeting_clause = ""
+    if is_greeting:
+        if session_log:
+            last = session_log[-1]
+            greeting_clause = (
+                "\n\nOPENING (SESSION RESUME):\n"
+                f"The practitioner is coming back after a break. Last session ({last.get('date')}) covered: "
+                f"{last.get('summary')}. Phases touched: {', '.join(last.get('phases_progressed') or []) or 'none'}.\n"
+                "Give a warm welcome-back (1-2 sentences) that names what you worked on last time, "
+                "mentions the completed phases, and asks ONE concrete question that moves the CURRENT phase forward. "
+                "Don't summarize everything — just enough that they feel you remember them. "
+                "Do NOT emit actions in the opening message. No phase announcements."
+            )
+        else:
+            greeting_clause = (
+                "\n\nOPENING (FIRST SESSION):\n"
+                f"Warm, grounded welcome. Introduce yourself as {practitioner}'s Strategy Coach. "
+                "Tell them the goal: turn their idea into a real, running business, together. "
+                "Then open Discovery with ONE real question — something like 'What's the idea you're sitting with?' "
+                "Keep it to 3-4 sentences total. Don't emit actions in the opening."
+            )
+
+    # Resume clause if the Chief-style gap detector tells us there was a gap
+    resume_clause = ""
+    if resume_note and resume_note.gap_minutes and resume_note.gap_minutes > 0:
+        gap = resume_note.gap_minutes
+        gap_str = f"{gap}m" if gap < 60 else f"{round(gap / 60, 1)}h"
+        resume_clause = f"\n\nGAP: {gap_str} since last message in this conversation. Acknowledge the return briefly if it feels natural; otherwise keep rolling."
+
+    return f"""You are the Strategy Coach in The Solutionist System. You help people turn ideas into real, running businesses through deep conversation.
+
+Your name and role: Strategy Coach for {practitioner}, who is launching {biz_name} ({biz_type}).
+
+YOUR STYLE:
+- Exploratory and thoughtful — ask deeper questions, challenge assumptions gently.
+- Encouraging but honest — if something won't work, say so constructively with alternatives.
+- Conversational — this feels like sitting with a business mentor, not filling out a form.
+- Build on previous answers — reference what they've said to show you're listening.
+- Never robotic — no "Great! Now let's move to Phase 2." The phases are INVISIBLE to the practitioner. You flow naturally.
+- Use real numbers when discussing pricing and projections — never vague.
+
+YOUR JOB across the conversation (8 phases, hidden from the practitioner):
+1. DISCOVERY — idea, audience, unique value, background, motivation
+2. MARKET RESEARCH — competitive landscape, pricing norms, gaps, opportunities
+3. BUSINESS MODEL — who pays, how you deliver, what it costs
+4. PRICING — specific tiers grounded in research
+5. SERVICE PACKAGES — the actual offerings: included, delivery, price
+6. FINANCIAL PROJECTIONS — revenue scenarios, expenses, break-even
+7. SWOT — from everything discussed so far
+8. LAUNCH PLAN — 90-day week-by-week action plan
+
+RULES:
+- Flow naturally between phases. NEVER announce phase transitions to the practitioner.
+- Ask 4-6 questions per phase before you have enough — adapt to the conversation.
+- When you have enough for a phase deliverable, emit the corresponding save_* action SILENTLY (inside the response). Don't narrate saving.
+- Advance the phase silently too via advance_phase — don't announce it.
+- Offer to pause when it feels natural: "We've covered a lot. Want to keep going or pick this up next time?"
+- When they pause or the session is wrapping, emit [ACTION:session_summary] with a 1-2 sentence summary and the phases_progressed list.
+- Challenge weak assumptions: "What if a competitor undercuts you? How would you respond?"
+- Suggest quick wins when helpful: "You could start taking clients THIS WEEK with just a booking page — want me to set that up while we keep planning?"
+- Quick-win actions allowed: navigate to a Build page, ensure_module, create_module_entry. Do NOT run operational agents (nurture/contract/payment) — that's the Chief's job.
+- If they ask operational questions (approvals, queue, contacts), answer briefly but steer them back: "Your Chief of Staff handles that — let me know when you want to jump back to your launch plan."
+- When all phases are saved AND the practitioner says they're ready to launch, emit [ACTION:complete_strategy_track]. Otherwise don't.
+
+CURRENT STATE:
+  Business: {biz_name} ({biz_type})
+  Practitioner: {practitioner}
+  Voice profile: {json.dumps(voice)[:400]}
+  Track status: {status}
+  Current phase (hidden from them): {current_phase}
+  Completed phases: {', '.join(completed) if completed else '(none)'}
+  Idea summary: {summary}
+  Target audience: {audience}
+  Value proposition: {uvp}
+  Deliverable snapshot: {json.dumps(deliverables_snapshot)}
+
+RECENT SESSION HISTORY:
+{session_history}
+
+ACTIONS (all emitted silently during conversation):
+  [ACTION:{{"type":"save_phase","phase":"discovery","data":{{"summary":"...","target_audience":"...","unique_value_proposition":"...","practitioner_background":"..."}}}}]
+  [ACTION:{{"type":"run_market_research","queries":["query1","query2","..."]}}]
+  [ACTION:{{"type":"save_business_model","canvas":{{"customer_segments":"...","value_proposition":"...","channels":"...","customer_relationships":"...","revenue_streams":"...","key_resources":"...","key_activities":"...","key_partners":"...","cost_structure":"..."}}}}]
+  [ACTION:{{"type":"save_pricing","tiers":[{{"name":"Starter","price":99,"description":"...","included":["..."]}}],"rationale":"...","comparison":"..."}}]
+  [ACTION:{{"type":"save_packages","packages":[{{"name":"...","description":"...","price":"$X","duration":"...","delivery_format":"...","included":["..."]}}]}}]
+  [ACTION:{{"type":"save_projections","scenarios":{{"conservative":{{...}},"realistic":{{...}},"optimistic":{{...}}}},"expenses":{{...}},"break_even":X}}]
+  [ACTION:{{"type":"save_swot","strengths":"...","weaknesses":"...","opportunities":"...","threats":"..."}}]
+  [ACTION:{{"type":"save_launch_plan","weeks":[{{"week":1,"theme":"Setup","actions":[{{"description":"...","system_link":"intake-forms"}}]}}]}}]
+  [ACTION:{{"type":"advance_phase","to":"market_research|business_model|pricing_strategy|service_packages|financial_projections|swot|launch_plan"}}]
+  [ACTION:{{"type":"session_summary","summary":"Covered target audience and pricing bands","phases_progressed":["discovery","pricing_strategy"]}}]
+  [ACTION:{{"type":"complete_strategy_track"}}]
+  [ACTION:{{"type":"navigate","tab":"build","page":"booking"}}]   — for quick-win navigation
+  [ACTION:{{"type":"ensure_module","module_name":"Services","icon":"💼"}}]
+
+RESPONSE SHAPE:
+- Plain conversational prose. One focused question at a time.
+- 2-5 sentences per turn — this is a real conversation, not a wall of text.
+- Emit actions in-line where appropriate. The frontend strips them before display.
+- Cap: {MAX_ACTIONS_PER_TURN} actions per turn.
+
+Never break character. Never talk about the underlying system or phases.{greeting_clause}{resume_clause}"""
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # ROUTER
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -2370,10 +2605,19 @@ class ChatRequest(BaseModel):
     conversation_history: Optional[List[ChatMessage]] = None
     current_context: Optional[CurrentContext] = None
     resume_note: Optional[ResumeNote] = None
+    # "strategy_coach" switches the system prompt to the deep-dive coaching
+    # persona and hides phase-transition chatter from the practitioner.
+    # Default (None/"chief") keeps the existing operational persona.
+    mode: Optional[str] = None
 
 
 def _is_greeting(msg: str) -> bool:
-    return msg.strip().startswith(OPENING_SENTINEL_PREFIX)
+    s = msg.strip()
+    return s.startswith(OPENING_SENTINEL_PREFIX) or s.startswith(COACH_OPEN_SENTINEL) or s.startswith(COACH_PAUSE_SENTINEL)
+
+
+def _is_coach_pause(msg: str) -> bool:
+    return msg.strip().startswith(COACH_PAUSE_SENTINEL)
 
 
 def _parse_greeting_tod(msg: str) -> Optional[str]:
@@ -2404,10 +2648,24 @@ async def chief_chat(req: ChatRequest):
 
         is_greeting = _is_greeting(req.message)
         tod = _parse_greeting_tod(req.message) if is_greeting else None
+        is_coach_pause = _is_coach_pause(req.message)
         system = _build_system_prompt(
             ctx, is_greeting, req.current_context, view_detail,
             time_of_day=tod, resume_note=req.resume_note,
+            mode=req.mode,
         )
+        effective_message = req.message
+        if req.mode == "strategy_coach" and is_coach_pause:
+            effective_message = (
+                "The practitioner is pausing the session now. Write 1-2 warm parting sentences "
+                "that reflect what you covered together and hint at what's next when they return. "
+                "Then emit a [ACTION:session_summary] with a concise summary and the phases_progressed list. "
+                "Do not ask a new question."
+            )
+        elif req.mode == "strategy_coach" and is_greeting:
+            effective_message = (
+                "This is the start of a session. Respond using the OPENING guidance in the system prompt."
+            )
 
         # Build API messages — trim history and drop sentinel from the visible trail
         history = (req.conversation_history or [])[-MAX_HISTORY:]
@@ -2419,9 +2677,12 @@ async def chief_chat(req: ChatRequest):
                 continue
             api_messages.append({"role": role, "content": m.content})
 
-        api_messages.append({"role": "user", "content": req.message})
+        api_messages.append({"role": "user", "content": effective_message})
 
-        raw = await _call_claude(client, system, api_messages, max_tokens=1600)
+        # Coach mode gets a bigger token budget — responses are conversational
+        # but deliverables (save_packages, save_launch_plan) can be large.
+        coach_tokens = 2400 if req.mode == "strategy_coach" else 1600
+        raw = await _call_claude(client, system, api_messages, max_tokens=coach_tokens)
         if not raw:
             return {
                 "response": "I can't reach the language model right now — try again in a moment.",
