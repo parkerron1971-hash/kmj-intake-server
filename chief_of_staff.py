@@ -380,9 +380,24 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
             f"\"{n.get('title')}\" ({when}){suggestion}"
         )
 
+    # Email templates + signature snapshot so the Chief uses them when drafting
+    et = (biz.get('settings') or {}).get('email_templates') or {}
+    et_summary = ""
+    if isinstance(et, dict) and (et.get('templates') or et.get('signature') or et.get('global_rules')):
+        sig = (et.get('signature') or {})
+        rules = (et.get('global_rules') or {})
+        tpls = (et.get('templates') or {})
+        et_summary = (
+            "\n  Email templates: " + ", ".join(sorted(tpls.keys())[:12])
+            + f"\n  Signature: {sig.get('name', '(none)')} · {sig.get('title', '')} · {sig.get('business', '')}"
+            + f"\n  Closing line: {rules.get('closing_line', '(default)')}"
+            + (f"\n  Always mention: {rules.get('always_mention')}" if rules.get('always_mention') else "")
+            + (f"\n  Disclaimer: {(rules.get('disclaimer') or '')[:120]}" if rules.get('disclaimer') else "")
+        )
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
-  Voice profile: {json.dumps(biz.get('voice_profile') or {})[:500]}
+  Voice profile: {json.dumps(biz.get('voice_profile') or {})[:500]}{et_summary}
 
 CONTACTS: {ctx['contacts_total']} total
   by_status: {json.dumps(ctx['contacts_by_status'])}
@@ -2396,6 +2411,23 @@ When the practitioner describes a specific event/campaign with dates and details
   - A micro-site is a separate entry in business_sites with site_config.type='micro'
 For ensure_module: [ACTION:{{"type":"ensure_module","module_name":"Blog","icon":"📝","public_display_enabled":true,"display_type":"list"}}]
 The ensure_module action creates the module if it doesn't exist, returns the module_id either way. Then use create_module_entry to add content.
+
+TESTIMONIAL REQUEST FLOW:
+After a session reaches status='completed' AND the follow-up draft for that contact is approved (visible in RECENT AGENT ACTIVITY), proactively offer:
+  - "Session with Sarah went well and her follow-up is sent — want me to queue a testimonial ask 3 days out?"
+If the practitioner agrees, draft it with the `testimonial_request` email template (under email_templates.templates.testimonial_request). Queue it as a draft in agent_queue with agent='testimonial', action_type='email', priority='low', and set `ai_reasoning` to `"Testimonial ask — post-session follow-up approved on <date>. Suggested send: 3 days from now."` so the practitioner can see the intended delay.
+Do NOT auto-send. Leave it in the queue as a draft — the practitioner chooses when to approve.
+When a practitioner mentions a contact replied with positive feedback ("Sandra wrote back with an amazing testimonial"), use ensure_module for "Testimonials" and create_module_entry with the quote + attribution. Offer to publish it on the site.
+
+EMAIL TEMPLATES & SIGNATURE:
+The practitioner has email templates and a signature saved at businesses.settings.email_templates. When drafting ANY email (draft_email / draft_nurture / proposal / follow-up / testimonial / re-engagement), always:
+  - Use the matching template's subject + body as the starting point.
+  - Substitute the variables: {contact_name}, {business_name}, {practitioner_name}, {booking_url}, {session_time}, {closing_line}, {invoice_id}.
+  - End with the closing_line from email_templates.global_rules (e.g., "Blessings,", "Talk soon,").
+  - If email_templates.global_rules.always_include_signature is true, append the practitioner's signature block at the end.
+  - Honor email_templates.global_rules.always_mention — include that phrase somewhere in the body if set.
+  - Append the disclaimer from email_templates.global_rules.disclaimer (plain line or paragraph below the signature) if set.
+Never invent a signature. If email_templates isn't set yet, use the practitioner's settings.practitioner_name as a simple sign-off.
 
 AGENT ACTIVITY AWARENESS:
 Reference RECENT AGENT ACTIVITY. If an agent created drafts the practitioner hasn't reviewed, mention it: "The nurture agent drafted a check-in for Deacon Harris earlier — still in your queue. Want me to show it?"
