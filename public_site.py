@@ -1071,26 +1071,29 @@ async def _serve_site_by_custom_domain(domain: str) -> HTMLResponse:
 
 @router.get("/", include_in_schema=False)
 async def subdomain_root(request: Request):
-    """Handle subdomain requests at the root path."""
+    """Handle subdomain requests at the root path. On Railway/localhost
+    (the API domain), fall through with 404 so real API routes handle it."""
     slug = extract_slug_from_host(request)
     if slug:
         if not _check_rate(slug):
             raise HTTPException(429, "Rate limit exceeded")
         return await _serve_site_by_slug(slug)
 
-    # Check if this is a custom domain
     host = (request.headers.get("host") or "").split(":")[0].lower()
+
+    # Custom domain lookup (not Railway, not localhost, not a known base)
     if host and "." in host and "railway" not in host and "localhost" not in host:
-        for base in BASE_DOMAINS:
-            if host == base or host.endswith(f".{base}"):
-                break
-        else:
-            # Not a known base domain — try custom domain lookup
+        is_base = any(host == base or host.endswith(f".{base}") for base in BASE_DOMAINS)
+        if not is_base:
             result = await _serve_site_by_custom_domain(host)
             if result:
                 return result
 
-    # Root domain or unknown — serve marketing page
+    # Railway API domain or localhost — let other routes handle the request
+    if "railway" in host or "localhost" in host or host == "":
+        raise HTTPException(404, "Not found")
+
+    # Actual marketing domain — serve marketing page
     return HTMLResponse(content=MARKETING_HTML, media_type="text/html")
 
 
