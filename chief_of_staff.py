@@ -2638,7 +2638,7 @@ When a practitioner mentions a contact replied with positive feedback ("Sandra w
 EMAIL TEMPLATES & SIGNATURE:
 The practitioner has email templates and a signature saved at businesses.settings.email_templates. When drafting ANY email (draft_email / draft_nurture / proposal / follow-up / testimonial / re-engagement), always:
   - Use the matching template's subject + body as the starting point.
-  - Substitute the variables: {contact_name}, {business_name}, {practitioner_name}, {booking_url}, {session_time}, {closing_line}, {invoice_id}.
+  - Substitute the variables: {{contact_name}}, {{business_name}}, {{practitioner_name}}, {{booking_url}}, {{session_time}}, {{closing_line}}, {{invoice_id}}.
   - End with the closing_line from email_templates.global_rules (e.g., "Blessings,", "Talk soon,").
   - If email_templates.global_rules.always_include_signature is true, append the practitioner's signature block at the end.
   - Honor email_templates.global_rules.always_mention — include that phrase somewhere in the body if set.
