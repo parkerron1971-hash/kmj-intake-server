@@ -1107,31 +1107,191 @@ async def handle_forget(client, biz, action) -> Dict:
 BULK_CAP = 20
 HEALTH_BUMP_ON_APPROVE = 5
 
+# Action types that represent outbound email. Non-email action types
+# (follow_up, check_in, onboarding, alert, other) are still "approved"
+# but we don't attempt a Resend delivery for them.
+EMAIL_ACTION_TYPES = {"email", "proposal", "invoice"}
 
-async def _do_approve_one(client, biz_id: str, item: Dict) -> bool:
-    """Approve a single queue item: PATCH status, emit event, bump health."""
+# Channels where a Resend send is meaningful. "in_app" drafts stay in
+# the app and should NOT hit the email provider.
+EMAIL_CHANNELS = {"email"}
+
+
+def _format_from_email() -> str:
+    return os.environ.get("RESEND_FROM_EMAIL") or "noreply@solutionist.app"
+
+
+def _build_signature_plaintext(sig: Dict[str, Any]) -> str:
+    """Mirrors the frontend signature builder — plain text for email bodies."""
+    if not isinstance(sig, dict):
+        return ""
+    lines: List[str] = []
+    if sig.get("name"): lines.append(sig["name"])
+    title_line = " · ".join([s for s in [sig.get("title"), sig.get("business")] if s])
+    if title_line: lines.append(title_line)
+    if sig.get("tagline"): lines.append(sig["tagline"])
+    contact = " · ".join([s for s in [sig.get("phone"), sig.get("email")] if s])
+    if contact: lines.append(contact)
+    if sig.get("link_page_url"): lines.append(sig["link_page_url"])
+    return "\n".join(lines)
+
+
+def _compose_body_with_signature(body: str, biz: Dict[str, Any]) -> str:
+    """Append the practitioner's closing line + signature + disclaimer to a
+    draft body when global_rules say so. Plain-text friendly — the receiving
+    client can wrap it however it likes."""
+    body = body or ""
+    et = (biz.get("settings") or {}).get("email_templates") or {}
+    rules = et.get("global_rules") or {}
+    sig = et.get("signature") or {}
+    out = body.rstrip()
+
+    closing = (rules.get("closing_line") or "").strip()
+    if closing and closing not in out:
+        out += f"\n\n{closing}"
+
+    if rules.get("always_include_signature", True):
+        sig_text = _build_signature_plaintext(sig)
+        if sig_text and sig_text not in out:
+            out += f"\n{sig_text}" if closing else f"\n\n{sig_text}"
+
+    disclaimer = (rules.get("disclaimer") or "").strip()
+    if disclaimer and disclaimer not in out:
+        out += f"\n\n--\n{disclaimer}"
+
+    return out
+
+
+async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
+    """Deliver a queue item via Resend. Returns a dict describing the
+    outcome — never raises. Fields:
+      sent: bool            — True only if Resend returned 2xx
+      reason: str | None    — populated when NOT sent ("no_contact",
+                              "no_email", "not_email_channel", "no_api_key",
+                              "exception:<msg>")
+      to_email: str | None
+      to_name: str | None
+      provider_id: str | None   — Resend message id when sent
+    """
+    out: Dict[str, Any] = {"sent": False, "reason": None, "to_email": None, "to_name": None, "provider_id": None}
+
+    # Only attempt delivery for outbound email channels / email-ish action types.
+    channel = (item.get("channel") or "").lower()
+    action_type = (item.get("action_type") or "").lower()
+    if channel and channel not in EMAIL_CHANNELS:
+        out["reason"] = "not_email_channel"
+        return out
+    # Accept email-typed actions even if channel is missing (legacy drafts).
+    if not channel and action_type not in EMAIL_ACTION_TYPES:
+        out["reason"] = "not_email_channel"
+        return out
+
+    contact_id = item.get("contact_id")
+    if not contact_id:
+        out["reason"] = "no_contact"
+        return out
+
+    rows = await _sb(client, "GET",
+        f"/contacts?id=eq.{contact_id}&business_id=eq.{biz['id']}&limit=1&select=id,name,email")
+    if not rows:
+        out["reason"] = "no_contact"
+        return out
+    contact = rows[0]
+    email = (contact.get("email") or "").strip()
+    if not email or "@" not in email:
+        out["reason"] = "no_email"
+        out["to_name"] = contact.get("name")
+        return out
+
+    if not os.environ.get("RESEND_API_KEY"):
+        out["reason"] = "no_api_key"
+        out["to_email"] = email
+        out["to_name"] = contact.get("name")
+        return out
+
+    # Build the final body (append closing + signature + disclaimer per rules)
+    composed_body = _compose_body_with_signature(item.get("body") or "", biz)
+
+    settings = biz.get("settings") or {}
+    et = settings.get("email_templates") or {}
+    sig = et.get("signature") or {}
+    from_name = (sig.get("name") or settings.get("practitioner_name") or biz.get("name") or "The Solutionist System").strip()
+    reply_to = (sig.get("email") or settings.get("contact_email") or "").strip() or None
+
+    # Use the email_sender helper directly — no HTTP hop to ourselves.
+    try:
+        from email_sender import send_via_resend  # local import: avoid circular + runtime-only
+        data = await send_via_resend(
+            to_email=email,
+            to_name=contact.get("name"),
+            from_email=_format_from_email(),
+            from_name=from_name,
+            subject=item.get("subject") or f"Message from {biz.get('name', '')}",
+            body=composed_body,
+            reply_to=reply_to,
+        )
+        out["sent"] = True
+        out["to_email"] = email
+        out["to_name"] = contact.get("name")
+        if isinstance(data, dict):
+            out["provider_id"] = data.get("id")
+    except Exception as e:
+        logger.warning(f"Resend delivery failed for queue {item.get('id')}: {e}")
+        out["reason"] = f"exception:{str(e)[:160]}"
+        out["to_email"] = email
+        out["to_name"] = contact.get("name")
+
+    return out
+
+
+async def _do_approve_one(client, biz: Dict[str, Any], item: Dict) -> Dict[str, Any]:
+    """Approve a single queue item: PATCH status, attempt Resend send,
+    emit event, bump health. Returns delivery info for the caller to
+    surface in the action's `result`/`label`.
+    """
     qid = item.get("id")
     contact_id = item.get("contact_id")
+    biz_id = biz["id"]
+    result: Dict[str, Any] = {"ok": False, "sent": False, "reason": None, "to_email": None, "to_name": None, "provider_id": None}
     if not qid:
-        return False
+        return result
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Step 1: mark approved
     await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {
         "status": "approved",
-        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "reviewed_at": now_iso,
     })
-    # Emit agent_message_sent event (mirrors ApprovalQueue.tsx)
+
+    # Step 2: attempt delivery
+    delivery = await _send_queued_email(client, biz, item)
+    result.update(delivery)
+    result["ok"] = True
+
+    # Step 3: if sent, flip status to "sent" and timestamp
+    if delivery.get("sent"):
+        patch: Dict[str, Any] = {"status": "sent", "sent_at": now_iso}
+        await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", patch)
+
+    # Step 4: emit event (agent_message_sent when delivered, agent_message_approved otherwise)
     await _sb(client, "POST", "/events", {
         "business_id": biz_id,
         "contact_id": contact_id,
-        "event_type": "agent_message_sent",
+        "event_type": "agent_message_sent" if delivery.get("sent") else "agent_message_approved",
         "data": {
             "agent": item.get("agent"),
             "action_type": item.get("action_type"),
             "subject": item.get("subject"),
             "queue_id": qid,
+            "email_sent": bool(delivery.get("sent")),
+            "reason": delivery.get("reason"),
+            "provider_id": delivery.get("provider_id"),
         },
         "source": "chief_of_staff",
     })
-    # Bump contact health
+
+    # Step 5: bump contact health
     if contact_id:
         existing = await _sb(client, "GET",
             f"/contacts?id=eq.{contact_id}&select=health_score&limit=1")
@@ -1139,9 +1299,32 @@ async def _do_approve_one(client, biz_id: str, item: Dict) -> bool:
             score = min(100, (existing[0].get("health_score") or 50) + HEALTH_BUMP_ON_APPROVE)
             await _sb(client, "PATCH", f"/contacts?id=eq.{contact_id}", {
                 "health_score": score,
-                "last_interaction": datetime.now(timezone.utc).isoformat(),
+                "last_interaction": now_iso,
             })
-    return True
+    return result
+
+
+def _approve_label(subject: Optional[str], delivery: Dict[str, Any]) -> str:
+    """Human-readable label for the Chief's action card."""
+    subj = subject or "draft"
+    if delivery.get("sent"):
+        to_parts = []
+        if delivery.get("to_name"): to_parts.append(delivery["to_name"])
+        if delivery.get("to_email"): to_parts.append(f"({delivery['to_email']})")
+        target = " to " + " ".join(to_parts) if to_parts else ""
+        return f"📧 Sent: {subj}{target}"
+    reason = delivery.get("reason") or ""
+    if reason == "no_email":
+        return f"✓ Approved (no email on file): {subj} — add an email to send"
+    if reason == "no_contact":
+        return f"✓ Approved (no contact linked): {subj}"
+    if reason == "not_email_channel":
+        return f"✓ Approved: {subj}"
+    if reason == "no_api_key":
+        return f"✓ Approved (email provider not configured): {subj}"
+    if reason.startswith("exception:"):
+        return f"✓ Approved (delivery failed — will retry): {subj}"
+    return f"✓ Approved: {subj}"
 
 
 async def handle_approve_draft(client, biz, action) -> Dict:
@@ -1155,12 +1338,23 @@ async def handle_approve_draft(client, biz, action) -> Dict:
     item = rows[0]
     if item.get("status") != "draft":
         return {"type": "approve_draft", "result": f"already {item.get('status')}", "label": item.get("subject") or qid, "nav": None}
-    await _do_approve_one(client, biz["id"], item)
+    delivery = await _do_approve_one(client, biz, item)
+
+    result_str = "approved and sent" if delivery.get("sent") else \
+                 "approved (no email on file)" if delivery.get("reason") == "no_email" else \
+                 "approved (no contact)" if delivery.get("reason") == "no_contact" else \
+                 "approved (not an email)" if delivery.get("reason") == "not_email_channel" else \
+                 "approved (send failed)" if (delivery.get("reason") or "").startswith("exception:") else \
+                 "approved (email not configured)" if delivery.get("reason") == "no_api_key" else \
+                 "approved"
+
     return {
         "type": "approve_draft",
-        "result": "approved",
-        "label": f"Approved: {item.get('subject') or 'draft'}",
+        "result": result_str,
+        "label": _approve_label(item.get("subject"), delivery),
         "nav": _nav("operate", "queue"),
+        "email_sent": bool(delivery.get("sent")),
+        "to_email": delivery.get("to_email"),
     }
 
 
@@ -1198,13 +1392,18 @@ async def handle_edit_draft(client, biz, action) -> Dict:
         return _fail("edit_draft", f"Draft {qid} not found")
     item = rows[0]
     await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {"body": new_body})
-    await _do_approve_one(client, biz["id"], {**item, "body": new_body})
+    delivery = await _do_approve_one(client, biz, {**item, "body": new_body})
+    result_str = "edited, approved, and sent" if delivery.get("sent") else "edited and approved"
     return {
         "type": "edit_draft",
-        "result": "edited and approved",
-        "label": f"Edited + approved: {item.get('subject') or 'draft'}",
+        "result": result_str,
+        "label": f"Edited + {_approve_label(item.get('subject'), delivery).lstrip('📧 ').lstrip('✓ ').strip()}"
+                 if delivery.get("sent") or (delivery.get("reason") == "no_email")
+                 else f"Edited + approved: {item.get('subject') or 'draft'}",
         "nav": _nav("operate", "queue"),
         "draft_preview": new_body[:300],
+        "email_sent": bool(delivery.get("sent")),
+        "to_email": delivery.get("to_email"),
     }
 
 
@@ -1267,18 +1466,33 @@ async def handle_bulk_approve(client, biz, action) -> Dict:
     items = await _query_queue_by_filter(client, biz["id"], filter_str)
     if not items:
         return {"type": "bulk_approve", "result": "no matching drafts", "label": "Bulk approve", "nav": None}
-    approved = []
+    approved: List[str] = []
+    sent_count = 0
+    no_email_count = 0
+    failed_send_count = 0
     for item in items:
-        ok = await _do_approve_one(client, biz["id"], item)
-        if ok:
+        delivery = await _do_approve_one(client, biz, item)
+        if delivery.get("ok"):
             approved.append(item.get("subject") or item.get("id"))
+            if delivery.get("sent"):
+                sent_count += 1
+            elif delivery.get("reason") == "no_email" or delivery.get("reason") == "no_contact":
+                no_email_count += 1
+            elif (delivery.get("reason") or "").startswith("exception:"):
+                failed_send_count += 1
     total_matching_note = f" (capped at {BULK_CAP})" if len(items) == BULK_CAP else ""
+    breakdown = []
+    if sent_count:        breakdown.append(f"{sent_count} sent")
+    if no_email_count:    breakdown.append(f"{no_email_count} no email")
+    if failed_send_count: breakdown.append(f"{failed_send_count} delivery failed")
+    breakdown_str = f" — {', '.join(breakdown)}" if breakdown else ""
     return {
         "type": "bulk_approve",
-        "result": f"approved {len(approved)} of {len(items)}{total_matching_note}",
-        "label": f"Bulk approved {len(approved)} draft{'s' if len(approved) != 1 else ''}",
+        "result": f"approved {len(approved)} of {len(items)}{total_matching_note}{breakdown_str}",
+        "label": f"📧 Bulk approved {len(approved)} draft{'s' if len(approved) != 1 else ''}{breakdown_str}",
         "nav": _nav("operate", "queue"),
         "items": approved[:10],
+        "sent_count": sent_count,
     }
 
 
