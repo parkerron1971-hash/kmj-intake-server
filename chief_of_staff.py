@@ -34,13 +34,11 @@ import json
 import logging
 import os
 import re
-import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -276,7 +274,7 @@ def _format_site_info(ctx: Dict[str, Any]) -> str:
     slug = site["slug"]
     status = site.get("status", "draft")
     custom = (site.get("site_config") or {}).get("custom_domain")
-    lines = [f"  Live at: https://{slug}.solutionist.app"]
+    lines = [f"  Live at: https://{slug}.mysolutionist.app"]
     lines.append(f"  Status: {status}")
     if custom:
         lines.append(f"  Custom domain: {custom}")
@@ -1120,7 +1118,7 @@ EMAIL_CHANNELS = {"email"}
 
 
 def _format_from_email() -> str:
-    return os.environ.get("RESEND_FROM_EMAIL") or "noreply@solutionist.app"
+    return os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app"
 
 
 def _build_signature_plaintext(sig: Dict[str, Any]) -> str:
@@ -2881,88 +2879,77 @@ def _parse_greeting_tod(msg: str) -> Optional[str]:
 
 @router.post("/agents/chief/chat")
 async def chief_chat(req: ChatRequest):
-    try:
-        if not req.message:
-            raise HTTPException(400, "message is required")
+    if not req.message:
+        raise HTTPException(400, "message is required")
 
-        async with httpx.AsyncClient() as client:
-            # Gather global context + view-specific detail in parallel
-            ctx_task = _gather_context(client, req.business_id)
-            view_task = _fetch_view_detail(client, req.business_id, req.current_context)
-            ctx, view_detail = await asyncio.gather(ctx_task, view_task)
+    async with httpx.AsyncClient() as client:
+        # Gather global context + view-specific detail in parallel
+        ctx_task = _gather_context(client, req.business_id)
+        view_task = _fetch_view_detail(client, req.business_id, req.current_context)
+        ctx, view_detail = await asyncio.gather(ctx_task, view_task)
 
-            if not ctx:
-                raise HTTPException(404, "Business not found")
-            biz = ctx["business"]
+        if not ctx:
+            raise HTTPException(404, "Business not found")
+        biz = ctx["business"]
 
-            is_greeting = _is_greeting(req.message)
-            tod = _parse_greeting_tod(req.message) if is_greeting else None
-            is_coach_pause = _is_coach_pause(req.message)
-            system = _build_system_prompt(
-                ctx, is_greeting, req.current_context, view_detail,
-                time_of_day=tod, resume_note=req.resume_note,
-                mode=req.mode,
-            )
-            effective_message = req.message
-            if req.mode == "strategy_coach" and is_coach_pause:
-                effective_message = (
-                    "The practitioner is pausing the session now. Write 1-2 warm parting sentences "
-                    "that reflect what you covered together and hint at what's next when they return. "
-                    "Then emit a [ACTION:session_summary] with a concise summary and the phases_progressed list. "
-                    "Do not ask a new question."
-                )
-            elif req.mode == "strategy_coach" and is_greeting:
-                effective_message = (
-                    "This is the start of a session. Respond using the OPENING guidance in the system prompt."
-                )
-
-            # Build API messages — trim history and drop sentinel from the visible trail
-            history = (req.conversation_history or [])[-MAX_HISTORY:]
-            api_messages: List[Dict[str, str]] = []
-            for m in history:
-                role = "assistant" if m.role == "assistant" else "user"
-                # Filter out any sentinel echoes in history
-                if _is_greeting(m.content):
-                    continue
-                api_messages.append({"role": role, "content": m.content})
-
-            api_messages.append({"role": "user", "content": effective_message})
-
-            # Coach mode gets a bigger token budget — responses are conversational
-            # but deliverables (save_packages, save_launch_plan) can be large.
-            coach_tokens = 2400 if req.mode == "strategy_coach" else 1600
-            raw = await _call_claude(client, system, api_messages, max_tokens=coach_tokens)
-            if not raw:
-                return {
-                    "response": "I can't reach the language model right now — try again in a moment.",
-                    "actions_taken": [],
-                }
-
-            actions, clean = _extract_actions_and_clean(raw)
-            taken = await _execute_actions(client, biz, actions) if actions else []
-
-            # Best-effort: mark memories referenced in the response
-            await _mark_referenced_memories(client, biz["id"], ctx.get("memories") or [], clean or raw)
-
-            logger.info(
-                f"Chief chat for {biz.get('name')}: message_len={len(req.message)} "
-                f"actions={len(taken)} greeting={is_greeting} memories={len(ctx.get('memories') or [])}"
-            )
-
-            return {
-                "response": clean or raw,
-                "actions_taken": taken,
-            }
-    except HTTPException:
-        raise
-    except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[CHIEF ERROR] {tb}")
-        logger.exception("chief_chat failed")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e), "traceback": tb},
+        is_greeting = _is_greeting(req.message)
+        tod = _parse_greeting_tod(req.message) if is_greeting else None
+        is_coach_pause = _is_coach_pause(req.message)
+        system = _build_system_prompt(
+            ctx, is_greeting, req.current_context, view_detail,
+            time_of_day=tod, resume_note=req.resume_note,
+            mode=req.mode,
         )
+        effective_message = req.message
+        if req.mode == "strategy_coach" and is_coach_pause:
+            effective_message = (
+                "The practitioner is pausing the session now. Write 1-2 warm parting sentences "
+                "that reflect what you covered together and hint at what's next when they return. "
+                "Then emit a [ACTION:session_summary] with a concise summary and the phases_progressed list. "
+                "Do not ask a new question."
+            )
+        elif req.mode == "strategy_coach" and is_greeting:
+            effective_message = (
+                "This is the start of a session. Respond using the OPENING guidance in the system prompt."
+            )
+
+        # Build API messages — trim history and drop sentinel from the visible trail
+        history = (req.conversation_history or [])[-MAX_HISTORY:]
+        api_messages: List[Dict[str, str]] = []
+        for m in history:
+            role = "assistant" if m.role == "assistant" else "user"
+            # Filter out any sentinel echoes in history
+            if _is_greeting(m.content):
+                continue
+            api_messages.append({"role": role, "content": m.content})
+
+        api_messages.append({"role": "user", "content": effective_message})
+
+        # Coach mode gets a bigger token budget — responses are conversational
+        # but deliverables (save_packages, save_launch_plan) can be large.
+        coach_tokens = 2400 if req.mode == "strategy_coach" else 1600
+        raw = await _call_claude(client, system, api_messages, max_tokens=coach_tokens)
+        if not raw:
+            return {
+                "response": "I can't reach the language model right now — try again in a moment.",
+                "actions_taken": [],
+            }
+
+        actions, clean = _extract_actions_and_clean(raw)
+        taken = await _execute_actions(client, biz, actions) if actions else []
+
+        # Best-effort: mark memories referenced in the response
+        await _mark_referenced_memories(client, biz["id"], ctx.get("memories") or [], clean or raw)
+
+        logger.info(
+            f"Chief chat for {biz.get('name')}: message_len={len(req.message)} "
+            f"actions={len(taken)} greeting={is_greeting} memories={len(ctx.get('memories') or [])}"
+        )
+
+        return {
+            "response": clean or raw,
+            "actions_taken": taken,
+        }
 
 
 @router.get("/agents/chief/health")

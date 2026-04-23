@@ -51,14 +51,40 @@ DEFAULT_PALETTE = TYPE_PALETTES["consulting"]
 # SUBDOMAIN DETECTION
 # ═══════════════════════════════════════════════════════════════════════
 
-BASE_DOMAINS = ["solutionist.app", "solutionistsystem.com", "getsolutionist.com", "mysolutionist.com"]
+BASE_DOMAINS = ["mysolutionist.app", "solutionistsystem.com", "getsolutionist.com", "mysolutionist.com"]
+
+# Hosts where the Railway API is served directly. When the incoming
+# Host matches one of these, the root + catch-all handlers MUST 404 so
+# requests fall through to the real API routers (chief, email, etc.)
+# without being intercepted by the subdomain site-server.
+API_HOSTS = (
+    "kmj-intake-server-production.up.railway.app",
+    ".railway.app",
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+)
+
+
+def _is_api_host(host: str) -> bool:
+    """True when the request arrived on the Railway API domain (or local dev)."""
+    h = (host or "").split(":")[0].lower().strip()
+    if not h:
+        return True  # no host header → treat as API to be safe
+    for needle in API_HOSTS:
+        if needle.startswith("."):
+            if h.endswith(needle):
+                return True
+        elif h == needle:
+            return True
+    return False
 
 
 def extract_slug_from_host(request: Request) -> Optional[str]:
     """Extract the business slug from subdomain.
-    embrace-the-shift.solutionist.app → 'embrace-the-shift'
-    www.solutionist.app → None (root)
-    solutionist.app → None (root)
+    embrace-the-shift.mysolutionist.app → 'embrace-the-shift'
+    www.mysolutionist.app → None (root)
+    mysolutionist.app → None (root)
     kmj-intake-server-production.up.railway.app → None (API domain)
     """
     host = (request.headers.get("host") or "").split(":")[0].lower().strip()
@@ -78,7 +104,7 @@ def extract_slug_from_host(request: Request) -> Optional[str]:
 
 def _inject_canonical(html: str, slug: str) -> str:
     """Inject canonical URL + OG tags into the HTML head section."""
-    canonical = f"https://{slug}.solutionist.app"
+    canonical = f"https://{slug}.mysolutionist.app"
     tags = (
         f'\n<link rel="canonical" href="{canonical}" />'
         f'\n<meta property="og:url" content="{canonical}" />'
@@ -1006,7 +1032,7 @@ async def public_health():
 # SUBDOMAIN ROUTING — Root domain + catch-all
 # ═══════════════════════════════════════════════════════════════════════
 # MUST be registered LAST so they don't shadow API routes.
-# They only fire when the Host header is a solutionist.app subdomain.
+# They only fire when the Host header is a mysolutionist.app subdomain.
 # API calls from kmj-intake-server-production.up.railway.app pass through
 # because extract_slug_from_host returns None → 404 → FastAPI continues.
 
@@ -1071,37 +1097,49 @@ async def _serve_site_by_custom_domain(domain: str) -> HTMLResponse:
 
 @router.get("/", include_in_schema=False)
 async def subdomain_root(request: Request):
-    """Handle subdomain requests at the root path. On Railway/localhost
-    (the API domain), fall through with 404 so real API routes handle it."""
+    """Handle subdomain requests at the root path.
+
+    When the request arrives on the Railway API host, raise 404 so it
+    falls through to whatever real route might be registered (e.g. the
+    `@app.get("/")` root defined in main.py). Do NOT serve the marketing
+    page from the API domain — it was shadowing every API endpoint.
+    """
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+
     slug = extract_slug_from_host(request)
     if slug:
         if not _check_rate(slug):
             raise HTTPException(429, "Rate limit exceeded")
         return await _serve_site_by_slug(slug)
 
-    host = (request.headers.get("host") or "").split(":")[0].lower()
-
-    # Custom domain lookup (not Railway, not localhost, not a known base)
-    if host and "." in host and "railway" not in host and "localhost" not in host:
-        is_base = any(host == base or host.endswith(f".{base}") for base in BASE_DOMAINS)
-        if not is_base:
+    # Custom domain lookup (skip for API/local hosts)
+    if not _is_api_host(host):
+        is_known_base = any(host == base or host.endswith(f".{base}") for base in BASE_DOMAINS)
+        if not is_known_base and "." in host:
             result = await _serve_site_by_custom_domain(host)
             if result:
                 return result
 
-    # Railway API domain or localhost — let other routes handle the request
-    if "railway" in host or "localhost" in host or host == "":
+    # API domain: let other routers / the app root handler take over.
+    if _is_api_host(host):
         raise HTTPException(404, "Not found")
 
-    # Actual marketing domain — serve marketing page
+    # Known base domain with no subdomain — serve the marketing page.
     return HTMLResponse(content=MARKETING_HTML, media_type="text/html")
 
 
 @router.get("/{path:path}", include_in_schema=False)
 async def subdomain_catch_all(request: Request, path: str):
-    """Catch-all for subdomain requests. Serves the same single-page site
-    regardless of path (SPA routing). Only fires for subdomain hosts —
-    API domain requests fall through with 404."""
+    """Catch-all for subdomain requests. Serves the practitioner's site
+    regardless of path (SPA routing). API-host requests MUST 404 here so
+    they fall through to the real API routers — otherwise this handler
+    shadows /email/health, /agents/*, everything."""
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+
+    # API / local dev: bail immediately. Don't even look at the body.
+    if _is_api_host(host):
+        raise HTTPException(404, "Not found")
+
     slug = extract_slug_from_host(request)
     if slug:
         if not _check_rate(slug):
@@ -1109,15 +1147,11 @@ async def subdomain_catch_all(request: Request, path: str):
         return await _serve_site_by_slug(slug)
 
     # Custom domain check
-    host = (request.headers.get("host") or "").split(":")[0].lower()
-    if host and "." in host and "railway" not in host and "localhost" not in host:
-        for base in BASE_DOMAINS:
-            if host == base or host.endswith(f".{base}"):
-                break
-        else:
-            result = await _serve_site_by_custom_domain(host)
-            if result:
-                return result
+    is_known_base = any(host == base or host.endswith(f".{base}") for base in BASE_DOMAINS)
+    if not is_known_base and "." in host:
+        result = await _serve_site_by_custom_domain(host)
+        if result:
+            return result
 
-    # Not a subdomain/custom domain — let FastAPI return 404
+    # Not a subdomain/custom domain — 404
     raise HTTPException(404, "Not found")
