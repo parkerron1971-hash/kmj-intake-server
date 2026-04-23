@@ -283,27 +283,17 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=threshold_days)).isoformat()
 
-    # Step 1: fetch contacts with valid statuses (simple PostgREST filter)
-    all_eligible = await _sb(client, "GET",
-        f"/contacts?business_id=eq.{biz_id}&status=in.(active,lead,vip)"
-        f"&order=health_score.asc&limit=50"
+    # Debug: fetch ALL contacts for this business (unfiltered) so response shows raw state
+    all_contacts = await _sb(client, "GET",
+        f"/contacts?business_id=eq.{biz_id}&select=id,name,status,health_score,last_interaction&limit=50"
     ) or []
 
-    # Step 2: filter in Python — include if last_interaction is null or older than cutoff
-    cutoff_dt = datetime.fromisoformat(cutoff)
-    contacts = []
-    for c in all_eligible:
-        li = c.get("last_interaction")
-        if li is None:
-            contacts.append(c)
-        else:
-            try:
-                li_dt = datetime.fromisoformat(li.replace("Z", "+00:00"))
-                if li_dt < cutoff_dt:
-                    contacts.append(c)
-            except (ValueError, TypeError):
-                contacts.append(c)
-    contacts = contacts[:20]
+    # Get contacts needing attention
+    contacts = await _sb(client, "GET",
+        f"/contacts?business_id=eq.{biz_id}&status=in.(active,lead,vip)"
+        f"&or=(last_interaction.is.null,last_interaction.lt.{cutoff})"
+        f"&order=health_score.asc&limit=20"
+    ) or []
 
     drafts_created = 0
     flagged = []
@@ -346,6 +336,11 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
         "contacts_checked": len(contacts),
         "drafts_created": drafts_created,
         "flagged": flagged,
+        "debug_cutoff": str(cutoff),
+        "debug_business_type": biz_type,
+        "debug_threshold_days": threshold_days,
+        "debug_all_contacts": all_contacts,
+        "debug_filtered_count": len(contacts),
     }
 
 

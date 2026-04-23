@@ -6,6 +6,9 @@ convert. Uses the business voice_profile to adapt: a church gets a
 partnership proposal, a coach gets a program outline, a consultant
 gets a scope of work.
 
+Also generates professional PDF proposals and uploads them to
+Supabase Storage.
+
 ═══════════════════════════════════════════════════════════════════════
 DEPLOYMENT
 ═══════════════════════════════════════════════════════════════════════
@@ -16,12 +19,25 @@ DEPLOYMENT
        from contract_agent import router as contract_router
        app.include_router(contract_router)
 
-3. Env vars needed (already set): SUPABASE_URL, SUPABASE_ANON, ANTHROPIC_API_KEY
+3. Add to requirements.txt:
+       reportlab>=4.0.0
+
+4. Env vars needed (already set): SUPABASE_URL, SUPABASE_ANON, ANTHROPIC_API_KEY
+
+5. Create a PUBLIC Storage bucket named "proposals" in Supabase Dashboard:
+   Storage → New Bucket → name: proposals → Public: ON
+
+6. Add Storage RLS policies on storage.objects (in SQL Editor):
+       CREATE POLICY "Allow public read"   ON storage.objects FOR SELECT USING (bucket_id = 'proposals');
+       CREATE POLICY "Allow public upload" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'proposals');
+       CREATE POLICY "Allow public delete" ON storage.objects FOR DELETE USING (bucket_id = 'proposals');
 """
 
+import io
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -323,3 +339,239 @@ async def contract_health():
         "anthropic_configured": bool(_anthropic_key()),
         "min_lead_score": MIN_LEAD_SCORE,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PDF GENERATION
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Generates a styled PDF proposal using reportlab and uploads it to
+# the Supabase "proposals" Storage bucket. Returns the public URL.
+
+PDF_BUCKET = "proposals"
+PDF_ACCENT = "#C8973E"  # Default gold
+
+
+def _build_pdf(
+    business_name: str,
+    practitioner_name: str,
+    contact_name: str,
+    contact_org: Optional[str],
+    subject: str,
+    body: str,
+    accent_hex: str = PDF_ACCENT,
+) -> bytes:
+    """Generate a professional PDF proposal. Returns bytes."""
+    # Lazy import so the module loads even if reportlab isn't installed yet
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.colors import HexColor, black, white
+    from reportlab.lib.units import inch
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, HRFlowable, ListFlowable, ListItem,
+    )
+    from reportlab.lib.enums import TA_LEFT
+
+    accent = HexColor(accent_hex)
+    dark = HexColor("#1A1A22")
+    muted = HexColor("#6B7280")
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=LETTER,
+        rightMargin=0.75 * inch, leftMargin=0.75 * inch,
+        topMargin=0.75 * inch, bottomMargin=0.75 * inch,
+        title=subject,
+    )
+
+    styles = getSampleStyleSheet()
+    h_business = ParagraphStyle(
+        "BusinessName", parent=styles["Title"],
+        fontSize=22, leading=26, textColor=dark, spaceAfter=4, alignment=TA_LEFT,
+        fontName="Helvetica-Bold",
+    )
+    h_practitioner = ParagraphStyle(
+        "Practitioner", parent=styles["Normal"],
+        fontSize=11, leading=14, textColor=muted, spaceAfter=2, fontName="Helvetica",
+    )
+    h_date = ParagraphStyle(
+        "DateStyle", parent=styles["Normal"],
+        fontSize=10, leading=12, textColor=muted, spaceAfter=20, fontName="Helvetica",
+    )
+    h_recipient = ParagraphStyle(
+        "Recipient", parent=styles["Normal"],
+        fontSize=11, leading=14, textColor=dark, spaceAfter=18, fontName="Helvetica",
+    )
+    h_subject = ParagraphStyle(
+        "Subject", parent=styles["Heading2"],
+        fontSize=15, leading=18, textColor=accent, spaceAfter=12,
+        fontName="Helvetica-Bold",
+    )
+    h_section = ParagraphStyle(
+        "Section", parent=styles["Heading3"],
+        fontSize=12, leading=15, textColor=accent, spaceAfter=6, spaceBefore=12,
+        fontName="Helvetica-Bold",
+    )
+    h_body = ParagraphStyle(
+        "Body", parent=styles["BodyText"],
+        fontSize=10.5, leading=15, textColor=dark, spaceAfter=8,
+        fontName="Helvetica", alignment=TA_LEFT,
+    )
+    h_footer = ParagraphStyle(
+        "Footer", parent=styles["Normal"],
+        fontSize=9, leading=11, textColor=muted, alignment=TA_LEFT,
+        fontName="Helvetica",
+    )
+
+    story: List[Any] = []
+    # Header
+    story.append(Paragraph(business_name, h_business))
+    story.append(Paragraph(practitioner_name, h_practitioner))
+    story.append(Paragraph(datetime.now().strftime("%B %d, %Y"), h_date))
+    story.append(HRFlowable(width="100%", thickness=2, color=accent, spaceBefore=0, spaceAfter=14))
+
+    # Recipient
+    recipient_line = f"<b>Prepared for:</b> {contact_name}"
+    if contact_org:
+        recipient_line += f", {contact_org}"
+    story.append(Paragraph(recipient_line, h_recipient))
+
+    # Subject
+    story.append(Paragraph(subject, h_subject))
+    story.append(Spacer(1, 6))
+
+    # Body — parse markdown-ish formatting (## headers, **bold**, - bullets)
+    bullet_buffer: List[str] = []
+
+    def _flush_bullets():
+        if not bullet_buffer:
+            return
+        items = [ListItem(Paragraph(b, h_body), leftIndent=12) for b in bullet_buffer]
+        story.append(ListFlowable(items, bulletType="bullet", start="•", leftIndent=18, bulletColor=accent))
+        story.append(Spacer(1, 6))
+        bullet_buffer.clear()
+
+    def _inline_md(text: str) -> str:
+        # Convert **bold** → <b>bold</b>
+        text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
+        # Convert *italic* → <i>italic</i>  (only single asterisks)
+        text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", text)
+        # Escape stray angle brackets
+        return text
+
+    for raw_line in body.split("\n"):
+        line = raw_line.rstrip()
+        if not line.strip():
+            _flush_bullets()
+            story.append(Spacer(1, 4))
+            continue
+        # Heading
+        if line.startswith("## "):
+            _flush_bullets()
+            story.append(Paragraph(_inline_md(line[3:]), h_section))
+            continue
+        if line.startswith("# "):
+            _flush_bullets()
+            story.append(Paragraph(_inline_md(line[2:]), h_section))
+            continue
+        # Bullet
+        bm = re.match(r"^\s*[-*]\s+(.*)", line)
+        nm = re.match(r"^\s*\d+\.\s+(.*)", line)
+        if bm:
+            bullet_buffer.append(_inline_md(bm.group(1)))
+            continue
+        if nm:
+            bullet_buffer.append(_inline_md(nm.group(1)))
+            continue
+        # Regular paragraph
+        _flush_bullets()
+        story.append(Paragraph(_inline_md(line), h_body))
+
+    _flush_bullets()
+
+    # Footer
+    story.append(Spacer(1, 24))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=muted, spaceBefore=0, spaceAfter=8))
+    story.append(Paragraph(f"{business_name}  ·  {practitioner_name}", h_footer))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+async def _upload_pdf_to_supabase(
+    client: httpx.AsyncClient,
+    pdf_bytes: bytes,
+    business_id: str,
+    contact_id: str,
+) -> Optional[str]:
+    """Upload PDF to Supabase Storage. Returns public URL."""
+    timestamp = int(datetime.now(timezone.utc).timestamp())
+    path = f"{business_id}/{contact_id}/proposal-{timestamp}.pdf"
+    url = f"{_supabase_url()}/storage/v1/object/{PDF_BUCKET}/{path}"
+    headers = {
+        "apikey": _supabase_anon(),
+        "Authorization": f"Bearer {_supabase_anon()}",
+        "Content-Type": "application/pdf",
+    }
+    resp = await client.post(url, headers=headers, content=pdf_bytes, timeout=HTTP_TIMEOUT)
+    if resp.status_code >= 400:
+        logger.error(f"Supabase Storage upload failed: {resp.status_code} {resp.text}")
+        if "Bucket not found" in resp.text:
+            raise HTTPException(500, f"Storage bucket '{PDF_BUCKET}' does not exist. Create it in Supabase Dashboard → Storage → New Bucket → name: {PDF_BUCKET} → Public: ON.")
+        if "row-level security" in resp.text.lower() or resp.status_code == 403:
+            raise HTTPException(500, f"Storage upload blocked by RLS. Add INSERT policy on storage.objects for bucket '{PDF_BUCKET}'.")
+        raise HTTPException(500, f"PDF upload failed: {resp.text}")
+    return f"{_supabase_url()}/storage/v1/object/public/{PDF_BUCKET}/{path}"
+
+
+class PdfRequest(BaseModel):
+    business_id: str
+    contact_id: str
+    proposal_body: str
+    subject: str
+
+
+@router.post("/agents/contract/pdf")
+async def contract_pdf(req: PdfRequest):
+    async with httpx.AsyncClient() as client:
+        # Fetch business + contact for header/recipient info
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        if not businesses:
+            raise HTTPException(404, "Business not found")
+        biz = businesses[0]
+
+        contacts = await _sb(client, "GET", f"/contacts?id=eq.{req.contact_id}&select=*&limit=1")
+        if not contacts:
+            raise HTTPException(404, "Contact not found")
+        contact = contacts[0]
+
+        biz_name = biz.get("name", "")
+        practitioner = biz.get("settings", {}).get("practitioner_name", "")
+        practitioner_line = practitioner if practitioner else biz_name
+
+        contact_name = contact.get("name", "Recipient")
+        contact_org = (contact.get("metadata") or {}).get("submission", {}).get("organization") \
+            or (contact.get("metadata") or {}).get("organization") \
+            or contact.get("role")
+
+        # Build PDF
+        try:
+            pdf_bytes = _build_pdf(
+                business_name=biz_name,
+                practitioner_name=practitioner_line,
+                contact_name=contact_name,
+                contact_org=contact_org,
+                subject=req.subject,
+                body=req.proposal_body,
+            )
+        except ImportError:
+            raise HTTPException(500, "reportlab is not installed. Add reportlab>=4.0.0 to requirements.txt and redeploy.")
+        except Exception as e:
+            logger.error(f"PDF build failed: {e}")
+            raise HTTPException(500, f"PDF build failed: {e}")
+
+        # Upload
+        pdf_url = await _upload_pdf_to_supabase(client, pdf_bytes, req.business_id, req.contact_id)
+
+        logger.info(f"PDF generated for {contact_name}: {pdf_url}")
+        return {"pdf_url": pdf_url, "size_bytes": len(pdf_bytes)}
