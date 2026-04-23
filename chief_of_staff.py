@@ -34,11 +34,13 @@ import json
 import logging
 import os
 import re
+import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1107,15 +1109,6 @@ async def handle_forget(client, biz, action) -> Dict:
 BULK_CAP = 20
 HEALTH_BUMP_ON_APPROVE = 5
 
-# Action types that represent outbound email. Non-email action types
-# (follow_up, check_in, onboarding, alert, other) are still "approved"
-# but we don't attempt a Resend delivery for them.
-EMAIL_ACTION_TYPES = {"email", "proposal", "invoice"}
-
-# Channels where a Resend send is meaningful. "in_app" drafts stay in
-# the app and should NOT hit the email provider.
-EMAIL_CHANNELS = {"email"}
-
 
 def _format_from_email() -> str:
     return os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app"
@@ -1167,25 +1160,17 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any]) 
     outcome — never raises. Fields:
       sent: bool            — True only if Resend returned 2xx
       reason: str | None    — populated when NOT sent ("no_contact",
-                              "no_email", "not_email_channel", "no_api_key",
-                              "exception:<msg>")
+                              "no_email", "no_api_key", "exception:<msg>")
       to_email: str | None
       to_name: str | None
       provider_id: str | None   — Resend message id when sent
     """
     out: Dict[str, Any] = {"sent": False, "reason": None, "to_email": None, "to_name": None, "provider_id": None}
 
-    # Only attempt delivery for outbound email channels / email-ish action types.
-    channel = (item.get("channel") or "").lower()
-    action_type = (item.get("action_type") or "").lower()
-    if channel and channel not in EMAIL_CHANNELS:
-        out["reason"] = "not_email_channel"
-        return out
-    # Accept email-typed actions even if channel is missing (legacy drafts).
-    if not channel and action_type not in EMAIL_ACTION_TYPES:
-        out["reason"] = "not_email_channel"
-        return out
-
+    # v1 rule: if the queue item has a contact_id and the contact has an
+    # email, send. No channel/action_type gating — the frozen channel value
+    # on the draft row does not reflect whether the contact has an email
+    # NOW, only at draft time.
     contact_id = item.get("contact_id")
     if not contact_id:
         out["reason"] = "no_contact"
@@ -1318,8 +1303,6 @@ def _approve_label(subject: Optional[str], delivery: Dict[str, Any]) -> str:
         return f"✓ Approved (no email on file): {subj} — add an email to send"
     if reason == "no_contact":
         return f"✓ Approved (no contact linked): {subj}"
-    if reason == "not_email_channel":
-        return f"✓ Approved: {subj}"
     if reason == "no_api_key":
         return f"✓ Approved (email provider not configured): {subj}"
     if reason.startswith("exception:"):
@@ -1343,7 +1326,6 @@ async def handle_approve_draft(client, biz, action) -> Dict:
     result_str = "approved and sent" if delivery.get("sent") else \
                  "approved (no email on file)" if delivery.get("reason") == "no_email" else \
                  "approved (no contact)" if delivery.get("reason") == "no_contact" else \
-                 "approved (not an email)" if delivery.get("reason") == "not_email_channel" else \
                  "approved (send failed)" if (delivery.get("reason") or "").startswith("exception:") else \
                  "approved (email not configured)" if delivery.get("reason") == "no_api_key" else \
                  "approved"
@@ -2879,77 +2861,88 @@ def _parse_greeting_tod(msg: str) -> Optional[str]:
 
 @router.post("/agents/chief/chat")
 async def chief_chat(req: ChatRequest):
-    if not req.message:
-        raise HTTPException(400, "message is required")
+    try:
+        if not req.message:
+            raise HTTPException(400, "message is required")
 
-    async with httpx.AsyncClient() as client:
-        # Gather global context + view-specific detail in parallel
-        ctx_task = _gather_context(client, req.business_id)
-        view_task = _fetch_view_detail(client, req.business_id, req.current_context)
-        ctx, view_detail = await asyncio.gather(ctx_task, view_task)
+        async with httpx.AsyncClient() as client:
+            # Gather global context + view-specific detail in parallel
+            ctx_task = _gather_context(client, req.business_id)
+            view_task = _fetch_view_detail(client, req.business_id, req.current_context)
+            ctx, view_detail = await asyncio.gather(ctx_task, view_task)
 
-        if not ctx:
-            raise HTTPException(404, "Business not found")
-        biz = ctx["business"]
+            if not ctx:
+                raise HTTPException(404, "Business not found")
+            biz = ctx["business"]
 
-        is_greeting = _is_greeting(req.message)
-        tod = _parse_greeting_tod(req.message) if is_greeting else None
-        is_coach_pause = _is_coach_pause(req.message)
-        system = _build_system_prompt(
-            ctx, is_greeting, req.current_context, view_detail,
-            time_of_day=tod, resume_note=req.resume_note,
-            mode=req.mode,
-        )
-        effective_message = req.message
-        if req.mode == "strategy_coach" and is_coach_pause:
-            effective_message = (
-                "The practitioner is pausing the session now. Write 1-2 warm parting sentences "
-                "that reflect what you covered together and hint at what's next when they return. "
-                "Then emit a [ACTION:session_summary] with a concise summary and the phases_progressed list. "
-                "Do not ask a new question."
+            is_greeting = _is_greeting(req.message)
+            tod = _parse_greeting_tod(req.message) if is_greeting else None
+            is_coach_pause = _is_coach_pause(req.message)
+            system = _build_system_prompt(
+                ctx, is_greeting, req.current_context, view_detail,
+                time_of_day=tod, resume_note=req.resume_note,
+                mode=req.mode,
             )
-        elif req.mode == "strategy_coach" and is_greeting:
-            effective_message = (
-                "This is the start of a session. Respond using the OPENING guidance in the system prompt."
+            effective_message = req.message
+            if req.mode == "strategy_coach" and is_coach_pause:
+                effective_message = (
+                    "The practitioner is pausing the session now. Write 1-2 warm parting sentences "
+                    "that reflect what you covered together and hint at what's next when they return. "
+                    "Then emit a [ACTION:session_summary] with a concise summary and the phases_progressed list. "
+                    "Do not ask a new question."
+                )
+            elif req.mode == "strategy_coach" and is_greeting:
+                effective_message = (
+                    "This is the start of a session. Respond using the OPENING guidance in the system prompt."
+                )
+
+            # Build API messages — trim history and drop sentinel from the visible trail
+            history = (req.conversation_history or [])[-MAX_HISTORY:]
+            api_messages: List[Dict[str, str]] = []
+            for m in history:
+                role = "assistant" if m.role == "assistant" else "user"
+                # Filter out any sentinel echoes in history
+                if _is_greeting(m.content):
+                    continue
+                api_messages.append({"role": role, "content": m.content})
+
+            api_messages.append({"role": "user", "content": effective_message})
+
+            # Coach mode gets a bigger token budget — responses are conversational
+            # but deliverables (save_packages, save_launch_plan) can be large.
+            coach_tokens = 2400 if req.mode == "strategy_coach" else 1600
+            raw = await _call_claude(client, system, api_messages, max_tokens=coach_tokens)
+            if not raw:
+                return {
+                    "response": "I can't reach the language model right now — try again in a moment.",
+                    "actions_taken": [],
+                }
+
+            actions, clean = _extract_actions_and_clean(raw)
+            taken = await _execute_actions(client, biz, actions) if actions else []
+
+            # Best-effort: mark memories referenced in the response
+            await _mark_referenced_memories(client, biz["id"], ctx.get("memories") or [], clean or raw)
+
+            logger.info(
+                f"Chief chat for {biz.get('name')}: message_len={len(req.message)} "
+                f"actions={len(taken)} greeting={is_greeting} memories={len(ctx.get('memories') or [])}"
             )
 
-        # Build API messages — trim history and drop sentinel from the visible trail
-        history = (req.conversation_history or [])[-MAX_HISTORY:]
-        api_messages: List[Dict[str, str]] = []
-        for m in history:
-            role = "assistant" if m.role == "assistant" else "user"
-            # Filter out any sentinel echoes in history
-            if _is_greeting(m.content):
-                continue
-            api_messages.append({"role": role, "content": m.content})
-
-        api_messages.append({"role": "user", "content": effective_message})
-
-        # Coach mode gets a bigger token budget — responses are conversational
-        # but deliverables (save_packages, save_launch_plan) can be large.
-        coach_tokens = 2400 if req.mode == "strategy_coach" else 1600
-        raw = await _call_claude(client, system, api_messages, max_tokens=coach_tokens)
-        if not raw:
             return {
-                "response": "I can't reach the language model right now — try again in a moment.",
-                "actions_taken": [],
+                "response": clean or raw,
+                "actions_taken": taken,
             }
-
-        actions, clean = _extract_actions_and_clean(raw)
-        taken = await _execute_actions(client, biz, actions) if actions else []
-
-        # Best-effort: mark memories referenced in the response
-        await _mark_referenced_memories(client, biz["id"], ctx.get("memories") or [], clean or raw)
-
-        logger.info(
-            f"Chief chat for {biz.get('name')}: message_len={len(req.message)} "
-            f"actions={len(taken)} greeting={is_greeting} memories={len(ctx.get('memories') or [])}"
+    except HTTPException:
+        raise
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[CHIEF ERROR] {tb}")
+        logger.exception("chief_chat failed")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "traceback": tb},
         )
-
-        return {
-            "response": clean or raw,
-            "actions_taken": taken,
-        }
 
 
 @router.get("/agents/chief/health")
