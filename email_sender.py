@@ -16,7 +16,7 @@ DEPLOYMENT
 
 3. Env vars on Railway:
        RESEND_API_KEY           — required. https://resend.com/api-keys
-       RESEND_FROM_EMAIL        — optional. Defaults to noreply@solutionist.app.
+       RESEND_FROM_EMAIL        — optional. Defaults to noreply@mysolutionist.app.
                                   Must be on a verified Resend domain, OR use
                                   `onboarding@resend.dev` for pre-verification testing.
 
@@ -36,7 +36,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 RESEND_URL = "https://api.resend.com/emails"
-DEFAULT_FROM_EMAIL = "noreply@solutionist.app"
+DEFAULT_FROM_EMAIL = "noreply@mysolutionist.app"
 DEFAULT_FROM_NAME = "The Solutionist System"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=15.0, pool=10.0)
 
