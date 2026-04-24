@@ -66,6 +66,12 @@ COACH_OPEN_SENTINEL = "[SYSTEM:strategy_coach_open]"
 COACH_PAUSE_SENTINEL = "[SYSTEM:strategy_coach_pause]"
 MAX_ACTIONS_PER_TURN = 8  # safety cap in case the AI goes wild
 
+# Platform owner — only businesses owned by this UID get auto-generated
+# Stripe payment links using the server-side STRIPE_SECRET_KEY. All other
+# practitioners paste their own Stripe Payment Link manually into
+# businesses.settings.payments.stripe_link.
+PLATFORM_OWNER_ID = "d820593c-9cf8-45b7-a703-89fe49efb6a4"
+
 VALID_CONTACT_STATUSES = {"active", "lead", "vip", "inactive", "churned"}
 
 # agent_queue.action_type CHECK constraint
@@ -2408,13 +2414,17 @@ async def handle_create_invoice(client, biz, action) -> Dict:
     total = round(subtotal + tax_amount, 2)
 
     settings = biz.get("settings") or {}
-    stripe_link = (settings.get("payments") or {}).get("stripe_link")
+    manual_stripe_link = (settings.get("payments") or {}).get("stripe_link") or None
+    currency = (action.get("currency") or "USD")
 
     invoice_number = action.get("invoice_number") or await _next_invoice_number(client, biz["id"])
     due_date = action.get("due_date")
     if not due_date:
         due_date = (datetime.now(timezone.utc).date() + timedelta(days=14)).isoformat()
 
+    # Create the invoice row first with whatever manual link exists.
+    # Auto-generation runs AFTER insert so the PATCH carries the new URL
+    # onto the row — this also keeps a single source of truth for the URL.
     inserted = await _sb(client, "POST", "/invoices", {
         "business_id": biz["id"],
         "contact_id": contact["id"],
@@ -2425,23 +2435,57 @@ async def handle_create_invoice(client, biz, action) -> Dict:
         "tax_rate": tax_rate,
         "tax_amount": tax_amount,
         "total": total,
-        "currency": action.get("currency") or "USD",
+        "currency": currency,
         "due_date": due_date,
         "notes": action.get("notes") or None,
-        "stripe_payment_url": stripe_link,
+        "stripe_payment_url": manual_stripe_link,
     })
     if not inserted:
         return _fail("create_invoice", "insert failed")
     row = inserted[0] if isinstance(inserted, list) else inserted
+    invoice_id = row.get("id") if isinstance(row, dict) else None
+
+    # ── Auto-generate a per-invoice Stripe Payment Link for the platform owner ──
+    # Other practitioners keep using their own manually-pasted link. The
+    # server-side STRIPE_SECRET_KEY is only used for owner businesses —
+    # this limits blast radius if the key ever leaks.
+    stripe_url = manual_stripe_link
+    is_owner = biz.get("owner_id") == PLATFORM_OWNER_ID
+    stripe_key = os.environ.get("STRIPE_SECRET_KEY")
+
+    if is_owner and stripe_key and total > 0 and invoice_id:
+        try:
+            from stripe_proxy import _create_stripe_payment_link
+            data = await _create_stripe_payment_link(
+                amount=float(total),
+                currency=(currency or "usd").lower(),
+                description=f"Invoice {invoice_number}",
+            )
+            if data.get("url"):
+                stripe_url = data["url"]
+                await _sb(client, "PATCH", f"/invoices?id=eq.{invoice_id}", {
+                    "stripe_payment_url": stripe_url,
+                })
+                print(f"[Chief] Auto-generated Stripe link for {invoice_number}: {stripe_url}", flush=True)
+                logger.info(f"stripe auto-link ok invoice={invoice_number} id={data.get('id')}")
+        except HTTPException as e:
+            print(f"[Chief] Stripe auto-generate failed for {invoice_number}: {e.detail}", flush=True)
+            logger.warning(f"stripe auto-link failed: {e.detail}")
+        except Exception as e:  # pragma: no cover
+            print(f"[Chief] Stripe auto-generate unexpected error: {e}", flush=True)
+            logger.warning(f"stripe auto-link unexpected error: {e}")
 
     return {
         "type": "create_invoice",
         "result": "drafted",
-        "label": f"💰 Invoice {invoice_number} · {contact.get('name')} · ${total:,.2f}",
+        "label": f"💰 Invoice {invoice_number} · {contact.get('name')} · ${total:,.2f}"
+                 + (" · pay link ready" if stripe_url else ""),
         "nav": {"tab": "operate", "sub": "invoices"},
-        "invoice_id": row.get("id") if isinstance(row, dict) else None,
+        "invoice_id": invoice_id,
         "invoice_number": invoice_number,
         "total": total,
+        "stripe_payment_url": stripe_url,
+        "stripe_auto_generated": bool(is_owner and stripe_url and stripe_url != manual_stripe_link),
     }
 
 
