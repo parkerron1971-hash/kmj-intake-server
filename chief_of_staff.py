@@ -2597,16 +2597,42 @@ async def _send_invoice_email(
 
 async def handle_send_invoice(client, biz, action) -> Dict:
     invoice_id = action.get("invoice_id")
+    print(f"[Chief] send_invoice START — invoice_id={invoice_id!r}", flush=True)
+
+    # Sentinel support: "latest" resolves to the most recent draft/sent
+    # invoice for this business. Lets the Chief chain without UUIDs.
+    if invoice_id == "latest":
+        latest = await _sb(client, "GET",
+            f"/invoices?business_id=eq.{biz['id']}&order=created_at.desc&limit=1&select=id")
+        if not latest:
+            print(f"[Chief] send_invoice — 'latest' but no invoices exist for business", flush=True)
+            return _fail("send_invoice", "no invoices found")
+        invoice_id = latest[0]["id"]
+        print(f"[Chief] send_invoice — 'latest' resolved to {invoice_id}", flush=True)
+
     if not invoice_id:
+        print(f"[Chief] send_invoice ABORT — invoice_id missing. action keys: {list(action.keys())}", flush=True)
         return _fail("send_invoice", "invoice_id required")
+
     rows = await _sb(client, "GET",
         f"/invoices?id=eq.{invoice_id}&business_id=eq.{biz['id']}&limit=1&select=*")
+    print(f"[Chief] send_invoice — invoice found: {bool(rows)}, row_count: {len(rows or [])}", flush=True)
     if not rows:
         return _fail("send_invoice", f"Invoice {invoice_id} not found")
+
     invoice = rows[0]
+    print(f"[Chief] send_invoice — invoice_number: {invoice.get('invoice_number')}, "
+          f"status: {invoice.get('status')}, total: {invoice.get('total')}, "
+          f"contact_id: {invoice.get('contact_id')}, "
+          f"items_count: {len(invoice.get('items') or [])}", flush=True)
+
     if not invoice.get("contact_id"):
+        print(f"[Chief] send_invoice ABORT — invoice {invoice.get('invoice_number')} has no contact_id", flush=True)
         return _fail("send_invoice", "invoice has no linked contact")
+
     contact = await _validate_contact(client, biz["id"], invoice["contact_id"])
+    print(f"[Chief] send_invoice — contact: {contact.get('name') if contact else 'NOT FOUND'}, "
+          f"email: {contact.get('email') if contact else '—'}", flush=True)
     if not contact:
         return _fail("send_invoice", "contact not found")
     if not contact.get("email"):
@@ -2617,13 +2643,24 @@ async def handle_send_invoice(client, biz, action) -> Dict:
     settings = biz.get("settings") or {}
     current_stripe_on_invoice = invoice.get("stripe_payment_url")
     stripe_from_settings = (settings.get("payments") or {}).get("stripe_link")
+    print(f"[Chief] send_invoice — stripe_url on invoice: {current_stripe_on_invoice or 'NONE'}, "
+          f"settings fallback: {stripe_from_settings or 'NONE'}", flush=True)
     if not current_stripe_on_invoice and stripe_from_settings:
         await _sb(client, "PATCH", f"/invoices?id=eq.{invoice_id}", {
             "stripe_payment_url": stripe_from_settings,
         })
         invoice["stripe_payment_url"] = stripe_from_settings
+        print(f"[Chief] send_invoice — backfilled stripe_payment_url from settings", flush=True)
 
+    # Sanity-check the invoice has enough to render a meaningful email
+    if float(invoice.get("total") or 0) <= 0:
+        print(f"[Chief] send_invoice WARNING — invoice {invoice.get('invoice_number')} total is 0; sending anyway", flush=True)
+    if not (invoice.get("items") or []):
+        print(f"[Chief] send_invoice WARNING — invoice {invoice.get('invoice_number')} has no line items", flush=True)
+
+    print(f"[Chief] send_invoice — calling _send_invoice_email…", flush=True)
     ok, error_detail, provider_id = await _send_invoice_email(client, biz, invoice, contact)
+    print(f"[Chief] send_invoice — result: ok={ok}, error={error_detail!r}, provider_id={provider_id}", flush=True)
     print(f"[Chief] Invoice send result: ok={ok} invoice={invoice.get('invoice_number')} "
           f"to={contact.get('email')} provider_id={provider_id} error={error_detail}", flush=True)
     logger.info(
@@ -2682,6 +2719,14 @@ async def handle_send_invoice(client, biz, action) -> Dict:
 
 async def handle_mark_invoice_paid(client, biz, action) -> Dict:
     invoice_id = action.get("invoice_id")
+    # Same "latest" sentinel support as send_invoice — resolves to the
+    # most recent invoice for this business.
+    if invoice_id == "latest":
+        latest = await _sb(client, "GET",
+            f"/invoices?business_id=eq.{biz['id']}&order=created_at.desc&limit=1&select=id")
+        if not latest:
+            return _fail("mark_invoice_paid", "no invoices found")
+        invoice_id = latest[0]["id"]
     if not invoice_id:
         return _fail("mark_invoice_paid", "invoice_id required")
     rows = await _sb(client, "GET",
@@ -2786,16 +2831,67 @@ async def _mark_referenced_memories(client, biz_id: str, memories: List[Dict], r
     ], return_exceptions=True)
 
 
+def _resolve_action_references(action: Dict[str, Any], prior_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Substitute references to earlier action results inside a later action.
+
+    The Chief often emits a create_X followed by a send_X in the same turn.
+    The model can't know the UUID that create_X will mint, so we let it
+    reference earlier actions in three ways:
+
+      1. Sentinel "latest" — e.g. {"invoice_id": "latest"} — the handler
+         resolves this itself by querying the DB.
+      2. Typed reference — e.g. {"invoice_id": "@create_invoice.invoice_id"}
+         pulls the field from the most recent matching prior result.
+      3. Auto-backfill — if the action is send_invoice / mark_invoice_paid
+         and invoice_id is missing, but a prior create_invoice succeeded,
+         we copy its invoice_id in automatically.
+    """
+    resolved = dict(action)
+    atype = resolved.get("type")
+
+    def _lookup(ref: str) -> Any:
+        # Format: @<action_type>.<field>
+        if not ref.startswith("@") or "." not in ref:
+            return ref
+        spec = ref[1:]
+        ref_type, _, ref_field = spec.partition(".")
+        for prev in reversed(prior_results):
+            if prev.get("type") == ref_type and ref_field in prev:
+                return prev[ref_field]
+        return ref  # unresolved — let the handler's validation surface it
+
+    # Phase 1: resolve any @type.field references in string values
+    for k, v in list(resolved.items()):
+        if isinstance(v, str) and v.startswith("@") and "." in v:
+            resolved[k] = _lookup(v)
+
+    # Phase 2: auto-backfill invoice_id when missing — a very common
+    # multi-action pattern where the Chief emits send_invoice right after
+    # create_invoice without an explicit reference.
+    if atype in ("send_invoice", "mark_invoice_paid") and not resolved.get("invoice_id"):
+        for prev in reversed(prior_results):
+            if prev.get("type") == "create_invoice" and prev.get("invoice_id"):
+                resolved["invoice_id"] = prev["invoice_id"]
+                print(f"[Chief] auto-chained {atype}.invoice_id from create_invoice -> {prev['invoice_id']}", flush=True)
+                break
+
+    return resolved
+
+
 async def _execute_actions(client, biz, actions: List[Dict]) -> List[Dict]:
-    results = []
+    results: List[Dict[str, Any]] = []
     for action in actions:
         atype = action.get("type")
         handler = ACTION_HANDLERS.get(atype)
         if not handler:
             results.append(_fail(atype or "unknown", f"Unknown action type '{atype}'"))
             continue
+        # Substitute references from earlier results. Lets the Chief do
+        # create_invoice → send_invoice in one turn without knowing the
+        # freshly-minted UUID.
+        resolved = _resolve_action_references(action, results)
         try:
-            res = await handler(client, biz, action)
+            res = await handler(client, biz, resolved)
             results.append(res)
         except Exception as e:
             logger.exception(f"Action {atype} raised: {e}")
@@ -3148,9 +3244,10 @@ ACTIONS — TASKS + NOTES + ACTIVITY:
   [ACTION:{{"type":"log_activity","contact_id":"<uuid>","activity_type":"call|text|meeting|email|other","notes":"What happened","occurred_at":"2026-04-23"}}]
 
 ACTIONS — INVOICES:
-  [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[{{"description":"Coaching Session (60 min)","quantity":4,"unit_price":150}}],"due_date":"2026-04-30","notes":"Thanks!"}}]  — status='draft'; total auto-computed
-  [ACTION:{{"type":"send_invoice","invoice_id":"<uuid from create_invoice>"}}]  — Resend-delivers the HTML invoice and flips status to 'sent'
-  [ACTION:{{"type":"mark_invoice_paid","invoice_id":"<uuid>","payment_method":"stripe|check|cash"}}]
+  [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[{{"description":"Coaching Session (60 min)","quantity":4,"unit_price":150}}],"due_date":"2026-04-30","notes":"Thanks!"}}]  — status='draft'; total auto-computed; for the platform owner, a Stripe payment link is generated automatically
+  [ACTION:{{"type":"send_invoice","invoice_id":"latest"}}]  — send the invoice you just created. "latest" resolves to the most recent invoice on the business. Or use "@create_invoice.invoice_id" to reference the prior create_invoice result. You can also omit invoice_id entirely — when the preceding action is create_invoice, it auto-chains.
+  [ACTION:{{"type":"mark_invoice_paid","invoice_id":"latest","payment_method":"stripe|check|cash"}}]
+  NOTE: "create_invoice + send_invoice in one turn" works — emit both in the same response. The server automatically threads the new invoice_id into send_invoice.
 
 ACTIONS — NAVIGATION + MEMORY:
   [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"dashboard|queue|contacts|projects|sessions|invoices|tasks|agents|briefing|health|insights","contact_id":"<uuid-optional>","page":"<page-id-optional>"}}]
