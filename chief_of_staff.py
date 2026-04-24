@@ -527,19 +527,6 @@ def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
         i = k + 1 if k < n else n
 
     cleaned = "".join(out_parts).strip()
-
-    # Detect the "described an action without emitting a tag" failure mode.
-    # Helps us catch it in Railway logs even when prompt reinforcement fails.
-    if not actions and cleaned:
-        action_phrases = (
-            "added to your", "created the", "drafted an email", "approved the",
-            "i've added", "i've created", "i've drafted",
-            "in your system as a",
-        )
-        lower = cleaned.lower()
-        if any(phrase in lower for phrase in action_phrases):
-            print(f"[CHIEF WARNING] AI described actions but emitted no tags. Response: {cleaned[:200]}")
-
     return actions[:MAX_ACTIONS_PER_TURN], cleaned
 
 
@@ -2532,10 +2519,7 @@ Pick up naturally — don't re-introduce yourself. If they reference something f
 OPENING GREETING MODE:
 This is your first turn in a fresh conversation. Give a concise briefing (2-4 sentences) based on the most important things in the data RIGHT NOW.{tod_guidance} Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. End with ONE question or a specific proactive suggestion. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate)."""
 
-    return f"""MANDATORY — READ FIRST:
-You MUST emit [ACTION:{{"type":"..."}}] tags for EVERY operation you perform. Without the tag, NOTHING HAPPENS — the system cannot execute your intent. Never describe an action without its tag. This is non-negotiable.
-
-You are the Chief of Staff for {biz_name}. You are {practitioner}'s operational partner — you see everything happening in their business and help them manage it through conversation.
+    return f"""You are the Chief of Staff for {biz_name}. You are {practitioner}'s operational partner — you see everything happening in their business and help them manage it through conversation.
 
 REAL-TIME BUSINESS DATA (fresh every message):
 
@@ -2546,20 +2530,6 @@ REAL-TIME BUSINESS DATA (fresh every message):
 YOU ARE THE CENTRAL ORCHESTRATOR. ALL agent operations flow through you. The practitioner never needs to interact with agents directly. When they want something done, you decide which agent handles it and trigger it. When agents create drafts, you show the results. When the practitioner wants to approve, edit, or dismiss, you handle it. You are the single point of contact for the entire system.
 
 ACTION FORMAT — embed JSON inside [ACTION:...] tags. The system strips them before display and executes them.
-
-CRITICAL RULE — ACTIONS ARE NOT OPTIONAL:
-When the practitioner asks you to DO something (create a contact, draft an email, approve a draft, run an agent, remember something, navigate somewhere), you MUST emit an [ACTION:{{...}}] tag.
-
-DO NOT just say "I've added the contact" or "I've drafted the email" without the action tag. If there is no [ACTION:] tag in your response, NOTHING HAPPENS. The system only executes operations through action tags.
-
-WRONG (no action tag — nothing happens):
-  "Done! I've added Pastor David Lee to your contacts."
-
-RIGHT (action tag triggers the actual operation):
-  "Adding Pastor David Lee to your contacts now.
-  [ACTION:{{"type":"create_contact","name":"Pastor David Lee","email":"david@email.com","status":"lead"}}]"
-
-Every action you take MUST have a corresponding [ACTION:{{...}}] tag or it does not happen.
 
 ACTIONS — AGENTS (batch or targeted):
   [ACTION:{{"type":"run_agent","agent":"nurture|session_prep|session_follow|session_no_show|contract|payment|module|briefing|insights"}}]
@@ -2664,9 +2634,7 @@ After every answer or action (except purely factual or greeting), propose 1-2 na
 VOICE:
 Direct, warm, operational. Match {practitioner}'s voice (profile: {json.dumps(voice)[:400]}). Reference specific names and numbers. No generic advice. Lead with the answer.
 
-Keep responses concise unless asked for depth.
-
-FINAL REMINDER: Every operation (create, draft, approve, navigate, remember, run) requires an [ACTION:{{...}}] tag. No tag = no execution. The practitioner is counting on you.{greeting_clause}{resume_clause}"""
+Keep responses concise unless asked for depth.{greeting_clause}{resume_clause}"""
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2880,6 +2848,55 @@ def _is_coach_pause(msg: str) -> bool:
     return msg.strip().startswith(COACH_PAUSE_SENTINEL)
 
 
+# Phrases that suggest a prior assistant turn described an action. When we
+# see these in cleaned history (action tags already stripped), we annotate
+# the turn so the model knows actions WERE emitted and not to mimic an
+# action-free style. Keep broad — false positives are harmless, false
+# negatives let the model drift into pure conversation mode.
+_ACTION_HINT_PATTERNS = (
+    "drafted", "draft ", "queued", "queue ", "approved", "approving",
+    "sent", "sending", "dismissed", "dismissing", "scheduled",
+    "navigating", "opening", "took you", "taking you", "let me pull",
+    "pulling up", "marked", "updated", "bumped", "saved", "remembered",
+    "i'll remember", "i've saved", "i'll save", "running ", "ran the ",
+    "set that up", "set up ", "created ", "add that ", "added ",
+    "phase", "discovery phase", "strategy", "generated ",
+    "rewritten", "rewrote", "edited", "bulk ",
+)
+
+
+def _looks_like_action_description(text: str) -> bool:
+    """Heuristic: does this assistant message read like it describes an
+    action the system performed? Only called on prior turns AFTER
+    [ACTION:] tags have been stripped, to decide whether to re-hint that
+    actions were in fact emitted."""
+    low = (text or "").lower()
+    if not low:
+        return False
+    return any(p in low for p in _ACTION_HINT_PATTERNS)
+
+
+def _enrich_history_with_action_hints(history_msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Walk trimmed conversation history and append a short reminder onto
+    any prior assistant turn that looks like it described an action.
+    Because _extract_actions_and_clean strips [ACTION:{...}] tags from the
+    raw model output before the client stores history, the model sees
+    assistant turns with no action tags and drifts into action-free
+    conversation mode on subsequent turns. This reminder restores the
+    grounding that actions ARE the right way to operate."""
+    HINT = "\n\n(Actions were emitted via [ACTION:] tags and executed by the system.)"
+    out: List[Dict[str, str]] = []
+    for m in history_msgs:
+        if m.get("role") == "assistant" and m.get("content"):
+            content = m["content"]
+            if HINT not in content and _looks_like_action_description(content):
+                content = content + HINT
+            out.append({"role": m["role"], "content": content})
+        else:
+            out.append(m)
+    return out
+
+
 def _parse_greeting_tod(msg: str) -> Optional[str]:
     """Extract time-of-day suffix from [SYSTEM:opening_greeting:morning] etc."""
     s = msg.strip()
@@ -2938,7 +2955,26 @@ async def chief_chat(req: ChatRequest):
                     continue
                 api_messages.append({"role": role, "content": m.content})
 
-            api_messages.append({"role": "user", "content": effective_message})
+            # Fix 1: re-hint prior assistant turns that described actions.
+            # The raw output had [ACTION:{...}] tags; _extract_actions_and_clean
+            # stripped them before the client stored history. Without this
+            # hint the model sees clean prose and mimics it — responding
+            # conversationally on the next turn instead of emitting new tags.
+            api_messages = _enrich_history_with_action_hints(api_messages)
+
+            # Fix 2: per-turn system reminder prepended to the user message.
+            # Skipped for the opening greeting (the greeting clause explicitly
+            # says "Do NOT emit actions in the greeting") and for strategy-
+            # coach sentinels which already carry their own guidance.
+            if not is_greeting and not is_coach_pause:
+                augmented_message = (
+                    "(System reminder: emit [ACTION:{...}] tags for every operation.)\n\n"
+                    + effective_message
+                )
+            else:
+                augmented_message = effective_message
+
+            api_messages.append({"role": "user", "content": augmented_message})
 
             # Coach mode gets a bigger token budget — responses are conversational
             # but deliverables (save_packages, save_launch_plan) can be large.
