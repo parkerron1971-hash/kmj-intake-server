@@ -527,6 +527,19 @@ def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
         i = k + 1 if k < n else n
 
     cleaned = "".join(out_parts).strip()
+
+    # Detect the "described an action without emitting a tag" failure mode.
+    # Helps us catch it in Railway logs even when prompt reinforcement fails.
+    if not actions and cleaned:
+        action_phrases = (
+            "added to your", "created the", "drafted an email", "approved the",
+            "i've added", "i've created", "i've drafted",
+            "in your system as a",
+        )
+        lower = cleaned.lower()
+        if any(phrase in lower for phrase in action_phrases):
+            print(f"[CHIEF WARNING] AI described actions but emitted no tags. Response: {cleaned[:200]}")
+
     return actions[:MAX_ACTIONS_PER_TURN], cleaned
 
 
@@ -2519,7 +2532,10 @@ Pick up naturally — don't re-introduce yourself. If they reference something f
 OPENING GREETING MODE:
 This is your first turn in a fresh conversation. Give a concise briefing (2-4 sentences) based on the most important things in the data RIGHT NOW.{tod_guidance} Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. End with ONE question or a specific proactive suggestion. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate)."""
 
-    return f"""You are the Chief of Staff for {biz_name}. You are {practitioner}'s operational partner — you see everything happening in their business and help them manage it through conversation.
+    return f"""MANDATORY — READ FIRST:
+You MUST emit [ACTION:{{"type":"..."}}] tags for EVERY operation you perform. Without the tag, NOTHING HAPPENS — the system cannot execute your intent. Never describe an action without its tag. This is non-negotiable.
+
+You are the Chief of Staff for {biz_name}. You are {practitioner}'s operational partner — you see everything happening in their business and help them manage it through conversation.
 
 REAL-TIME BUSINESS DATA (fresh every message):
 
@@ -2648,7 +2664,9 @@ After every answer or action (except purely factual or greeting), propose 1-2 na
 VOICE:
 Direct, warm, operational. Match {practitioner}'s voice (profile: {json.dumps(voice)[:400]}). Reference specific names and numbers. No generic advice. Lead with the answer.
 
-Keep responses concise unless asked for depth.{greeting_clause}{resume_clause}"""
+Keep responses concise unless asked for depth.
+
+FINAL REMINDER: Every operation (create, draft, approve, navigate, remember, run) requires an [ACTION:{{...}}] tag. No tag = no execution. The practitioner is counting on you.{greeting_clause}{resume_clause}"""
 
 
 # ═══════════════════════════════════════════════════════════════════════
