@@ -36,7 +36,7 @@ import os
 import re
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -2445,16 +2445,27 @@ async def handle_create_invoice(client, biz, action) -> Dict:
     }
 
 
-async def _send_invoice_email(client, biz: Dict, invoice: Dict, contact: Dict) -> bool:
-    """Compose an invoice HTML email and ship it via Resend."""
+async def _send_invoice_email(
+    client, biz: Dict, invoice: Dict, contact: Dict
+) -> Tuple[bool, Optional[str], Optional[str]]:
+    """Compose an invoice HTML email and ship it via Resend.
+
+    Returns (ok, error_detail, provider_id).
+    - ok = True only when Resend returned 2xx
+    - error_detail is populated on failure so the caller can surface WHY
+    - provider_id is the Resend message id on success
+    """
     if not contact.get("email"):
-        return False
+        return False, "contact has no email on file", None
+
     settings = biz.get("settings") or {}
     brand = (settings.get("brand_kit") or {})
     sig = ((settings.get("email_templates") or {}).get("signature") or {})
     primary = (brand.get("colors") or {}).get("primary") or "#C8973E"
     biz_name = biz.get("name") or "your business"
     stripe_link = invoice.get("stripe_payment_url") or (settings.get("payments") or {}).get("stripe_link")
+    total = float(invoice.get("total") or 0)
+    total_fmt = f"${total:,.2f}"
 
     line_rows = "".join(
         f'<tr><td style="padding:10px 0;border-bottom:1px solid #eee;">{it.get("description","")}</td>'
@@ -2463,12 +2474,26 @@ async def _send_invoice_email(client, biz: Dict, invoice: Dict, contact: Dict) -
         f'<td style="padding:10px 0;border-bottom:1px solid #eee;text-align:right;font-weight:600;">${it.get("total",0):.2f}</td></tr>'
         for it in (invoice.get("items") or [])
     )
-    pay_btn = (
-        f'<p style="text-align:center;margin:28px 0;"><a href="{stripe_link}" '
-        f'style="display:inline-block;padding:14px 28px;background:{primary};color:#fff;'
-        f'text-decoration:none;border-radius:8px;font-weight:700;font-size:15px;">'
-        f'Pay ${invoice.get("total",0):,.2f} Now</a></p>'
-    ) if stripe_link else ""
+
+    # Payment CTA — prominent Pay Now button when Stripe is configured,
+    # else a fallback note so the contact knows what to do.
+    if stripe_link:
+        payment_block = (
+            f'<div style="text-align:center;margin:28px 0;">'
+            f'<a href="{stripe_link}" '
+            f'style="display:inline-block;padding:14px 32px;background:{primary};'
+            f'color:#fff;text-decoration:none;border-radius:8px;font-size:16px;'
+            f'font-weight:bold;margin-top:20px;">Pay Now — {total_fmt}</a>'
+            f'</div>'
+        )
+    else:
+        payment_block = (
+            f'<div style="margin:24px 0;padding:14px 16px;background:#f9f7f2;'
+            f'border-left:3px solid {primary};border-radius:0 6px 6px 0;'
+            f'font-size:13px;color:#666;line-height:1.6;">'
+            f'Please reply to this email for payment arrangements.'
+            f'</div>'
+        )
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
@@ -2494,18 +2519,20 @@ async def _send_invoice_email(client, biz: Dict, invoice: Dict, contact: Dict) -
     <tbody>{line_rows}</tbody>
     <tfoot>
       <tr><td colspan="3" style="text-align:right;padding:12px;font-weight:700;font-size:16px;">TOTAL</td>
-          <td style="text-align:right;padding:12px 0;font-weight:700;font-size:18px;color:{primary};">${invoice.get("total",0):,.2f}</td></tr>
+          <td style="text-align:right;padding:12px 0;font-weight:700;font-size:18px;color:{primary};">{total_fmt}</td></tr>
     </tfoot>
   </table>
-  {pay_btn}
+  {payment_block}
   {f'<p style="margin-top:24px;padding:14px;background:#f9f7f2;border-left:3px solid {primary};font-size:13px;color:#666;line-height:1.6;font-style:italic;">{invoice.get("notes","")}</p>' if invoice.get("notes") else ''}
   <p style="font-size:13px;color:#666;margin-top:24px;">Thank you,<br/><strong>{sig.get("name") or biz_name}</strong></p>
 </div>
 </body></html>"""
 
+    # Actual delivery. Keep try/except narrow — we want Resend's real error
+    # surfaced, not replaced with a generic "delivery failed".
     try:
         from email_sender import send_via_resend
-        await send_via_resend(
+        data = await send_via_resend(
             to_email=contact["email"],
             to_name=contact.get("name"),
             from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
@@ -2514,10 +2541,14 @@ async def _send_invoice_email(client, biz: Dict, invoice: Dict, contact: Dict) -
             body=html,
             reply_to=sig.get("email"),
         )
-        return True
-    except Exception as e:
-        logger.warning(f"send_invoice via Resend failed: {e}")
-        return False
+        provider_id = data.get("id") if isinstance(data, dict) else None
+        return True, None, provider_id
+    except RuntimeError as e:
+        # send_via_resend raises RuntimeError on non-2xx with the Resend
+        # response body attached — propagate the full message.
+        return False, f"Resend refused: {e}", None
+    except Exception as e:  # pragma: no cover
+        return False, f"unexpected error: {type(e).__name__}: {e}", None
 
 
 async def handle_send_invoice(client, biz, action) -> Dict:
@@ -2537,9 +2568,45 @@ async def handle_send_invoice(client, biz, action) -> Dict:
     if not contact.get("email"):
         return _fail("send_invoice", f"{contact.get('name')} has no email on file")
 
-    ok = await _send_invoice_email(client, biz, invoice, contact)
+    # Backfill the invoice's stripe_payment_url from settings on the fly
+    # in case the invoice was created before the link was configured.
+    settings = biz.get("settings") or {}
+    current_stripe_on_invoice = invoice.get("stripe_payment_url")
+    stripe_from_settings = (settings.get("payments") or {}).get("stripe_link")
+    if not current_stripe_on_invoice and stripe_from_settings:
+        await _sb(client, "PATCH", f"/invoices?id=eq.{invoice_id}", {
+            "stripe_payment_url": stripe_from_settings,
+        })
+        invoice["stripe_payment_url"] = stripe_from_settings
+
+    ok, error_detail, provider_id = await _send_invoice_email(client, biz, invoice, contact)
+    print(f"[Chief] Invoice send result: ok={ok} invoice={invoice.get('invoice_number')} "
+          f"to={contact.get('email')} provider_id={provider_id} error={error_detail}", flush=True)
+    logger.info(
+        f"invoice send → ok={ok} invoice={invoice.get('invoice_number')} "
+        f"to={contact.get('email')} provider_id={provider_id} error={error_detail}"
+    )
+
     if not ok:
-        return _fail("send_invoice", "Resend delivery failed")
+        # Log the failure event so it shows on the contact timeline instead
+        # of silently disappearing.
+        await _sb(client, "POST", "/events", {
+            "business_id": biz["id"],
+            "contact_id": contact["id"],
+            "event_type": "invoice_send_failed",
+            "data": {
+                "invoice_id": invoice_id,
+                "invoice_number": invoice.get("invoice_number"),
+                "total": invoice.get("total"),
+                "to_email": contact.get("email"),
+                "error": error_detail or "unknown",
+            },
+            "source": "chief_of_staff",
+        })
+        return _fail(
+            "send_invoice",
+            f"Invoice {invoice.get('invoice_number')} send failed — {error_detail or 'unknown error'}",
+        )
 
     now_iso = datetime.now(timezone.utc).isoformat()
     await _sb(client, "PATCH", f"/invoices?id=eq.{invoice_id}", {
@@ -2554,14 +2621,18 @@ async def handle_send_invoice(client, biz, action) -> Dict:
             "invoice_number": invoice.get("invoice_number"),
             "total": invoice.get("total"),
             "to_email": contact.get("email"),
+            "provider_id": provider_id,
+            "has_stripe_link": bool(invoice.get("stripe_payment_url")),
         },
         "source": "chief_of_staff",
     })
     return {
         "type": "send_invoice",
         "result": "sent",
-        "label": f"📧 Invoice {invoice.get('invoice_number')} sent to {contact.get('name')}",
+        "label": f"📧 Invoice {invoice.get('invoice_number')} sent to {contact.get('name')} ({contact.get('email')})",
         "nav": {"tab": "operate", "sub": "invoices"},
+        "email_sent": True,
+        "provider_id": provider_id,
     }
 
 
