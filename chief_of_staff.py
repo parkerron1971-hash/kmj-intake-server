@@ -582,10 +582,11 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
     if not body:
         body = f"Hi {contact.get('name')}, just thinking of you. Wanted to check in. — {practitioner}"
 
+    subject = f"Check-in for {contact.get('name')}"
     inserted = await _sb(client, "POST", "/agent_queue", {
         "business_id": biz["id"], "contact_id": contact["id"],
         "agent": "nurture", "action_type": "check_in",
-        "subject": f"Check-in for {contact.get('name')}",
+        "subject": subject,
         "body": body,
         "channel": "email" if contact.get("email") else "in_app",
         "status": "draft", "priority": "medium",
@@ -595,11 +596,14 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
     if not inserted:
         return _fail("draft_nurture", "insert failed")
 
+    queue_id = inserted[0].get("id") if isinstance(inserted, list) and inserted else None
     return {
         "type": "draft_nurture",
         "result": "queued for approval",
         "label": f"Check-in for {contact.get('name')}",
         "nav": _nav("operate", "queue"),
+        "queue_id": queue_id,
+        "draft_preview": {"subject": subject, "body": (body or "")[:200]},
     }
 
 
@@ -636,12 +640,70 @@ async def handle_draft_email(client, biz, action) -> Dict:
     if not inserted:
         return _fail("draft_email", "insert failed")
 
+    queue_id = inserted[0].get("id") if isinstance(inserted, list) and inserted else None
     label = f"Email: {subject}" + (f" → {contact.get('name')}" if contact else "")
     return {
         "type": "draft_email",
         "result": "queued for approval",
         "label": label,
         "nav": _nav("operate", "queue"),
+        "queue_id": queue_id,
+        "draft_preview": {"subject": subject, "body": (body or "")[:200]},
+    }
+
+
+async def handle_draft_and_send(client, biz, action) -> Dict:
+    """Draft an email AND immediately approve + send it in a single step.
+
+    Reuses handle_draft_email to build the draft row so the body, signature,
+    channel, and reasoning logic stay in sync. Then pulls the freshly-inserted
+    row and feeds it to _do_approve_one, which PATCHes status → approved,
+    calls Resend via _send_queued_email, and PATCHes status → sent on 2xx.
+
+    Returns the draft_email result merged with the approval's delivery info so
+    the Chief can narrate both outcomes (drafted + sent / drafted + no email /
+    drafted + delivery failed) in one action card.
+    """
+    # Step 1 — run the normal draft handler to create the queue row.
+    draft_result = await handle_draft_email(client, biz, action)
+    if str(draft_result.get("result", "")).startswith("Failed"):
+        return {**draft_result, "type": "draft_and_send"}
+
+    queue_id = draft_result.get("queue_id")
+    if not queue_id:
+        return _fail("draft_and_send", "draft insert succeeded but no queue_id returned")
+
+    # Step 2 — load the freshly-inserted row and approve + send.
+    rows = await _sb(client, "GET",
+        f"/agent_queue?id=eq.{queue_id}&business_id=eq.{biz['id']}&limit=1&select=*")
+    if not rows:
+        return _fail("draft_and_send", f"Draft {queue_id} not found after insert")
+    item = rows[0]
+    delivery = await _do_approve_one(client, biz, item)
+
+    # Step 3 — merge results.
+    if delivery.get("sent"):
+        result_str = "drafted and sent"
+    elif delivery.get("reason") == "no_email":
+        result_str = "drafted (no email on file — not sent)"
+    elif delivery.get("reason") == "no_contact":
+        result_str = "drafted (no contact — not sent)"
+    elif (delivery.get("reason") or "").startswith("exception:"):
+        result_str = "drafted (send failed)"
+    elif delivery.get("reason") == "no_api_key":
+        result_str = "drafted (email provider not configured)"
+    else:
+        result_str = "drafted and approved"
+
+    return {
+        "type": "draft_and_send",
+        "result": result_str,
+        "label": _approve_label(item.get("subject"), delivery),
+        "nav": _nav("operate", "queue"),
+        "queue_id": queue_id,
+        "email_sent": bool(delivery.get("sent")),
+        "to_email": delivery.get("to_email"),
+        "draft_preview": draft_result.get("draft_preview"),
     }
 
 
@@ -1314,6 +1376,18 @@ async def handle_approve_draft(client, biz, action) -> Dict:
     qid = action.get("queue_id")
     if not qid:
         return _fail("approve_draft", "queue_id required")
+
+    # Shortcut: queue_id="latest" resolves to the most recent draft for
+    # this business. Lets the Chief chain a draft + "approve it" across
+    # turns without needing to know the UUID it just created.
+    if qid == "latest":
+        latest = await _sb(client, "GET",
+            f"/agent_queue?business_id=eq.{biz['id']}&status=eq.draft"
+            f"&order=created_at.desc&limit=1&select=id")
+        if not latest:
+            return {"type": "approve_draft", "result": "no drafts found", "label": "No pending drafts", "nav": _nav("operate", "queue")}
+        qid = latest[0]["id"]
+
     rows = await _sb(client, "GET",
         f"/agent_queue?id=eq.{qid}&business_id=eq.{biz['id']}&limit=1&select=*")
     if not rows:
@@ -2144,6 +2218,7 @@ async def handle_complete_strategy_track(client, biz, action) -> Dict:
 ACTION_HANDLERS = {
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
+    "draft_and_send":        handle_draft_and_send,
     "create_session":        handle_create_session,
     "update_contact_status": handle_update_contact_status,
     "update_contact_health": handle_update_contact_health,
@@ -2539,6 +2614,7 @@ ACTIONS — AGENTS (batch or targeted):
 
 ACTIONS — QUEUE MANAGEMENT:
   [ACTION:{{"type":"approve_draft","queue_id":"<uuid from QUEUE>"}}]
+  [ACTION:{{"type":"approve_draft","queue_id":"latest"}}]  — approves the most recent draft for this business; use when they say "approve it"/"send it" right after you drafted something
   [ACTION:{{"type":"dismiss_draft","queue_id":"<uuid>"}}]
   [ACTION:{{"type":"edit_draft","queue_id":"<uuid>","new_body":"rewritten text"}}]  — edit + approve in one step
   [ACTION:{{"type":"rewrite_draft","queue_id":"<uuid>","instruction":"make it warmer"}}]  — AI rewrites, does NOT auto-approve
@@ -2548,6 +2624,7 @@ ACTIONS — QUEUE MANAGEMENT:
 ACTIONS — CONTACTS + SESSIONS + MODULES:
   [ACTION:{{"type":"draft_nurture","contact_id":"<uuid>","reason":"why"}}]
   [ACTION:{{"type":"draft_email","contact_id":"<uuid>","subject":"...","reason":"..."}}]
+  [ACTION:{{"type":"draft_and_send","contact_id":"<uuid>","subject":"...","body":"..."}}]  — Draft an email AND immediately approve + send it. Use when the practitioner wants to send right away without reviewing.
   [ACTION:{{"type":"create_session","contact_id":"<uuid>","title":"...","scheduled_for":"2026-04-20T14:00:00Z"}}]
   [ACTION:{{"type":"update_contact_status","contact_id":"<uuid>","new_status":"active|lead|vip|inactive|churned"}}]
   [ACTION:{{"type":"update_contact_health","contact_id":"<uuid>","health_score":75}}]
@@ -2579,6 +2656,17 @@ Recommendations: base on contact health (lower = more urgent), time pending, whe
 
 CONVERSATIONAL DRAFT EDITING:
 When the practitioner says "make it shorter," "more personal," "change the tone" etc., use rewrite_draft with the instruction. Show the rewritten version. Ask if they want to approve. They can keep iterating.
+
+DRAFT + APPROVE IN ONE TURN:
+When the practitioner says "draft and send", "draft and approve", "send it now", "just send it", or any variant that signals they want the email to go out without review, use the combined action:
+  [ACTION:{{"type":"draft_and_send","contact_id":"<uuid>","subject":"...","body":"..."}}]
+This drafts, approves, and delivers via Resend in one step. Do NOT emit a separate draft_email + approve_draft pair in the same turn — you can't reference the draft's queue_id before it exists.
+
+When the practitioner says "approve it", "send it", "looks good, ship it", or similar RIGHT AFTER you drafted something earlier in the conversation, emit:
+  [ACTION:{{"type":"approve_draft","queue_id":"latest"}}]
+The server resolves "latest" to the most recent draft for this business. Use this INSTEAD of trying to remember a UUID from a previous turn.
+
+If the practitioner reviewed a specific draft in the queue and asks to approve THAT one, use its actual queue_id from the QUEUE block in the context — not "latest".
 
 DEEP CONTACT INTELLIGENCE:
 When asked "tell me about [contact]" or "what's the full story," use contact_deep_dive. You'll get their entire history. Narrate it as a RELATIONSHIP STORY, not a data dump. End with your assessment and a recommended next step.
