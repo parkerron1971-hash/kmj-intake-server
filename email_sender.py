@@ -27,12 +27,14 @@ dashboard to unlock general sends.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 RESEND_URL = "https://api.resend.com/emails"
@@ -167,3 +169,188 @@ async def email_health():
         "resend_configured": bool(os.environ.get("RESEND_API_KEY")),
         "from_email": os.environ.get("RESEND_FROM_EMAIL") or DEFAULT_FROM_EMAIL,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# INBOUND EMAIL WEBHOOK
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Resend forwards incoming replies via a webhook to this endpoint. Resend's
+# payload shape for inbound (and for their unified event webhook) varies
+# across versions, so the parsing below is permissive — it tries multiple
+# common keys before giving up.
+#
+# Configure in the Resend dashboard:
+#   Webhooks → Add webhook → URL = https://<this-host>/email/inbound
+#   Events = "email.received" (or the inbound topic)
+#
+# Inbound email requires MX records on the sending domain to point at
+# Resend. See: https://resend.com/docs/inbound. This is a DNS-side task.
+#
+# The handler always returns 200 — failing loudly would cause Resend to
+# retry forever. Errors are logged and a failure flag is returned in the
+# body so operators can see them in the Resend dashboard.
+
+
+async def _sb_get(client: httpx.AsyncClient, path: str):
+    url = f"{os.environ.get('SUPABASE_URL', '')}/rest/v1{path}"
+    headers = {
+        "apikey": os.environ.get("SUPABASE_ANON", ""),
+        "Authorization": f"Bearer {os.environ.get('SUPABASE_ANON', '')}",
+        "Content-Type": "application/json",
+    }
+    try:
+        r = await client.get(url, headers=headers, timeout=HTTP_TIMEOUT)
+        if r.status_code >= 400:
+            logger.warning(f"supabase GET {path}: {r.status_code} {r.text[:200]}")
+            return None
+        return r.json() if r.text else None
+    except httpx.HTTPError as e:
+        logger.warning(f"supabase GET {path} failed: {e}")
+        return None
+
+
+async def _sb_post(client: httpx.AsyncClient, path: str, body: Dict[str, Any]):
+    url = f"{os.environ.get('SUPABASE_URL', '')}/rest/v1{path}"
+    headers = {
+        "apikey": os.environ.get("SUPABASE_ANON", ""),
+        "Authorization": f"Bearer {os.environ.get('SUPABASE_ANON', '')}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    try:
+        r = await client.post(url, headers=headers, content=json.dumps(body), timeout=HTTP_TIMEOUT)
+        if r.status_code >= 400:
+            logger.warning(f"supabase POST {path}: {r.status_code} {r.text[:200]}")
+            return None
+        return r.json() if r.text else None
+    except httpx.HTTPError as e:
+        logger.warning(f"supabase POST {path} failed: {e}")
+        return None
+
+
+async def _sb_patch(client: httpx.AsyncClient, path: str, body: Dict[str, Any]):
+    url = f"{os.environ.get('SUPABASE_URL', '')}/rest/v1{path}"
+    headers = {
+        "apikey": os.environ.get("SUPABASE_ANON", ""),
+        "Authorization": f"Bearer {os.environ.get('SUPABASE_ANON', '')}",
+        "Content-Type": "application/json",
+    }
+    try:
+        await client.patch(url, headers=headers, content=json.dumps(body), timeout=HTTP_TIMEOUT)
+    except httpx.HTTPError as e:
+        logger.warning(f"supabase PATCH {path} failed: {e}")
+
+
+def _extract_inbound(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize Resend's inbound payload to a consistent shape."""
+    # Resend wraps events in {"type": "email.received", "data": {...}}
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    # from can be a string or a list of {name,email}
+    from_val = data.get("from") or payload.get("from") or ""
+    if isinstance(from_val, list) and from_val:
+        from_val = from_val[0]
+    if isinstance(from_val, dict):
+        from_email = str(from_val.get("email") or "").strip().lower()
+    else:
+        # Strip "Name <email@x>" if present
+        s = str(from_val).strip()
+        if "<" in s and ">" in s:
+            s = s.split("<", 1)[1].rsplit(">", 1)[0]
+        from_email = s.strip().lower()
+
+    subject = data.get("subject") or payload.get("subject") or ""
+    text = (data.get("text") or payload.get("text") or "").strip()
+    html = data.get("html") or payload.get("html") or ""
+    body = text or _strip_html(html)
+    in_reply_to = data.get("in_reply_to") or payload.get("in_reply_to") or ""
+    message_id = data.get("message_id") or payload.get("message_id") or data.get("id") or ""
+
+    return {
+        "from_email": from_email,
+        "subject": str(subject),
+        "body": str(body),
+        "in_reply_to": str(in_reply_to),
+        "message_id": str(message_id),
+    }
+
+
+def _strip_html(html: str) -> str:
+    """Ultra-simple HTML-to-text fallback. Sufficient for preview bodies."""
+    if not html:
+        return ""
+    import re as _re
+    s = _re.sub(r"<script[\s\S]*?</script>", " ", html, flags=_re.IGNORECASE)
+    s = _re.sub(r"<style[\s\S]*?</style>", " ", s, flags=_re.IGNORECASE)
+    s = _re.sub(r"<br\s*/?>", "\n", s, flags=_re.IGNORECASE)
+    s = _re.sub(r"</p>", "\n\n", s, flags=_re.IGNORECASE)
+    s = _re.sub(r"<[^>]+>", "", s)
+    s = s.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
+    return s.strip()
+
+
+@router.post("/email/inbound")
+async def inbound_email(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"status": "ignored", "reason": "non-json payload"}
+
+    parsed = _extract_inbound(payload)
+    from_email = parsed["from_email"]
+    if not from_email:
+        logger.info("[INBOUND] no from address in payload — ignored")
+        return {"status": "ignored", "reason": "no_from"}
+
+    async with httpx.AsyncClient() as client:
+        # Match by email — business ambiguity handled by taking the first
+        # contact found. Resend doesn't pass business routing info.
+        rows = await _sb_get(client, f"/contacts?email=eq.{from_email}&select=id,name,business_id,health_score&limit=1")
+        if not rows:
+            logger.info(f"[INBOUND] unknown sender: {from_email}")
+            return {"status": "unknown_sender", "from": from_email}
+
+        contact = rows[0]
+        business_id = contact.get("business_id")
+        contact_id = contact.get("id")
+
+        # 1. Event on the contact's timeline
+        await _sb_post(client, "/events", {
+            "business_id": business_id,
+            "contact_id": contact_id,
+            "event_type": "email_reply_received",
+            "data": {
+                "from": from_email,
+                "subject": parsed["subject"],
+                "body_preview": parsed["body"][:500],
+                "full_body": parsed["body"][:20000],
+                "in_reply_to": parsed["in_reply_to"],
+                "message_id": parsed["message_id"],
+            },
+            "source": "resend_inbound",
+        })
+
+        # 2. Notification for the practitioner
+        await _sb_post(client, "/chief_notifications", {
+            "business_id": business_id,
+            "type": "urgent",
+            "title": f"Reply from {contact.get('name') or from_email}",
+            "body": f"Re: {parsed['subject']}\n\n{parsed['body'][:200]}",
+            "suggested_action": f"View reply from {contact.get('name') or 'contact'}",
+            "status": "unread",
+            "data": {
+                "contact_id": contact_id,
+                "event_type": "email_reply_received",
+                "subject": parsed["subject"],
+            },
+        })
+
+        # 3. Bump contact health — they engaged
+        current = contact.get("health_score") or 50
+        await _sb_patch(client, f"/contacts?id=eq.{contact_id}", {
+            "health_score": min(100, int(current) + 10),
+            "last_interaction": datetime.now(timezone.utc).isoformat(),
+        })
+
+        logger.info(f"[INBOUND] processed reply from {from_email} → contact={contact_id}")
+        return {"status": "processed", "contact_id": contact_id}

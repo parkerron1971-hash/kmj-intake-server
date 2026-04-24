@@ -2215,6 +2215,391 @@ async def handle_complete_strategy_track(client, biz, action) -> Dict:
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# PHASE-2 HANDLERS — tasks, notes, activity log, invoices
+# ═══════════════════════════════════════════════════════════════════════
+
+
+async def handle_create_task(client, biz, action) -> Dict:
+    title = (action.get("title") or "").strip()
+    if not title:
+        return _fail("create_task", "title required")
+    priority = (action.get("priority") or "medium").lower()
+    if priority not in ("urgent", "high", "medium", "low"):
+        priority = "medium"
+    due_date = action.get("due_date") or None
+    if due_date and len(str(due_date)) > 10:
+        due_date = str(due_date)[:10]  # YYYY-MM-DD
+
+    payload = {
+        "business_id": biz["id"],
+        "title": title,
+        "description": action.get("description") or None,
+        "status": "todo",
+        "priority": priority,
+        "due_date": due_date,
+    }
+    # Optional contact link — validate when provided so we don't poison the FK
+    contact_id = action.get("contact_id")
+    if contact_id:
+        contact = await _validate_contact(client, biz["id"], contact_id)
+        if contact:
+            payload["contact_id"] = contact["id"]
+    if action.get("project_id"):
+        payload["project_id"] = action["project_id"]
+
+    inserted = await _sb(client, "POST", "/tasks", payload)
+    if not inserted:
+        return _fail("create_task", "insert failed")
+    row = inserted[0] if isinstance(inserted, list) else inserted
+    return {
+        "type": "create_task",
+        "result": "added",
+        "label": f"✅ Task: {title}" + (f" — due {due_date}" if due_date else ""),
+        "nav": {"tab": "operate", "sub": "tasks"},
+        "task_id": row.get("id") if isinstance(row, dict) else None,
+    }
+
+
+async def handle_complete_task(client, biz, action) -> Dict:
+    task_id = action.get("task_id")
+    title_hint = (action.get("title") or "").strip()
+
+    if not task_id and title_hint:
+        # Fuzzy match on title within this business's open tasks
+        rows = await _sb(client, "GET",
+            f"/tasks?business_id=eq.{biz['id']}&status=neq.done"
+            f"&select=id,title&limit=50") or []
+        hint = title_hint.lower()
+        best = next((r for r in rows if hint in (r.get("title") or "").lower()), None)
+        if not best:
+            return _fail("complete_task", f"no open task matches '{title_hint}'")
+        task_id = best["id"]
+
+    if not task_id:
+        return _fail("complete_task", "task_id or title required")
+
+    await _sb(client, "PATCH", f"/tasks?id=eq.{task_id}&business_id=eq.{biz['id']}", {
+        "status": "done",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {
+        "type": "complete_task",
+        "result": "completed",
+        "label": f"✓ Task completed",
+        "nav": {"tab": "operate", "sub": "tasks"},
+    }
+
+
+async def handle_create_note(client, biz, action) -> Dict:
+    note = (action.get("note") or action.get("content") or "").strip()
+    contact_id = action.get("contact_id")
+    if not note:
+        return _fail("create_note", "note text required")
+    if not contact_id:
+        return _fail("create_note", "contact_id required")
+    contact = await _validate_contact(client, biz["id"], contact_id)
+    if not contact:
+        return _fail("create_note", f"Contact {contact_id} not found")
+
+    await _sb(client, "POST", "/events", {
+        "business_id": biz["id"],
+        "contact_id": contact["id"],
+        "event_type": "contact_note",
+        "data": {"note": note[:5000]},
+        "source": "chief_of_staff",
+    })
+    return {
+        "type": "create_note",
+        "result": "saved",
+        "label": f"📝 Note on {contact.get('name')}: {note[:60]}",
+        "nav": _nav("operate", "contacts", contact["id"]),
+    }
+
+
+VALID_ACTIVITY_TYPES = {"call", "text", "meeting", "email", "other"}
+
+
+async def handle_log_activity(client, biz, action) -> Dict:
+    contact_id = action.get("contact_id")
+    activity_type = (action.get("activity_type") or "other").lower()
+    if activity_type not in VALID_ACTIVITY_TYPES:
+        activity_type = "other"
+    notes = (action.get("notes") or "").strip()
+    if not contact_id:
+        return _fail("log_activity", "contact_id required")
+    contact = await _validate_contact(client, biz["id"], contact_id)
+    if not contact:
+        return _fail("log_activity", f"Contact {contact_id} not found")
+
+    occurred_at = action.get("occurred_at") or datetime.now(timezone.utc).date().isoformat()
+    await _sb(client, "POST", "/events", {
+        "business_id": biz["id"],
+        "contact_id": contact["id"],
+        "event_type": "activity_logged",
+        "data": {
+            "activity_type": activity_type,
+            "notes": notes[:5000],
+            "occurred_at": occurred_at,
+        },
+        "source": "chief_of_staff",
+    })
+    # Bump last_interaction on the contact
+    await _sb(client, "PATCH", f"/contacts?id=eq.{contact['id']}", {
+        "last_interaction": datetime.now(timezone.utc).isoformat(),
+    })
+    label_map = {"call": "📞 Call", "text": "💬 Text", "meeting": "🤝 Meeting", "email": "✉ Email", "other": "• Activity"}
+    return {
+        "type": "log_activity",
+        "result": "logged",
+        "label": f"{label_map[activity_type]} with {contact.get('name')}",
+        "nav": _nav("operate", "contacts", contact["id"]),
+    }
+
+
+async def _next_invoice_number(client, biz_id: str) -> str:
+    year = datetime.now(timezone.utc).year
+    prefix = f"INV-{year}-"
+    # Ascii-percent-encoded wildcard for PostgREST
+    rows = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz_id}&invoice_number=like.{prefix}%25"
+        f"&select=invoice_number&order=invoice_number.desc&limit=1") or []
+    if rows and rows[0].get("invoice_number"):
+        try:
+            n = int(str(rows[0]["invoice_number"]).split("-")[-1]) + 1
+        except (ValueError, IndexError):
+            n = 1
+    else:
+        n = 1
+    return f"{prefix}{n:03d}"
+
+
+async def handle_create_invoice(client, biz, action) -> Dict:
+    contact_id = action.get("contact_id")
+    if not contact_id:
+        return _fail("create_invoice", "contact_id required")
+    contact = await _validate_contact(client, biz["id"], contact_id)
+    if not contact:
+        return _fail("create_invoice", f"Contact {contact_id} not found")
+
+    items_in = action.get("items") or []
+    if not isinstance(items_in, list) or not items_in:
+        return _fail("create_invoice", "items (list) required")
+
+    norm_items: List[Dict[str, Any]] = []
+    subtotal = 0.0
+    for raw in items_in:
+        if not isinstance(raw, dict):
+            continue
+        desc = str(raw.get("description") or "").strip()
+        qty = float(raw.get("quantity") or 1)
+        price = float(raw.get("unit_price") or raw.get("price") or 0)
+        total = round(qty * price, 2)
+        subtotal += total
+        norm_items.append({
+            "description": desc or "Line item",
+            "quantity": qty,
+            "unit_price": price,
+            "total": total,
+        })
+    subtotal = round(subtotal, 2)
+    tax_rate = float(action.get("tax_rate") or 0)
+    tax_amount = round(subtotal * tax_rate / 100, 2)
+    total = round(subtotal + tax_amount, 2)
+
+    settings = biz.get("settings") or {}
+    stripe_link = (settings.get("payments") or {}).get("stripe_link")
+
+    invoice_number = action.get("invoice_number") or await _next_invoice_number(client, biz["id"])
+    due_date = action.get("due_date")
+    if not due_date:
+        due_date = (datetime.now(timezone.utc).date() + timedelta(days=14)).isoformat()
+
+    inserted = await _sb(client, "POST", "/invoices", {
+        "business_id": biz["id"],
+        "contact_id": contact["id"],
+        "invoice_number": invoice_number,
+        "status": "draft",
+        "items": norm_items,
+        "subtotal": subtotal,
+        "tax_rate": tax_rate,
+        "tax_amount": tax_amount,
+        "total": total,
+        "currency": action.get("currency") or "USD",
+        "due_date": due_date,
+        "notes": action.get("notes") or None,
+        "stripe_payment_url": stripe_link,
+    })
+    if not inserted:
+        return _fail("create_invoice", "insert failed")
+    row = inserted[0] if isinstance(inserted, list) else inserted
+
+    return {
+        "type": "create_invoice",
+        "result": "drafted",
+        "label": f"💰 Invoice {invoice_number} · {contact.get('name')} · ${total:,.2f}",
+        "nav": {"tab": "operate", "sub": "invoices"},
+        "invoice_id": row.get("id") if isinstance(row, dict) else None,
+        "invoice_number": invoice_number,
+        "total": total,
+    }
+
+
+async def _send_invoice_email(client, biz: Dict, invoice: Dict, contact: Dict) -> bool:
+    """Compose an invoice HTML email and ship it via Resend."""
+    if not contact.get("email"):
+        return False
+    settings = biz.get("settings") or {}
+    brand = (settings.get("brand_kit") or {})
+    sig = ((settings.get("email_templates") or {}).get("signature") or {})
+    primary = (brand.get("colors") or {}).get("primary") or "#C8973E"
+    biz_name = biz.get("name") or "your business"
+    stripe_link = invoice.get("stripe_payment_url") or (settings.get("payments") or {}).get("stripe_link")
+
+    line_rows = "".join(
+        f'<tr><td style="padding:10px 0;border-bottom:1px solid #eee;">{it.get("description","")}</td>'
+        f'<td style="padding:10px 0;border-bottom:1px solid #eee;text-align:right;color:#666;">× {it.get("quantity",0)}</td>'
+        f'<td style="padding:10px 0;border-bottom:1px solid #eee;text-align:right;color:#666;">${it.get("unit_price",0):.2f}</td>'
+        f'<td style="padding:10px 0;border-bottom:1px solid #eee;text-align:right;font-weight:600;">${it.get("total",0):.2f}</td></tr>'
+        for it in (invoice.get("items") or [])
+    )
+    pay_btn = (
+        f'<p style="text-align:center;margin:28px 0;"><a href="{stripe_link}" '
+        f'style="display:inline-block;padding:14px 28px;background:{primary};color:#fff;'
+        f'text-decoration:none;border-radius:8px;font-weight:700;font-size:15px;">'
+        f'Pay ${invoice.get("total",0):,.2f} Now</a></p>'
+    ) if stripe_link else ""
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f5f3ef;font-family:Arial,sans-serif;color:#333;">
+<div style="max-width:600px;margin:0 auto;background:#fff;padding:32px;">
+  <div style="display:flex;justify-content:space-between;margin-bottom:24px;">
+    <div style="font-size:20px;font-weight:700;color:{primary};">{biz_name}</div>
+    <div style="text-align:right;">
+      <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#999;">INVOICE</div>
+      <div style="font-size:16px;font-weight:700;color:{primary};">{invoice.get("invoice_number","")}</div>
+    </div>
+  </div>
+  <p style="font-size:14px;line-height:1.6;color:#333;">Hi {contact.get("name") or "there"},</p>
+  <p style="font-size:14px;line-height:1.6;color:#333;">Please find your invoice below.
+  {f'Payment is due by <strong>{invoice.get("due_date")}</strong>.' if invoice.get("due_date") else ''}</p>
+  <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:14px;">
+    <thead><tr style="border-bottom:2px solid {primary};">
+      <th style="text-align:left;padding:10px 0;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#999;">Item</th>
+      <th style="text-align:right;padding:10px 0;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#999;">Qty</th>
+      <th style="text-align:right;padding:10px 0;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#999;">Price</th>
+      <th style="text-align:right;padding:10px 0;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#999;">Total</th>
+    </tr></thead>
+    <tbody>{line_rows}</tbody>
+    <tfoot>
+      <tr><td colspan="3" style="text-align:right;padding:12px;font-weight:700;font-size:16px;">TOTAL</td>
+          <td style="text-align:right;padding:12px 0;font-weight:700;font-size:18px;color:{primary};">${invoice.get("total",0):,.2f}</td></tr>
+    </tfoot>
+  </table>
+  {pay_btn}
+  {f'<p style="margin-top:24px;padding:14px;background:#f9f7f2;border-left:3px solid {primary};font-size:13px;color:#666;line-height:1.6;font-style:italic;">{invoice.get("notes","")}</p>' if invoice.get("notes") else ''}
+  <p style="font-size:13px;color:#666;margin-top:24px;">Thank you,<br/><strong>{sig.get("name") or biz_name}</strong></p>
+</div>
+</body></html>"""
+
+    try:
+        from email_sender import send_via_resend
+        await send_via_resend(
+            to_email=contact["email"],
+            to_name=contact.get("name"),
+            from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
+            from_name=sig.get("name") or biz_name,
+            subject=f"Invoice {invoice.get('invoice_number')} from {biz_name}",
+            body=html,
+            reply_to=sig.get("email"),
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"send_invoice via Resend failed: {e}")
+        return False
+
+
+async def handle_send_invoice(client, biz, action) -> Dict:
+    invoice_id = action.get("invoice_id")
+    if not invoice_id:
+        return _fail("send_invoice", "invoice_id required")
+    rows = await _sb(client, "GET",
+        f"/invoices?id=eq.{invoice_id}&business_id=eq.{biz['id']}&limit=1&select=*")
+    if not rows:
+        return _fail("send_invoice", f"Invoice {invoice_id} not found")
+    invoice = rows[0]
+    if not invoice.get("contact_id"):
+        return _fail("send_invoice", "invoice has no linked contact")
+    contact = await _validate_contact(client, biz["id"], invoice["contact_id"])
+    if not contact:
+        return _fail("send_invoice", "contact not found")
+    if not contact.get("email"):
+        return _fail("send_invoice", f"{contact.get('name')} has no email on file")
+
+    ok = await _send_invoice_email(client, biz, invoice, contact)
+    if not ok:
+        return _fail("send_invoice", "Resend delivery failed")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await _sb(client, "PATCH", f"/invoices?id=eq.{invoice_id}", {
+        "status": "sent", "sent_at": now_iso,
+    })
+    await _sb(client, "POST", "/events", {
+        "business_id": biz["id"],
+        "contact_id": contact["id"],
+        "event_type": "invoice_sent",
+        "data": {
+            "invoice_id": invoice_id,
+            "invoice_number": invoice.get("invoice_number"),
+            "total": invoice.get("total"),
+            "to_email": contact.get("email"),
+        },
+        "source": "chief_of_staff",
+    })
+    return {
+        "type": "send_invoice",
+        "result": "sent",
+        "label": f"📧 Invoice {invoice.get('invoice_number')} sent to {contact.get('name')}",
+        "nav": {"tab": "operate", "sub": "invoices"},
+    }
+
+
+async def handle_mark_invoice_paid(client, biz, action) -> Dict:
+    invoice_id = action.get("invoice_id")
+    if not invoice_id:
+        return _fail("mark_invoice_paid", "invoice_id required")
+    rows = await _sb(client, "GET",
+        f"/invoices?id=eq.{invoice_id}&business_id=eq.{biz['id']}&limit=1&select=*")
+    if not rows:
+        return _fail("mark_invoice_paid", f"Invoice {invoice_id} not found")
+    invoice = rows[0]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await _sb(client, "PATCH", f"/invoices?id=eq.{invoice_id}", {
+        "status": "paid",
+        "paid_at": now_iso,
+        "payment_method": action.get("payment_method") or None,
+    })
+    if invoice.get("contact_id"):
+        await _sb(client, "POST", "/events", {
+            "business_id": biz["id"],
+            "contact_id": invoice["contact_id"],
+            "event_type": "invoice_paid",
+            "data": {
+                "invoice_id": invoice_id,
+                "invoice_number": invoice.get("invoice_number"),
+                "total": invoice.get("total"),
+            },
+            "source": "chief_of_staff",
+        })
+    return {
+        "type": "mark_invoice_paid",
+        "result": "marked paid",
+        "label": f"💵 Invoice {invoice.get('invoice_number')} marked paid — ${float(invoice.get('total') or 0):,.2f}",
+        "nav": {"tab": "operate", "sub": "invoices"},
+    }
+
+
 ACTION_HANDLERS = {
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
@@ -2250,6 +2635,14 @@ ACTION_HANDLERS = {
     "save_launch_plan":           handle_save_launch_plan,
     "session_summary":            handle_session_summary,
     "complete_strategy_track":    handle_complete_strategy_track,
+    # Phase-2 operations
+    "create_task":                handle_create_task,
+    "complete_task":              handle_complete_task,
+    "create_note":                handle_create_note,
+    "log_activity":               handle_log_activity,
+    "create_invoice":             handle_create_invoice,
+    "send_invoice":               handle_send_invoice,
+    "mark_invoice_paid":          handle_mark_invoice_paid,
 }
 
 
@@ -2632,8 +3025,20 @@ ACTIONS — CONTACTS + SESSIONS + MODULES:
   [ACTION:{{"type":"create_module_entry","module_id":"<uuid>","data":{{...}}}}]
   [ACTION:{{"type":"contact_deep_dive","contact_id":"<uuid>"}}]  — returns full history/events/sessions/queue
 
+ACTIONS — TASKS + NOTES + ACTIVITY:
+  [ACTION:{{"type":"create_task","title":"Call Deacon Harris back","due_date":"2026-04-24","priority":"high","contact_id":"<uuid-optional>"}}]
+  [ACTION:{{"type":"complete_task","task_id":"<uuid>"}}]
+  [ACTION:{{"type":"complete_task","title":"call deacon"}}]  — fuzzy-matches an open task by title when you don't have the id
+  [ACTION:{{"type":"create_note","contact_id":"<uuid>","note":"He's interested in leadership program"}}]
+  [ACTION:{{"type":"log_activity","contact_id":"<uuid>","activity_type":"call|text|meeting|email|other","notes":"What happened","occurred_at":"2026-04-23"}}]
+
+ACTIONS — INVOICES:
+  [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[{{"description":"Coaching Session (60 min)","quantity":4,"unit_price":150}}],"due_date":"2026-04-30","notes":"Thanks!"}}]  — status='draft'; total auto-computed
+  [ACTION:{{"type":"send_invoice","invoice_id":"<uuid from create_invoice>"}}]  — Resend-delivers the HTML invoice and flips status to 'sent'
+  [ACTION:{{"type":"mark_invoice_paid","invoice_id":"<uuid>","payment_method":"stripe|check|cash"}}]
+
 ACTIONS — NAVIGATION + MEMORY:
-  [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"queue|contacts|sessions|agents|briefing|health|insights","contact_id":"<uuid-optional>","page":"<page-id-optional>"}}]
+  [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"dashboard|queue|contacts|projects|sessions|invoices|tasks|agents|briefing|health|insights","contact_id":"<uuid-optional>","page":"<page-id-optional>"}}]
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
   [ACTION:{{"type":"forget","memory_content":"snippet to deactivate"}}]
   [ACTION:{{"type":"generate_briefing"}}]
@@ -2712,6 +3117,13 @@ The practitioner has email templates and a signature saved at businesses.setting
   - Honor email_templates.global_rules.always_mention — include that phrase somewhere in the body if set.
   - Append the disclaimer from email_templates.global_rules.disclaimer (plain line or paragraph below the signature) if set.
 Never invent a signature. If email_templates isn't set yet, use the practitioner's settings.practitioner_name as a simple sign-off.
+
+TASKS · NOTES · ACTIVITY · INVOICES:
+When the practitioner says "remind me to X" or "add a task", emit create_task. Parse natural-language due-dates into YYYY-MM-DD (today is {datetime.now(timezone.utc).date().isoformat()}). Priority defaults to medium — only raise it if they say urgent/high.
+When they say "mark the X task as done" / "I finished X" / "check off X", emit complete_task with either the task_id (if known) or title= for fuzzy match.
+When they share information ABOUT a contact that should stick ("Marcus is interested in the leadership program"), emit create_note with contact_id + note.
+When they report a real-world interaction ("I just called Deacon Harris" / "I met with Sandra yesterday"), emit log_activity with the right activity_type and notes.
+For invoices: create_invoice with a list of {{description, quantity, unit_price}} line items. After creating, SHOW the total and ask "send now?" — only emit send_invoice after they confirm. "Has Sandra paid?" → look at the QUEUE / recent events, or ask; "mark Sandra paid" → mark_invoice_paid with the invoice_id. Always echo the invoice number and total in your response.
 
 AGENT ACTIVITY AWARENESS:
 Reference RECENT AGENT ACTIVITY. If an agent created drafts the practitioner hasn't reviewed, mention it: "The nurture agent drafted a check-in for Deacon Harris earlier — still in your queue. Want me to show it?"
