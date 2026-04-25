@@ -1019,6 +1019,123 @@ async def handle_update_contact_health(client, biz, action) -> Dict:
     }
 
 
+# General-purpose contact field updater. Existing
+# update_contact_status / update_contact_health remain (they emit
+# typed timeline events); this one covers everything else — email,
+# phone, name, role, tags, notes, lead_score — and falls back to
+# fuzzy name lookup when the model didn't supply a contact_id.
+UPDATABLE_CONTACT_FIELDS = (
+    "email", "phone", "name", "role", "tags", "notes",
+    "status", "health_score", "lead_score",
+)
+
+
+async def handle_update_contact(client, biz, action) -> Dict:
+    """Update any field on a contact — email/phone/name/tags/notes/etc.
+
+    Resolution order for the target contact:
+      1. action["contact_id"] — preferred, validated against business.
+      2. action["name"] / action["contact_name"] — case-insensitive
+         fuzzy match (ilike) within this business.
+    """
+    biz_id = biz["id"]
+    contact_id = action.get("contact_id")
+    name_query = action.get("name") or action.get("contact_name")
+    contact: Optional[Dict[str, Any]] = None
+
+    if contact_id:
+        contact = await _validate_contact(client, biz_id, contact_id)
+
+    # Fall back to a name search when no id (or id didn't validate)
+    if not contact and name_query:
+        try:
+            rows = await _sb(
+                client, "GET",
+                f"/contacts?business_id=eq.{biz_id}&name=ilike.*{name_query}*"
+                f"&select=id,name,email&limit=2",
+            ) or []
+        except Exception:
+            rows = []
+        if isinstance(rows, list) and len(rows) == 1:
+            contact = rows[0]
+        elif isinstance(rows, list) and len(rows) > 1:
+            options = ", ".join(f"{r.get('name')} ({(r.get('email') or 'no email')})" for r in rows[:5])
+            return _fail(
+                "update_contact",
+                f"Multiple contacts match '{name_query}': {options}. "
+                "Please specify contact_id or use a more unique name.",
+            )
+
+    if not contact:
+        return _fail("update_contact", f"Contact not found ({contact_id or name_query or '—'})")
+
+    # Build the patch from the allowed fields. Validate status the same
+    # way handle_update_contact_status does so a generic update can't
+    # write a bogus status. health_score / lead_score get clamped 0..100.
+    patch: Dict[str, Any] = {}
+    for field in UPDATABLE_CONTACT_FIELDS:
+        if field not in action:
+            continue
+        value = action[field]
+        if value is None:
+            continue
+        if field == "status":
+            v = str(value).lower().strip()
+            if v not in VALID_CONTACT_STATUSES:
+                return _fail("update_contact", f"Invalid status '{v}'")
+            patch["status"] = v
+        elif field in ("health_score", "lead_score"):
+            try:
+                patch[field] = max(0, min(100, int(value)))
+            except (TypeError, ValueError):
+                return _fail("update_contact", f"{field} must be a number 0-100")
+        elif field == "tags":
+            if isinstance(value, list):
+                patch["tags"] = [str(t).strip() for t in value if str(t).strip()]
+            elif isinstance(value, str) and value.strip():
+                patch["tags"] = [t.strip() for t in value.split(",") if t.strip()]
+        else:
+            # email / phone / name / role / notes — just store the string.
+            patch[field] = str(value).strip() or None
+
+    # Ignore name when the practitioner used `name` purely to look up
+    # the contact and didn't actually want to rename them. Heuristic:
+    # if the only patch field is `name` and it matches the resolved
+    # contact's current name, treat as no-op.
+    if patch.get("name") and patch["name"] == contact.get("name") and len(patch) == 1:
+        del patch["name"]
+
+    if not patch:
+        return _fail("update_contact", "no fields to update")
+
+    try:
+        await _sb(client, "PATCH", f"/contacts?id=eq.{contact['id']}", patch)
+    except Exception as e:
+        return _fail("update_contact", f"patch failed: {e}")
+
+    # Emit a status_changed event for downstream listeners (contact-linked
+    # modules etc.) so the generic updater stays consistent with the
+    # specialized handler. Only fires when status actually moved.
+    if "status" in patch and patch["status"] != contact.get("status"):
+        await _sb(client, "POST", "/events", {
+            "business_id": biz_id,
+            "contact_id": contact["id"],
+            "event_type": "contact_status_changed",
+            "data": {"from": contact.get("status"), "to": patch["status"]},
+            "source": "chief_of_staff",
+        })
+
+    contact_label = contact.get("name") or "contact"
+    changes = ", ".join(f"{k}={v}" for k, v in patch.items())
+    return {
+        "type": "update_contact",
+        "result": "updated",
+        "label": f"✏️ Updated {contact_label}: {changes}",
+        "contact_id": contact["id"],
+        "nav": _nav("operate", "contacts", contact["id"]),
+    }
+
+
 AGENT_ENDPOINT_MAP = {
     "nurture": "/agents/nurture/run",
     "session_prep": "/agents/session/prep",
@@ -3830,6 +3947,7 @@ ACTION_HANDLERS = {
     "create_session":        handle_create_session,
     "update_contact_status": handle_update_contact_status,
     "update_contact_health": handle_update_contact_health,
+    "update_contact":         handle_update_contact,
     "run_agent":             handle_run_agent,
     "create_module_entry":   handle_create_module_entry,
     "create_contact":        handle_create_contact,
@@ -4305,6 +4423,11 @@ ACTIONS — CONTACTS + SESSIONS + MODULES:
   [ACTION:{{"type":"create_session","contact_id":"<uuid>","title":"...","scheduled_for":"2026-04-20T14:00:00Z"}}]
   [ACTION:{{"type":"update_contact_status","contact_id":"<uuid>","new_status":"active|lead|vip|inactive|churned"}}]
   [ACTION:{{"type":"update_contact_health","contact_id":"<uuid>","health_score":75}}]
+  [ACTION:{{"type":"update_contact","contact_id":"<uuid>","email":"new@email.com"}}]
+  [ACTION:{{"type":"update_contact","name":"Monica Walton","email":"monicawalton2011@icloud.com"}}]
+  [ACTION:{{"type":"update_contact","contact_id":"<uuid>","phone":"555-1234","status":"active"}}]
+    — Update any contact field: email, phone, name, role, status, tags, notes, health_score, lead_score.
+    — If contact_id is omitted, searches by name (ilike). Ambiguous matches return an error listing candidates so you can disambiguate.
   [ACTION:{{"type":"create_contact","name":"...","email":"...","status":"lead"}}]
   [ACTION:{{"type":"create_module_entry","module_id":"<uuid>","data":{{...}}}}]
   [ACTION:{{"type":"contact_deep_dive","contact_id":"<uuid>"}}]  — returns full history/events/sessions/queue
