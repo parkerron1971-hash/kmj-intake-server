@@ -4693,6 +4693,32 @@ def _looks_like_action_description(text: str) -> bool:
     return any(p in low for p in _ACTION_HINT_PATTERNS)
 
 
+# Stronger trigger set — used to decide whether to RETRY the model call
+# when no [ACTION:] tags were emitted. Tighter than _ACTION_HINT_PATTERNS
+# (which also matches "I'll draft" / "I'll create"); this list focuses on
+# "I already did it" claims so we only retry when the AI is asserting
+# something that should have produced a tag.
+_DESCRIBED_ACTION_PHRASES = (
+    "added to your", "created the", "drafted an email", "approved the",
+    "i've added", "i've created", "i've drafted", "in your system as a",
+    "sent the", "queued", "invoice created", "is now in your",
+    "added as a lead", "contact and", "email is on its way",
+    "done.", "done —", "done!", "i'll add", "i'll create",
+    "adding them now", "creating the", "sending the",
+)
+
+
+def _looks_like_completed_action(text: str) -> bool:
+    """Stronger version of _looks_like_action_description used by the
+    retry path — only fires when the AI's prose is actively claiming an
+    operation already happened. False positives here are costly (we'd
+    re-call the model unnecessarily), so this list stays tight."""
+    low = (text or "").lower()
+    if not low:
+        return False
+    return any(p in low for p in _DESCRIBED_ACTION_PHRASES)
+
+
 def _enrich_history_with_action_hints(history_msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Walk trimmed conversation history and append a short reminder onto
     any prior assistant turn that looks like it described an action.
@@ -4701,7 +4727,7 @@ def _enrich_history_with_action_hints(history_msgs: List[Dict[str, str]]) -> Lis
     assistant turns with no action tags and drifts into action-free
     conversation mode on subsequent turns. This reminder restores the
     grounding that actions ARE the right way to operate."""
-    HINT = "\n\n(Actions were emitted via [ACTION:] tags and executed by the system.)"
+    HINT = "\n\n[Note: In this response, I used [ACTION:{...}] tags to execute all operations. Every action I described had a corresponding tag.]"
     out: List[Dict[str, str]] = []
     for m in history_msgs:
         if m.get("role") == "assistant" and m.get("content"):
@@ -4810,7 +4836,10 @@ async def chief_chat(req: ChatRequest):
             # coach sentinels which already carry their own guidance.
             if not is_greeting and not is_coach_pause:
                 augmented_message = (
-                    "(System reminder: emit [ACTION:{...}] tags for every operation.)\n\n"
+                    "(IMPORTANT: If you create a contact, draft an email, approve something, or perform "
+                    "ANY operation, you MUST include [ACTION:{...}] tags. "
+                    "Example: [ACTION:{\"type\":\"create_contact\",\"name\":\"...\",\"email\":\"...\"}]. "
+                    "Without the tag, the operation does NOT happen.)\n\n"
                     + effective_message
                 )
             else:
@@ -4829,6 +4858,66 @@ async def chief_chat(req: ChatRequest):
                 }
 
             actions, clean = _extract_actions_and_clean(raw)
+
+            # ── Server-side enforcement retry ────────────────────────
+            # If the AI's prose claimed it performed an operation but no
+            # [ACTION:] tags came through, the system silently did nothing
+            # and the practitioner thinks the work happened. The prompt
+            # rules and history hints are advisory and the model still
+            # drifts into action-free conversation, especially on long
+            # threads. Catch the failure mode here: detect "I did X"-shaped
+            # text without tags, retry the call ONCE without conversation
+            # history (which is what was poisoning the pattern), and use
+            # the retry result if it succeeded.
+            if (
+                not actions
+                and clean
+                and not is_greeting
+                and not is_coach_pause
+                and _looks_like_completed_action(clean)
+            ):
+                print(
+                    f"[Chief] RETRY — AI described action without tags. "
+                    f"Retrying with correction. raw_len={len(raw)}",
+                    flush=True,
+                )
+                correction = (
+                    "SYSTEM CORRECTION: Your previous response described performing actions "
+                    "(like creating contacts, drafting emails, etc.) but you did NOT include any "
+                    "[ACTION:{...}] tags. Without these tags, NOTHING actually happened. "
+                    "The contact was NOT created. The email was NOT sent. Nothing was done.\n\n"
+                    "Please try again. This time you MUST include [ACTION:{...}] tags for every "
+                    "operation. Here is the user's original request again:\n\n"
+                    f"{effective_message}"
+                )
+                # No history — that's what was poisoning the pattern.
+                retry_messages = [{"role": "user", "content": correction}]
+                retry_raw = await _call_claude(
+                    client, system, retry_messages, max_tokens=coach_tokens,
+                )
+                if retry_raw:
+                    retry_actions, retry_clean = _extract_actions_and_clean(retry_raw)
+                    if retry_actions:
+                        print(
+                            f"[Chief] RETRY succeeded — "
+                            f"{len(retry_actions)} action(s) extracted",
+                            flush=True,
+                        )
+                        actions = retry_actions
+                        clean = retry_clean
+                        raw = retry_raw
+                    else:
+                        print(
+                            "[Chief] RETRY also failed — no actions on second attempt",
+                            flush=True,
+                        )
+                        clean = (clean or "").rstrip() + (
+                            "\n\n⚠️ I described performing actions but they may not have "
+                            "executed. Please verify in the relevant tab."
+                        )
+                else:
+                    print("[Chief] RETRY model call returned empty", flush=True)
+
             taken = await _execute_actions(client, biz, actions) if actions else []
 
             # Best-effort: mark memories referenced in the response
