@@ -674,10 +674,32 @@ def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
             continue
 
         json_str = text[json_start:j + 1]
-        # After the closing brace we expect a ']'
+        # After the closing brace we expect a ']' — but the AI sometimes
+        # emits whitespace between them ("} ]"), so skip past it before
+        # checking. Also handle stray ; or , the model occasionally
+        # inserts before the closing bracket.
         k = j + 1
-        if k < n and text[k] == "]":
+        while k < n and text[k] in (" ", "\n", "\r", "\t", ";", ","):
+            k += 1
+        bracket_found = k < n and text[k] == "]"
+
+        # Aggressive logging — every tag we find, regardless of outcome,
+        # so Railway logs make production parser issues debuggable.
+        print(
+            f"[Chief Parser] Found tag at position {start} | "
+            f"raw len={len(json_str)} | "
+            f"head={json_str[:100]!r} | tail={json_str[-50:]!r} | "
+            f"bracket_found={bracket_found}",
+            flush=True,
+        )
+
+        if bracket_found:
             parsed = _try_parse_action_json(json_str)
+            print(
+                f"[Chief Parser] Parse result: "
+                f"{'SUCCESS type=' + str(parsed.get('type')) if isinstance(parsed, dict) else 'FAILED'}",
+                flush=True,
+            )
             if isinstance(parsed, dict) and parsed.get("type"):
                 actions.append(parsed)
                 # Swallow the entire [ACTION:{...}] and any trailing space
@@ -686,17 +708,20 @@ def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
                     after += 1
                 i = after
                 continue
-            # If the structural shape was [ACTION:{...}] but the JSON was
-            # too broken to recover, drop the tag entirely so we don't
-            # leak the malformed marker into the user-facing text.
-            if parsed is None:
-                after = k + 1
-                while after < n and text[after] in (" ", "\n", "\r", "\t"):
-                    after += 1
-                i = after
-                continue
+            # Structural shape was [ACTION:{...}] but JSON was too broken
+            # to recover. Drop the tag so the malformed marker doesn't
+            # leak into the user-facing text.
+            after = k + 1
+            while after < n and text[after] in (" ", "\n", "\r", "\t"):
+                after += 1
+            i = after
+            continue
 
-        # Parse failed structurally — emit literal so users see something
+        # No closing ']' located — emit the original literal and move on.
+        print(
+            f"[Chief Parser] No closing bracket found within {k - (j + 1)} chars after }} — emitting literal",
+            flush=True,
+        )
         out_parts.append(text[start:k + 1 if k < n else n])
         i = k + 1 if k < n else n
 
@@ -1177,11 +1202,15 @@ async def handle_create_contact(client, biz, action) -> Dict:
         return _fail("create_contact", "insert failed")
 
     created = inserted[0] if isinstance(inserted, list) else inserted
+    contact_id = created.get("id") if isinstance(created, dict) else None
     return {
         "type": "create_contact",
         "result": f"added as {status}",
         "label": name,
-        "nav": _nav("operate", "contacts", created.get("id")),
+        # Expose contact_id at the top level so chained actions can
+        # resolve "@create_contact.contact_id" via _resolve_action_references.
+        "contact_id": contact_id,
+        "nav": _nav("operate", "contacts", contact_id),
     }
 
 
@@ -3892,8 +3921,16 @@ def _resolve_action_references(action: Dict[str, Any], prior_results: List[Dict[
         spec = ref[1:]
         ref_type, _, ref_field = spec.partition(".")
         for prev in reversed(prior_results):
-            if prev.get("type") == ref_type and ref_field in prev:
+            if prev.get("type") != ref_type:
+                continue
+            # Top-level wins; fall back to nav.* (older handlers stash
+            # ids inside the nav payload — e.g. nav.contact_id).
+            if ref_field in prev and prev[ref_field] is not None:
                 return prev[ref_field]
+            nav = prev.get("nav") or {}
+            if isinstance(nav, dict) and ref_field in nav and nav[ref_field] is not None:
+                return nav[ref_field]
+        print(f"[Chief] reference unresolved: {ref}", flush=True)
         return ref  # unresolved — let the handler's validation surface it
 
     # Phase 1: resolve any @type.field references in string values
