@@ -1152,11 +1152,13 @@ async def handle_create_contact(client, biz, action) -> Dict:
         return _fail("create_contact", "insert failed")
 
     created = inserted[0] if isinstance(inserted, list) else inserted
+    new_contact_id = created.get("id")
     return {
         "type": "create_contact",
         "result": f"added as {status}",
         "label": name,
-        "nav": _nav("operate", "contacts", created.get("id")),
+        "contact_id": new_contact_id,
+        "nav": _nav("operate", "contacts", new_contact_id),
     }
 
 
@@ -3884,6 +3886,26 @@ def _resolve_action_references(action: Dict[str, Any], prior_results: List[Dict[
             if prev.get("type") == "create_invoice" and prev.get("invoice_id"):
                 resolved["invoice_id"] = prev["invoice_id"]
                 print(f"[Chief] auto-chained {atype}.invoice_id from create_invoice -> {prev['invoice_id']}", flush=True)
+                break
+
+    # Phase 3: auto-backfill contact_id when a contact-keyed action follows
+    # create_contact in the same turn. The model often emits create_contact
+    # then draft_and_send/draft_email/etc. without knowing the new UUID.
+    # We accept contact_id at the top level of the prior result OR under
+    # nav.contactId (older handlers only stored it there).
+    CONTACT_KEYED = {
+        "draft_and_send", "draft_email", "draft_nurture",
+        "create_session", "update_contact_status", "update_contact_health",
+        "contact_deep_dive",
+    }
+    if atype in CONTACT_KEYED and not resolved.get("contact_id"):
+        for prev in reversed(prior_results):
+            if prev.get("type") != "create_contact":
+                continue
+            prior_contact_id = prev.get("contact_id") or (prev.get("nav") or {}).get("contactId")
+            if prior_contact_id:
+                resolved["contact_id"] = prior_contact_id
+                print(f"[Chief] auto-chained {atype}.contact_id from create_contact -> {prior_contact_id}", flush=True)
                 break
 
     return resolved
