@@ -352,5 +352,134 @@ async def inbound_email(request: Request):
             "last_interaction": datetime.now(timezone.utc).isoformat(),
         })
 
-        logger.info(f"[INBOUND] processed reply from {from_email} → contact={contact_id}")
+        logger.info(f"[INBOUND] processed reply from {from_email} -> contact={contact_id}")
         return {"status": "processed", "contact_id": contact_id}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# WEBHOOK — email.opened (open tracking)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# When Resend reports an email.opened event, we look the recipient up by
+# email, find their most recent invoice that we sent, and flip the
+# invoice from "sent" -> "viewed". We post an `invoice_viewed` timeline
+# event and a chief_notification so the practitioner sees the open in
+# real time.
+#
+# Resend dashboard:
+#   resend.com -> Webhooks -> Add webhook
+#   URL:    https://<this-host>/email/webhook
+#   Events: email.opened
+#
+# We always return 200 so Resend doesn't retry — failures are logged.
+
+def _extract_open_event(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Resend wraps webhook payloads as {type, created_at, data: {...}}.
+    Pull out a normalized {type, to_email, subject, opened_at} shape."""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    evt_type = (payload.get("type") or "").strip().lower()
+    to_field = data.get("to") or data.get("to_email") or ""
+    if isinstance(to_field, list):
+        to_email = ""
+        for item in to_field:
+            if isinstance(item, str):
+                to_email = item; break
+            if isinstance(item, dict):
+                to_email = item.get("email") or ""
+                if to_email:
+                    break
+    else:
+        to_email = str(to_field)
+    return {
+        "type": evt_type,
+        "to_email": (to_email or "").strip().lower(),
+        "subject": (data.get("subject") or "").strip(),
+        "opened_at": payload.get("created_at") or data.get("opened_at") or datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.post("/email/webhook")
+async def resend_webhook(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"status": "ignored", "reason": "non-json payload"}
+
+    evt = _extract_open_event(payload)
+    if evt["type"] != "email.opened":
+        # Other event types (delivered, bounced, etc) — accept and ignore
+        return {"status": "ignored", "reason": f"unsupported event {evt['type']}"}
+
+    to_email = evt["to_email"]
+    if not to_email:
+        return {"status": "ignored", "reason": "no recipient"}
+
+    async with httpx.AsyncClient() as client:
+        rows = await _sb_get(client, f"/contacts?email=eq.{to_email}&select=id,name,business_id&limit=1")
+        if not rows:
+            logger.info(f"[OPEN] unknown recipient: {to_email}")
+            return {"status": "unknown_recipient", "to": to_email}
+        contact = rows[0]
+        contact_id = contact.get("id")
+        contact_name = contact.get("name") or to_email
+        business_id = contact.get("business_id")
+
+        # Find the most recent sent invoice for this contact that hasn't
+        # already been flipped to viewed/paid. We don't try to subject-
+        # match because Resend's open event doesn't always carry the
+        # original subject reliably.
+        invoices = await _sb_get(
+            client,
+            f"/invoices?contact_id=eq.{contact_id}&business_id=eq.{business_id}"
+            f"&status=eq.sent&select=id,invoice_number,total,sent_at"
+            f"&order=sent_at.desc.nullslast,created_at.desc&limit=1",
+        )
+        if not invoices:
+            # Maybe already-viewed: skip silently
+            logger.info(f"[OPEN] no matching sent invoice for {to_email}")
+            return {"status": "no_match"}
+
+        inv = invoices[0]
+        invoice_id = inv.get("id")
+        invoice_number = inv.get("invoice_number")
+        total = float(inv.get("total") or 0)
+        opened_at = evt["opened_at"]
+
+        await _sb_patch(client, f"/invoices?id=eq.{invoice_id}", {
+            "status": "viewed",
+            "viewed_at": opened_at,
+        })
+
+        await _sb_post(client, "/events", {
+            "business_id": business_id,
+            "contact_id": contact_id,
+            "event_type": "invoice_viewed",
+            "data": {
+                "invoice_id": invoice_id,
+                "invoice_number": invoice_number,
+                "total": total,
+                "to_email": to_email,
+                "opened_at": opened_at,
+            },
+            "source": "resend_webhook",
+        })
+
+        await _sb_post(client, "/chief_notifications", {
+            "business_id": business_id,
+            "type": "info",
+            "title": f"👁️ {contact_name} opened {invoice_number}",
+            "body": f"{contact_name} viewed Invoice {invoice_number} (${total:,.2f}) — they haven't paid yet.",
+            "suggested_action": "Send a friendly nudge?",
+            "status": "unread",
+            "data": {
+                "kind": "invoice_viewed",
+                "invoice_id": invoice_id,
+                "invoice_number": invoice_number,
+                "contact_id": contact_id,
+                "contact_name": contact_name,
+                "total": total,
+            },
+        })
+
+        logger.info(f"[OPEN] {contact_name} opened {invoice_number}")
+        return {"status": "viewed", "invoice_id": invoice_id, "contact_id": contact_id}

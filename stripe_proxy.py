@@ -31,12 +31,14 @@ Endpoints:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 STRIPE_API_BASE = "https://api.stripe.com/v1"
@@ -139,6 +141,231 @@ async def create_payment_link(req: PaymentLinkRequest):
 @router.get("/stripe/status")
 async def stripe_status():
     return {"configured": bool(os.environ.get("STRIPE_SECRET_KEY"))}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# WEBHOOK — checkout.session.completed
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Stripe POSTs here when a Payment Link checkout succeeds. We:
+#   1. Match the session back to one of our invoices (by payment_link
+#      ID, then by amount + recently-sent invoices).
+#   2. Flip the invoice to status="paid" with paid_at + payment_method.
+#   3. Log an `invoice_paid_auto` event on the contact's timeline.
+#   4. Post a chief_notification surfacing the payment.
+#   5. Bump the contact's health to 100.
+#
+# Always returns 200 — Stripe retries on non-2xx responses.
+#
+# Stripe dashboard:
+#   stripe.com -> Developers -> Webhooks -> Add endpoint
+#   URL:    https://<this-host>/stripe/webhook
+#   Events: checkout.session.completed
+
+SUPABASE_URL_DEFAULT = "https://brqjgbpzackdihgjsorf.supabase.co"
+
+
+def _sb_headers() -> Dict[str, str]:
+    key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON", "")
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+
+
+def _sb_url() -> str:
+    return os.environ.get("SUPABASE_URL", SUPABASE_URL_DEFAULT).rstrip("/")
+
+
+async def _sb_get(client: httpx.AsyncClient, path: str) -> Optional[Any]:
+    url = f"{_sb_url()}/rest/v1{path}"
+    try:
+        r = await client.get(url, headers=_sb_headers(), timeout=HTTP_TIMEOUT)
+        if r.status_code >= 400:
+            logger.warning(f"supabase GET {path}: {r.status_code} {r.text[:200]}")
+            return None
+        return r.json() if r.text else None
+    except httpx.HTTPError as e:
+        logger.warning(f"supabase GET {path} failed: {e}")
+        return None
+
+
+async def _sb_post(client: httpx.AsyncClient, path: str, body: Dict[str, Any]) -> Optional[Any]:
+    url = f"{_sb_url()}/rest/v1{path}"
+    try:
+        r = await client.post(url, headers=_sb_headers(), content=json.dumps(body), timeout=HTTP_TIMEOUT)
+        if r.status_code >= 400:
+            logger.warning(f"supabase POST {path}: {r.status_code} {r.text[:200]}")
+            return None
+        return r.json() if r.text else None
+    except httpx.HTTPError as e:
+        logger.warning(f"supabase POST {path} failed: {e}")
+        return None
+
+
+async def _sb_patch(client: httpx.AsyncClient, path: str, body: Dict[str, Any]) -> None:
+    url = f"{_sb_url()}/rest/v1{path}"
+    try:
+        await client.patch(url, headers=_sb_headers(), content=json.dumps(body), timeout=HTTP_TIMEOUT)
+    except httpx.HTTPError as e:
+        logger.warning(f"supabase PATCH {path} failed: {e}")
+
+
+async def _match_invoice_for_payment(
+    client: httpx.AsyncClient,
+    payment_link_id: str,
+    amount: float,
+) -> Optional[Dict[str, Any]]:
+    """Find the invoice this payment corresponds to. Strategy:
+       1. If payment_link_id is non-empty, look for an invoice whose
+          stripe_payment_url contains that id.
+       2. Fall back to recently-sent invoices with a matching total.
+       Returns the first matching row, or None.
+    """
+    if payment_link_id:
+        rows = await _sb_get(
+            client,
+            f"/invoices?stripe_payment_url=ilike.*{payment_link_id}*"
+            f"&select=id,invoice_number,business_id,contact_id,total,status&limit=1",
+        )
+        if rows:
+            return rows[0]
+
+    # Amount fallback — broaden the window a touch (1¢) to ride out
+    # rounding inconsistencies between client display and Stripe totals.
+    if amount > 0:
+        amount_low = max(0, amount - 0.01)
+        amount_high = amount + 0.01
+        rows = await _sb_get(
+            client,
+            f"/invoices?status=in.(sent,viewed,overdue)"
+            f"&total=gte.{amount_low}&total=lte.{amount_high}"
+            f"&select=id,invoice_number,business_id,contact_id,total,status,sent_at"
+            f"&order=sent_at.desc.nullslast,created_at.desc&limit=1",
+        )
+        if rows:
+            return rows[0]
+    return None
+
+
+@router.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook payloads. Signature verification is
+    intentionally skipped here — STRIPE_WEBHOOK_SECRET is not yet wired
+    in env. Add `stripe.Webhook.construct_event` checks once the secret
+    is provisioned. Until then, we accept any POST and rely on the
+    matching logic to filter spurious traffic."""
+    body = await request.body()
+    try:
+        event = json.loads(body)
+    except Exception:
+        logger.warning("stripe webhook: invalid JSON payload")
+        return {"status": "invalid"}
+
+    evt_type = (event.get("type") or "").strip()
+    if evt_type != "checkout.session.completed":
+        # Accept and ignore — many event types share the endpoint.
+        logger.info(f"stripe webhook: ignoring {evt_type}")
+        return {"status": "ignored", "reason": evt_type}
+
+    session_obj = (event.get("data") or {}).get("object") or {}
+    payment_link = session_obj.get("payment_link") or ""
+    amount_total = session_obj.get("amount_total")
+    customer_details = session_obj.get("customer_details") or {}
+    customer_email = (customer_details.get("email") or "").strip().lower()
+
+    try:
+        amount_dollars = float(amount_total) / 100.0 if amount_total is not None else 0.0
+    except (TypeError, ValueError):
+        amount_dollars = 0.0
+
+    logger.info(
+        f"stripe webhook: checkout.session.completed link={payment_link} "
+        f"amount=${amount_dollars:.2f} email={customer_email or '-'}"
+    )
+
+    async with httpx.AsyncClient() as client:
+        invoice = await _match_invoice_for_payment(client, payment_link, amount_dollars)
+        if not invoice:
+            logger.warning(
+                f"stripe webhook: no invoice matched (link={payment_link}, amount=${amount_dollars:.2f})"
+            )
+            # Still 200 so Stripe doesn't retry forever
+            return {"status": "no_match", "amount": amount_dollars, "link": payment_link}
+
+        invoice_id = invoice["id"]
+        invoice_number = invoice.get("invoice_number")
+        business_id = invoice.get("business_id")
+        contact_id = invoice.get("contact_id")
+        total = float(invoice.get("total") or amount_dollars)
+        paid_at = datetime.now(timezone.utc).isoformat()
+
+        # 1) Flip invoice to paid
+        await _sb_patch(client, f"/invoices?id=eq.{invoice_id}", {
+            "status": "paid",
+            "paid_at": paid_at,
+            "payment_method": "stripe",
+        })
+
+        # 2) Lookup contact for the timeline + notification text
+        contact_name = "Client"
+        if contact_id:
+            rows = await _sb_get(client, f"/contacts?id=eq.{contact_id}&select=name,health_score")
+            if rows:
+                contact_name = rows[0].get("name") or contact_name
+
+        # 3) Timeline event
+        if contact_id:
+            await _sb_post(client, "/events", {
+                "business_id": business_id,
+                "contact_id": contact_id,
+                "event_type": "invoice_paid_auto",
+                "data": {
+                    "invoice_id": invoice_id,
+                    "invoice_number": invoice_number,
+                    "total": total,
+                    "payment_method": "stripe",
+                    "stripe_payment_link": payment_link,
+                    "customer_email": customer_email or None,
+                },
+                "source": "stripe_webhook",
+            })
+
+        # 4) Notification
+        await _sb_post(client, "/chief_notifications", {
+            "business_id": business_id,
+            "type": "success",
+            "title": f"💰 Payment Received — ${total:,.2f}",
+            "body": f"{contact_name} paid Invoice {invoice_number}.",
+            "suggested_action": f"Thank {contact_name}",
+            "status": "unread",
+            "data": {
+                "kind": "invoice_paid",
+                "invoice_id": invoice_id,
+                "invoice_number": invoice_number,
+                "contact_id": contact_id,
+                "contact_name": contact_name,
+                "total": total,
+            },
+        })
+
+        # 5) Bump contact health — paying clients are healthy
+        if contact_id:
+            await _sb_patch(client, f"/contacts?id=eq.{contact_id}", {
+                "health_score": 100,
+                "last_interaction": paid_at,
+            })
+
+        logger.info(
+            f"stripe webhook: marked {invoice_number} paid (${total:,.2f}) for {contact_name}"
+        )
+        return {
+            "status": "paid",
+            "invoice_id": invoice_id,
+            "invoice_number": invoice_number,
+        }
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -72,6 +72,91 @@ MAX_ACTIONS_PER_TURN = 8  # safety cap in case the AI goes wild
 # businesses.settings.payments.stripe_link.
 PLATFORM_OWNER_ID = "d820593c-9cf8-45b7-a703-89fe49efb6a4"
 
+# ─── Team personas (mirror of src/core/lib/teamPersonas.ts) ──────────
+# Keep the labels/descriptions in sync with the TS file so the Chief
+# uses the same words the practitioner sees in the UI.
+
+TEAM_PERSONAS = {
+    "church": {
+        "nurture": {"label": "Congregational Care", "description": "follows up with your members and visitors"},
+        "session_prep": {"label": "Meeting Prep", "description": "prepares you for counseling and ministry meetings"},
+        "contract": {"label": "Ministry Proposals", "description": "drafts partnership and program proposals"},
+        "payment": {"label": "Tithes & Payments", "description": "tracks giving, invoices, and payment follow-ups"},
+        "module": {"label": "Ministry Tracker", "description": "manages prayer requests, events, and follow-ups"},
+        "growth": {"label": "Ministry Insights", "description": "spots trends in attendance, engagement, and growth"},
+    },
+    "coaching": {
+        "nurture": {"label": "Client Care", "description": "nurtures your client relationships"},
+        "session_prep": {"label": "Session Prep", "description": "gets you ready for coaching sessions"},
+        "contract": {"label": "Proposals", "description": "drafts coaching packages and agreements"},
+        "payment": {"label": "Billing", "description": "tracks invoices and follows up on payments"},
+        "module": {"label": "Progress Tracker", "description": "manages client milestones and goals"},
+        "growth": {"label": "Growth Advisor", "description": "analyzes your practice and spots opportunities"},
+    },
+    "consulting": {
+        "nurture": {"label": "Client Relations", "description": "maintains engagement with prospects and clients"},
+        "session_prep": {"label": "Engagement Prep", "description": "prepares briefs for client meetings"},
+        "contract": {"label": "Proposals & Contracts", "description": "drafts SOWs and project proposals"},
+        "payment": {"label": "Accounts Receivable", "description": "tracks invoices and collections"},
+        "module": {"label": "Project Tracker", "description": "manages deliverables and timelines"},
+        "growth": {"label": "Business Intelligence", "description": "analyzes pipeline and revenue trends"},
+    },
+    "nonprofit": {
+        "nurture": {"label": "Donor Relations", "description": "nurtures relationships with donors and supporters"},
+        "session_prep": {"label": "Meeting Prep", "description": "prepares for board meetings and donor calls"},
+        "contract": {"label": "Grant Writer", "description": "drafts proposals and funding applications"},
+        "payment": {"label": "Donations & Pledges", "description": "tracks contributions and pledge follow-ups"},
+        "module": {"label": "Program Tracker", "description": "manages programs, volunteers, and impact metrics"},
+        "growth": {"label": "Impact Advisor", "description": "analyzes outcomes and growth opportunities"},
+    },
+    "freelance": {
+        "nurture": {"label": "Client Outreach", "description": "keeps in touch with clients and prospects"},
+        "session_prep": {"label": "Project Prep", "description": "briefs you before client calls and reviews"},
+        "contract": {"label": "Estimates & Contracts", "description": "drafts quotes and service agreements"},
+        "payment": {"label": "Invoicing", "description": "tracks payments and follows up on late invoices"},
+        "module": {"label": "Work Tracker", "description": "manages projects, deadlines, and deliverables"},
+        "growth": {"label": "Business Coach", "description": "analyzes your freelance business and spots growth"},
+    },
+    "real_estate": {
+        "nurture": {"label": "Client Nurture", "description": "follows up with buyers, sellers, and leads"},
+        "session_prep": {"label": "Showing Prep", "description": "prepares you for showings and client meetings"},
+        "contract": {"label": "Listing Proposals", "description": "drafts listing presentations and agreements"},
+        "payment": {"label": "Commission Tracking", "description": "tracks closings, invoices, and payments"},
+        "module": {"label": "Pipeline Tracker", "description": "manages active listings and buyer pipeline"},
+        "growth": {"label": "Market Advisor", "description": "analyzes your deals and market trends"},
+    },
+    "health_wellness": {
+        "nurture": {"label": "Patient Care", "description": "follows up with clients between appointments"},
+        "session_prep": {"label": "Appointment Prep", "description": "prepares notes before each session"},
+        "contract": {"label": "Treatment Plans", "description": "drafts care plans and service proposals"},
+        "payment": {"label": "Billing", "description": "tracks payments and insurance follow-ups"},
+        "module": {"label": "Client Tracker", "description": "manages treatment progress and outcomes"},
+        "growth": {"label": "Practice Advisor", "description": "analyzes your practice health and growth"},
+    },
+    "default": {
+        "nurture": {"label": "Outreach", "description": "follows up with your contacts"},
+        "session_prep": {"label": "Session Prep", "description": "prepares you for meetings"},
+        "contract": {"label": "Proposals", "description": "drafts proposals and agreements"},
+        "payment": {"label": "Billing", "description": "tracks invoices and payments"},
+        "module": {"label": "Tracker", "description": "manages your custom lists and modules"},
+        "growth": {"label": "Advisor", "description": "analyzes your business and spots opportunities"},
+    },
+}
+
+
+def get_team_label(biz_type: Optional[str], agent_key: str) -> str:
+    bt = (biz_type or "default").lower()
+    persona = TEAM_PERSONAS.get(bt, TEAM_PERSONAS["default"]).get(agent_key)
+    if persona:
+        return persona["label"]
+    return agent_key.replace("_", " ").title()
+
+
+def get_team_description(biz_type: Optional[str], agent_key: str) -> str:
+    bt = (biz_type or "default").lower()
+    persona = TEAM_PERSONAS.get(bt, TEAM_PERSONAS["default"]).get(agent_key)
+    return persona["description"] if persona else ""
+
 VALID_CONTACT_STATUSES = {"active", "lead", "vip", "inactive", "churned"}
 
 # agent_queue.action_type CHECK constraint
@@ -250,6 +335,10 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
     at_risk = [c for c in contacts if (c.get("health_score") or 0) < 40 and c.get("status") in ("active", "lead", "vip")]
     at_risk.sort(key=lambda c: c.get("health_score") or 0)
 
+    # Recent autopilot auto-actions (chief_auto_approved events) — used
+    # by the Chief to give the practitioner a "while you were away" recap.
+    auto_recent = [ev for ev in (events or []) if ev.get("event_type") == "chief_auto_approved"]
+
     return {
         "business": biz,
         "contacts_total": len(contacts),
@@ -265,6 +354,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "memories": memories or [],
         "notifications": notifications or [],
         "recent_queue_24h": recent_queue or [],
+        "auto_recent": auto_recent,
         "site": (site_rows or [{}])[0] if site_rows else None,
         "strategy_track": (strategy_rows or [None])[0] if strategy_rows else None,
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
@@ -403,9 +493,32 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
             + (f"\n  Disclaimer: {(rules.get('disclaimer') or '')[:120]}" if rules.get('disclaimer') else "")
         )
 
+    # Autopilot summary — what's been auto-handled lately + per-team levels
+    autopilot_cfg = (biz.get("settings") or {}).get("autopilot") or DEFAULT_AUTOPILOT
+    overall_level = autopilot_cfg.get("overall", "manual")
+    per_team = autopilot_cfg.get("per_team") or {}
+    team_levels: List[str] = []
+    for k in ("nurture", "session_prep", "contract", "payment", "module", "growth"):
+        lvl = per_team.get(k, overall_level)
+        team_levels.append(f"  - {get_team_label(biztype, k)}: {lvl}")
+    auto_recent = ctx.get("auto_recent") or []
+    auto_recent_lines = []
+    for ev in auto_recent[:6]:
+        d = ev.get("data") or {}
+        auto_recent_lines.append(
+            f"  - {d.get('reason', 'auto')}: {get_team_label(biztype, d.get('agent') or 'default')} "
+            f"sent \"{(d.get('subject') or '')[:60]}\""
+        )
+
+    autopilot_block = (
+        f"\nAUTOPILOT (overall: {overall_level}):\n"
+        + "\n".join(team_levels)
+        + ("\n  Recent auto-actions:\n" + "\n".join(auto_recent_lines) if auto_recent_lines else "")
+    )
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
-  Voice profile: {json.dumps(biz.get('voice_profile') or {})[:500]}{et_summary}
+  Voice profile: {json.dumps(biz.get('voice_profile') or {})[:500]}{et_summary}{autopilot_block}
 
 CONTACTS: {ctx['contacts_total']} total
   by_status: {json.dumps(ctx['contacts_by_status'])}
@@ -603,10 +716,19 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
         return _fail("draft_nurture", "insert failed")
 
     queue_id = inserted[0].get("id") if isinstance(inserted, list) and inserted else None
+    draft_row = inserted[0] if isinstance(inserted, list) and inserted else None
+
+    # Autopilot: if Smart/Full + routine, auto-approve right now.
+    auto_label_suffix = ""
+    if draft_row:
+        ap_result = await _process_autopilot_for_draft(client, biz, draft_row, contact)
+        if ap_result and ap_result.get("ok"):
+            auto_label_suffix = " (auto-sent)" if ap_result.get("sent") else " (auto-approved)"
+
     return {
         "type": "draft_nurture",
-        "result": "queued for approval",
-        "label": f"Check-in for {contact.get('name')}",
+        "result": "auto_approved" if auto_label_suffix else "queued for approval",
+        "label": f"Check-in for {contact.get('name')}{auto_label_suffix}",
         "nav": _nav("operate", "queue"),
         "queue_id": queue_id,
         "draft_preview": {"subject": subject, "body": (body or "")[:200]},
@@ -1295,6 +1417,337 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any]) 
         out["to_name"] = contact.get("name")
 
     return out
+
+
+# ─── Autopilot — auto-approval gating ────────────────────────────────
+#
+# The practitioner sets per-team autonomy in businesses.settings.autopilot.
+# When an agent inserts a draft into agent_queue, the Chief consults
+# this config (along with situational context — VIP, at-risk, recent
+# contact, escalating reminders) to decide whether to auto-approve and
+# send, or hold for review.
+#
+# Mirror of the TS-side defaults in src/core/lib/teamPersonas.ts, kept
+# minimal here — Python only needs to know the levels.
+
+DEFAULT_AUTOPILOT = {
+    "overall": "manual",
+    "per_team": {
+        "nurture": "manual", "session_prep": "manual", "contract": "manual",
+        "payment": "manual", "module": "manual", "growth": "manual",
+    },
+}
+
+
+def _autopilot_level(biz: Dict[str, Any], agent_name: str) -> str:
+    ap = (biz.get("settings") or {}).get("autopilot") or {}
+    per = ap.get("per_team") or {}
+    if agent_name in per and per[agent_name] in ("manual", "smart", "full"):
+        return per[agent_name]
+    overall = ap.get("overall")
+    return overall if overall in ("manual", "smart", "full") else "manual"
+
+
+async def _count_payment_reminders(client, biz_id: str, invoice_id: Optional[str]) -> int:
+    """How many payment reminder events have we logged for this invoice?
+    Used by smart-mode to escalate after the second reminder."""
+    if not invoice_id:
+        return 0
+    try:
+        rows = await _sb(
+            client, "GET",
+            f"/agent_queue?business_id=eq.{biz_id}&agent=eq.payment&data->>invoice_id=eq.{invoice_id}&status=eq.sent&select=id",
+        ) or []
+        return len(rows) if isinstance(rows, list) else 0
+    except Exception:
+        return 0
+
+
+async def _should_auto_approve(
+    client,
+    biz: Dict[str, Any],
+    agent_name: str,
+    draft: Dict[str, Any],
+    contact: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str]:
+    """Return (should_auto_approve, reason_code)."""
+    level = _autopilot_level(biz, agent_name)
+    if level == "manual":
+        return False, "manual_mode"
+    if level == "full":
+        return True, "full_auto"
+
+    # Smart mode — apply contextual rules
+    if agent_name == "nurture":
+        if contact and (contact.get("status") or "").lower() == "vip":
+            return False, "vip_contact_review"
+        health = contact.get("health_score") if contact else None
+        if isinstance(health, (int, float)) and health < 30:
+            return False, "at_risk_review"
+        last = (contact or {}).get("last_interaction")
+        if last:
+            try:
+                last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+                if (datetime.now(timezone.utc) - last_dt).total_seconds() < 48 * 3600:
+                    return False, "recent_contact_cooldown"
+            except Exception:
+                pass
+        return True, "routine_checkin"
+
+    if agent_name == "session_prep":
+        if (draft.get("action_type") or "") == "session_prep":
+            return True, "routine_prep"
+        return False, "followup_review"
+
+    if agent_name == "payment":
+        invoice_id = (draft.get("data") or {}).get("invoice_id") if isinstance(draft.get("data"), dict) else None
+        reminders = await _count_payment_reminders(client, biz["id"], invoice_id)
+        if reminders < 2:
+            return True, "routine_reminder"
+        return False, "escalated_reminder"
+
+    if agent_name == "growth":
+        if (draft.get("action_type") or "") == "briefing":
+            return True, "routine_briefing"
+        return False, "insight_review"
+
+    # contract / module — default to manual under smart mode
+    return False, "default_manual"
+
+
+async def _process_autopilot_for_draft(
+    client,
+    biz: Dict[str, Any],
+    draft_row: Dict[str, Any],
+    contact: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Run the autopilot decision against a freshly-inserted draft row.
+    If it auto-approves, kicks off the standard approval pipeline and
+    emits a chief_auto_approved event. Returns the delivery result for
+    callers to inspect, or None when held for review."""
+    agent_name = (draft_row.get("agent") or "").strip().lower()
+    if not agent_name:
+        return None
+    should_auto, reason = await _should_auto_approve(client, biz, agent_name, draft_row, contact)
+    if not should_auto:
+        print(f"[Chief Autopilot] Queued for review: {agent_name} -- {reason}", flush=True)
+        return None
+    try:
+        result = await _do_approve_one(client, biz, draft_row)
+    except Exception as e:
+        print(f"[Chief Autopilot] auto-approve failed for {agent_name}: {e}", flush=True)
+        return None
+    await _sb(client, "POST", "/events", {
+        "business_id": biz["id"],
+        "contact_id": draft_row.get("contact_id"),
+        "event_type": "chief_auto_approved",
+        "data": {
+            "queue_id": draft_row.get("id"),
+            "agent": agent_name,
+            "reason": reason,
+            "subject": draft_row.get("subject"),
+            "sent": bool(result.get("sent")),
+        },
+        "source": "chief_autopilot",
+    })
+    print(f"[Chief Autopilot] Auto-approved {agent_name} draft: {reason}", flush=True)
+    return result
+
+
+async def _autopilot_sweep(client, biz: Dict[str, Any], lookback_minutes: int = 15) -> int:
+    """At the top of each chief_chat, look at drafts created in the last
+    few minutes and auto-process whatever the autopilot config allows.
+    This catches drafts created by external agents (nurture_agent.py
+    etc) without having to instrument every insertion site.
+    Returns the number of drafts auto-approved."""
+    biz_id = biz["id"]
+    since = (datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)).isoformat()
+    try:
+        drafts = await _sb(
+            client, "GET",
+            f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&created_at=gte.{since}"
+            f"&select=id,agent,action_type,subject,body,channel,contact_id,data,priority,created_at"
+            f"&limit=20",
+        ) or []
+    except Exception as e:
+        print(f"[Chief Autopilot] sweep load failed: {e}", flush=True)
+        return 0
+    if not drafts:
+        return 0
+
+    approved_count = 0
+    for d in drafts:
+        contact = None
+        cid = d.get("contact_id")
+        if cid:
+            try:
+                rows = await _sb(client, "GET", f"/contacts?id=eq.{cid}&select=id,name,email,status,health_score,last_interaction")
+                contact = (rows or [None])[0]
+            except Exception:
+                contact = None
+        result = await _process_autopilot_for_draft(client, biz, d, contact)
+        if result and result.get("ok"):
+            approved_count += 1
+    return approved_count
+
+
+# ─── Escalation generator ────────────────────────────────────────────
+#
+# When the Chief evaluates business state, it should surface anything
+# requiring a human decision. Escalations are chief_notifications with
+# type="escalation" — the Autopilot UI renders the options and routes
+# the practitioner's choice back through the Chief or direct PATCHes.
+
+async def _create_escalation(
+    client,
+    biz: Dict[str, Any],
+    agent_key: str,
+    title: str,
+    body: str,
+    options: List[Dict[str, str]],
+    contact_id: Optional[str] = None,
+    invoice_id: Optional[str] = None,
+) -> None:
+    """Idempotent create — de-duped by agent + title within unread escalations."""
+    biz_id = biz["id"]
+    biz_type = biz.get("type")
+    try:
+        existing = await _sb(
+            client, "GET",
+            f"/chief_notifications?business_id=eq.{biz_id}&status=eq.unread&type=eq.escalation"
+            f"&data->>agent=eq.{agent_key}&select=id,title&limit=50",
+        ) or []
+    except Exception:
+        existing = []
+    # Python-side title match — PostgREST URL-encoding of title with
+    # special chars is unreliable, so we filter after the fact.
+    if isinstance(existing, list) and any((row.get("title") == title) for row in existing):
+        return
+    agent_label = get_team_label(biz_type, agent_key)
+    await _sb(client, "POST", "/chief_notifications", {
+        "business_id": biz_id,
+        "type": "escalation",
+        "title": title,
+        "body": body,
+        "suggested_action": (options[0]["label"] if options else ""),
+        "status": "unread",
+        "data": {
+            "agent": agent_key,
+            "agent_label": agent_label,
+            "contact_id": contact_id,
+            "contact_name": None,  # caller can pass via body for display
+            "invoice_id": invoice_id,
+            "options": options,
+        },
+    })
+
+
+async def _evaluate_escalations(client, biz: Dict[str, Any]) -> int:
+    """Inspect business state and create deduped escalation notifications
+    where the practitioner needs to make a call. Conservative — only
+    surfaces situations the system can't resolve on autopilot."""
+    biz_id = biz["id"]
+    biz_type = biz.get("type")
+    created = 0
+    today = datetime.now(timezone.utc).date()
+
+    # ── Nurture: critically low health
+    try:
+        rows = await _sb(
+            client, "GET",
+            f"/contacts?business_id=eq.{biz_id}&health_score=lt.20&status=neq.inactive"
+            f"&select=id,name,health_score,last_interaction&limit=5",
+        ) or []
+    except Exception:
+        rows = []
+    for c in rows:
+        name = c.get("name") or "this contact"
+        title = f"{name}'s engagement is critically low"
+        body = f"{name} is at health {c.get('health_score')}. Time to intervene?"
+        await _create_escalation(
+            client, biz, "nurture", title, body,
+            options=[
+                {"label": "Reach Out Personally", "style": "primary"},
+                {"label": "Give Space", "style": "secondary"},
+                {"label": "Mark Inactive", "style": "secondary"},
+            ],
+            contact_id=c.get("id"),
+        )
+        created += 1
+
+    # ── Payment: 30+ and 60+ day overdue
+    try:
+        thirty = (today - timedelta(days=30)).isoformat()
+        sixty = (today - timedelta(days=60)).isoformat()
+        overdue = await _sb(
+            client, "GET",
+            f"/invoices?business_id=eq.{biz_id}&status=in.(sent,viewed,overdue)"
+            f"&due_date=lt.{thirty}&select=id,invoice_number,total,due_date,contact_id,contacts(name)"
+            f"&order=due_date.asc&limit=10",
+        ) or []
+    except Exception:
+        overdue = []
+    for inv in overdue:
+        try:
+            due = date.fromisoformat(str(inv.get("due_date"))) if inv.get("due_date") else today
+        except Exception:
+            due = today
+        days = (today - due).days
+        amount = float(inv.get("total") or 0)
+        contact_name = (inv.get("contacts") or {}).get("name") if isinstance(inv.get("contacts"), dict) else None
+        invoice_number = inv.get("invoice_number") or "(no number)"
+        if days >= 60:
+            title = f"{invoice_number} is critically overdue"
+            body = f"{invoice_number} is {days} days past due (${amount:,.2f}). Time to make a call."
+            opts = [
+                {"label": "Final Notice", "style": "primary"},
+                {"label": "Write Off", "style": "secondary"},
+                {"label": "Ask Chief", "style": "secondary"},
+            ]
+        else:
+            title = f"{invoice_number} is {days} days overdue"
+            body = f"{invoice_number} is {days} days past due (${amount:,.2f}). Two reminders already sent."
+            opts = [
+                {"label": "Send Final Notice", "style": "primary"},
+                {"label": "Offer Payment Plan", "style": "secondary"},
+                {"label": "Write Off", "style": "secondary"},
+            ]
+        await _create_escalation(
+            client, biz, "payment", title, body, opts,
+            contact_id=inv.get("contact_id"),
+            invoice_id=inv.get("id"),
+        )
+        created += 1
+
+    # ── Session Prep: tomorrow with no prep_brief
+    try:
+        tomorrow_start = datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+        tomorrow_end = tomorrow_start + timedelta(hours=24)
+        sessions = await _sb(
+            client, "GET",
+            f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
+            f"&scheduled_for=gte.{tomorrow_start.isoformat()}&scheduled_for=lt.{tomorrow_end.isoformat()}"
+            f"&select=id,title,scheduled_for,prep_brief,contact_id,contacts(name)&limit=10",
+        ) or []
+    except Exception:
+        sessions = []
+    for s in sessions:
+        if s.get("prep_brief"):
+            continue
+        contact_name = (s.get("contacts") or {}).get("name") if isinstance(s.get("contacts"), dict) else None
+        title = f"Tomorrow's session with {contact_name or 'a contact'} has no prep brief"
+        body = f"{s.get('title') or 'Session'} is scheduled tomorrow. Want me to prep now?"
+        await _create_escalation(
+            client, biz, "session_prep", title, body,
+            options=[
+                {"label": "Prep Now", "style": "primary"},
+                {"label": "Skip Prep", "style": "secondary"},
+            ],
+            contact_id=s.get("contact_id"),
+        )
+        created += 1
+
+    return created
 
 
 async def _do_approve_one(client, biz: Dict[str, Any], item: Dict) -> Dict[str, Any]:
@@ -3871,6 +4324,9 @@ When they share information ABOUT a contact that should stick ("Marcus is intere
 When they report a real-world interaction ("I just called Deacon Harris" / "I met with Sandra yesterday"), emit log_activity with the right activity_type and notes.
 For invoices: create_invoice with a list of {{description, quantity, unit_price}} line items. After creating, SHOW the total and ask "send now?" — only emit send_invoice after they confirm. "Has Sandra paid?" → look at the QUEUE / recent events, or ask; "mark Sandra paid" → mark_invoice_paid with the invoice_id. Always echo the invoice number and total in your response.
 
+AUTOPILOT:
+The practitioner sets autonomy levels per team member in OPERATE → Autopilot. Read the AUTOPILOT block in the context above — it lists the current overall mode, per-team levels, and recent auto-actions. When you greet the practitioner, reference what was auto-handled while they were away ("Your Client Care team sent 3 check-ins automatically. I held back one for a VIP — want to review it?"). Use the team labels from the AUTOPILOT block, NOT the raw agent keys (e.g. say "Client Care" not "nurture"). Don't second-guess the autonomy choices unless the practitioner asks. When they say "make it more conservative" / "give Sandra more space" / "stop the auto-sends," guide them to the Autopilot tab or save a chief_memories agent_rule to constrain the agent. Escalations show up in chief_notifications with type=escalation — surface them in NEEDS YOUR DECISION sections of the conversation.
+
 DOCUMENTS:
 Practitioners can upload and manage documents in OPERATE → Documents. Files can be attached to a contact (stored under contacts/{{contact_id}}/) or kept as general business documents. When a practitioner says "upload a file" or "attach a document," navigate them to the Documents tab — or, for a specific contact, the Files tab on that contact's detail page. You CANNOT upload files yourself — guide the practitioner to the UI. document_uploaded events appear on the contact timeline and you can reference them ("I see you uploaded the signed agreement on April 5").
 
@@ -4193,6 +4649,21 @@ async def chief_chat(req: ChatRequest):
                     print(f"[Chief] auto-generated {created} recurring invoice(s)", flush=True)
             except Exception as e:  # pragma: no cover
                 print(f"[Chief] recurrence cron error: {e}", flush=True)
+
+            # Autopilot + escalations — needs the business row first so
+            # we can read settings.autopilot. Fetch a minimal copy.
+            try:
+                biz_rows = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=id,name,type,settings")
+                biz_lite = (biz_rows or [None])[0]
+                if biz_lite:
+                    auto_count = await _autopilot_sweep(client, biz_lite)
+                    if auto_count:
+                        print(f"[Chief Autopilot] swept {auto_count} draft(s)", flush=True)
+                    esc_count = await _evaluate_escalations(client, biz_lite)
+                    if esc_count:
+                        print(f"[Chief] surfaced {esc_count} escalation(s)", flush=True)
+            except Exception as e:  # pragma: no cover
+                print(f"[Chief] autopilot/escalation sweep error: {e}", flush=True)
 
             # Gather global context + view-specific detail in parallel
             ctx_task = _gather_context(client, req.business_id)
