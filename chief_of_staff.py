@@ -571,111 +571,136 @@ CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
 ACTION_OPEN = "[ACTION:"
 
 
-def _extract_actions_and_clean(raw_text: str) -> (List[Dict[str, Any]], str):
-    """Extract [ACTION:{...}] tags using bracket-depth counting, not regex.
-    Tolerates JSON bodies with escaped newlines, escaped quotes, and nested
-    objects. Returns (actions, cleaned_text). Logs JSON parse failures so
-    we can spot malformed payloads in Railway logs.
-    """
+def _sanitize_action_json(raw: str) -> str:
+    """Fix common JSON malformations that LLMs produce.
+
+    Real-world example we've seen the model emit:
+        {"type":"draft_and_send","body":"...gmail.com";}
+    The trailing `;` before `}` makes it invalid JSON. Same shape shows
+    up with stray trailing commas. Strip those before json.loads."""
+    import re
+    s = raw.strip()
+    s = re.sub(r';(\s*[}\]])', r'\1', s)   # ; before } or ]
+    s = re.sub(r',(\s*[}\]])', r'\1', s)   # trailing , before } or ]
+    return s
+
+
+def _strip_control_chars(s: str) -> str:
+    """Remove ASCII control bytes (except \\t, \\n, \\r) that occasionally
+    sneak into model output and trip json.loads. Used as a last-ditch
+    fallback after the structural sanitizer didn't help."""
+    return "".join(ch for ch in s if ch in "\t\n\r" or ord(ch) >= 0x20)
+
+
+def _try_parse_action_json(raw: str) -> Optional[Dict[str, Any]]:
+    """Parse the JSON body of an [ACTION:{...}] tag, applying tolerant
+    recovery passes when the model emits something almost-valid.
+    Returns the parsed dict on success, None on irrecoverable failure.
+
+    `strict=False` lets json.loads keep going when a string contains
+    raw \\n / \\t bytes — another shape we see in model output."""
+    # Pass 1 — straight parse with relaxed strictness
+    try:
+        return json.loads(raw, strict=False)
+    except json.JSONDecodeError:
+        pass
+    # Pass 2 — strip stray separators ( ;}  ,}  ,] )
+    cleaned = _sanitize_action_json(raw)
+    try:
+        return json.loads(cleaned, strict=False)
+    except json.JSONDecodeError:
+        pass
+    # Pass 3 — strip control chars and retry on the sanitized version
+    final = _strip_control_chars(cleaned)
+    try:
+        return json.loads(final, strict=False)
+    except json.JSONDecodeError as e:
+        preview = raw[:240].replace("\n", "\\n")
+        print(f"[Chief] action JSON parse failed after sanitize+strip: {e}\n  raw={preview}", flush=True)
+        return None
+
+
+def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
+    """Scan the AI's response for [ACTION:{...}] tags. Returns (actions, cleaned_text)."""
     actions: List[Dict[str, Any]] = []
     out_parts: List[str] = []
     i = 0
-    n = len(raw_text)
+    n = len(text)
 
     while i < n:
-        tag_start = raw_text.find(ACTION_OPEN, i)
-        if tag_start == -1:
-            out_parts.append(raw_text[i:])
+        start = text.find(ACTION_OPEN, i)
+        if start < 0:
+            out_parts.append(text[i:])
             break
+        out_parts.append(text[i:start])
 
-        out_parts.append(raw_text[i:tag_start])
-
-        json_start = tag_start + len(ACTION_OPEN)
-        if json_start >= n or raw_text[json_start] != "{":
-            # Not a JSON object — emit the literal "[ACTION:" and advance.
-            out_parts.append(raw_text[tag_start:json_start])
-            i = json_start
+        # Find matching closing bracket by tracking brace depth within the JSON
+        json_start = start + len(ACTION_OPEN)
+        # The JSON block should start with '{'
+        if json_start >= n or text[json_start] != "{":
+            # Not a well-formed action — emit literal and advance
+            out_parts.append(text[start:json_start + 1])
+            i = json_start + 1
             continue
 
-        # Walk the JSON, tracking brace depth and string state. A backslash
-        # escapes the next character regardless of where we are, so braces
-        # and quotes inside escape sequences don't confuse the matcher.
         depth = 0
-        in_string = False
-        escape_next = False
         j = json_start
-        end_pos: Optional[int] = None
-
+        in_string = False
+        escape = False
         while j < n:
-            ch = raw_text[j]
-
-            if escape_next:
-                escape_next = False
-                j += 1
-                continue
-
-            if ch == "\\":
-                escape_next = True
-                j += 1
-                continue
-
-            if ch == '"':
-                in_string = not in_string
-            elif not in_string:
-                if ch == "{":
+            ch = text[j]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+            else:
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
                     depth += 1
                 elif ch == "}":
                     depth -= 1
                     if depth == 0:
-                        end_pos = j + 1
                         break
-
             j += 1
 
-        if end_pos is None:
-            # Never found the matching closing brace — keep the rest as text.
-            out_parts.append(raw_text[tag_start:])
-            i = n
+        if depth != 0 or j >= n:
+            # Unbalanced — keep literal and move on
+            out_parts.append(text[start:json_start + 1])
+            i = json_start + 1
             continue
 
-        json_str = raw_text[json_start:end_pos]
-
-        # Swallow the optional closing ']' that follows the JSON object.
-        if end_pos < n and raw_text[end_pos] == "]":
-            end_pos += 1
-
-        try:
-            parsed = json.loads(json_str)
+        json_str = text[json_start:j + 1]
+        # After the closing brace we expect a ']'
+        k = j + 1
+        if k < n and text[k] == "]":
+            parsed = _try_parse_action_json(json_str)
             if isinstance(parsed, dict) and parsed.get("type"):
                 actions.append(parsed)
-            else:
-                # Valid JSON but not an action shape — keep the literal so
-                # the practitioner can see what the model emitted.
-                out_parts.append(raw_text[tag_start:end_pos])
-        except json.JSONDecodeError as e:
-            print(f"[Chief] Failed to parse action JSON: {e}")
-            print(f"[Chief] Raw JSON: {json_str[:200]}")
-            out_parts.append(raw_text[tag_start:end_pos])
+                # Swallow the entire [ACTION:{...}] and any trailing space
+                after = k + 1
+                while after < n and text[after] in (" ", "\n", "\r", "\t"):
+                    after += 1
+                i = after
+                continue
+            # If the structural shape was [ACTION:{...}] but the JSON was
+            # too broken to recover, drop the tag entirely so we don't
+            # leak the malformed marker into the user-facing text.
+            if parsed is None:
+                after = k + 1
+                while after < n and text[after] in (" ", "\n", "\r", "\t"):
+                    after += 1
+                i = after
+                continue
 
-        # Swallow trailing whitespace after the tag.
-        while end_pos < n and raw_text[end_pos] in (" ", "\n", "\r", "\t"):
-            end_pos += 1
-        i = end_pos
+        # Parse failed structurally — emit literal so users see something
+        out_parts.append(text[start:k + 1 if k < n else n])
+        i = k + 1 if k < n else n
 
     cleaned = "".join(out_parts).strip()
-
-    # Detect the "described an action without emitting a tag" failure mode.
-    # Helps us catch it in Railway logs even when prompt reinforcement fails.
-    if not actions and cleaned:
-        action_phrases = (
-            "added to your", "created the", "drafted an email", "approved the",
-            "i've added", "i've created", "i've drafted", "in your system as a",
-            "sent the", "queued", "invoice created",
-        )
-        lower = cleaned.lower()
-        if any(phrase in lower for phrase in action_phrases):
-            print(f"[CHIEF WARNING] AI described actions but emitted no tags. Response: {cleaned[:200]}")
-
     return actions[:MAX_ACTIONS_PER_TURN], cleaned
 
 
@@ -1152,13 +1177,11 @@ async def handle_create_contact(client, biz, action) -> Dict:
         return _fail("create_contact", "insert failed")
 
     created = inserted[0] if isinstance(inserted, list) else inserted
-    new_contact_id = created.get("id")
     return {
         "type": "create_contact",
         "result": f"added as {status}",
         "label": name,
-        "contact_id": new_contact_id,
-        "nav": _nav("operate", "contacts", new_contact_id),
+        "nav": _nav("operate", "contacts", created.get("id")),
     }
 
 
@@ -3886,26 +3909,6 @@ def _resolve_action_references(action: Dict[str, Any], prior_results: List[Dict[
             if prev.get("type") == "create_invoice" and prev.get("invoice_id"):
                 resolved["invoice_id"] = prev["invoice_id"]
                 print(f"[Chief] auto-chained {atype}.invoice_id from create_invoice -> {prev['invoice_id']}", flush=True)
-                break
-
-    # Phase 3: auto-backfill contact_id when a contact-keyed action follows
-    # create_contact in the same turn. The model often emits create_contact
-    # then draft_and_send/draft_email/etc. without knowing the new UUID.
-    # We accept contact_id at the top level of the prior result OR under
-    # nav.contactId (older handlers only stored it there).
-    CONTACT_KEYED = {
-        "draft_and_send", "draft_email", "draft_nurture",
-        "create_session", "update_contact_status", "update_contact_health",
-        "contact_deep_dive",
-    }
-    if atype in CONTACT_KEYED and not resolved.get("contact_id"):
-        for prev in reversed(prior_results):
-            if prev.get("type") != "create_contact":
-                continue
-            prior_contact_id = prev.get("contact_id") or (prev.get("nav") or {}).get("contactId")
-            if prior_contact_id:
-                resolved["contact_id"] = prior_contact_id
-                print(f"[Chief] auto-chained {atype}.contact_id from create_contact -> {prior_contact_id}", flush=True)
                 break
 
     return resolved
