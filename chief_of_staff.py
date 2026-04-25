@@ -35,7 +35,7 @@ import logging
 import os
 import re
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -2445,10 +2445,24 @@ async def handle_create_invoice(client, biz, action) -> Dict:
     if not due_date:
         due_date = (datetime.now(timezone.utc).date() + timedelta(days=14)).isoformat()
 
+    # Recurrence — when is_recurring=true the row becomes a template.
+    # The next instance is generated lazily by the server (on context load)
+    # or the client (on InvoicesPanel mount).
+    is_recurring = bool(action.get("is_recurring"))
+    rec_freq = action.get("recurrence_frequency")
+    if rec_freq and rec_freq not in ("weekly", "biweekly", "monthly", "quarterly", "annually"):
+        rec_freq = None
+    rec_start = action.get("recurrence_start") or due_date
+    rec_end_type = action.get("recurrence_end_type") or "never"
+    if rec_end_type not in ("never", "after_count", "on_date"):
+        rec_end_type = "never"
+    rec_end_value = action.get("recurrence_end_value")
+    rec_auto_send = bool(action.get("auto_send") or action.get("recurrence_auto_send"))
+
     # Create the invoice row first with whatever manual link exists.
     # Auto-generation runs AFTER insert so the PATCH carries the new URL
     # onto the row — this also keeps a single source of truth for the URL.
-    inserted = await _sb(client, "POST", "/invoices", {
+    payload = {
         "business_id": biz["id"],
         "contact_id": contact["id"],
         "invoice_number": invoice_number,
@@ -2463,7 +2477,19 @@ async def handle_create_invoice(client, biz, action) -> Dict:
         "due_date": due_date,
         "notes": action.get("notes") or None,
         "stripe_payment_url": manual_stripe_link,
-    })
+        "is_recurring": is_recurring and bool(rec_freq),
+    }
+    if is_recurring and rec_freq:
+        payload.update({
+            "recurrence_frequency": rec_freq,
+            "recurrence_start": rec_start,
+            "recurrence_end_type": rec_end_type,
+            "recurrence_end_value": rec_end_value,
+            "recurrence_auto_send": rec_auto_send,
+            "recurrence_paused": False,
+            "recurrence_index": 0,
+        })
+    inserted = await _sb(client, "POST", "/invoices", payload)
     if not inserted:
         return _fail("create_invoice", "insert failed")
     row = inserted[0] if isinstance(inserted, list) else inserted
@@ -2499,18 +2525,302 @@ async def handle_create_invoice(client, biz, action) -> Dict:
             print(f"[Chief] Stripe auto-generate unexpected error: {e}", flush=True)
             logger.warning(f"stripe auto-link unexpected error: {e}")
 
+    label_suffix = ""
+    if payload.get("is_recurring"):
+        freq_label = {
+            "weekly": "weekly", "biweekly": "every 2 weeks", "monthly": "monthly",
+            "quarterly": "quarterly", "annually": "annually",
+        }.get(rec_freq or "", rec_freq or "")
+        label_suffix = f" · 🔄 recurring {freq_label}"
+        if rec_auto_send:
+            label_suffix += " (auto-send)"
+    elif stripe_url:
+        label_suffix = " · pay link ready"
+
     return {
         "type": "create_invoice",
-        "result": "drafted",
-        "label": f"💰 Invoice {invoice_number} · {contact.get('name')} · ${total:,.2f}"
-                 + (" · pay link ready" if stripe_url else ""),
+        "result": "drafted_recurring" if payload.get("is_recurring") else "drafted",
+        "label": f"💰 Invoice {invoice_number} · {contact.get('name')} · ${total:,.2f}{label_suffix}",
         "nav": {"tab": "operate", "sub": "invoices"},
         "invoice_id": invoice_id,
         "invoice_number": invoice_number,
         "total": total,
+        "is_recurring": payload.get("is_recurring", False),
         "stripe_payment_url": stripe_url,
         "stripe_auto_generated": bool(is_owner and stripe_url and stripe_url != manual_stripe_link),
     }
+
+
+# ─── Cancel / pause recurring invoice ─────────────────────────────────
+
+async def handle_batch_email(client, biz, action) -> Dict:
+    """Send the same email body to a list of contacts, replacing
+    {contact_name} and {business_name} per recipient. Logs a
+    batch_email_sent event for each successful delivery.
+
+    action shape:
+        contact_ids:  ["uuid", ...]   (required, max 50)
+        subject:      str             (required)
+        body:         str             (required, supports {contact_name}/{business_name})
+        personalize:  bool            (default true — when false, strip {contact_name})
+    """
+    contact_ids = action.get("contact_ids") or []
+    subject_tpl = (action.get("subject") or "").strip()
+    body_tpl = (action.get("body") or "").strip()
+    personalize = bool(action.get("personalize", True))
+
+    if not isinstance(contact_ids, list) or not contact_ids:
+        return _fail("batch_email", "contact_ids (list) required")
+    if len(contact_ids) > 50:
+        contact_ids = contact_ids[:50]
+    if not subject_tpl or not body_tpl:
+        return _fail("batch_email", "subject and body required")
+
+    # Bulk-fetch the contacts
+    id_filter = ",".join([f'"{cid}"' for cid in contact_ids])
+    try:
+        contacts = await _sb(
+            client, "GET",
+            f"/contacts?id=in.({id_filter})&business_id=eq.{biz['id']}&select=id,name,email"
+        ) or []
+    except Exception as e:
+        return _fail("batch_email", f"contact lookup failed: {e}")
+
+    settings = biz.get("settings") or {}
+    et = (settings.get("email_templates") or {}) if isinstance(settings.get("email_templates"), dict) else {}
+    sig = et.get("signature") or {}
+    from_name = (sig.get("name") or settings.get("practitioner_name") or biz.get("name") or "The Solutionist System").strip()
+    reply_to = (sig.get("email") or settings.get("contact_email") or "").strip() or None
+    biz_name = biz.get("name") or ""
+
+    sent = 0
+    skipped: List[str] = []
+    failures: List[str] = []
+    sample_subject = subject_tpl
+
+    for c in contacts:
+        cid = c.get("id")
+        email = (c.get("email") or "").strip()
+        name = c.get("name") or "there"
+        if not email:
+            skipped.append(cid)
+            continue
+        subj = subject_tpl.replace("{contact_name}", name).replace("{business_name}", biz_name)
+        body_personal = body_tpl.replace("{business_name}", biz_name)
+        if personalize:
+            body_personal = body_personal.replace("{contact_name}", name)
+        else:
+            body_personal = body_personal.replace("{contact_name}", "").strip()
+        # Convert plain newlines to <br> so the practitioner's draft renders
+        body_html = body_personal.replace("\r\n", "\n").replace("\n", "<br/>")
+        try:
+            from email_sender import send_via_resend
+            await send_via_resend(
+                to_email=email,
+                to_name=name,
+                from_email=_format_from_email(),
+                from_name=from_name,
+                subject=subj,
+                body=body_html,
+                reply_to=reply_to,
+            )
+            sent += 1
+            sample_subject = subj
+            await _sb(client, "POST", "/events", {
+                "business_id": biz["id"],
+                "contact_id": cid,
+                "event_type": "batch_email_sent",
+                "data": {
+                    "subject": subj,
+                    "to_email": email,
+                    "batch_size": len(contacts),
+                },
+                "source": "chief_batch_email",
+            })
+        except Exception as e:
+            failures.append(f"{name}:{str(e)[:60]}")
+
+    parts = [f"📧 Batch email: {sent}/{len(contacts)} delivered"]
+    if skipped:
+        parts.append(f"{len(skipped)} skipped (no email)")
+    if failures:
+        parts.append(f"{len(failures)} failed")
+
+    return {
+        "type": "batch_email",
+        "result": f"sent {sent} of {len(contacts)}",
+        "label": " · ".join(parts),
+        "subject": sample_subject,
+        "sent_count": sent,
+        "skipped_count": len(skipped),
+        "failure_count": len(failures),
+    }
+
+
+async def handle_cancel_recurring_invoice(client, biz, action) -> Dict:
+    """Stop a recurring invoice — by default pauses (still visible in
+    history); pass mode='cancel' to mark the template cancelled."""
+    invoice_id = action.get("invoice_id")
+    if not invoice_id:
+        return _fail("cancel_recurring_invoice", "invoice_id required")
+    mode = action.get("mode") or "pause"
+    patch: Dict[str, Any] = {}
+    if mode == "cancel":
+        patch = {"status": "cancelled", "recurrence_paused": True}
+    else:
+        patch = {"recurrence_paused": True}
+    try:
+        await _sb(client, "PATCH", f"/invoices?id=eq.{invoice_id}&business_id=eq.{biz['id']}", patch)
+    except Exception as e:
+        return _fail("cancel_recurring_invoice", f"patch failed: {e}")
+    return {
+        "type": "cancel_recurring_invoice",
+        "result": "cancelled" if mode == "cancel" else "paused",
+        "label": f"🔄 Recurring invoice {'cancelled' if mode == 'cancel' else 'paused'}",
+    }
+
+
+# ─── Server-side recurrence generator ─────────────────────────────────
+
+def _add_freq_step(d: date, freq: str) -> date:
+    if freq == "weekly":
+        return d + timedelta(days=7)
+    if freq == "biweekly":
+        return d + timedelta(days=14)
+    if freq == "monthly":
+        m = d.month + 1
+        y = d.year + (m - 1) // 12
+        m = ((m - 1) % 12) + 1
+        try:
+            return date(y, m, d.day)
+        except ValueError:
+            # day overflow — clamp to last day of new month
+            from calendar import monthrange
+            return date(y, m, monthrange(y, m)[1])
+    if freq == "quarterly":
+        m = d.month + 3
+        y = d.year + (m - 1) // 12
+        m = ((m - 1) % 12) + 1
+        try:
+            return date(y, m, d.day)
+        except ValueError:
+            from calendar import monthrange
+            return date(y, m, monthrange(y, m)[1])
+    if freq == "annually":
+        try:
+            return date(d.year + 1, d.month, d.day)
+        except ValueError:
+            return date(d.year + 1, d.month, 28)
+    return d
+
+
+async def _generate_missing_recurring_instances(client, biz_id: str) -> int:
+    """Server-side counterpart to the client cron. Idempotent — checks
+    for an existing child by parent_id+due_date before inserting."""
+    try:
+        templates = await _sb(
+            client, "GET",
+            f"/invoices?business_id=eq.{biz_id}&is_recurring=eq.true"
+            f"&recurrence_paused=eq.false&status=neq.cancelled&select=*&limit=200",
+        ) or []
+    except Exception as e:
+        print(f"[Chief] recurrence load failed: {e}", flush=True)
+        return 0
+
+    today = datetime.now(timezone.utc).date()
+    created = 0
+    for tpl in templates:
+        freq = tpl.get("recurrence_frequency")
+        start = tpl.get("recurrence_start")
+        if not freq or not start:
+            continue
+        try:
+            start_d = datetime.fromisoformat(start).date() if "T" in start else date.fromisoformat(start)
+        except Exception:
+            continue
+
+        # how many child instances already exist?
+        try:
+            children = await _sb(
+                client, "GET",
+                f"/invoices?recurrence_parent_id=eq.{tpl['id']}&select=id,due_date,recurrence_index",
+            ) or []
+        except Exception:
+            children = []
+        child_count = len(children) if isinstance(children, list) else 0
+
+        # cap by after_count
+        end_type = tpl.get("recurrence_end_type") or "never"
+        end_value = tpl.get("recurrence_end_value")
+        if end_type == "after_count":
+            try:
+                cap = int(end_value or 0)
+                if cap > 0 and child_count >= cap:
+                    continue
+            except ValueError:
+                pass
+
+        # next due
+        next_due = start_d
+        for _ in range(child_count):
+            next_due = _add_freq_step(next_due, freq)
+
+        if next_due > today:
+            continue
+
+        if end_type == "on_date" and end_value:
+            try:
+                end_d = date.fromisoformat(end_value)
+                if next_due > end_d:
+                    continue
+            except Exception:
+                pass
+
+        # avoid duplicate
+        due_iso = next_due.isoformat()
+        if any((c.get("due_date") == due_iso) for c in (children or [])):
+            continue
+
+        # generate
+        try:
+            child_number = await _next_invoice_number(client, biz_id)
+            await _sb(client, "POST", "/invoices", {
+                "business_id": biz_id,
+                "contact_id": tpl.get("contact_id"),
+                "invoice_number": child_number,
+                "status": "draft",
+                "items": tpl.get("items") or [],
+                "subtotal": tpl.get("subtotal"),
+                "tax_rate": tpl.get("tax_rate"),
+                "tax_amount": tpl.get("tax_amount"),
+                "total": tpl.get("total"),
+                "currency": tpl.get("currency") or "USD",
+                "category": tpl.get("category") or "Other",
+                "due_date": due_iso,
+                "notes": tpl.get("notes"),
+                "stripe_payment_url": tpl.get("stripe_payment_url"),
+                "is_recurring": False,
+                "recurrence_parent_id": tpl["id"],
+                "recurrence_index": child_count + 1,
+            })
+            created += 1
+            await _sb(client, "POST", "/events", {
+                "business_id": biz_id,
+                "contact_id": tpl.get("contact_id"),
+                "event_type": "recurring_invoice_generated",
+                "data": {
+                    "template_id": tpl["id"],
+                    "template_number": tpl.get("invoice_number"),
+                    "child_number": child_number,
+                    "due_date": due_iso,
+                    "occurrence": child_count + 1,
+                    "auto_send": bool(tpl.get("recurrence_auto_send")),
+                },
+                "source": "chief_recurrence_cron",
+            })
+        except Exception as e:
+            print(f"[Chief] recurrence generation failed for {tpl.get('invoice_number')}: {e}", flush=True)
+    return created
 
 
 # ─── Multi-provider payment config ──────────────────────────────────
@@ -3019,6 +3329,8 @@ ACTION_HANDLERS = {
     "create_invoice":             handle_create_invoice,
     "send_invoice":               handle_send_invoice,
     "mark_invoice_paid":          handle_mark_invoice_paid,
+    "cancel_recurring_invoice":   handle_cancel_recurring_invoice,
+    "batch_email":                handle_batch_email,
 }
 
 
@@ -3463,6 +3775,12 @@ ACTIONS — INVOICES:
   [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[{{"description":"Coaching Session (60 min)","quantity":4,"unit_price":150}}],"category":"Coaching","due_date":"2026-04-30","notes":"Thanks!"}}]  — status='draft'; total auto-computed; for the platform owner, a Stripe payment link is generated automatically. category is optional but recommended — pick from the practitioner's configured list (default: Coaching, Consulting, Speaking, Workshop, Product, Other). Infer from context if not specified.
   [ACTION:{{"type":"send_invoice","invoice_id":"latest"}}]  — send the invoice you just created. "latest" resolves to the most recent invoice on the business. Or use "@create_invoice.invoice_id" to reference the prior create_invoice result. You can also omit invoice_id entirely — when the preceding action is create_invoice, it auto-chains.
   [ACTION:{{"type":"mark_invoice_paid","invoice_id":"latest","payment_method":"stripe|check|cash"}}]
+  [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[...],"is_recurring":true,"recurrence_frequency":"monthly","recurrence_start":"2026-05-01","recurrence_end_type":"never","auto_send":true}}]  — recurring invoice template; freq is weekly/biweekly/monthly/quarterly/annually. recurrence_end_type is never/after_count/on_date and recurrence_end_value carries the count or end-date. Server auto-generates each occurrence on its due date.
+  [ACTION:{{"type":"cancel_recurring_invoice","invoice_id":"<template-uuid>","mode":"pause|cancel"}}]
+
+ACTIONS — BATCH EMAIL:
+  [ACTION:{{"type":"batch_email","contact_ids":["uuid1","uuid2","uuid3"],"subject":"A note from {{business_name}}","body":"Hi {{contact_name}}, …"}}]
+  Use {{contact_name}} and {{business_name}} placeholders — replaced per recipient. Cap is 50 contacts per call. Skipped recipients (no email on file) are reported in the result label.
   NOTE: "create_invoice + send_invoice in one turn" works — emit both in the same response. The server automatically threads the new invoice_id into send_invoice.
 
 ACTIONS — NAVIGATION + MEMORY:
@@ -3561,6 +3879,12 @@ The Calendar sub-tab in OPERATE shows sessions, tasks with due dates, and invoic
 
 REVENUE & TAX:
 The Revenue dashboard lives at OPERATE → Invoices → Revenue toggle. It shows invoiced/collected/outstanding totals, by-category and by-client breakdowns, tax set-aside (defaults to 25%), and CSV/PDF export. Tax rate and category list are in businesses.settings.financial. When the practitioner asks "how much did I make this month/quarter/year," "what's my tax set-aside," or "send my revenue report," navigate to that view (or pre-fill an email when they want to send to their accountant). Categories: pick from their configured list when creating invoices via the Chief — infer from line items if they don't say.
+
+BATCH EMAIL:
+"Email all my active contacts about the upcoming retreat" / "Send a check-in to all my leads" / "Blast a message to everyone who hasn't been contacted in 30 days" → emit a batch_email action with the matching contact_ids and a body that uses {{contact_name}} so each recipient gets a personalized greeting. Pull contact_ids from CONTACT LOOKUP filtered by the criterion the practitioner gave you. If the criterion implies a smart-list match (active / lead / VIP / not-contacted), apply it yourself before emitting the action. For "send a nurture check-in to these contacts" prefer running the nurture agent on each (creates drafts in the queue) rather than batch_email — batch_email is for one-shot blasts where the practitioner has the wording. Cap your audience at 50; if more, ask which segment to start with.
+
+RECURRING INVOICES:
+"Bill Marcus $500 every month starting May 1" / "Set up quarterly invoicing for Sandra at $1,200" → emit create_invoice with is_recurring=true, recurrence_frequency, recurrence_start (YYYY-MM-DD), and auto_send (default true). The first row IS the template — instances spawn on each due date. "Stop Marcus's recurring invoice" / "pause the monthly billing for Sandra" → cancel_recurring_invoice with the TEMPLATE invoice_id. Templates show 🔄 in the UI; generated children show 🔁 and link back via recurrence_parent_id. Don't suggest setting up recurring billing unless the practitioner actually asks for repeating amounts.
 
 PAYMENT PROVIDERS:
 Practitioners can connect Stripe, Square, and/or PayPal in BUILD → Integrations → Payment Providers. Each enabled provider with a saved link adds a button to invoice emails — clients pick how to pay. The platform owner ({PLATFORM_OWNER_ID}) gets auto-generated Stripe payment links per invoice; everyone else uses the manual link they pasted. Bare paypal.me URLs get the invoice total appended automatically.
@@ -3860,6 +4184,16 @@ async def chief_chat(req: ChatRequest):
             raise HTTPException(400, "message is required")
 
         async with httpx.AsyncClient() as client:
+            # Recurrence "cron" — generate any due invoice instances
+            # before we load context so they show up this turn. Cheap
+            # in steady-state (zero rows the vast majority of the time).
+            try:
+                created = await _generate_missing_recurring_instances(client, req.business_id)
+                if created:
+                    print(f"[Chief] auto-generated {created} recurring invoice(s)", flush=True)
+            except Exception as e:  # pragma: no cover
+                print(f"[Chief] recurrence cron error: {e}", flush=True)
+
             # Gather global context + view-specific detail in parallel
             ctx_task = _gather_context(client, req.business_id)
             view_task = _fetch_view_detail(client, req.business_id, req.current_context)
