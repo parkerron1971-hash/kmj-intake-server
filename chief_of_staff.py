@@ -571,81 +571,111 @@ CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
 ACTION_OPEN = "[ACTION:"
 
 
-def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
-    """Scan the AI's response for [ACTION:{...}] tags. Returns (actions, cleaned_text)."""
+def _extract_actions_and_clean(raw_text: str) -> (List[Dict[str, Any]], str):
+    """Extract [ACTION:{...}] tags using bracket-depth counting, not regex.
+    Tolerates JSON bodies with escaped newlines, escaped quotes, and nested
+    objects. Returns (actions, cleaned_text). Logs JSON parse failures so
+    we can spot malformed payloads in Railway logs.
+    """
     actions: List[Dict[str, Any]] = []
     out_parts: List[str] = []
     i = 0
-    n = len(text)
+    n = len(raw_text)
 
     while i < n:
-        start = text.find(ACTION_OPEN, i)
-        if start < 0:
-            out_parts.append(text[i:])
+        tag_start = raw_text.find(ACTION_OPEN, i)
+        if tag_start == -1:
+            out_parts.append(raw_text[i:])
             break
-        out_parts.append(text[i:start])
 
-        # Find matching closing bracket by tracking brace depth within the JSON
-        json_start = start + len(ACTION_OPEN)
-        # The JSON block should start with '{'
-        if json_start >= n or text[json_start] != "{":
-            # Not a well-formed action — emit literal and advance
-            out_parts.append(text[start:json_start + 1])
-            i = json_start + 1
+        out_parts.append(raw_text[i:tag_start])
+
+        json_start = tag_start + len(ACTION_OPEN)
+        if json_start >= n or raw_text[json_start] != "{":
+            # Not a JSON object — emit the literal "[ACTION:" and advance.
+            out_parts.append(raw_text[tag_start:json_start])
+            i = json_start
             continue
 
+        # Walk the JSON, tracking brace depth and string state. A backslash
+        # escapes the next character regardless of where we are, so braces
+        # and quotes inside escape sequences don't confuse the matcher.
         depth = 0
-        j = json_start
         in_string = False
-        escape = False
+        escape_next = False
+        j = json_start
+        end_pos: Optional[int] = None
+
         while j < n:
-            ch = text[j]
-            if in_string:
-                if escape:
-                    escape = False
-                elif ch == "\\":
-                    escape = True
-                elif ch == '"':
-                    in_string = False
-            else:
-                if ch == '"':
-                    in_string = True
-                elif ch == "{":
+            ch = raw_text[j]
+
+            if escape_next:
+                escape_next = False
+                j += 1
+                continue
+
+            if ch == "\\":
+                escape_next = True
+                j += 1
+                continue
+
+            if ch == '"':
+                in_string = not in_string
+            elif not in_string:
+                if ch == "{":
                     depth += 1
                 elif ch == "}":
                     depth -= 1
                     if depth == 0:
+                        end_pos = j + 1
                         break
+
             j += 1
 
-        if depth != 0 or j >= n:
-            # Unbalanced — keep literal and move on
-            out_parts.append(text[start:json_start + 1])
-            i = json_start + 1
+        if end_pos is None:
+            # Never found the matching closing brace — keep the rest as text.
+            out_parts.append(raw_text[tag_start:])
+            i = n
             continue
 
-        json_str = text[json_start:j + 1]
-        # After the closing brace we expect a ']'
-        k = j + 1
-        if k < n and text[k] == "]":
-            try:
-                parsed = json.loads(json_str)
-                if isinstance(parsed, dict) and parsed.get("type"):
-                    actions.append(parsed)
-                # Swallow the entire [ACTION:{...}] and any trailing space
-                after = k + 1
-                while after < n and text[after] in (" ", "\n", "\r", "\t"):
-                    after += 1
-                i = after
-                continue
-            except json.JSONDecodeError:
-                pass
+        json_str = raw_text[json_start:end_pos]
 
-        # Parse failed — emit literal
-        out_parts.append(text[start:k + 1 if k < n else n])
-        i = k + 1 if k < n else n
+        # Swallow the optional closing ']' that follows the JSON object.
+        if end_pos < n and raw_text[end_pos] == "]":
+            end_pos += 1
+
+        try:
+            parsed = json.loads(json_str)
+            if isinstance(parsed, dict) and parsed.get("type"):
+                actions.append(parsed)
+            else:
+                # Valid JSON but not an action shape — keep the literal so
+                # the practitioner can see what the model emitted.
+                out_parts.append(raw_text[tag_start:end_pos])
+        except json.JSONDecodeError as e:
+            print(f"[Chief] Failed to parse action JSON: {e}")
+            print(f"[Chief] Raw JSON: {json_str[:200]}")
+            out_parts.append(raw_text[tag_start:end_pos])
+
+        # Swallow trailing whitespace after the tag.
+        while end_pos < n and raw_text[end_pos] in (" ", "\n", "\r", "\t"):
+            end_pos += 1
+        i = end_pos
 
     cleaned = "".join(out_parts).strip()
+
+    # Detect the "described an action without emitting a tag" failure mode.
+    # Helps us catch it in Railway logs even when prompt reinforcement fails.
+    if not actions and cleaned:
+        action_phrases = (
+            "added to your", "created the", "drafted an email", "approved the",
+            "i've added", "i've created", "i've drafted", "in your system as a",
+            "sent the", "queued", "invoice created",
+        )
+        lower = cleaned.lower()
+        if any(phrase in lower for phrase in action_phrases):
+            print(f"[CHIEF WARNING] AI described actions but emitted no tags. Response: {cleaned[:200]}")
+
     return actions[:MAX_ACTIONS_PER_TURN], cleaned
 
 
