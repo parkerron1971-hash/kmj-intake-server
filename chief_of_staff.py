@@ -2415,7 +2415,30 @@ async def handle_create_invoice(client, biz, action) -> Dict:
 
     settings = biz.get("settings") or {}
     manual_stripe_link = (settings.get("payments") or {}).get("stripe_link") or None
-    currency = (action.get("currency") or "USD")
+    fin = (settings.get("financial") or {}) if isinstance(settings.get("financial"), dict) else {}
+    fin_currency = fin.get("currency")
+    fin_categories = fin.get("categories") if isinstance(fin.get("categories"), list) else None
+    currency = (action.get("currency") or fin_currency or "USD")
+
+    # Category — practitioner-supplied first, otherwise infer from line
+    # items, otherwise fall back to "Other" (or first configured category).
+    valid_cats = fin_categories or ["Coaching", "Consulting", "Speaking", "Workshop", "Product", "Other"]
+    category = (action.get("category") or "").strip()
+    if not category:
+        # crude keyword inference from descriptions
+        joined = " ".join((it.get("description") or "").lower() for it in norm_items)
+        if "coach" in joined:
+            category = "Coaching"
+        elif "consult" in joined:
+            category = "Consulting"
+        elif "speak" in joined or "keynote" in joined:
+            category = "Speaking"
+        elif "workshop" in joined or "training" in joined or "cohort" in joined:
+            category = "Workshop"
+        elif any(k in joined for k in ("product", "course", "book", "template", "kit")):
+            category = "Product"
+    if category not in valid_cats:
+        category = "Other" if "Other" in valid_cats else valid_cats[0]
 
     invoice_number = action.get("invoice_number") or await _next_invoice_number(client, biz["id"])
     due_date = action.get("due_date")
@@ -2436,6 +2459,7 @@ async def handle_create_invoice(client, biz, action) -> Dict:
         "tax_amount": tax_amount,
         "total": total,
         "currency": currency,
+        "category": category,
         "due_date": due_date,
         "notes": action.get("notes") or None,
         "stripe_payment_url": manual_stripe_link,
@@ -2510,6 +2534,45 @@ PROVIDER_ICONS = {
     "square": "◻️",
     "paypal": "🅿️",
 }
+
+# Inline brand-mark SVGs for the email payment buttons. Email clients
+# strip <svg> from many sources but Resend / Gmail / Outlook desktop
+# all render inline SVG fine. Sized to 18px white-fill so they sit on
+# the colored buttons. Kept in sync with src/core/lib/paymentProviders.ts.
+def _brand_icon_svg(provider: str, size: int = 18, fill: str = "#ffffff") -> str:
+    if provider == "stripe":
+        return (
+            f'<svg viewBox="0 0 24 24" width="{size}" height="{size}" fill="{fill}" '
+            f'xmlns="http://www.w3.org/2000/svg" aria-label="Stripe">'
+            f'<path d="M13.976 9.15c-2.172-.806-3.356-1.426-3.356-2.409 0-.831.683-1.305 1.901-1.305 '
+            f'2.227 0 4.515.858 6.09 1.631l.89-5.494C18.252.975 15.697 0 12.165 0 9.667 0 7.589.654 '
+            f'6.104 1.872 4.56 3.147 3.757 4.992 3.757 7.218c0 4.039 2.467 5.76 6.476 7.219 2.585.92 '
+            f'3.445 1.574 3.445 2.583 0 .98-.84 1.545-2.354 1.545-1.875 0-4.965-.921-6.99-2.109l-.9 '
+            f'5.555C5.175 22.99 8.385 24 11.714 24c2.641 0 4.843-.624 6.328-1.813 1.664-1.305 '
+            f'2.525-3.236 2.525-5.732 0-4.128-2.524-5.851-6.591-7.305z"/></svg>'
+        )
+    if provider == "square":
+        return (
+            f'<svg viewBox="0 0 24 24" width="{size}" height="{size}" fill="{fill}" '
+            f'xmlns="http://www.w3.org/2000/svg" aria-label="Square">'
+            f'<path d="M4.01 0C1.795 0 0 1.795 0 4.01v15.98C0 22.205 1.795 24 4.01 24h15.98C22.205 24 '
+            f'24 22.205 24 19.99V4.01C24 1.795 22.205 0 19.99 0H4.01zm2.751 5.394h10.478c.744 0 '
+            f'1.349.605 1.349 1.349v10.514c0 .744-.605 1.349-1.349 1.349H6.761c-.744 0-1.349-.605-1.349-1.349V6.743'
+            f'c0-.744.605-1.349 1.349-1.349zm1.493 2.76a.468.468 0 00-.468.468v6.756c0 .259.21.468.468.468h6.756'
+            f'a.468.468 0 00.468-.468V8.622a.468.468 0 00-.468-.468H8.254z"/></svg>'
+        )
+    # paypal — solid (white) on the colored button
+    return (
+        f'<svg viewBox="0 0 24 24" width="{size}" height="{size}" '
+        f'xmlns="http://www.w3.org/2000/svg" aria-label="PayPal">'
+        f'<path d="M7.076 21.337H2.47a.641.641 0 01-.633-.74L4.944.901C5.026.382 5.474 0 5.998 0h7.46c2.57 0 '
+        f'4.578.543 5.69 1.81 1.01 1.15 1.304 2.42 1.012 4.287-.023.143-.047.288-.077.437-.983 5.05-4.349 '
+        f'6.797-8.647 6.797h-2.19c-.524 0-.968.382-1.05.9l-1.12 7.106z" fill="{fill}"/>'
+        f'<path d="M23.048 7.667c-.028.179-.06.362-.096.55-1.237 6.351-5.469 8.545-10.874 8.545H9.326c-.661 0-1.218.48-1.321 '
+        f'1.132l-.942 5.976-.267 1.693a.696.696 0 00.687.804h4.821c.578 0 1.069-.42 1.159-.99l.048-.248.919-5.832.059-.32'
+        f'c.09-.572.582-.992 1.16-.992h.73c4.729 0 8.431-1.92 9.513-7.476.452-2.321.218-4.259-.978-5.622a4.667 4.667 0 '
+        f'00-1.336-1.06z" fill="{fill}" opacity="0.85"/></svg>'
+    )
 
 
 def _get_payment_providers(settings: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -2597,39 +2660,41 @@ def _build_payment_buttons(biz: Dict[str, Any], invoice: Dict[str, Any], brand_p
     btn_base = (
         "display:block;padding:14px 32px;color:#fff;text-decoration:none;"
         "border-radius:8px;font-size:16px;font-weight:bold;text-align:center;"
-        "margin-bottom:10px;"
+        "margin-bottom:10px;line-height:1;"
     )
+    icon_wrap = (
+        'display:inline-block;vertical-align:middle;margin-right:8px;'
+    )
+    label_wrap = 'display:inline-block;vertical-align:middle;'
 
     buttons: List[str] = []
+
+    def _btn(provider: str, url: str, label: str) -> str:
+        return (
+            f'<a href="{url}" style="{btn_base}background:{PROVIDER_BUTTON_COLORS[provider]};">'
+            f'<span style="{icon_wrap}">{_brand_icon_svg(provider)}</span>'
+            f'<span style="{label_wrap}">{label}</span></a>'
+        )
 
     # Stripe — auto-gen link wins over manual
     stripe = providers.get("stripe", {})
     stripe_url = invoice_stripe or (stripe.get("manual_link") if stripe.get("enabled") else "")
     if stripe_url:
         label = stripe.get("label") or PROVIDER_DEFAULT_LABELS["stripe"]
-        buttons.append(
-            f'<a href="{stripe_url}" style="{btn_base}background:{PROVIDER_BUTTON_COLORS["stripe"]};">'
-            f'{PROVIDER_ICONS["stripe"]} {label}</a>'
-        )
+        buttons.append(_btn("stripe", stripe_url, label))
 
     # Square
     square = providers.get("square", {})
     if square.get("enabled") and square.get("manual_link"):
         label = square.get("label") or PROVIDER_DEFAULT_LABELS["square"]
-        buttons.append(
-            f'<a href="{square["manual_link"]}" style="{btn_base}background:{PROVIDER_BUTTON_COLORS["square"]};">'
-            f'{PROVIDER_ICONS["square"]} {label}</a>'
-        )
+        buttons.append(_btn("square", square["manual_link"], label))
 
     # PayPal
     paypal = providers.get("paypal", {})
     if paypal.get("enabled") and paypal.get("manual_link"):
         label = paypal.get("label") or PROVIDER_DEFAULT_LABELS["paypal"]
         pp_url = _paypal_url_with_amount(paypal["manual_link"], total)
-        buttons.append(
-            f'<a href="{pp_url}" style="{btn_base}background:{PROVIDER_BUTTON_COLORS["paypal"]};">'
-            f'{PROVIDER_ICONS["paypal"]} {label}</a>'
-        )
+        buttons.append(_btn("paypal", pp_url, label))
 
     if not buttons:
         return (
@@ -3395,13 +3460,13 @@ ACTIONS — TASKS + NOTES + ACTIVITY:
   [ACTION:{{"type":"log_activity","contact_id":"<uuid>","activity_type":"call|text|meeting|email|other","notes":"What happened","occurred_at":"2026-04-23"}}]
 
 ACTIONS — INVOICES:
-  [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[{{"description":"Coaching Session (60 min)","quantity":4,"unit_price":150}}],"due_date":"2026-04-30","notes":"Thanks!"}}]  — status='draft'; total auto-computed; for the platform owner, a Stripe payment link is generated automatically
+  [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[{{"description":"Coaching Session (60 min)","quantity":4,"unit_price":150}}],"category":"Coaching","due_date":"2026-04-30","notes":"Thanks!"}}]  — status='draft'; total auto-computed; for the platform owner, a Stripe payment link is generated automatically. category is optional but recommended — pick from the practitioner's configured list (default: Coaching, Consulting, Speaking, Workshop, Product, Other). Infer from context if not specified.
   [ACTION:{{"type":"send_invoice","invoice_id":"latest"}}]  — send the invoice you just created. "latest" resolves to the most recent invoice on the business. Or use "@create_invoice.invoice_id" to reference the prior create_invoice result. You can also omit invoice_id entirely — when the preceding action is create_invoice, it auto-chains.
   [ACTION:{{"type":"mark_invoice_paid","invoice_id":"latest","payment_method":"stripe|check|cash"}}]
   NOTE: "create_invoice + send_invoice in one turn" works — emit both in the same response. The server automatically threads the new invoice_id into send_invoice.
 
 ACTIONS — NAVIGATION + MEMORY:
-  [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"dashboard|queue|contacts|projects|sessions|invoices|tasks|agents|briefing|health|insights","contact_id":"<uuid-optional>","page":"<page-id-optional>"}}]
+  [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"dashboard|queue|contacts|projects|calendar|invoices|tasks|documents|agents|briefing|health|insights","contact_id":"<uuid-optional>","page":"<page-id-optional>"}}]
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
   [ACTION:{{"type":"forget","memory_content":"snippet to deactivate"}}]
   [ACTION:{{"type":"generate_briefing"}}]
@@ -3487,6 +3552,15 @@ When they say "mark the X task as done" / "I finished X" / "check off X", emit c
 When they share information ABOUT a contact that should stick ("Marcus is interested in the leadership program"), emit create_note with contact_id + note.
 When they report a real-world interaction ("I just called Deacon Harris" / "I met with Sandra yesterday"), emit log_activity with the right activity_type and notes.
 For invoices: create_invoice with a list of {{description, quantity, unit_price}} line items. After creating, SHOW the total and ask "send now?" — only emit send_invoice after they confirm. "Has Sandra paid?" → look at the QUEUE / recent events, or ask; "mark Sandra paid" → mark_invoice_paid with the invoice_id. Always echo the invoice number and total in your response.
+
+DOCUMENTS:
+Practitioners can upload and manage documents in OPERATE → Documents. Files can be attached to a contact (stored under contacts/{{contact_id}}/) or kept as general business documents. When a practitioner says "upload a file" or "attach a document," navigate them to the Documents tab — or, for a specific contact, the Files tab on that contact's detail page. You CANNOT upload files yourself — guide the practitioner to the UI. document_uploaded events appear on the contact timeline and you can reference them ("I see you uploaded the signed agreement on April 5").
+
+CALENDAR:
+The Calendar sub-tab in OPERATE shows sessions, tasks with due dates, and invoice due dates in one timeline (month / week / day views). When the practitioner asks "what's on my schedule" or "what's coming up Friday," navigate to OPERATE → Calendar with [ACTION:{{"type":"navigate","tab":"operate","sub":"calendar"}}], or summarize from CONTEXT data without navigating if a quick text answer is enough.
+
+REVENUE & TAX:
+The Revenue dashboard lives at OPERATE → Invoices → Revenue toggle. It shows invoiced/collected/outstanding totals, by-category and by-client breakdowns, tax set-aside (defaults to 25%), and CSV/PDF export. Tax rate and category list are in businesses.settings.financial. When the practitioner asks "how much did I make this month/quarter/year," "what's my tax set-aside," or "send my revenue report," navigate to that view (or pre-fill an email when they want to send to their accountant). Categories: pick from their configured list when creating invoices via the Chief — infer from line items if they don't say.
 
 PAYMENT PROVIDERS:
 Practitioners can connect Stripe, Square, and/or PayPal in BUILD → Integrations → Payment Providers. Each enabled provider with a saved link adds a button to invoice emails — clients pick how to pay. The platform owner ({PLATFORM_OWNER_ID}) gets auto-generated Stripe payment links per invoice; everyone else uses the manual link they pasted. Bare paypal.me URLs get the invoice total appended automatically.
