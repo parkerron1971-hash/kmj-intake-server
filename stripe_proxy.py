@@ -139,3 +139,114 @@ async def create_payment_link(req: PaymentLinkRequest):
 @router.get("/stripe/status")
 async def stripe_status():
     return {"configured": bool(os.environ.get("STRIPE_SECRET_KEY"))}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# MULTI-PROVIDER OAUTH PLACEHOLDERS (Stripe Connect / Square / PayPal)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# These endpoints are placeholders for the upcoming "one-click Connect"
+# flow that will replace today's manual paste-a-payment-link experience.
+# They return a not_implemented payload so frontends can light up the
+# Connect button and the system can surface a friendly "coming soon"
+# message instead of a 404.
+#
+# When real OAuth is wired:
+#   /payments/connect/{provider}     — kicks off the OAuth dance and 302s
+#                                       the practitioner to the provider's
+#                                       authorization page.
+#   /payments/callback/{provider}    — receives the auth code, exchanges
+#                                       for an access token, persists onto
+#                                       businesses.settings.payment_providers.
+#   /payments/providers/{biz_id}     — returns the saved provider config
+#                                       for a business (post-migration).
+
+SUPPORTED_PROVIDERS = ("stripe", "square", "paypal")
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://brqjgbpzackdihgjsorf.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY", "")
+
+
+def _validate_provider(provider: str) -> str:
+    p = (provider or "").strip().lower()
+    if p not in SUPPORTED_PROVIDERS:
+        raise HTTPException(400, f"Unsupported provider '{provider}'. Try one of: {', '.join(SUPPORTED_PROVIDERS)}")
+    return p
+
+
+@router.get("/payments/connect/{provider}")
+async def payments_connect(provider: str, business_id: Optional[str] = None):
+    """Kick off OAuth for a provider. Today: returns not_implemented."""
+    p = _validate_provider(provider)
+    return {
+        "status": "not_implemented",
+        "provider": p,
+        "business_id": business_id or None,
+        "message": f"{p.capitalize()} Connect is coming soon. For now, paste your payment link in BUILD → Integrations → Payment Providers.",
+    }
+
+
+@router.get("/payments/callback/{provider}")
+async def payments_callback(provider: str, code: Optional[str] = None, state: Optional[str] = None):
+    """OAuth redirect target. Today: returns not_implemented."""
+    p = _validate_provider(provider)
+    return {
+        "status": "not_implemented",
+        "provider": p,
+        "received_code": bool(code),
+        "received_state": bool(state),
+        "message": f"{p.capitalize()} OAuth callback is coming soon.",
+    }
+
+
+@router.get("/payments/providers/{business_id}")
+async def payments_providers(business_id: str):
+    """Read the saved payment_providers config for a business.
+
+    Returns a normalized record showing which providers are enabled and
+    whether each has a link configured. Used by clients that want to
+    know what to render before fetching the full business settings.
+    Falls back to legacy settings.payments.stripe_link if the new shape
+    isn't present yet.
+    """
+    if not SUPABASE_KEY:
+        raise HTTPException(500, "Supabase key not configured on server")
+    if not business_id or len(business_id) < 8:
+        raise HTTPException(400, "business_id is required")
+
+    url = f"{SUPABASE_URL}/rest/v1/businesses?id=eq.{business_id}&select=settings"
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        resp = await client.get(url, headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+        })
+        if resp.status_code >= 400:
+            raise HTTPException(resp.status_code, f"Supabase error: {resp.text[:200]}")
+        rows = resp.json() or []
+        if not rows:
+            raise HTTPException(404, "Business not found")
+
+    settings = (rows[0].get("settings") or {}) if isinstance(rows[0], dict) else {}
+    incoming = settings.get("payment_providers") or {}
+    legacy_stripe = (settings.get("payments") or {}).get("stripe_link") or ""
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for pid in SUPPORTED_PROVIDERS:
+        slot = incoming.get(pid) or {}
+        link = (slot.get("manual_link") or "").strip()
+        if pid == "stripe" and not link and legacy_stripe:
+            link = legacy_stripe
+        out[pid] = {
+            "enabled": bool(slot.get("enabled")) or (pid == "stripe" and bool(legacy_stripe) and not incoming),
+            "type": slot.get("type") or "manual",
+            "has_link": bool(link),
+            "label": slot.get("label") or "",
+            "connect_account_id": slot.get("connect_account_id"),
+            "oauth_merchant_id": slot.get("oauth_merchant_id"),
+        }
+
+    return {
+        "business_id": business_id,
+        "providers": out,
+        "any_enabled": any(v["enabled"] and v["has_link"] for v in out.values()),
+    }

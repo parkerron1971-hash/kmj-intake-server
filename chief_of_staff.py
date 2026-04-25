@@ -2489,6 +2489,164 @@ async def handle_create_invoice(client, biz, action) -> Dict:
     }
 
 
+# ─── Multi-provider payment config ──────────────────────────────────
+# Mirrors src/core/lib/paymentProviders.ts. Reads new
+# settings.payment_providers shape and falls back to legacy
+# settings.payments.stripe_link so existing businesses don't lose
+# config when the multi-provider UI is introduced.
+
+PROVIDER_DEFAULT_LABELS = {
+    "stripe": "Pay with Card",
+    "square": "Pay with Square",
+    "paypal": "Pay with PayPal",
+}
+PROVIDER_BUTTON_COLORS = {
+    "stripe": "#635BFF",
+    "square": "#006AFF",
+    "paypal": "#0070BA",
+}
+PROVIDER_ICONS = {
+    "stripe": "💳",
+    "square": "◻️",
+    "paypal": "🅿️",
+}
+
+
+def _get_payment_providers(settings: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Read payment_providers with legacy migration. Always returns all
+    three slots so callers can iterate without optional handling."""
+    incoming = (settings or {}).get("payment_providers") or {}
+    if not isinstance(incoming, dict):
+        incoming = {}
+
+    def merged(pid: str) -> Dict[str, Any]:
+        base = {
+            "enabled": False,
+            "type": "manual",
+            "manual_link": "",
+            "label": PROVIDER_DEFAULT_LABELS[pid],
+        }
+        base.update(incoming.get(pid) or {})
+        return base
+
+    out = {pid: merged(pid) for pid in ("stripe", "square", "paypal")}
+
+    # Legacy migration: settings.payments.stripe_link → stripe slot
+    legacy_link = ((settings or {}).get("payments") or {}).get("stripe_link") or ""
+    if legacy_link and not out["stripe"].get("manual_link"):
+        out["stripe"]["enabled"] = True
+        out["stripe"]["manual_link"] = legacy_link
+        if not out["stripe"].get("label"):
+            out["stripe"]["label"] = PROVIDER_DEFAULT_LABELS["stripe"]
+    return out
+
+
+def _enabled_provider_names(providers: Dict[str, Dict[str, Any]], invoice_stripe_url: str) -> List[str]:
+    """Return the human-readable list of providers actually rendered into
+    an invoice email (Stripe falls back on the auto-generated invoice
+    link even if the slot is disabled)."""
+    names: List[str] = []
+    s = providers.get("stripe", {})
+    if invoice_stripe_url or (s.get("enabled") and s.get("manual_link")):
+        names.append("Stripe")
+    sq = providers.get("square", {})
+    if sq.get("enabled") and sq.get("manual_link"):
+        names.append("Square")
+    pp = providers.get("paypal", {})
+    if pp.get("enabled") and pp.get("manual_link"):
+        names.append("PayPal")
+    return names
+
+
+def _paypal_url_with_amount(url: str, total: float) -> str:
+    """paypal.me supports /<handle>/<amount> deep linking. Append the
+    amount when the link is a bare paypal.me URL so the client lands
+    on a pre-filled checkout."""
+    if not url:
+        return ""
+    if "paypal.me/" not in url.lower():
+        return url
+    if total <= 0:
+        return url
+    if url.endswith("/"):
+        return f"{url}{total:.2f}"
+    # If a path segment that looks like an amount is already there, keep it.
+    tail = url.rsplit("/", 1)[-1]
+    try:
+        float(tail)
+        return url  # already has an amount
+    except ValueError:
+        return f"{url}/{total:.2f}"
+
+
+def _build_payment_buttons(biz: Dict[str, Any], invoice: Dict[str, Any], brand_primary: str) -> str:
+    """Build the email payment block — one button per enabled provider.
+    Falls back to a 'contact us' note when no providers are wired up.
+
+    Stripe gets special handling: the invoice's auto-generated
+    stripe_payment_url (if present) takes precedence over the manual
+    link, so the platform-owner auto-gen flow keeps working. Other
+    providers always use their manual link.
+    """
+    settings = biz.get("settings") or {}
+    providers = _get_payment_providers(settings)
+    invoice_stripe = (invoice.get("stripe_payment_url") or "").strip()
+    total = float(invoice.get("total") or 0)
+    total_fmt = f"${total:,.2f}"
+
+    btn_base = (
+        "display:block;padding:14px 32px;color:#fff;text-decoration:none;"
+        "border-radius:8px;font-size:16px;font-weight:bold;text-align:center;"
+        "margin-bottom:10px;"
+    )
+
+    buttons: List[str] = []
+
+    # Stripe — auto-gen link wins over manual
+    stripe = providers.get("stripe", {})
+    stripe_url = invoice_stripe or (stripe.get("manual_link") if stripe.get("enabled") else "")
+    if stripe_url:
+        label = stripe.get("label") or PROVIDER_DEFAULT_LABELS["stripe"]
+        buttons.append(
+            f'<a href="{stripe_url}" style="{btn_base}background:{PROVIDER_BUTTON_COLORS["stripe"]};">'
+            f'{PROVIDER_ICONS["stripe"]} {label}</a>'
+        )
+
+    # Square
+    square = providers.get("square", {})
+    if square.get("enabled") and square.get("manual_link"):
+        label = square.get("label") or PROVIDER_DEFAULT_LABELS["square"]
+        buttons.append(
+            f'<a href="{square["manual_link"]}" style="{btn_base}background:{PROVIDER_BUTTON_COLORS["square"]};">'
+            f'{PROVIDER_ICONS["square"]} {label}</a>'
+        )
+
+    # PayPal
+    paypal = providers.get("paypal", {})
+    if paypal.get("enabled") and paypal.get("manual_link"):
+        label = paypal.get("label") or PROVIDER_DEFAULT_LABELS["paypal"]
+        pp_url = _paypal_url_with_amount(paypal["manual_link"], total)
+        buttons.append(
+            f'<a href="{pp_url}" style="{btn_base}background:{PROVIDER_BUTTON_COLORS["paypal"]};">'
+            f'{PROVIDER_ICONS["paypal"]} {label}</a>'
+        )
+
+    if not buttons:
+        return (
+            f'<div style="margin:24px 0;padding:14px 16px;background:#f9f7f2;'
+            f'border-left:3px solid {brand_primary};border-radius:0 6px 6px 0;'
+            f'font-size:13px;color:#666;line-height:1.6;">'
+            f'Please reply to this email for payment arrangements.</div>'
+        )
+
+    header = (
+        f'<div style="text-align:center;margin-top:24px;margin-bottom:12px;'
+        f'font-size:14px;color:#666;font-weight:600;">'
+        f'Pay This Invoice — {total_fmt}</div>'
+    )
+    return header + "\n".join(buttons)
+
+
 async def _send_invoice_email(
     client, biz: Dict, invoice: Dict, contact: Dict
 ) -> Tuple[bool, Optional[str], Optional[str]]:
@@ -2507,7 +2665,6 @@ async def _send_invoice_email(
     sig = ((settings.get("email_templates") or {}).get("signature") or {})
     primary = (brand.get("colors") or {}).get("primary") or "#C8973E"
     biz_name = biz.get("name") or "your business"
-    stripe_link = invoice.get("stripe_payment_url") or (settings.get("payments") or {}).get("stripe_link")
     total = float(invoice.get("total") or 0)
     total_fmt = f"${total:,.2f}"
 
@@ -2519,25 +2676,12 @@ async def _send_invoice_email(
         for it in (invoice.get("items") or [])
     )
 
-    # Payment CTA — prominent Pay Now button when Stripe is configured,
-    # else a fallback note so the contact knows what to do.
-    if stripe_link:
-        payment_block = (
-            f'<div style="text-align:center;margin:28px 0;">'
-            f'<a href="{stripe_link}" '
-            f'style="display:inline-block;padding:14px 32px;background:{primary};'
-            f'color:#fff;text-decoration:none;border-radius:8px;font-size:16px;'
-            f'font-weight:bold;margin-top:20px;">Pay Now — {total_fmt}</a>'
-            f'</div>'
-        )
-    else:
-        payment_block = (
-            f'<div style="margin:24px 0;padding:14px 16px;background:#f9f7f2;'
-            f'border-left:3px solid {primary};border-radius:0 6px 6px 0;'
-            f'font-size:13px;color:#666;line-height:1.6;">'
-            f'Please reply to this email for payment arrangements.'
-            f'</div>'
-        )
+    # Multi-provider payment buttons (Stripe / Square / PayPal). The
+    # auto-generated invoice-specific Stripe link still wins over the
+    # manual link for the Stripe button. Other providers use their
+    # manual links. Falls back to "contact us" note when nothing is
+    # configured.
+    payment_block = _build_payment_buttons(biz, invoice, primary)
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
@@ -2693,6 +2837,12 @@ async def handle_send_invoice(client, biz, action) -> Dict:
     await _sb(client, "PATCH", f"/invoices?id=eq.{invoice_id}", {
         "status": "sent", "sent_at": now_iso,
     })
+    # Snapshot which providers were included in the email so the
+    # contact timeline can show them ("Payment options: Stripe, PayPal").
+    providers_in_email = _enabled_provider_names(
+        _get_payment_providers(biz.get("settings") or {}),
+        invoice.get("stripe_payment_url") or "",
+    )
     await _sb(client, "POST", "/events", {
         "business_id": biz["id"],
         "contact_id": contact["id"],
@@ -2704,6 +2854,7 @@ async def handle_send_invoice(client, biz, action) -> Dict:
             "to_email": contact.get("email"),
             "provider_id": provider_id,
             "has_stripe_link": bool(invoice.get("stripe_payment_url")),
+            "payment_providers": providers_in_email,
         },
         "source": "chief_of_staff",
     })
@@ -3336,6 +3487,14 @@ When they say "mark the X task as done" / "I finished X" / "check off X", emit c
 When they share information ABOUT a contact that should stick ("Marcus is interested in the leadership program"), emit create_note with contact_id + note.
 When they report a real-world interaction ("I just called Deacon Harris" / "I met with Sandra yesterday"), emit log_activity with the right activity_type and notes.
 For invoices: create_invoice with a list of {{description, quantity, unit_price}} line items. After creating, SHOW the total and ask "send now?" — only emit send_invoice after they confirm. "Has Sandra paid?" → look at the QUEUE / recent events, or ask; "mark Sandra paid" → mark_invoice_paid with the invoice_id. Always echo the invoice number and total in your response.
+
+PAYMENT PROVIDERS:
+Practitioners can connect Stripe, Square, and/or PayPal in BUILD → Integrations → Payment Providers. Each enabled provider with a saved link adds a button to invoice emails — clients pick how to pay. The platform owner ({PLATFORM_OWNER_ID}) gets auto-generated Stripe payment links per invoice; everyone else uses the manual link they pasted. Bare paypal.me URLs get the invoice total appended automatically.
+- "How can clients pay me?" / "What payment options do I have?" → Look at the business settings.payment_providers (and the legacy settings.payments.stripe_link path). List enabled providers. If none are enabled, suggest setting up at least one in BUILD → Integrations.
+- "Set up Square" / "Add PayPal" / "Connect Stripe" → Use [ACTION:{{"type":"navigate","tab":"build","sub":"integrations"}}] and tell them to find Payment Providers, paste their link, and Save.
+- After invoice_sent events, the timeline shows which providers the client could choose from (data.payment_providers list). Surface that detail when relevant ("Sandra got Stripe + PayPal options").
+- Don't promise auto-generation unless the practitioner is the platform owner. For everyone else, say "the link you saved in Integrations will be sent."
+- "Coming soon" — one-click Connect (Stripe Connect / Square OAuth / PayPal OAuth) will replace the manual paste flow. Acknowledge if asked but don't claim it's available yet.
 
 AGENT ACTIVITY AWARENESS:
 Reference RECENT AGENT ACTIVITY. If an agent created drafts the practitioner hasn't reviewed, mention it: "The nurture agent drafted a check-in for Deacon Harris earlier — still in your queue. Want me to show it?"
