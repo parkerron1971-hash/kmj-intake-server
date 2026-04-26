@@ -917,9 +917,25 @@ async def handle_draft_and_send(client, biz, action) -> Dict:
 
 async def handle_create_session(client, biz, action) -> Dict:
     contact_id = action.get("contact_id")
+    contact_name = action.get("contact_name")
     contact = await _validate_contact(client, biz["id"], contact_id) if contact_id else None
     if contact_id and not contact:
         return _fail("create_session", f"Contact {contact_id} not found")
+
+    # Fall back to fuzzy name lookup when no id (or it didn't validate)
+    if not contact and contact_name:
+        try:
+            rows = await _sb(
+                client, "GET",
+                f"/contacts?business_id=eq.{biz['id']}&name=ilike.*{contact_name}*&select=id,name,email&limit=2",
+            ) or []
+        except Exception:
+            rows = []
+        if isinstance(rows, list) and len(rows) == 1:
+            contact = rows[0]
+        elif isinstance(rows, list) and len(rows) > 1:
+            options = ", ".join(r.get("name", "") for r in rows[:5])
+            return _fail("create_session", f"Multiple contacts match '{contact_name}': {options}. Specify contact_id.")
 
     title = action.get("title") or "New session"
     scheduled_for = action.get("scheduled_for") or action.get("date")
@@ -933,7 +949,8 @@ async def handle_create_session(client, biz, action) -> Dict:
         scheduled_for = scheduled_for + ":00Z" if len(scheduled_for) == 16 else scheduled_for + "Z"
 
     session_type = action.get("session_type") or action.get("type_label") or "consultation"
-    duration = action.get("duration_minutes") or 60
+    # Accept "duration" as an alias for "duration_minutes" — common short form
+    duration = action.get("duration_minutes") or action.get("duration") or 60
 
     inserted = await _sb(client, "POST", "/sessions", {
         "business_id": biz["id"],
@@ -948,6 +965,7 @@ async def handle_create_session(client, biz, action) -> Dict:
     if not inserted:
         return _fail("create_session", "insert failed")
 
+    session_id = (inserted[0].get("id") if isinstance(inserted, list) and inserted else None)
     label = f"Session: {title}" + (f" with {contact.get('name')}" if contact else "")
     try:
         when = datetime.fromisoformat(scheduled_for.replace("Z", "+00:00")).strftime("%b %d, %I:%M %p")
@@ -957,7 +975,9 @@ async def handle_create_session(client, biz, action) -> Dict:
         "type": "create_session",
         "result": f"scheduled for {when}",
         "label": label,
-        "nav": _nav("operate", "sessions"),
+        "session_id": session_id,
+        "contact_id": contact["id"] if contact else None,
+        "nav": _nav("operate", "calendar"),
     }
 
 
@@ -1133,6 +1153,185 @@ async def handle_update_contact(client, biz, action) -> Dict:
         "label": f"✏️ Updated {contact_label}: {changes}",
         "contact_id": contact["id"],
         "nav": _nav("operate", "contacts", contact["id"]),
+    }
+
+
+# Delete a contact by id, with name-based fallback. Cascades on the
+# DB side handle related events/sessions/etc; we just DELETE the row.
+async def handle_delete_contact(client, biz, action) -> Dict:
+    biz_id = biz["id"]
+    contact_id = action.get("contact_id")
+    name = action.get("name") or action.get("contact_name")
+    contact: Optional[Dict[str, Any]] = None
+
+    if contact_id:
+        contact = await _validate_contact(client, biz_id, contact_id)
+
+    if not contact and name:
+        try:
+            rows = await _sb(
+                client, "GET",
+                f"/contacts?business_id=eq.{biz_id}&name=ilike.*{name}*&select=id,name&limit=2",
+            ) or []
+        except Exception:
+            rows = []
+        if isinstance(rows, list) and len(rows) == 1:
+            contact = rows[0]
+        elif isinstance(rows, list) and len(rows) > 1:
+            options = ", ".join(r.get("name", "") for r in rows[:5])
+            return _fail("delete_contact", f"Multiple contacts match '{name}': {options}. Specify contact_id.")
+
+    if not contact:
+        return _fail("delete_contact", f"contact not found ({contact_id or name or '—'})")
+
+    try:
+        await _sb(client, "DELETE", f"/contacts?id=eq.{contact['id']}", None)
+    except Exception as e:
+        return _fail("delete_contact", f"delete failed: {e}")
+
+    return {
+        "type": "delete_contact",
+        "result": "deleted",
+        "label": f"🗑️ Deleted: {contact.get('name') or 'contact'}",
+        "nav": _nav("operate", "contacts"),
+    }
+
+
+# Update an existing session — reschedule, change status, edit notes,
+# or swap session_type. Resolves by session_id, falling back to the
+# most-recent session for a named contact.
+async def handle_update_session(client, biz, action) -> Dict:
+    biz_id = biz["id"]
+    session_id = action.get("session_id")
+
+    # Resolution: id wins, otherwise most-recent session for contact
+    if not session_id:
+        contact_id = action.get("contact_id")
+        contact_name = action.get("contact_name")
+        target_contact_id = contact_id
+        if not target_contact_id and contact_name:
+            try:
+                rows = await _sb(
+                    client, "GET",
+                    f"/contacts?business_id=eq.{biz_id}&name=ilike.*{contact_name}*&select=id,name&limit=1",
+                ) or []
+            except Exception:
+                rows = []
+            if rows:
+                target_contact_id = rows[0].get("id")
+        if target_contact_id:
+            try:
+                sess = await _sb(
+                    client, "GET",
+                    f"/sessions?business_id=eq.{biz_id}&contact_id=eq.{target_contact_id}"
+                    f"&order=scheduled_for.desc&limit=1&select=id",
+                ) or []
+            except Exception:
+                sess = []
+            if sess:
+                session_id = sess[0].get("id")
+
+    if not session_id:
+        return _fail("update_session", "session not found (provide session_id or contact_name)")
+
+    patch: Dict[str, Any] = {}
+
+    # Reschedule
+    new_when = action.get("scheduled_for") or action.get("date")
+    if new_when:
+        if len(new_when) == 10:
+            new_when = f"{new_when}T09:00:00Z"
+        elif "T" in new_when and not new_when.endswith("Z") and "+" not in new_when:
+            new_when = new_when + ":00Z" if len(new_when) == 16 else new_when + "Z"
+        patch["scheduled_for"] = new_when
+
+    # Status — accept the standard set
+    if "status" in action and action["status"]:
+        v = str(action["status"]).lower().strip()
+        if v not in ("scheduled", "completed", "no_show", "cancelled", "in_progress"):
+            return _fail("update_session", f"invalid session status '{v}'")
+        patch["status"] = v
+
+    # Notes / type / duration / title
+    if "notes" in action and action["notes"] is not None:
+        patch["notes"] = (action["notes"] or "").strip() or None
+    if "session_type" in action and action["session_type"]:
+        patch["session_type"] = action["session_type"]
+    if "duration_minutes" in action or "duration" in action:
+        try:
+            patch["duration_minutes"] = int(action.get("duration_minutes") or action.get("duration") or 0) or 60
+        except (TypeError, ValueError):
+            pass
+    if "title" in action and action["title"]:
+        patch["title"] = str(action["title"]).strip()
+
+    if not patch:
+        return _fail("update_session", "no fields to update")
+
+    try:
+        await _sb(client, "PATCH", f"/sessions?id=eq.{session_id}", patch)
+    except Exception as e:
+        return _fail("update_session", f"patch failed: {e}")
+
+    # Friendly label
+    bits: List[str] = []
+    if "status" in patch:
+        bits.append(f"status={patch['status']}")
+    if "scheduled_for" in patch:
+        try:
+            when = datetime.fromisoformat(patch["scheduled_for"].replace("Z", "+00:00")).strftime("%b %d, %I:%M %p")
+            bits.append(f"rescheduled→{when}")
+        except (ValueError, TypeError):
+            bits.append(f"rescheduled→{patch['scheduled_for']}")
+    if "notes" in patch:
+        bits.append("notes")
+    if "session_type" in patch:
+        bits.append(f"type={patch['session_type']}")
+
+    return {
+        "type": "update_session",
+        "result": "updated",
+        "label": f"📅 Session updated: {', '.join(bits) or 'fields'}",
+        "session_id": session_id,
+        "nav": _nav("operate", "calendar"),
+    }
+
+
+# ─── Navigation shortcut handlers ────────────────────────────────────
+#
+# Tiny wrappers that dispatch a nav payload — they exist so the Chief
+# can emit a clear named action when the practitioner asks "open my
+# documents" / "show my calendar" / "show me revenue", instead of
+# falling back to the generic `navigate` action and getting the sub
+# wrong.
+
+async def handle_open_documents(client, biz, action) -> Dict:
+    return {
+        "type": "open_documents",
+        "result": "navigating",
+        "label": "📄 Opening Documents",
+        "nav": _nav("operate", "documents"),
+    }
+
+
+async def handle_open_calendar(client, biz, action) -> Dict:
+    return {
+        "type": "open_calendar",
+        "result": "navigating",
+        "label": "📅 Opening Calendar",
+        "nav": _nav("operate", "calendar"),
+    }
+
+
+async def handle_show_revenue(client, biz, action) -> Dict:
+    nav = _nav("operate", "invoices")
+    if isinstance(nav, dict):
+        nav = {**nav, "view": "revenue"}
+    return {
+        "type": "show_revenue",
+        "result": "navigating",
+        "label": "💰 Opening Revenue Dashboard",
+        "nav": nav,
     }
 
 
@@ -2342,6 +2541,301 @@ async def handle_ensure_module(client, biz, action) -> Dict:
         "label": f"Created module: {name}",
         "module_id": inserted[0]["id"],
         "nav": None,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PROJECT HANDLERS
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Projects live as module_entries on a "Projects" custom_module that
+# the Chief auto-creates the first time it's needed. The schema mirrors
+# what the ProjectsPanel UI expects: title, client, status, dates,
+# description, value, notes.
+
+PROJECT_STATUSES = ("planning", "active", "on_hold", "completed", "cancelled")
+
+
+async def _ensure_projects_module(client, biz_id: str) -> Optional[str]:
+    """Find the Projects module (slug=projects) for this business, or
+    create it. Returns the module id, or None on failure."""
+    try:
+        rows = await _sb(
+            client, "GET",
+            f"/custom_modules?business_id=eq.{biz_id}&slug=eq.projects&is_active=eq.true&limit=1&select=id",
+        ) or []
+    except Exception:
+        rows = []
+    if isinstance(rows, list) and rows:
+        return rows[0].get("id")
+
+    schema = {"fields": [
+        {"name": "title", "type": "text"},
+        {"name": "client", "type": "text"},
+        {"name": "contact_id", "type": "contact_link"},
+        {"name": "status", "type": "select", "options": list(PROJECT_STATUSES)},
+        {"name": "start_date", "type": "date"},
+        {"name": "target_date", "type": "date"},
+        {"name": "description", "type": "textarea"},
+        {"name": "tasks", "type": "textarea"},
+        {"name": "milestones", "type": "textarea"},
+        {"name": "notes", "type": "textarea"},
+        {"name": "value", "type": "number"},
+    ]}
+    try:
+        inserted = await _sb(client, "POST", "/custom_modules", {
+            "business_id": biz_id,
+            "name": "Projects",
+            "slug": "projects",
+            "description": "Auto-created Projects module",
+            "icon": "📁",
+            "schema": schema,
+            "agent_config": {"enabled": True, "triggers": []},
+            "public_display": {
+                "enabled": False, "display_type": "list",
+                "title_override": "Projects", "visible_fields": ["title", "client", "status"],
+                "hidden_fields": ["contact_id", "notes"], "max_display": 20, "sort_by": "created_at",
+            },
+            "is_active": True,
+        })
+    except Exception as e:
+        print(f"[Chief] Projects module create failed: {e}", flush=True)
+        return None
+    if not inserted or not isinstance(inserted, list):
+        return None
+    return inserted[0].get("id")
+
+
+async def _resolve_project_contact(client, biz_id: str, action: Dict) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve (contact_id, contact_name) from a project action.
+    Accepts contact_id directly, otherwise fuzzy-matches contact_name."""
+    contact_id = action.get("contact_id")
+    contact_name = action.get("contact_name") or action.get("client") or ""
+    if contact_id:
+        try:
+            rows = await _sb(client, "GET", f"/contacts?id=eq.{contact_id}&business_id=eq.{biz_id}&select=id,name") or []
+            if rows:
+                return rows[0].get("id"), rows[0].get("name") or contact_name
+        except Exception:
+            pass
+    if contact_name:
+        try:
+            rows = await _sb(
+                client, "GET",
+                f"/contacts?business_id=eq.{biz_id}&name=ilike.*{contact_name}*&select=id,name&limit=1",
+            ) or []
+            if rows:
+                return rows[0].get("id"), rows[0].get("name")
+        except Exception:
+            pass
+    return None, contact_name or None
+
+
+async def handle_create_project(client, biz, action) -> Dict:
+    """Create a project as a module_entry on the Projects module."""
+    biz_id = biz["id"]
+    title = (action.get("title") or "Untitled Project").strip()
+    status = (action.get("status") or "planning").lower()
+    if status not in PROJECT_STATUSES:
+        status = "planning"
+
+    module_id = await _ensure_projects_module(client, biz_id)
+    if not module_id:
+        return _fail("create_project", "could not find or create Projects module")
+
+    contact_id, contact_name = await _resolve_project_contact(client, biz_id, action)
+
+    try:
+        value = float(action.get("value") or 0)
+    except (TypeError, ValueError):
+        value = 0.0
+
+    payload = {
+        "module_id": module_id,
+        "business_id": biz_id,
+        "status": "active",
+        "data": {
+            "title": title,
+            "client": contact_name or "",
+            "contact_id": contact_id,
+            "status": status,
+            "start_date": action.get("start_date") or "",
+            "target_date": action.get("target_date") or "",
+            "description": action.get("description") or "",
+            "tasks": action.get("tasks") or "",
+            "milestones": action.get("milestones") or "",
+            "notes": action.get("notes") or "",
+            "value": value,
+        },
+    }
+    inserted = await _sb(client, "POST", "/module_entries", payload)
+    if not inserted:
+        return _fail("create_project", "insert failed")
+
+    project_id = (inserted[0].get("id") if isinstance(inserted, list) and inserted else None)
+    label = f"📁 Project: {title}"
+    if contact_name:
+        label += f" — {contact_name}"
+    if value > 0:
+        label += f" · ${value:,.0f}"
+    return {
+        "type": "create_project",
+        "result": "created",
+        "label": label,
+        "project_id": project_id,
+        "contact_id": contact_id,
+        "nav": _nav("operate", "projects"),
+    }
+
+
+async def _find_project_by_title(client, biz_id: str, title: str) -> Optional[Dict]:
+    """Fuzzy-find a project module_entry by title. Returns the row or None."""
+    module_id = await _ensure_projects_module(client, biz_id)
+    if not module_id:
+        return None
+    try:
+        rows = await _sb(
+            client, "GET",
+            f"/module_entries?module_id=eq.{module_id}&select=id,data&limit=200",
+        ) or []
+    except Exception:
+        return None
+    needle = title.lower()
+    matches = [r for r in (rows or []) if needle in (((r.get("data") or {}).get("title") or "").lower())]
+    return matches[0] if matches else None
+
+
+async def handle_update_project(client, biz, action) -> Dict:
+    """Update a project's fields. Resolves by project_id or fuzzy title."""
+    biz_id = biz["id"]
+    project_id = action.get("project_id")
+    title_query = action.get("title_query") or (action.get("title") if not project_id and not action.get("status_change_only") else None)
+
+    project: Optional[Dict[str, Any]] = None
+    if project_id:
+        try:
+            rows = await _sb(client, "GET", f"/module_entries?id=eq.{project_id}&select=id,data&limit=1") or []
+            if rows:
+                project = rows[0]
+        except Exception:
+            project = None
+    if not project and title_query:
+        project = await _find_project_by_title(client, biz_id, title_query)
+
+    if not project:
+        return _fail("update_project", "project not found (provide project_id or a unique title)")
+
+    data = dict(project.get("data") or {})
+    changes: List[str] = []
+
+    # Allow renaming if explicit title change requested AND the title field
+    # was used as the lookup key (be conservative — don't rename when the
+    # `title` field was just a search term).
+    if "title" in action and action.get("project_id"):
+        new_title = str(action["title"]).strip()
+        if new_title and new_title != data.get("title"):
+            data["title"] = new_title
+            changes.append(f"title='{new_title}'")
+
+    for field in ("status", "start_date", "target_date", "description", "tasks", "milestones", "notes"):
+        if field in action and action[field] is not None:
+            v = action[field]
+            if field == "status":
+                v = str(v).lower()
+                if v not in PROJECT_STATUSES:
+                    return _fail("update_project", f"invalid status '{v}'")
+            data[field] = v
+            changes.append(f"{field}={v}")
+
+    if "value" in action and action["value"] is not None:
+        try:
+            data["value"] = float(action["value"])
+            changes.append(f"value={data['value']}")
+        except (TypeError, ValueError):
+            pass
+
+    # Re-link contact when contact_name supplied
+    if action.get("contact_name") or action.get("contact_id"):
+        cid, cname = await _resolve_project_contact(client, biz_id, action)
+        if cid or cname:
+            data["contact_id"] = cid
+            data["client"] = cname or data.get("client") or ""
+            changes.append(f"client={cname}")
+
+    if not changes:
+        return _fail("update_project", "no fields to update")
+
+    try:
+        await _sb(client, "PATCH", f"/module_entries?id=eq.{project['id']}", {"data": data})
+    except Exception as e:
+        return _fail("update_project", f"patch failed: {e}")
+
+    return {
+        "type": "update_project",
+        "result": "updated",
+        "label": f"📁 Updated: {data.get('title', 'project')} — {', '.join(changes)}",
+        "project_id": project["id"],
+        "nav": _nav("operate", "projects"),
+    }
+
+
+async def handle_list_projects(client, biz, action) -> Dict:
+    """Return the project list, optionally filtered by status."""
+    biz_id = biz["id"]
+    module_id = await _ensure_projects_module(client, biz_id)
+    if not module_id:
+        return {
+            "type": "list_projects",
+            "result": "no projects yet",
+            "label": "📁 0 projects",
+            "projects": [],
+            "summary": "(no projects)",
+            "nav": _nav("operate", "projects"),
+        }
+
+    try:
+        rows = await _sb(
+            client, "GET",
+            f"/module_entries?module_id=eq.{module_id}&order=created_at.desc&select=id,data&limit=200",
+        ) or []
+    except Exception:
+        rows = []
+
+    status_filter = (action.get("status") or "").lower() or None
+    projects = []
+    for r in rows:
+        d = r.get("data") or {}
+        if status_filter and (d.get("status") or "").lower() != status_filter:
+            continue
+        projects.append({
+            "id": r.get("id"),
+            "title": d.get("title") or "Untitled",
+            "client": d.get("client") or "",
+            "status": d.get("status") or "planning",
+            "value": d.get("value") or 0,
+            "target_date": d.get("target_date") or "",
+        })
+
+    summary_lines = []
+    for p in projects[:20]:
+        line = f"- {p['title']} ({p['status']})"
+        if p["client"]:
+            line += f" — {p['client']}"
+        if p["value"]:
+            try:
+                line += f" · ${float(p['value']):,.0f}"
+            except (TypeError, ValueError):
+                pass
+        summary_lines.append(line)
+    summary = "\n".join(summary_lines) if summary_lines else "(no matching projects)"
+
+    return {
+        "type": "list_projects",
+        "result": f"{len(projects)} project{'s' if len(projects) != 1 else ''} found",
+        "label": f"📁 {len(projects)} projects" + (f" ({status_filter})" if status_filter else ""),
+        "projects": projects,
+        "summary": summary,
+        "nav": _nav("operate", "projects"),
     }
 
 
@@ -3948,6 +4442,14 @@ ACTION_HANDLERS = {
     "update_contact_status": handle_update_contact_status,
     "update_contact_health": handle_update_contact_health,
     "update_contact":         handle_update_contact,
+    "delete_contact":         handle_delete_contact,
+    "update_session":         handle_update_session,
+    "create_project":         handle_create_project,
+    "update_project":         handle_update_project,
+    "list_projects":          handle_list_projects,
+    "open_documents":         handle_open_documents,
+    "open_calendar":          handle_open_calendar,
+    "show_revenue":           handle_show_revenue,
     "run_agent":             handle_run_agent,
     "create_module_entry":   handle_create_module_entry,
     "create_contact":        handle_create_contact,
@@ -4416,21 +4918,37 @@ ACTIONS — QUEUE MANAGEMENT:
   [ACTION:{{"type":"bulk_approve","filter":"all|agent:nurture|priority:low"}}]  — cap 20
   [ACTION:{{"type":"bulk_dismiss","filter":"priority:low"}}]  — cap 20
 
-ACTIONS — CONTACTS + SESSIONS + MODULES:
-  [ACTION:{{"type":"draft_nurture","contact_id":"<uuid>","reason":"why"}}]
-  [ACTION:{{"type":"draft_email","contact_id":"<uuid>","subject":"...","reason":"..."}}]
-  [ACTION:{{"type":"draft_and_send","contact_id":"<uuid>","subject":"...","body":"..."}}]  — Draft an email AND immediately approve + send it. Use when the practitioner wants to send right away without reviewing.
-  [ACTION:{{"type":"create_session","contact_id":"<uuid>","title":"...","scheduled_for":"2026-04-20T14:00:00Z"}}]
-  [ACTION:{{"type":"update_contact_status","contact_id":"<uuid>","new_status":"active|lead|vip|inactive|churned"}}]
-  [ACTION:{{"type":"update_contact_health","contact_id":"<uuid>","health_score":75}}]
+ACTIONS — CONTACTS:
+  [ACTION:{{"type":"create_contact","name":"...","email":"...","phone":"...","status":"lead"}}]
   [ACTION:{{"type":"update_contact","contact_id":"<uuid>","email":"new@email.com"}}]
   [ACTION:{{"type":"update_contact","name":"Monica Walton","email":"monicawalton2011@icloud.com"}}]
   [ACTION:{{"type":"update_contact","contact_id":"<uuid>","phone":"555-1234","status":"active"}}]
-    — Update any contact field: email, phone, name, role, status, tags, notes, health_score, lead_score.
-    — If contact_id is omitted, searches by name (ilike). Ambiguous matches return an error listing candidates so you can disambiguate.
-  [ACTION:{{"type":"create_contact","name":"...","email":"...","status":"lead"}}]
+  [ACTION:{{"type":"update_contact_status","contact_id":"<uuid>","new_status":"active|lead|vip|inactive|churned"}}]
+  [ACTION:{{"type":"update_contact_health","contact_id":"<uuid>","health_score":75}}]
+  [ACTION:{{"type":"delete_contact","name":"..."}}]
+  [ACTION:{{"type":"contact_deep_dive","contact_id":"<uuid>"}}]
+    — Full CRUD on contacts. Search by name when contact_id is missing. Ambiguous matches return a candidate list.
+
+ACTIONS — SESSIONS:
+  [ACTION:{{"type":"create_session","contact_id":"<uuid>","title":"...","session_type":"coaching_session|consultation|discovery_call|follow_up|pastoral_visit|meeting","scheduled_for":"2026-05-01T14:00:00Z","duration_minutes":60}}]
+  [ACTION:{{"type":"create_session","contact_name":"Marcus","title":"Coaching","scheduled_for":"2026-05-01T14:00:00Z","duration":60}}]
+  [ACTION:{{"type":"update_session","session_id":"<uuid>","scheduled_for":"2026-05-05T10:00:00Z"}}]
+  [ACTION:{{"type":"update_session","contact_name":"Marcus","status":"completed","notes":"Talked through Q3 plan."}}]
+    — Reschedule, complete, cancel, or annotate. Falls back to the most recent session for a named contact.
+
+ACTIONS — PROJECTS:
+  [ACTION:{{"type":"create_project","title":"...","contact_name":"...","status":"planning","value":2400,"start_date":"2026-05-01","target_date":"2026-07-31","description":"..."}}]
+  [ACTION:{{"type":"update_project","title":"Decatur retreat","status":"completed"}}]
+  [ACTION:{{"type":"update_project","project_id":"<uuid>","status":"active","value":3000,"target_date":"2026-08-15"}}]
+  [ACTION:{{"type":"list_projects"}}]
+  [ACTION:{{"type":"list_projects","status":"active"}}]
+    — Projects live as module_entries on the auto-created Projects module. Status options: planning|active|on_hold|completed|cancelled.
+
+ACTIONS — DRAFTS + MODULES:
+  [ACTION:{{"type":"draft_nurture","contact_id":"<uuid>","reason":"why"}}]
+  [ACTION:{{"type":"draft_email","contact_id":"<uuid>","subject":"...","reason":"..."}}]
+  [ACTION:{{"type":"draft_and_send","contact_id":"<uuid>","subject":"...","body":"..."}}]  — Draft an email AND immediately approve + send it. Use when the practitioner wants to send right away without reviewing.
   [ACTION:{{"type":"create_module_entry","module_id":"<uuid>","data":{{...}}}}]
-  [ACTION:{{"type":"contact_deep_dive","contact_id":"<uuid>"}}]  — returns full history/events/sessions/queue
 
 ACTIONS — TASKS + NOTES + ACTIVITY:
   [ACTION:{{"type":"create_task","title":"Call Deacon Harris back","due_date":"2026-04-24","priority":"high","contact_id":"<uuid-optional>"}}]
@@ -4453,10 +4971,42 @@ ACTIONS — BATCH EMAIL:
 
 ACTIONS — NAVIGATION + MEMORY:
   [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"dashboard|queue|contacts|projects|calendar|invoices|tasks|documents|agents|briefing|health|insights","contact_id":"<uuid-optional>","page":"<page-id-optional>"}}]
+  [ACTION:{{"type":"open_documents"}}]   — shortcut: navigate straight to the Documents tab.
+  [ACTION:{{"type":"open_calendar"}}]    — shortcut: navigate straight to the Calendar tab.
+  [ACTION:{{"type":"show_revenue"}}]     — shortcut: open OPERATE → Invoices in Revenue view.
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
   [ACTION:{{"type":"forget","memory_content":"snippet to deactivate"}}]
   [ACTION:{{"type":"generate_briefing"}}]
   [ACTION:{{"type":"generate_insights"}}]
+
+UNDERSTANDING PRACTITIONER REQUESTS:
+When the practitioner says...                       You should emit...
+  "Create/start/add a project for..."           →   create_project
+  "Update/change/move the project..."           →   update_project
+  "What projects do I have?" / "List projects"  →   list_projects
+  "Add/create a contact named..."               →   create_contact
+  "Update/change [name]'s email/phone..."       →   update_contact
+  "Delete/remove [name]..."                     →   delete_contact
+  "Schedule a session/meeting with..."          →   create_session
+  "Reschedule/cancel/complete the session..."   →   update_session
+  "Create an invoice for..."                    →   create_invoice
+  "Set up a $X monthly invoice..."              →   create_invoice with is_recurring=true
+  "Send the invoice..."                         →   send_invoice
+  "Add a task..." / "Remind me to..."           →   create_task
+  "Mark [task] as done..."                      →   complete_task
+  "Note on [contact]..."                        →   create_note
+  "Log a call/meeting with..."                  →   log_activity
+  "Draft an email to..."                        →   draft_email
+  "Send an email to..." / "Email [contact]..."  →   draft_and_send
+  "Email all my [smart-list] about..."          →   batch_email
+  "Approve it/the draft..."                     →   approve_draft (queue_id="latest")
+  "Run all agents/check on everyone..."         →   run_agent (agent name) or bulk_approve when triaging
+  "Show me my dashboard/queue/calendar..."      →   navigate (or open_documents/open_calendar/show_revenue)
+  "Upload a file" / "Where are my files?"       →   open_documents
+  "How much did I make this month?"             →   show_revenue (then narrate from CONTEXT)
+  "Remember/don't forget..."                    →   remember
+  "Forget that / never mind that rule"          →   forget
+If the request maps to an action, ALWAYS emit the action tag. NEVER just describe what you would do.
 
 RULES:
 - Use EXACT UUIDs from CONTACT LOOKUP / CUSTOM MODULES / CURRENTLY VIEWING / QUEUE. Never invent IDs.
