@@ -2872,6 +2872,328 @@ async def handle_list_projects(client, biz, action) -> Dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# GROW HANDLERS — goals + content
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Goals live in businesses.settings.goals.active_goals (list of objects)
+# and businesses.settings.goals.completed_goals. Content posts live at
+# businesses.settings.content_calendar.planned_posts. Both are JSONB
+# blobs that the corresponding GROW UI panels render.
+
+VALID_GOAL_CATEGORIES = ("contacts", "revenue", "sessions", "engagement", "custom")
+VALID_GOAL_PERIODS = ("weekly", "monthly", "quarterly", "yearly")
+VALID_GOAL_METRICS = (
+    "total_contacts", "new_contacts",
+    "revenue_collected", "revenue_invoiced",
+    "sessions_completed", "sessions_scheduled",
+    "engagement_rate", "custom",
+)
+
+
+def _default_metric_for_category(cat: str) -> str:
+    return {
+        "contacts": "new_contacts",
+        "revenue": "revenue_collected",
+        "sessions": "sessions_completed",
+        "engagement": "engagement_rate",
+    }.get(cat, "custom")
+
+
+def _default_period_range(period: str) -> Tuple[str, str]:
+    today = datetime.now(timezone.utc).date()
+    if period == "weekly":
+        start = today - timedelta(days=(today.weekday()))
+        return (start.isoformat(), (start + timedelta(days=6)).isoformat())
+    if period == "monthly":
+        start = today.replace(day=1)
+        # last day of month
+        next_month = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        end = next_month - timedelta(days=1)
+        return (start.isoformat(), end.isoformat())
+    if period == "quarterly":
+        q = (today.month - 1) // 3
+        start = today.replace(month=q * 3 + 1, day=1)
+        next_q_month = (start.month - 1 + 3) % 12 + 1
+        next_q_year = start.year + ((start.month - 1 + 3) // 12)
+        next_q = date(next_q_year, next_q_month, 1)
+        end = next_q - timedelta(days=1)
+        return (start.isoformat(), end.isoformat())
+    return (f"{today.year}-01-01", f"{today.year}-12-31")
+
+
+async def _fetch_business_settings(client, biz_id: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    rows = await _sb(client, "GET", f"/businesses?id=eq.{biz_id}&select=id,settings&limit=1") or []
+    if not rows:
+        return None, {}
+    biz = rows[0]
+    settings = biz.get("settings") or {}
+    if not isinstance(settings, dict):
+        settings = {}
+    return biz, settings
+
+
+async def handle_create_goal(client, biz, action) -> Dict:
+    """Create a strategic goal stored at settings.goals.active_goals.
+    Auto-tracked goals don't carry a current value — the UI computes
+    progress from live data on every render."""
+    biz_id = biz["id"]
+    title = (action.get("title") or "").strip()
+    if not title:
+        return _fail("create_goal", "title is required")
+
+    category = (action.get("category") or "custom").lower()
+    if category not in VALID_GOAL_CATEGORIES:
+        category = "custom"
+
+    try:
+        target = float(action.get("target") or 0)
+    except (TypeError, ValueError):
+        target = 0.0
+    if target <= 0:
+        return _fail("create_goal", "target must be > 0")
+
+    period = (action.get("period") or "quarterly").lower()
+    if period not in VALID_GOAL_PERIODS:
+        period = "quarterly"
+
+    default_start, default_end = _default_period_range(period)
+    start = action.get("start") or default_start
+    end = action.get("end") or default_end
+
+    metric = action.get("metric") or _default_metric_for_category(category)
+    if metric not in VALID_GOAL_METRICS:
+        metric = "custom"
+
+    auto_track = bool(action.get("auto_track", True)) and metric != "custom"
+
+    new_goal = {
+        "id": f"goal-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+        "title": title,
+        "category": category,
+        "target": target,
+        "period": period,
+        "start": start,
+        "end": end,
+        "auto_track": auto_track,
+        "metric": metric,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    _, settings = await _fetch_business_settings(client, biz_id)
+    goals = settings.get("goals") if isinstance(settings.get("goals"), dict) else {}
+    active = list(goals.get("active_goals") or [])
+    completed = list(goals.get("completed_goals") or [])
+    active.append(new_goal)
+    next_settings = {
+        **settings,
+        "goals": {
+            **goals,
+            "active_goals": active,
+            "completed_goals": completed,
+        },
+    }
+    try:
+        await _sb(client, "PATCH", f"/businesses?id=eq.{biz_id}", {"settings": next_settings})
+    except Exception as e:
+        return _fail("create_goal", f"save failed: {e}")
+
+    label_target = f"${int(target):,}" if category == "revenue" else f"{int(target)}"
+    return {
+        "type": "create_goal",
+        "result": "created",
+        "label": f"🎯 New goal: {title} — {label_target} by {end}",
+        "goal_id": new_goal["id"],
+        "nav": _nav("grow", "goals"),
+    }
+
+
+async def handle_check_goals(client, biz, action) -> Dict:
+    """Summarize progress on every active goal. Computes current values
+    from live data the same way the UI does so the Chief can answer
+    'how am I doing on my goals' with real numbers."""
+    biz_id = biz["id"]
+    _, settings = await _fetch_business_settings(client, biz_id)
+    goals = settings.get("goals") if isinstance(settings.get("goals"), dict) else {}
+    active = goals.get("active_goals") or []
+    if not active:
+        return {
+            "type": "check_goals",
+            "result": "no active goals",
+            "label": "🎯 No active goals yet — set one in GROW → Goals.",
+            "summary": "(no goals)",
+            "nav": _nav("grow", "goals"),
+        }
+
+    # Gather data once
+    try:
+        contacts = await _sb(client, "GET",
+            f"/contacts?business_id=eq.{biz_id}&select=id,created_at,status,last_interaction&limit=2000") or []
+        paid_invoices = await _sb(client, "GET",
+            f"/invoices?business_id=eq.{biz_id}&status=eq.paid&select=paid_at,total&limit=2000") or []
+        invoiced = await _sb(client, "GET",
+            f"/invoices?business_id=eq.{biz_id}&select=created_at,total,status&limit=2000") or []
+        sessions = await _sb(client, "GET",
+            f"/sessions?business_id=eq.{biz_id}&select=scheduled_for,status&limit=2000") or []
+    except Exception as e:
+        return _fail("check_goals", f"data fetch failed: {e}")
+
+    def _in_range(iso: Optional[str], start: str, end: str) -> bool:
+        if not iso:
+            return False
+        d = iso[:10]
+        return start <= d <= end
+
+    def _progress(g: Dict) -> float:
+        m = g.get("metric")
+        s = g.get("start", "")
+        e = g.get("end", "")
+        if not g.get("auto_track") or m == "custom":
+            try:
+                return float(g.get("current_override") or 0)
+            except (TypeError, ValueError):
+                return 0.0
+        if m == "total_contacts":
+            return float(sum(1 for c in contacts if (c.get("created_at") or "")[:10] <= e))
+        if m == "new_contacts":
+            return float(sum(1 for c in contacts if _in_range(c.get("created_at"), s, e)))
+        if m == "revenue_collected":
+            return float(sum(float(i.get("total") or 0) for i in paid_invoices if _in_range(i.get("paid_at"), s, e)))
+        if m == "revenue_invoiced":
+            return float(sum(
+                float(i.get("total") or 0)
+                for i in invoiced
+                if _in_range(i.get("created_at"), s, e) and i.get("status") not in ("draft", "cancelled")
+            ))
+        if m == "sessions_completed":
+            return float(sum(1 for x in sessions if x.get("status") == "completed" and _in_range(x.get("scheduled_for"), s, e)))
+        if m == "sessions_scheduled":
+            return float(sum(1 for x in sessions if _in_range(x.get("scheduled_for"), s, e)))
+        if m == "engagement_rate":
+            actives = [c for c in contacts if (c.get("status") or "") not in ("inactive", "churned")]
+            if not actives:
+                return 0.0
+            engaged = [c for c in actives if _in_range(c.get("last_interaction"), s, e)]
+            return round((len(engaged) / len(actives)) * 100, 1)
+        return 0.0
+
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+    summary_lines: List[str] = []
+    on_track_count = 0
+    behind_count = 0
+    hit_count = 0
+    for g in active:
+        target = float(g.get("target") or 0) or 1.0
+        current = _progress(g)
+        pct = min(100, int((current / target) * 100))
+        # rough pace: assume linear
+        start_iso = g.get("start") or today_iso
+        end_iso = g.get("end") or today_iso
+        try:
+            total_days = max(1, (date.fromisoformat(end_iso) - date.fromisoformat(start_iso)).days)
+            elapsed = max(1, (date.fromisoformat(today_iso) - date.fromisoformat(start_iso)).days)
+            elapsed = max(1, min(total_days, elapsed))
+            projected = (current / elapsed) * total_days
+            on_track = projected >= target or current >= target
+        except Exception:
+            on_track = pct >= 50
+
+        if current >= target:
+            hit_count += 1
+            status_emoji = "🎉"
+        elif on_track:
+            on_track_count += 1
+            status_emoji = "✅"
+        else:
+            behind_count += 1
+            status_emoji = "⚠"
+
+        cur_str = (f"${int(current):,}" if g.get("category") == "revenue"
+                   else f"{int(current)}%" if g.get("category") == "engagement"
+                   else f"{int(current)}")
+        tgt_str = (f"${int(target):,}" if g.get("category") == "revenue"
+                   else f"{int(target)}%" if g.get("category") == "engagement"
+                   else f"{int(target)}")
+        summary_lines.append(f"{status_emoji} {g.get('title')}: {cur_str} / {tgt_str} ({pct}%)")
+
+    summary = "\n".join(summary_lines)
+    headline_bits: List[str] = []
+    if hit_count: headline_bits.append(f"{hit_count} hit")
+    if on_track_count: headline_bits.append(f"{on_track_count} on track")
+    if behind_count: headline_bits.append(f"{behind_count} behind")
+    headline = " · ".join(headline_bits) or "no progress yet"
+
+    return {
+        "type": "check_goals",
+        "result": headline,
+        "label": f"🎯 Goals: {headline}",
+        "summary": summary,
+        "goals": active,
+        "nav": _nav("grow", "goals"),
+    }
+
+
+VALID_PLATFORMS = ("instagram", "linkedin", "twitter", "facebook", "tiktok", "youtube", "blog", "other")
+
+
+async def handle_plan_content(client, biz, action) -> Dict:
+    """Add a planned post to settings.content_calendar.planned_posts."""
+    biz_id = biz["id"]
+    title = (action.get("title") or "").strip()
+    if not title:
+        return _fail("plan_content", "title is required")
+
+    platform = (action.get("platform") or "instagram").lower()
+    if platform not in VALID_PLATFORMS:
+        platform = "other"
+
+    scheduled_date = action.get("scheduled_date") or action.get("date") or datetime.now(timezone.utc).date().isoformat()
+    if len(scheduled_date) > 10:
+        scheduled_date = scheduled_date[:10]
+
+    status_v = (action.get("status") or "planned").lower()
+    if status_v not in ("planned", "draft", "posted", "cancelled"):
+        status_v = "planned"
+
+    body = action.get("body") or None
+
+    new_post = {
+        "id": f"post-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+        "title": title,
+        "body": body,
+        "platform": platform,
+        "scheduled_date": scheduled_date,
+        "status": status_v,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    _, settings = await _fetch_business_settings(client, biz_id)
+    cal = settings.get("content_calendar") if isinstance(settings.get("content_calendar"), dict) else {}
+    planned = list(cal.get("planned_posts") or [])
+    posted = list(cal.get("posted") or [])
+    planned.append(new_post)
+    next_settings = {
+        **settings,
+        "content_calendar": {
+            **cal,
+            "planned_posts": planned,
+            "posted": posted,
+        },
+    }
+    try:
+        await _sb(client, "PATCH", f"/businesses?id=eq.{biz_id}", {"settings": next_settings})
+    except Exception as e:
+        return _fail("plan_content", f"save failed: {e}")
+
+    return {
+        "type": "plan_content",
+        "result": "scheduled",
+        "label": f"📱 Planned {platform} post: {title} — {scheduled_date}",
+        "post_id": new_post["id"],
+        "nav": _nav("grow", "content"),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # STRATEGY TRACK HANDLERS
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -4482,6 +4804,9 @@ ACTION_HANDLERS = {
     "open_documents":         handle_open_documents,
     "open_calendar":          handle_open_calendar,
     "show_revenue":           handle_show_revenue,
+    "create_goal":            handle_create_goal,
+    "check_goals":            handle_check_goals,
+    "plan_content":           handle_plan_content,
     "run_agent":             handle_run_agent,
     "create_module_entry":   handle_create_module_entry,
     "create_contact":        handle_create_contact,
@@ -5001,8 +5326,17 @@ ACTIONS — BATCH EMAIL:
   Use {{contact_name}} and {{business_name}} placeholders — replaced per recipient. Cap is 50 contacts per call. Skipped recipients (no email on file) are reported in the result label.
   NOTE: "create_invoice + send_invoice in one turn" works — emit both in the same response. The server automatically threads the new invoice_id into send_invoice.
 
+ACTIONS — GROW (goals + content):
+  [ACTION:{{"type":"create_goal","title":"Reach 50 contacts","category":"contacts","target":50,"period":"quarterly","end":"2026-06-30","auto_track":true}}]
+  [ACTION:{{"type":"create_goal","title":"Generate $15,000 in revenue","category":"revenue","target":15000,"period":"quarterly","metric":"revenue_collected"}}]
+  [ACTION:{{"type":"check_goals"}}]
+  [ACTION:{{"type":"plan_content","title":"3 ways to build trust","platform":"linkedin","scheduled_date":"2026-04-29","status":"draft"}}]
+    — Categories: contacts | revenue | sessions | engagement | custom. Periods: weekly | monthly | quarterly | yearly.
+    — auto_track=true (default) computes progress from live data; metric is inferred from category but can be set explicitly.
+    — Platforms for plan_content: instagram | linkedin | twitter | facebook | tiktok | youtube | blog | other.
+
 ACTIONS — NAVIGATION + MEMORY:
-  [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"dashboard|queue|contacts|projects|calendar|invoices|tasks|documents|agents|briefing|health|insights","contact_id":"<uuid-optional>","page":"<page-id-optional>"}}]
+  [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"dashboard|queue|contacts|projects|calendar|invoices|tasks|documents|agents|briefing|insights|goals|revenue|content|funnel","contact_id":"<uuid-optional>","page":"<page-id-optional>"}}]
   [ACTION:{{"type":"open_documents"}}]   — shortcut: navigate straight to the Documents tab.
   [ACTION:{{"type":"open_calendar"}}]    — shortcut: navigate straight to the Calendar tab.
   [ACTION:{{"type":"show_revenue"}}]     — shortcut: open OPERATE → Invoices in Revenue view.
@@ -5038,6 +5372,11 @@ When the practitioner says...                       You should emit...
   "How much did I make this month?"             →   show_revenue (then narrate from CONTEXT)
   "Remember/don't forget..."                    →   remember
   "Forget that / never mind that rule"          →   forget
+  "Set a goal to..." / "Track [X] by [date]"    →   create_goal
+  "How am I doing on my goals?"                 →   check_goals
+  "Plan a post about..." / "Schedule [post]"    →   plan_content
+  "Run my weekly briefing"                      →   generate_briefing
+  "Generate new insights" / "What's new?"       →   generate_insights
 If the request maps to an action, ALWAYS emit the action tag. NEVER just describe what you would do.
 
 RULES:
@@ -5126,6 +5465,21 @@ The practitioner sets autonomy levels per team member in OPERATE → Autopilot. 
 
 DOCUMENTS:
 Practitioners can upload and manage documents in OPERATE → Documents. Files can be attached to a contact (stored under contacts/{{contact_id}}/) or kept as general business documents. When a practitioner says "upload a file" or "attach a document," navigate them to the Documents tab — or, for a specific contact, the Files tab on that contact's detail page. You CANNOT upload files yourself — guide the practitioner to the UI. document_uploaded events appear on the contact timeline and you can reference them ("I see you uploaded the signed agreement on April 5").
+
+GROWTH & STRATEGY:
+The GROW tab is the practitioner's strategic intelligence center. Sub-tabs: Dashboard (4 metric cards + 6-month trend + top performers), Briefing (AI weekly briefing), Insights (AI observations grouped by category), Goals (settings.goals.active_goals), Revenue (full analytics), Content (settings.content_calendar.planned_posts), Funnel (lead→active conversion).
+
+When the practitioner asks growth/strategy questions, give specific data-backed answers. Name names, cite numbers, show trends. Don't give generic advice. Quick mappings:
+  • "How is my business doing?"            → Summarize from CONTEXT (contacts/queue/insights/recent events) — no need to run anything.
+  • "Run my weekly briefing"               → [ACTION:{{"type":"generate_briefing"}}]
+  • "Generate new insights"                → [ACTION:{{"type":"generate_insights"}}]
+  • "Set a goal to reach 50 contacts by June"  → [ACTION:{{"type":"create_goal","title":"...","category":"contacts","target":50,"period":"quarterly","end":"2026-06-30"}}]
+  • "Am I on track for my goals?" / "How are my goals?" → [ACTION:{{"type":"check_goals"}}] (handler computes live progress and returns a summary)
+  • "What should I post about?" / "Plan a post for Thursday"  → [ACTION:{{"type":"plan_content","title":"...","platform":"...","scheduled_date":"YYYY-MM-DD"}}]
+  • "Where are my leads coming from?"      → navigate to GROW → Funnel ([ACTION:{{"type":"navigate","tab":"grow","sub":"funnel"}}])
+  • "Show me my revenue breakdown"         → [ACTION:{{"type":"show_revenue"}}] (or navigate to grow/revenue for the full analytics)
+  • "What's my conversion rate?"           → navigate to GROW → Funnel and narrate from data once there.
+Goals live at settings.goals.active_goals (auto-tracked from live contacts/invoices/sessions). Content posts live at settings.content_calendar.planned_posts (the practitioner posts manually; this just tracks what's planned).
 
 CALENDAR:
 The Calendar sub-tab in OPERATE shows sessions, tasks with due dates, invoice due dates, AND projects with target/start dates in one timeline (month / week / day views). When the practitioner asks "what's on my schedule" or "what's coming up Friday," navigate to OPERATE → Calendar with [ACTION:{{"type":"open_calendar"}}], or summarize from CONTEXT data without navigating if a quick text answer is enough.
