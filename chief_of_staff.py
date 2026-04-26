@@ -726,7 +726,39 @@ def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
         i = k + 1 if k < n else n
 
     cleaned = "".join(out_parts).strip()
+    cleaned = _scrub_response_text(cleaned)
     return actions[:MAX_ACTIONS_PER_TURN], cleaned
+
+
+# Internal hint markers we inject into prior assistant turns so the
+# model recognizes that actions WERE emitted (and not to drift into
+# action-free conversation). Some models copy these markers forward
+# into NEW responses — strip them from anything the practitioner sees.
+_HINT_LITERALS = (
+    "[Note: In this response, I used [ACTION:{...}] tags to execute all operations. Every action I described had a corresponding tag.]",
+    "[Note: In this response, I used tags to execute all operations. Every action I described had a corresponding tag.]",
+    "(Actions were emitted via [ACTION:] tags and executed by the system.)",
+)
+_HINT_BRACKETED = re.compile(r"\[Note:[^\]]*?corresponding tag\.\s*\]", re.IGNORECASE | re.DOTALL)
+_HINT_PARENS = re.compile(r"\(Actions were emitted[^\)]*?by the system\.\s*\)", re.IGNORECASE | re.DOTALL)
+_BLANK_LINES_3PLUS = re.compile(r"\n{3,}")
+
+
+def _scrub_response_text(text: str) -> str:
+    """Remove internal hint markers + extra blank lines from text the
+    practitioner is about to see. Belt-and-suspenders: literal
+    replacement first (handles the exact marker), then regex (handles
+    paraphrased variants), then blank-line collapse."""
+    if not text:
+        return text
+    s = text
+    for lit in _HINT_LITERALS:
+        if lit in s:
+            s = s.replace(lit, "")
+    s = _HINT_BRACKETED.sub("", s)
+    s = _HINT_PARENS.sub("", s)
+    s = _BLANK_LINES_3PLUS.sub("\n\n", s)
+    return s.strip()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5096,7 +5128,20 @@ DOCUMENTS:
 Practitioners can upload and manage documents in OPERATE → Documents. Files can be attached to a contact (stored under contacts/{{contact_id}}/) or kept as general business documents. When a practitioner says "upload a file" or "attach a document," navigate them to the Documents tab — or, for a specific contact, the Files tab on that contact's detail page. You CANNOT upload files yourself — guide the practitioner to the UI. document_uploaded events appear on the contact timeline and you can reference them ("I see you uploaded the signed agreement on April 5").
 
 CALENDAR:
-The Calendar sub-tab in OPERATE shows sessions, tasks with due dates, and invoice due dates in one timeline (month / week / day views). When the practitioner asks "what's on my schedule" or "what's coming up Friday," navigate to OPERATE → Calendar with [ACTION:{{"type":"navigate","tab":"operate","sub":"calendar"}}], or summarize from CONTEXT data without navigating if a quick text answer is enough.
+The Calendar sub-tab in OPERATE shows sessions, tasks with due dates, invoice due dates, AND projects with target/start dates in one timeline (month / week / day views). When the practitioner asks "what's on my schedule" or "what's coming up Friday," navigate to OPERATE → Calendar with [ACTION:{{"type":"open_calendar"}}], or summarize from CONTEXT data without navigating if a quick text answer is enough.
+
+CALENDAR AWARENESS:
+Everything with a date appears on the practitioner's calendar automatically — the calendar reads live from these tables:
+  • Sessions (scheduled_for)
+  • Tasks (due_date)
+  • Invoices (due_date)
+  • Projects (target_date, start_date)
+When you create any of these, ALWAYS include the date so it shows up on the calendar. When the practitioner says "put this on my calendar," "schedule this," "block off [day]," or "remind me [date]," create the appropriate item with the date populated. Quick mappings:
+  • "Put a reminder on my calendar for Friday"        → create_task with due_date set to Friday
+  • "Block May 1st for Sandra's coaching kickoff"     → create_session with scheduled_for=2026-05-01T...
+  • "I need to finish the proposal by June 15"        → create_task or create_project with the date
+  • "Add a project deadline of July 31 for [client]"  → create_project with target_date
+Don't describe scheduling something without emitting the create action — the calendar only shows rows that exist in the DB.
 
 REVENUE & TAX:
 The Revenue dashboard lives at OPERATE → Invoices → Revenue toggle. It shows invoiced/collected/outstanding totals, by-category and by-client breakdowns, tax set-aside (defaults to 25%), and CSV/PDF export. Tax rate and category list are in businesses.settings.financial. When the practitioner asks "how much did I make this month/quarter/year," "what's my tax set-aside," or "send my revenue report," navigate to that view (or pre-fill an email when they want to send to their accountant). Categories: pick from their configured list when creating invoices via the Chief — infer from line items if they don't say.
@@ -5601,8 +5646,14 @@ async def chief_chat(req: ChatRequest):
                 f"actions={len(taken)} greeting={is_greeting} memories={len(ctx.get('memories') or [])}"
             )
 
+            # Final scrub: if `clean` is empty (parse fall-through) we
+            # serve `raw`, which may still contain the hint markers we
+            # injected into history. Belt-and-suspenders so nothing
+            # internal-looking ever reaches the practitioner.
+            response_text = clean if clean else _scrub_response_text(raw or "")
+
             return {
-                "response": clean or raw,
+                "response": response_text,
                 "actions_taken": taken,
             }
     except HTTPException:
