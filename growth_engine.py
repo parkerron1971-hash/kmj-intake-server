@@ -808,6 +808,90 @@ async def growth_health_report(req: GrowthRequest):
 # ENDPOINT: INSIGHTS (AI pattern/anomaly/opportunity detection)
 # ═══════════════════════════════════════════════════════════════════════
 
+async def forecast_revenue(client: httpx.AsyncClient, biz_id: str) -> Optional[Dict[str, Any]]:
+    """Predict next month's revenue using a weighted moving average of
+    the last 6 months plus an assumed conversion of the current
+    pipeline. Returns None when there isn't enough history (< 3 paid
+    invoices) — let callers render a "not enough data yet" state.
+
+    Output:
+      {
+        "forecast_next_month": int,         # blended forecast
+        "current_month_pace":  int,         # straight-line projection
+        "current_month_actual": int,        # collected so far this month
+        "pipeline_total":      int,         # outstanding sent/viewed invoices
+        "trend":               "up"|"down"|"steady",
+        "monthly_history":     [{"month": "YYYY-MM", "revenue": float}, ...],
+      }
+    """
+    now = datetime.now(timezone.utc)
+    six_months_ago = (now - timedelta(days=180)).isoformat()
+    paid_rows = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz_id}&status=eq.paid&paid_at=gte.{six_months_ago}"
+        f"&select=total,paid_at&limit=500"
+    ) or []
+
+    if len(paid_rows) < 3:
+        return None
+
+    monthly: Dict[str, float] = {}
+    for inv in paid_rows:
+        month = (inv.get("paid_at") or "")[:7]
+        if not month:
+            continue
+        monthly[month] = monthly.get(month, 0.0) + float(inv.get("total") or 0)
+
+    months_sorted = sorted(monthly.items())
+    values = [v for _, v in months_sorted]
+
+    # Weighted moving average — recent months count more.
+    if len(values) >= 3:
+        weights = list(range(1, len(values) + 1))
+        weighted_sum = sum(v * w for v, w in zip(values, weights))
+        weight_total = sum(weights)
+        forecast = weighted_sum / weight_total if weight_total else 0.0
+    else:
+        forecast = sum(values) / max(len(values), 1)
+
+    # Pipeline (sent + viewed invoices) — assume ~70% converts.
+    pipeline_rows = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz_id}&status=in.(sent,viewed)&select=total&limit=200"
+    ) or []
+    pipeline_total = sum(float(i.get("total") or 0) for i in pipeline_rows)
+    pipeline_contribution = pipeline_total * 0.7
+
+    # Blend the two signals.
+    adjusted_forecast = forecast * 0.6 + pipeline_contribution * 0.4
+
+    # Current-month pace via straight-line projection.
+    this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    this_month_rows = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz_id}&status=eq.paid&paid_at=gte.{this_month_start}"
+        f"&select=total&limit=500"
+    ) or []
+    current_month_total = sum(float(i.get("total") or 0) for i in this_month_rows)
+    day_of_month = now.day
+    days_in_month = 30
+    pace = (current_month_total / max(day_of_month, 1)) * days_in_month
+
+    # Trend
+    trend = "steady"
+    if len(values) >= 2:
+        if values[-1] > values[-2] * 1.05:
+            trend = "up"
+        elif values[-1] < values[-2] * 0.95:
+            trend = "down"
+
+    return {
+        "forecast_next_month": round(adjusted_forecast),
+        "current_month_pace": round(pace),
+        "current_month_actual": round(current_month_total),
+        "pipeline_total": round(pipeline_total),
+        "trend": trend,
+        "monthly_history": [{"month": m, "revenue": round(v, 2)} for m, v in months_sorted],
+    }
+
+
 async def _gather_cross_domain_data(client: httpx.AsyncClient, biz_id: str) -> Dict[str, Any]:
     """Build per-contact profiles spanning contacts, sessions, invoices,
     and engagement events. The insights generator uses these to find

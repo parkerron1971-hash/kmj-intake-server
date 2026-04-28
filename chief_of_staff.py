@@ -5884,6 +5884,188 @@ def _build_suggestions_block(active: bool) -> str:
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# REVENUE FORECAST + RELATIONSHIP INSIGHTS + TIME CONTEXT
+# All three return human-readable blocks injected into the system
+# prompt. Best-effort — failures degrade silently to "" so the chief
+# stays usable even when these probes return nothing.
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _forecast_revenue(client: httpx.AsyncClient, biz_id: str) -> Optional[Dict[str, Any]]:
+    """Same logic as growth_engine.forecast_revenue but inlined here so
+    chief_of_staff doesn't need to import the GROW module (avoids any
+    circular-import risk)."""
+    now = datetime.now(timezone.utc)
+    six_months_ago = (now - timedelta(days=180)).isoformat()
+    paid_rows = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz_id}&status=eq.paid&paid_at=gte.{six_months_ago}"
+        f"&select=total,paid_at&limit=500"
+    ) or []
+    if len(paid_rows) < 3:
+        return None
+
+    monthly: Dict[str, float] = {}
+    for inv in paid_rows:
+        month = (inv.get("paid_at") or "")[:7]
+        if not month:
+            continue
+        monthly[month] = monthly.get(month, 0.0) + float(inv.get("total") or 0)
+
+    months_sorted = sorted(monthly.items())
+    values = [v for _, v in months_sorted]
+    if len(values) >= 3:
+        weights = list(range(1, len(values) + 1))
+        forecast = sum(v * w for v, w in zip(values, weights)) / sum(weights)
+    else:
+        forecast = sum(values) / max(len(values), 1)
+
+    pipeline_rows = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz_id}&status=in.(sent,viewed)&select=total&limit=200"
+    ) or []
+    pipeline_total = sum(float(i.get("total") or 0) for i in pipeline_rows)
+    adjusted = forecast * 0.6 + (pipeline_total * 0.7) * 0.4
+
+    this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    this_month_rows = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz_id}&status=eq.paid&paid_at=gte.{this_month_start}"
+        f"&select=total&limit=500"
+    ) or []
+    current_total = sum(float(i.get("total") or 0) for i in this_month_rows)
+    pace = (current_total / max(now.day, 1)) * 30
+
+    trend = "steady"
+    if len(values) >= 2:
+        if values[-1] > values[-2] * 1.05: trend = "up"
+        elif values[-1] < values[-2] * 0.95: trend = "down"
+
+    return {
+        "forecast_next_month": round(adjusted),
+        "current_month_pace": round(pace),
+        "current_month_actual": round(current_total),
+        "pipeline_total": round(pipeline_total),
+        "trend": trend,
+    }
+
+
+def _format_forecast_block(f: Optional[Dict[str, Any]]) -> str:
+    if not f:
+        return ""
+    return (
+        "REVENUE FORECAST (use when asked 'how am I doing financially / what's revenue looking like'):\n"
+        f"- Next month projection: ${f['forecast_next_month']:,}\n"
+        f"- Current month pace: ${f['current_month_pace']:,} (actual so far ${f['current_month_actual']:,})\n"
+        f"- Pipeline (outstanding invoices): ${f['pipeline_total']:,}\n"
+        f"- Trend vs prior month: {f['trend']}\n"
+        "Be specific. Say 'You're on pace for $X this month' — not 'revenue looks good'."
+    )
+
+
+async def _analyze_relationships(client: httpx.AsyncClient, biz_id: str) -> List[str]:
+    """Generate 3-5 plain-language insights about relationship quality.
+    Returns empty list when there isn't enough data to say anything
+    meaningful."""
+    contacts = await _sb(client, "GET",
+        f"/contacts?business_id=eq.{biz_id}&status=neq.inactive"
+        f"&select=id,name,status,health_score,last_interaction&limit=200"
+    ) or []
+    if len(contacts) < 3:
+        return []
+
+    events = await _sb(client, "GET",
+        f"/events?business_id=eq.{biz_id}&order=created_at.desc&limit=600"
+        f"&select=contact_id,event_type"
+    ) or []
+    sessions = await _sb(client, "GET",
+        f"/sessions?business_id=eq.{biz_id}&select=contact_id,status&limit=500"
+    ) or []
+    invoices = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz_id}&select=contact_id,status&limit=500"
+    ) or []
+
+    insights: List[str] = []
+    for c in contacts:
+        cid = c["id"]
+        name = c.get("name") or "this contact"
+        c_events = [e for e in events if e.get("contact_id") == cid]
+        emails = sum(1 for e in c_events if e.get("event_type") in ("email_sent", "draft_and_send", "batch_email_sent"))
+        replies = sum(1 for e in c_events if e.get("event_type") == "email_reply")
+        sessions_done = sum(1 for s in sessions if s.get("contact_id") == cid and s.get("status") == "completed")
+        invoices_count = sum(1 for i in invoices if i.get("contact_id") == cid)
+
+        # Transactional-only relationship.
+        if invoices_count > 0 and sessions_done > 0 and emails <= invoices_count:
+            insights.append(
+                f"{name}: mostly transactional lately — invoices and sessions "
+                f"but few personal touchpoints. A casual check-in could strengthen the connection."
+            )
+
+        # One-way communication.
+        if emails > 5 and replies == 0:
+            insights.append(
+                f"{name}: hasn't replied to any of your {emails} emails. "
+                f"They might prefer a different channel — try a phone call or text."
+            )
+
+        # VIP neglect.
+        if c.get("status") == "vip":
+            ds = _days_since(c.get("last_interaction"))
+            if ds is not None and ds > 14:
+                insights.append(
+                    f"{name} (VIP): {ds} days since last interaction. "
+                    f"VIPs deserve regular personal attention."
+                )
+
+    return insights[:5]
+
+
+def _format_relationships_block(insights: List[str]) -> str:
+    if not insights:
+        return ""
+    bullets = "\n".join(f"- {i}" for i in insights)
+    return (
+        "RELATIONSHIP INSIGHTS (use when the practitioner asks about a contact "
+        "by name OR when relevant to their question — surface naturally, don't "
+        "dump the list):\n" + bullets
+    )
+
+
+async def _get_time_context(client: httpx.AsyncClient, biz_id: str) -> str:
+    """Build a small block about the moment — time of day, day of week,
+    and any recurring activity pattern from chief_patterns."""
+    now = datetime.now(timezone.utc)
+    hour = now.hour
+    day = now.strftime("%A")
+
+    parts: List[str] = []
+    if hour < 9:
+        parts.append("It's early morning — keep it focused, lead with priorities.")
+    elif hour >= 17:
+        parts.append("It's late in the day — consider suggesting a wrap-up or end-of-day review rather than starting new tasks.")
+    if day == "Monday":
+        parts.append("It's Monday — good moment for a weekly overview and setting the week's priorities.")
+    elif day == "Friday":
+        parts.append("It's Friday — consider suggesting a weekly review or prepping for next week.")
+
+    # Pattern hint — does the practitioner usually show up today?
+    try:
+        rows = await _sb(client, "GET",
+            f"/chief_patterns?business_id=eq.{biz_id}"
+            f"&pattern_type=eq.work_schedule&pattern_key=eq.activity"
+            f"&select=pattern_value,occurrences&limit=1"
+        )
+        if rows:
+            pv = rows[0].get("pattern_value") or {}
+            most_active_day = (pv.get("day_of_week") or "").lower()
+            if most_active_day and day.lower() == most_active_day and (rows[0].get("occurrences") or 0) >= 5:
+                parts.append("This is typically the practitioner's most active day.")
+    except Exception:
+        pass
+
+    if not parts:
+        return ""
+    return "TIME CONTEXT:\n" + "\n".join(f"- {p}" for p in parts)
+
+
 def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          view: Optional[CurrentContext] = None,
                          view_detail: Optional[Dict] = None,
@@ -5894,7 +6076,10 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          session_context: str = "",
                          priorities: Optional[List[str]] = None,
                          mentor_active: bool = False,
-                         suggestions_active: bool = True) -> str:
+                         suggestions_active: bool = True,
+                         forecast_block: str = "",
+                         relationships_block: str = "",
+                         time_block: str = "") -> str:
     # Strategy Coach mode is a different persona entirely.
     if mode == "strategy_coach":
         return _build_coach_prompt(ctx, is_greeting, resume_note=resume_note)
@@ -5965,6 +6150,12 @@ REAL-TIME BUSINESS DATA (fresh every message):
 {strategy_block}
 
 {priorities_block}
+
+{time_block}
+
+{forecast_block}
+
+{relationships_block}
 
 {session_context}
 
@@ -6616,13 +6807,35 @@ async def chief_chat(req: ChatRequest):
             is_coach_pause = _is_coach_pause(req.message)
 
             # Intelligence enrichment — voice samples, session context,
-            # daily priorities, mentor cooldown, suggestion preference.
+            # daily priorities, mentor cooldown, suggestion preference,
+            # plus revenue forecast / relationship insights / time-context
+            # blocks. All of these tolerate failure (return "" or None).
             voice_examples = await _get_voice_examples(client, req.business_id)
             session_context = await _get_session_context(client, req.business_id)
             priorities = _build_daily_priorities(biz, ctx) if is_greeting else []
             mentor_active = await _should_show_mentor_tip(client, biz)
             prefs = (biz.get("settings") or {}).get("chief_preferences") or {}
             suggestions_active = prefs.get("auto_suggestions") is not False
+
+            forecast = None
+            try:
+                forecast = await _forecast_revenue(client, req.business_id)
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"_forecast_revenue failed: {e}")
+            forecast_block = _format_forecast_block(forecast)
+
+            try:
+                relationship_insights = await _analyze_relationships(client, req.business_id)
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"_analyze_relationships failed: {e}")
+                relationship_insights = []
+            relationships_block = _format_relationships_block(relationship_insights)
+
+            try:
+                time_block = await _get_time_context(client, req.business_id)
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"_get_time_context failed: {e}")
+                time_block = ""
 
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
@@ -6633,6 +6846,9 @@ async def chief_chat(req: ChatRequest):
                 priorities=priorities,
                 mentor_active=mentor_active,
                 suggestions_active=suggestions_active,
+                forecast_block=forecast_block,
+                relationships_block=relationships_block,
+                time_block=time_block,
             )
             effective_message = req.message
             if req.mode == "strategy_coach" and is_coach_pause:
