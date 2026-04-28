@@ -116,6 +116,164 @@ def _inject_canonical(html: str, slug: str) -> str:
     return html
 
 
+def _esc(text: Any) -> str:
+    """Cheap HTML escape."""
+    if text is None:
+        return ""
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _render_products_section(products: List[Dict[str, Any]], slug: str) -> str:
+    """Render a Products & Services section. Returns '' when nothing to show."""
+    visible = [
+        p for p in (products or [])
+        if (p.get("status") or "active") == "active"
+        and p.get("display_on_website", True)
+    ]
+    if not visible:
+        return ""
+
+    visible.sort(key=lambda p: (p.get("sort_order") or 0, p.get("name") or ""))
+
+    cards: List[str] = []
+    for p in visible:
+        name = _esc(p.get("name") or "")
+        desc = _esc((p.get("description") or "")[:240])
+        ptype = (p.get("type") or "service").lower()
+        try:
+            price = float(p.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        currency = (p.get("currency") or "USD").upper()
+        sym = "$" if currency == "USD" else ""
+        pricing_type = (p.get("pricing_type") or "fixed").lower()
+
+        if pricing_type == "custom" or price <= 0:
+            price_label = "Contact for pricing"
+        else:
+            base = f"{sym}{price:,.2f}".rstrip("0").rstrip(".") if price % 1 else f"{sym}{price:,.0f}"
+            if pricing_type == "hourly":
+                price_label = f"{base}/hr"
+            elif pricing_type == "per_session":
+                price_label = f"{base}/session"
+            elif pricing_type == "subscription":
+                price_label = f"{base}/mo"
+            else:
+                price_label = base
+
+        image_url = p.get("image_url")
+        image_html = (
+            f'<div style="width:100%;aspect-ratio:4/3;overflow:hidden;background:#f5f5f5;">'
+            f'<img src="{_esc(image_url)}" alt="{name}" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy" />'
+            f'</div>'
+        ) if image_url else ""
+
+        stripe_link = p.get("stripe_payment_url")
+        if ptype == "digital" and stripe_link:
+            cta = (
+                f'<a href="{_esc(stripe_link)}" style="display:inline-block;margin-top:10px;padding:10px 18px;'
+                f'background:#D4AF37;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">'
+                f'Buy Now — {price_label}</a>'
+            )
+        elif ptype == "service":
+            cta = (
+                f'<a href="/{_esc(slug)}/book" style="display:inline-block;margin-top:10px;padding:10px 18px;'
+                f'background:#D4AF37;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">'
+                f'Book Now — {price_label}</a>'
+            )
+        else:
+            cta = (
+                f'<div style="margin-top:10px;font-weight:700;color:#222;">{price_label}</div>'
+            )
+
+        includes = p.get("includes") or []
+        includes_html = ""
+        if ptype == "package" and isinstance(includes, list) and includes:
+            items = "".join(
+                f'<li style="font-size:13px;color:#555;">{_esc((i.get("item") if isinstance(i, dict) else i) or "")}</li>'
+                for i in includes[:5]
+            )
+            includes_html = f'<ul style="margin:8px 0 0;padding-left:18px;">{items}</ul>'
+
+        cards.append(
+            f'<div style="background:#fff;border:1px solid rgba(0,0,0,0.08);border-radius:12px;'
+            f'overflow:hidden;display:flex;flex-direction:column;">'
+            f'{image_html}'
+            f'<div style="padding:16px;display:flex;flex-direction:column;gap:6px;">'
+            f'<h3 style="margin:0;font-size:18px;color:#222;">{name}</h3>'
+            f'<p style="margin:0;font-size:14px;color:#555;line-height:1.5;">{desc}</p>'
+            f'{includes_html}'
+            f'{cta}'
+            f'</div></div>'
+        )
+
+    return (
+        '<section id="products" style="padding:60px 24px;background:#fafafa;">'
+        '<div style="max-width:1100px;margin:0 auto;">'
+        '<h2 style="text-align:center;font-size:32px;margin:0 0 32px;color:#222;">Products &amp; Services</h2>'
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:20px;">'
+        + "".join(cards) +
+        '</div></div></section>'
+    )
+
+
+def _render_gallery_section(gallery: List[Dict[str, Any]]) -> str:
+    """Render the Gallery section from settings.media_library.gallery.
+    Returns '' if nothing public to show."""
+    visible = [
+        g for g in (gallery or [])
+        if g.get("show_on_website", True) and g.get("url")
+    ]
+    if not visible:
+        return ""
+    visible.sort(key=lambda g: g.get("sort_order") or 0)
+
+    tiles = []
+    for g in visible:
+        url = _esc(g.get("url"))
+        alt = _esc(g.get("alt") or "")
+        caption = _esc(g.get("caption") or "")
+        cap_html = (
+            f'<p style="margin:6px 0 0;font-size:12px;color:#666;text-align:center;">{caption}</p>'
+            if caption else ""
+        )
+        tiles.append(
+            f'<div class="gallery-item" style="display:flex;flex-direction:column;">'
+            f'<div style="aspect-ratio:1/1;overflow:hidden;border-radius:8px;background:#f5f5f5;">'
+            f'<img src="{url}" alt="{alt}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;" />'
+            f'</div>{cap_html}</div>'
+        )
+
+    return (
+        '<section id="gallery" style="padding:60px 24px;background:#fff;">'
+        '<div style="max-width:1100px;margin:0 auto;">'
+        '<h2 style="text-align:center;font-size:32px;margin:0 0 32px;color:#222;">Gallery</h2>'
+        '<div class="gallery-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;">'
+        + "".join(tiles) +
+        '</div></div></section>'
+    )
+
+
+def _inject_dynamic_sections(html: str, products_html: str, gallery_html: str) -> str:
+    """Append the products + gallery sections into the served HTML right
+    before </body>. The site itself is regenerated rarely; this gives
+    practitioners live updates without a regen cycle."""
+    extra = (products_html or "") + (gallery_html or "")
+    if not extra:
+        return html
+    if "</body>" in html:
+        return html.replace("</body>", extra + "\n</body>", 1)
+    if "</BODY>" in html:
+        return html.replace("</BODY>", extra + "\n</BODY>", 1)
+    return html + extra
+
+
 logger = logging.getLogger("public_site")
 if not logger.handlers:
     h = logging.StreamHandler()
@@ -325,8 +483,29 @@ async def get_site_html(slug: str):
         html = site.get("html_content") or ""
         if not html:
             raise HTTPException(404, "Site has no content")
-        # Inject canonical URL for SEO
+        biz_id = site.get("business_id")
+
+        # Pull live products + media library so they update without a regen
+        products: List[Dict[str, Any]] = []
+        gallery: List[Dict[str, Any]] = []
+        if biz_id:
+            prod_rows, biz_rows = await asyncio.gather(
+                _sb(client,
+                    f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
+                    f"&order=sort_order.asc,created_at.desc&select=*&limit=100"),
+                _sb(client, f"/businesses?id=eq.{biz_id}&select=settings&limit=1"),
+            )
+            products = prod_rows or []
+            if biz_rows:
+                lib = ((biz_rows[0].get("settings") or {}).get("media_library") or {})
+                gallery = lib.get("gallery") or []
+
         html = _inject_canonical(html, slug)
+        html = _inject_dynamic_sections(
+            html,
+            _render_products_section(products, slug),
+            _render_gallery_section(gallery),
+        )
         return HTMLResponse(
             content=html,
             status_code=200,
@@ -549,6 +728,24 @@ async def link_page_html(slug: str):
                 continue
             social_html += f'<span style="font-size:1.4em;cursor:pointer;" title="{platform}: {handle}">{social_map.get(platform, "🔗")}</span> '
 
+        # Optional gallery — pulls from media_library when toggled on
+        gallery_html = ""
+        if lp.get("show_gallery"):
+            lib = ((biz.get("settings") or {}).get("media_library") or {})
+            gallery_items = [g for g in (lib.get("gallery") or []) if g.get("show_on_website", True) and g.get("url")]
+            gallery_items.sort(key=lambda g: g.get("sort_order") or 0)
+            if gallery_items:
+                tiles = "".join(
+                    f'<a href="{_esc(g.get("url"))}" target="_blank" rel="noreferrer" '
+                    f'style="display:block;aspect-ratio:1/1;border-radius:8px;overflow:hidden;background:#0001;">'
+                    f'<img src="{_esc(g.get("url"))}" alt="{_esc(g.get("alt") or "")}" loading="lazy" '
+                    f'style="width:100%;height:100%;object-fit:cover;display:block;" /></a>'
+                    for g in gallery_items[:9]
+                )
+                gallery_html = (
+                    f'<div style="margin-top:24px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">{tiles}</div>'
+                )
+
         html = f"""<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
@@ -570,6 +767,7 @@ h1{{font-size:1.4em;font-weight:700;margin-bottom:4px;}}
 {f'<p class="tagline">{tagline}</p>' if tagline else f'<p class="tagline">{biz_name}</p>'}
 {links_html}
 {f'<div class="socials">{social_html}</div>' if social_html else ''}
+{gallery_html}
 <div class="footer">Powered by The Solutionist System</div>
 </div></body></html>"""
         return HTMLResponse(content=html)
@@ -1068,15 +1266,40 @@ p{font-size:1.05em;color:#8B8880;line-height:1.7;margin-bottom:32px;}
 </html>"""
 
 
+async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: str, html: str) -> str:
+    """Inject canonical + live products + gallery into served HTML."""
+    products: List[Dict[str, Any]] = []
+    gallery: List[Dict[str, Any]] = []
+    if biz_id:
+        prod_rows, biz_rows = await asyncio.gather(
+            _sb(client,
+                f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
+                f"&order=sort_order.asc,created_at.desc&select=*&limit=100"),
+            _sb(client, f"/businesses?id=eq.{biz_id}&select=settings&limit=1"),
+        )
+        products = prod_rows or []
+        if biz_rows:
+            lib = ((biz_rows[0].get("settings") or {}).get("media_library") or {})
+            gallery = lib.get("gallery") or []
+    html = _inject_canonical(html, slug)
+    html = _inject_dynamic_sections(
+        html,
+        _render_products_section(products, slug),
+        _render_gallery_section(gallery),
+    )
+    return html
+
+
 async def _serve_site_by_slug(slug: str) -> HTMLResponse:
     """Shared logic: look up site by slug and return HTML."""
     async with httpx.AsyncClient() as client:
         sites = await _sb(client,
             f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
-            f"&select=html_content")
+            f"&select=html_content,business_id")
         if not sites or not sites[0].get("html_content"):
             raise HTTPException(404, "Site not found")
-        html = _inject_canonical(sites[0]["html_content"], slug)
+        site = sites[0]
+        html = await _augment_html(client, site.get("business_id"), slug, site["html_content"])
         return HTMLResponse(content=html, media_type="text/html")
 
 
@@ -1087,11 +1310,12 @@ async def _serve_site_by_custom_domain(domain: str) -> HTMLResponse:
         sites = await _sb(client,
             f"/business_sites?site_config->>custom_domain=eq.{domain}"
             f"&order=updated_at.desc&limit=1"
-            f"&select=html_content,slug")
+            f"&select=html_content,slug,business_id")
         if not sites or not sites[0].get("html_content"):
             return None  # type: ignore
-        slug = sites[0].get("slug") or domain
-        html = _inject_canonical(sites[0]["html_content"], slug)
+        site = sites[0]
+        slug = site.get("slug") or domain
+        html = await _augment_html(client, site.get("business_id"), slug, site["html_content"])
         return HTMLResponse(content=html, media_type="text/html")
 
 

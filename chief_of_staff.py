@@ -4788,6 +4788,200 @@ async def handle_mark_invoice_paid(client, biz, action) -> Dict:
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# PRODUCTS & SERVICES
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _find_product_by_name(client, biz_id: str, name: str) -> Optional[Dict[str, Any]]:
+    if not name:
+        return None
+    safe = name.replace("%", "")
+    rows = await _sb(client, "GET",
+        f"/products?business_id=eq.{biz_id}&name=ilike.*{safe}*&select=*&limit=5")
+    if not rows:
+        return None
+    # Exact match wins, otherwise the first ilike hit
+    for r in rows:
+        if (r.get("name") or "").strip().lower() == name.strip().lower():
+            return r
+    return rows[0]
+
+
+async def handle_create_product(client, biz, action) -> Dict:
+    name = (action.get("name") or "").strip()
+    if not name:
+        return _fail("create_product", "name required")
+
+    product_type = (action.get("type") or action.get("product_type") or "service").strip().lower()
+    if product_type not in ("service", "digital", "physical", "package"):
+        product_type = "service"
+
+    pricing_type = (action.get("pricing_type") or "fixed").strip().lower()
+    if pricing_type not in ("fixed", "hourly", "per_session", "subscription", "custom"):
+        pricing_type = "fixed"
+
+    settings = biz.get("settings") or {}
+    fin = (settings.get("financial") or {}) if isinstance(settings.get("financial"), dict) else {}
+    currency = (action.get("currency") or fin.get("currency") or "USD").upper()
+
+    duration = action.get("duration") or action.get("duration_minutes")
+    try:
+        duration_int = int(duration) if duration is not None else None
+    except (TypeError, ValueError):
+        duration_int = None
+
+    try:
+        price = float(action.get("price") or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+
+    payload: Dict[str, Any] = {
+        "business_id": biz["id"],
+        "name": name,
+        "description": action.get("description") or None,
+        "type": product_type,
+        "price": price,
+        "currency": currency,
+        "pricing_type": pricing_type,
+        "duration_minutes": duration_int,
+        "auto_deliver": bool(action.get("auto_deliver", False)),
+        "status": "active",
+        "display_on_website": bool(action.get("display_on_website", True)),
+        "includes": action.get("includes") or [],
+    }
+
+    rows = await _sb(client, "POST", "/products", payload)
+    if not rows:
+        return _fail("create_product", "Could not create product")
+    product = rows[0]
+    product_id = product.get("id")
+
+    # Auto-generate a Stripe Payment Link for digital products with a price,
+    # but only for the platform owner (matches invoice behavior above).
+    is_owner = biz.get("owner_id") == PLATFORM_OWNER_ID
+    if (
+        product_type == "digital"
+        and price > 0
+        and is_owner
+        and os.environ.get("STRIPE_SECRET_KEY")
+        and product_id
+    ):
+        try:
+            from stripe_proxy import _create_stripe_payment_link
+            data = await _create_stripe_payment_link(
+                amount=price,
+                currency=currency.lower(),
+                description=name,
+            )
+            if data.get("url"):
+                await _sb(client, "PATCH", f"/products?id=eq.{product_id}",
+                          {"stripe_payment_url": data["url"]})
+                product["stripe_payment_url"] = data["url"]
+        except Exception as e:
+            logger.warning(f"product stripe link failed: {e}")
+
+    price_label = (
+        f"${price:,.2f}/session" if pricing_type == "per_session"
+        else f"${price:,.2f}/hr" if pricing_type == "hourly"
+        else f"${price:,.2f}/mo" if pricing_type == "subscription"
+        else f"${price:,.2f}" if price > 0
+        else "Contact for pricing"
+    )
+    return {
+        "type": "create_product",
+        "result": "created",
+        "label": f"🛍️ {name} — {price_label}",
+        "product_id": product_id,
+        "nav": _nav("build", "products"),
+    }
+
+
+async def handle_update_product(client, biz, action) -> Dict:
+    product_id = action.get("product_id")
+    if not product_id and action.get("name"):
+        match = await _find_product_by_name(client, biz["id"], action["name"])
+        if match:
+            product_id = match["id"]
+    if not product_id:
+        return _fail("update_product", "product_id or name required")
+
+    patch: Dict[str, Any] = {}
+    for k in ("name", "description", "type", "currency", "pricing_type",
+              "image_url", "digital_file_url", "stripe_payment_url",
+              "status"):
+        if k in action and action[k] is not None:
+            patch[k] = action[k]
+    if "price" in action:
+        try:
+            patch["price"] = float(action["price"])
+        except (TypeError, ValueError):
+            pass
+    if "duration_minutes" in action or "duration" in action:
+        d = action.get("duration_minutes", action.get("duration"))
+        try:
+            patch["duration_minutes"] = int(d) if d is not None else None
+        except (TypeError, ValueError):
+            pass
+    if "auto_deliver" in action:
+        patch["auto_deliver"] = bool(action["auto_deliver"])
+    if "display_on_website" in action:
+        patch["display_on_website"] = bool(action["display_on_website"])
+    if "includes" in action and isinstance(action["includes"], list):
+        patch["includes"] = action["includes"]
+
+    if not patch:
+        return _fail("update_product", "no fields to update")
+
+    rows = await _sb(client, "PATCH", f"/products?id=eq.{product_id}", patch)
+    if not rows:
+        return _fail("update_product", "update failed")
+    product = rows[0]
+    return {
+        "type": "update_product",
+        "result": "updated",
+        "label": f"🛍️ Updated {product.get('name')}",
+        "product_id": product_id,
+        "nav": _nav("build", "products"),
+    }
+
+
+async def handle_list_products(client, biz, action) -> Dict:
+    status_filter = (action.get("status") or "").strip().lower()
+    type_filter = (action.get("type") or action.get("product_type") or "").strip().lower()
+
+    qs = f"business_id=eq.{biz['id']}&select=id,name,type,price,currency,pricing_type,status&order=type.asc,name.asc&limit=100"
+    if status_filter in ("active", "draft", "archived"):
+        qs += f"&status=eq.{status_filter}"
+    if type_filter in ("service", "digital", "physical", "package"):
+        qs += f"&type=eq.{type_filter}"
+
+    rows = await _sb(client, "GET", f"/products?{qs}") or []
+    if not rows:
+        return {
+            "type": "list_products",
+            "result": "empty",
+            "label": "🛍️ No products yet",
+            "products": [],
+            "nav": _nav("build", "products"),
+        }
+
+    summary_lines = [
+        f"{r.get('name')} — ${float(r.get('price') or 0):,.2f} ({r.get('type')}, {r.get('status')})"
+        for r in rows[:25]
+    ]
+    label = f"🛍️ {len(rows)} product{'s' if len(rows) != 1 else ''}"
+    if len(rows) > 25:
+        label += " (showing first 25)"
+    return {
+        "type": "list_products",
+        "result": "ok",
+        "label": label,
+        "summary": "\n".join(summary_lines),
+        "products": rows,
+        "nav": _nav("build", "products"),
+    }
+
+
 ACTION_HANDLERS = {
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
@@ -4845,6 +5039,10 @@ ACTION_HANDLERS = {
     "mark_invoice_paid":          handle_mark_invoice_paid,
     "cancel_recurring_invoice":   handle_cancel_recurring_invoice,
     "batch_email":                handle_batch_email,
+    # Products & Services
+    "create_product":             handle_create_product,
+    "update_product":             handle_update_product,
+    "list_products":              handle_list_products,
 }
 
 
@@ -5321,6 +5519,20 @@ ACTIONS — INVOICES:
   [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[...],"is_recurring":true,"recurrence_frequency":"monthly","recurrence_start":"2026-05-01","recurrence_end_type":"never","auto_send":true}}]  — recurring invoice template; freq is weekly/biweekly/monthly/quarterly/annually. recurrence_end_type is never/after_count/on_date and recurrence_end_value carries the count or end-date. Server auto-generates each occurrence on its due date.
   [ACTION:{{"type":"cancel_recurring_invoice","invoice_id":"<template-uuid>","mode":"pause|cancel"}}]
 
+ACTIONS — PRODUCTS & SERVICES:
+  [ACTION:{{"type":"create_product","name":"Leadership Coaching","product_type":"service","price":200,"pricing_type":"per_session","duration":60,"description":"...","display_on_website":true}}]
+  [ACTION:{{"type":"create_product","name":"Born for the Time","product_type":"digital","price":14.99,"description":"...","auto_deliver":true}}]
+  [ACTION:{{"type":"create_product","name":"12-Week Coaching Program","product_type":"package","price":2400,"description":"...","includes":[{{"item":"12 one-on-one coaching sessions","value":2400}},{{"item":"Leadership assessment","value":200}}]}}]
+  [ACTION:{{"type":"update_product","name":"Leadership Coaching","price":250}}]
+  [ACTION:{{"type":"update_product","product_id":"<uuid>","status":"archived"}}]
+  [ACTION:{{"type":"list_products"}}]
+  [ACTION:{{"type":"list_products","type":"digital"}}]
+    — product_type values: service | digital | physical | package. pricing_type: fixed | hourly | per_session | subscription | custom.
+    — When the practitioner says "add a service", "create a product", "I sell...", "I have a course called..." → create_product.
+    — When they say "show my products/services" or "what do I offer?" → list_products.
+    — When they say "change the price of X" or "raise my coaching rate to Y" → update_product (use name= to look up by name; product_id wins if both supplied).
+    — Digital products with price > 0 get an auto-generated Stripe payment link (platform owner only). Set auto_deliver=true to enable email delivery on purchase.
+
 ACTIONS — BATCH EMAIL:
   [ACTION:{{"type":"batch_email","contact_ids":["uuid1","uuid2","uuid3"],"subject":"A note from {{business_name}}","body":"Hi {{contact_name}}, …"}}]
   Use {{contact_name}} and {{business_name}} placeholders — replaced per recipient. Cap is 50 contacts per call. Skipped recipients (no email on file) are reported in the result label.
@@ -5372,6 +5584,9 @@ When the practitioner says...                       You should emit...
   "How much did I make this month?"             →   show_revenue (then narrate from CONTEXT)
   "Remember/don't forget..."                    →   remember
   "Forget that / never mind that rule"          →   forget
+  "Add a service/product" / "I sell..."         →   create_product
+  "What products/services do I have?"           →   list_products
+  "Change the price of [X]..."                  →   update_product
   "Set a goal to..." / "Track [X] by [date]"    →   create_goal
   "How am I doing on my goals?"                 →   check_goals
   "Plan a post about..." / "Schedule [post]"    →   plan_content

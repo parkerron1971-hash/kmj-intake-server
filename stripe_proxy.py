@@ -213,6 +213,167 @@ async def _sb_patch(client: httpx.AsyncClient, path: str, body: Dict[str, Any]) 
         logger.warning(f"supabase PATCH {path} failed: {e}")
 
 
+async def _match_digital_product_for_payment(
+    client: httpx.AsyncClient,
+    payment_link_id: str,
+    amount: float,
+) -> Optional[Dict[str, Any]]:
+    """Find an auto-deliverable digital product whose stripe_payment_url
+    contains the payment link id (or whose price matches the captured
+    amount). Returns the first hit or None.
+    """
+    if payment_link_id:
+        rows = await _sb_get(
+            client,
+            f"/products?stripe_payment_url=ilike.*{payment_link_id}*"
+            f"&auto_deliver=eq.true&type=eq.digital&select=*&limit=1",
+        )
+        if rows:
+            return rows[0]
+
+    if amount > 0:
+        # Allow a 1¢ wiggle room for rounding edges
+        low = max(0, amount - 0.01)
+        high = amount + 0.01
+        rows = await _sb_get(
+            client,
+            f"/products?type=eq.digital&auto_deliver=eq.true"
+            f"&price=gte.{low}&price=lte.{high}"
+            f"&select=*&order=created_at.desc&limit=1",
+        )
+        if rows:
+            return rows[0]
+    return None
+
+
+async def _deliver_digital_product(
+    client: httpx.AsyncClient,
+    product: Dict[str, Any],
+    customer_email: str,
+    customer_name: str,
+    amount: float,
+) -> bool:
+    """Email the buyer their download link via Resend, log a product_sold
+    event, and (best-effort) post a chief notification. Returns True if
+    the email was sent."""
+    file_url = product.get("digital_file_url") or ""
+    if not customer_email or "@" not in customer_email:
+        logger.warning("digital delivery: no valid customer email")
+        return False
+    if not file_url:
+        logger.warning("digital delivery: product has no digital_file_url")
+        return False
+
+    business_id = product.get("business_id")
+    biz_name = "The Solutionist System"
+    biz_email = None
+    closing = "Best,"
+    practitioner_name = ""
+    template = None
+
+    if business_id:
+        biz_rows = await _sb_get(client, f"/businesses?id=eq.{business_id}&select=name,settings&limit=1")
+        if biz_rows:
+            biz = biz_rows[0]
+            biz_name = biz.get("name") or biz_name
+            settings = biz.get("settings") or {}
+            biz_email = settings.get("contact_email")
+            practitioner_name = settings.get("practitioner_name") or ""
+            email_templates = settings.get("email_templates") or {}
+            rules = email_templates.get("global_rules") or {}
+            closing = rules.get("closing_line") or closing
+            template = (email_templates.get("templates") or {}).get("product_delivery")
+
+    # Substitute variables
+    name = product.get("name") or "your download"
+    contact_first = (customer_name.split(" ")[0] if customer_name else "there") or "there"
+    vars_ = {
+        "contact_name": contact_first,
+        "business_name": biz_name,
+        "practitioner_name": practitioner_name,
+        "product_name": name,
+        "download_url": file_url,
+        "closing_line": closing,
+    }
+
+    def apply(text: str) -> str:
+        out = text or ""
+        for k, v in vars_.items():
+            out = out.replace("{" + k + "}", str(v))
+        return out
+
+    if template and template.get("subject") and template.get("body"):
+        subject = apply(template["subject"])
+        body_text = apply(template["body"])
+        # Convert plain-text body to a minimal HTML if the template stored plain text
+        body_html = (
+            f"""<div style="font-family:Inter,Arial,sans-serif;font-size:14px;line-height:1.6;color:#222;">
+{body_text.replace(chr(10), '<br>')}
+<br><br>
+<a href="{file_url}" style="display:inline-block;padding:14px 32px;background:#D4AF37;color:#fff;text-decoration:none;border-radius:8px;font-size:16px;font-weight:bold;">Download Now</a>
+</div>"""
+        )
+    else:
+        subject = f"Your download: {name}"
+        body_html = f"""<div style="font-family:Inter,Arial,sans-serif;font-size:14px;line-height:1.6;color:#222;">
+            <h2 style="margin-top:0;">Thank you for your purchase!</h2>
+            <p>Here's your download link for <strong>{name}</strong>:</p>
+            <p><a href="{file_url}" style="display:inline-block;padding:14px 32px;background:#D4AF37;color:#fff;text-decoration:none;border-radius:8px;font-size:16px;font-weight:bold;">Download Now</a></p>
+            <p>This link will remain active. Save it for future reference.</p>
+            <p>If you have any questions, just reply to this email.</p>
+            <p>{closing}<br>{practitioner_name or biz_name}</p>
+        </div>"""
+
+    try:
+        from email_sender import send_via_resend, DEFAULT_FROM_EMAIL
+        from_email = os.environ.get("RESEND_FROM_EMAIL") or DEFAULT_FROM_EMAIL
+        await send_via_resend(
+            to_email=customer_email,
+            to_name=customer_name or None,
+            from_email=from_email,
+            from_name=biz_name,
+            subject=subject,
+            body=body_html,
+            reply_to=biz_email,
+        )
+    except Exception as e:
+        logger.warning(f"digital delivery: resend send failed: {e}")
+        return False
+
+    # Log the sale
+    if business_id:
+        await _sb_post(client, "/events", {
+            "business_id": business_id,
+            "event_type": "product_sold",
+            "data": {
+                "product_id": product.get("id"),
+                "product_name": name,
+                "amount": amount,
+                "currency": (product.get("currency") or "USD"),
+                "customer_email": customer_email,
+                "customer_name": customer_name,
+                "auto_delivered": True,
+            },
+            "source": "stripe_webhook",
+        })
+        await _sb_post(client, "/chief_notifications", {
+            "business_id": business_id,
+            "type": "success",
+            "title": f"💰 Sale — {name} (${amount:,.2f})",
+            "body": f"{customer_email} purchased {name}. Download link delivered automatically.",
+            "status": "unread",
+            "data": {
+                "kind": "product_sold",
+                "product_id": product.get("id"),
+                "product_name": name,
+                "amount": amount,
+                "customer_email": customer_email,
+            },
+        })
+    logger.info(f"digital delivery: sent {name} to {customer_email}")
+    return True
+
+
 async def _match_invoice_for_payment(
     client: httpx.AsyncClient,
     payment_link_id: str,
@@ -289,8 +450,21 @@ async def stripe_webhook(request: Request):
     async with httpx.AsyncClient() as client:
         invoice = await _match_invoice_for_payment(client, payment_link, amount_dollars)
         if not invoice:
+            # Maybe this is a digital product purchase rather than an invoice payment.
+            product = await _match_digital_product_for_payment(client, payment_link, amount_dollars)
+            if product:
+                customer_name = (customer_details.get("name") or "").strip()
+                delivered = await _deliver_digital_product(
+                    client, product, customer_email, customer_name, amount_dollars,
+                )
+                return {
+                    "status": "product_delivered" if delivered else "product_match_no_send",
+                    "product_id": product.get("id"),
+                    "product_name": product.get("name"),
+                    "amount": amount_dollars,
+                }
             logger.warning(
-                f"stripe webhook: no invoice matched (link={payment_link}, amount=${amount_dollars:.2f})"
+                f"stripe webhook: no invoice or product matched (link={payment_link}, amount=${amount_dollars:.2f})"
             )
             # Still 200 so Stripe doesn't retry forever
             return {"status": "no_match", "amount": amount_dollars, "link": payment_link}
