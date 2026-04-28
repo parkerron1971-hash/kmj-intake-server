@@ -4982,6 +4982,84 @@ async def handle_list_products(client, biz, action) -> Dict:
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# CONVERSATION RECALL — search archived chats
+# ═══════════════════════════════════════════════════════════════════════
+
+def _parse_time_range_days(time_range: Optional[str]) -> int:
+    """Accept '7d', '30d', '24h', '2w', or a bare number. Default 7 days."""
+    s = (time_range or "").strip().lower()
+    if not s:
+        return 7
+    try:
+        if s.endswith("h"):
+            hours = int(s[:-1])
+            return max(1, hours // 24 if hours >= 24 else 1)
+        if s.endswith("d"):
+            return max(1, int(s[:-1]))
+        if s.endswith("w"):
+            return max(1, int(s[:-1]) * 7)
+        return max(1, int(s))
+    except (ValueError, TypeError):
+        return 7
+
+
+async def handle_recall_conversation(client, biz, action) -> Dict:
+    """Search archived chief_conversations rows for relevant context.
+    Filters by `query` (matches summary or any key_topic) and `time_range`."""
+    query = (action.get("query") or "").strip()
+    days = _parse_time_range_days(action.get("time_range"))
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    rows = await _sb(
+        client, "GET",
+        f"/chief_conversations?business_id=eq.{biz['id']}&ended_at=gte.{since}"
+        f"&order=ended_at.desc&limit=10"
+        f"&select=id,summary,key_topics,actions_taken,started_at,ended_at,message_count",
+    ) or []
+
+    if not rows:
+        return {
+            "type": "recall_conversation",
+            "result": "no_conversations",
+            "label": "📜 No recent conversations to recall",
+            "summary": (
+                f"I don't have any archived conversations from the last {days} days. "
+                "Conversations auto-archive after a few hours of inactivity."
+            ),
+            "conversations": [],
+        }
+
+    if query:
+        q = query.lower()
+        relevant = [
+            c for c in rows
+            if q in (c.get("summary") or "").lower()
+            or any(q in (t or "").lower() for t in (c.get("key_topics") or []))
+        ]
+        # Fall back to all matches when nothing scored — gives the AI raw
+        # material to answer "anything from last week?" type queries.
+        rows = relevant or rows
+
+    summaries: List[str] = []
+    for conv in rows[:5]:
+        ended = (conv.get("ended_at") or "")[:10]
+        summary = conv.get("summary") or "No summary recorded."
+        topics = ", ".join(conv.get("key_topics") or []) or "—"
+        msg_count = conv.get("message_count") or 0
+        summaries.append(
+            f"**{ended}** ({msg_count} messages · topics: {topics})\n{summary}"
+        )
+
+    return {
+        "type": "recall_conversation",
+        "result": f"{len(rows)} conversations",
+        "label": f"📜 Found {len(rows)} recent conversation{'s' if len(rows) != 1 else ''}",
+        "conversations": summaries,
+        "summary": "\n\n".join(summaries),
+    }
+
+
 ACTION_HANDLERS = {
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
@@ -5043,6 +5121,8 @@ ACTION_HANDLERS = {
     "create_product":             handle_create_product,
     "update_product":             handle_update_product,
     "list_products":              handle_list_products,
+    # Conversation recall
+    "recall_conversation":        handle_recall_conversation,
 }
 
 
@@ -5973,6 +6053,17 @@ ACTIONS — PRODUCTS & SERVICES:
     — When they say "change the price of X" or "raise my coaching rate to Y" → update_product (use name= to look up by name; product_id wins if both supplied).
     — Digital products with price > 0 get an auto-generated Stripe payment link (platform owner only). Set auto_deliver=true to enable email delivery on purchase.
 
+ACTIONS — CONVERSATION RECALL:
+  [ACTION:{{"type":"recall_conversation","query":"Marcus","time_range":"7d"}}]
+  [ACTION:{{"type":"recall_conversation","time_range":"24h"}}]
+    — Search archived conversations. time_range accepts 24h, 7d, 30d, 2w (default 7d).
+    — Use when the practitioner asks "what did we talk about yesterday", "remember when I asked about X",
+      "what was that thing we discussed last week", "did we already cover Y", or any variant referencing
+      past chats. Filter with `query` to narrow to a name/topic; omit it to list all recent.
+    — When the result returns, weave the summaries into a natural narrative ("Last Tuesday we discussed
+      Marcus's coaching program — you asked me to draft a proposal and schedule a session. Both went out.").
+      Don't dump the raw summary list.
+
 ACTIONS — BATCH EMAIL:
   [ACTION:{{"type":"batch_email","contact_ids":["uuid1","uuid2","uuid3"],"subject":"A note from {{business_name}}","body":"Hi {{contact_name}}, …"}}]
   Use {{contact_name}} and {{business_name}} placeholders — replaced per recipient. Cap is 50 contacts per call. Skipped recipients (no email on file) are reported in the result label.
@@ -6024,6 +6115,7 @@ When the practitioner says...                       You should emit...
   "How much did I make this month?"             →   show_revenue (then narrate from CONTEXT)
   "Remember/don't forget..."                    →   remember
   "Forget that / never mind that rule"          →   forget
+  "What did we talk about / Remember when..."   →   recall_conversation
   "Add a service/product" / "I sell..."         →   create_product
   "What products/services do I have?"           →   list_products
   "Change the price of [X]..."                  →   update_product
