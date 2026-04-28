@@ -5060,6 +5060,81 @@ async def handle_recall_conversation(client, biz, action) -> Dict:
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# TIMERS & ALARMS
+# ═══════════════════════════════════════════════════════════════════════
+
+def _format_timer_duration(seconds: int) -> str:
+    """Pretty duration for the action label. 5400s -> '1h 30m', 1800s -> '30 min'."""
+    s = max(0, int(seconds))
+    h = s // 3600
+    m = (s % 3600) // 60
+    if h > 0 and m > 0:
+        return f"{h}h {m}m"
+    if h > 0:
+        return f"{h}h"
+    if m > 0:
+        return f"{m} min"
+    return f"{s}s"
+
+
+async def handle_set_timer(client, biz, action) -> Dict:
+    """Set a countdown timer or alarm. Server returns the timer
+    metadata; ChiefOfStaff.tsx creates the timer client-side via
+    timerManager so it ticks in the browser even after the response
+    arrives."""
+    timer_type = (action.get("timer_type") or "countdown").strip().lower()
+    label = (action.get("label") or "").strip() or ("Alarm" if timer_type == "alarm" else "Timer")
+    voice = action.get("voice") is not False
+    sound = action.get("sound") is not False
+
+    if timer_type == "countdown":
+        try:
+            seconds = int(action.get("duration"))
+        except (TypeError, ValueError):
+            return _fail("set_timer", "duration (seconds) required for countdown")
+        if seconds <= 0:
+            return _fail("set_timer", "duration must be positive")
+        return {
+            "type": "set_timer",
+            "result": "timer_set",
+            "label": f"⏱️ Timer: {label} — {_format_timer_duration(seconds)}",
+            "timer_data": {
+                "type": "countdown",
+                "label": label,
+                "duration_ms": seconds * 1000,
+                "voice": voice,
+                "sound": sound,
+            },
+        }
+
+    if timer_type == "alarm":
+        target = (action.get("target_time") or "").strip()
+        if not target:
+            return _fail("set_timer", "target_time (ISO string) required for alarm")
+        # Best-effort label for the action card — frontend re-parses the
+        # ISO string into a Date in local time.
+        try:
+            dt = datetime.fromisoformat(target.replace("Z", "+00:00"))
+            display = dt.strftime("%a %-I:%M %p") if hasattr(dt, "strftime") else target
+        except (ValueError, TypeError):
+            display = target
+        return {
+            "type": "set_timer",
+            "result": "alarm_set",
+            "label": f"⏰ Alarm: {label} — {display}",
+            "timer_data": {
+                "type": "alarm",
+                "label": label,
+                "target_time": target,
+                "voice": voice,
+                "sound": sound,
+            },
+        }
+
+    return _fail("set_timer", f"unknown timer_type '{timer_type}'")
+
+
 ACTION_HANDLERS = {
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
@@ -5123,6 +5198,8 @@ ACTION_HANDLERS = {
     "list_products":              handle_list_products,
     # Conversation recall
     "recall_conversation":        handle_recall_conversation,
+    # Timers & alarms
+    "set_timer":                  handle_set_timer,
 }
 
 
@@ -6244,6 +6321,29 @@ ACTIONS — PRODUCTS & SERVICES:
     — When they say "change the price of X" or "raise my coaching rate to Y" → update_product (use name= to look up by name; product_id wins if both supplied).
     — Digital products with price > 0 get an auto-generated Stripe payment link (platform owner only). Set auto_deliver=true to enable email delivery on purchase.
 
+ACTIONS — TIMERS & ALARMS:
+  Countdown (duration-based, in SECONDS):
+  [ACTION:{{"type":"set_timer","timer_type":"countdown","label":"Focus session","duration":1800,"voice":true}}]
+  Alarm (clock-time, ISO string):
+  [ACTION:{{"type":"set_timer","timer_type":"alarm","label":"Stop working","target_time":"2026-04-28T17:00:00","voice":true}}]
+
+  Natural-language → action:
+    "Set a timer for 30 minutes"     → countdown, duration=1800, label="Timer"
+    "Give me 2 hours"                → countdown, duration=7200
+    "Work session for 45 minutes"    → countdown, duration=2700, label="Work session"
+    "Give me a Pomodoro"             → countdown, duration=1500, label="Pomodoro focus"
+    "Set a 15 minute break timer"    → countdown, duration=900,  label="Break"
+    "Set an alarm for 5pm"           → alarm, target_time today at 17:00:00
+    "Remind me at 6:30pm to stop"    → alarm, target_time today at 18:30:00, label="Stop working"
+    "Wake me up at 3pm"              → alarm, target_time today at 15:00:00, label="Wake up"
+
+  Always calculate duration in seconds (30 min = 1800, 1h 30m = 5400). For alarms,
+  use today's date in ISO format with the requested time. If the requested time has
+  already passed today, use tomorrow's date instead.
+
+  When you set a focus/work/pomodoro timer, mention that you'll check in when it
+  ends — the system surfaces a follow-up automatically.
+
 ACTIONS — CONVERSATION RECALL:
   [ACTION:{{"type":"recall_conversation","query":"Marcus","time_range":"7d"}}]
   [ACTION:{{"type":"recall_conversation","time_range":"24h"}}]
@@ -6306,6 +6406,8 @@ When the practitioner says...                       You should emit...
   "How much did I make this month?"             →   show_revenue (then narrate from CONTEXT)
   "Remember/don't forget..."                    →   remember
   "Forget that / never mind that rule"          →   forget
+  "Set a timer / alarm / give me X minutes"     →   set_timer
+  "Pomodoro / focus session / break timer"      →   set_timer (countdown)
   "What did we talk about / Remember when..."   →   recall_conversation
   "Add a service/product" / "I sell..."         →   create_product
   "What products/services do I have?"           →   list_products
