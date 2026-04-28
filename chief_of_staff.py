@@ -5398,12 +5398,423 @@ def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]],
     return "\n".join(lines)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# CHIEF INTELLIGENCE — pattern learning, voice examples, daily priorities,
+# mentor mode, smart suggestions, session continuity, assistant naming.
+# All helpers below are best-effort: if a probe fails, we degrade silently
+# rather than poisoning the chat response.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _today_utc() -> "date":
+    return datetime.now(timezone.utc).date()
+
+
+def _safe_iso(dt_str: Optional[str]) -> Optional[datetime]:
+    if not dt_str:
+        return None
+    try:
+        return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_today(dt_str: Optional[str]) -> bool:
+    dt = _safe_iso(dt_str)
+    return bool(dt and dt.date() == _today_utc())
+
+
+def _is_past_due(dt_str: Optional[str]) -> bool:
+    dt = _safe_iso(dt_str)
+    return bool(dt and dt.date() < _today_utc())
+
+
+def _is_recent_event(event: Dict[str, Any], days: int = 1) -> bool:
+    dt = _safe_iso(event.get("created_at"))
+    if not dt:
+        return False
+    return (datetime.now(timezone.utc) - dt).days < days
+
+
+async def _upsert_pattern(client: httpx.AsyncClient, biz_id: str,
+                          pattern_type: str, pattern_key: str,
+                          value: Dict[str, Any], increment: bool = False) -> None:
+    """Insert or merge a chief_patterns row. Confidence ramps with occurrences."""
+    try:
+        existing = await _sb(
+            client, "GET",
+            f"/chief_patterns?business_id=eq.{biz_id}"
+            f"&pattern_type=eq.{pattern_type}&pattern_key=eq.{pattern_key}"
+            f"&select=id,occurrences,pattern_value&limit=1",
+        )
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if existing:
+            row = existing[0]
+            merged = {**(row.get("pattern_value") or {}), **(value or {})}
+            occ = (row.get("occurrences") or 1) + (1 if increment else 0)
+            conf = min(0.95, 0.5 + (occ * 0.05))
+            await _sb(client, "PATCH", f"/chief_patterns?id=eq.{row['id']}", {
+                "pattern_value": merged,
+                "occurrences": occ,
+                "confidence": conf,
+                "last_seen": now_iso,
+            })
+        else:
+            await _sb(client, "POST", "/chief_patterns", {
+                "business_id": biz_id,
+                "pattern_type": pattern_type,
+                "pattern_key": pattern_key,
+                "pattern_value": value or {},
+                "occurrences": 1,
+                "confidence": 0.5,
+            })
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"_upsert_pattern failed: {e}")
+
+
+async def _learn_patterns(client: httpx.AsyncClient, biz: Dict[str, Any],
+                          actions_taken: List[Dict[str, Any]]) -> None:
+    """Quietly learn from the practitioner's behavior. Called after each
+    Chief turn via asyncio.create_task so it never blocks the response."""
+    try:
+        if not (biz.get("settings") or {}).get("chief_preferences", {}).get("learn_patterns", True):
+            return
+        biz_id = biz["id"]
+
+        # Draft approval / dismissal patterns
+        for action in actions_taken or []:
+            atype = action.get("type")
+            qid = action.get("queue_id")
+            if not qid or atype not in ("approve_draft", "dismiss_draft", "edit_draft"):
+                continue
+            drafts = await _sb(
+                client, "GET",
+                f"/agent_queue?id=eq.{qid}&select=subject,body,agent&limit=1",
+            )
+            if not drafts:
+                continue
+            d = drafts[0]
+            agent_key = d.get("agent") or "unknown"
+            verb = "approved" if atype in ("approve_draft", "edit_draft") else "dismissed"
+            await _upsert_pattern(
+                client, biz_id, "draft_preference", f"{verb}_{agent_key}",
+                {
+                    "subject": (d.get("subject") or "")[:140],
+                    "body_preview": (d.get("body") or "")[:240],
+                    f"{verb}_at": datetime.now(timezone.utc).isoformat(),
+                },
+                increment=True,
+            )
+
+        # Work-schedule activity (when does the practitioner show up?)
+        now = datetime.now(timezone.utc)
+        await _upsert_pattern(
+            client, biz_id, "work_schedule", "activity",
+            {
+                "last_active": now.isoformat(),
+                "day_of_week": now.strftime("%A").lower(),
+                "hour": now.hour,
+            },
+            increment=True,
+        )
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"_learn_patterns failed: {e}")
+
+
+async def _learn_patterns_async(biz: Dict[str, Any], actions_taken: List[Dict[str, Any]]) -> None:
+    """Background task wrapper — owns its own httpx client so it
+    survives chief_chat returning."""
+    try:
+        async with httpx.AsyncClient() as client:
+            await _learn_patterns(client, biz, actions_taken)
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"_learn_patterns_async failed: {e}")
+
+
+async def _record_mentor_shown_async(biz_id: str) -> None:
+    try:
+        async with httpx.AsyncClient() as client:
+            await _mark_mentor_tip_shown(client, biz_id)
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"_record_mentor_shown_async failed: {e}")
+
+
+async def _get_voice_examples(client: httpx.AsyncClient, biz_id: str, limit: int = 5) -> str:
+    """Pull recent approved drafts to anchor the AI in the practitioner's voice."""
+    try:
+        rows = await _sb(
+            client, "GET",
+            f"/agent_queue?business_id=eq.{biz_id}&status=eq.sent"
+            f"&order=reviewed_at.desc.nullslast,created_at.desc&limit={limit}"
+            f"&select=subject,body,agent",
+        )
+    except Exception:
+        rows = []
+    if not rows:
+        return ""
+    blocks: List[str] = []
+    for d in rows:
+        body = (d.get("body") or "").strip()
+        if not body:
+            continue
+        body_preview = body[:280]
+        subj = (d.get("subject") or "").strip()
+        blocks.append(f"Subject: {subj}\n{body_preview}")
+    if not blocks:
+        return ""
+    return (
+        "PRACTITIONER'S APPROVED WRITING STYLE — match this tone and voice.\n"
+        "Notice greeting style, sentence length, formality, sign-off, personality.\n"
+        "If they write 'Hey' not 'Dear', use 'Hey'. If they keep it short, keep it short.\n"
+        "Mirror THEM, not generic business writing.\n\n"
+        + "\n---\n".join(blocks)
+    )
+
+
+async def _get_session_context(client: httpx.AsyncClient, biz_id: str) -> str:
+    """Recap of what the Chief has done in the last ~2 hours so the AI
+    can reference it naturally without re-explaining."""
+    try:
+        two_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        rows = await _sb(
+            client, "GET",
+            f"/events?business_id=eq.{biz_id}"
+            f"&event_type=like.chief_*&created_at=gte.{two_hours_ago}"
+            f"&order=created_at.desc&limit=10"
+            f"&select=event_type,data,created_at",
+        )
+    except Exception:
+        rows = []
+    if not rows:
+        return ""
+    parts: List[str] = []
+    for e in rows[:5]:
+        data = e.get("data") or {}
+        label = data.get("label") or data.get("subject") or e.get("event_type", "")
+        if label:
+            parts.append(f"- {label}")
+    if not parts:
+        return ""
+    return (
+        "EARLIER THIS SESSION (reference naturally if relevant — don't re-explain):\n"
+        + "\n".join(parts)
+    )
+
+
+def _build_daily_priorities(biz: Dict[str, Any], ctx: Dict[str, Any]) -> List[str]:
+    """Top 3 things the practitioner needs to know about TODAY.
+    Reads from the same context dict that the prompt is built from."""
+    out: List[str] = []
+
+    # Sessions today
+    sessions_upcoming = ctx.get("sessions_upcoming") or []
+    sessions_today = [
+        s for s in sessions_upcoming
+        if _is_today(s.get("scheduled_for"))
+    ]
+    if sessions_today:
+        names = ", ".join(
+            (s.get("contacts") or {}).get("name") or s.get("contact_name") or "someone"
+            for s in sessions_today[:3]
+        )
+        out.append(
+            f"You have {len(sessions_today)} session(s) today with {names}."
+        )
+
+    # Overdue invoices
+    overdue = [
+        i for i in (ctx.get("invoices") or [])
+        if i.get("status") in ("sent", "viewed")
+        and _is_past_due(i.get("due_date"))
+    ]
+    if overdue:
+        total = sum(float(i.get("total") or 0) for i in overdue)
+        out.append(
+            f"${total:,.0f} in overdue invoices across {len(overdue)} client(s)."
+        )
+
+    # Hot leads
+    hot_leads = [
+        c for c in (ctx.get("contacts") or [])
+        if c.get("status") == "lead" and (c.get("health_score") or 0) > 70
+    ]
+    if hot_leads:
+        out.append(
+            f"{len(hot_leads)} warm lead(s) — {hot_leads[0].get('name')} is especially engaged."
+        )
+
+    # Recent payments (3 days)
+    recent_payments = [
+        e for e in (ctx.get("recent_events") or [])
+        if e.get("event_type") in ("invoice_paid_auto", "invoice_paid", "product_sold")
+        and _is_recent_event(e, days=3)
+    ]
+    if recent_payments:
+        total_paid = sum(float((e.get("data") or {}).get("amount") or 0) for e in recent_payments)
+        if total_paid > 0:
+            out.append(f"${total_paid:,.0f} received in the last 3 days.")
+
+    # Autopilot report — what got handled vs what's waiting
+    auto_actions = [
+        e for e in (ctx.get("recent_events") or [])
+        if e.get("event_type") == "chief_auto_approved"
+        and _is_recent_event(e, days=1)
+    ]
+    held = ctx.get("queue") or []
+    if auto_actions or held:
+        text = ""
+        if auto_actions:
+            text = f"Your team handled {len(auto_actions)} thing(s) automatically."
+        if held:
+            text += (" " if text else "") + f"{len(held)} waiting for your review."
+        if text:
+            out.append(text)
+
+    # At-risk contacts
+    at_risk = [
+        c for c in (ctx.get("contacts") or [])
+        if (c.get("health_score") or 50) < 30
+        and c.get("status") not in ("inactive", "churned")
+    ]
+    if at_risk:
+        out.append(
+            f"{len(at_risk)} contact(s) at risk — {at_risk[0].get('name')} needs attention."
+        )
+
+    return out[:3]
+
+
+def _format_priorities_block(priorities: List[str]) -> str:
+    if not priorities:
+        return ""
+    bullets = "\n".join(f"- {p}" for p in priorities)
+    return (
+        "TODAY'S PRIORITIES (weave these into your greeting — be specific, "
+        "name names, cite numbers):\n" + bullets
+    )
+
+
+async def _should_show_mentor_tip(client: httpx.AsyncClient, biz: Dict[str, Any]) -> bool:
+    """Mentor tips run on a cooldown that opens after 24h (new business)
+    or 168h (after 60d). Returns False when mentor mode is OFF."""
+    prefs = (biz.get("settings") or {}).get("chief_preferences") or {}
+    if prefs.get("mentor_mode") is False:
+        return False
+    biz_id = biz["id"]
+
+    biz_age_days = 999
+    created = _safe_iso(biz.get("created_at"))
+    if created:
+        biz_age_days = (datetime.now(timezone.utc) - created).days
+
+    try:
+        rows = await _sb(
+            client, "GET",
+            f"/chief_patterns?business_id=eq.{biz_id}"
+            f"&pattern_type=eq.mentor_tip&pattern_key=eq.last_shown"
+            f"&select=last_seen&limit=1",
+        )
+    except Exception:
+        rows = []
+
+    if not rows:
+        return True
+
+    last = _safe_iso(rows[0].get("last_seen"))
+    if not last:
+        return True
+    hours_since = (datetime.now(timezone.utc) - last).total_seconds() / 3600
+    cooldown = 24 if biz_age_days < 60 else 168
+    return hours_since > cooldown
+
+
+async def _mark_mentor_tip_shown(client: httpx.AsyncClient, biz_id: str) -> None:
+    await _upsert_pattern(
+        client, biz_id, "mentor_tip", "last_shown",
+        {"shown_at": datetime.now(timezone.utc).isoformat()},
+        increment=True,
+    )
+
+
+_MENTOR_TIP_MARKERS = (
+    "i've noticed", "i have noticed", "quick thought",
+    "by the way", "side note",
+)
+
+
+def _looks_like_mentor_tip(text: str) -> bool:
+    if not text:
+        return False
+    low = text.lower()
+    return any(m in low for m in _MENTOR_TIP_MARKERS)
+
+
+def _build_assistant_name_block(biz: Dict[str, Any]) -> str:
+    prefs = (biz.get("settings") or {}).get("chief_preferences") or {}
+    name = (prefs.get("assistant_name") or "").strip()
+    practitioner = (biz.get("settings") or {}).get("practitioner_name") or ""
+    first_name = practitioner.split()[0] if practitioner else ""
+    if name:
+        return (
+            f"YOUR NAME:\n"
+            f"The practitioner named you \"{name}\". Use it naturally — "
+            f"once in the greeting is enough, e.g. 'Good morning"
+            f"{(', ' + first_name) if first_name else ''}. It\\'s {name}.' "
+            f"Don\\'t overuse it. You\\'re still the Chief of Staff — "
+            f"the name is personal, the role is the same."
+        )
+    return (
+        "YOUR NAME:\n"
+        "You are the Chief of Staff. No personal name has been set. "
+        "If asked 'what's your name', let them know they can pick one in "
+        "BUILD → Settings → Your Assistant. Don't suggest a name yourself."
+    )
+
+
+def _build_mentor_block(active: bool) -> str:
+    if not active:
+        return "MENTOR MODE: OFF — never share business observations or tips this turn."
+    return (
+        "MENTOR MODE: active — you may share AT MOST ONE casual observation, "
+        "if directly relevant to what just happened.\n"
+        "Voice rules:\n"
+        "- Start with what you DID, then add the observation.\n"
+        "- Use 'I've noticed', 'quick thought', or 'by the way' — never "
+        "'tip', 'lesson', 'best practice', or 'pro tip'.\n"
+        "- One sentence maximum. Casual, specific, never preachy.\n"
+        "- Skip the observation entirely if nothing notable applies.\n"
+        "Examples — RIGHT: 'Invoice sent. By the way — I've noticed the "
+        "ones you send same-day tend to get paid about a week faster.' / "
+        "WRONG: 'Tip: Same-day invoices increase collection rates by 30%.'"
+    )
+
+
+def _build_suggestions_block(active: bool) -> str:
+    if not active:
+        return "SMART SUGGESTIONS: OFF — do not append a 'want me to…' next-step suggestion this turn."
+    return (
+        "SMART SUGGESTIONS: active — after completing an action, OFFER one clear next step.\n"
+        "- Don't ask, offer. Keep it to ONE option.\n"
+        "- After creating a contact: 'Want me to send a welcome email or schedule an intro call?'\n"
+        "- After sending an invoice: 'I can set a payment reminder for 7 days from now if you want.'\n"
+        "- After a session is marked completed: 'Want me to draft a follow-up and book the next session?'\n"
+        "- After a payment lands: 'Nice. Want me to send a thank-you note?'\n"
+        "- After creating a project: 'Should I break this into tasks and add milestones to your calendar?'\n"
+        "- After running agents: 'Found N items. Want to review them now or hold them?'\n"
+        "Skip suggestions if no action was taken or if the practitioner just asked for information."
+    )
+
+
 def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          view: Optional[CurrentContext] = None,
                          view_detail: Optional[Dict] = None,
                          time_of_day: Optional[str] = None,
                          resume_note: Optional[ResumeNote] = None,
-                         mode: Optional[str] = None) -> str:
+                         mode: Optional[str] = None,
+                         voice_examples: str = "",
+                         session_context: str = "",
+                         priorities: Optional[List[str]] = None,
+                         mentor_active: bool = False,
+                         suggestions_active: bool = True) -> str:
     # Strategy Coach mode is a different persona entirely.
     if mode == "strategy_coach":
         return _build_coach_prompt(ctx, is_greeting, resume_note=resume_note)
@@ -5416,6 +5827,13 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     context_block = _format_context_for_prompt(ctx)
     view_block = _format_view_block(view, view_detail or {})
     strategy_block = _format_strategy_block(biz, ctx.get("strategy_track"), mode=mode)
+
+    # Intelligence blocks — supplied by chief_chat. Each is empty string
+    # when there's nothing useful to inject so the prompt stays clean.
+    name_block = _build_assistant_name_block(biz)
+    mentor_block = _build_mentor_block(mentor_active)
+    suggestions_block = _build_suggestions_block(suggestions_active)
+    priorities_block = _format_priorities_block(priorities or [])
 
     # Time-of-day tailoring for greeting
     tod_guidance = ""
@@ -5439,20 +5857,42 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
 CONVERSATION RESUMED: The practitioner last spoke with you {gap_str} ago. Since then: {changes}.
 Pick up naturally — don't re-introduce yourself. If they reference something from earlier, you have the full conversation history."""
 
+    greeting_style = (biz.get("settings") or {}).get("chief_preferences", {}).get("greeting_style", "briefing")
+    greeting_style_guidance = ""
+    if greeting_style == "quick":
+        greeting_style_guidance = "Keep the greeting to ONE sentence — just the single most important thing."
+    elif greeting_style == "full":
+        greeting_style_guidance = "Give a fuller report (4-6 sentences) covering what happened since they were last here, what's pending, and what's coming up."
+    else:
+        greeting_style_guidance = "Lead with up to 3 priorities (use the TODAY'S PRIORITIES list above). Be specific — name names, cite numbers, reference dates. End with ONE question."
+
     greeting_clause = ""
     if is_greeting:
         greeting_clause = f"""
 
 OPENING GREETING MODE:
-This is your first turn in a fresh conversation. Give a concise briefing (2-4 sentences) based on the most important things in the data RIGHT NOW.{tod_guidance} Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. End with ONE question or a specific proactive suggestion. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate)."""
+This is your first turn in a fresh conversation. {greeting_style_guidance}{tod_guidance}
+Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate)."""
 
     return f"""You are the Chief of Staff for {biz_name}. You are {practitioner}'s operational partner — you see everything happening in their business and help them manage it through conversation.
+
+{name_block}
 
 REAL-TIME BUSINESS DATA (fresh every message):
 
 {context_block}
 {view_block}
 {strategy_block}
+
+{priorities_block}
+
+{session_context}
+
+{voice_examples}
+
+{mentor_block}
+
+{suggestions_block}
 
 YOU ARE THE CENTRAL ORCHESTRATOR. ALL agent operations flow through you. The practitioner never needs to interact with agents directly. When they want something done, you decide which agent handles it and trigger it. When agents create drafts, you show the results. When the practitioner wants to approve, edit, or dismiss, you handle it. You are the single point of contact for the entire system.
 
@@ -6082,10 +6522,25 @@ async def chief_chat(req: ChatRequest):
             is_greeting = _is_greeting(req.message)
             tod = _parse_greeting_tod(req.message) if is_greeting else None
             is_coach_pause = _is_coach_pause(req.message)
+
+            # Intelligence enrichment — voice samples, session context,
+            # daily priorities, mentor cooldown, suggestion preference.
+            voice_examples = await _get_voice_examples(client, req.business_id)
+            session_context = await _get_session_context(client, req.business_id)
+            priorities = _build_daily_priorities(biz, ctx) if is_greeting else []
+            mentor_active = await _should_show_mentor_tip(client, biz)
+            prefs = (biz.get("settings") or {}).get("chief_preferences") or {}
+            suggestions_active = prefs.get("auto_suggestions") is not False
+
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,
                 mode=req.mode,
+                voice_examples=voice_examples,
+                session_context=session_context,
+                priorities=priorities,
+                mentor_active=mentor_active,
+                suggestions_active=suggestions_active,
             )
             effective_message = req.message
             if req.mode == "strategy_coach" and is_coach_pause:
@@ -6209,6 +6664,19 @@ async def chief_chat(req: ChatRequest):
 
             # Best-effort: mark memories referenced in the response
             await _mark_referenced_memories(client, biz["id"], ctx.get("memories") or [], clean or raw)
+
+            # Intelligence learning — pattern memory + mentor-tip cooldown.
+            # Best-effort, never blocks the response. Use a separate client
+            # so the outer `async with` can close cleanly even if these
+            # tasks haven't finished yet.
+            response_text_for_learn = clean or raw or ""
+            try:
+                if mentor_active and _looks_like_mentor_tip(response_text_for_learn):
+                    asyncio.create_task(_record_mentor_shown_async(biz["id"]))
+                if (biz.get("settings") or {}).get("chief_preferences", {}).get("learn_patterns", True):
+                    asyncio.create_task(_learn_patterns_async(biz, taken))
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"intelligence post-hooks failed: {e}")
 
             logger.info(
                 f"Chief chat for {biz.get('name')}: message_len={len(req.message)} "

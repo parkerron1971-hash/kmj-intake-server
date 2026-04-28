@@ -808,6 +808,154 @@ async def growth_health_report(req: GrowthRequest):
 # ENDPOINT: INSIGHTS (AI pattern/anomaly/opportunity detection)
 # ═══════════════════════════════════════════════════════════════════════
 
+async def _gather_cross_domain_data(client: httpx.AsyncClient, biz_id: str) -> Dict[str, Any]:
+    """Build per-contact profiles spanning contacts, sessions, invoices,
+    and engagement events. The insights generator uses these to find
+    correlations the practitioner can't see looking at one tab at a time."""
+    contacts = await _sb(client, "GET",
+        f"/contacts?business_id=eq.{biz_id}&select=id,name,status,health_score,source,created_at,last_interaction&limit=500"
+    ) or []
+    sessions = await _sb(client, "GET",
+        f"/sessions?business_id=eq.{biz_id}&select=contact_id,status,scheduled_for&limit=1000"
+    ) or []
+    invoices = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz_id}&select=contact_id,total,status,paid_at,due_date,sent_at&limit=1000"
+    ) or []
+    events = await _sb(client, "GET",
+        f"/events?business_id=eq.{biz_id}&order=created_at.desc&limit=500&select=contact_id,event_type,data,created_at"
+    ) or []
+
+    now = datetime.now(timezone.utc)
+    profiles: Dict[str, Dict[str, Any]] = {}
+
+    for c in contacts:
+        cid = c.get("id")
+        if not cid:
+            continue
+        c_sessions = [s for s in sessions if s.get("contact_id") == cid]
+        c_invoices = [i for i in invoices if i.get("contact_id") == cid]
+        c_events = [e for e in events if e.get("contact_id") == cid]
+
+        # days_as_client = days since contact created
+        days_as_client = 0
+        try:
+            created = datetime.fromisoformat((c.get("created_at") or now.isoformat()).replace("Z", "+00:00"))
+            days_as_client = max(0, (now - created).days)
+        except (ValueError, TypeError):
+            days_as_client = 0
+
+        # avg days from sent_at -> paid_at on paid invoices
+        pay_lags: List[int] = []
+        for inv in c_invoices:
+            if inv.get("status") != "paid":
+                continue
+            sent = inv.get("sent_at")
+            paid = inv.get("paid_at")
+            if not sent or not paid:
+                continue
+            try:
+                sd = datetime.fromisoformat(sent.replace("Z", "+00:00"))
+                pd = datetime.fromisoformat(paid.replace("Z", "+00:00"))
+                pay_lags.append(max(0, (pd - sd).days))
+            except (ValueError, TypeError):
+                continue
+        avg_pay_lag = round(sum(pay_lags) / len(pay_lags), 1) if pay_lags else None
+
+        profiles[cid] = {
+            "name": c.get("name"),
+            "status": c.get("status"),
+            "health": c.get("health_score"),
+            "source": c.get("source"),
+            "days_as_client": days_as_client,
+            "sessions_completed": sum(1 for s in c_sessions if s.get("status") == "completed"),
+            "sessions_noshow": sum(1 for s in c_sessions if s.get("status") == "no_show"),
+            "sessions_scheduled": sum(1 for s in c_sessions if s.get("status") == "scheduled"),
+            "total_invoiced": round(sum(float(i.get("total") or 0) for i in c_invoices), 2),
+            "total_paid": round(sum(float(i.get("total") or 0) for i in c_invoices if i.get("status") == "paid"), 2),
+            "invoices_overdue": sum(
+                1 for i in c_invoices
+                if i.get("status") in ("sent", "viewed")
+                and i.get("due_date")
+                and (lambda d: d.date() < now.date() if d else False)(_safe_dt(i.get("due_date")))
+            ),
+            "avg_pay_lag_days": avg_pay_lag,
+            "emails_sent": sum(1 for e in c_events if e.get("event_type") in ("email_sent", "draft_and_send", "batch_email_sent")),
+        }
+
+    # Aggregate views the model can use to spot lifts
+    by_source: Dict[str, Dict[str, float]] = {}
+    for p in profiles.values():
+        src = p.get("source") or "unknown"
+        slot = by_source.setdefault(src, {"count": 0, "total_paid": 0.0})
+        slot["count"] += 1
+        slot["total_paid"] += p["total_paid"]
+    for src, slot in by_source.items():
+        slot["avg_paid"] = round(slot["total_paid"] / slot["count"], 2) if slot["count"] else 0.0
+
+    return {
+        "profiles": profiles,
+        "source_summary": by_source,
+    }
+
+
+def _format_cross_domain_for_ai(cd: Dict[str, Any]) -> str:
+    """Compact rendering of profiles + source summary for the prompt."""
+    profiles = cd.get("profiles") or {}
+    if not profiles:
+        return ""
+
+    # Top 15 by total_paid then engagement; the model doesn't need all 500.
+    items = list(profiles.values())
+    items.sort(key=lambda p: (p.get("total_paid") or 0, p.get("sessions_completed") or 0), reverse=True)
+    top = items[:15]
+
+    lines = []
+    for p in top:
+        lines.append(
+            f"- {p.get('name')}: status={p.get('status')}, health={p.get('health')}, "
+            f"source={p.get('source') or 'unknown'}, days_in={p.get('days_as_client')}, "
+            f"sessions={p.get('sessions_completed')}c/{p.get('sessions_noshow')}ns, "
+            f"paid=${p.get('total_paid'):.0f}/invoiced=${p.get('total_invoiced'):.0f}, "
+            f"avg_pay_lag={p.get('avg_pay_lag_days')}, emails={p.get('emails_sent')}"
+        )
+
+    src_lines = []
+    for src, slot in (cd.get("source_summary") or {}).items():
+        src_lines.append(
+            f"- {src}: {int(slot.get('count', 0))} contacts, "
+            f"avg paid ${slot.get('avg_paid', 0):.2f}"
+        )
+
+    return (
+        "CROSS-DOMAIN PROFILES (top 15 by revenue):\n"
+        + "\n".join(lines)
+        + "\n\nSOURCE SUMMARY (avg revenue by acquisition channel):\n"
+        + ("\n".join(src_lines) if src_lines else "  (none)")
+    )
+
+
+def _safe_dt(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+CROSS_DOMAIN_PROMPT = """
+Look for connections ACROSS domains that the practitioner wouldn't see looking at each area separately:
+
+1. ENGAGEMENT vs REVENUE: Are the most engaged contacts also the highest-paying? If someone is very engaged but hasn't paid, they might need a proposal. If someone pays but isn't engaged, they might churn.
+2. SOURCE vs VALUE: Where do the most valuable clients come from? Are booking-page leads worth more than intake-form leads?
+3. SESSION FREQUENCY vs RETENTION: Do clients who have more frequent sessions stay longer? Is there an optimal session cadence?
+4. INVOICE SPEED vs PAYMENT: Do contacts who get invoiced quickly pay faster? What's the avg_pay_lag spread?
+5. REFERRAL CHAINS: Has any contact referred others? What's the total value of a referrer's network?
+
+Generate 2-3 cross-domain insights that connect dots. Be specific — name contacts, cite numbers, show the connection clearly.
+"""
+
+
 async def _gather_insights_data(client: httpx.AsyncClient, biz_id: str) -> Dict:
     now = datetime.now(timezone.utc)
     window_start = (now - timedelta(days=INSIGHTS_WINDOW_DAYS)).isoformat()
@@ -913,8 +1061,11 @@ async def growth_insights(req: GrowthRequest):
         biz_name = biz.get("name", "your business")
 
         stats = await _gather_insights_data(client, req.business_id)
+        cross_domain = await _gather_cross_domain_data(client, req.business_id)
 
         system_prompt = f"""You are the Growth Intelligence Engine for {biz_name}. Analyze 30 days of business data and return 3-5 actionable insights.
+
+{CROSS_DOMAIN_PROMPT}
 
 Return a JSON array. No prose, no markdown, just valid JSON. Each element must be an object with these exact keys:
 
@@ -943,6 +1094,9 @@ Categories of insights to look for:
 Be specific and actionable. Do NOT invent numbers. Only reference data present in the stats below."""
 
         user_msg = _format_insights_data_for_ai(stats)
+        cd_block = _format_cross_domain_for_ai(cross_domain)
+        if cd_block:
+            user_msg = f"{user_msg}\n\n{cd_block}"
         raw = await _call_claude(client, system_prompt, user_msg, model=INSIGHTS_MODEL, max_tokens=2000)
         parsed = _extract_json_block(raw)
 
