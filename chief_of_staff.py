@@ -64,7 +64,7 @@ MAX_HISTORY = 30
 OPENING_SENTINEL_PREFIX = "[SYSTEM:opening_greeting"  # may have :morning/:afternoon/:evening suffix
 COACH_OPEN_SENTINEL = "[SYSTEM:strategy_coach_open]"
 COACH_PAUSE_SENTINEL = "[SYSTEM:strategy_coach_pause]"
-MAX_ACTIONS_PER_TURN = 8  # safety cap in case the AI goes wild
+MAX_ACTIONS_PER_TURN = 10  # safety cap; delegation chains can issue up to this many in one turn
 
 # Platform owner — only businesses owned by this UID get auto-generated
 # Stripe payment links using the server-side STRIPE_SECRET_KEY. All other
@@ -5078,6 +5078,102 @@ def _format_timer_duration(seconds: int) -> str:
     return f"{s}s"
 
 
+async def handle_catch_up(client, biz, action) -> Dict:
+    """Summarize what's happened since the practitioner was last active.
+    Reads recent events, new contacts, and auto-handled actions; folds
+    them into a single human-readable summary string."""
+    biz_id = biz["id"]
+
+    raw_since = (action.get("since") or "").strip()
+    try:
+        if raw_since:
+            since_dt = datetime.fromisoformat(raw_since.replace("Z", "+00:00"))
+        else:
+            since_dt = datetime.now(timezone.utc) - timedelta(hours=8)
+    except Exception:
+        since_dt = datetime.now(timezone.utc) - timedelta(hours=8)
+    since_iso = since_dt.astimezone(timezone.utc).isoformat()
+
+    events = await _sb(
+        client, "GET",
+        f"/events?business_id=eq.{biz_id}&created_at=gte.{since_iso}"
+        f"&order=created_at.desc&limit=80&select=event_type,data,contact_id,created_at",
+    ) or []
+
+    new_contacts = await _sb(
+        client, "GET",
+        f"/contacts?business_id=eq.{biz_id}&created_at=gte.{since_iso}"
+        f"&order=created_at.desc&limit=20&select=name",
+    ) or []
+
+    summary_parts: List[str] = []
+
+    # Payments (auto + manual variants)
+    payment_types = {"invoice_paid", "invoice_paid_auto", "product_sold"}
+    payments = [e for e in events if e.get("event_type") in payment_types]
+    if payments:
+        total = 0.0
+        for e in payments:
+            try:
+                total += float((e.get("data") or {}).get("amount") or 0)
+            except (TypeError, ValueError):
+                pass
+        if total > 0:
+            summary_parts.append(f"{len(payments)} payment(s) received — ${total:,.0f} total")
+        else:
+            summary_parts.append(f"{len(payments)} payment(s) received")
+
+    # Email reciprocity
+    email_replies = [e for e in events if e.get("event_type") == "email_reply"]
+    if email_replies:
+        summary_parts.append(f"{len(email_replies)} email repl{'y' if len(email_replies) == 1 else 'ies'} arrived")
+
+    # Auto-handled actions
+    auto = [e for e in events if e.get("event_type") == "chief_auto_approved"]
+    if auto:
+        summary_parts.append(f"Your team handled {len(auto)} thing(s) automatically")
+
+    # Sessions completed
+    completed_sessions = [e for e in events if e.get("event_type") in ("session_completed", "session_finished")]
+    if completed_sessions:
+        summary_parts.append(
+            f"{len(completed_sessions)} session(s) completed"
+        )
+
+    # Sessions cancelled / no-shows worth surfacing
+    cancellations = [e for e in events if e.get("event_type") in ("session_cancelled", "session_no_show")]
+    if cancellations:
+        summary_parts.append(f"{len(cancellations)} session(s) cancelled or missed")
+
+    # New contacts
+    if new_contacts:
+        names = ", ".join(c.get("name") or "—" for c in new_contacts[:3])
+        suffix = "" if len(new_contacts) <= 3 else f" (+{len(new_contacts) - 3} more)"
+        summary_parts.append(f"{len(new_contacts)} new contact(s): {names}{suffix}")
+
+    # Escalations / urgent flags
+    urgent = [
+        e for e in events
+        if str(e.get("event_type") or "").lower().find("escalat") >= 0
+        or str(e.get("event_type") or "").lower().find("urgent") >= 0
+    ]
+    if urgent:
+        summary_parts.append(f"{len(urgent)} item(s) flagged urgent")
+
+    if not summary_parts:
+        summary = "All quiet. Nothing new to report."
+    else:
+        summary = ". ".join(summary_parts) + "."
+
+    return {
+        "type": "catch_up",
+        "result": summary,
+        "label": f"📋 Catch-up · {len(summary_parts)} update{'s' if len(summary_parts) != 1 else ''}",
+        "summary": summary,
+        "since": since_iso,
+    }
+
+
 async def handle_set_timer(client, biz, action) -> Dict:
     """Set a countdown timer or alarm. Server returns the timer
     metadata; ChiefOfStaff.tsx creates the timer client-side via
@@ -5198,6 +5294,8 @@ ACTION_HANDLERS = {
     "list_products":              handle_list_products,
     # Conversation recall
     "recall_conversation":        handle_recall_conversation,
+    # Catch-up briefing
+    "catch_up":                   handle_catch_up,
     # Timers & alarms
     "set_timer":                  handle_set_timer,
 }
@@ -5673,6 +5771,74 @@ async def _learn_patterns(client: httpx.AsyncClient, biz: Dict[str, Any],
             },
             increment=True,
         )
+
+        # ── Habit tracking ──────────────────────────────────────────
+        # Invoicing speed: when send_invoice / mark_invoice_paid runs,
+        # measure hours between the invoice's most recent associated
+        # completed session and now. Roll the latest 5 into the value
+        # so confidence builds and the avg stays current.
+        for action in actions_taken or []:
+            atype = action.get("type")
+
+            if atype in ("send_invoice", "mark_invoice_paid", "create_invoice"):
+                contact_id = action.get("contact_id") or action.get("client_id")
+                if not contact_id:
+                    continue
+                try:
+                    sess = await _sb(
+                        client, "GET",
+                        f"/sessions?contact_id=eq.{contact_id}&status=eq.completed"
+                        f"&order=scheduled_for.desc&limit=1&select=scheduled_for",
+                    ) or []
+                    if not sess:
+                        continue
+                    sched = sess[0].get("scheduled_for")
+                    if not sched:
+                        continue
+                    try:
+                        sched_dt = datetime.fromisoformat(sched.replace("Z", "+00:00"))
+                    except Exception:
+                        continue
+                    hours = (now - sched_dt).total_seconds() / 3600
+                    if hours <= 0 or hours > 24 * 21:
+                        # Negative (future-dated) or older than ~3 weeks isn't a
+                        # "responsive" signal — skip rather than skew the average.
+                        continue
+                    # Read existing rolling window so we can update the avg
+                    existing = await _sb(
+                        client, "GET",
+                        f"/chief_patterns?business_id=eq.{biz_id}"
+                        f"&pattern_type=eq.habit&pattern_key=eq.invoicing_speed"
+                        f"&select=pattern_value&limit=1",
+                    ) or []
+                    prev_window: List[float] = []
+                    if existing:
+                        raw = (existing[0].get("pattern_value") or {}).get("last_5") or []
+                        prev_window = [float(x) for x in raw if isinstance(x, (int, float))]
+                    window = ([round(hours)] + prev_window)[:5]
+                    avg = round(sum(window) / len(window), 1) if window else None
+                    await _upsert_pattern(
+                        client, biz_id, "habit", "invoicing_speed",
+                        {
+                            "latest_hours": round(hours),
+                            "avg_hours": avg,
+                            "last_5": window,
+                            "last_seen": now.isoformat(),
+                        },
+                        increment=True,
+                    )
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"invoicing_speed habit failed: {e}")
+
+            if atype in ("draft_and_send", "draft_email", "draft_nurture"):
+                try:
+                    await _upsert_pattern(
+                        client, biz_id, "habit", "followup_consistency",
+                        {"latest": now.isoformat()},
+                        increment=True,
+                    )
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"followup_consistency habit failed: {e}")
     except Exception as e:  # pragma: no cover
         logger.warning(f"_learn_patterns failed: {e}")
 
@@ -6052,6 +6218,453 @@ def _build_personality_block(biz: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def _build_delegation_block() -> str:
+    """Multi-step workflows from broad commands. The AI emits multiple
+    [ACTION:] tags in one response; the executor handles them in sequence."""
+    return (
+        "DELEGATION CHAINS:\n"
+        "When the practitioner gives a broad instruction, break it into a logical chain of "
+        "actions and execute ALL of them in one response. Don't ask for confirmation on each step.\n\n"
+        "Examples:\n"
+        "\"Handle everything for Marcus\" →\n"
+        "  1. Look up Marcus's status, health, recent activity\n"
+        "  2. Check upcoming sessions → prep if needed\n"
+        "  3. Check outstanding invoices → draft reminder if overdue\n"
+        "  4. Check last interaction date → draft check-in if stale\n"
+        "  5. Report what you did\n\n"
+        "\"Onboard Sarah as a new coaching client\" →\n"
+        "  1. Create contact (status: active)\n"
+        "  2. Send welcome email\n"
+        "  3. Schedule initial session\n"
+        "  4. Create a project for her coaching program\n"
+        "  5. Create first invoice\n"
+        "  6. Report back\n\n"
+        "\"Close out this month\" →\n"
+        "  1. List outstanding invoices → send reminders\n"
+        "  2. At-risk contacts → draft check-ins\n"
+        "  3. Generate revenue summary\n"
+        "  4. Generate activity report\n"
+        "  5. Suggest goals for next month\n\n"
+        "\"Prep me for tomorrow\" →\n"
+        "  1. List tomorrow's sessions\n"
+        "  2. Prep any missing session briefs (run_agent session/prep)\n"
+        "  3. List tasks due tomorrow\n"
+        "  4. List invoices due tomorrow\n"
+        "  5. Brief on what to expect\n\n"
+        "RULES:\n"
+        "- Execute the entire chain. Don't stop to ask 'should I also...?'\n"
+        "- Use multiple [ACTION:] tags in one response — the system handles them sequentially.\n"
+        "- Reference earlier actions inside later ones with @action_type.field "
+        "(e.g. {\"contact_id\":\"@create_contact.contact_id\"}). The system has back-fill for "
+        "common patterns (create → send invoice).\n"
+        "- Report at the end: \"Done. Here's what I handled: ...\"\n"
+        "- If a step fails, continue with the rest and note the failure.\n"
+        "- Maximum 10 actions per chain. If more are needed, do 10 and offer to continue."
+    )
+
+
+def _build_whatif_block() -> str:
+    """Hypothetical-scenario reasoning rules — uses real numbers from ctx."""
+    return (
+        "WHAT-IF ANALYSIS:\n"
+        "When the practitioner asks 'what if' or 'should I' style hypotheticals about "
+        "their business, analyze using the real data already in context.\n\n"
+        "Examples:\n"
+        "- \"What if I raised my rate to $250?\" → count active clients at current rate, "
+        "current monthly revenue, project at new rate (assume 5-15% churn based on size of "
+        "increase), present current vs projected with net impact.\n"
+        "- \"What if I lost Marcus?\" → calculate Marcus's revenue contribution, % of total, "
+        "assess pipeline replacement, note relationship connections.\n"
+        "- \"What if I added a group program at $100/person?\" → estimate from contact base "
+        "(realistic conversion %), compare revenue per hour vs 1-on-1, suggest pricing.\n"
+        "- \"Can I afford a week off next month?\" → sessions to reschedule, revenue impact "
+        "from delayed invoicing, can autopilot cover routine ops, prep steps.\n\n"
+        "RULES:\n"
+        "- Always use REAL numbers from the practitioner's data. Never generic percentages.\n"
+        "- Show the math briefly: \"12 clients × $200 = $2,400/mo. At $250 × 11 (assume 1 churn) "
+        "= $2,750. Net: +$350/mo.\"\n"
+        "- Be honest about uncertainty: \"Estimating 1 lost based on a 25% increase. Could be 0, "
+        "could be 2.\"\n"
+        "- End with a recommendation, not just numbers."
+    )
+
+
+def _build_pre_session_brief_block() -> str:
+    return (
+        "PRE-SESSION BRIEFING:\n"
+        "When the practitioner asks 'prep me for my session' / 'tell me about my next session' "
+        "/ 'brief me on Marcus':\n"
+        "Pull the contact's full context and deliver a concise spoken-style briefing:\n"
+        "- Session number with this contact (1st, 5th, 14th)\n"
+        "- Last session summary if a session_summary exists\n"
+        "- Health score and trend\n"
+        "- Recent activity (emails, payments, events)\n"
+        "- Outstanding invoices or open issues\n"
+        "- Standing instructions or notes about this contact\n\n"
+        "Keep it conversational — like a quick huddle before a meeting:\n"
+        "\"Marcus is your longest client — this is session 14. Last time you worked on the "
+        "delegation framework. His health is strong at 85. He paid his last invoice same day. "
+        "No red flags — this should be a good one.\""
+    )
+
+
+def _build_weekly_planning_block() -> str:
+    return (
+        "WEEKLY PLANNING:\n"
+        "When the practitioner asks to plan the week, or it's offered on Monday morning:\n"
+        "Lay out the week concisely:\n"
+        "1. This week's sessions (day, time, who, prep status)\n"
+        "2. Follow-ups due this week\n"
+        "3. Invoices to send or due\n"
+        "4. Tasks with deadlines this week\n"
+        "5. Goals with approaching deadlines\n"
+        "6. Suggested priorities (what to tackle first)\n\n"
+        "Frame it as a conversation, not a wall of text:\n"
+        "\"Here's your week. Monday and Wednesday are your busy days — 3 sessions each. "
+        "Tuesday is wide open — good day to tackle your 2 overdue follow-ups and send Sandra's "
+        "proposal. Your revenue goal needs $1,200 more this month — you've got 3 invoices ready "
+        "to send. Want me to handle those now?\"\n"
+        "End with an actionable offer."
+    )
+
+
+def _build_decision_support_block() -> str:
+    return (
+        "DECISION SUPPORT:\n"
+        "When the practitioner asks for advice on a business decision:\n"
+        "- \"Should I take on this new client?\" → assess current capacity, time commitment, "
+        "scheduling conflicts. Recommend: yes now / yes after [date] / not yet.\n"
+        "- \"Should I raise my rates?\" → current rate vs revenue, impact at new rate with "
+        "estimated churn, recommend with timing.\n"
+        "- \"Should I invest in [X]?\" → financial health (revenue, outstanding, reserves), "
+        "ROI if calculable, risks, recommendation with caveats.\n\n"
+        "RULES:\n"
+        "- Use REAL data from their business. Never generic advice.\n"
+        "- Show your reasoning briefly. Don't just say 'yes' or 'no'.\n"
+        "- Always end with a recommendation AND a caveat.\n"
+        "- Frame it as 'here's what I see' not 'here's what you should do'."
+    )
+
+
+def _build_contextual_draft_block() -> str:
+    return (
+        "CONTEXTUAL DRAFTING:\n"
+        "When drafting an email for a contact, ALWAYS reference specific details from their history.\n\n"
+        "BAD (generic):\n"
+        "  \"Hi Marcus, just checking in. Hope everything is going well. Let me know if you need anything.\"\n\n"
+        "GOOD (contextual):\n"
+        "  \"Hey Marcus, wanted to follow up after our session last Tuesday. You mentioned wanting "
+        "to work on the delegation framework this week — how's that going? Also, just a heads up "
+        "that your next session is Thursday at 2 PM.\"\n\n"
+        "Rules:\n"
+        "- Reference the last session topic if one exists\n"
+        "- Reference any commitments the contact made\n"
+        "- Mention upcoming sessions or deadlines\n"
+        "- If they recently paid, acknowledge it subtly\n"
+        "- If they haven't responded recently, adjust tone — don't guilt-trip\n"
+        "- Use the practitioner's approved writing style from voice examples\n"
+        "- Keep it genuine — forced personalization is worse than none.\n"
+        "When DRAFT CONTEXT FOR <name> appears in the user message, that's a structured "
+        "summary of the contact's recent history. Lean on it."
+    )
+
+
+def _build_habit_recognition_block(habit_block: str) -> str:
+    """Return guidance only when there's at least one observed habit."""
+    if not habit_block:
+        return ""
+    return (
+        "HABIT RECOGNITION:\n"
+        "You quietly track the practitioner's operational habits. When you notice a POSITIVE "
+        "trend (never nag about negatives), mention it ONCE per conversation as a casual "
+        "observation:\n"
+        "  \"I noticed you've been invoicing same-day for the last few sessions. Your collection "
+        "time dropped — that's real money moving faster.\"\n"
+        "  \"You've followed up with every new lead within 24 hours this month. That's why your "
+        "conversion rate is climbing.\"\n\n"
+        "Rules:\n"
+        "- Only POSITIVE habits. Never nag about bad ones.\n"
+        "- Maximum once per conversation. Don't repeat the same observation in later turns.\n"
+        "- Frame it as something YOU noticed, not a lesson.\n"
+        "- One sentence, two max. Separate from MENTOR MODE — that's tips, this is patterns.\n\n"
+        + habit_block
+    )
+
+
+# ─── Sentiment detection ─────────────────────────────────────────────
+
+_FRUSTRATED_WORDS = (
+    "again", "still", "not working", "broken", "wrong", "didn't",
+    "did not", "failed", "fix", "ugh", "annoying", "frustrating",
+)
+_RELAXED_WORDS = (
+    "please", "thanks", "thank you", "when you get a chance",
+    "no rush", "appreciate",
+)
+
+
+def _detect_sentiment(history: List[Any], current_message: str) -> str:
+    """Return 'rushed' | 'frustrated' | 'relaxed'. Pure heuristic — best
+    effort on a single turn. `history` is the trimmed conversation history
+    (objects with .role + .content OR plain dicts)."""
+    msg = (current_message or "").strip()
+    if not msg:
+        return "relaxed"
+
+    rushed = 0
+    frustrated = 0
+    relaxed = 0
+
+    if len(msg) < 20:
+        rushed += 1
+    if len(msg) > 100:
+        relaxed += 1
+
+    # Multiple user messages in quick succession → rushed
+    user_recent = []
+    for m in (history or [])[-6:]:
+        role = getattr(m, "role", None) or (m.get("role") if isinstance(m, dict) else None)
+        if role == "user":
+            user_recent.append(m)
+    if len(user_recent) >= 3:
+        rushed += 2
+
+    # Frustration signals
+    if msg.count("!") > 1:
+        frustrated += 2
+    # Mostly-uppercase 5+ letter messages — avoid catching short ALL-CAPS like "OK"
+    letters = [c for c in msg if c.isalpha()]
+    if len(letters) >= 5 and "".join(letters).isupper():
+        frustrated += 2
+
+    low = msg.lower()
+    if any(w in low for w in _FRUSTRATED_WORDS):
+        frustrated += 1
+    if any(w in low for w in _RELAXED_WORDS):
+        relaxed += 1
+
+    if frustrated >= 2:
+        return "frustrated"
+    if rushed >= 2:
+        return "rushed"
+    return "relaxed"
+
+
+def _build_sentiment_block(sentiment: str) -> str:
+    if sentiment == "rushed":
+        return (
+            "SENTIMENT: rushed (short messages, rapid pace).\n"
+            "- Keep responses SHORT. No pleasantries. Action and confirmation.\n"
+            "- Don't ask clarifying questions unless absolutely necessary.\n"
+            "- Execute and confirm: \"Done. Invoice sent to Marcus.\" That's it."
+        )
+    if sentiment == "frustrated":
+        return (
+            "SENTIMENT: frustrated (something may not be working).\n"
+            "- Acknowledge briefly: \"Let me fix that.\"\n"
+            "- Be extra careful with actions. Double-check before executing.\n"
+            "- No personality / observations / mentor tips this turn. Just solve it.\n"
+            "- If something failed earlier, acknowledge it: \"Sorry about that. "
+            "Here's what happened and what I'm doing differently.\""
+        )
+    return (
+        "SENTIMENT: normal pace. Respond naturally with your usual warmth and personality."
+    )
+
+
+# ─── Contextual draft enrichment ─────────────────────────────────────
+
+_DRAFT_INTENT = re.compile(
+    r"\b(draft|write|send|reply|respond|follow[- ]?up|check[- ]?in|email|message)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_draft_request(message: str) -> bool:
+    if not message:
+        return False
+    return bool(_DRAFT_INTENT.search(message))
+
+
+def _resolve_contact_from_message(message: str, contacts: List[Dict[str, Any]]) -> Optional[str]:
+    """Best-effort contact-id resolver from prose. Matches the longest
+    contact name (or its first word) that appears in the message — longer
+    matches win so 'Marcus Klein' beats 'Marcus' when both exist."""
+    if not message or not contacts:
+        return None
+    low = message.lower()
+    best: Optional[Dict[str, Any]] = None
+    best_len = 0
+    for c in contacts:
+        name = (c.get("name") or "").strip()
+        if not name:
+            continue
+        full = name.lower()
+        if full in low and len(full) > best_len:
+            best, best_len = c, len(full)
+            continue
+        first = full.split()[0]
+        if len(first) >= 3 and re.search(rf"\b{re.escape(first)}\b", low) and len(first) > best_len:
+            best, best_len = c, len(first)
+    return best.get("id") if best else None
+
+
+async def _get_draft_context(client: httpx.AsyncClient, biz_id: str,
+                             contact_id: Optional[str]) -> str:
+    """Build a structured summary of a contact's recent history so the
+    AI's draft references real specifics. Returns "" when there's no
+    contact id or when the lookup fails — prompt stays clean."""
+    if not contact_id:
+        return ""
+    try:
+        contacts = await _sb(
+            client, "GET",
+            f"/contacts?id=eq.{contact_id}&select=name,health_score,status,created_at&limit=1",
+        )
+        if not contacts:
+            return ""
+        c = contacts[0]
+        name = c.get("name") or "this contact"
+
+        parts: List[str] = []
+
+        # Last 3 completed sessions
+        sessions = await _sb(
+            client, "GET",
+            f"/sessions?contact_id=eq.{contact_id}&status=eq.completed"
+            f"&order=scheduled_for.desc&limit=3"
+            f"&select=scheduled_for,session_type,notes",
+        ) or []
+        if sessions:
+            last = sessions[0]
+            when = (last.get("scheduled_for") or "")[:10]
+            stype = last.get("session_type") or "session"
+            parts.append(f"Last session: {when} ({stype})")
+            notes = (last.get("notes") or "").strip()
+            if notes:
+                parts.append(f"Session notes: {notes[:240]}")
+            parts.append(f"Total completed sessions: {len(sessions)}+")
+
+        # Next scheduled session
+        upcoming = await _sb(
+            client, "GET",
+            f"/sessions?contact_id=eq.{contact_id}&status=eq.scheduled"
+            f"&scheduled_for=gte.{datetime.now(timezone.utc).isoformat()}"
+            f"&order=scheduled_for.asc&limit=1&select=scheduled_for,session_type",
+        ) or []
+        if upcoming:
+            parts.append(f"Next session: {(upcoming[0].get('scheduled_for') or '')[:16].replace('T', ' ')}")
+
+        # Recent invoices
+        invoices = await _sb(
+            client, "GET",
+            f"/invoices?contact_id=eq.{contact_id}&order=created_at.desc&limit=3"
+            f"&select=status,total,invoice_number,paid_at,due_date",
+        ) or []
+        if invoices:
+            last_inv = invoices[0]
+            st = last_inv.get("status")
+            if st == "paid":
+                parts.append(f"Last invoice paid: {(last_inv.get('paid_at') or '')[:10]}")
+            elif st in ("sent", "viewed", "overdue"):
+                parts.append(
+                    f"Outstanding invoice: {last_inv.get('invoice_number') or '—'} "
+                    f"— ${last_inv.get('total') or 0}"
+                )
+
+        # Email reciprocity over recent activity
+        events = await _sb(
+            client, "GET",
+            f"/events?contact_id=eq.{contact_id}"
+            f"&event_type=in.(email_sent,email_reply)"
+            f"&order=created_at.desc&limit=10&select=event_type",
+        ) or []
+        if events:
+            sent = sum(1 for e in events if e.get("event_type") == "email_sent")
+            reply = sum(1 for e in events if e.get("event_type") == "email_reply")
+            parts.append(f"Recent emails: {sent} sent, {reply} replies")
+            if sent >= 3 and reply == 0:
+                parts.append(
+                    "NOTE: They haven't replied to recent emails — consider a different "
+                    "approach or a shorter message."
+                )
+
+        # Health + status
+        hs = c.get("health_score")
+        st = c.get("status") or "unknown"
+        if hs is not None:
+            parts.append(f"Health: {hs}, Status: {st}")
+        else:
+            parts.append(f"Status: {st}")
+
+        if not parts:
+            return ""
+        return f"DRAFT CONTEXT FOR {name}:\n" + "\n".join(f"- {p}" for p in parts)
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"_get_draft_context failed: {e}")
+        return ""
+
+
+# ─── Habit insights ──────────────────────────────────────────────────
+
+async def _get_habit_insights(client: httpx.AsyncClient, biz_id: str) -> str:
+    """Pull confident habit patterns and format them for prompt injection."""
+    try:
+        rows = await _sb(
+            client, "GET",
+            f"/chief_patterns?business_id=eq.{biz_id}"
+            f"&pattern_type=eq.habit&confidence=gte.0.7"
+            f"&select=pattern_key,pattern_value,occurrences&limit=20",
+        ) or []
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"_get_habit_insights failed: {e}")
+        return ""
+    if not rows:
+        return ""
+
+    parts: List[str] = []
+    for h in rows:
+        key = h.get("pattern_key") or ""
+        val = h.get("pattern_value") or {}
+        occ = h.get("occurrences") or 0
+
+        if key == "invoicing_speed" and occ >= 5:
+            avg_hours = val.get("avg_hours")
+            if avg_hours is None:
+                avg_hours = val.get("latest_hours")
+            try:
+                avg_hours_int = int(round(float(avg_hours))) if avg_hours is not None else None
+            except (TypeError, ValueError):
+                avg_hours_int = None
+            if avg_hours_int is not None and avg_hours_int < 24:
+                parts.append(
+                    f"HABIT: invoicing within {avg_hours_int} hours of sessions "
+                    f"({occ} observations). Positive trend worth acknowledging."
+                )
+
+        if key == "followup_consistency" and occ >= 5:
+            parts.append(
+                f"HABIT: consistent follow-ups ({occ} tracked). Positive trend."
+            )
+
+    if not parts:
+        return ""
+    return "OBSERVED HABITS:\n" + "\n".join(parts)
+
+
+def _build_catchup_routing_block() -> str:
+    return (
+        "CATCH-UP BRIEFING:\n"
+        "When the practitioner says \"update me\" / \"what did I miss\" / \"catch me up\" / "
+        "\"what's new\":\n"
+        "Emit [ACTION:{\"type\":\"catch_up\"}] (optionally with \"since\":\"<ISO timestamp>\"). "
+        "The system will return a summary of payments, new contacts, auto-handled items, and "
+        "completed sessions since the practitioner was last active. Open with one warm sentence "
+        "framing the gap, then deliver the summary like a verbal briefing.\n\n"
+        "If the catch-up returns nothing notable: \"All quiet since you were last here. Nothing new to report.\""
+    )
+
+
 def _build_eod_wrapup_block() -> str:
     """End-of-day wrap-up rules. Shapes the response when the practitioner
     asks for a wrap-up / EOD / day-summary. Concise, advisor-voice, ends
@@ -6272,7 +6885,9 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          suggestions_active: bool = True,
                          forecast_block: str = "",
                          relationships_block: str = "",
-                         time_block: str = "") -> str:
+                         time_block: str = "",
+                         sentiment: str = "relaxed",
+                         habit_block: str = "") -> str:
     # Strategy Coach mode is a different persona entirely.
     if mode == "strategy_coach":
         return _build_coach_prompt(ctx, is_greeting, resume_note=resume_note)
@@ -6294,6 +6909,15 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     priorities_block = _format_priorities_block(priorities or [])
     personality_block = _build_personality_block(biz, ctx)
     eod_block = _build_eod_wrapup_block()
+    delegation_block = _build_delegation_block()
+    whatif_block = _build_whatif_block()
+    pre_session_block = _build_pre_session_brief_block()
+    weekly_block = _build_weekly_planning_block()
+    decision_block = _build_decision_support_block()
+    contextual_draft_block = _build_contextual_draft_block()
+    habit_recognition_block = _build_habit_recognition_block(habit_block)
+    catchup_block = _build_catchup_routing_block()
+    sentiment_block = _build_sentiment_block(sentiment)
 
     # Time-of-day tailoring for greeting
     tod_guidance = ""
@@ -6371,6 +6995,24 @@ REAL-TIME BUSINESS DATA (fresh every message):
 {mentor_block}
 
 {suggestions_block}
+
+{sentiment_block}
+
+{delegation_block}
+
+{whatif_block}
+
+{pre_session_block}
+
+{weekly_block}
+
+{decision_block}
+
+{contextual_draft_block}
+
+{habit_recognition_block}
+
+{catchup_block}
 
 {eod_block}
 
@@ -7071,6 +7713,14 @@ async def chief_chat(req: ChatRequest):
                 logger.warning(f"_get_time_context failed: {e}")
                 time_block = ""
 
+            try:
+                habit_block = await _get_habit_insights(client, req.business_id)
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"_get_habit_insights failed: {e}")
+                habit_block = ""
+
+            sentiment = _detect_sentiment(req.conversation_history or [], req.message or "")
+
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,
@@ -7083,6 +7733,8 @@ async def chief_chat(req: ChatRequest):
                 forecast_block=forecast_block,
                 relationships_block=relationships_block,
                 time_block=time_block,
+                sentiment=sentiment,
+                habit_block=habit_block,
             )
             effective_message = req.message
             if req.mode == "strategy_coach" and is_coach_pause:
@@ -7114,6 +7766,22 @@ async def chief_chat(req: ChatRequest):
             # conversationally on the next turn instead of emitting new tags.
             api_messages = _enrich_history_with_action_hints(api_messages)
 
+            # Contextual draft enrichment — when the message hints at
+            # drafting an email and we can resolve a target contact from
+            # ctx.contacts, look up their recent history and prepend it
+            # so the AI's draft references real specifics.
+            draft_context = ""
+            if not is_greeting and not is_coach_pause and _looks_like_draft_request(req.message or ""):
+                resolved_id = _resolve_contact_from_message(
+                    req.message or "",
+                    ctx.get("contacts") or [],
+                )
+                if resolved_id:
+                    try:
+                        draft_context = await _get_draft_context(client, req.business_id, resolved_id)
+                    except Exception as e:  # pragma: no cover
+                        logger.warning(f"draft context lookup failed: {e}")
+
             # Fix 2: per-turn system reminder prepended to the user message.
             # Skipped for the opening greeting (the greeting clause explicitly
             # says "Do NOT emit actions in the greeting") and for strategy-
@@ -7124,6 +7792,7 @@ async def chief_chat(req: ChatRequest):
                     "ANY operation, you MUST include [ACTION:{...}] tags. "
                     "Example: [ACTION:{\"type\":\"create_contact\",\"name\":\"...\",\"email\":\"...\"}]. "
                     "Without the tag, the operation does NOT happen.)\n\n"
+                    + (f"{draft_context}\n\n" if draft_context else "")
                     + effective_message
                 )
             else:
