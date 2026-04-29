@@ -200,18 +200,36 @@ async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
     return json.loads(text) if text else None
 
 
+# Web search is exposed as a server-side tool. The model decides per
+# turn whether to invoke it (the WEB SEARCH section of the system
+# prompt tells it when it should). max_uses caps the call count per
+# request so a single message can't run the budget up.
+# Set CHIEF_WEB_SEARCH=0 in the environment to disable.
+CHIEF_WEB_SEARCH_ENABLED = os.environ.get("CHIEF_WEB_SEARCH", "1") not in ("0", "false", "False")
+CHIEF_WEB_SEARCH_MAX_USES = int(os.environ.get("CHIEF_WEB_SEARCH_MAX_USES", "3") or 3)
+WEB_SEARCH_TOOL = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": CHIEF_WEB_SEARCH_MAX_USES,
+}
+
+
 async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Dict],
-                       max_tokens: int = 1600) -> str:
+                       max_tokens: int = 1600,
+                       enable_web_search: bool = True) -> str:
     key = _anthropic_key()
     if not key:
         return ""
+    payload: Dict[str, Any] = {
+        "model": CHIEF_MODEL, "max_tokens": max_tokens, "system": system,
+        "messages": messages,
+    }
+    if enable_web_search and CHIEF_WEB_SEARCH_ENABLED:
+        payload["tools"] = [WEB_SEARCH_TOOL]
     try:
         resp = await client.post(ANTHROPIC_API_URL, headers={
             "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json",
-        }, json={
-            "model": CHIEF_MODEL, "max_tokens": max_tokens, "system": system,
-            "messages": messages,
-        }, timeout=HTTP_TIMEOUT)
+        }, json=payload, timeout=HTTP_TIMEOUT)
     except httpx.HTTPError as e:
         logger.warning(f"Claude request failed: {e}")
         return ""
@@ -219,7 +237,14 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         logger.warning(f"Claude error: {resp.status_code} {resp.text[:300]}")
         return ""
     data = resp.json()
-    return "".join(b.get("text", "") for b in data.get("content", []) if isinstance(b, dict)).strip()
+    # Content includes text blocks + server-tool blocks (server_tool_use,
+    # web_search_tool_result). We only stitch together the text blocks —
+    # the model's narrative already weaves the search results into prose.
+    return "".join(
+        b.get("text", "")
+        for b in data.get("content", [])
+        if isinstance(b, dict) and b.get("type") == "text"
+    ).strip()
 
 
 async def _draft_short(client: httpx.AsyncClient, biz: Dict, system: str, user_msg: str) -> str:
@@ -6665,6 +6690,37 @@ def _build_catchup_routing_block() -> str:
     )
 
 
+def _build_web_search_block() -> str:
+    """Tells the model when to actually use the web_search tool.
+    Without explicit guidance the model under-uses server tools and
+    hallucinates instead of looking things up."""
+    return (
+        "WEB SEARCH:\n"
+        "You have access to a web_search tool. Use it when the practitioner "
+        "asks about something outside their business data.\n\n"
+        "SEARCH FOR:\n"
+        "- Market rates, pricing, industry benchmarks ('what do coaches charge?')\n"
+        "- Prospect / company research ('look up Sandra's company')\n"
+        "- Business questions ('how do I form an LLC?', 'tax deadline?')\n"
+        "- Trending topics + content ideas ('what's trending in leadership?')\n"
+        "- Local information ('churches in Muskegon', 'events this month')\n"
+        "- Holidays, awareness months, seasonal planning ('Pastor Appreciation Month?')\n"
+        "- General knowledge you're not confident about\n\n"
+        "DO NOT SEARCH FOR:\n"
+        "- Information already in the practitioner's business data — use the context blocks above.\n"
+        "- Personal information about contacts (privacy).\n"
+        "- Medical, legal, or financial advice that requires a licensed professional. "
+        "If the practitioner asks for that, search for general orientation only and "
+        "tell them to consult a pro.\n"
+        "- Social media profiles of contacts.\n\n"
+        "When you do search, briefly mention what you found ('I looked that up — '). "
+        "Don't dump results — summarize the key finding in 2-3 sentences. If the "
+        "search returns nothing useful, say so honestly.\n"
+        "Most messages don't need a search — the budget is small (a few searches "
+        "per turn), so don't burn it on questions the context already answers."
+    )
+
+
 def _build_eod_wrapup_block() -> str:
     """End-of-day wrap-up rules. Shapes the response when the practitioner
     asks for a wrap-up / EOD / day-summary. Concise, advisor-voice, ends
@@ -6918,6 +6974,7 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     habit_recognition_block = _build_habit_recognition_block(habit_block)
     catchup_block = _build_catchup_routing_block()
     sentiment_block = _build_sentiment_block(sentiment)
+    web_search_block = _build_web_search_block() if CHIEF_WEB_SEARCH_ENABLED else ""
 
     # Time-of-day tailoring for greeting
     tod_guidance = ""
@@ -7013,6 +7070,8 @@ REAL-TIME BUSINESS DATA (fresh every message):
 {habit_recognition_block}
 
 {catchup_block}
+
+{web_search_block}
 
 {eod_block}
 
