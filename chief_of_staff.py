@@ -5199,6 +5199,102 @@ async def handle_catch_up(client, biz, action) -> Dict:
     }
 
 
+async def handle_add_testimonial(client, biz, action) -> Dict:
+    """Append a verified testimonial to businesses.settings.website_content.
+
+    The quote is stored EXACTLY as provided by the practitioner — never
+    paraphrased, never embellished. Existing testimonials are preserved.
+    """
+    quote = (action.get("quote") or "").strip()
+    name = (action.get("name") or "").strip()
+    role = (action.get("role") or "").strip()
+    show_on_website = action.get("show_on_website")
+    if show_on_website is None:
+        show_on_website = True
+
+    if not quote or not name:
+        return _fail("add_testimonial", "Need both a quote and a name.")
+
+    # Read-modify-write so we don't clobber other settings keys.
+    rows = await _sb(client, "GET",
+        f"/businesses?id=eq.{biz['id']}&select=settings&limit=1") or []
+    if not rows:
+        return _fail("add_testimonial", "Business not found.")
+
+    settings = dict(rows[0].get("settings") or {})
+    website_content = dict(settings.get("website_content") or {})
+    testimonials = list(website_content.get("testimonials") or [])
+
+    new_id = f"t_{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+    testimonials.append({
+        "id": new_id,
+        "quote": quote,
+        "name": name,
+        "role": role,
+        "provided_by": "practitioner",
+        "show_on_website": bool(show_on_website),
+        "date_added": datetime.now(timezone.utc).isoformat()[:10],
+    })
+    website_content["testimonials"] = testimonials
+    website_content["last_updated"] = datetime.now(timezone.utc).isoformat()
+    settings["website_content"] = website_content
+
+    await _sb(client, "PATCH", f"/businesses?id=eq.{biz['id']}", {"settings": settings})
+
+    return {
+        "type": "add_testimonial",
+        "result": "added",
+        "testimonial_id": new_id,
+        "label": f"📣 Testimonial from {name} added",
+    }
+
+
+async def handle_remove_testimonial(client, biz, action) -> Dict:
+    """Remove a testimonial by id, name, or quote substring. The Chief
+    can call this when the practitioner says 'remove the testimonial
+    from Marcus' or 'delete that quote'."""
+    target_id = (action.get("testimonial_id") or "").strip()
+    target_name = (action.get("name") or "").strip().lower()
+    target_quote = (action.get("quote") or "").strip().lower()
+
+    if not (target_id or target_name or target_quote):
+        return _fail("remove_testimonial", "Need testimonial_id, name, or quote substring.")
+
+    rows = await _sb(client, "GET",
+        f"/businesses?id=eq.{biz['id']}&select=settings&limit=1") or []
+    if not rows:
+        return _fail("remove_testimonial", "Business not found.")
+    settings = dict(rows[0].get("settings") or {})
+    website_content = dict(settings.get("website_content") or {})
+    testimonials = list(website_content.get("testimonials") or [])
+
+    def matches(t: Dict[str, Any]) -> bool:
+        if target_id and t.get("id") == target_id:
+            return True
+        if target_name and (t.get("name") or "").lower() == target_name:
+            return True
+        if target_quote and target_quote in (t.get("quote") or "").lower():
+            return True
+        return False
+
+    kept = [t for t in testimonials if not matches(t)]
+    removed_count = len(testimonials) - len(kept)
+    if removed_count == 0:
+        return _fail("remove_testimonial", "No matching testimonial found.")
+
+    website_content["testimonials"] = kept
+    website_content["last_updated"] = datetime.now(timezone.utc).isoformat()
+    settings["website_content"] = website_content
+    await _sb(client, "PATCH", f"/businesses?id=eq.{biz['id']}", {"settings": settings})
+
+    return {
+        "type": "remove_testimonial",
+        "result": "removed",
+        "removed": removed_count,
+        "label": f"🗑️ Removed {removed_count} testimonial{'s' if removed_count != 1 else ''}",
+    }
+
+
 async def handle_set_timer(client, biz, action) -> Dict:
     """Set a countdown timer or alarm. Server returns the timer
     metadata; ChiefOfStaff.tsx creates the timer client-side via
@@ -5321,6 +5417,9 @@ ACTION_HANDLERS = {
     "recall_conversation":        handle_recall_conversation,
     # Catch-up briefing
     "catch_up":                   handle_catch_up,
+    # Website content integrity
+    "add_testimonial":            handle_add_testimonial,
+    "remove_testimonial":         handle_remove_testimonial,
     # Timers & alarms
     "set_timer":                  handle_set_timer,
 }
@@ -6721,6 +6820,114 @@ def _build_web_search_block() -> str:
     )
 
 
+def _build_website_block() -> str:
+    """Guided interview + content-integrity rules for the practitioner's
+    public website. The Chief should NEVER generate fake testimonials or
+    fictional content; if a section has no real input, it doesn't appear."""
+    return (
+        "WEBSITE BUILDING:\n"
+        "When the practitioner asks to build, update, or regenerate their website, DO NOT "
+        "generate immediately. Walk through a short, conversational interview to collect REAL "
+        "content. Skip steps where you already have the answer in business data; ask only for "
+        "what's missing.\n\n"
+        "STEP 1 — TAGLINE: 'What's a one-sentence description of what you do?'\n"
+        "STEP 2 — SERVICES: If the products table has active/display_on_website items, ask "
+        "'I see [list]. Use these on the site, or describe them differently?' Otherwise: "
+        "'What services do you offer? Name + brief description + price for each.'\n"
+        "STEP 3 — ABOUT: 'Tell me about yourself in your own words. I'll polish grammar but "
+        "keep YOUR voice.'\n"
+        "STEP 4 — TESTIMONIALS: 'Do you have any real testimonials from clients? If not, "
+        "that's fine — I'll skip the section and you can add them later.'\n"
+        "  → NEVER fabricate. Only use exact quotes the practitioner provides.\n"
+        "  → If they paraphrase ('Marcus said something like…'), ask for the exact words.\n"
+        "STEP 5 — PHOTOS: Check media_library for headshot/gallery; ask only for what's missing.\n"
+        "STEP 6 — STYLE: 'Modern and clean? Warm and welcoming? Bold? Or pick from your brand colors?'\n"
+        "STEP 7 — REVIEW: Show a structured summary of everything collected and ask 'Does this "
+        "look right? I'll generate the site and you can preview before it goes live.'\n\n"
+        "Only after explicit confirmation, emit:\n"
+        "[ACTION:{\"type\":\"generate_website\",\"content\":{...collected fields...}}]\n\n"
+        "RULES:\n"
+        "- NEVER invent testimonials, quotes, awards, statistics, team members, or partners.\n"
+        "- If a section has no real content, OMIT it entirely — no placeholder copy.\n"
+        "- Polish the about/bio for grammar but preserve the practitioner's voice.\n"
+        "- Services must match what's in their products table — don't add invented services.\n"
+        "- Mark anything you re-wrote (vs. quoted verbatim) as 'ai_polished' so the review "
+        "panel can flag it for verification."
+    )
+
+
+def _build_testimonial_collection_block() -> str:
+    return (
+        "COLLECTING TESTIMONIALS:\n"
+        "When the practitioner says 'add a testimonial' / 'I got a great quote from X' / "
+        "'add this quote from Marcus':\n"
+        "Emit [ACTION:{\"type\":\"add_testimonial\",\"quote\":\"<exact words>\","
+        "\"name\":\"<contact name>\",\"role\":\"<optional role>\"}]\n\n"
+        "RULES:\n"
+        "- Store the quote EXACTLY as provided. Never modify, embellish, or paraphrase.\n"
+        "- If the practitioner paraphrases ('Marcus said something like…'), ask 'Can you "
+        "give me his exact words? I want to use his real quote, not a paraphrase.'\n"
+        "- Always capture name. Role/title is optional but ask if it's natural.\n"
+        "- After saving, confirm in plain language: 'Saved. Marcus's quote is on your site now.'\n\n"
+        "ASKING FOR TESTIMONIALS:\n"
+        "When the practitioner says 'help me ask Marcus for a testimonial' / 'draft a "
+        "testimonial request', draft a short natural email and emit it as a draft "
+        "(draft_and_send / draft_email). Keep the ask brief — 1-2 sentence target. Tone:\n"
+        "  'Hey Marcus, I'm updating my website and would love to include a quick word from "
+        "you about our coaching work together. Would you mind sharing 1-2 sentences about "
+        "your experience? Something like what you'd tell a friend who was considering "
+        "coaching. No pressure at all — and thanks for being great to work with. Kevin'\n\n"
+        "When the contact replies with a quote, surface it: 'Marcus sent his testimonial. "
+        "Want me to add it to your website?' If yes → add_testimonial."
+    )
+
+
+def _build_website_nudges_block(biz: Dict[str, Any]) -> str:
+    """Nudges only fire when content is genuinely missing. Computed from
+    website_content + media_library so the AI doesn't pester practitioners
+    who already provided everything."""
+    settings = biz.get("settings") or {}
+    wc = settings.get("website_content") or {}
+    media = settings.get("media_library") or {}
+    gallery = media.get("gallery") or []
+
+    missing: List[str] = []
+    if not (wc.get("testimonials") or []):
+        missing.append("testimonials")
+    if not (wc.get("about") or "").strip():
+        missing.append("about")
+    if not gallery:
+        missing.append("gallery")
+
+    if not missing:
+        return ""
+
+    nudges = []
+    if "testimonials" in missing:
+        nudges.append(
+            "  - No testimonials yet. Once per WEEK MAX, casually surface: "
+            "'Have any of your clients said something nice about working with you "
+            "recently? A real quote on your site goes a long way.'"
+        )
+    if "about" in missing:
+        nudges.append(
+            "  - No about section. Once per WEEK MAX: 'Your site doesn't have an about "
+            "section yet. Want to tell me a bit about yourself and I'll add it?'"
+        )
+    if "gallery" in missing:
+        nudges.append(
+            "  - No gallery photos. Once per WEEK MAX: 'Your site could use some "
+            "photos. Got any from events, sessions, or your workspace?'"
+        )
+
+    return (
+        "WEBSITE CONTENT NUDGES:\n"
+        + "\n".join(nudges) +
+        "\n  - NEVER pushy. ONE nudge per week max across all of these. If they ignore "
+        "it, don't bring it up again for at least 2 weeks."
+    )
+
+
 def _build_eod_wrapup_block() -> str:
     """End-of-day wrap-up rules. Shapes the response when the practitioner
     asks for a wrap-up / EOD / day-summary. Concise, advisor-voice, ends
@@ -6975,6 +7182,9 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     catchup_block = _build_catchup_routing_block()
     sentiment_block = _build_sentiment_block(sentiment)
     web_search_block = _build_web_search_block() if CHIEF_WEB_SEARCH_ENABLED else ""
+    website_block = _build_website_block()
+    testimonial_block = _build_testimonial_collection_block()
+    nudges_block = _build_website_nudges_block(biz)
 
     # Time-of-day tailoring for greeting
     tod_guidance = ""
@@ -7072,6 +7282,12 @@ REAL-TIME BUSINESS DATA (fresh every message):
 {catchup_block}
 
 {web_search_block}
+
+{website_block}
+
+{testimonial_block}
+
+{nudges_block}
 
 {eod_block}
 

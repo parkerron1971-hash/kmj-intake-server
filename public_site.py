@@ -260,11 +260,57 @@ def _render_gallery_section(gallery: List[Dict[str, Any]]) -> str:
     )
 
 
-def _inject_dynamic_sections(html: str, products_html: str, gallery_html: str) -> str:
-    """Append the products + gallery sections into the served HTML right
-    before </body>. The site itself is regenerated rarely; this gives
-    practitioners live updates without a regen cycle."""
-    extra = (products_html or "") + (gallery_html or "")
+def _render_testimonials_section(testimonials: List[Dict[str, Any]]) -> str:
+    """Render the Testimonials section from settings.website_content.testimonials.
+    ONLY renders when there are real, opt-in testimonials — never produces a
+    placeholder. Quotes are HTML-escaped but otherwise rendered verbatim;
+    we never modify the practitioner's words."""
+    visible = [
+        t for t in (testimonials or [])
+        if t.get("show_on_website", True) and (t.get("quote") or "").strip()
+    ]
+    if not visible:
+        return ""
+
+    cards: List[str] = []
+    for t in visible:
+        quote = _esc(t.get("quote") or "")
+        name = _esc(t.get("name") or "")
+        role = _esc(t.get("role") or "")
+        role_html = (
+            f'<div style="font-size:12px;color:#777;margin-top:2px;">{role}</div>'
+            if role else ""
+        )
+        cards.append(
+            '<figure style="margin:0;padding:24px;background:#fff;border:1px solid #ececec;'
+            'border-radius:12px;display:flex;flex-direction:column;gap:14px;">'
+            f'<blockquote style="margin:0;font-size:16px;line-height:1.6;color:#222;">'
+            f'&ldquo;{quote}&rdquo;</blockquote>'
+            '<figcaption style="display:flex;align-items:flex-start;justify-content:space-between;">'
+            f'<div><div style="font-weight:600;color:#222;">— {name}</div>{role_html}</div>'
+            '</figcaption></figure>'
+        )
+
+    return (
+        '<section id="testimonials" style="padding:60px 24px;background:#fafafa;">'
+        '<div style="max-width:1100px;margin:0 auto;">'
+        '<h2 style="text-align:center;font-size:32px;margin:0 0 32px;color:#222;">What people are saying</h2>'
+        '<div class="testimonial-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;">'
+        + "".join(cards) +
+        '</div></div></section>'
+    )
+
+
+def _inject_dynamic_sections(
+    html: str,
+    products_html: str,
+    gallery_html: str,
+    testimonials_html: str = "",
+) -> str:
+    """Append the products + gallery + testimonials sections into the served
+    HTML right before </body>. The site itself is regenerated rarely; this
+    gives practitioners live updates without a regen cycle."""
+    extra = (products_html or "") + (gallery_html or "") + (testimonials_html or "")
     if not extra:
         return html
     if "</body>" in html:
@@ -485,9 +531,11 @@ async def get_site_html(slug: str):
             raise HTTPException(404, "Site has no content")
         biz_id = site.get("business_id")
 
-        # Pull live products + media library so they update without a regen
+        # Pull live products + media library + verified testimonials so
+        # they update without a regen.
         products: List[Dict[str, Any]] = []
         gallery: List[Dict[str, Any]] = []
+        testimonials: List[Dict[str, Any]] = []
         if biz_id:
             prod_rows, biz_rows = await asyncio.gather(
                 _sb(client,
@@ -497,14 +545,18 @@ async def get_site_html(slug: str):
             )
             products = prod_rows or []
             if biz_rows:
-                lib = ((biz_rows[0].get("settings") or {}).get("media_library") or {})
+                biz_settings = biz_rows[0].get("settings") or {}
+                lib = biz_settings.get("media_library") or {}
                 gallery = lib.get("gallery") or []
+                website_content = biz_settings.get("website_content") or {}
+                testimonials = website_content.get("testimonials") or []
 
         html = _inject_canonical(html, slug)
         html = _inject_dynamic_sections(
             html,
             _render_products_section(products, slug),
             _render_gallery_section(gallery),
+            _render_testimonials_section(testimonials),
         )
         return HTMLResponse(
             content=html,
