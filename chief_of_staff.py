@@ -329,8 +329,15 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         _sb(client, "GET",
             f"/strategy_tracks?business_id=eq.{biz_id}"
             f"&order=created_at.desc&limit=1&select=*"),
+        # Products catalog — Chief uses this to answer pricing questions
+        # and pre-fill invoice line items without the practitioner
+        # having to repeat themselves.
+        _sb(client, "GET",
+            f"/products?business_id=eq.{biz_id}&status=eq.active"
+            f"&order=type.asc,sort_order.asc,name.asc&limit=50"
+            f"&select=id,name,type,price,currency,pricing_type,duration_minutes,description"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, products = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -382,6 +389,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "auto_recent": auto_recent,
         "site": (site_rows or [{}])[0] if site_rows else None,
         "strategy_track": (strategy_rows or [None])[0] if strategy_rows else None,
+        "products": products or [],
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
@@ -541,6 +549,32 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         + ("\n  Recent auto-actions:\n" + "\n".join(auto_recent_lines) if auto_recent_lines else "")
     )
 
+    # Products / services catalog — feed the live list so the Chief
+    # quotes real prices and uses real product_ids when creating
+    # invoices. Without this, the model invents numbers.
+    product_lines = []
+    for p in (ctx.get("products") or []):
+        try:
+            price = float(p.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        ptype = (p.get("type") or "service")
+        currency = p.get("currency") or "USD"
+        pricing_type = p.get("pricing_type") or "fixed"
+        suffix = ""
+        if pricing_type == "hourly":
+            suffix = "/hr"
+        elif pricing_type == "per_session":
+            suffix = "/session"
+        elif pricing_type == "subscription":
+            suffix = "/mo"
+        price_label = f"{currency} {price:,.2f}{suffix}" if price else "(no price set)"
+        dur = p.get("duration_minutes")
+        dur_part = f" · {dur}min" if dur else ""
+        product_lines.append(
+            f"  - {p.get('name')} [{ptype}{dur_part}] {price_label} [id={p.get('id')}]"
+        )
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
   Voice profile: {json.dumps(biz.get('voice_profile') or {})[:500]}{et_summary}{autopilot_block}
@@ -580,6 +614,9 @@ RECENT UNREAD NOTIFICATIONS:
 
 PRACTITIONER SITE:
 {_format_site_info(ctx)}
+
+PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull description + unit_price from the catalog rather than asking again):
+{chr(10).join(product_lines) if product_lines else '  (no products yet)'}
 
 CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
 {chr(10).join(contact_ref_lines) if contact_ref_lines else '  (no contacts)'}
@@ -3919,14 +3956,46 @@ async def handle_create_invoice(client, biz, action) -> Dict:
     if not isinstance(items_in, list) or not items_in:
         return _fail("create_invoice", "items (list) required")
 
+    # Each line item may carry a `product_id` or `product_name` so the
+    # Chief can say "invoice Marcus for Leadership Coaching" without
+    # knowing the price. Resolve those references against the products
+    # catalog and pre-fill description / unit_price when missing.
+    async def _resolve_product(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        pid = (raw.get("product_id") or "").strip()
+        if pid:
+            rows = await _sb(
+                client, "GET",
+                f"/products?id=eq.{pid}&business_id=eq.{biz['id']}"
+                f"&select=id,name,description,price&limit=1"
+            )
+            if rows:
+                return rows[0]
+        pname = (raw.get("product_name") or raw.get("product") or "").strip()
+        if pname:
+            return await _find_product_by_name(client, biz["id"], pname)
+        # Fallback: infer from description text — e.g. an item description
+        # of "Leadership Coaching" should still resolve to the product.
+        desc = (raw.get("description") or "").strip()
+        if desc and not raw.get("unit_price") and not raw.get("price"):
+            return await _find_product_by_name(client, biz["id"], desc)
+        return None
+
     norm_items: List[Dict[str, Any]] = []
     subtotal = 0.0
     for raw in items_in:
         if not isinstance(raw, dict):
             continue
+        product = await _resolve_product(raw)
         desc = str(raw.get("description") or "").strip()
+        if not desc and product:
+            desc = str(product.get("name") or "").strip()
         qty = float(raw.get("quantity") or 1)
         price = float(raw.get("unit_price") or raw.get("price") or 0)
+        if price == 0 and product and product.get("price"):
+            try:
+                price = float(product.get("price") or 0)
+            except (TypeError, ValueError):
+                price = 0.0
         total = round(qty * price, 2)
         subtotal += total
         norm_items.append({
@@ -3934,6 +4003,7 @@ async def handle_create_invoice(client, biz, action) -> Dict:
             "quantity": qty,
             "unit_price": price,
             "total": total,
+            **({"product_id": product.get("id")} if product and product.get("id") else {}),
         })
     subtotal = round(subtotal, 2)
     tax_rate = float(action.get("tax_rate") or 0)
@@ -7351,6 +7421,7 @@ ACTIONS — TASKS + NOTES + ACTIVITY:
 
 ACTIONS — INVOICES:
   [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[{{"description":"Coaching Session (60 min)","quantity":4,"unit_price":150}}],"category":"Coaching","due_date":"2026-04-30","notes":"Thanks!"}}]  — status='draft'; total auto-computed; for the platform owner, a Stripe payment link is generated automatically. category is optional but recommended — pick from the practitioner's configured list (default: Coaching, Consulting, Speaking, Workshop, Product, Other). Infer from context if not specified.
+  Each line item can reference a product from the catalog with "product_id":"<uuid>" or "product_name":"<exact name>" — when present, description and unit_price auto-fill from the products table so you do NOT need to ask the practitioner for the price. ALWAYS try this first when the practitioner names something in the catalog. Example: [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[{{"product_id":"<uuid-from-catalog>","quantity":1}}]}}]
   [ACTION:{{"type":"send_invoice","invoice_id":"latest"}}]  — send the invoice you just created. "latest" resolves to the most recent invoice on the business. Or use "@create_invoice.invoice_id" to reference the prior create_invoice result. You can also omit invoice_id entirely — when the preceding action is create_invoice, it auto-chains.
   [ACTION:{{"type":"mark_invoice_paid","invoice_id":"latest","payment_method":"stripe|check|cash"}}]
   [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[...],"is_recurring":true,"recurrence_frequency":"monthly","recurrence_start":"2026-05-01","recurrence_end_type":"never","auto_send":true}}]  — recurring invoice template; freq is weekly/biweekly/monthly/quarterly/annually. recurrence_end_type is never/after_count/on_date and recurrence_end_value carries the count or end-date. Server auto-generates each occurrence on its due date.

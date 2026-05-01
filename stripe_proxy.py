@@ -270,6 +270,10 @@ async def _deliver_digital_product(
     closing = "Best,"
     practitioner_name = ""
     template = None
+    # Brand kit - propagates to delivery emails so customers see the
+    # practitioner's accent color rather than generic gold.
+    brand_color = "#D4AF37"
+    brand_font = "Inter,Arial,sans-serif"
 
     if business_id:
         biz_rows = await _sb_get(client, f"/businesses?id=eq.{business_id}&select=name,settings&limit=1")
@@ -283,6 +287,14 @@ async def _deliver_digital_product(
             rules = email_templates.get("global_rules") or {}
             closing = rules.get("closing_line") or closing
             template = (email_templates.get("templates") or {}).get("product_delivery")
+            brand_kit = settings.get("brand_kit") or {}
+            if isinstance(brand_kit, dict):
+                bc = (brand_kit.get("primary_color") or "").strip()
+                if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
+                    brand_color = bc
+                bf = (brand_kit.get("font_heading") or brand_kit.get("font_body") or "").strip()
+                if bf:
+                    brand_font = f"{bf},Inter,Arial,sans-serif"
 
     # Substitute variables
     name = product.get("name") or "your download"
@@ -302,23 +314,27 @@ async def _deliver_digital_product(
             out = out.replace("{" + k + "}", str(v))
         return out
 
+    btn_style = (
+        f"display:inline-block;padding:14px 32px;background:{brand_color};"
+        f"color:#fff;text-decoration:none;border-radius:8px;font-size:16px;font-weight:bold;"
+    )
     if template and template.get("subject") and template.get("body"):
         subject = apply(template["subject"])
         body_text = apply(template["body"])
         # Convert plain-text body to a minimal HTML if the template stored plain text
         body_html = (
-            f"""<div style="font-family:Inter,Arial,sans-serif;font-size:14px;line-height:1.6;color:#222;">
+            f"""<div style="font-family:{brand_font};font-size:14px;line-height:1.6;color:#222;">
 {body_text.replace(chr(10), '<br>')}
 <br><br>
-<a href="{file_url}" style="display:inline-block;padding:14px 32px;background:#D4AF37;color:#fff;text-decoration:none;border-radius:8px;font-size:16px;font-weight:bold;">Download Now</a>
+<a href="{file_url}" style="{btn_style}">Download Now</a>
 </div>"""
         )
     else:
         subject = f"Your download: {name}"
-        body_html = f"""<div style="font-family:Inter,Arial,sans-serif;font-size:14px;line-height:1.6;color:#222;">
+        body_html = f"""<div style="font-family:{brand_font};font-size:14px;line-height:1.6;color:#222;">
             <h2 style="margin-top:0;">Thank you for your purchase!</h2>
             <p>Here's your download link for <strong>{name}</strong>:</p>
-            <p><a href="{file_url}" style="display:inline-block;padding:14px 32px;background:#D4AF37;color:#fff;text-decoration:none;border-radius:8px;font-size:16px;font-weight:bold;">Download Now</a></p>
+            <p><a href="{file_url}" style="{btn_style}">Download Now</a></p>
             <p>This link will remain active. Save it for future reference.</p>
             <p>If you have any questions, just reply to this email.</p>
             <p>{closing}<br>{practitioner_name or biz_name}</p>

@@ -129,8 +129,12 @@ def _esc(text: Any) -> str:
     )
 
 
-def _render_products_section(products: List[Dict[str, Any]], slug: str) -> str:
-    """Render a Products & Services section. Returns '' when nothing to show."""
+def _render_products_section(products: List[Dict[str, Any]], slug: str, brand_color: str = "#D4AF37") -> str:
+    """Render a Products & Services section. Returns '' when nothing to show.
+
+    `brand_color` flows in from settings.brand_kit.primary_color so the
+    CTA buttons match the practitioner's brand instead of always gold.
+    """
     visible = [
         p for p in (products or [])
         if (p.get("status") or "active") == "active"
@@ -178,13 +182,13 @@ def _render_products_section(products: List[Dict[str, Any]], slug: str) -> str:
         if ptype == "digital" and stripe_link:
             cta = (
                 f'<a href="{_esc(stripe_link)}" style="display:inline-block;margin-top:10px;padding:10px 18px;'
-                f'background:#D4AF37;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">'
+                f'background:{brand_color};color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">'
                 f'Buy Now — {price_label}</a>'
             )
         elif ptype == "service":
             cta = (
                 f'<a href="/{_esc(slug)}/book" style="display:inline-block;margin-top:10px;padding:10px 18px;'
-                f'background:#D4AF37;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">'
+                f'background:{brand_color};color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">'
                 f'Book Now — {price_label}</a>'
             )
         else:
@@ -536,6 +540,7 @@ async def get_site_html(slug: str):
         products: List[Dict[str, Any]] = []
         gallery: List[Dict[str, Any]] = []
         testimonials: List[Dict[str, Any]] = []
+        brand_color = "#D4AF37"
         if biz_id:
             prod_rows, biz_rows = await asyncio.gather(
                 _sb(client,
@@ -550,11 +555,15 @@ async def get_site_html(slug: str):
                 gallery = lib.get("gallery") or []
                 website_content = biz_settings.get("website_content") or {}
                 testimonials = website_content.get("testimonials") or []
+                bk = biz_settings.get("brand_kit") or {}
+                bc = (bk.get("primary_color") or "").strip() if isinstance(bk, dict) else ""
+                if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
+                    brand_color = bc
 
         html = _inject_canonical(html, slug)
         html = _inject_dynamic_sections(
             html,
-            _render_products_section(products, slug),
+            _render_products_section(products, slug, brand_color),
             _render_gallery_section(gallery),
             _render_testimonials_section(testimonials),
         )
@@ -648,6 +657,40 @@ async def get_site_data(slug: str):
             "sections": sections,
             "forms": linked_forms,
         }
+
+
+@router.post("/sites/{business_id}/invalidate")
+async def invalidate_site_cache(business_id: str):
+    """Bump business_sites.updated_at so consumers see a fresh
+    revision after products / brand_kit / testimonials change.
+
+    The static template HTML is regenerated client-side via the BUILD
+    > My Site flow; what changes here is only the dynamically-injected
+    sections (products, gallery, testimonials) and the brand colors
+    applied at request time. Calling this endpoint is a no-op if the
+    business has no published site row yet.
+    """
+    async with httpx.AsyncClient() as client:
+        sites = await _sb(client, f"/business_sites?business_id=eq.{business_id}&select=id&limit=1")
+        if not sites:
+            return {"status": "no_site"}
+        site_id = sites[0]["id"]
+        url = f"{_supabase_url()}/rest/v1/business_sites?id=eq.{site_id}"
+        headers = {
+            "apikey": _supabase_anon(),
+            "Authorization": f"Bearer {_supabase_anon()}",
+            "Content-Type": "application/json",
+        }
+        try:
+            await client.patch(
+                url,
+                headers=headers,
+                content=json.dumps({"updated_at": datetime.now(timezone.utc).isoformat()}),
+                timeout=HTTP_TIMEOUT,
+            )
+        except Exception as e:
+            logger.warning(f"site invalidate patch failed: {e}")
+        return {"status": "invalidated", "site_id": site_id}
 
 
 @router.get("/public/widget/{module_id}")
@@ -974,8 +1017,56 @@ async def booking_slots(slug: str, days: int = 14):
         hours_end = booking.get("hours", {}).get("end", "17:00")
         buffer = booking.get("buffer_minutes", 15)
         window = min(days, booking.get("booking_window_days", 14))
-        session_types = booking.get("session_types", [])
-        durations = booking.get("durations", {})
+        session_types = list(booking.get("session_types", []) or [])
+        durations = dict(booking.get("durations", {}) or {})
+
+        # Pull bookable services from the products catalog. Any product
+        # with type=service, status=active, display_on_website=true is
+        # offered as a session type — that way adding a product in
+        # BUILD -> Products & Services automatically makes it bookable.
+        product_services = []
+        try:
+            product_services = await _sb(
+                client,
+                f"/products?business_id=eq.{biz_id}&status=eq.active"
+                f"&type=eq.service&display_on_website=eq.true"
+                f"&order=sort_order.asc&limit=50"
+                f"&select=id,name,description,price,currency,pricing_type,duration_minutes"
+            ) or []
+        except Exception:
+            product_services = []
+
+        # Merge product services into the legacy session_types/durations
+        # shape so the existing booking UI keeps working. Each product
+        # name becomes a session type and its duration_minutes seeds the
+        # durations map. Practitioner-defined session_types still win
+        # for any name conflict.
+        existing_keys = {str(t).lower() for t in session_types}
+        product_meta: List[Dict[str, Any]] = []
+        for p in product_services:
+            name = (p.get("name") or "").strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key not in existing_keys:
+                session_types.append(name)
+                existing_keys.add(key)
+            dur = p.get("duration_minutes") or 60
+            try:
+                dur = int(dur)
+            except (TypeError, ValueError):
+                dur = 60
+            if name not in durations:
+                durations[name] = dur
+            product_meta.append({
+                "id": p.get("id"),
+                "name": name,
+                "description": p.get("description") or "",
+                "price": p.get("price"),
+                "currency": p.get("currency") or "USD",
+                "pricing_type": p.get("pricing_type") or "fixed",
+                "duration_minutes": dur,
+            })
         min_duration = min(durations.values()) if durations else 60
 
         # Parse hours
@@ -1031,7 +1122,12 @@ async def booking_slots(slug: str, days: int = 14):
             if day_slots:
                 slots.append({"date": day.isoformat(), "times": day_slots})
 
-        return {"slots": slots, "session_types": session_types, "durations": durations}
+        return {
+            "slots": slots,
+            "session_types": session_types,
+            "durations": durations,
+            "products": product_meta,
+        }
 
 
 class BookingSubmission(BaseModel):
@@ -1322,6 +1418,7 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
     """Inject canonical + live products + gallery into served HTML."""
     products: List[Dict[str, Any]] = []
     gallery: List[Dict[str, Any]] = []
+    brand_color = "#D4AF37"
     if biz_id:
         prod_rows, biz_rows = await asyncio.gather(
             _sb(client,
@@ -1331,12 +1428,17 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
         )
         products = prod_rows or []
         if biz_rows:
-            lib = ((biz_rows[0].get("settings") or {}).get("media_library") or {})
+            settings = (biz_rows[0].get("settings") or {})
+            lib = settings.get("media_library") or {}
             gallery = lib.get("gallery") or []
+            bk = settings.get("brand_kit") or {}
+            bc = (bk.get("primary_color") or "").strip() if isinstance(bk, dict) else ""
+            if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
+                brand_color = bc
     html = _inject_canonical(html, slug)
     html = _inject_dynamic_sections(
         html,
-        _render_products_section(products, slug),
+        _render_products_section(products, slug, brand_color),
         _render_gallery_section(gallery),
     )
     return html
