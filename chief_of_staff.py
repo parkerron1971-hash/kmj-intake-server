@@ -308,7 +308,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
             f"&select=id,category,title,priority"),
         _sb(client, "GET",
             f"/custom_modules?business_id=eq.{biz_id}&is_active=eq.true"
-            f"&select=id,name,description&limit=50"),
+            f"&select=id,name,slug,description&limit=50"),
         _sb(client, "GET",
             f"/chief_memories?business_id=eq.{biz_id}&is_active=eq.true"
             f"&order=importance.desc,created_at.desc&limit=50"
@@ -460,7 +460,8 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
     for m in ctx["modules"][:20]:
         count = ctx["module_counts"].get(m["id"], 0)
         desc = f" — {m.get('description')}" if m.get('description') else ""
-        module_lines.append(f"  - {m.get('name')} ({count} entries){desc} [id={m.get('id')}]")
+        slug_part = f" slug={m.get('slug')}" if m.get('slug') else ""
+        module_lines.append(f"  - {m.get('name')} ({count} entries){desc} [id={m.get('id')}{slug_part}]")
 
     # At-risk contacts
     at_risk_lines = [
@@ -1604,6 +1605,134 @@ async def handle_create_module_entry(client, biz, action) -> Dict:
         "result": "entry added",
         "label": f"{module.get('name')}: {title}",
         "nav": _nav("build"),  # module is in build sidebar
+    }
+
+
+async def _resolve_module(client, biz_id: str, action) -> Optional[Dict[str, Any]]:
+    """Resolve a module by id, slug, or name. Used by every module
+    handler so the Chief can refer to modules naturally."""
+    mid = (action.get("module_id") or "").strip()
+    if mid:
+        rows = await _sb(client, "GET",
+            f"/custom_modules?id=eq.{mid}&business_id=eq.{biz_id}&limit=1&select=*") or []
+        if rows: return rows[0]
+    slug = (action.get("module_slug") or action.get("slug") or "").strip()
+    if slug:
+        rows = await _sb(client, "GET",
+            f"/custom_modules?slug=eq.{slug}&business_id=eq.{biz_id}&limit=1&select=*") or []
+        if rows: return rows[0]
+    name = (action.get("module_name") or action.get("name") or "").strip()
+    if name:
+        safe = name.replace("%", "")
+        rows = await _sb(client, "GET",
+            f"/custom_modules?name=ilike.*{safe}*&business_id=eq.{biz_id}&limit=5&select=*") or []
+        # Exact match wins, otherwise the first hit.
+        for r in rows:
+            if (r.get("name") or "").strip().lower() == name.strip().lower():
+                return r
+        if rows: return rows[0]
+    return None
+
+
+async def handle_update_module_entry(client, biz, action) -> Dict:
+    """Update an existing entry in a custom module. Caller passes
+    `entry_id` plus a `data` patch dict; existing data is merged."""
+    entry_id = (action.get("entry_id") or "").strip()
+    if not entry_id:
+        return _fail("update_module_entry", "entry_id required")
+    patch = action.get("data") or {}
+    if not isinstance(patch, dict) or not patch:
+        return _fail("update_module_entry", "data must be a non-empty object")
+
+    # Read existing entry so we can merge rather than replace.
+    rows = await _sb(client, "GET",
+        f"/module_entries?id=eq.{entry_id}&business_id=eq.{biz['id']}"
+        f"&select=id,module_id,data&limit=1") or []
+    if not rows:
+        return _fail("update_module_entry", "entry not found")
+    existing = rows[0]
+    merged = {**(existing.get("data") or {}), **patch}
+
+    updated = await _sb(client, "PATCH", f"/module_entries?id=eq.{entry_id}",
+                       {"data": merged})
+    if not updated:
+        return _fail("update_module_entry", "update failed")
+
+    return {
+        "type": "update_module_entry",
+        "result": "updated",
+        "label": "📦 Module entry updated",
+        "entry_id": entry_id,
+        "nav": _nav("build"),
+    }
+
+
+async def handle_delete_module_entry(client, biz, action) -> Dict:
+    """Delete a module entry. Soft-deletes by flipping status to
+    'deleted' so anything tracking the row keeps a reference."""
+    entry_id = (action.get("entry_id") or "").strip()
+    if not entry_id:
+        return _fail("delete_module_entry", "entry_id required")
+
+    rows = await _sb(client, "PATCH",
+        f"/module_entries?id=eq.{entry_id}&business_id=eq.{biz['id']}",
+        {"status": "deleted"}) or []
+    if not rows:
+        return _fail("delete_module_entry", "delete failed (entry not found?)")
+
+    return {
+        "type": "delete_module_entry",
+        "result": "deleted",
+        "label": "📦 Module entry removed",
+        "entry_id": entry_id,
+    }
+
+
+async def handle_list_module_entries(client, biz, action) -> Dict:
+    """List active entries from a module. Resolves module by id, slug,
+    or name. Returns a compact summary the chat surface can render."""
+    module = await _resolve_module(client, biz["id"], action)
+    if not module:
+        return _fail("list_module_entries", "module not found - pass module_id, module_slug, or module_name")
+
+    rows = await _sb(client, "GET",
+        f"/module_entries?module_id=eq.{module['id']}&status=eq.active"
+        f"&order=created_at.desc&limit=50&select=id,data,created_at") or []
+
+    if not rows:
+        return {
+            "type": "list_module_entries",
+            "result": "empty",
+            "module_id": module["id"],
+            "label": f"📦 {module.get('name')} is empty",
+            "summary": f"No entries in {module.get('name')} yet. Want to add the first one?",
+            "entries": [],
+            "nav": {"tab": "build", "page": f"module:{module['id']}"},
+        }
+
+    # Build summary lines using whatever 'title' or 'name' field exists
+    # in the entry's data blob, falling back to the first non-empty value.
+    def _entry_label(d: Dict[str, Any]) -> str:
+        for k in ("title", "name", "label", "deliverable_name"):
+            if d.get(k): return str(d[k])
+        for v in d.values():
+            if isinstance(v, str) and v.strip():
+                return v[:60]
+        return "(untitled)"
+
+    summary_lines = [f"- {_entry_label(r.get('data') or {})}" for r in rows[:25]]
+    label = f"📦 {module.get('name')}: {len(rows)} entr{'y' if len(rows) == 1 else 'ies'}"
+    if len(rows) > 25:
+        label += " (showing first 25)"
+
+    return {
+        "type": "list_module_entries",
+        "result": "ok",
+        "module_id": module["id"],
+        "label": label,
+        "summary": "\n".join(summary_lines),
+        "entries": rows,
+        "nav": _nav("build", "module", module["id"]),
     }
 
 
@@ -5518,6 +5647,9 @@ ACTION_HANDLERS = {
     "plan_content":           handle_plan_content,
     "run_agent":             handle_run_agent,
     "create_module_entry":   handle_create_module_entry,
+    "update_module_entry":   handle_update_module_entry,
+    "delete_module_entry":   handle_delete_module_entry,
+    "list_module_entries":   handle_list_module_entries,
     "create_contact":        handle_create_contact,
     "generate_briefing":     handle_generate_briefing,
     "generate_insights":     handle_generate_insights,
@@ -7482,11 +7614,26 @@ ACTIONS — PROJECTS:
   [ACTION:{{"type":"list_projects","status":"active"}}]
     — Projects live as module_entries on the auto-created Projects module. Status options: planning|active|on_hold|completed|cancelled.
 
-ACTIONS — DRAFTS + MODULES:
+ACTIONS — DRAFTS:
   [ACTION:{{"type":"draft_nurture","contact_id":"<uuid>","reason":"why"}}]
   [ACTION:{{"type":"draft_email","contact_id":"<uuid>","subject":"...","reason":"..."}}]
   [ACTION:{{"type":"draft_and_send","contact_id":"<uuid>","subject":"...","body":"..."}}]  — Draft an email AND immediately approve + send it. Use when the practitioner wants to send right away without reviewing.
-  [ACTION:{{"type":"create_module_entry","module_id":"<uuid>","data":{{...}}}}]
+
+ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MODULES section above lists what exists):
+  [ACTION:{{"type":"ensure_module","module_name":"Client Progress","fields":[{{"name":"client","type":"contact_link","label":"Client"}},{{"name":"status","type":"select","label":"Status","options":["new","active","done"]}},{{"name":"notes","type":"textarea","label":"Notes"}}]}}]
+    — Creates a new module if it doesn't exist. After creating, tell the practitioner: "I created a [name] module — you'll find it in BUILD on your sidebar."
+  [ACTION:{{"type":"create_module_entry","module_id":"<uuid>","data":{{"title":"...","status":"active"}}}}]
+    — Adds an entry to a module. Use the module id from the CUSTOM MODULES context block.
+  [ACTION:{{"type":"list_module_entries","module_id":"<uuid>"}}]
+  [ACTION:{{"type":"list_module_entries","module_name":"Client Progress"}}]  — fuzzy match by name when id isn't handy
+  [ACTION:{{"type":"update_module_entry","entry_id":"<uuid>","data":{{"status":"done"}}}}]  — patches the entry's data; existing fields are preserved.
+  [ACTION:{{"type":"delete_module_entry","entry_id":"<uuid>"}}]  — soft-deletes (sets status='deleted').
+  [ACTION:{{"type":"navigate","tab":"build","page":"module:<uuid>"}}]  — opens a specific module in BUILD.
+    — When the practitioner says "create a tracker / module / custom section for X" → ensure_module.
+    — When they say "add to my [module name]" → create_module_entry.
+    — When they say "show / list / what's in my [module name]" → list_module_entries.
+    — When they say "go to / open [module name]" → navigate with page=module:<id>.
+    — When they say "what modules do I have?" → just list them from the CUSTOM MODULES context block (no action needed).
 
 ACTIONS — TASKS + NOTES + ACTIVITY:
   [ACTION:{{"type":"create_task","title":"Call Deacon Harris back","due_date":"2026-04-24","priority":"high","contact_id":"<uuid-optional>"}}]
