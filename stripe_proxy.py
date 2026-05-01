@@ -138,6 +138,105 @@ async def create_payment_link(req: PaymentLinkRequest):
     return PaymentLinkResponse(url=data["url"], id=data["id"])
 
 
+class ProductPaymentLinkRequest(BaseModel):
+    business_id: str
+    product_id: str
+    # Optional override - normally read from the product row
+    force_regenerate: bool = False
+
+
+@router.post("/stripe/product-link")
+async def create_product_payment_link(req: ProductPaymentLinkRequest):
+    """Create a Stripe payment link for a product and persist the URL
+    back onto the products row.
+
+    Idempotent: if the product already has a stripe_payment_url and the
+    caller didn't pass force_regenerate=true, returns the existing URL.
+
+    The product must have type in (digital, physical, package) - services
+    route to the booking page, so they don't get a Stripe link from this
+    endpoint. Pricing types 'free' and 'custom' return 400 (no fixed
+    price to charge against).
+    """
+    key = os.environ.get("STRIPE_SECRET_KEY")
+    if not key:
+        raise HTTPException(500, "Stripe not configured on server - set STRIPE_SECRET_KEY")
+
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        # Look up the product, scoped by business_id so a leaked id
+        # can't be exploited cross-tenant.
+        prod_rows = await _sb_get(
+            client,
+            f"/products?id=eq.{req.product_id}&business_id=eq.{req.business_id}"
+            f"&select=*&limit=1",
+        )
+        if not prod_rows:
+            raise HTTPException(404, "Product not found for this business")
+        product = prod_rows[0]
+
+        existing_url = (product.get("stripe_payment_url") or "").strip()
+        if existing_url and not req.force_regenerate:
+            return {
+                "url": existing_url,
+                "id": (product.get("metadata") or {}).get("stripe_link_id") or "",
+                "regenerated": False,
+            }
+
+        try:
+            price = float(product.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        if price <= 0:
+            raise HTTPException(400, "Product has no fixed price - cannot create a payment link")
+
+        pricing_type = (product.get("pricing_type") or "fixed").lower()
+        if pricing_type in ("free", "custom"):
+            raise HTTPException(400, f"Product pricing_type='{pricing_type}' has no payable amount")
+
+        ptype = (product.get("type") or "service").lower()
+        if ptype == "service":
+            raise HTTPException(
+                400,
+                "Services use the booking flow - generate the Stripe link via /stripe/create-payment-link "
+                "during booking confirmation, not as a standalone product link",
+            )
+
+        currency = (product.get("currency") or "USD")
+        description = product.get("name") or "Product"
+
+        # Build the payment link via the existing helper.
+        link = await _create_stripe_payment_link(
+            amount=price,
+            currency=currency,
+            description=description,
+        )
+        url = link.get("url") or ""
+        link_id = link.get("id") or ""
+        if not url:
+            raise HTTPException(502, "Stripe returned no payment link URL")
+
+        # Persist on the product. Merge metadata so we keep any existing
+        # paypal/shopify/square URLs the practitioner pasted in.
+        existing_meta = product.get("metadata") or {}
+        if not isinstance(existing_meta, dict):
+            existing_meta = {}
+        new_meta = {
+            **existing_meta,
+            "stripe_link_id": link_id,
+        }
+        await _sb_patch(
+            client,
+            f"/products?id=eq.{req.product_id}",
+            {"stripe_payment_url": url, "metadata": new_meta},
+        )
+
+        logger.info(
+            f"stripe product-link ok business={req.business_id} product={req.product_id} "
+            f"amount={price} {currency} id={link_id}"
+        )
+        return {"url": url, "id": link_id, "regenerated": True}
+
+
 @router.get("/stripe/status")
 async def stripe_status():
     return {"configured": bool(os.environ.get("STRIPE_SECRET_KEY"))}

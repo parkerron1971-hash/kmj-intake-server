@@ -571,8 +571,27 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         price_label = f"{currency} {price:,.2f}{suffix}" if price else "(no price set)"
         dur = p.get("duration_minutes")
         dur_part = f" · {dur}min" if dur else ""
+        # Payment link status — so the Chief can answer "can people buy
+        # X on my site?" accurately. Services route to /book even
+        # without a Stripe link, so they show as "bookable".
+        if ptype == "service":
+            pay_status = "bookable"
+        elif p.get("stripe_payment_url"):
+            pay_status = "Stripe link"
+        else:
+            md = p.get("metadata") or {}
+            if isinstance(md, dict) and (
+                md.get("shopify_buy_url")
+                or md.get("square_buy_url")
+                or md.get("paypal_buy_url")
+                or md.get("external_buy_url")
+                or md.get("shopify_embed")
+            ):
+                pay_status = "external link"
+            else:
+                pay_status = "no payment link"
         product_lines.append(
-            f"  - {p.get('name')} [{ptype}{dur_part}] {price_label} [id={p.get('id')}]"
+            f"  - {p.get('name')} [{ptype}{dur_part}] {price_label} [{pay_status}] [id={p.get('id')}]"
         )
 
     return f"""BUSINESS: {bizname} (type: {biztype})
@@ -5077,6 +5096,62 @@ async def handle_list_products(client, biz, action) -> Dict:
     }
 
 
+async def handle_generate_payment_link(client, biz, action) -> Dict:
+    """Generate (or rotate) the Stripe payment link for a product.
+
+    Resolves product by id OR by name. Calls the local Railway endpoint
+    `/stripe/product-link`, which creates a Stripe Price + PaymentLink
+    and patches the URL back onto products.stripe_payment_url.
+    """
+    product_id = (action.get("product_id") or "").strip()
+    if not product_id and action.get("name"):
+        match = await _find_product_by_name(client, biz["id"], action["name"])
+        if match:
+            product_id = match["id"]
+    if not product_id:
+        return _fail("generate_payment_link", "product_id or name required")
+
+    force = bool(action.get("force_regenerate") or action.get("regenerate"))
+
+    # Call the in-process router. We can't trivially call FastAPI by name
+    # without importing the app, so fall back to a direct httpx call to
+    # the local server. RAILWAY_BASE works in both prod and local dev.
+    base = os.environ.get("RAILWAY_INTERNAL_BASE") or os.environ.get(
+        "RAILWAY_PUBLIC_BASE"
+    ) or "http://127.0.0.1:8000"
+    try:
+        resp = await client.post(
+            f"{base.rstrip('/')}/stripe/product-link",
+            json={
+                "business_id": biz["id"],
+                "product_id": product_id,
+                "force_regenerate": force,
+            },
+            timeout=30.0,
+        )
+        if resp.status_code >= 400:
+            detail = resp.text[:300]
+            return _fail("generate_payment_link", f"stripe error: {detail}")
+        data = resp.json()
+    except Exception as e:
+        return _fail("generate_payment_link", f"stripe call failed: {e}")
+
+    # Look up the product name for a friendlier label.
+    rows = await _sb(
+        client, "GET",
+        f"/products?id=eq.{product_id}&select=name&limit=1",
+    ) or []
+    name = (rows[0].get("name") if rows else "Product")
+    return {
+        "type": "generate_payment_link",
+        "result": "regenerated" if data.get("regenerated") else "existing",
+        "label": f"💳 Payment link {'regenerated' if data.get('regenerated') else 'ready'} for {name}",
+        "payment_url": data.get("url"),
+        "product_id": product_id,
+        "nav": _nav("build", "products"),
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # CONVERSATION RECALL — search archived chats
 # ═══════════════════════════════════════════════════════════════════════
@@ -5483,6 +5558,7 @@ ACTION_HANDLERS = {
     "create_product":             handle_create_product,
     "update_product":             handle_update_product,
     "list_products":              handle_list_products,
+    "generate_payment_link":      handle_generate_payment_link,
     # Conversation recall
     "recall_conversation":        handle_recall_conversation,
     # Catch-up briefing
@@ -7435,11 +7511,15 @@ ACTIONS — PRODUCTS & SERVICES:
   [ACTION:{{"type":"update_product","product_id":"<uuid>","status":"archived"}}]
   [ACTION:{{"type":"list_products"}}]
   [ACTION:{{"type":"list_products","type":"digital"}}]
+  [ACTION:{{"type":"generate_payment_link","product_id":"<uuid>"}}]  — generates a Stripe payment link for a digital/physical/package product (services use the booking flow). Pass force_regenerate=true to rotate an existing link. The link is saved to products.stripe_payment_url and appears as a Buy Now button on the practitioner's website automatically.
+  [ACTION:{{"type":"generate_payment_link","name":"Leadership Course"}}]  — fuzzy match by name when you don't have the id.
     — product_type values: service | digital | physical | package. pricing_type: fixed | hourly | per_session | subscription | custom.
     — When the practitioner says "add a service", "create a product", "I sell...", "I have a course called..." → create_product.
     — When they say "show my products/services" or "what do I offer?" → list_products.
     — When they say "change the price of X" or "raise my coaching rate to Y" → update_product (use name= to look up by name; product_id wins if both supplied).
     — Digital products with price > 0 get an auto-generated Stripe payment link (platform owner only). Set auto_deliver=true to enable email delivery on purchase.
+    — When the practitioner says "set up payments for X", "create a buy link for X", or "make X purchasable" → generate_payment_link. Confirm first if the product has no price yet.
+    — When they ask "can people buy X on my site?" → check the catalog: if display_on_website is true AND a payment link exists, say yes; otherwise offer to fix the gap.
 
 ACTIONS — TIMERS & ALARMS:
   Countdown (duration-based, in SECONDS):

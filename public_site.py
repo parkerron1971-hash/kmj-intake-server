@@ -129,12 +129,136 @@ def _esc(text: Any) -> str:
     )
 
 
-def _render_products_section(products: List[Dict[str, Any]], slug: str, brand_color: str = "#D4AF37") -> str:
+def _format_price_label(price: float, pricing_type: str, currency: str) -> str:
+    """Produce a display-friendly price tag. Honors pricing_type semantics
+    so 'free' / 'custom' / 'starting_at' render correctly on the site."""
+    sym = "$" if (currency or "USD").upper() == "USD" else ""
+    pt = (pricing_type or "fixed").lower()
+    if pt == "free":
+        return "Free"
+    if pt == "custom" or price <= 0:
+        return "Contact for pricing"
+    base = f"{sym}{price:,.2f}".rstrip("0").rstrip(".") if price % 1 else f"{sym}{price:,.0f}"
+    if pt == "hourly" or pt == "per_hour":
+        return f"{base}/hr"
+    if pt == "per_session":
+        return f"{base}/session"
+    if pt == "subscription" or pt == "monthly":
+        return f"{base}/mo"
+    if pt == "starting_at":
+        return f"Starting at {base}"
+    return base
+
+
+def _get_product_cta(
+    product: Dict[str, Any],
+    slug: str,
+    brand_color: str,
+    settings: Dict[str, Any],
+    price_label: str,
+) -> str:
+    """Return the CTA HTML for a single product card.
+
+    Priority order for buy buttons:
+      1. Shopify Buy Button embed (rendered as-is when from cdn.shopify.com)
+      2. Stripe payment link (auto-generated for the platform owner; can
+         be set manually for other practitioners)
+      3. Shopify URL (cart link, paste-in)
+      4. Square checkout URL
+      5. PayPal URL
+      6. External / catch-all URL
+      7. Fallbacks: 'Contact for pricing' -> #contact, 'Free' -> #contact
+
+    Services route to /{slug}/book even when a payment link exists, so
+    the practitioner can collect time + intake before charging.
+    """
+    ptype = (product.get("type") or "service").lower()
+    metadata = product.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    stripe_url = (product.get("stripe_payment_url") or "").strip()
+    shopify_url = (metadata.get("shopify_buy_url") or "").strip()
+    square_url = (metadata.get("square_buy_url") or "").strip()
+    paypal_url = (metadata.get("paypal_buy_url") or "").strip()
+    external_url = (metadata.get("external_buy_url") or "").strip()
+    shopify_embed = (metadata.get("shopify_embed") or "").strip()
+
+    btn_style = (
+        f"display:inline-block;margin-top:10px;padding:10px 18px;"
+        f"background:{brand_color};color:#fff;text-decoration:none;"
+        f"border-radius:6px;font-weight:600;text-align:center;"
+    )
+    secondary_btn_style = (
+        f"display:inline-block;margin-top:6px;padding:8px 14px;"
+        f"background:transparent;color:{brand_color};border:1px solid {brand_color};"
+        f"text-decoration:none;border-radius:6px;font-weight:500;font-size:13px;"
+        f"text-align:center;"
+    )
+
+    # 1. Shopify Buy Button embed wins — sanitize: only allow embeds that
+    # reference cdn.shopify.com so the renderer can't be tricked into
+    # injecting arbitrary scripts.
+    if shopify_embed and "cdn.shopify.com" in shopify_embed:
+        return f'<div class="shopify-embed" style="margin-top:10px;">{shopify_embed}</div>'
+
+    # 2. Services always use /book — booking captures slot + contact info
+    # AND can collect payment via Stripe afterwards if the practitioner
+    # wires it up. Override only if a specific service has a stripe_url
+    # set on the product (rare).
+    if ptype == "service":
+        booking_slug = slug
+        return (
+            f'<a href="/{_esc(booking_slug)}/book" style="{btn_style}">'
+            f'Book Now &mdash; {price_label}</a>'
+        )
+
+    # 3. Provider priority for non-services. Stripe first because it's
+    # the only one we can auto-generate.
+    primary = ""
+    label_suffix = f" &mdash; {price_label}" if price_label and price_label != "Contact for pricing" else ""
+    if stripe_url:
+        primary = f'<a href="{_esc(stripe_url)}" target="_blank" rel="noopener" style="{btn_style}">Buy Now{label_suffix}</a>'
+    elif shopify_url:
+        primary = f'<a href="{_esc(shopify_url)}" target="_blank" rel="noopener" style="{btn_style}">Buy on Shopify{label_suffix}</a>'
+    elif square_url:
+        primary = f'<a href="{_esc(square_url)}" target="_blank" rel="noopener" style="{btn_style}">Buy Now{label_suffix}</a>'
+    elif paypal_url:
+        primary = f'<a href="{_esc(paypal_url)}" target="_blank" rel="noopener" style="{btn_style}">Buy with PayPal{label_suffix}</a>'
+    elif external_url:
+        primary = f'<a href="{_esc(external_url)}" target="_blank" rel="noopener" style="{btn_style}">Buy Now{label_suffix}</a>'
+    else:
+        # No payment link at all -> contact CTA
+        pricing_type = (product.get("pricing_type") or "fixed").lower()
+        if pricing_type == "custom":
+            return f'<a href="#contact" style="{btn_style}">Get a Quote</a>'
+        if pricing_type == "free":
+            return f'<a href="#contact" style="{btn_style}">Get It Free</a>'
+        return f'<div style="margin-top:10px;font-weight:700;color:#222;">{price_label}</div>'
+
+    # 4. Alternate-provider buttons under the primary, if multiple exist.
+    alts: List[str] = []
+    if stripe_url and shopify_url:
+        alts.append(f'<a href="{_esc(shopify_url)}" target="_blank" rel="noopener" style="{secondary_btn_style}">Also on Shopify</a>')
+    if stripe_url and paypal_url:
+        alts.append(f'<a href="{_esc(paypal_url)}" target="_blank" rel="noopener" style="{secondary_btn_style}">Pay with PayPal</a>')
+    return primary + "".join(alts)
+
+
+def _render_products_section(
+    products: List[Dict[str, Any]],
+    slug: str,
+    brand_color: str = "#D4AF37",
+    settings: Optional[Dict[str, Any]] = None,
+) -> str:
     """Render a Products & Services section. Returns '' when nothing to show.
 
     `brand_color` flows in from settings.brand_kit.primary_color so the
     CTA buttons match the practitioner's brand instead of always gold.
+    `settings` carries the rest of the business settings (subdomain,
+    payment_providers, etc.) for CTA routing decisions.
     """
+    settings = settings or {}
     visible = [
         p for p in (products or [])
         if (p.get("status") or "active") == "active"
@@ -143,7 +267,11 @@ def _render_products_section(products: List[Dict[str, Any]], slug: str, brand_co
     if not visible:
         return ""
 
-    visible.sort(key=lambda p: (p.get("sort_order") or 0, p.get("name") or ""))
+    visible.sort(key=lambda p: (
+        0 if p.get("featured") else 1,
+        p.get("sort_order") or 0,
+        p.get("name") or "",
+    ))
 
     cards: List[str] = []
     for p in visible:
@@ -155,21 +283,8 @@ def _render_products_section(products: List[Dict[str, Any]], slug: str, brand_co
         except (TypeError, ValueError):
             price = 0.0
         currency = (p.get("currency") or "USD").upper()
-        sym = "$" if currency == "USD" else ""
         pricing_type = (p.get("pricing_type") or "fixed").lower()
-
-        if pricing_type == "custom" or price <= 0:
-            price_label = "Contact for pricing"
-        else:
-            base = f"{sym}{price:,.2f}".rstrip("0").rstrip(".") if price % 1 else f"{sym}{price:,.0f}"
-            if pricing_type == "hourly":
-                price_label = f"{base}/hr"
-            elif pricing_type == "per_session":
-                price_label = f"{base}/session"
-            elif pricing_type == "subscription":
-                price_label = f"{base}/mo"
-            else:
-                price_label = base
+        price_label = _format_price_label(price, pricing_type, currency)
 
         image_url = p.get("image_url")
         image_html = (
@@ -178,49 +293,66 @@ def _render_products_section(products: List[Dict[str, Any]], slug: str, brand_co
             f'</div>'
         ) if image_url else ""
 
-        stripe_link = p.get("stripe_payment_url")
-        if ptype == "digital" and stripe_link:
-            cta = (
-                f'<a href="{_esc(stripe_link)}" style="display:inline-block;margin-top:10px;padding:10px 18px;'
-                f'background:{brand_color};color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">'
-                f'Buy Now — {price_label}</a>'
+        # Featured badge
+        featured_badge = ""
+        if p.get("featured"):
+            featured_badge = (
+                f'<span style="display:inline-block;padding:2px 8px;border-radius:99px;'
+                f'background:{brand_color};color:#fff;font-size:10px;font-weight:700;'
+                f'text-transform:uppercase;letter-spacing:0.06em;margin-left:6px;">'
+                f'Popular</span>'
             )
-        elif ptype == "service":
-            cta = (
-                f'<a href="/{_esc(slug)}/book" style="display:inline-block;margin-top:10px;padding:10px 18px;'
-                f'background:{brand_color};color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">'
-                f'Book Now — {price_label}</a>'
+
+        # Duration badge for services
+        duration_badge = ""
+        duration = p.get("duration_minutes")
+        if duration and ptype == "service":
+            duration_badge = (
+                f'<span style="display:inline-block;padding:2px 8px;border-radius:99px;'
+                f'background:rgba(0,0,0,0.06);color:#666;font-size:11px;margin-left:6px;">'
+                f'{int(duration)} min</span>'
             )
-        else:
-            cta = (
-                f'<div style="margin-top:10px;font-weight:700;color:#222;">{price_label}</div>'
-            )
+
+        cta = _get_product_cta(p, slug, brand_color, settings, price_label)
 
         includes = p.get("includes") or []
         includes_html = ""
         if ptype == "package" and isinstance(includes, list) and includes:
             items = "".join(
-                f'<li style="font-size:13px;color:#555;">{_esc((i.get("item") if isinstance(i, dict) else i) or "")}</li>'
-                for i in includes[:5]
+                f'<li style="font-size:13px;color:#555;padding:3px 0;">&#10003; {_esc((i.get("item") if isinstance(i, dict) else i) or "")}</li>'
+                for i in includes[:6]
             )
-            includes_html = f'<ul style="margin:8px 0 0;padding-left:18px;">{items}</ul>'
+            includes_html = f'<ul style="list-style:none;margin:8px 0 4px;padding-left:0;">{items}</ul>'
 
+        # Featured card gets a tinted background + accent border
+        card_style = (
+            "background:#fff;border:1px solid rgba(0,0,0,0.08);border-radius:12px;"
+            "overflow:hidden;display:flex;flex-direction:column;"
+        )
+        if p.get("featured"):
+            card_style = (
+                f"background:#fff;border:2px solid {brand_color};border-radius:12px;"
+                f"overflow:hidden;display:flex;flex-direction:column;"
+                f"box-shadow:0 4px 24px rgba(0,0,0,0.06);"
+            )
+
+        price_color = brand_color
         cards.append(
-            f'<div style="background:#fff;border:1px solid rgba(0,0,0,0.08);border-radius:12px;'
-            f'overflow:hidden;display:flex;flex-direction:column;">'
+            f'<div style="{card_style}">'
             f'{image_html}'
-            f'<div style="padding:16px;display:flex;flex-direction:column;gap:6px;">'
-            f'<h3 style="margin:0;font-size:18px;color:#222;">{name}</h3>'
-            f'<p style="margin:0;font-size:14px;color:#555;line-height:1.5;">{desc}</p>'
-            f'{includes_html}'
+            f'<div style="padding:16px;display:flex;flex-direction:column;gap:6px;flex:1;">'
+            f'<h3 style="margin:0;font-size:18px;color:#222;">{name}{duration_badge}{featured_badge}</h3>'
+            f'<div style="font-size:22px;font-weight:700;color:{price_color};margin:4px 0;">{price_label}</div>'
+            + (f'<p style="margin:0;font-size:14px;color:#555;line-height:1.5;">{desc}</p>' if desc else '')
+            + f'{includes_html}'
             f'{cta}'
             f'</div></div>'
         )
 
     return (
-        '<section id="products" style="padding:60px 24px;background:#fafafa;">'
+        '<section id="services" style="padding:60px 24px;background:#fafafa;">'
         '<div style="max-width:1100px;margin:0 auto;">'
-        '<h2 style="text-align:center;font-size:32px;margin:0 0 32px;color:#222;">Products &amp; Services</h2>'
+        '<h2 style="text-align:center;font-size:32px;margin:0 0 32px;color:#222;">Services &amp; Products</h2>'
         '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:20px;">'
         + "".join(cards) +
         '</div></div></section>'
@@ -311,10 +443,60 @@ def _inject_dynamic_sections(
     gallery_html: str,
     testimonials_html: str = "",
 ) -> str:
-    """Append the products + gallery + testimonials sections into the served
-    HTML right before </body>. The site itself is regenerated rarely; this
-    gives practitioners live updates without a regen cycle."""
-    extra = (products_html or "") + (gallery_html or "") + (testimonials_html or "")
+    """Inject the products + gallery + testimonials sections into the
+    served HTML.
+
+    Placeholder-aware: if the template contains `{{PRODUCTS_SECTION}}`,
+    `{{GALLERY_SECTION}}`, or `{{TESTIMONIALS_SECTION}}`, those tokens
+    are replaced in place. This lets generated templates control where
+    each section lives. Otherwise the sections fall back to being
+    appended right before </body> (legacy templates).
+
+    The site itself is regenerated rarely; this gives practitioners
+    live updates without a regen cycle.
+    """
+    products_html = products_html or ""
+    gallery_html = gallery_html or ""
+    testimonials_html = testimonials_html or ""
+
+    placeholder_replaced = False
+    if "{{PRODUCTS_SECTION}}" in html:
+        html = html.replace("{{PRODUCTS_SECTION}}", products_html)
+        placeholder_replaced = True
+    if "{{GALLERY_SECTION}}" in html:
+        html = html.replace("{{GALLERY_SECTION}}", gallery_html)
+        placeholder_replaced = True
+    if "{{TESTIMONIALS_SECTION}}" in html:
+        html = html.replace("{{TESTIMONIALS_SECTION}}", testimonials_html)
+        placeholder_replaced = True
+    if placeholder_replaced:
+        # Old templates may have ONE placeholder but not all three; for
+        # the missing ones, fall through and append before </body>.
+        leftovers = []
+        if "{{PRODUCTS_SECTION}}" not in (products_html + gallery_html + testimonials_html):
+            # the placeholder we just replaced was already filled; nothing to add
+            pass
+        # Append remaining sections only if they weren't placed via placeholder
+        # and haven't already been written into the document.
+        # Since placeholder replacement was scoped above, the legacy append
+        # path still runs for any section without a placeholder.
+        if "{{PRODUCTS_SECTION}}" not in html and products_html and products_html not in html:
+            leftovers.append(products_html)
+        if "{{GALLERY_SECTION}}" not in html and gallery_html and gallery_html not in html:
+            leftovers.append(gallery_html)
+        if "{{TESTIMONIALS_SECTION}}" not in html and testimonials_html and testimonials_html not in html:
+            leftovers.append(testimonials_html)
+        extra = "".join(leftovers)
+        if not extra:
+            return html
+        if "</body>" in html:
+            return html.replace("</body>", extra + "\n</body>", 1)
+        if "</BODY>" in html:
+            return html.replace("</BODY>", extra + "\n</BODY>", 1)
+        return html + extra
+
+    # No placeholders at all -> legacy append-before-</body> behavior.
+    extra = products_html + gallery_html + testimonials_html
     if not extra:
         return html
     if "</body>" in html:
@@ -541,6 +723,7 @@ async def get_site_html(slug: str):
         gallery: List[Dict[str, Any]] = []
         testimonials: List[Dict[str, Any]] = []
         brand_color = "#D4AF37"
+        biz_settings: Dict[str, Any] = {}
         if biz_id:
             prod_rows, biz_rows = await asyncio.gather(
                 _sb(client,
@@ -563,7 +746,7 @@ async def get_site_html(slug: str):
         html = _inject_canonical(html, slug)
         html = _inject_dynamic_sections(
             html,
-            _render_products_section(products, slug, brand_color),
+            _render_products_section(products, slug, brand_color, biz_settings),
             _render_gallery_section(gallery),
             _render_testimonials_section(testimonials),
         )
@@ -657,6 +840,87 @@ async def get_site_data(slug: str):
             "sections": sections,
             "forms": linked_forms,
         }
+
+
+@router.get("/public/{slug}/thank-you")
+async def thank_you_page(slug: str):
+    """Branded thank-you page shown after a Stripe checkout completes.
+
+    Reads the business name + brand_kit.primary_color from settings so
+    the success state matches the rest of the practitioner's site.
+    """
+    if not _check_rate(f"thank-you-{slug}"):
+        raise HTTPException(429, "Rate limit exceeded")
+
+    name = "Thank You"
+    accent = "#D4AF37"
+    home_link = f"/public/site/{slug}"
+
+    async with httpx.AsyncClient() as client:
+        sites = await _sb(client,
+            f"/business_sites?slug=eq.{slug}&limit=1&select=business_id")
+        if sites:
+            biz_id = sites[0].get("business_id")
+            if biz_id:
+                biz_rows = await _sb(client,
+                    f"/businesses?id=eq.{biz_id}&select=name,settings&limit=1")
+                if biz_rows:
+                    biz = biz_rows[0]
+                    name = biz.get("name") or name
+                    bk = (biz.get("settings") or {}).get("brand_kit") or {}
+                    if isinstance(bk, dict):
+                        bc = (bk.get("primary_color") or "").strip()
+                        if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
+                            accent = bc
+
+    safe_name = _esc(name)
+    html = f"""<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<title>Thank You &mdash; {safe_name}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<style>
+* {{ box-sizing: border-box; }}
+body {{
+  margin:0; min-height:100vh; padding:24px;
+  display:flex; align-items:center; justify-content:center;
+  background:#0a0a0f; color:#e8e6e3;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif;
+  text-align:center;
+}}
+.wrap {{ max-width: 480px; }}
+.check {{
+  width:72px; height:72px; border-radius:50%;
+  background: color-mix(in srgb, {accent} 16%, transparent);
+  border: 2px solid {accent};
+  display:flex; align-items:center; justify-content:center;
+  margin:0 auto 24px;
+  font-size:34px; color:{accent}; font-weight:700;
+}}
+h1 {{ font-size:30px; font-weight:700; margin:0 0 12px; letter-spacing:-0.01em; }}
+p {{ color:#aaa; font-size:16px; line-height:1.6; margin:0 0 28px; }}
+a.btn {{
+  display:inline-block; padding:12px 24px;
+  background:{accent}; color:#0a0a0f; font-weight:600;
+  text-decoration:none; border-radius:8px;
+  transition: opacity 0.2s;
+}}
+a.btn:hover {{ opacity: 0.9; }}
+.muted {{ color:#666; font-size:13px; margin-top:18px; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="check">&#10003;</div>
+  <h1>Thank you!</h1>
+  <p>Your purchase is confirmed. A confirmation email is on its way &mdash; and if your purchase includes a download, you'll get a delivery email shortly.</p>
+  <a class="btn" href="{home_link}">&larr; Back to {safe_name}</a>
+  <div class="muted">Powered by The Solutionist System</div>
+</div>
+</body></html>"""
+
+    return HTMLResponse(content=html, status_code=200, media_type="text/html")
 
 
 @router.post("/sites/{business_id}/invalidate")
@@ -1419,6 +1683,7 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
     products: List[Dict[str, Any]] = []
     gallery: List[Dict[str, Any]] = []
     brand_color = "#D4AF37"
+    biz_settings: Dict[str, Any] = {}
     if biz_id:
         prod_rows, biz_rows = await asyncio.gather(
             _sb(client,
@@ -1428,17 +1693,17 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
         )
         products = prod_rows or []
         if biz_rows:
-            settings = (biz_rows[0].get("settings") or {})
-            lib = settings.get("media_library") or {}
+            biz_settings = (biz_rows[0].get("settings") or {})
+            lib = biz_settings.get("media_library") or {}
             gallery = lib.get("gallery") or []
-            bk = settings.get("brand_kit") or {}
+            bk = biz_settings.get("brand_kit") or {}
             bc = (bk.get("primary_color") or "").strip() if isinstance(bk, dict) else ""
             if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
                 brand_color = bc
     html = _inject_canonical(html, slug)
     html = _inject_dynamic_sections(
         html,
-        _render_products_section(products, slug, brand_color),
+        _render_products_section(products, slug, brand_color, biz_settings),
         _render_gallery_section(gallery),
     )
     return html
