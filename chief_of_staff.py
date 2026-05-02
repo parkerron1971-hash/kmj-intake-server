@@ -44,6 +44,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import foundation_agent
+import business_profile_agent
+from business_profile_agent import chief_context_block as bp_chief_context_block
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -363,6 +365,13 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
     except Exception as _e:
         foundation_block = ""
 
+    try:
+        # business_profile_agent.chief_context_block is sync — run it off
+        # the event loop so its httpx calls don't block the Chief gather.
+        business_profile_block = await asyncio.to_thread(bp_chief_context_block, biz_id)
+    except Exception as _e:
+        business_profile_block = ""
+
     # Module entry counts — one query per module (parallel)
     module_entries_tasks = [
         _sb(client, "GET",
@@ -413,6 +422,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "email_replies": email_replies or [],
         "sms_messages": sms_messages or [],
         "foundation_block": foundation_block or "",
+        "business_profile_block": business_profile_block or "",
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
@@ -427,6 +437,25 @@ def _format_foundation_block(ctx: Dict[str, Any]) -> str:
     nothing to show."""
     block = (ctx.get("foundation_block") or "").strip()
     return block + "\n" if block else ""
+
+
+def _format_business_profile_block(ctx: Dict[str, Any]) -> str:
+    """Render the Business Profile context block for the system prompt.
+    Tells the Chief what kind of business this is so it can frame advice
+    appropriately. Empty string when no profile exists, so the Chief
+    simply omits it rather than referencing a missing profile."""
+    block = (ctx.get("business_profile_block") or "").strip()
+    if not block:
+        return ""
+    steering = (
+        "When advising, match guidance to this business's type. A coach is "
+        "not a creative; a financial educator is not a financial advisor; a "
+        "course creator's contracts differ from a service provider's. Use "
+        "the profile above as the frame for every recommendation. If the "
+        "profile is incomplete or missing fields the user is asking about, "
+        "suggest they finish their Business Profile."
+    )
+    return f"{block}\n{steering}\n"
 
 
 def _format_sms_block(ctx: Dict[str, Any]) -> str:
@@ -756,6 +785,7 @@ PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull
 
 {_format_email_replies_block(ctx)}
 {_format_sms_block(ctx)}
+{_format_business_profile_block(ctx)}
 {_format_foundation_block(ctx)}
 CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
 {chr(10).join(contact_ref_lines) if contact_ref_lines else '  (no contacts)'}
