@@ -371,31 +371,70 @@ def _extract_inbound(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _fetch_inbound_body(client: httpx.AsyncClient, email_id: str) -> Dict[str, str]:
-    """Fetch the full email body from Resend via /emails/{id}.
+    """Fetch the full email body from Resend's INBOUND endpoint.
 
     Resend's email.received webhook only includes metadata, not the
-    body. We use the email_id to pull the actual content. Returns
-    {'text': ..., 'html': ...} (both possibly empty on failure)."""
+    body. The correct endpoint for received messages is
+        GET /emails/receiving/{id}
+    NOT /emails/{id} — the latter returns emails WE sent, not emails
+    we received, and 404s for inbound message ids.
+
+    Confirmed against Resend's SDK example:
+        resend.emails.receiving.get(event.data.email_id)
+
+    Returns {'text': ..., 'html': ...} (both possibly empty on failure).
+    """
     if not email_id:
         return {"text": "", "html": ""}
     key = os.environ.get("RESEND_API_KEY")
     if not key:
-        logger.warning("[INBOUND] RESEND_API_KEY missing — can't fetch body")
+        logger.warning("[INBOUND] RESEND_API_KEY missing - can't fetch body")
         return {"text": "", "html": ""}
+    url = f"https://api.resend.com/emails/receiving/{email_id}"
     try:
         r = await client.get(
-            f"https://api.resend.com/emails/{email_id}",
+            url,
             headers={"Authorization": f"Bearer {key}"},
             timeout=HTTP_TIMEOUT,
         )
+        logger.info(f"[INBOUND] receiving API status={r.status_code} email_id={email_id}")
         if r.status_code >= 400:
-            logger.warning(f"[INBOUND] /emails/{email_id} -> {r.status_code} {r.text[:200]}")
+            logger.warning(f"[INBOUND] receiving API error: {r.status_code} {r.text[:300]}")
             return {"text": "", "html": ""}
+
         body = r.json() if r.text else {}
-        return {
-            "text": str(body.get("text") or ""),
-            "html": str(body.get("html") or ""),
-        }
+        if isinstance(body, dict):
+            keys = list(body.keys())
+            logger.info(f"[INBOUND] receiving API response keys: {keys}")
+            # Resend's receiving response shape isn't fully documented at
+            # the field level - try the standard names plus a couple of
+            # alternatives so we don't lose the body if they rename one.
+            text = (
+                body.get("text")
+                or body.get("body_text")
+                or body.get("body")
+                or body.get("content")
+                or ""
+            )
+            html = (
+                body.get("html")
+                or body.get("body_html")
+                or ""
+            )
+            text = str(text or "")
+            html = str(html or "")
+            if not text and not html:
+                # Surface the full payload (capped) so an unfamiliar
+                # field name shows up in Railway logs and we can adapt.
+                logger.warning(f"[INBOUND] no text/html on receiving response: {str(body)[:500]}")
+            else:
+                logger.info(
+                    f"[INBOUND] fetched body via receiving API: "
+                    f"text_len={len(text)} html_len={len(html)}"
+                )
+            return {"text": text, "html": html}
+        logger.warning(f"[INBOUND] receiving API non-dict body: {str(body)[:200]}")
+        return {"text": "", "html": ""}
     except httpx.HTTPError as e:
         logger.warning(f"[INBOUND] body fetch error: {e}")
         return {"text": "", "html": ""}
