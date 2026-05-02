@@ -342,8 +342,15 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
             f"/email_replies?business_id=eq.{biz_id}"
             f"&order=received_at.desc&limit=10"
             f"&select=id,from_email,from_name,subject,body_text,received_at,read,contact_id"),
+        # Recent SMS messages — both directions, last ~15. Lets the
+        # Chief answer "did anyone text me?" and reference specific
+        # text content the same way it does with email replies.
+        _sb(client, "GET",
+            f"/sms_messages?business_id=eq.{biz_id}"
+            f"&order=created_at.desc&limit=15"
+            f"&select=id,direction,phone_number,message,status,created_at,read,contact_id"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, products, email_replies = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, products, email_replies, sms_messages = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -397,12 +404,51 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "strategy_track": (strategy_rows or [None])[0] if strategy_rows else None,
         "products": products or [],
         "email_replies": email_replies or [],
+        "sms_messages": sms_messages or [],
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
             for c in contacts[:200]
         ],
     }
+
+
+def _format_sms_block(ctx: Dict[str, Any]) -> str:
+    """Render the recent SMS thread for the system prompt.
+
+    Direction arrows make it easy for the model to scan: → outbound,
+    ← inbound. Unread inbound messages get an [UNREAD] flag so
+    questions like 'did anyone text me?' resolve naturally."""
+    msgs = ctx.get("sms_messages") or []
+    if not msgs:
+        return "TEXT MESSAGES (none yet):\n"
+
+    contact_lookup = ctx.get("contacts_lookup") or []
+    contact_by_id: Dict[str, Dict[str, Any]] = {}
+    for c in contact_lookup:
+        if c.get("id"):
+            contact_by_id[c["id"]] = c
+
+    unread_in = [m for m in msgs if m.get("direction") == "inbound" and not m.get("read")]
+    lines: List[str] = [
+        f"TEXT MESSAGES ({len(unread_in)} unread inbound, {len(msgs)} recent):",
+        "  Format: arrow + name + body. -> outbound (you), <- inbound (them).",
+        "  When the practitioner asks 'did anyone text me?' / 'what did X say?' /",
+        "  'text X back' — pull from this block. Quote text content verbatim;",
+        "  drafted replies should be SHORT (under 160 chars), warm, first-name.",
+        "",
+    ]
+    for m in msgs[:10]:
+        cid = m.get("contact_id") or ""
+        name = contact_by_id.get(cid, {}).get("name") or m.get("phone_number") or "Unknown"
+        direction = "->" if m.get("direction") == "outbound" else "<-"
+        flag = " [UNREAD]" if m.get("direction") == "inbound" and not m.get("read") else ""
+        body = (m.get("message") or "").replace("\n", " ").strip()
+        if len(body) > 140:
+            body = body[:140] + "…"
+        when = (m.get("created_at") or "")[:16]
+        lines.append(f"  {direction} {name}{flag} ({when}): \"{body}\"")
+    return "\n".join(lines) + "\n"
 
 
 def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
@@ -693,6 +739,7 @@ PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull
 {chr(10).join(product_lines) if product_lines else '  (no products yet)'}
 
 {_format_email_replies_block(ctx)}
+{_format_sms_block(ctx)}
 CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
 {chr(10).join(contact_ref_lines) if contact_ref_lines else '  (no contacts)'}
 """
@@ -5664,6 +5711,81 @@ async def handle_save_email_template(client, biz, action) -> Dict:
     }
 
 
+async def handle_send_sms(client, biz, action) -> Dict:
+    """Send an SMS to a contact via the local sms_service router.
+
+    Resolves the contact by id or fuzzy name; pulls the phone off the
+    contacts row; calls /sms/send which handles Telnyx + storage +
+    event logging. Returns a chat-friendly result with the contact's
+    name + a status label.
+    """
+    message = (action.get("message") or "").strip()
+    if not message:
+        return _fail("send_sms", "message body required")
+
+    contact_id = (action.get("contact_id") or "").strip()
+    contact_name = (action.get("contact_name") or action.get("name") or "").strip()
+    phone_override = (action.get("to") or action.get("phone") or "").strip()
+
+    # Resolve contact id by name when not supplied directly.
+    if not contact_id and contact_name:
+        safe = contact_name.replace("%", "")
+        rows = await _sb(client, "GET",
+            f"/contacts?business_id=eq.{biz['id']}&name=ilike.*{safe}*"
+            f"&select=id,name&limit=2") or []
+        if rows:
+            contact_id = rows[0].get("id") or ""
+            contact_name = rows[0].get("name") or contact_name
+
+    contact_phone: Optional[str] = phone_override or None
+    if contact_id and not contact_phone:
+        rows = await _sb(client, "GET",
+            f"/contacts?id=eq.{contact_id}&select=id,name,phone&limit=1") or []
+        if rows:
+            contact_phone = rows[0].get("phone")
+            contact_name = contact_name or rows[0].get("name") or ""
+
+    if not contact_phone:
+        who = contact_name or contact_id or "the contact"
+        return _fail("send_sms", f"{who} has no phone number on file")
+
+    base = (
+        os.environ.get("RAILWAY_INTERNAL_BASE")
+        or os.environ.get("RAILWAY_PUBLIC_BASE")
+        or "http://127.0.0.1:8000"
+    ).rstrip("/")
+    try:
+        resp = await client.post(
+            f"{base}/sms/send",
+            json={
+                "business_id": biz["id"],
+                "contact_id": contact_id or None,
+                "to": contact_phone,
+                "message": message,
+            },
+            timeout=30.0,
+        )
+    except Exception as e:
+        return _fail("send_sms", f"sms send call failed: {e}")
+
+    if resp.status_code >= 400:
+        detail = resp.text[:300]
+        return _fail("send_sms", f"sms error: {detail}")
+
+    data = resp.json() if resp.text else {}
+    return {
+        "type": "send_sms",
+        "result": "sent",
+        "label": f"💬 Text sent to {contact_name or 'contact'}",
+        "contact_id": contact_id or None,
+        "to": contact_phone,
+        "preview": message[:160],
+        "sms_id": data.get("id"),
+        "telnyx_id": data.get("telnyx_id"),
+        "nav": _nav("operate", "sms"),
+    }
+
+
 async def handle_mark_reply_read(client, biz, action) -> Dict:
     """Flip email_replies.read to true.
 
@@ -5889,6 +6011,7 @@ ACTION_HANDLERS = {
     "add_testimonial":            handle_add_testimonial,
     "save_email_template":        handle_save_email_template,
     "mark_reply_read":            handle_mark_reply_read,
+    "send_sms":                   handle_send_sms,
     "remove_testimonial":         handle_remove_testimonial,
     # Timers & alarms
     "set_timer":                  handle_set_timer,
@@ -7815,6 +7938,17 @@ ACTIONS — DRAFTS:
     — When asked "show my templates / what templates do I have?" → name them from the catalog you can see in business settings; offer to navigate via {{tab:'operate', sub:'email'}}.
   [ACTION:{{"type":"mark_reply_read","reply_id":"<uuid>"}}]
   [ACTION:{{"type":"mark_reply_read","contact_name":"Marcus"}}]  — flips ALL unread replies from that contact
+
+ACTIONS — TEXT MESSAGES (Telnyx-backed SMS — see TEXT MESSAGES context block above):
+  [ACTION:{{"type":"send_sms","contact_name":"Marcus Thompson","message":"Hey Marcus! Reminder: your session is tomorrow at 2pm. Reply Y to confirm."}}]
+  [ACTION:{{"type":"send_sms","contact_id":"<uuid>","message":"..."}}]   — direct id form
+  [ACTION:{{"type":"send_sms","to":"+15551234567","message":"..."}}]      — raw phone (skip contact lookup)
+    — Texts must be SHORT: under 160 chars ideal, never over 320. Warm tone, first-name only, no links in the first text.
+    — When the practitioner says "text Marcus" / "send a text to X" / "shoot X a text" → send_sms.
+    — When asked "did anyone text me?" / "any new texts?" → summarize unread inbound from the TEXT MESSAGES block.
+    — When asked "what did X text?" → quote their message verbatim from the block.
+    — Session-reminder pattern: "Hi {{first_name}}! Reminder: your {{session_type}} with {{biz_name}} is {{day}} at {{time}}. Reply Y to confirm or let me know if you need to reschedule."
+    — If a contact has no phone on file the action returns an error — tell the practitioner and offer to add the number.
 
 REPLYING TO REPLIES (CRITICAL — see EMAIL REPLIES context block above):
   When the practitioner says "reply to Marcus" / "respond to Sandra's email" / "what did X say":
