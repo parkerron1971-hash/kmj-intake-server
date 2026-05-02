@@ -242,22 +242,98 @@ async def _sb_patch(client: httpx.AsyncClient, path: str, body: Dict[str, Any]):
         logger.warning(f"supabase PATCH {path} failed: {e}")
 
 
+def _normalize_address_field(val: Any) -> List[str]:
+    """Resend's `to` / `cc` fields can be a string or a list of strings or
+    a list of {name, email} dicts. Return a flat list of plain email
+    addresses (lower-cased), with any "Name <addr>" wrappers stripped."""
+    out: List[str] = []
+    if val is None:
+        return out
+    items = val if isinstance(val, list) else [val]
+    for item in items:
+        if isinstance(item, dict):
+            addr = str(item.get("email") or item.get("address") or "")
+        else:
+            addr = str(item or "")
+        addr = addr.strip()
+        if "<" in addr and ">" in addr:
+            addr = addr.split("<", 1)[1].rsplit(">", 1)[0]
+        addr = addr.strip().lower()
+        if addr:
+            out.append(addr)
+    return out
+
+
+def _inbound_domain() -> str:
+    """The MX-receiving domain for inbound replies. When unset, the
+    routed reply-to feature is silently disabled — outbound emails fall
+    back to the practitioner's signature email and inbound parsing
+    skips the routed-address path."""
+    return (os.environ.get("INBOUND_EMAIL_DOMAIN") or "").strip().lower()
+
+
+def build_routed_reply_to(business_id: str, contact_id: Optional[str]) -> Optional[str]:
+    """Encode (business, contact) into a Reply-To address so that when
+    the recipient hits Reply, the message lands on our /email/inbound
+    webhook and we can route it back to the right practitioner.
+
+    Format: reply+{biz_first8}+{contact_first8}@<INBOUND_EMAIL_DOMAIN>
+
+    Returns None when no inbound domain is configured (in which case
+    callers should fall back to the practitioner's signature email).
+    """
+    domain = _inbound_domain()
+    if not domain or not business_id:
+        return None
+    biz_short = (business_id or "")[:8]
+    contact_short = (contact_id or "")[:8] if contact_id else "anon"
+    return f"reply+{biz_short}+{contact_short}@{domain}"
+
+
+def _parse_routed_address(addr: str) -> Optional[Dict[str, str]]:
+    """Reverse of build_routed_reply_to. Returns {biz_short, contact_short}
+    when the address matches our inbound routing pattern, else None."""
+    if not addr:
+        return None
+    domain = _inbound_domain()
+    if not addr.lower().endswith(f"@{domain}") if domain else not "@inbound." in addr.lower():
+        # If the env-configured domain is set, require an exact match.
+        # If unset, accept any @inbound.* domain so a misconfigured
+        # deploy still surfaces routing attempts in logs.
+        if domain:
+            return None
+    local = addr.split("@", 1)[0]
+    if not local.startswith("reply+"):
+        return None
+    parts = local[len("reply+"):].split("+")
+    if len(parts) < 2:
+        return None
+    return {"biz_short": parts[0], "contact_short": parts[1]}
+
+
 def _extract_inbound(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize Resend's inbound payload to a consistent shape."""
     # Resend wraps events in {"type": "email.received", "data": {...}}
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     # from can be a string or a list of {name,email}
     from_val = data.get("from") or payload.get("from") or ""
+    from_name = ""
     if isinstance(from_val, list) and from_val:
         from_val = from_val[0]
     if isinstance(from_val, dict):
         from_email = str(from_val.get("email") or "").strip().lower()
+        from_name = str(from_val.get("name") or "").strip()
     else:
         # Strip "Name <email@x>" if present
         s = str(from_val).strip()
         if "<" in s and ">" in s:
+            from_name = s.split("<", 1)[0].strip().strip('"')
             s = s.split("<", 1)[1].rsplit(">", 1)[0]
         from_email = s.strip().lower()
+
+    # Recipient addresses — checked against the routed reply-to pattern.
+    to_addresses = _normalize_address_field(data.get("to") or payload.get("to"))
+    cc_addresses = _normalize_address_field(data.get("cc") or payload.get("cc"))
 
     subject = data.get("subject") or payload.get("subject") or ""
     text = (data.get("text") or payload.get("text") or "").strip()
@@ -268,11 +344,40 @@ def _extract_inbound(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "from_email": from_email,
+        "from_name": from_name,
+        "to_addresses": to_addresses + cc_addresses,
         "subject": str(subject),
         "body": str(body),
+        "raw_text": str(text),
+        "raw_html": str(html)[:5000],
         "in_reply_to": str(in_reply_to),
         "message_id": str(message_id),
     }
+
+
+def _strip_quoted_reply(text: str) -> str:
+    """Trim quoted previous-email content so the stored body is just
+    the new reply. Stops at the first quote marker we recognize."""
+    if not text:
+        return ""
+    lines = text.split("\n")
+    out: List[str] = []
+    for line in lines:
+        s = line.strip()
+        if s.startswith(">"):
+            break
+        if s.startswith("On ") and " wrote:" in s:
+            break
+        if s.startswith("From:") and len(out) > 1:
+            break
+        if s in ("---", "___"):
+            break
+        if "Original Message" in s:
+            break
+        if s.startswith("Sent from my "):
+            break
+        out.append(line)
+    return "\n".join(out).rstrip()
 
 
 def _strip_html(html: str) -> str:
@@ -291,6 +396,16 @@ def _strip_html(html: str) -> str:
 
 @router.post("/email/inbound")
 async def inbound_email(request: Request):
+    """Process inbound email replies from Resend.
+
+    Resolution priority:
+      1. Parse `reply+{biz}+{contact}@<INBOUND_EMAIL_DOMAIN>` from the
+         To/Cc address — most reliable, scoped to the original send.
+      2. Fall back to email-based match against the contacts table —
+         catches replies sent to a static address (legacy / direct).
+
+    Always returns 200 so Resend doesn't retry; failures are logged.
+    """
     try:
         payload = await request.json()
     except Exception:
@@ -302,58 +417,130 @@ async def inbound_email(request: Request):
         logger.info("[INBOUND] no from address in payload — ignored")
         return {"status": "ignored", "reason": "no_from"}
 
+    business_id: Optional[str] = None
+    contact_id: Optional[str] = None
+    contact_name: Optional[str] = None
+    current_health: int = 50
+    routed = False
+
     async with httpx.AsyncClient() as client:
-        # Match by email — business ambiguity handled by taking the first
-        # contact found. Resend doesn't pass business routing info.
-        rows = await _sb_get(client, f"/contacts?email=eq.{from_email}&select=id,name,business_id,health_score&limit=1")
-        if not rows:
-            logger.info(f"[INBOUND] unknown sender: {from_email}")
-            return {"status": "unknown_sender", "from": from_email}
+        # ── 1. Try the routed reply-to address first ─────────────────
+        for addr in parsed["to_addresses"]:
+            parsed_addr = _parse_routed_address(addr)
+            if not parsed_addr:
+                continue
+            biz_short = parsed_addr["biz_short"]
+            contact_short = parsed_addr["contact_short"]
+            biz_rows = await _sb_get(client,
+                f"/businesses?id=like.{biz_short}*&select=id&limit=1")
+            if not biz_rows:
+                continue
+            business_id = biz_rows[0]["id"]
+            if contact_short and contact_short != "anon":
+                cid_rows = await _sb_get(client,
+                    f"/contacts?id=like.{contact_short}*&business_id=eq.{business_id}"
+                    f"&select=id,name,health_score&limit=1")
+                if cid_rows:
+                    contact_id = cid_rows[0]["id"]
+                    contact_name = cid_rows[0].get("name")
+                    current_health = int(cid_rows[0].get("health_score") or 50)
+            routed = True
+            break
 
-        contact = rows[0]
-        business_id = contact.get("business_id")
-        contact_id = contact.get("id")
+        # ── 2. Email-based fallback ──────────────────────────────────
+        if not business_id:
+            rows = await _sb_get(client,
+                f"/contacts?email=eq.{from_email}&select=id,name,business_id,health_score&limit=1")
+            if not rows:
+                logger.info(f"[INBOUND] unknown sender: {from_email} to={parsed['to_addresses']}")
+                return {"status": "unknown_sender", "from": from_email}
+            contact = rows[0]
+            business_id = contact.get("business_id")
+            contact_id = contact.get("id")
+            contact_name = contact.get("name")
+            current_health = int(contact.get("health_score") or 50)
 
-        # 1. Event on the contact's timeline
+        if not business_id:
+            logger.info(f"[INBOUND] could not resolve business: from={from_email} to={parsed['to_addresses']}")
+            return {"status": "unresolved", "from": from_email}
+
+        # Cleaned reply body (quoted-text stripped)
+        clean_body = _strip_quoted_reply(parsed["body"])
+        from_name = parsed.get("from_name") or contact_name or ""
+
+        # ── 3. Persist to email_replies table ────────────────────────
+        # The Email Hub UI reads from this table directly; the events
+        # entry below remains for the contact timeline + activity feed.
+        reply_row = {
+            "business_id": business_id,
+            "contact_id": contact_id,
+            "from_email": from_email,
+            "from_name": from_name,
+            "subject": parsed["subject"],
+            "body_text": clean_body[:20000],
+            "body_html": (parsed.get("raw_html") or "")[:5000] or None,
+            "raw_text": (parsed.get("raw_text") or "")[:20000] or None,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "read": False,
+            "metadata": {
+                "in_reply_to": parsed["in_reply_to"],
+                "message_id": parsed["message_id"],
+                "routed": routed,
+            },
+        }
+        inserted = await _sb_post(client, "/email_replies", reply_row)
+        reply_id = None
+        if isinstance(inserted, list) and inserted:
+            reply_id = inserted[0].get("id")
+        elif isinstance(inserted, dict):
+            reply_id = inserted.get("id")
+
+        # ── 4. Event on the contact's timeline ───────────────────────
         await _sb_post(client, "/events", {
             "business_id": business_id,
             "contact_id": contact_id,
-            "event_type": "email_reply_received",
+            "event_type": "email_replied",
             "data": {
                 "from": from_email,
+                "from_name": from_name,
                 "subject": parsed["subject"],
-                "body_preview": parsed["body"][:500],
-                "full_body": parsed["body"][:20000],
+                "preview": clean_body[:200],
+                "full_body": clean_body[:20000],
                 "in_reply_to": parsed["in_reply_to"],
                 "message_id": parsed["message_id"],
+                "reply_id": reply_id,
             },
             "source": "resend_inbound",
         })
 
-        # 2. Notification for the practitioner
+        # ── 5. Notification for the practitioner ─────────────────────
         await _sb_post(client, "/chief_notifications", {
             "business_id": business_id,
-            "type": "urgent",
-            "title": f"Reply from {contact.get('name') or from_email}",
-            "body": f"Re: {parsed['subject']}\n\n{parsed['body'][:200]}",
-            "suggested_action": f"View reply from {contact.get('name') or 'contact'}",
+            "type": "info",
+            "title": f"{from_name or from_email} replied",
+            "body": f"Re: \"{parsed['subject']}\" — {clean_body[:200]}",
+            "suggested_action": f"View reply from {from_name or 'contact'}",
             "status": "unread",
             "data": {
                 "contact_id": contact_id,
-                "event_type": "email_reply_received",
+                "reply_id": reply_id,
+                "event_type": "email_replied",
                 "subject": parsed["subject"],
             },
         })
 
-        # 3. Bump contact health — they engaged
-        current = contact.get("health_score") or 50
-        await _sb_patch(client, f"/contacts?id=eq.{contact_id}", {
-            "health_score": min(100, int(current) + 10),
-            "last_interaction": datetime.now(timezone.utc).isoformat(),
-        })
+        # ── 6. Bump contact health — they engaged ───────────────────
+        if contact_id:
+            await _sb_patch(client, f"/contacts?id=eq.{contact_id}", {
+                "health_score": min(100, current_health + 5),
+                "last_interaction": datetime.now(timezone.utc).isoformat(),
+            })
 
-        logger.info(f"[INBOUND] processed reply from {from_email} -> contact={contact_id}")
-        return {"status": "processed", "contact_id": contact_id}
+        logger.info(
+            f"[INBOUND] reply from {from_email} -> biz={business_id[:8]} "
+            f"contact={contact_id[:8] if contact_id else 'unknown'} routed={routed}"
+        )
+        return {"status": "processed", "contact_id": contact_id, "reply_id": reply_id}
 
 
 # ═══════════════════════════════════════════════════════════════════════

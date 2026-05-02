@@ -336,8 +336,14 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
             f"/products?business_id=eq.{biz_id}&status=eq.active"
             f"&order=type.asc,sort_order.asc,name.asc&limit=50"
             f"&select=id,name,type,price,currency,pricing_type,duration_minutes,description"),
+        # Recent email replies — full body content so the Chief can
+        # quote a contact's actual words back when drafting responses.
+        _sb(client, "GET",
+            f"/email_replies?business_id=eq.{biz_id}"
+            f"&order=received_at.desc&limit=10"
+            f"&select=id,from_email,from_name,subject,body_text,received_at,read,contact_id"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, products = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, products, email_replies = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -390,12 +396,60 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "site": (site_rows or [{}])[0] if site_rows else None,
         "strategy_track": (strategy_rows or [None])[0] if strategy_rows else None,
         "products": products or [],
+        "email_replies": email_replies or [],
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
             for c in contacts[:200]
         ],
     }
+
+
+def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
+    """Format the recent inbound email replies for the system prompt.
+
+    Includes the actual body text (capped) so the Chief can quote a
+    contact's words verbatim when drafting a response — this is the
+    whole point of the Email Hub feature: replies must inform the
+    Chief's drafts, not be referenced as a generic 'they replied'.
+    """
+    replies = ctx.get("email_replies") or []
+    if not replies:
+        return "EMAIL REPLIES (none yet):\n"
+
+    unread = [r for r in replies if not r.get("read")]
+    contact_lookup = ctx.get("contacts_lookup") or []
+    contact_by_id: Dict[str, Dict[str, Any]] = {}
+    for c in contact_lookup:
+        if c.get("id"):
+            contact_by_id[c["id"]] = c
+
+    lines: List[str] = [
+        f"EMAIL REPLIES ({len(unread)} unread, {len(replies)} total recent):",
+        "  When the practitioner asks 'did anyone reply?' / 'what did X say?' /",
+        "  'reply to X' — pull from this block. Quote the actual reply content;",
+        "  do not paraphrase. NEVER draft a generic response when you have the",
+        "  real reply text below.",
+        "",
+    ]
+    for r in replies[:6]:
+        name = r.get("from_name") or contact_by_id.get(r.get("contact_id") or "", {}).get("name") or r.get("from_email") or "Unknown"
+        subject = (r.get("subject") or "").strip() or "(no subject)"
+        body = (r.get("body_text") or "").strip()
+        # Trim to ~280 chars for prompt economy; the full body is one
+        # mark_reply_read action away if the Chief needs more.
+        if len(body) > 280:
+            body = body[:280] + "…"
+        body_one_line = body.replace("\n", " / ").strip()
+        flag = "" if r.get("read") else " [UNREAD]"
+        contact_part = f" [contact={r['contact_id']}]" if r.get("contact_id") else ""
+        lines.append(
+            f"  - {name}{flag}{contact_part} reply_id={r.get('id')} "
+            f"received={(r.get('received_at') or '')[:16]}"
+        )
+        lines.append(f"      Re: \"{subject}\"")
+        lines.append(f"      Body: \"{body_one_line}\"")
+    return "\n".join(lines) + "\n"
 
 
 def _format_site_info(ctx: Dict[str, Any]) -> str:
@@ -638,6 +692,7 @@ PRACTITIONER SITE:
 PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull description + unit_price from the catalog rather than asking again):
 {chr(10).join(product_lines) if product_lines else '  (no products yet)'}
 
+{_format_email_replies_block(ctx)}
 CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
 {chr(10).join(contact_ref_lines) if contact_ref_lines else '  (no contacts)'}
 """
@@ -2037,7 +2092,12 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any]) 
 
     # Use the email_sender helper directly — no HTTP hop to ourselves.
     try:
-        from email_sender import send_via_resend  # local import: avoid circular + runtime-only
+        from email_sender import send_via_resend, build_routed_reply_to  # local import: avoid circular + runtime-only
+        # Prefer the routed inbound address so replies land on our
+        # webhook with full (business, contact) context. Falls back to
+        # the practitioner's signature email when INBOUND_EMAIL_DOMAIN
+        # isn't configured on the deployment.
+        routed = build_routed_reply_to(biz["id"], contact.get("id"))
         data = await send_via_resend(
             to_email=email,
             to_name=contact.get("name"),
@@ -2045,7 +2105,7 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any]) 
             from_name=from_name,
             subject=item.get("subject") or f"Message from {biz.get('name', '')}",
             body=composed_body,
-            reply_to=reply_to,
+            reply_to=routed or reply_to,
         )
         out["sent"] = True
         out["to_email"] = email
@@ -4359,7 +4419,8 @@ async def handle_batch_email(client, biz, action) -> Dict:
         # Convert plain newlines to <br> so the practitioner's draft renders
         body_html = body_personal.replace("\r\n", "\n").replace("\n", "<br/>")
         try:
-            from email_sender import send_via_resend
+            from email_sender import send_via_resend, build_routed_reply_to
+            routed = build_routed_reply_to(biz["id"], cid)
             await send_via_resend(
                 to_email=email,
                 to_name=name,
@@ -4367,7 +4428,7 @@ async def handle_batch_email(client, biz, action) -> Dict:
                 from_name=from_name,
                 subject=subj,
                 body=body_html,
-                reply_to=reply_to,
+                reply_to=routed or reply_to,
             )
             sent += 1
             sample_subject = subj
@@ -4839,7 +4900,8 @@ async def _send_invoice_email(
     # Actual delivery. Keep try/except narrow — we want Resend's real error
     # surfaced, not replaced with a generic "delivery failed".
     try:
-        from email_sender import send_via_resend
+        from email_sender import send_via_resend, build_routed_reply_to
+        routed = build_routed_reply_to(biz["id"], contact.get("id"))
         data = await send_via_resend(
             to_email=contact["email"],
             to_name=contact.get("name"),
@@ -4847,7 +4909,7 @@ async def _send_invoice_email(
             from_name=sig.get("name") or biz_name,
             subject=f"Invoice {invoice.get('invoice_number')} from {biz_name}",
             body=html,
-            reply_to=sig.get("email"),
+            reply_to=routed or sig.get("email"),
         )
         provider_id = data.get("id") if isinstance(data, dict) else None
         return True, None, provider_id
@@ -5602,6 +5664,55 @@ async def handle_save_email_template(client, biz, action) -> Dict:
     }
 
 
+async def handle_mark_reply_read(client, biz, action) -> Dict:
+    """Flip email_replies.read to true.
+
+    Resolution priority:
+      1. Explicit reply_id
+      2. contact_name → flip ALL unread replies from that contact
+      3. Otherwise fail with a helpful hint.
+
+    The Email Hub UI listens for the row update via Supabase realtime
+    so the badge clears as soon as the Chief acknowledges a reply.
+    """
+    reply_id = (action.get("reply_id") or "").strip()
+    contact_name = (action.get("contact_name") or "").strip()
+    contact_id = (action.get("contact_id") or "").strip()
+
+    if reply_id:
+        await _sb(client, "PATCH",
+            f"/email_replies?id=eq.{reply_id}&business_id=eq.{biz['id']}",
+            {"read": True})
+        return {
+            "type": "mark_reply_read",
+            "result": "marked_read",
+            "label": "📧 Reply marked as read",
+            "reply_id": reply_id,
+        }
+
+    # Resolve by contact — accept either an explicit id or a fuzzy name.
+    if not contact_id and contact_name:
+        safe = contact_name.replace("%", "")
+        rows = await _sb(client, "GET",
+            f"/contacts?business_id=eq.{biz['id']}&name=ilike.*{safe}*"
+            f"&select=id,name&limit=2") or []
+        if rows:
+            contact_id = rows[0].get("id") or ""
+
+    if contact_id:
+        await _sb(client, "PATCH",
+            f"/email_replies?business_id=eq.{biz['id']}&contact_id=eq.{contact_id}&read=eq.false",
+            {"read": True})
+        return {
+            "type": "mark_reply_read",
+            "result": "marked_read",
+            "label": "📧 Replies from this contact marked as read",
+            "contact_id": contact_id,
+        }
+
+    return _fail("mark_reply_read", "Need reply_id, contact_id, or contact_name.")
+
+
 async def handle_remove_testimonial(client, biz, action) -> Dict:
     """Remove a testimonial by id, name, or quote substring. The Chief
     can call this when the practitioner says 'remove the testimonial
@@ -5777,6 +5888,7 @@ ACTION_HANDLERS = {
     # Website content integrity
     "add_testimonial":            handle_add_testimonial,
     "save_email_template":        handle_save_email_template,
+    "mark_reply_read":            handle_mark_reply_read,
     "remove_testimonial":         handle_remove_testimonial,
     # Timers & alarms
     "set_timer":                  handle_set_timer,
@@ -7701,6 +7813,20 @@ ACTIONS — DRAFTS:
   [ACTION:{{"type":"save_email_template","name":"Welcome Email","subject":"Welcome, {{name}}","body":"Hi {{name}}...","category":"welcome"}}]  — Save a reusable email template. category: welcome | follow_up | reminder | nurture | custom. Variables of the form {{name}}, {{service}}, {{date}} are auto-detected. If a template with the same name already exists, it's updated. The template appears in OPERATE → Email → Templates and is also offered to the practitioner the next time you draft an email.
     — When the practitioner says "save this as a template", "create a [type] template", or "make a reusable template" → save_email_template.
     — When asked "show my templates / what templates do I have?" → name them from the catalog you can see in business settings; offer to navigate via {{tab:'operate', sub:'email'}}.
+  [ACTION:{{"type":"mark_reply_read","reply_id":"<uuid>"}}]
+  [ACTION:{{"type":"mark_reply_read","contact_name":"Marcus"}}]  — flips ALL unread replies from that contact
+
+REPLYING TO REPLIES (CRITICAL — see EMAIL REPLIES context block above):
+  When the practitioner says "reply to Marcus" / "respond to Sandra's email" / "what did X say":
+    1. Find the latest reply from that contact in the EMAIL REPLIES block.
+    2. Quote their actual message back (their words, not paraphrase).
+    3. Draft a response that addresses what they said specifically.
+    4. After drafting, you MAY mark_reply_read so the badge clears.
+  Example pattern:
+    Reply from Marcus: "I tried the delegation framework. Worked Mon-Tue, fell back Wed."
+    Your draft: "Hey Marcus — two days of delegation IS a real shift. Wed pullback is normal.
+                 Let's talk about what triggered it on Thursday."
+  Never draft a generic "Thanks for reaching out!" reply when you have the reply text.
 
 ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MODULES section above lists what exists):
   [ACTION:{{"type":"ensure_module","module_name":"Client Progress","fields":[{{"name":"client","type":"contact_link","label":"Client"}},{{"name":"status","type":"select","label":"Status","options":["new","active","done"]}},{{"name":"notes","type":"textarea","label":"Notes"}}]}}]
