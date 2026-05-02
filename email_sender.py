@@ -312,7 +312,14 @@ def _parse_routed_address(addr: str) -> Optional[Dict[str, str]]:
 
 
 def _extract_inbound(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize Resend's inbound payload to a consistent shape."""
+    """Normalize Resend's inbound payload to a consistent shape.
+
+    NOTE: Resend's `email.received` webhook does NOT include the body —
+    only metadata (from/to/subject/email_id). The body must be fetched
+    separately via /emails/{id} on the Resend API. _fetch_inbound_body
+    below does that. _extract_inbound just returns whatever is in the
+    payload (typically empty body).
+    """
     # Resend wraps events in {"type": "email.received", "data": {...}}
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     # from can be a string or a list of {name,email}
@@ -340,7 +347,15 @@ def _extract_inbound(payload: Dict[str, Any]) -> Dict[str, Any]:
     html = data.get("html") or payload.get("html") or ""
     body = text or _strip_html(html)
     in_reply_to = data.get("in_reply_to") or payload.get("in_reply_to") or ""
-    message_id = data.get("message_id") or payload.get("message_id") or data.get("id") or ""
+    # Resend uses different keys for the inbound message id depending on
+    # webhook version: email_id (current), message_id, or id.
+    message_id = (
+        data.get("email_id")
+        or data.get("message_id")
+        or payload.get("message_id")
+        or data.get("id")
+        or ""
+    )
 
     return {
         "from_email": from_email,
@@ -353,6 +368,37 @@ def _extract_inbound(payload: Dict[str, Any]) -> Dict[str, Any]:
         "in_reply_to": str(in_reply_to),
         "message_id": str(message_id),
     }
+
+
+async def _fetch_inbound_body(client: httpx.AsyncClient, email_id: str) -> Dict[str, str]:
+    """Fetch the full email body from Resend via /emails/{id}.
+
+    Resend's email.received webhook only includes metadata, not the
+    body. We use the email_id to pull the actual content. Returns
+    {'text': ..., 'html': ...} (both possibly empty on failure)."""
+    if not email_id:
+        return {"text": "", "html": ""}
+    key = os.environ.get("RESEND_API_KEY")
+    if not key:
+        logger.warning("[INBOUND] RESEND_API_KEY missing — can't fetch body")
+        return {"text": "", "html": ""}
+    try:
+        r = await client.get(
+            f"https://api.resend.com/emails/{email_id}",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=HTTP_TIMEOUT,
+        )
+        if r.status_code >= 400:
+            logger.warning(f"[INBOUND] /emails/{email_id} -> {r.status_code} {r.text[:200]}")
+            return {"text": "", "html": ""}
+        body = r.json() if r.text else {}
+        return {
+            "text": str(body.get("text") or ""),
+            "html": str(body.get("html") or ""),
+        }
+    except httpx.HTTPError as e:
+        logger.warning(f"[INBOUND] body fetch error: {e}")
+        return {"text": "", "html": ""}
 
 
 def _strip_quoted_reply(text: str) -> str:
@@ -424,7 +470,24 @@ async def inbound_email(request: Request):
     routed = False
 
     async with httpx.AsyncClient() as client:
+        # ── Fetch the actual body. Resend's email.received webhook
+        #    only carries metadata; the body must be pulled via
+        #    /emails/{id} on the Resend API. We fetch only when the
+        #    payload didn't include text content (so legacy webhooks
+        #    that DO include body still work without an extra round-trip).
+        if not parsed["body"] and parsed["message_id"]:
+            fetched = await _fetch_inbound_body(client, parsed["message_id"])
+            if fetched["text"] or fetched["html"]:
+                parsed["raw_text"] = fetched["text"]
+                parsed["raw_html"] = (fetched["html"] or "")[:5000]
+                parsed["body"] = fetched["text"] or _strip_html(fetched["html"])
+                logger.info(
+                    f"[INBOUND] fetched body from Resend API: "
+                    f"text_len={len(fetched['text'])} html_len={len(fetched['html'])}"
+                )
+
         # ── 1. Try the routed reply-to address first ─────────────────
+        # PostgREST `like` operator: % is the wildcard.
         for addr in parsed["to_addresses"]:
             parsed_addr = _parse_routed_address(addr)
             if not parsed_addr:
@@ -432,13 +495,13 @@ async def inbound_email(request: Request):
             biz_short = parsed_addr["biz_short"]
             contact_short = parsed_addr["contact_short"]
             biz_rows = await _sb_get(client,
-                f"/businesses?id=like.{biz_short}*&select=id&limit=1")
+                f"/businesses?id=like.{biz_short}%25&select=id&limit=1")
             if not biz_rows:
                 continue
             business_id = biz_rows[0]["id"]
             if contact_short and contact_short != "anon":
                 cid_rows = await _sb_get(client,
-                    f"/contacts?id=like.{contact_short}*&business_id=eq.{business_id}"
+                    f"/contacts?id=like.{contact_short}%25&business_id=eq.{business_id}"
                     f"&select=id,name,health_score&limit=1")
                 if cid_rows:
                     contact_id = cid_rows[0]["id"]
