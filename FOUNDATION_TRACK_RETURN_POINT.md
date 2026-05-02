@@ -11,7 +11,7 @@ This is the canonical rollback point if Foundation Track work needs to be unwoun
 | Repo | Tag pushed? | Branch |
 |---|---|---|
 | Backend (this repo) | yes (`origin`) | `foundation-track` |
-| Frontend (`solutionist-studio`) | local-only (no `origin` remote) | `foundation-track` |
+| Frontend (`solutionist-studio`) | yes (github.com/parkerron1971-hash/solutionist-studio) | `foundation-track` |
 
 ## Rollback procedures
 
