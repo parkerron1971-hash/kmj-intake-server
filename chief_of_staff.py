@@ -5523,6 +5523,85 @@ async def handle_add_testimonial(client, biz, action) -> Dict:
     }
 
 
+async def handle_save_email_template(client, biz, action) -> Dict:
+    """Save (or update) a reusable email template in
+    businesses.settings.email_templates_v2 (an array of objects).
+    The Email Hub UI reads from this array; the older nested-object
+    shape under settings.email_templates is preserved untouched.
+
+    Variables of the form {name}, {service}, {date} are extracted into
+    a `variables` field for the UI to surface.
+    """
+    name = (action.get("name") or "").strip()
+    subject = (action.get("subject") or "").strip()
+    body = (action.get("body") or "").strip()
+    category_in = (action.get("category") or "custom").strip().lower()
+
+    if not name:
+        return _fail("save_email_template", "Template name is required.")
+    if not subject and not body:
+        return _fail("save_email_template", "Need at least a subject or a body.")
+
+    valid_cats = {"welcome", "follow_up", "reminder", "nurture", "custom"}
+    category = category_in if category_in in valid_cats else "custom"
+
+    rows = await _sb(client, "GET",
+        f"/businesses?id=eq.{biz['id']}&select=settings&limit=1") or []
+    if not rows:
+        return _fail("save_email_template", "Business not found.")
+    settings = dict(rows[0].get("settings") or {})
+    templates = list(settings.get("email_templates_v2") or [])
+
+    variables = sorted(set(re.findall(r"\{[^}]+\}", f"{subject} {body}")))
+
+    # Update by name match (case-insensitive) — practitioners shouldn't
+    # have to track ids when telling the Chief what to save.
+    name_lc = name.lower()
+    idx = next((i for i, t in enumerate(templates)
+                if (t.get("name") or "").strip().lower() == name_lc), -1)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if idx >= 0:
+        existing = dict(templates[idx])
+        existing.update({
+            "subject": subject,
+            "body": body,
+            "category": category,
+            "variables": variables,
+        })
+        templates[idx] = existing
+        action_word = "updated"
+    else:
+        templates.append({
+            "id": f"tmpl-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+            "name": name,
+            "subject": subject,
+            "body": body,
+            "category": category,
+            "variables": variables,
+            "usage_count": 0,
+            "last_used": "",
+            "created_at": now_iso,
+        })
+        action_word = "saved"
+
+    settings["email_templates_v2"] = templates
+    patched = await _sb(client, "PATCH",
+        f"/businesses?id=eq.{biz['id']}",
+        {"settings": settings})
+    if not patched:
+        return _fail("save_email_template", "settings update failed")
+
+    return {
+        "type": "save_email_template",
+        "result": action_word,
+        "label": f"📧 Template {action_word}: {name}",
+        "template_name": name,
+        "category": category,
+        "nav": _nav("operate", "email"),
+    }
+
+
 async def handle_remove_testimonial(client, biz, action) -> Dict:
     """Remove a testimonial by id, name, or quote substring. The Chief
     can call this when the practitioner says 'remove the testimonial
@@ -5697,6 +5776,7 @@ ACTION_HANDLERS = {
     "catch_up":                   handle_catch_up,
     # Website content integrity
     "add_testimonial":            handle_add_testimonial,
+    "save_email_template":        handle_save_email_template,
     "remove_testimonial":         handle_remove_testimonial,
     # Timers & alarms
     "set_timer":                  handle_set_timer,
@@ -7618,6 +7698,9 @@ ACTIONS — DRAFTS:
   [ACTION:{{"type":"draft_nurture","contact_id":"<uuid>","reason":"why"}}]
   [ACTION:{{"type":"draft_email","contact_id":"<uuid>","subject":"...","reason":"..."}}]
   [ACTION:{{"type":"draft_and_send","contact_id":"<uuid>","subject":"...","body":"..."}}]  — Draft an email AND immediately approve + send it. Use when the practitioner wants to send right away without reviewing.
+  [ACTION:{{"type":"save_email_template","name":"Welcome Email","subject":"Welcome, {{name}}","body":"Hi {{name}}...","category":"welcome"}}]  — Save a reusable email template. category: welcome | follow_up | reminder | nurture | custom. Variables of the form {{name}}, {{service}}, {{date}} are auto-detected. If a template with the same name already exists, it's updated. The template appears in OPERATE → Email → Templates and is also offered to the practitioner the next time you draft an email.
+    — When the practitioner says "save this as a template", "create a [type] template", or "make a reusable template" → save_email_template.
+    — When asked "show my templates / what templates do I have?" → name them from the catalog you can see in business settings; offer to navigate via {{tab:'operate', sub:'email'}}.
 
 ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MODULES section above lists what exists):
   [ACTION:{{"type":"ensure_module","module_name":"Client Progress","fields":[{{"name":"client","type":"contact_link","label":"Client"}},{{"name":"status","type":"select","label":"Status","options":["new","active","done"]}},{{"name":"notes","type":"textarea","label":"Notes"}}]}}]
