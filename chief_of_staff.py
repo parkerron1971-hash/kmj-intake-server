@@ -43,6 +43,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import foundation_agent
+
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════
@@ -356,6 +358,11 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         return {}
     biz = biz_rows[0]
 
+    try:
+        foundation_block = await foundation_agent.chief_context_block(biz_id)
+    except Exception as _e:
+        foundation_block = ""
+
     # Module entry counts — one query per module (parallel)
     module_entries_tasks = [
         _sb(client, "GET",
@@ -405,12 +412,21 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "products": products or [],
         "email_replies": email_replies or [],
         "sms_messages": sms_messages or [],
+        "foundation_block": foundation_block or "",
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
             for c in contacts[:200]
         ],
     }
+
+
+def _format_foundation_block(ctx: Dict[str, Any]) -> str:
+    """Render the Foundation Track context block for the system prompt.
+    The agent populates this in _gather_context. Empty string when there's
+    nothing to show."""
+    block = (ctx.get("foundation_block") or "").strip()
+    return block + "\n" if block else ""
 
 
 def _format_sms_block(ctx: Dict[str, Any]) -> str:
@@ -740,6 +756,7 @@ PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull
 
 {_format_email_replies_block(ctx)}
 {_format_sms_block(ctx)}
+{_format_foundation_block(ctx)}
 CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
 {chr(10).join(contact_ref_lines) if contact_ref_lines else '  (no contacts)'}
 """

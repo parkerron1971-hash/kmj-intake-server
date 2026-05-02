@@ -35,6 +35,7 @@ from public_site import router as public_site_router
 from email_sender import router as email_router
 from stripe_proxy import router as stripe_router
 from sms_service import router as sms_router
+from foundation_router import router as foundation_router
 
 app = FastAPI(title="KMJ Intake Automation")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -52,6 +53,7 @@ app.include_router(whisper_router)
 app.include_router(email_router)
 app.include_router(stripe_router)
 app.include_router(sms_router)
+app.include_router(foundation_router)
 # public_site_router MUST remain LAST — it defines `/` and `/{path:path}`
 # catch-alls that would otherwise shadow every specific API route.
 app.include_router(public_site_router)
