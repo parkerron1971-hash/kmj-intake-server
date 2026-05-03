@@ -46,6 +46,8 @@ from pydantic import BaseModel
 import foundation_agent
 import business_profile_agent
 from business_profile_agent import chief_context_block as bp_chief_context_block
+import practitioner_profile_agent
+from practitioner_profile_agent import chief_context_block as pp_chief_context_block
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -380,6 +382,20 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
     except Exception as _e:
         business_profile_raw = {}
 
+    # Practitioner profile (Build 3) — keyed on owner_id, not business_id.
+    owner_id_for_pp = (biz or {}).get("owner_id")
+    try:
+        practitioner_block = await asyncio.to_thread(pp_chief_context_block, owner_id_for_pp) if owner_id_for_pp else ""
+    except Exception as _e:
+        practitioner_block = ""
+    try:
+        practitioner_profile_raw = (
+            await asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id_for_pp)
+            if owner_id_for_pp else {}
+        ) or {}
+    except Exception as _e:
+        practitioner_profile_raw = {}
+
     # Module entry counts — one query per module (parallel)
     module_entries_tasks = [
         _sb(client, "GET",
@@ -432,6 +448,8 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "foundation_block": foundation_block or "",
         "business_profile_block": business_profile_block or "",
         "business_profile_raw": business_profile_raw or {},
+        "practitioner_block": practitioner_block or "",
+        "practitioner_profile_raw": practitioner_profile_raw or {},
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
@@ -503,11 +521,19 @@ def _detect_profile_topics(user_message: str, missing_fields: List[str]) -> List
     return hits
 
 
-def _was_recently_asked(memories: List[Dict[str, Any]], field_path: str, hours: int = 24) -> bool:
+def _was_recently_asked(
+    memories: List[Dict[str, Any]],
+    field_path: str,
+    hours: int = 24,
+    prefix: str = "jit_asked:",
+) -> bool:
     """True if a chief_memories row exists with category='jit_asked' and
-    content marker 'jit_asked:<field>' within the last `hours`."""
+    content marker '<prefix><field>' within the last `hours`. The prefix
+    parameter lets the same helper namespace business asks
+    ('jit_asked:<field>') from practitioner asks
+    ('jit_asked_practitioner:<field>') so anti-repeat doesn't collide."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    marker = f"jit_asked:{field_path}"
+    marker = f"{prefix}{field_path}"
     for mem in memories or []:
         if mem.get("category") != "jit_asked":
             continue
@@ -525,6 +551,58 @@ def _was_recently_asked(memories: List[Dict[str, Any]], field_path: str, hours: 
     return False
 
 
+# ─── Practitioner-level JIT triggers (Build 3) ────────────────
+# Same shape as _JIT_TRIGGERS, separate keyword set. Practitioner
+# data follows the human across all their businesses, so the asks
+# only fire when the user signals something practitioner-relevant
+# (scheduling, contract signatures, accountant references, etc.).
+
+_JIT_PRACTITIONER_TRIGGERS: Dict[str, List[str]] = {
+    "full_legal_name": [
+        "contract", "agreement", "engagement letter", "msa", "sow",
+        "legal document", "sign as", "as the practitioner",
+        "operating agreement", "tax form",
+    ],
+    "preferred_title": [
+        "email signature", "sign off", "signature line",
+        "address me as", "title", "how should they call me",
+    ],
+    "timezone": [
+        "schedule", "session at", "meeting at", "book me", "book a",
+        "calendar", "what time", "remind me at", "tomorrow at",
+        "send at", "what's my schedule",
+    ],
+    "working_hours_start": [
+        "deep work", "focus time", "morning routine", "first thing",
+        "start of my day", "early morning",
+    ],
+    "working_hours_end": [
+        "wrap up", "end of day", "after hours", "evening",
+        "before i log off", "before i sign off",
+    ],
+    "primary_accountant_name": [
+        "my accountant", "my cpa", "send to accounting",
+        "loop in accounting", "tax person", "bookkeeper",
+    ],
+}
+
+
+def _detect_practitioner_topics(user_message: str, missing_fields: List[str]) -> List[str]:
+    """Lowercase substring scan against practitioner trigger keywords.
+    Returns field_paths whose triggers fired AND are still missing.
+    Each field can fire at most once per message."""
+    if not user_message:
+        return []
+    msg = user_message.lower()
+    hits: List[str] = []
+    for field_path in missing_fields:
+        for kw in _JIT_PRACTITIONER_TRIGGERS.get(field_path, []):
+            if kw in msg:
+                hits.append(field_path)
+                break
+    return hits
+
+
 def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     """Compose the directive injected at the top of the Chief system
     prompt when the user's message signals a missing profile field
@@ -540,57 +618,116 @@ def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     if not biz_id:
         return ""
 
-    try:
-        missing = business_profile_agent.get_missing_jit_fields(biz_id)
-    except Exception as e:
-        logger.warning(f"[jit] get_missing_jit_fields failed: {e}")
-        return ""
-    if not missing:
-        return ""
-
     memories = ctx.get("memories") or []
-
-    # Reactive: did the user message hit a trigger for a missing field?
-    triggered = _detect_profile_topics(user_message or "", missing)
-    triggered = [f for f in triggered if not _was_recently_asked(memories, f)]
-
-    # Proactive: only if user opted in AND nothing reactive fired.
-    if not triggered:
-        profile = ctx.get("business_profile_raw") or {}
-        if profile.get("proactive_capture_enabled"):
-            for f in missing:
-                if not _was_recently_asked(memories, f, hours=24):
-                    triggered = [f]
-                    break
-
-    if not triggered:
-        return ""
-
     brand_voice = ((ctx.get("business_profile_raw") or {}).get("brand_voice") or "warm")
 
-    lines: List[str] = []
-    lines.append("JIT-CAPTURE PRIORITY (the user just signaled a missing profile field):")
-    for f in triggered:
-        phrasing = business_profile_agent.get_phrasing(f, brand_voice)
-        lines.append("  - missing field: " + f)
-        lines.append("    suggested ask (use brand_voice='" + brand_voice + "'): " + phrasing)
-        lines.append(
-            "    when user confirms an answer, emit: "
-            '[ACTION:{"type":"update_business_profile_field","field_path":"'
-            + f + '","value":<their normalized answer>}]'
-        )
-        lines.append(
-            "    AND emit: "
-            '[ACTION:{"type":"remember","category":"jit_asked","source":"ai_inferred","content":"jit_asked:'
-            + f + '","importance":3}]'
-        )
-    lines.append("RULES:")
-    lines.append("- Ask ONE field per response, not all at once")
-    lines.append("- Frame the question as helpful context, not a form")
-    lines.append("- Wait for the user to confirm before emitting update_business_profile_field")
-    lines.append("- After storing, briefly reflect: 'Got it.'")
-    lines.append("- Never invent values. If the user is vague, ask for clarification before emitting.")
-    return "\n".join(lines) + "\n\n"
+    # ─── Business JIT section ──────────────────────────────────
+    biz_section = ""
+    try:
+        biz_missing = business_profile_agent.get_missing_jit_fields(biz_id)
+    except Exception as e:
+        logger.warning(f"[jit] business get_missing_jit_fields failed: {e}")
+        biz_missing = []
+
+    biz_triggered: List[str] = []
+    if biz_missing:
+        biz_triggered = _detect_profile_topics(user_message or "", biz_missing)
+        biz_triggered = [f for f in biz_triggered if not _was_recently_asked(memories, f, prefix="jit_asked:")]
+        if not biz_triggered:
+            profile = ctx.get("business_profile_raw") or {}
+            if profile.get("proactive_capture_enabled"):
+                for f in biz_missing:
+                    if not _was_recently_asked(memories, f, hours=24, prefix="jit_asked:"):
+                        biz_triggered = [f]
+                        break
+
+    if biz_triggered:
+        b_lines: List[str] = []
+        b_lines.append("JIT-CAPTURE PRIORITY (business-level — the user just signaled a missing business profile field):")
+        for f in biz_triggered:
+            phrasing = business_profile_agent.get_phrasing(f, brand_voice)
+            b_lines.append("  - missing field: " + f)
+            b_lines.append("    suggested ask (use brand_voice='" + brand_voice + "'): " + phrasing)
+            b_lines.append(
+                "    when user confirms an answer, emit: "
+                '[ACTION:{"type":"update_business_profile_field","field_path":"'
+                + f + '","value":<their normalized answer>}]'
+            )
+            b_lines.append(
+                "    AND emit: "
+                '[ACTION:{"type":"remember","category":"jit_asked","source":"ai_inferred","content":"jit_asked:'
+                + f + '","importance":3}]'
+            )
+        b_lines.append("RULES:")
+        b_lines.append("- Ask ONE field per response, not all at once")
+        b_lines.append("- Frame the question as helpful context, not a form")
+        b_lines.append("- Wait for the user to confirm before emitting update_business_profile_field")
+        b_lines.append("- After storing, briefly reflect: 'Got it.'")
+        b_lines.append("- Never invent values. If the user is vague, ask for clarification before emitting.")
+        biz_section = "\n".join(b_lines) + "\n\n"
+
+    # ─── Practitioner JIT section (Build 3) ────────────────────
+    practitioner_section = ""
+    owner_id = (ctx.get("business") or {}).get("owner_id")
+    if owner_id:
+        try:
+            p_missing = practitioner_profile_agent.get_missing_jit_fields(owner_id)
+        except Exception as e:
+            logger.warning(f"[jit] practitioner get_missing_jit_fields failed: {e}")
+            p_missing = []
+
+        p_triggered: List[str] = []
+        if p_missing:
+            p_triggered = _detect_practitioner_topics(user_message or "", p_missing)
+            p_triggered = [
+                f for f in p_triggered
+                if not _was_recently_asked(memories, f, prefix="jit_asked_practitioner:")
+            ]
+            if not p_triggered:
+                pp = ctx.get("practitioner_profile_raw") or {}
+                if pp.get("proactive_capture_enabled"):
+                    for f in p_missing:
+                        if not _was_recently_asked(memories, f, hours=24, prefix="jit_asked_practitioner:"):
+                            p_triggered = [f]
+                            break
+
+        if p_triggered:
+            p_lines: List[str] = []
+            p_lines.append("JIT-CAPTURE PRIORITY (practitioner-level — about the human, not the business):")
+            for f in p_triggered:
+                phrasing = practitioner_profile_agent.get_phrasing(f, brand_voice)
+                p_lines.append("  - missing field: " + f)
+                p_lines.append("    suggested ask (use brand_voice='" + brand_voice + "'): " + phrasing)
+                p_lines.append(
+                    "    when user confirms an answer, emit: "
+                    '[ACTION:{"type":"update_practitioner_profile_field","field_path":"'
+                    + f + '","value":<their normalized answer>}]'
+                )
+                p_lines.append(
+                    "    AND emit: "
+                    '[ACTION:{"type":"remember","category":"jit_asked","source":"ai_inferred","content":"jit_asked_practitioner:'
+                    + f + '","importance":3}]'
+                )
+            p_lines.append("RULES (practitioner):")
+            p_lines.append("- Ask ONE field per response")
+            p_lines.append("- Practitioner data follows the user across all their businesses")
+            p_lines.append("- Wait for the user to confirm before emitting update_practitioner_profile_field")
+            p_lines.append("- After storing, briefly reflect: 'Got it.'")
+            p_lines.append("- Never invent values. If the user is vague, ask for clarification first.")
+            practitioner_section = "\n".join(p_lines) + "\n\n"
+
+    if not biz_section and not practitioner_section:
+        return ""
+    return biz_section + practitioner_section
+
+
+def _format_practitioner_block(ctx: Dict[str, Any]) -> str:
+    """Render the Practitioner Profile context block. The Chief reads
+    about the human first (legal name, title, timezone, working hours,
+    key relationships), then about the business they're running.
+    Empty when no practitioner_profiles row exists."""
+    block = (ctx.get("practitioner_block") or "").strip()
+    return block + "\n" if block else ""
 
 
 def _format_business_profile_block(ctx: Dict[str, Any]) -> str:
@@ -939,6 +1076,7 @@ PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull
 
 {_format_email_replies_block(ctx)}
 {_format_sms_block(ctx)}
+{_format_practitioner_block(ctx)}
 {_format_business_profile_block(ctx)}
 {_format_foundation_block(ctx)}
 CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
@@ -6176,6 +6314,66 @@ def _human_jit_summary(field_path: str, value: Any) -> str:
     return f"{field_path} updated"
 
 
+def _human_practitioner_summary(field_path: str, value: Any) -> str:
+    if field_path == "full_legal_name":
+        return f"your name is {value}"
+    if field_path == "preferred_title":
+        return f"you go by {value}"
+    if field_path == "timezone":
+        return f"timezone is {value}"
+    if field_path == "working_hours_start":
+        return f"work day starts at {value}"
+    if field_path == "working_hours_end":
+        return f"work day ends at {value}"
+    if field_path == "primary_accountant_name":
+        return f"your accountant is {value}"
+    if field_path == "primary_attorney_name":
+        return f"your attorney is {value}"
+    if field_path == "primary_mentor_name":
+        return f"your mentor is {value}"
+    if field_path == "primary_partner_name":
+        return f"your partner is {value}"
+    if field_path == "pronouns":
+        return f"pronouns: {value}"
+    return f"{field_path} updated"
+
+
+async def handle_update_practitioner_profile_field(client, biz, action) -> Dict:
+    """Store a single practitioner_profiles field after explicit user
+    confirmation. Practitioner data follows the user across all their
+    businesses, so this writes against owner_id, not business_id."""
+    field_path = (action.get("field_path") or "").strip()
+    value = action.get("value")
+    if not field_path or value is None:
+        return _fail("update_practitioner_profile_field", "Missing field_path or value")
+
+    owner_id = biz.get("owner_id") if isinstance(biz, dict) else None
+    if not owner_id:
+        return _fail("update_practitioner_profile_field", "No owner_id on business")
+
+    try:
+        updated = await asyncio.to_thread(
+            practitioner_profile_agent.update_field, owner_id, field_path, value
+        )
+    except Exception as e:
+        logger.warning(f"[jit_practitioner] update_field failed: {e}")
+        return _fail("update_practitioner_profile_field", str(e))
+
+    if updated is None:
+        return _fail("update_practitioner_profile_field", "write returned no row")
+
+    summary = _human_practitioner_summary(field_path, value)
+    return {
+        "type": "update_practitioner_profile_field",
+        "result": f"Stored {field_path} = {value}",
+        "label": f"Learned: {summary}",
+        "toast": {
+            "message": f"Got it — {summary}",
+            "kind": "success",
+        },
+    }
+
+
 async def handle_update_business_profile_field(client, biz, action) -> Dict:
     """Store a single profile field after explicit user confirmation."""
     field_path = (action.get("field_path") or "").strip()
@@ -6300,6 +6498,8 @@ ACTION_HANDLERS = {
     "set_timer":                  handle_set_timer,
     # JIT capture (Build 2)
     "update_business_profile_field": handle_update_business_profile_field,
+    # Practitioner profile (Build 3)
+    "update_practitioner_profile_field": handle_update_practitioner_profile_field,
 }
 
 
@@ -8352,6 +8552,8 @@ ACTIONS — NAVIGATION + MEMORY:
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
   [ACTION:{{"type":"update_business_profile_field","field_path":"governing_state|produces_deliverables|sensitive_areas.health_advice|sensitive_areas.session_recording|sensitive_areas.physical_activity","value":"<their answer>"}}]
   — used ONLY after the user has explicitly confirmed a value for a previously-missing profile field. Never emit on speculation. The JIT-CAPTURE PRIORITY block (when present at the top of this prompt) tells you which field to ask about and what brand-voice phrasing to use.
+  [ACTION:{{"type":"update_practitioner_profile_field","field_path":"full_legal_name|preferred_title|timezone|working_hours_start|working_hours_end|primary_accountant_name","value":"<their answer>"}}]
+  — used ONLY after the user has explicitly confirmed a value for a practitioner-level field (about the human, not the business). Practitioner data follows the user across ALL their businesses — same human, same legal name, same timezone, same accountant. Never emit on speculation.
   [ACTION:{{"type":"forget","memory_content":"snippet to deactivate"}}]
   [ACTION:{{"type":"generate_briefing"}}]
   [ACTION:{{"type":"generate_insights"}}]
