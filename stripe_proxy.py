@@ -386,14 +386,30 @@ async def _deliver_digital_product(
             rules = email_templates.get("global_rules") or {}
             closing = rules.get("closing_line") or closing
             template = (email_templates.get("templates") or {}).get("product_delivery")
-            brand_kit = settings.get("brand_kit") or {}
-            if isinstance(brand_kit, dict):
-                bc = (brand_kit.get("primary_color") or "").strip()
+            # Brand Engine v1: route through bundle for canonical color/font.
+            # Fallback to both-shapes inline read if bundle composition fails.
+            try:
+                from brand_engine import get_bundle as _be_get_bundle
+                _bundle = _be_get_bundle(biz.get("id"))
+                _bd = _bundle.get("design") or {}
+                bc = (_bd.get("primary_color") or "").strip()
                 if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
                     brand_color = bc
-                bf = (brand_kit.get("font_heading") or brand_kit.get("font_body") or "").strip()
+                bf = (_bd.get("font_heading") or _bd.get("font_body") or "").strip()
                 if bf:
                     brand_font = f"{bf},Inter,Arial,sans-serif"
+            except Exception:
+                brand_kit = settings.get("brand_kit") or {}
+                if isinstance(brand_kit, dict):
+                    _colors = (brand_kit.get("colors") or {})
+                    bc = (_colors.get("primary") or brand_kit.get("primary_color") or "").strip()
+                    if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
+                        brand_color = bc
+                    _fp = (brand_kit.get("font_pair") or {})
+                    bf = (_fp.get("heading") or _fp.get("body")
+                          or brand_kit.get("font_heading") or brand_kit.get("font_body") or "").strip()
+                    if bf:
+                        brand_font = f"{bf},Inter,Arial,sans-serif"
 
     # Substitute variables
     name = product.get("name") or "your download"

@@ -48,6 +48,8 @@ import business_profile_agent
 from business_profile_agent import chief_context_block as bp_chief_context_block
 import practitioner_profile_agent
 from practitioner_profile_agent import chief_context_block as pp_chief_context_block
+import brand_engine
+from brand_engine import chief_context_block as brand_engine_chief_context_block
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -396,6 +398,12 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
     except Exception as _e:
         practitioner_profile_raw = {}
 
+    # Brand Engine (Build: Brand Engine v1) — bundle context block.
+    try:
+        brand_block = await asyncio.to_thread(brand_engine_chief_context_block, biz_id)
+    except Exception as _e:
+        brand_block = ""
+
     # Module entry counts — one query per module (parallel)
     module_entries_tasks = [
         _sb(client, "GET",
@@ -450,6 +458,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "business_profile_raw": business_profile_raw or {},
         "practitioner_block": practitioner_block or "",
         "practitioner_profile_raw": practitioner_profile_raw or {},
+        "brand_block": brand_block or "",
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
@@ -727,6 +736,15 @@ def _format_practitioner_block(ctx: Dict[str, Any]) -> str:
     key relationships), then about the business they're running.
     Empty when no practitioner_profiles row exists."""
     block = (ctx.get("practitioner_block") or "").strip()
+    return block + "\n" if block else ""
+
+
+def _format_brand_block(ctx: Dict[str, Any]) -> str:
+    """Render the Brand Engine bundle context block. Sits between the
+    practitioner block and the business profile block — the Chief reads
+    about the human, then about the brand the human ships, then about
+    the business specifics."""
+    block = (ctx.get("brand_block") or "").strip()
     return block + "\n" if block else ""
 
 
@@ -1077,6 +1095,7 @@ PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull
 {_format_email_replies_block(ctx)}
 {_format_sms_block(ctx)}
 {_format_practitioner_block(ctx)}
+{_format_brand_block(ctx)}
 {_format_business_profile_block(ctx)}
 {_format_foundation_block(ctx)}
 CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
@@ -6338,6 +6357,33 @@ def _human_practitioner_summary(field_path: str, value: Any) -> str:
     return f"{field_path} updated"
 
 
+async def handle_propose_brand_kit_from_context(client, biz, action) -> Dict:
+    """Generate a brand kit proposal using the full available context
+    (archetype, voice profile, Strategy Track outputs, practitioner
+    profile). Returns the proposal — does NOT save. The frontend
+    confirms with the user, then calls /brand/save to persist."""
+    try:
+        result = await asyncio.to_thread(brand_engine.generate_from_context, biz["id"])
+    except Exception as e:
+        return _fail("propose_brand_kit_from_context", str(e))
+    if not result.get("ok"):
+        return _fail("propose_brand_kit_from_context", result.get("error", "generation failed"))
+    return {
+        "type": "propose_brand_kit_from_context",
+        "result": "Brand kit proposal generated.",
+        "label": "Brand kit proposed",
+        "kit": result["kit"],
+        "frontend_event": {
+            "name": "brand-kit-proposed",
+            "detail": {"business_id": biz["id"], "kit": result["kit"]},
+        },
+        "toast": {
+            "message": "Brand kit drafted — open About My Brand to review.",
+            "kind": "success",
+        },
+    }
+
+
 async def handle_update_practitioner_profile_field(client, biz, action) -> Dict:
     """Store a single practitioner_profiles field after explicit user
     confirmation. Practitioner data follows the user across all their
@@ -6500,6 +6546,8 @@ ACTION_HANDLERS = {
     "update_business_profile_field": handle_update_business_profile_field,
     # Practitioner profile (Build 3)
     "update_practitioner_profile_field": handle_update_practitioner_profile_field,
+    # Brand Engine v1
+    "propose_brand_kit_from_context": handle_propose_brand_kit_from_context,
 }
 
 
@@ -8554,6 +8602,8 @@ ACTIONS — NAVIGATION + MEMORY:
   — used ONLY after the user has explicitly confirmed a value for a previously-missing profile field. Never emit on speculation. The JIT-CAPTURE PRIORITY block (when present at the top of this prompt) tells you which field to ask about and what brand-voice phrasing to use.
   [ACTION:{{"type":"update_practitioner_profile_field","field_path":"full_legal_name|preferred_title|timezone|working_hours_start|working_hours_end|primary_accountant_name","value":"<their answer>"}}]
   — used ONLY after the user has explicitly confirmed a value for a practitioner-level field (about the human, not the business). Practitioner data follows the user across ALL their businesses — same human, same legal name, same timezone, same accountant. Never emit on speculation.
+  [ACTION:{{"type":"propose_brand_kit_from_context"}}]
+  — generates a starter brand kit proposal (colors, fonts, tagline, voice) using the business archetype, voice_profile, Strategy Track outputs, and practitioner profile. Use when the user asks to draft / propose / generate a brand kit, OR when their brand kit is empty and they ask anything brand-related (colors, design, site look, logo). The proposal is returned in the action result — the frontend will preview and the user confirms before save. Never overwrite an existing brand kit without the user explicitly asking to regenerate.
   [ACTION:{{"type":"forget","memory_content":"snippet to deactivate"}}]
   [ACTION:{{"type":"generate_briefing"}}]
   [ACTION:{{"type":"generate_insights"}}]

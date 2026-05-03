@@ -38,6 +38,7 @@ from sms_service import router as sms_router
 from foundation_router import router as foundation_router
 from business_profile_router import router as business_profile_router
 from practitioner_profile_router import router as practitioner_profile_router
+from brand_engine_router import router as brand_engine_router
 
 app = FastAPI(title="KMJ Intake Automation")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -55,6 +56,7 @@ app.include_router(whisper_router)
 app.include_router(email_router)
 app.include_router(stripe_router)
 app.include_router(sms_router)
+app.include_router(brand_engine_router)
 app.include_router(business_profile_router)
 app.include_router(practitioner_profile_router)
 app.include_router(foundation_router)

@@ -417,6 +417,35 @@ async def generate_operating_agreement(
     state_code: str,
     members: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
+    # Brand Engine v1: pull canonical legal name + governing state from
+    # the bundle. Operating agreements MUST use the practitioner's full
+    # legal name on the signature line — refuse to generate otherwise.
+    bundle = None
+    try:
+        from brand_engine import get_bundle as _be_get_bundle
+        bundle = _be_get_bundle(business_id)
+    except Exception as _e:
+        bundle = None
+
+    if bundle:
+        legal_name = (bundle.get("practitioner") or {}).get("full_legal_name")
+        if not legal_name:
+            return {
+                "ok": False,
+                "error": (
+                    "I need your full legal name before I can draft an operating "
+                    "agreement — tell me what name should appear on legal documents."
+                ),
+                "missing_field": "practitioner.full_legal_name",
+            }
+        canonical_state = (bundle.get("legal") or {}).get("governing_state") or state_code
+        canonical_business = (bundle.get("business") or {}).get("name") or business_name
+        # Promote the practitioner as the first signing member if the
+        # caller didn't already pass one. Caller-supplied members win.
+        members = members or [{"name": legal_name, "ownership_pct": 100}]
+        state_code = canonical_state
+        business_name = canonical_business
+
     text = _operating_agreement_text(business_name or "Your Company", state_code or "MI", members or [])
     async with httpx.AsyncClient() as client:
         saved = await _sb_post(client, "/foundation_documents", {
@@ -451,6 +480,32 @@ async def _generate_policy(business_id: str, kind: str, business_data: Dict[str,
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return {"ok": False, "error": "ANTHROPIC_API_KEY not configured"}
+
+    # Brand Engine v1: enrich business_data with canonical bundle fields so
+    # privacy policies and TOS reflect the actual legal name, governing
+    # state, contact email, and full required-disclaimer set. Caller-
+    # supplied keys still win — bundle only fills gaps.
+    try:
+        from brand_engine import get_bundle as _be_get_bundle, DISCLAIMER_PHRASES as _DPH
+        _bundle = _be_get_bundle(business_id) or {}
+        _legal = _bundle.get("legal") or {}
+        _practitioner = _bundle.get("practitioner") or {}
+        _footer = _bundle.get("footer") or {}
+        _biz = _bundle.get("business") or {}
+        business_data = dict(business_data or {})
+        business_data.setdefault("business_name", _biz.get("name"))
+        business_data.setdefault("governing_state", _legal.get("governing_state"))
+        business_data.setdefault("contact_email", _footer.get("contact_email"))
+        business_data.setdefault("legal_name", _practitioner.get("full_legal_name"))
+        required = _legal.get("required_disclaimers") or []
+        if required:
+            business_data.setdefault(
+                "required_disclaimers",
+                [_DPH.get(d, d) for d in required],
+            )
+    except Exception as _e:
+        logger.warning(f"_generate_policy: bundle enrichment skipped: {_e}")
+
     try:
         client = Anthropic(api_key=api_key)
         msg = client.messages.create(

@@ -14,15 +14,72 @@ DEPLOYMENT
        from public_site import router as public_site_router
        app.include_router(public_site_router)
 3. No env vars beyond the existing SUPABASE_URL + SUPABASE_ANON.
+
+Brand Engine v1 helpers (_brand_footer_html, _in_the_clear_badge_html)
+are available for any renderer to call. The brand-engine-migration.sql
+also promotes nested keys into the legacy flat keys this file reads
+at lines 741, 870, 1700 — so existing color reads now resolve to the
+real practitioner brand color instead of defaults. Smart Sites (Pass 3)
+will wire the helpers into every page footer.
 """
 
 import asyncio
+import html as _html
 import json
 import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+
+
+def _brand_footer_html(business_id: str) -> str:
+    """Return a small footer block (copyright + legal disclaimers) sourced
+    from the Brand Engine bundle. Returns "" if the bundle can't compose,
+    so callers can safely append unconditionally."""
+    if not business_id:
+        return ""
+    try:
+        from brand_engine import get_bundle as _be_get_bundle
+        bundle = _be_get_bundle(business_id) or {}
+    except Exception:
+        return ""
+    footer = bundle.get("footer") or {}
+    cr = footer.get("copyright_line") or ""
+    legal = footer.get("legal_footer") or ""
+    if not cr and not legal:
+        return ""
+    parts: List[str] = []
+    if cr:
+        parts.append(f'<div class="brand-copyright">{_html.escape(cr)}</div>')
+    if legal:
+        parts.append(f'<div class="brand-legal-footer">{_html.escape(legal)}</div>')
+    return (
+        '<footer class="brand-footer" style="margin-top:2rem;padding:1rem;'
+        'font-size:.8rem;color:#666;text-align:center;line-height:1.6;">'
+        + "".join(parts)
+        + "</footer>"
+    )
+
+
+def _in_the_clear_badge_html(business_id: str) -> str:
+    """Inline badge marking the business as foundation-complete. Smart
+    Sites in Pass 3 will style this properly via the
+    `.in-the-clear-badge` class. v1 ships unstyled markup."""
+    if not business_id:
+        return ""
+    try:
+        from brand_engine import get_bundle as _be_get_bundle
+        bundle = _be_get_bundle(business_id) or {}
+    except Exception:
+        return ""
+    if not (bundle.get("legal") or {}).get("in_the_clear"):
+        return ""
+    return (
+        '<span class="in-the-clear-badge" '
+        'title="Foundation Track complete">'
+        '✓ Business In The Clear</span>'
+    )
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
