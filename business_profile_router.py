@@ -9,7 +9,7 @@ registered BEFORE public_site_router in kmj_intake_automation.py
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -27,6 +27,13 @@ logger = logging.getLogger("business_profile_router")
 
 class SeedBody(BaseModel):
     business_type: str
+
+
+class SeedFromOnboardingBody(BaseModel):
+    business_id: str
+    business_type: str
+    tones: Optional[List[Any]] = None
+    voice_profile: Optional[Dict[str, Any]] = None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -71,6 +78,25 @@ def seed_from_archetype(business_id: str, body: SeedBody) -> JSONResponse:
     row = bp.apply_archetype_defaults(business_id, body.business_type)
     if row is None:
         return JSONResponse({"ok": False, "error": "unknown archetype"}, status_code=400)
+    return JSONResponse({"ok": True, "profile": row})
+
+
+@router.post("/profile/seed-from-onboarding")
+def seed_from_onboarding(body: SeedFromOnboardingBody) -> JSONResponse:
+    """
+    Called from OnboardingFlow.handleLaunch after the businesses row is
+    inserted. Idempotent: maps tones -> brand_voice, applies archetype
+    defaults, and only fills NULL fields if a profile already exists.
+    Failure is non-fatal on the client side.
+    """
+    row = bp.seed_from_onboarding(
+        business_id=body.business_id,
+        business_type=body.business_type,
+        tones=body.tones,
+        voice_profile=body.voice_profile,
+    )
+    if row is None:
+        return JSONResponse({"ok": False, "error": "seed failed"}, status_code=500)
     return JSONResponse({"ok": True, "profile": row})
 
 

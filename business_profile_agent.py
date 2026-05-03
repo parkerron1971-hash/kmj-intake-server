@@ -181,6 +181,159 @@ def upsert_profile(business_id: str, data: Dict[str, Any]) -> Optional[Dict[str,
     return result if isinstance(result, dict) else get_profile(business_id)
 
 
+TONE_TO_BRAND_VOICE = {
+    "warm": "warm",
+    "professional": "formal",
+    "bold": "direct",
+    "inspirational": "warm",
+    "educational": "formal",
+}
+
+
+def _tones_to_brand_voice(tones: Optional[List[Any]]) -> Optional[str]:
+    """Map onboarding tone selections to a single brand_voice. First mappable
+    tone wins. Returns None when nothing maps so the Chief asks later."""
+    if not tones:
+        return None
+    if isinstance(tones, str):
+        tones = [tones]
+    if not isinstance(tones, list):
+        return None
+    for t in tones:
+        if not t:
+            continue
+        key = str(t).strip().lower()
+        if key in TONE_TO_BRAND_VOICE:
+            return TONE_TO_BRAND_VOICE[key]
+    return None
+
+
+def seed_from_onboarding(
+    business_id: str,
+    business_type: str,
+    tones: Optional[List[Any]] = None,
+    voice_profile: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Idempotent seed called from OnboardingFlow.handleLaunch. Maps tones to
+    brand_voice, applies archetype defaults, and marks the row auto_seeded.
+
+    If a row already exists for this business, only NULL/empty fields are
+    filled. Never overwrites user-confirmed answers.
+    """
+    if not business_id:
+        return None
+
+    arche = get_archetype(business_type) or {}
+    brand_voice = _tones_to_brand_voice(tones)
+
+    # Build a "we know this much" baseline from the archetype.
+    seed: Dict[str, Any] = {
+        "business_type": business_type or "custom",
+        "service_models": arche.get("default_service_models") or [],
+        "pricing_models": arche.get("default_pricing_models") or [],
+        "typical_engagement_length": arche.get("default_engagement_length"),
+        "produces_deliverables": bool(arche.get("default_produces_deliverables")),
+        "sensitive_areas": arche.get("default_sensitive_areas") or {},
+        "auto_seeded": True,
+        "auto_seeded_at": datetime.now(timezone.utc).isoformat(),
+        "auto_seeded_source": "onboarding-flow",
+    }
+    if brand_voice:
+        seed["brand_voice"] = brand_voice
+
+    existing = get_profile(business_id)
+    if not existing:
+        return upsert_profile(business_id, seed)
+
+    # Idempotent fill: only set fields the existing row hasn't filled.
+    patch: Dict[str, Any] = {}
+    for k, v in seed.items():
+        if k in ("auto_seeded", "auto_seeded_at", "auto_seeded_source"):
+            continue
+        cur = existing.get(k)
+        is_empty = (
+            cur is None
+            or (isinstance(cur, str) and not cur.strip())
+            or (isinstance(cur, list) and len(cur) == 0)
+            or (isinstance(cur, dict) and not any(bool(x) for x in cur.values()))
+        )
+        if is_empty and v not in (None, "", [], {}):
+            patch[k] = v
+    if not patch:
+        return existing
+    # Stamp the audit columns even on partial fills so we know we touched the row.
+    patch["auto_seeded"] = True
+    patch.setdefault("auto_seeded_at", seed["auto_seeded_at"])
+    patch.setdefault("auto_seeded_source", "onboarding-flow")
+    return upsert_profile(business_id, patch)
+
+
+def import_from_strategy_track(business_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Pull service_models / pricing_models from strategy_tracks into the
+    business_profiles row. Called when complete_strategy_track fires.
+
+    Maps:
+      service_packages[].delivery_format -> service_models[]
+      pricing_strategy.tiers (any) -> pricing_models = ['package']
+
+    Idempotent: never overwrites a non-empty service_models/pricing_models
+    list. Returns the resulting profile or None if there's nothing to import.
+    """
+    if not business_id:
+        return None
+
+    tracks = _sb_get(
+        f"/strategy_tracks?business_id=eq.{business_id}"
+        f"&order=created_at.desc&limit=1"
+    ) or []
+    if not tracks:
+        return None
+    track = tracks[0]
+
+    packages = track.get("service_packages") or []
+    pricing = track.get("pricing_strategy") or {}
+
+    derived_service_models: List[str] = []
+    seen: set = set()
+    for pkg in packages:
+        if not isinstance(pkg, dict):
+            continue
+        df = (pkg.get("delivery_format") or "").lower()
+        if "group" in df:
+            tag = "group_program"
+        elif "course" in df or "digital" in df:
+            tag = "course_digital"
+        elif "retainer" in df:
+            tag = "retainer"
+        elif "done-for-you" in df or "dfy" in df:
+            tag = "done_for_you"
+        else:
+            tag = "one_on_one"
+        if tag not in seen:
+            derived_service_models.append(tag)
+            seen.add(tag)
+
+    derived_pricing_models: List[str] = []
+    if isinstance(pricing, dict) and pricing.get("tiers"):
+        derived_pricing_models = ["package"]
+
+    if not derived_service_models and not derived_pricing_models:
+        return None
+
+    profile = get_profile(business_id) or {}
+    patch: Dict[str, Any] = {}
+    if derived_service_models and not (profile.get("service_models") or []):
+        patch["service_models"] = derived_service_models
+    if derived_pricing_models and not (profile.get("pricing_models") or []):
+        patch["pricing_models"] = derived_pricing_models
+
+    if not patch:
+        return profile or None
+    return upsert_profile(business_id, patch)
+
+
 def apply_archetype_defaults(business_id: str, business_type: str) -> Optional[Dict[str, Any]]:
     """
     Pre-fill the profile from an archetype when the user first picks a type.

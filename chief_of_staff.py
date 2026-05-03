@@ -4078,6 +4078,14 @@ async def handle_complete_strategy_track(client, biz, action) -> Dict:
         "completed_at": datetime.now(timezone.utc).isoformat(),
     })
 
+    # Pull service_models / pricing_models into business_profiles from
+    # what the Strategy Coach saved. Non-fatal — if the profile import
+    # fails for any reason, the track still completes cleanly.
+    try:
+        await asyncio.to_thread(business_profile_agent.import_from_strategy_track, biz["id"])
+    except Exception as e:
+        logger.warning(f"[strategy_complete] business_profile import failed (non-fatal): {e}")
+
     return {
         "type": "complete_strategy_track",
         "result": "launched",
