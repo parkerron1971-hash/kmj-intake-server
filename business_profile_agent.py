@@ -49,6 +49,137 @@ OPTIONAL_FIELDS = (
     "sensitive_areas",
 )
 
+# ─── JIT capture (Build 2) ────────────────────────────────────
+# Fields the Chief asks about just-in-time when triggered by keywords
+# in the user's message. Order matters when proactive mode picks one
+# at a time (we walk this list and emit the first one that hasn't
+# been asked recently).
+
+JIT_FIELDS_V1 = [
+    "governing_state",
+    "produces_deliverables",
+    "sensitive_areas.health_advice",
+    "sensitive_areas.session_recording",
+    "sensitive_areas.physical_activity",
+]
+
+# Brand-voice-matched phrasing per field × voice. The Chief reads its
+# brand_voice and picks the matching wording so each ask sounds like
+# it does. Fallback is 'warm'.
+PHRASING: Dict[str, Dict[str, str]] = {
+    "governing_state": {
+        "warm":      "Hey — quick thing before I draft this. What state are you operating from? I want to get the governing law right.",
+        "formal":    "Before drafting this contract, I need to confirm your governing state. Which state are you operating from?",
+        "casual":    "Quick one — what state you running this from? Need to lock the governing law in.",
+        "ministry":  "Quick check before I put this together — what state is your ministry operating from?",
+        "corporate": "Required for the contract: governing state. Which state should I list?",
+        "direct":    "What state are you in? I need it for the contract.",
+    },
+    "sensitive_areas.health_advice": {
+        "warm":      "I noticed you mentioned wellness work. Does what you do involve health-related guidance? I want to make sure your contracts and policies have the right disclaimers.",
+        "formal":    "To ensure proper contract disclaimers, please confirm: does your work involve health-related advice or guidance?",
+        "casual":    "Heads up — does your work touch on health stuff? Need to know for the disclaimers.",
+        "ministry":  "I want to make sure we honor the right boundaries — does your work involve health-related counsel?",
+        "corporate": "Compliance question: does your service include health-related guidance? Affects required disclaimers.",
+        "direct":    "Does your work give health advice? Yes or no — affects your disclaimers.",
+    },
+    "sensitive_areas.session_recording": {
+        "warm":      "Just noticed you talked about recording. Do you regularly record your client sessions? If so, I'll add recording consent language to your contracts.",
+        "formal":    "Confirming: do client sessions in your practice include recording? If so, recording consent provisions are required.",
+        "casual":    "You record sessions? If yes, I'll bake consent language into your contracts.",
+        "ministry":  "Do you record your sessions or counseling calls? Want to make sure consent is handled properly.",
+        "corporate": "Recording confirmation needed: are client sessions recorded?",
+        "direct":    "Do you record sessions? Yes or no.",
+    },
+    "sensitive_areas.physical_activity": {
+        "warm":      "Sounds like there's some physical training in what you do. Does your work involve in-person physical activity with clients? If so, I'll add a liability waiver.",
+        "formal":    "Please confirm: does your service include in-person physical activity? If yes, a liability waiver is required.",
+        "casual":    "Physical training involved? If so, gotta add a liability waiver.",
+        "ministry":  "Does your work include physical activity with clients? Want to make sure we cover liability.",
+        "corporate": "Physical activity confirmation: triggers liability waiver requirements.",
+        "direct":    "Physical activity in your work? Yes or no — triggers a waiver.",
+    },
+    "produces_deliverables": {
+        "warm":      "Quick one — does your work produce things the client takes ownership of? Reports, files, designs, plans. Affects how I write your IP terms.",
+        "formal":    "To structure IP transfer terms correctly: does your work produce tangible deliverables that transfer to the client?",
+        "casual":    "You produce stuff clients keep? Files, designs, reports? Affects IP terms.",
+        "ministry":  "Does your service produce materials the client takes with them? Affects ownership terms.",
+        "corporate": "Deliverables question: does engagement produce client-owned tangible output?",
+        "direct":    "Do you produce deliverables clients own? Yes or no — drives IP language.",
+    },
+}
+
+_VALID_VOICES = {"warm", "formal", "casual", "ministry", "corporate", "direct"}
+
+
+def get_phrasing(field_path: str, brand_voice: Optional[str]) -> str:
+    """Return brand-voice-matched ask for a field. Fallback: warm."""
+    voice = (brand_voice or "warm").lower()
+    if voice not in _VALID_VOICES:
+        voice = "warm"
+    field_map = PHRASING.get(field_path) or {}
+    return field_map.get(voice) or field_map.get("warm") or ""
+
+
+def update_field(business_id: str, field_path: str, new_value: Any) -> Optional[Dict[str, Any]]:
+    """
+    Update a single business_profiles field. Handles dotted paths
+    (sensitive_areas.health_advice -> patches the JSON object).
+    Bumps profile_completeness by 0.1, capped at 1.0. Returns the
+    updated row.
+    """
+    if not business_id or not field_path:
+        return None
+
+    current = get_profile(business_id) or {}
+    update_payload: Dict[str, Any] = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if "." in field_path:
+        parent, child = field_path.split(".", 1)
+        parent_val = dict(current.get(parent) or {})
+        parent_val[child] = new_value
+        update_payload[parent] = parent_val
+    else:
+        update_payload[field_path] = new_value
+
+    try:
+        new_completeness = min(1.0, float(current.get("profile_completeness") or 0) + 0.1)
+    except (TypeError, ValueError):
+        new_completeness = float(current.get("profile_completeness") or 0)
+    update_payload["profile_completeness"] = round(new_completeness, 4)
+
+    with httpx.Client(timeout=HTTP_TIMEOUT) as client:
+        r = client.patch(
+            f"{_sb_url()}/rest/v1/business_profiles?business_id=eq.{business_id}",
+            headers=_sb_headers(),
+            content=json.dumps(update_payload),
+        )
+        if r.status_code >= 400:
+            logger.warning(f"update_field PATCH failed: {r.status_code} {r.text[:200]}")
+            return None
+
+    return get_profile(business_id)
+
+
+def get_missing_jit_fields(business_id: str) -> List[str]:
+    """Return JIT_FIELDS_V1 entries that are still null/missing on this profile."""
+    if not business_id:
+        return list(JIT_FIELDS_V1)
+    profile = get_profile(business_id) or {}
+    missing: List[str] = []
+    for field_path in JIT_FIELDS_V1:
+        if "." in field_path:
+            parent, child = field_path.split(".", 1)
+            parent_val = profile.get(parent) or {}
+            if parent_val.get(child) is None:
+                missing.append(field_path)
+        else:
+            if profile.get(field_path) is None:
+                missing.append(field_path)
+    return missing
+
 
 # ──────────────────────────────────────────────────────────────
 # Supabase REST helpers (mirrors foundation_agent.py pattern)

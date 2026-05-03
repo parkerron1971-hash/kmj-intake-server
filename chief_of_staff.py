@@ -372,6 +372,14 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
     except Exception as _e:
         business_profile_block = ""
 
+    try:
+        # Raw profile row — used by the JIT capture detector to read
+        # proactive_capture_enabled and brand_voice. Sync httpx fetch
+        # via asyncio.to_thread to avoid blocking the gather.
+        business_profile_raw = await asyncio.to_thread(business_profile_agent.get_profile, biz_id) or {}
+    except Exception as _e:
+        business_profile_raw = {}
+
     # Module entry counts — one query per module (parallel)
     module_entries_tasks = [
         _sb(client, "GET",
@@ -423,6 +431,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "sms_messages": sms_messages or [],
         "foundation_block": foundation_block or "",
         "business_profile_block": business_profile_block or "",
+        "business_profile_raw": business_profile_raw or {},
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
@@ -437,6 +446,151 @@ def _format_foundation_block(ctx: Dict[str, Any]) -> str:
     nothing to show."""
     block = (ctx.get("foundation_block") or "").strip()
     return block + "\n" if block else ""
+
+
+# ─────────────────────────────────────────────────────────────────────
+# JIT capture (Build 2)
+# ─────────────────────────────────────────────────────────────────────
+# Deterministic safety net: scan the user message for keywords that
+# correlate with each JIT field. When a hit lines up with a field that's
+# still missing on the business_profiles row AND we haven't asked about
+# it recently (chief_memories category=jit_asked), we inject a directive
+# at the TOP of the system prompt instructing the Chief to ask about it
+# in the user's brand_voice and emit the storage actions on confirmation.
+
+_JIT_TRIGGERS: Dict[str, List[str]] = {
+    "governing_state": [
+        "contract", "agreement", "engagement letter", "msa", "sow",
+        "statement of work", "draft a contract", "send a contract",
+        "what state", "jurisdiction", "terms of service", "privacy policy",
+    ],
+    "sensitive_areas.health_advice": [
+        "wellness", "fitness coach", "fitness coaching", "nutrition",
+        "diet", "weight loss", "therapy", "therapeutic", "mental health",
+        "anxiety", "depression", "trauma", "medical", "clinical",
+    ],
+    "sensitive_areas.session_recording": [
+        "record the call", "record our session", "recording session",
+        "save the recording", "video session", "zoom recording",
+        "share the recording", "session video", "session replay",
+    ],
+    "sensitive_areas.physical_activity": [
+        "workout", "training session", "exercise routine", "yoga class",
+        "in person session", "in-person session", "physical training",
+        "gym session", "athletic", "personal training session",
+    ],
+    "produces_deliverables": [
+        "deliver the", "deliverable", "final files", "final designs",
+        "send the report", "send the plan", "hand off the work",
+        "client owns", "transfer ownership", "ip transfer", "intellectual property",
+    ],
+}
+
+
+def _detect_profile_topics(user_message: str, missing_fields: List[str]) -> List[str]:
+    """Lowercase substring scan of the user message against trigger
+    keywords. Returns field_paths whose triggers fired AND are still
+    missing. Each field can fire at most once per message."""
+    if not user_message:
+        return []
+    msg = user_message.lower()
+    hits: List[str] = []
+    for field_path in missing_fields:
+        for kw in _JIT_TRIGGERS.get(field_path, []):
+            if kw in msg:
+                hits.append(field_path)
+                break
+    return hits
+
+
+def _was_recently_asked(memories: List[Dict[str, Any]], field_path: str, hours: int = 24) -> bool:
+    """True if a chief_memories row exists with category='jit_asked' and
+    content marker 'jit_asked:<field>' within the last `hours`."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    marker = f"jit_asked:{field_path}"
+    for mem in memories or []:
+        if mem.get("category") != "jit_asked":
+            continue
+        if marker not in (mem.get("content") or ""):
+            continue
+        created = mem.get("created_at")
+        if not created:
+            continue
+        try:
+            created_dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+            if created_dt >= cutoff:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
+    """Compose the directive injected at the top of the Chief system
+    prompt when the user's message signals a missing profile field
+    (or, in proactive mode, at any natural pause). Returns "" when
+    nothing should fire.
+
+    Built as a plain string (NOT an f-string) so the JSON action
+    examples don't have to escape every literal brace. The result is
+    later inserted into the system prompt via concatenation, not
+    f-string interpolation, so braces stay literal.
+    """
+    biz_id = (ctx.get("business") or {}).get("id")
+    if not biz_id:
+        return ""
+
+    try:
+        missing = business_profile_agent.get_missing_jit_fields(biz_id)
+    except Exception as e:
+        logger.warning(f"[jit] get_missing_jit_fields failed: {e}")
+        return ""
+    if not missing:
+        return ""
+
+    memories = ctx.get("memories") or []
+
+    # Reactive: did the user message hit a trigger for a missing field?
+    triggered = _detect_profile_topics(user_message or "", missing)
+    triggered = [f for f in triggered if not _was_recently_asked(memories, f)]
+
+    # Proactive: only if user opted in AND nothing reactive fired.
+    if not triggered:
+        profile = ctx.get("business_profile_raw") or {}
+        if profile.get("proactive_capture_enabled"):
+            for f in missing:
+                if not _was_recently_asked(memories, f, hours=24):
+                    triggered = [f]
+                    break
+
+    if not triggered:
+        return ""
+
+    brand_voice = ((ctx.get("business_profile_raw") or {}).get("brand_voice") or "warm")
+
+    lines: List[str] = []
+    lines.append("JIT-CAPTURE PRIORITY (the user just signaled a missing profile field):")
+    for f in triggered:
+        phrasing = business_profile_agent.get_phrasing(f, brand_voice)
+        lines.append("  - missing field: " + f)
+        lines.append("    suggested ask (use brand_voice='" + brand_voice + "'): " + phrasing)
+        lines.append(
+            "    when user confirms an answer, emit: "
+            '[ACTION:{"type":"update_business_profile_field","field_path":"'
+            + f + '","value":<their normalized answer>}]'
+        )
+        lines.append(
+            "    AND emit: "
+            '[ACTION:{"type":"remember","category":"jit_asked","source":"ai_inferred","content":"jit_asked:'
+            + f + '","importance":3}]'
+        )
+    lines.append("RULES:")
+    lines.append("- Ask ONE field per response, not all at once")
+    lines.append("- Frame the question as helpful context, not a form")
+    lines.append("- Wait for the user to confirm before emitting update_business_profile_field")
+    lines.append("- After storing, briefly reflect: 'Got it.'")
+    lines.append("- Never invent values. If the user is vague, ask for clarification before emitting.")
+    return "\n".join(lines) + "\n\n"
 
 
 def _format_business_profile_block(ctx: Dict[str, Any]) -> str:
@@ -1965,7 +2119,8 @@ async def handle_navigate(client, biz, action) -> Dict:
     }
 
 
-VALID_MEMORY_CATEGORIES = {"preference", "pattern", "context", "decision", "boundary", "goal", "standing_instruction", "other"}
+VALID_MEMORY_CATEGORIES = {"preference", "pattern", "context", "decision", "boundary", "goal", "standing_instruction", "other", "jit_asked"}
+VALID_MEMORY_SOURCES = {"user_stated", "ai_inferred", "manual_added"}
 
 # Stop words excluded from memory dedup signature
 _MEMORY_STOPWORDS = {
@@ -2031,11 +2186,15 @@ async def handle_remember(client, biz, action) -> Dict:
             "nav": _nav("operate"),  # no specific destination
         }
 
+    source = (action.get("source") or "user_stated").lower().strip()
+    if source not in VALID_MEMORY_SOURCES:
+        source = "user_stated"
+
     inserted = await _sb(client, "POST", "/chief_memories", {
         "business_id": biz["id"],
         "category": category,
         "content": content[:2000],
-        "source": "user_stated",
+        "source": source,
         "importance": importance,
     })
     if not inserted:
@@ -5993,6 +6152,75 @@ async def handle_set_timer(client, biz, action) -> Dict:
     return _fail("set_timer", f"unknown timer_type '{timer_type}'")
 
 
+# ─────────────────────────────────────────────────────────────────────
+# JIT capture: store a single field on business_profiles after the user
+# has confirmed it. Called when the Chief emits
+#   [ACTION:{"type":"update_business_profile_field",
+#            "field_path":"governing_state","value":"Michigan"}]
+# Returns a `toast` field on the result so the frontend's generic toast
+# handler shows "Got it — governing state is Michigan".
+# ─────────────────────────────────────────────────────────────────────
+
+def _human_jit_summary(field_path: str, value: Any) -> str:
+    if field_path == "governing_state":
+        return f"governing state is {value}"
+    if field_path == "produces_deliverables":
+        return f"produces deliverables: {'yes' if value else 'no'}"
+    if field_path.startswith("sensitive_areas."):
+        flag = field_path.split(".", 1)[1].replace("_", " ")
+        if isinstance(value, bool):
+            bool_val = value
+        else:
+            bool_val = str(value).strip().lower() in ("yes", "true", "y", "1")
+        return f"{flag}: {'yes' if bool_val else 'no'}"
+    return f"{field_path} updated"
+
+
+async def handle_update_business_profile_field(client, biz, action) -> Dict:
+    """Store a single profile field after explicit user confirmation."""
+    field_path = (action.get("field_path") or "").strip()
+    value = action.get("value")
+    if not field_path or value is None:
+        return _fail("update_business_profile_field", "Missing field_path or value")
+
+    # Coerce yes/no/true/false strings to bool for boolean fields.
+    bool_paths = {
+        "produces_deliverables",
+        "sensitive_areas.health_advice",
+        "sensitive_areas.session_recording",
+        "sensitive_areas.physical_activity",
+    }
+    if field_path in bool_paths and not isinstance(value, bool):
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in ("yes", "true", "y", "1"):
+                value = True
+            elif v in ("no", "false", "n", "0"):
+                value = False
+
+    try:
+        updated = await asyncio.to_thread(
+            business_profile_agent.update_field, biz["id"], field_path, value
+        )
+    except Exception as e:
+        logger.warning(f"[jit] update_field failed: {e}")
+        return _fail("update_business_profile_field", str(e))
+
+    if updated is None:
+        return _fail("update_business_profile_field", "write returned no row")
+
+    summary = _human_jit_summary(field_path, value)
+    return {
+        "type": "update_business_profile_field",
+        "result": f"Stored {field_path} = {value}",
+        "label": f"Learned: {summary}",
+        "toast": {
+            "message": f"Got it — {summary}",
+            "kind": "success",
+        },
+    }
+
+
 ACTION_HANDLERS = {
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
@@ -6070,6 +6298,8 @@ ACTION_HANDLERS = {
     "remove_testimonial":         handle_remove_testimonial,
     # Timers & alarms
     "set_timer":                  handle_set_timer,
+    # JIT capture (Build 2)
+    "update_business_profile_field": handle_update_business_profile_field,
 }
 
 
@@ -8120,6 +8350,8 @@ ACTIONS — NAVIGATION + MEMORY:
   [ACTION:{{"type":"open_calendar"}}]    — shortcut: navigate straight to the Calendar tab.
   [ACTION:{{"type":"show_revenue"}}]     — shortcut: open OPERATE → Invoices in Revenue view.
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
+  [ACTION:{{"type":"update_business_profile_field","field_path":"governing_state|produces_deliverables|sensitive_areas.health_advice|sensitive_areas.session_recording|sensitive_areas.physical_activity","value":"<their answer>"}}]
+  — used ONLY after the user has explicitly confirmed a value for a previously-missing profile field. Never emit on speculation. The JIT-CAPTURE PRIORITY block (when present at the top of this prompt) tells you which field to ask about and what brand-voice phrasing to use.
   [ACTION:{{"type":"forget","memory_content":"snippet to deactivate"}}]
   [ACTION:{{"type":"generate_briefing"}}]
   [ACTION:{{"type":"generate_insights"}}]
@@ -8707,6 +8939,17 @@ async def chief_chat(req: ChatRequest):
                 sentiment=sentiment,
                 habit_block=habit_block,
             )
+
+            # JIT capture: prepend a directive at the very top of the prompt
+            # when the user message hits a trigger for a missing profile
+            # field (or, in proactive mode, when there's a natural pause).
+            # Concatenated, not f-string'd, so JSON braces stay literal.
+            try:
+                jit_directive = _build_jit_directive(ctx, req.message or "")
+                if jit_directive:
+                    system = jit_directive + system
+            except Exception as _jit_err:
+                logger.warning(f"[jit] directive build failed (non-fatal): {_jit_err}")
             effective_message = req.message
             if req.mode == "strategy_coach" and is_coach_pause:
                 effective_message = (

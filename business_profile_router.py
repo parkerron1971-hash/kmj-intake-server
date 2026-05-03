@@ -108,3 +108,22 @@ def required_disclaimers(business_id: str) -> JSONResponse:
 @router.get("/profile/{business_id}/is-complete")
 def complete(business_id: str) -> JSONResponse:
     return JSONResponse({"ok": True, "complete": bp.is_complete(business_id)})
+
+
+class ProactiveModeBody(BaseModel):
+    enabled: bool
+
+
+@router.post("/profile/{business_id}/proactive-mode")
+def set_proactive_mode(business_id: str, body: ProactiveModeBody) -> JSONResponse:
+    """
+    Toggle the user-controlled proactive JIT capture flag. When enabled,
+    the Chief may bring up one missing profile field at natural pauses
+    even without a reactive keyword trigger. Off by default.
+    """
+    if not business_id:
+        return JSONResponse({"ok": False, "error": "business_id required"}, status_code=400)
+    row = bp.upsert_profile(business_id, {"proactive_capture_enabled": bool(body.enabled)})
+    if row is None:
+        return JSONResponse({"ok": False, "error": "save failed"}, status_code=500)
+    return JSONResponse({"ok": True, "enabled": bool(body.enabled), "profile": row})
