@@ -236,9 +236,24 @@ def _compose_design(business: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _compose_voice(business: Dict[str, Any], profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _compose_voice(
+    business: Dict[str, Any],
+    profile: Optional[Dict[str, Any]],
+    practitioner: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Compose the bundle's voice section.
+
+    Pass 2.5b additions:
+      - Surface `audience` and `tone_original` (already captured but not
+        previously exposed in the bundle).
+      - Pull practitioner-level voice depth fields (samples, do's/don'ts,
+        greeting/sign-off styles) so artifact paths can read them off
+        the same canonical bundle.
+    """
     voice_profile = business.get("voice_profile") or {}
     canonical_voice = (profile or {}).get("brand_voice") if profile else None
+    practitioner = practitioner or {}
+
     tones_raw = voice_profile.get("communication_style")
     if isinstance(tones_raw, list):
         tones = tones_raw
@@ -246,11 +261,21 @@ def _compose_voice(business: Dict[str, Any], profile: Optional[Dict[str, Any]]) 
         tones = [voice_profile.get("tone")]
     else:
         tones = []
+
     return {
         "brand_voice": canonical_voice or voice_profile.get("tone") or "warm",
         "tones": tones,
         "personality": voice_profile.get("personality"),
         "communication_style": voice_profile.get("communication_style"),
+        # Surfaced (Pass 2.5b)
+        "audience": voice_profile.get("audience"),
+        "tone_original": voice_profile.get("tone_original"),
+        # Voice depth — practitioner-level (Pass 2.5b)
+        "voice_samples": practitioner.get("voice_samples") or {},
+        "voice_dos": practitioner.get("voice_dos") or [],
+        "voice_donts": practitioner.get("voice_donts") or [],
+        "greeting_style": practitioner.get("greeting_style"),
+        "signoff_style": practitioner.get("signoff_style"),
     }
 
 
@@ -416,7 +441,7 @@ def get_bundle(business_id: str) -> Dict[str, Any]:
         "logo_url": brand_kit.get("logo_url"),
     }
     practitioner_section = _compose_practitioner(practitioner, business)
-    voice_section = _compose_voice(business, profile)
+    voice_section = _compose_voice(business, profile, practitioner)
     design_section = _compose_design(business)
     design_section["vibe_family"] = VIBE_FAMILY_MAP.get(voice_section["brand_voice"], "warm")
     design_section["tone_words"] = brand_kit.get("tone_words") or []
@@ -723,6 +748,11 @@ def chief_context_block(business_id: str) -> str:
     tone_words = design.get("tone_words") or []
     if tone_words:
         lines.append(f"  Tone words: {', '.join(tone_words[:5])}")
+    # Pass 2.5b: surface previously-captured-but-hidden fields
+    if voice.get("personality"):
+        lines.append(f"  Personality: {voice['personality']}")
+    if voice.get("audience"):
+        lines.append(f"  Audience: {voice['audience']}")
     lines.append(f"  Practitioner display name: {practitioner.get('display_name') or 'The Practitioner'}")
     if practitioner.get("preferred_title"):
         lines.append(f"  Title: {practitioner['preferred_title']}")
