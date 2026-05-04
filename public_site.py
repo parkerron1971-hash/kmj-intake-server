@@ -81,6 +81,46 @@ def _in_the_clear_badge_html(business_id: str) -> str:
         '✓ Business In The Clear</span>'
     )
 
+
+def _brand_head_meta_tags(business_id: str) -> str:
+    """Return favicon link + Open Graph + Twitter Card meta tags sourced
+    from the Brand Engine bundle's assets section. Inject before
+    </head> in any rendered public page. Returns "" when no relevant
+    assets are configured, so callers can append unconditionally."""
+    if not business_id:
+        return ""
+    try:
+        from brand_engine import get_bundle as _be_get_bundle
+        bundle = _be_get_bundle(business_id) or {}
+    except Exception:
+        return ""
+    assets = bundle.get("assets") or {}
+    favicon = assets.get("favicon")
+    social_card = assets.get("social_card")
+    business = bundle.get("business") or {}
+    biz_name = (business.get("name") or "").replace('"', '&quot;')
+    tagline = (business.get("tagline") or "").replace('"', '&quot;')
+
+    parts: List[str] = []
+    if favicon:
+        parts.append(f'<link rel="icon" type="image/png" href="{favicon}">')
+        parts.append(f'<link rel="shortcut icon" href="{favicon}">')
+        parts.append(f'<link rel="apple-touch-icon" href="{favicon}">')
+    if social_card:
+        parts.append(f'<meta property="og:image" content="{social_card}">')
+        if biz_name:
+            parts.append(f'<meta property="og:title" content="{biz_name}">')
+        if tagline:
+            parts.append(f'<meta property="og:description" content="{tagline}">')
+        parts.append('<meta property="og:type" content="website">')
+        parts.append('<meta name="twitter:card" content="summary_large_image">')
+        parts.append(f'<meta name="twitter:image" content="{social_card}">')
+        if biz_name:
+            parts.append(f'<meta name="twitter:title" content="{biz_name}">')
+        if tagline:
+            parts.append(f'<meta name="twitter:description" content="{tagline}">')
+    return "\n    ".join(parts)
+
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse

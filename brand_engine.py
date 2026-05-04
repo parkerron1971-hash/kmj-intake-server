@@ -202,6 +202,18 @@ def _normalize_brand_kit(kit: Dict[str, Any]) -> Dict[str, Any]:
     if out.get("font_body") and not font_pair.get("body"):
         out.setdefault("font_pair", {})["body"] = out["font_body"]
 
+    # Asset registry (Pass 2.5a): mirror assets.primary <-> logo_url so
+    # legacy single-logo readers and the new variant-aware bundle stay
+    # in lockstep on every save. Idempotent.
+    assets = out.get("assets")
+    if not isinstance(assets, dict):
+        assets = {}
+    if out.get("logo_url") and not assets.get("primary"):
+        assets["primary"] = out["logo_url"]
+    if assets.get("primary") and not out.get("logo_url"):
+        out["logo_url"] = assets["primary"]
+    out["assets"] = assets
+
     return out
 
 
@@ -356,6 +368,8 @@ def _empty_bundle(business_id: str) -> Dict[str, Any]:
                    "contact_email": None},
         "signature_block": {"name": "The Practitioner", "title": None,
                             "business_name": "Unknown", "site_url": None},
+        "assets": {"primary": None, "logo_light": None, "logo_dark": None,
+                   "square": None, "favicon": None, "social_card": None},
         "snapshot_count": 0,
         "meta": {"completeness": 0.0, "missing_fields": ["business.id"],
                  "has_brand_kit": False},
@@ -411,6 +425,21 @@ def get_bundle(business_id: str) -> Dict[str, Any]:
     footer_section = _compose_footer(business, practitioner_section, legal_section, site_slug)
     signature_section = _compose_signature(practitioner_section, business, site_slug)
 
+    # Asset registry (Pass 2.5a). Six variants. Missing variants fall
+    # back to primary; primary falls back to legacy logo_url; both fall
+    # back to None. Smart Sites (Pass 3) and downstream rendering pick
+    # the right variant per surface.
+    assets_raw = brand_kit.get("assets") or {}
+    primary_logo = assets_raw.get("primary") or brand_kit.get("logo_url")
+    assets_section = {
+        "primary": primary_logo,
+        "logo_light": assets_raw.get("logo_light") or primary_logo,
+        "logo_dark": assets_raw.get("logo_dark") or primary_logo,
+        "square": assets_raw.get("square") or primary_logo,
+        "favicon": assets_raw.get("favicon"),
+        "social_card": assets_raw.get("social_card"),
+    }
+
     bundle = {
         "business": business_section,
         "practitioner": practitioner_section,
@@ -419,6 +448,7 @@ def get_bundle(business_id: str) -> Dict[str, Any]:
         "legal": legal_section,
         "footer": footer_section,
         "signature_block": signature_section,
+        "assets": assets_section,
         "snapshot_count": len(business.get("brand_kit_history") or []),
     }
     completeness, missing = _compute_completeness(bundle)
@@ -706,9 +736,172 @@ def chief_context_block(business_id: str) -> str:
     snap_count = bundle.get("snapshot_count") or 0
     if snap_count:
         lines.append(f"  Brand history snapshots available: {snap_count}")
+
+    # Asset coverage (Pass 2.5a)
+    assets = bundle.get("assets") or {}
+    if assets:
+        configured = sum(1 for v in assets.values() if v)
+        total_variants = len(assets)
+        if configured == total_variants:
+            lines.append(f"  Brand assets: all {total_variants} variants configured")
+        elif configured > 0:
+            missing_variants = [k for k, v in assets.items() if not v]
+            lines.append(
+                f"  Brand assets: {configured}/{total_variants} variants set. "
+                f"Missing: {', '.join(missing_variants)}"
+            )
+        else:
+            lines.append("  Brand assets: NONE configured. Suggest uploading a primary logo first.")
+
     lines.append(
         "When drafting any client-facing output (email, invoice, contract, page), "
         "prefer the bundle for signature, footer, colors, and required disclaimers. "
         "If the user asks 'what does the system know about my brand', summarize this section."
     )
     return "\n".join(lines) + "\n"
+
+
+# ─────────────────────────────────────────────────────────────
+# Asset registry (Pass 2.5a)
+# ─────────────────────────────────────────────────────────────
+
+ASSET_VARIANTS: Dict[str, Dict[str, Any]] = {
+    "primary":     {"max_size_mb": 5, "preferred_format": "png"},
+    "logo_light":  {"max_size_mb": 5, "preferred_format": "png"},
+    "logo_dark":   {"max_size_mb": 5, "preferred_format": "png"},
+    "square":      {"max_size_mb": 5, "preferred_format": "png"},
+    "favicon":     {"max_size_mb": 1, "preferred_format": "png"},
+    "social_card": {"max_size_mb": 5, "preferred_format": "png"},
+}
+
+_ALLOWED_ASSET_EXTS = {"png", "jpg", "jpeg", "svg", "webp", "gif", "ico"}
+_STORAGE_BUCKET = "business-assets"
+
+
+def _storage_upload(storage_path: str, file_bytes: bytes, content_type: str) -> Optional[str]:
+    """POST raw bytes to Supabase Storage REST. Returns the public URL on
+    success, None on failure. Uses the same anon key the rest of the
+    codebase uses; the bucket's RLS policy must allow uploads (existing
+    permissive policy on business-assets does)."""
+    base = _sb_url()
+    if not base:
+        logger.warning("storage_upload: SUPABASE_URL not configured")
+        return None
+    url = f"{base}/storage/v1/object/{_STORAGE_BUCKET}/{storage_path}"
+    headers = {
+        "apikey": _sb_anon(),
+        "Authorization": f"Bearer {_sb_anon()}",
+        "Content-Type": content_type or "application/octet-stream",
+        # `x-upsert: true` lets re-uploading the same path replace the object.
+        "x-upsert": "true",
+    }
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            r = client.post(url, content=file_bytes, headers=headers)
+        if r.status_code >= 400:
+            logger.warning(f"storage upload {storage_path}: {r.status_code} {r.text[:200]}")
+            return None
+    except httpx.HTTPError as e:
+        logger.warning(f"storage upload {storage_path} failed: {e}")
+        return None
+    # Public URL — bucket has public read RLS already in place.
+    return f"{base}/storage/v1/object/public/{_STORAGE_BUCKET}/{storage_path}"
+
+
+def upload_asset(
+    business_id: str,
+    variant: str,
+    file_bytes: bytes,
+    filename: str,
+    content_type: str,
+) -> Dict[str, Any]:
+    """Upload an asset to Supabase Storage and update brand_kit.assets[variant].
+    Returns {ok, url?, variant?, error?}."""
+    if not business_id:
+        return {"ok": False, "error": "business_id required"}
+    if variant not in ASSET_VARIANTS:
+        return {"ok": False, "error": f"Unknown variant: {variant}"}
+
+    max_size = ASSET_VARIANTS[variant]["max_size_mb"] * 1024 * 1024
+    if len(file_bytes) > max_size:
+        return {
+            "ok": False,
+            "error": f"File exceeds {ASSET_VARIANTS[variant]['max_size_mb']}MB limit",
+        }
+
+    if not (content_type or "").startswith("image/"):
+        return {"ok": False, "error": f"Content type must be an image, got {content_type}"}
+
+    ext = (filename.rsplit(".", 1)[-1] if "." in (filename or "") else "png").lower()
+    if ext not in _ALLOWED_ASSET_EXTS:
+        return {"ok": False, "error": f"Unsupported file extension: {ext}"}
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    storage_path = f"brand/{business_id}/{variant}-{timestamp}.{ext}"
+
+    public_url = _storage_upload(storage_path, file_bytes, content_type)
+    if not public_url:
+        return {"ok": False, "error": "Storage upload failed"}
+
+    # Update brand_kit.assets[variant] in the businesses row.
+    business = _safe_get_one("businesses", "id", business_id)
+    if not business:
+        return {"ok": False, "error": "Business not found"}
+
+    settings = dict(business.get("settings") or {})
+    brand_kit = dict(settings.get("brand_kit") or {})
+    assets = dict(brand_kit.get("assets") or {})
+    assets[variant] = public_url
+    brand_kit["assets"] = assets
+    if variant == "primary":
+        # Mirror to legacy logo_url so existing readers (MediaLibrary,
+        # OnboardingChecklist, etc.) keep resolving.
+        brand_kit["logo_url"] = public_url
+    settings["brand_kit"] = brand_kit
+
+    res = _sb_patch(
+        f"/businesses?id=eq.{business_id}",
+        {"settings": settings, "updated_at": datetime.now(timezone.utc).isoformat()},
+    )
+    if res is None:
+        return {"ok": False, "error": "Database update failed"}
+
+    return {"ok": True, "url": public_url, "variant": variant}
+
+
+def remove_asset(business_id: str, variant: str) -> Dict[str, Any]:
+    """Clear a variant from the asset registry. Does NOT delete the
+    underlying storage object — storage cleanup is a v2 lifecycle job
+    so reverts can re-link the previous URL if needed."""
+    if not business_id:
+        return {"ok": False, "error": "business_id required"}
+    if variant not in ASSET_VARIANTS:
+        return {"ok": False, "error": f"Unknown variant: {variant}"}
+
+    business = _safe_get_one("businesses", "id", business_id)
+    if not business:
+        return {"ok": False, "error": "Business not found"}
+
+    settings = dict(business.get("settings") or {})
+    brand_kit = dict(settings.get("brand_kit") or {})
+    assets = dict(brand_kit.get("assets") or {})
+
+    if variant in assets:
+        del assets[variant]
+    brand_kit["assets"] = assets
+
+    if variant == "primary":
+        # Removing primary also clears legacy logo_url; the asset_section
+        # composer will fall back through to None.
+        brand_kit.pop("logo_url", None)
+
+    settings["brand_kit"] = brand_kit
+
+    res = _sb_patch(
+        f"/businesses?id=eq.{business_id}",
+        {"settings": settings, "updated_at": datetime.now(timezone.utc).isoformat()},
+    )
+    if res is None:
+        return {"ok": False, "error": "Database update failed"}
+
+    return {"ok": True, "variant": variant}
