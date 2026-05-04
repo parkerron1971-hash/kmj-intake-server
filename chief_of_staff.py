@@ -50,6 +50,8 @@ import practitioner_profile_agent
 from practitioner_profile_agent import chief_context_block as pp_chief_context_block
 import brand_engine
 from brand_engine import chief_context_block as brand_engine_chief_context_block
+import voice_depth_agent
+from voice_depth_agent import chief_voice_context_block as voice_chief_context_block
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -255,16 +257,32 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     ).strip()
 
 
-async def _draft_short(client: httpx.AsyncClient, biz: Dict, system: str, user_msg: str) -> str:
-    """Use for embedded draft generation inside action handlers (draft_nurture/draft_email)."""
+async def _draft_short(
+    client: httpx.AsyncClient,
+    biz: Dict,
+    system: str,
+    user_msg: str,
+    voice_payload: str = "",
+) -> str:
+    """Embedded draft generation inside action handlers
+    (draft_nurture / draft_email / etc.).
+
+    Pass 2.5b: `voice_payload` is a compact voice-depth string from
+    voice_depth_agent.voice_depth_payload_for_inner_call(owner_id).
+    When non-empty, it's prepended to the system prompt so the inner
+    Claude call binds the actual drafted text to the practitioner's
+    samples + do's/don'ts + greeting + sign-off. Default empty string
+    keeps backwards compatibility for any callers that don't thread it.
+    """
     key = _anthropic_key()
     if not key:
         return ""
+    full_system = (voice_payload + "\n" + system) if voice_payload else system
     try:
         resp = await client.post(ANTHROPIC_API_URL, headers={
             "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json",
         }, json={
-            "model": DRAFT_MODEL, "max_tokens": 500, "system": system,
+            "model": DRAFT_MODEL, "max_tokens": 500, "system": full_system,
             "messages": [{"role": "user", "content": user_msg}],
         }, timeout=HTTP_TIMEOUT)
     except httpx.HTTPError:
@@ -404,6 +422,17 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
     except Exception as _e:
         brand_block = ""
 
+    # Voice Depth (Pass 2.5b) — practitioner-level voice samples / rules /
+    # greeting / sign-off / pending edit observations. Keys on owner_id
+    # because voice depth follows the human across all their businesses.
+    try:
+        voice_block = (
+            await asyncio.to_thread(voice_chief_context_block, owner_id_for_pp)
+            if owner_id_for_pp else ""
+        )
+    except Exception as _e:
+        voice_block = ""
+
     # Module entry counts — one query per module (parallel)
     module_entries_tasks = [
         _sb(client, "GET",
@@ -459,6 +488,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "practitioner_block": practitioner_block or "",
         "practitioner_profile_raw": practitioner_profile_raw or {},
         "brand_block": brand_block or "",
+        "voice_block": voice_block or "",
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
@@ -612,6 +642,51 @@ def _detect_practitioner_topics(user_message: str, missing_fields: List[str]) ->
     return hits
 
 
+# ─── Voice Depth JIT triggers (Pass 2.5b) ──────────────────────
+# Third namespace alongside business (jit_asked:) and practitioner
+# (jit_asked_practitioner:). Voice asks key on jit_asked_voice:.
+
+_JIT_VOICE_TRIGGERS: Dict[str, List[str]] = {
+    "voice_samples.discovery_followup": [
+        "draft a follow-up", "draft a follow up", "follow-up email",
+        "follow up email", "follow up with", "after our call",
+        "reach back out", "post-discovery", "after the discovery",
+    ],
+    "voice_samples.launch_announcement": [
+        "draft a launch", "announce", "announcement email",
+        "go-live email", "go live email", "send the launch",
+        "campaign launch", "newsletter announcement",
+    ],
+    "voice_samples.casual_nurture": [
+        "casual check-in", "casual check in", "nurture email",
+        "stay in touch", "keep in touch", "drop a quick note",
+        "casual update", "friendly check-in", "friendly check in",
+    ],
+    "greeting_style": [
+        "how should i open", "greeting", "salutation",
+        "open the email", "how do i start the email",
+    ],
+    "signoff_style": [
+        "sign off", "sign-off", "signature line", "close the email",
+        "end the email", "how do i sign",
+    ],
+}
+
+
+def _detect_voice_topics(user_message: str, missing_fields: List[str]) -> List[str]:
+    """Mirror of _detect_practitioner_topics scoped to voice fields."""
+    if not user_message:
+        return []
+    msg = user_message.lower()
+    hits: List[str] = []
+    for field_path in missing_fields:
+        for kw in _JIT_VOICE_TRIGGERS.get(field_path, []):
+            if kw in msg:
+                hits.append(field_path)
+                break
+    return hits
+
+
 def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     """Compose the directive injected at the top of the Chief system
     prompt when the user's message signals a missing profile field
@@ -725,9 +800,63 @@ def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
             p_lines.append("- Never invent values. If the user is vague, ask for clarification first.")
             practitioner_section = "\n".join(p_lines) + "\n\n"
 
-    if not biz_section and not practitioner_section:
+    voice_section = ""
+    if voice_depth_agent and owner_id:
+        try:
+            v_missing = voice_depth_agent.get_missing_voice_jit_fields(owner_id)
+        except Exception as e:
+            logger.warning(f"[jit] voice get_missing_voice_jit_fields failed: {e}")
+            v_missing = []
+
+        v_triggered: List[str] = []
+        if v_missing:
+            v_triggered = _detect_voice_topics(user_message or "", v_missing)
+            v_triggered = [
+                f for f in v_triggered
+                if not _was_recently_asked(memories, f, prefix="jit_asked_voice:")
+            ]
+            if not v_triggered:
+                pp = ctx.get("practitioner_profile_raw") or {}
+                if pp.get("proactive_capture_enabled"):
+                    for f in v_missing:
+                        if not _was_recently_asked(memories, f, hours=24, prefix="jit_asked_voice:"):
+                            v_triggered = [f]
+                            break
+
+        if v_triggered:
+            v_lines: List[str] = []
+            v_lines.append("JIT-CAPTURE PRIORITY (voice depth — how their writing actually sounds):")
+            for f in v_triggered:
+                phrasing = voice_depth_agent.get_voice_phrasing(f, brand_voice)
+                v_lines.append("  - missing voice field: " + f)
+                v_lines.append("    suggested ask (use brand_voice='" + brand_voice + "'): " + phrasing)
+                if f.startswith("voice_samples."):
+                    slot = f.split(".", 1)[1]
+                    v_lines.append(
+                        "    when user provides a real sample, emit: "
+                        '[ACTION:{"type":"update_voice_sample","slot":"'
+                        + slot + '","text":<their full sample text>}]'
+                    )
+                else:
+                    v_lines.append(
+                        "    when user confirms an answer, emit: "
+                        '[ACTION:{"type":"update_voice_style","field":"'
+                        + f + '","value":<their answer>}]'
+                    )
+                v_lines.append(
+                    "    AND emit: "
+                    '[ACTION:{"type":"remember","category":"jit_asked","source":"ai_inferred","content":"jit_asked_voice:'
+                    + f + '","importance":3}]'
+                )
+            v_lines.append("RULES (voice):")
+            v_lines.append("- Ask ONE voice field per response")
+            v_lines.append("- For sample slots, ask for a REAL email they've sent — not a hypothetical")
+            v_lines.append("- Voice samples are the most valuable signal; never invent words on their behalf")
+            voice_section = "\n".join(v_lines) + "\n\n"
+
+    if not biz_section and not practitioner_section and not voice_section:
         return ""
-    return biz_section + practitioner_section
+    return biz_section + practitioner_section + voice_section
 
 
 def _format_practitioner_block(ctx: Dict[str, Any]) -> str:
@@ -745,6 +874,15 @@ def _format_brand_block(ctx: Dict[str, Any]) -> str:
     about the human, then about the brand the human ships, then about
     the business specifics."""
     block = (ctx.get("brand_block") or "").strip()
+    return block + "\n" if block else ""
+
+
+def _format_voice_block(ctx: Dict[str, Any]) -> str:
+    """Render the Voice Depth context block (Pass 2.5b). Sits after the
+    brand block and before the practitioner block. Includes voice samples,
+    do's/don'ts, greeting/sign-off styles, and pending edit observations
+    (with rule-proposal instructions when the threshold is met)."""
+    block = (ctx.get("voice_block") or "").strip()
     return block + "\n" if block else ""
 
 
@@ -1094,8 +1232,9 @@ PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull
 
 {_format_email_replies_block(ctx)}
 {_format_sms_block(ctx)}
-{_format_practitioner_block(ctx)}
 {_format_brand_block(ctx)}
+{_format_voice_block(ctx)}
+{_format_practitioner_block(ctx)}
 {_format_business_profile_block(ctx)}
 {_format_foundation_block(ctx)}
 CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
@@ -1348,10 +1487,15 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
     practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
     tone = voice.get("tone", "warm and professional")
 
+    # Pass 2.5b: bind the inner draft call to the practitioner's voice
+    # samples + do's/don'ts + greeting + sign-off. Empty string when no
+    # voice depth is configured — falls back to current behavior.
+    voice_payload = voice_depth_agent.voice_depth_payload_for_inner_call(biz.get("owner_id"))
+
     system = (f"You are drafting a short, warm check-in from {practitioner} to {contact.get('name')}. "
               f"Voice: {tone}. Under 4 sentences. Sign off as {practitioner}.")
     user = f"Reason for the check-in: {reason}\n\nDraft the message body only (no subject)."
-    body = await _draft_short(client, biz, system, user)
+    body = await _draft_short(client, biz, system, user, voice_payload=voice_payload)
     if not body:
         body = f"Hi {contact.get('name')}, just thinking of you. Wanted to check in. — {practitioner}"
 
@@ -1402,10 +1546,14 @@ async def handle_draft_email(client, biz, action) -> Dict:
         practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
         tone = voice.get("tone", "warm and professional")
         name = contact.get("name") if contact else "there"
+        # Pass 2.5b: thread voice depth (samples, do's/don'ts, greeting,
+        # sign-off) into the inner draft call so the body actually reflects
+        # the practitioner's voice — not just a single tone string.
+        voice_payload = voice_depth_agent.voice_depth_payload_for_inner_call(biz.get("owner_id"))
         system = (f"Draft a short email from {practitioner} to {name}. Voice: {tone}. "
                   f"Under 5 sentences. Sign off as {practitioner}.")
         user = f"Subject: {subject}\nContext: {action.get('reason') or body_hint or 'general outreach'}"
-        body = await _draft_short(client, biz, system, user)
+        body = await _draft_short(client, biz, system, user, voice_payload=voice_payload)
         if not body:
             body = f"Hi {name},\n\nReaching out from {biz.get('name')}. — {practitioner}"
 
@@ -3053,16 +3201,40 @@ async def handle_rewrite_draft(client, biz, action) -> Dict:
     practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
     tone = voice.get("tone", "warm and professional")
 
+    # Pass 2.5b: voice depth payload for the inner rewrite call. The
+    # practitioner's samples + rules + greeting/sign-off bind the output
+    # so a "make it warmer" rewrite still respects the canonical voice.
+    voice_payload = voice_depth_agent.voice_depth_payload_for_inner_call(biz.get("owner_id"))
+
     system = (f"Rewrite this draft from {practitioner}. Voice: {tone}. "
               f"Keep the same length and intent but apply the requested change. "
               f"Return ONLY the rewritten text — no commentary, no preamble.")
     user_msg = f"CURRENT DRAFT:\n{old_body}\n\nINSTRUCTION: {instruction}"
 
-    rewritten = await _draft_short(client, biz, system, user_msg)
+    rewritten = await _draft_short(client, biz, system, user_msg, voice_payload=voice_payload)
     if not rewritten:
         return _fail("rewrite_draft", "AI rewrite failed")
 
     await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {"body": rewritten})
+
+    # Pass 2.5b: passive learning. A rewrite is the user effectively
+    # saying "this isn't quite my voice." Record it. After
+    # EDIT_OBSERVATION_THRESHOLD observations the Chief will propose a
+    # voice rule on the next chat turn.
+    try:
+        owner_id = biz.get("owner_id")
+        if owner_id:
+            await asyncio.to_thread(
+                voice_depth_agent.record_edit_observation,
+                owner_id,
+                old_body[:600],
+                rewritten[:600],
+                instruction[:200],
+                "dont",
+            )
+    except Exception as _e:
+        logger.warning(f"[voice] record_edit_observation failed: {_e}")
+
     return {
         "type": "rewrite_draft",
         "result": "rewritten (not yet approved)",
@@ -6357,6 +6529,158 @@ def _human_practitioner_summary(field_path: str, value: Any) -> str:
     return f"{field_path} updated"
 
 
+# ─────────────────────────────────────────────────────────────
+# Voice Depth action handlers (Pass 2.5b)
+# ─────────────────────────────────────────────────────────────
+
+async def handle_update_voice_sample(client, biz, action) -> Dict:
+    slot = (action.get("slot") or "").strip()
+    text = (action.get("text") or "").strip()
+    if not slot or not text:
+        return _fail("update_voice_sample", "Missing slot or text")
+    owner_id = biz.get("owner_id") if isinstance(biz, dict) else None
+    if not owner_id:
+        return _fail("update_voice_sample", "No owner_id on business")
+    try:
+        result = await asyncio.to_thread(
+            voice_depth_agent.update_voice_sample, owner_id, slot, text
+        )
+    except Exception as e:
+        return _fail("update_voice_sample", str(e))
+    if not result.get("ok"):
+        return _fail("update_voice_sample", result.get("error", "save failed"))
+    slot_pretty = slot.replace("_", " ")
+    return {
+        "type": "update_voice_sample",
+        "result": f"Saved {slot} sample.",
+        "label": f"Saved your {slot_pretty} writing sample",
+        "toast": {
+            "message": f"Got it — I'll match your voice on {slot_pretty} drafts.",
+            "kind": "success",
+        },
+    }
+
+
+async def handle_add_voice_rule(client, biz, action) -> Dict:
+    list_name = (action.get("list") or "").strip()
+    rule = (action.get("rule") or "").strip()
+    if not list_name or not rule:
+        return _fail("add_voice_rule", "Missing list or rule")
+    owner_id = biz.get("owner_id") if isinstance(biz, dict) else None
+    if not owner_id:
+        return _fail("add_voice_rule", "No owner_id on business")
+    try:
+        result = await asyncio.to_thread(
+            voice_depth_agent.add_voice_rule, owner_id, list_name, rule
+        )
+    except Exception as e:
+        return _fail("add_voice_rule", str(e))
+    if not result.get("ok"):
+        return _fail("add_voice_rule", result.get("error", "save failed"))
+    kind = "do" if list_name == "voice_dos" else "don't"
+    return {
+        "type": "add_voice_rule",
+        "result": f"Added voice {kind}.",
+        "label": f"Added voice {kind}",
+        "toast": {
+            "message": f"Got it — added '{rule}' to your voice {kind}s.",
+            "kind": "success",
+        },
+    }
+
+
+async def handle_remove_voice_rule(client, biz, action) -> Dict:
+    list_name = (action.get("list") or "").strip()
+    idx = action.get("idx")
+    if not list_name or idx is None:
+        return _fail("remove_voice_rule", "Missing list or idx")
+    owner_id = biz.get("owner_id") if isinstance(biz, dict) else None
+    if not owner_id:
+        return _fail("remove_voice_rule", "No owner_id on business")
+    try:
+        result = await asyncio.to_thread(
+            voice_depth_agent.remove_voice_rule, owner_id, list_name, int(idx)
+        )
+    except Exception as e:
+        return _fail("remove_voice_rule", str(e))
+    if not result.get("ok"):
+        return _fail("remove_voice_rule", result.get("error", "remove failed"))
+    return {
+        "type": "remove_voice_rule",
+        "result": "Removed.",
+        "label": "Voice rule removed",
+        "toast": {"message": "Got it — voice rule removed.", "kind": "success"},
+    }
+
+
+async def handle_update_voice_style(client, biz, action) -> Dict:
+    field = (action.get("field") or "").strip()
+    value = (action.get("value") or "").strip()
+    if not field or not value:
+        return _fail("update_voice_style", "Missing field or value")
+    owner_id = biz.get("owner_id") if isinstance(biz, dict) else None
+    if not owner_id:
+        return _fail("update_voice_style", "No owner_id on business")
+    try:
+        result = await asyncio.to_thread(
+            voice_depth_agent.update_voice_style, owner_id, field, value
+        )
+    except Exception as e:
+        return _fail("update_voice_style", str(e))
+    if not result.get("ok"):
+        return _fail("update_voice_style", result.get("error", "save failed"))
+    nice = "greeting style" if field == "greeting_style" else "sign-off style"
+    return {
+        "type": "update_voice_style",
+        "result": f"Saved {field}.",
+        "label": f"Saved {nice}",
+        "toast": {
+            "message": f"Got it — I'll use '{value}' for your {nice}.",
+            "kind": "success",
+        },
+    }
+
+
+async def handle_record_edit_pattern(client, biz, action) -> Dict:
+    """Silent observation. No toast, no label. Records to edit_observations."""
+    original = action.get("original_pattern") or ""
+    edited = action.get("edited_pattern") or ""
+    context = action.get("context") or ""
+    kind = action.get("kind") or "dont"
+    if not original or not edited:
+        return {"type": "record_edit_pattern", "result": "skipped: empty"}
+    owner_id = biz.get("owner_id") if isinstance(biz, dict) else None
+    if not owner_id:
+        return {"type": "record_edit_pattern", "result": "skipped: no owner_id"}
+    try:
+        await asyncio.to_thread(
+            voice_depth_agent.record_edit_observation,
+            owner_id, original, edited, context, kind,
+        )
+        return {"type": "record_edit_pattern", "result": "observed"}
+    except Exception as e:
+        return {"type": "record_edit_pattern", "result": f"error: {e}"}
+
+
+async def handle_propose_voice_rule(client, biz, action) -> Dict:
+    """Chief proposes a voice rule from observed edits. The frontend
+    confirms with the user; on accept, frontend calls add_voice_rule
+    and clear-observations endpoints. We do NOT store the rule here."""
+    list_name = (action.get("list") or "").strip()
+    rule = (action.get("rule") or "").strip()
+    if list_name not in ("voice_dos", "voice_donts") or not rule:
+        return _fail("propose_voice_rule", "Missing or invalid list/rule")
+    return {
+        "type": "propose_voice_rule",
+        "result": "Proposal pending user confirmation.",
+        "label": f"Proposed: {rule}",
+        "frontend_event": {
+            "name": "voice-rule-proposed",
+            "detail": {"list": list_name, "rule": rule},
+        },
+    }
+
+
 async def handle_propose_brand_kit_from_context(client, biz, action) -> Dict:
     """Generate a brand kit proposal using the full available context
     (archetype, voice profile, Strategy Track outputs, practitioner
@@ -6548,6 +6872,13 @@ ACTION_HANDLERS = {
     "update_practitioner_profile_field": handle_update_practitioner_profile_field,
     # Brand Engine v1
     "propose_brand_kit_from_context": handle_propose_brand_kit_from_context,
+    # Voice Depth (Pass 2.5b)
+    "update_voice_sample":            handle_update_voice_sample,
+    "add_voice_rule":                 handle_add_voice_rule,
+    "remove_voice_rule":              handle_remove_voice_rule,
+    "update_voice_style":             handle_update_voice_style,
+    "record_edit_pattern":            handle_record_edit_pattern,
+    "propose_voice_rule":             handle_propose_voice_rule,
 }
 
 
@@ -8604,6 +8935,18 @@ ACTIONS — NAVIGATION + MEMORY:
   — used ONLY after the user has explicitly confirmed a value for a practitioner-level field (about the human, not the business). Practitioner data follows the user across ALL their businesses — same human, same legal name, same timezone, same accountant. Never emit on speculation.
   [ACTION:{{"type":"propose_brand_kit_from_context"}}]
   — generates a starter brand kit proposal (colors, fonts, tagline, voice) using the business archetype, voice_profile, Strategy Track outputs, and practitioner profile. Use when the user asks to draft / propose / generate a brand kit, OR when their brand kit is empty and they ask anything brand-related (colors, design, site look, logo). The proposal is returned in the action result — the frontend will preview and the user confirms before save. Never overwrite an existing brand kit without the user explicitly asking to regenerate.
+  [ACTION:{{"type":"update_voice_sample","slot":"discovery_followup|launch_announcement|casual_nurture","text":"<paste of the practitioner's actual writing>"}}]
+  — saves a writing sample so the inner draft call can match the practitioner's voice. ONLY emit after the user has explicitly given you the sample text.
+  [ACTION:{{"type":"add_voice_rule","list":"voice_dos|voice_donts","rule":"<plain-language rule>"}}]
+  — adds a voice rule (do or don't). Use when the user explicitly states a rule ("always sign off with Shalom", "never use exclamation points"), OR when they ACCEPT a rule you proposed via propose_voice_rule.
+  [ACTION:{{"type":"remove_voice_rule","list":"voice_dos|voice_donts","idx":0}}]
+  — removes a voice rule by index when the user asks to drop one.
+  [ACTION:{{"type":"update_voice_style","field":"greeting_style|signoff_style","value":"<their answer>"}}]
+  — saves the practitioner's preferred greeting or sign-off style. Use after explicit user statement ("I always open with 'Hey friend'", "I sign off as Shalom").
+  [ACTION:{{"type":"propose_voice_rule","list":"voice_dos|voice_donts","rule":"<plain-language rule>"}}]
+  — propose a voice rule based on the PENDING VOICE OBSERVATIONS (when present in your prompt). The user will confirm via frontend dialog; on accept the frontend calls add_voice_rule. Only propose when a pattern is clear across multiple observations.
+  [ACTION:{{"type":"record_edit_pattern","original_pattern":"...","edited_pattern":"...","context":"discovery_followup","kind":"dont"}}]
+  — silent observation. The frontend calls this directly when the user edits a draft; you should not normally emit it yourself.
   [ACTION:{{"type":"forget","memory_content":"snippet to deactivate"}}]
   [ACTION:{{"type":"generate_briefing"}}]
   [ACTION:{{"type":"generate_insights"}}]
