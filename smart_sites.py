@@ -100,6 +100,117 @@ def _merge_with_defaults(raw: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
+def resolve_layout_and_vocabulary(
+    business_id: str,
+    site_config: Dict[str, Any],
+):
+    """Pass 3.5 Session 3: resolve which Studio layout + vocabulary triple
+    to render with.
+
+    Reads business_profiles + voice_profile + brand_kit, runs vocabulary
+    detection (or honors site_config.vocabulary_override), picks layout
+    from vocab affinity (or honors site_config.layout_id), composes the
+    DesignSystem.
+
+    Returns a tuple:
+        (layout_id, primary_vocab_id, composite, design_system, business_data,
+         business_profile, detected_matches)
+
+    Any element may be None if a step failed; the caller is responsible
+    for falling through to legacy rendering when layout_id or
+    design_system is None.
+    """
+    try:
+        from studio_data import LAYOUTS, VOCAB_LAYOUT_MAP, VOCABULARIES
+        from studio_composite import build_composite
+        from studio_design_system import build_design_system
+        from studio_vocab_detect import detect_vocabularies, detect_vocabulary_triple
+    except Exception:
+        return None, None, None, None, None, None, []
+
+    biz_rows = _sb_get(f"/businesses?id=eq.{business_id}&select=*&limit=1") or []
+    business_data = biz_rows[0] if biz_rows else {}
+    voice_profile = business_data.get("voice_profile") or {}
+    brand_kit = (business_data.get("settings") or {}).get("brand_kit") or {}
+
+    profile_rows = _sb_get(f"/business_profiles?business_id=eq.{business_id}&select=*&limit=1") or []
+    business_profile = profile_rows[0] if profile_rows else {}
+
+    # ─── Step 1: vocabulary resolution ──────────────────────────
+    detected_matches = []
+    try:
+        detected_matches = detect_vocabularies(
+            business_data, business_profile, voice_profile, brand_kit
+        )
+    except Exception:
+        detected_matches = []
+
+    vocab_override = site_config.get("vocabulary_override")
+    primary_vocab_id: Optional[str] = None
+    secondary_id: Optional[str] = None
+    aesthetic_id: Optional[str] = None
+
+    if vocab_override and vocab_override in VOCABULARIES:
+        primary_vocab_id = vocab_override
+        primary_section = VOCABULARIES[primary_vocab_id]["section"]
+        # Pick secondary from a different section, aesthetic from aesthetic-movement
+        for m in detected_matches:
+            v = m["vocabulary"]
+            if v["id"] == primary_vocab_id:
+                continue
+            if secondary_id is None and v["section"] != primary_section:
+                secondary_id = v["id"]
+            if aesthetic_id is None and v["section"] == "aesthetic-movement" and v["id"] != primary_vocab_id:
+                aesthetic_id = v["id"]
+        # Fallback: any non-primary match becomes secondary if still empty
+        if secondary_id is None:
+            for m in detected_matches:
+                if m["vocabulary"]["id"] != primary_vocab_id:
+                    secondary_id = m["vocabulary"]["id"]
+                    break
+    else:
+        # No override — use detection's full triple
+        if detected_matches:
+            try:
+                primary_vocab_id, secondary_id, aesthetic_id = detect_vocabulary_triple(
+                    business_data, business_profile, voice_profile, brand_kit
+                )
+            except Exception:
+                primary_vocab_id = secondary_id = aesthetic_id = None
+
+    if not primary_vocab_id:
+        return None, None, None, None, business_data, business_profile, detected_matches
+
+    # ─── Step 2: build composite + design system ─────────────────
+    try:
+        composite = build_composite(primary_vocab_id, secondary_id, aesthetic_id)
+        design_system = build_design_system(
+            composite,
+            business_name=business_data.get("name") or "Welcome",
+            tagline=business_data.get("tagline") or (brand_kit.get("tagline") if isinstance(brand_kit, dict) else None),
+        )
+    except Exception:
+        return None, primary_vocab_id, None, None, business_data, business_profile, detected_matches
+
+    # ─── Step 3: layout resolution ──────────────────────────────
+    layout_override = site_config.get("layout_id")
+    if layout_override and layout_override in LAYOUTS:
+        layout_id = layout_override
+    else:
+        affinity = VOCAB_LAYOUT_MAP.get(primary_vocab_id, [])
+        layout_id = affinity[0] if affinity else None
+
+    return (
+        layout_id,
+        primary_vocab_id,
+        composite,
+        design_system,
+        business_data,
+        business_profile,
+        detected_matches,
+    )
+
+
 def resolve_vibe_family(bundle: Dict[str, Any], site_config: Dict[str, Any]) -> str:
     """Override > bundle.design.vibe_family > brand_voice mapping > 'warm'."""
     override = site_config.get("vibe_family_override")
@@ -873,8 +984,67 @@ def _render_page(
 </html>"""
 
 
+def _try_render_via_studio_layouts(
+    business_id: str,
+    site_config: Dict[str, Any],
+    opts: Dict[str, Any],
+) -> Optional[str]:
+    """Pass 3.5 Session 3: attempt to render the home page via the new
+    Studio layout system (23 vocabularies × 12 layouts). Returns the
+    rendered HTML on success, None on ANY failure so the caller can
+    fall through to the legacy 3-vibe-family path.
+
+    NEVER raises. Logs warnings on internal failures.
+    """
+    import logging
+    logger = logging.getLogger("smart_sites")
+    try:
+        layout_id, _vocab_id, composite, design_system, business_data, _profile, _matches = (
+            resolve_layout_and_vocabulary(business_id, site_config)
+        )
+        if not (layout_id and design_system and composite and business_data):
+            return None
+
+        from studio_layouts.dispatch import render_layout
+
+        # Brand head meta tags (favicon / OG / Twitter Card) — defensive.
+        head_meta_extra = ""
+        try:
+            from public_site import _brand_head_meta_tags
+            head_meta_extra = _brand_head_meta_tags(business_id) or ""
+        except Exception:
+            pass
+
+        bundle = get_bundle(business_id) or {}
+        sections_config = site_config.get("sections") or {}
+        products = opts.get("products") or []
+
+        return render_layout(
+            layout_id,
+            business_data=business_data,
+            design_system=design_system,
+            composite=composite,
+            sections_config=sections_config,
+            bundle=bundle,
+            head_meta_extra=head_meta_extra,
+            products=products,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[smart_sites] Studio layout render failed for {business_id}; "
+            f"falling back to legacy 3-vibe rendering: {e}"
+        )
+        return None
+
+
 def render_smart_site_page(business_id: str, page_type: str, **opts: Any) -> str:
     """Render a Smart Sites page from bundle + persisted site_config.
+
+    Pass 3.5 Session 3: home pages first attempt the new Studio layout
+    system (23 vocabularies × 12 layouts with auto-detection or override).
+    Any failure falls through to the legacy 3-vibe-family rendering —
+    the safety net is non-negotiable: a layout bug must never break a
+    live site.
 
     Args:
       business_id: target business
@@ -882,17 +1052,36 @@ def render_smart_site_page(business_id: str, page_type: str, **opts: Any) -> str
       opts: page-specific data (products, links, resources, etc.)
     """
     site_config = get_site_config(business_id)
+
+    # Only home pages route through the new layout system in v1; other
+    # page types stay on the legacy renderer until Session 4+.
+    if page_type == "home":
+        layout_html = _try_render_via_studio_layouts(business_id, site_config, opts)
+        if layout_html:
+            return layout_html
+
+    # Legacy 3-vibe-family rendering — the safety net.
     return _render_page(business_id, page_type, site_config, opts)
 
 
 def render_smart_site_preview(business_id: str, draft_config: Dict[str, Any]) -> str:
     """Render Smart Sites home from a DRAFT config (no persistence).
-    Used by MySite.tsx live preview iframe."""
+    Used by MySite.tsx live preview iframe.
+
+    Pass 3.5 Session 3: tries the Studio layout system using the draft
+    config's vocabulary_override / layout_id / sections. Falls through
+    to legacy preview rendering on any exception.
+    """
     merged = _merge_with_defaults(draft_config or {})
-    # Preview always renders home, fetches its own products list
     products = _sb_get(
         f"/products?business_id=eq.{business_id}&is_active=eq.true&select=*&limit=6"
     ) or []
+
+    layout_html = _try_render_via_studio_layouts(business_id, merged, {"products": products})
+    if layout_html:
+        return layout_html
+
+    # Legacy preview path — safety net.
     return _render_page(business_id, "home", merged, {"products": products})
 
 
