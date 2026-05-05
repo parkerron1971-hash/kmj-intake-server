@@ -12,11 +12,11 @@ from studio_composite import CompositeDirection
 from studio_design_system import DesignSystem, _pick_accent_contrast, _pick_contrast_text
 from studio_layouts.shared import (
     render_appendix_sections, render_archetype_touch, render_footer,
-    render_head, render_in_the_clear_badge, render_stripe_button, safe_html,
+    render_head, render_in_the_clear_badge, render_stripe_button, safe_html, render_motion_script,
 )
 
 
-def _bespoke_gallery(design_system, items, section_config, bundle):
+def _bespoke_gallery(design_system, items, section_config, bundle, vocab_id=None):
     """Pass 3.6: bespoke studio-portfolio gallery — true masonry via
     column-fill so portfolio pieces have varied heights, photo-first
     treatment, minimal captions overlaid on hover."""
@@ -37,7 +37,7 @@ def _bespoke_gallery(design_system, items, section_config, bundle):
             if caption else ''
         )
         pieces.append(f"""
-<figure style="break-inside:avoid;margin:0 0 16px;position:relative;border-radius:6px;overflow:hidden;">
+<figure class="hover-lift reveal" style="break-inside:avoid;margin:0 0 16px;position:relative;border-radius:6px;overflow:hidden;">
   <img src="{url}" alt="{caption}" style="width:100%;display:block;border-radius:6px;" loading="lazy">
   {caption_overlay}
 </figure>""")
@@ -73,6 +73,7 @@ def render(
     products = products or []
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
+    vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
 
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
@@ -317,5 +318,6 @@ def render(
 {after_services}
 {appendix_html}
 {footer_html}
+{render_motion_script()}
 </body>
 </html>"""

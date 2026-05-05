@@ -12,13 +12,15 @@ from studio_composite import CompositeDirection
 from studio_design_system import DesignSystem, _pick_accent_contrast, _pick_contrast_text
 from studio_layouts.shared import (
     render_appendix_sections, render_archetype_touch, render_footer,
-    render_head, render_in_the_clear_badge, render_stripe_button, safe_html,
+    render_head, render_in_the_clear_badge, render_stripe_button, safe_html, render_motion_script,
 )
 
 
-def _bespoke_testimonials(design_system, items, section_config, bundle):
+def _bespoke_testimonials(design_system, items, section_config, bundle, vocab_id=None):
     """Pass 3.6: bespoke community-hub testimonials — warm, photo-placeholder
-    avatar circles, larger quote treatment, 'Voices from our community' framing."""
+    avatar circles, larger quote treatment, 'Voices from our community' framing.
+    Pass 3.7: vocab_id accepted (currently unused — bespoke has its own
+    warm character)."""
     if not items:
         return ""
     accent = design_system["palette_accent"]
@@ -42,7 +44,7 @@ def _bespoke_testimonials(design_system, items, section_config, bundle):
             if role else ''
         )
         cards.append(f"""
-<div style="padding:36px;background:color-mix(in srgb,{surface} 70%,white);color:{surface_text};border-radius:24px;border:1px solid color-mix(in srgb,{accent} 22%,transparent);box-shadow:0 4px 20px rgba(0,0,0,0.04);">
+<div class="hover-lift reveal" style="padding:36px;background:color-mix(in srgb,{surface} 70%,white);color:{surface_text};border-radius:24px;border:1px solid color-mix(in srgb,{accent} 22%,transparent);box-shadow:0 4px 20px rgba(0,0,0,0.04);">
   <p style="font-family:'{display_font}',Georgia,serif;font-size:1.2rem;line-height:1.5;margin:0 0 1.5rem;color:{surface_text};">&ldquo;{quote}&rdquo;</p>
   <div style="display:flex;align-items:center;gap:12px;">
     <div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,{accent},color-mix(in srgb,{accent} 60%,{surface}));display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:0.95rem;">{initials or '&bull;'}</div>
@@ -80,6 +82,7 @@ def render(
     products = products or []
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
+    vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
 
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
@@ -286,5 +289,6 @@ def render(
 {after_services}
 {appendix_html}
 {footer_html}
+{render_motion_script()}
 </body>
 </html>"""
