@@ -213,6 +213,32 @@ def _inject_canonical(html: str, slug: str) -> str:
     return html
 
 
+def _inject_brand_meta(html: str, business_id: Optional[str]) -> str:
+    """Pass 3: wire `_brand_head_meta_tags` into legacy HTML before </head>.
+    Activates the dormant Pass 2.5a helper for users who haven't opted into
+    Smart Sites yet — favicons + OG tags + Twitter Cards finally render.
+    Defensive: any failure returns the original HTML unchanged."""
+    if not business_id:
+        return html
+    try:
+        tags = _brand_head_meta_tags(business_id)
+    except Exception:
+        return html
+    if not tags:
+        return html
+    if "</head>" in html:
+        return html.replace("</head>", tags + "\n</head>", 1)
+    if "</HEAD>" in html:
+        return html.replace("</HEAD>", tags + "\n</HEAD>", 1)
+    return html
+
+
+def _use_smart_sites(site_row: Dict[str, Any]) -> bool:
+    """Pass 3: check if this business has opted into Smart Sites rendering."""
+    cfg = (site_row or {}).get("site_config") or {}
+    return bool(cfg.get("use_smart_sites"))
+
+
 def _esc(text: Any) -> str:
     """Cheap HTML escape."""
     if text is None:
@@ -659,6 +685,23 @@ async def _sb_post(client: httpx.AsyncClient, path: str, body: dict):
     text = resp.text
     return json.loads(text) if text else None
 
+
+async def _sb_patch(client: httpx.AsyncClient, path: str, body: dict):
+    """Pass 3: PATCH helper for the new Smart Sites endpoints."""
+    url = f"{_supabase_url()}/rest/v1{path}"
+    headers = {
+        "apikey": _supabase_anon(),
+        "Authorization": f"Bearer {_supabase_anon()}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    resp = await client.patch(url, headers=headers, content=json.dumps(body), timeout=HTTP_TIMEOUT)
+    if resp.status_code >= 400:
+        logger.error(f"Supabase PATCH {path}: {resp.status_code} {resp.text[:200]}")
+        return None
+    text = resp.text
+    return json.loads(text) if text else None
+
 # ═══════════════════════════════════════════════════════════════════════
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════
@@ -805,14 +848,27 @@ async def get_site_html(slug: str):
         # Accept both draft and published sites so practitioners can preview
         sites = await _sb(client,
             f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
-            f"&select=html_content,business_id,status")
+            f"&select=html_content,business_id,status,site_config")
         if not sites:
             raise HTTPException(404, "Site not found")
         site = sites[0]
+        biz_id = site.get("business_id")
+
+        # Pass 3: Smart Sites flag-gate. ANY failure falls through to legacy.
+        if _use_smart_sites(site) and biz_id:
+            products_for_smart = await _sb(client,
+                f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
+                f"&order=sort_order.asc,created_at.desc&select=*&limit=100") or []
+            smart_html = await _try_render_smart_site(
+                biz_id, "home", products=products_for_smart)
+            if smart_html:
+                return HTMLResponse(
+                    content=smart_html, status_code=200, media_type="text/html",
+                    headers={"X-Solutionist-Source": "smart-sites"})
+
         html = site.get("html_content") or ""
         if not html:
             raise HTTPException(404, "Site has no content")
-        biz_id = site.get("business_id")
 
         # Pull live products + media library + verified testimonials so
         # they update without a regen.
@@ -841,6 +897,8 @@ async def get_site_html(slug: str):
                     brand_color = bc
 
         html = _inject_canonical(html, slug)
+        # Pass 3: activate the dormant Pass 2.5a meta-tag helper.
+        html = _inject_brand_meta(html, biz_id)
         html = _inject_dynamic_sections(
             html,
             _render_products_section(products, slug, brand_color, biz_settings),
@@ -952,12 +1010,19 @@ async def thank_you_page(slug: str):
     name = "Thank You"
     accent = "#D4AF37"
     home_link = f"/public/site/{slug}"
+    biz_id: Optional[str] = None
 
     async with httpx.AsyncClient() as client:
         sites = await _sb(client,
-            f"/business_sites?slug=eq.{slug}&limit=1&select=business_id")
+            f"/business_sites?slug=eq.{slug}&limit=1&select=business_id,site_config")
         if sites:
             biz_id = sites[0].get("business_id")
+            # Pass 3: Smart Sites flag-gate (try/except always falls through)
+            if _use_smart_sites(sites[0]) and biz_id:
+                smart_html = await _try_render_smart_site(biz_id, "thank_you")
+                if smart_html:
+                    return HTMLResponse(content=smart_html, media_type="text/html",
+                                        headers={"X-Solutionist-Source": "smart-sites"})
             if biz_id:
                 biz_rows = await _sb(client,
                     f"/businesses?id=eq.{biz_id}&select=name,settings&limit=1")
@@ -1017,6 +1082,8 @@ a.btn:hover {{ opacity: 0.9; }}
 </div>
 </body></html>"""
 
+    # Pass 3: legacy thank-you also gets favicons + OG tags now.
+    html = _inject_brand_meta(html, biz_id)
     return HTMLResponse(content=html, status_code=200, media_type="text/html")
 
 
@@ -1052,6 +1119,73 @@ async def invalidate_site_cache(business_id: str):
         except Exception as e:
             logger.warning(f"site invalidate patch failed: {e}")
         return {"status": "invalidated", "site_id": site_id}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SMART SITES v1 — config + preview + enable/disable endpoints (Pass 3)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@router.post("/sites/{business_id}/smart-config")
+async def save_smart_config_endpoint(business_id: str, body: Dict[str, Any]):
+    """Save (merge into) site_config without flipping the use_smart_sites
+    flag. Body shape: any subset of SmartSiteConfig keys."""
+    try:
+        from smart_sites import save_smart_config
+        result = save_smart_config(business_id, body or {})
+        if not result.get("ok"):
+            raise HTTPException(404, result.get("error", "save failed"))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[smart_sites] save_smart_config failed: {e}")
+        raise HTTPException(500, "save failed")
+
+
+@router.post("/sites/{business_id}/smart-preview")
+async def smart_preview_endpoint(business_id: str, body: Dict[str, Any]):
+    """Render Smart Sites preview from a draft config without persisting.
+    Used by MySite.tsx live preview iframe."""
+    try:
+        from smart_sites import render_smart_site_preview
+        html = render_smart_site_preview(business_id, body or {})
+        return HTMLResponse(content=html, media_type="text/html")
+    except Exception as e:
+        logger.warning(f"[smart_sites] preview failed: {e}")
+        raise HTTPException(500, f"preview failed: {e}")
+
+
+@router.post("/sites/{business_id}/smart-enable")
+async def smart_enable_endpoint(business_id: str):
+    """Flip use_smart_sites = true. Seeds defaults from bundle if empty."""
+    try:
+        from smart_sites import enable_smart_sites
+        result = enable_smart_sites(business_id)
+        if not result.get("ok"):
+            raise HTTPException(404, result.get("error", "enable failed"))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[smart_sites] enable failed: {e}")
+        raise HTTPException(500, "enable failed")
+
+
+@router.post("/sites/{business_id}/smart-disable")
+async def smart_disable_endpoint(business_id: str):
+    """Flip use_smart_sites = false. Falls back to legacy rendering."""
+    try:
+        from smart_sites import disable_smart_sites
+        result = disable_smart_sites(business_id)
+        if not result.get("ok"):
+            raise HTTPException(404, result.get("error", "disable failed"))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[smart_sites] disable failed: {e}")
+        raise HTTPException(500, "disable failed")
 
 
 @router.get("/public/widget/{module_id}")
@@ -1119,6 +1253,19 @@ async def link_page_html(slug: str):
                 break
         if not biz:
             raise HTTPException(404, "Link page not found")
+
+        # Pass 3: Smart Sites flag-gate. Pull site_config to check the flag.
+        biz_id_for_smart = biz["id"]
+        site_rows = await _sb(client,
+            f"/business_sites?business_id=eq.{biz_id_for_smart}&limit=1&select=site_config")
+        if site_rows and _use_smart_sites(site_rows[0]):
+            lp_for_smart = (biz.get("settings") or {}).get("link_page") or {}
+            smart_links = lp_for_smart.get("custom_links") or []
+            smart_html = await _try_render_smart_site(
+                biz_id_for_smart, "link", links=smart_links)
+            if smart_html:
+                return HTMLResponse(content=smart_html, media_type="text/html",
+                                    headers={"X-Solutionist-Source": "smart-sites"})
 
         brand = (biz.get("settings") or {}).get("brand_kit") or {}
         lp = (biz.get("settings") or {}).get("link_page") or {}
@@ -1226,6 +1373,8 @@ h1{{font-size:1.4em;font-weight:700;margin-bottom:4px;}}
 {gallery_html}
 <div class="footer">Powered by The Solutionist System</div>
 </div></body></html>"""
+        # Pass 3: legacy link page also gets favicons + OG tags now.
+        html = _inject_brand_meta(html, biz_id_for_smart)
         return HTMLResponse(content=html)
 
 
@@ -1264,7 +1413,8 @@ async def resource_library_html(slug: str):
         raise HTTPException(429, "Rate limit exceeded")
 
     async with httpx.AsyncClient() as client:
-        sites = await _sb(client, f"/business_sites?slug=eq.{slug}&limit=1&select=business_id")
+        sites = await _sb(client,
+            f"/business_sites?slug=eq.{slug}&limit=1&select=business_id,site_config")
         if not sites:
             raise HTTPException(404, "Business not found")
         biz_id = sites[0]["business_id"]
@@ -1283,6 +1433,18 @@ async def resource_library_html(slug: str):
 
         entries = await _sb(client,
             f"/module_entries?module_id=eq.{module_id}&status=eq.active&order=created_at.desc&limit=50&select=id,data") or []
+
+        # Pass 3: Smart Sites flag-gate (try/except always falls through).
+        if _use_smart_sites(sites[0]):
+            smart_resources = [
+                {**(e.get("data") or {}), "url": (e.get("data") or {}).get("resource_url")}
+                for e in entries
+            ]
+            smart_html = await _try_render_smart_site(
+                biz_id, "resources", resources=smart_resources)
+            if smart_html:
+                return HTMLResponse(content=smart_html, media_type="text/html",
+                                    headers={"X-Solutionist-Source": "smart-sites"})
 
         primary = colors.get("primary", "#333")
         bg = colors.get("background", "#faf8f5")
@@ -1326,6 +1488,8 @@ h1{{font-size:1.8em;font-weight:700;margin-bottom:8px;}}
 <p class="sub">{biz_name}</p>
 <div class="grid">{cards_html}</div>
 </div></body></html>"""
+        # Pass 3: legacy resources page also gets favicons + OG tags now.
+        html = _inject_brand_meta(html, biz_id)
         return HTMLResponse(content=html)
 
 
@@ -1600,7 +1764,8 @@ async def booking_page_html(slug: str):
         raise HTTPException(429, "Rate limit exceeded")
 
     async with httpx.AsyncClient() as client:
-        sites = await _sb(client, f"/business_sites?slug=eq.{slug}&limit=1&select=business_id")
+        sites = await _sb(client,
+            f"/business_sites?slug=eq.{slug}&limit=1&select=business_id,site_config")
         if not sites:
             raise HTTPException(404, "Business not found")
         biz_id = sites[0]["business_id"]
@@ -1612,6 +1777,14 @@ async def booking_page_html(slug: str):
         booking = (biz.get("settings") or {}).get("booking") or {}
         if not booking.get("enabled"):
             raise HTTPException(404, "Booking not enabled")
+
+        # Pass 3: Smart Sites flag-gate. v1 booking page is intentionally
+        # minimal — Smart Sites v2 will inline the slot picker.
+        if _use_smart_sites(sites[0]):
+            smart_html = await _try_render_smart_site(biz_id, "booking")
+            if smart_html:
+                return HTMLResponse(content=smart_html, media_type="text/html",
+                                    headers={"X-Solutionist-Source": "smart-sites"})
 
         brand = (biz.get("settings") or {}).get("brand_kit") or {}
         colors = brand.get("colors") or _palette_for(biz.get("type", "general"))
@@ -1721,6 +1894,8 @@ load();
 </script>
 </body>
 </html>"""
+        # Pass 3: legacy booking page also gets favicons + OG tags now.
+        html = _inject_brand_meta(html, biz_id)
         return HTMLResponse(content=html)
 
 
@@ -1798,6 +1973,10 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
             if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
                 brand_color = bc
     html = _inject_canonical(html, slug)
+    # Pass 3: activate the Pass 2.5a `_brand_head_meta_tags` helper for
+    # legacy sites too — favicons + OG + Twitter Cards now render for
+    # everyone, not just Smart Sites users.
+    html = _inject_brand_meta(html, biz_id)
     html = _inject_dynamic_sections(
         html,
         _render_products_section(products, slug, brand_color, biz_settings),
@@ -1806,32 +1985,73 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
     return html
 
 
+async def _try_render_smart_site(business_id: str, page_type: str, **opts) -> Optional[str]:
+    """Pass 3: attempt Smart Sites render. Returns HTML on success, None on
+    any failure so the caller can fall through to legacy. NEVER raises."""
+    try:
+        from smart_sites import render_smart_site_page
+        return render_smart_site_page(business_id, page_type, **opts)
+    except Exception as e:
+        logger.warning(f"[smart_sites] render failed for {business_id} {page_type}: {e}")
+        return None
+
+
 async def _serve_site_by_slug(slug: str) -> HTMLResponse:
-    """Shared logic: look up site by slug and return HTML."""
+    """Shared logic: look up site by slug and return HTML.
+    Pass 3: when site_config.use_smart_sites is true, attempt Smart Sites
+    render first. ANY failure falls through to legacy."""
     async with httpx.AsyncClient() as client:
         sites = await _sb(client,
             f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
-            f"&select=html_content,business_id")
-        if not sites or not sites[0].get("html_content"):
+            f"&select=html_content,business_id,site_config")
+        if not sites:
             raise HTTPException(404, "Site not found")
         site = sites[0]
-        html = await _augment_html(client, site.get("business_id"), slug, site["html_content"])
+        biz_id = site.get("business_id")
+
+        if _use_smart_sites(site) and biz_id:
+            # Fetch products to pass into the home page renderer.
+            products = await _sb(client,
+                f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
+                f"&order=sort_order.asc,created_at.desc&select=*&limit=100") or []
+            smart_html = await _try_render_smart_site(biz_id, "home", products=products)
+            if smart_html:
+                return HTMLResponse(content=smart_html, media_type="text/html",
+                                    headers={"X-Solutionist-Source": "smart-sites"})
+            # else: fall through to legacy
+
+        if not site.get("html_content"):
+            raise HTTPException(404, "Site not found")
+        html = await _augment_html(client, biz_id, slug, site["html_content"])
         return HTMLResponse(content=html, media_type="text/html")
 
 
 async def _serve_site_by_custom_domain(domain: str) -> HTMLResponse:
-    """Look up a site by its custom domain."""
+    """Look up a site by its custom domain.
+    Pass 3: same flag check as _serve_site_by_slug."""
     async with httpx.AsyncClient() as client:
-        # Search business_sites for a matching custom_domain in site_config
         sites = await _sb(client,
             f"/business_sites?site_config->>custom_domain=eq.{domain}"
             f"&order=updated_at.desc&limit=1"
-            f"&select=html_content,slug,business_id")
-        if not sites or not sites[0].get("html_content"):
+            f"&select=html_content,slug,business_id,site_config")
+        if not sites:
             return None  # type: ignore
         site = sites[0]
+        biz_id = site.get("business_id")
         slug = site.get("slug") or domain
-        html = await _augment_html(client, site.get("business_id"), slug, site["html_content"])
+
+        if _use_smart_sites(site) and biz_id:
+            products = await _sb(client,
+                f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
+                f"&order=sort_order.asc,created_at.desc&select=*&limit=100") or []
+            smart_html = await _try_render_smart_site(biz_id, "home", products=products)
+            if smart_html:
+                return HTMLResponse(content=smart_html, media_type="text/html",
+                                    headers={"X-Solutionist-Source": "smart-sites"})
+
+        if not site.get("html_content"):
+            return None  # type: ignore
+        html = await _augment_html(client, biz_id, slug, site["html_content"])
         return HTMLResponse(content=html, media_type="text/html")
 
 
