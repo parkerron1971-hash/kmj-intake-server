@@ -15,8 +15,47 @@ from __future__ import annotations
 
 from typing import Dict, Optional, TypedDict
 
-from studio_composite import CompositeDirection
+from studio_composite import CompositeDirection, hex_to_hsl
 from studio_data import STYLE_STRANDS, FontPairing
+
+
+# ─── CONTRAST HELPERS (Session 2 patch) ───────────────────────────────
+
+
+def _yiq_luminance(hex_color: str) -> float:
+    """Perceived brightness via YIQ luminance (0-255).
+
+    HSL lightness underrepresents perceived brightness for warm colors —
+    pure yellow has HSL L=50% but YIQ ~226 (very bright). YIQ is the
+    standard cheap approximation for "would dark text or light text be
+    more readable on this background." Threshold at ~128.
+    """
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return 128.0  # neutral fallback
+    try:
+        r = int(h[0:2], 16)
+        g = int(h[2:4], 16)
+        b = int(h[4:6], 16)
+    except ValueError:
+        return 128.0
+    return (r * 299 + g * 587 + b * 114) / 1000
+
+
+def _pick_contrast_text(
+    bg_hex: str,
+    dark_color: str = "#1A1A1A",
+    light_color: str = "#F8F8F8",
+) -> str:
+    """Return dark or light text color based on perceived background brightness."""
+    return dark_color if _yiq_luminance(bg_hex) >= 128 else light_color
+
+
+def _pick_accent_contrast(accent_hex: str) -> str:
+    """When the accent color becomes a button/element background, pick
+    text color that contrasts. Yellows/golds (perceptually bright) get
+    dark text; deep accents get light text."""
+    return "#1A1A1A" if _yiq_luminance(accent_hex) >= 128 else "#FFFFFF"
 
 
 class DesignSystem(TypedDict):
@@ -86,18 +125,26 @@ VOCAB_TO_STRAND: Dict[str, str] = {
 
 
 def _strand_card_css(strand: str, accent: str, text_color: str, surface: str, muted: str) -> str:
-    """Port of designSystemBuilder.ts cardRules table."""
+    """Port of designSystemBuilder.ts cardRules table.
+
+    Pass 3.5 Session 2 patch: rules whose card background is the surface
+    color (organic/corporate/playful) now explicitly set a contrast-aware
+    text color. Without this, dark text on dark surfaces (or light text
+    on light surfaces) was unreadable when the page background and the
+    surface color disagreed on lightness.
+    """
+    surface_text = _pick_contrast_text(surface, dark_color=text_color)
     rules = {
         "luxury": f".card {{ border: none; border-bottom: 0.5px solid {muted}; padding: 2rem 0; }}",
         "brutalist": f".card {{ border: 2px solid {text_color}; border-radius: 0; padding: 1.5rem; }}",
         "editorial": f".card {{ padding: 1.5rem 0; border-bottom: 1px solid {muted}20; }}",
         "minimal": f".card {{ border-bottom: 1px solid {muted}10; padding: 2rem 0; }}",
-        "dark": f".card {{ background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 1.5rem; }}",
-        "organic": f".card {{ border-radius: 20px; padding: 1.5rem; background: {surface}; }}",
+        "dark": f".card {{ background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 1.5rem; color: {_pick_contrast_text(surface, dark_color=text_color)}; }}",
+        "organic": f".card {{ border-radius: 20px; padding: 1.5rem; background: {surface}; color: {surface_text}; }}",
         "bold": f".card {{ border-left: 6px solid {accent}; padding: 1.5rem; }}",
         "retrotech": f".card {{ border: 1px solid {accent}40; border-radius: 0; padding: 1rem; }}",
-        "corporate": f".card {{ background: {surface}; border: 1px solid rgba(255,255,255,0.1); padding: 1.5rem; border-radius: 4px; }}",
-        "playful": f".card {{ border-radius: 20px; padding: 1.5rem; background: {surface}; transition: all 0.3s; }} .card:hover {{ transform: translateY(-4px); }}",
+        "corporate": f".card {{ background: {surface}; border: 1px solid rgba(255,255,255,0.1); padding: 1.5rem; border-radius: 4px; color: {surface_text}; }}",
+        "playful": f".card {{ border-radius: 20px; padding: 1.5rem; background: {surface}; color: {surface_text}; transition: all 0.3s; }} .card:hover {{ transform: translateY(-4px); }}",
     }
     return rules.get(strand, rules["dark"])
 
@@ -106,18 +153,27 @@ def _strand_card_css(strand: str, accent: str, text_color: str, surface: str, mu
 
 
 def _strand_cta_css(strand: str, cta_color: str, bg: str, text_color: str, muted: str) -> str:
-    """Port of designSystemBuilder.ts ctaRules table."""
+    """Port of designSystemBuilder.ts ctaRules table.
+
+    Pass 3.5 Session 2 patch: every rule whose CTA background is the
+    accent/cta color (luxury/dark/organic/bold/corporate/playful) now
+    picks text color via _pick_accent_contrast(cta_color) instead of
+    using the page bg. The TS source assumed dark page backgrounds; on
+    light vocabularies (e.g., scholar-educator + ETS), the old rules
+    produced near-white text on yellow accents — unreadable.
+    """
+    on_accent = _pick_accent_contrast(cta_color)
     rules = {
-        "luxury": f".cta-btn {{ border-radius: 0; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; padding: 16px 40px; background: {cta_color}; color: {bg}; text-decoration: none; display: inline-block; }}",
+        "luxury": f".cta-btn {{ border-radius: 0; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; padding: 16px 40px; background: {cta_color}; color: {on_accent}; text-decoration: none; display: inline-block; }}",
         "brutalist": f".cta-btn {{ border: 3px solid {text_color}; background: transparent; color: {text_color}; padding: 12px 32px; border-radius: 0; font-weight: 700; text-decoration: none; display: inline-block; }}",
         "editorial": f".cta-btn {{ background: none; color: {text_color}; border: none; border-bottom: 1px solid {text_color}; padding: 8px 0; text-decoration: none; display: inline-block; }}",
         "minimal": f".cta-btn {{ background: none; color: {text_color}; border-bottom: 1px solid {muted}; padding: 8px 2px; text-decoration: none; display: inline-block; }}",
-        "dark": f".cta-btn {{ background: {cta_color}; color: {bg}; border-radius: 4px; padding: 12px 32px; text-decoration: none; display: inline-block; }}",
-        "organic": f".cta-btn {{ border-radius: 100px; background: {cta_color}; color: {bg}; padding: 14px 36px; text-decoration: none; display: inline-block; }}",
-        "bold": f".cta-btn {{ font-weight: 900; text-transform: uppercase; background: {cta_color}; color: {bg}; padding: 16px 48px; border-radius: 4px; text-decoration: none; display: inline-block; }}",
+        "dark": f".cta-btn {{ background: {cta_color}; color: {on_accent}; border-radius: 4px; padding: 12px 32px; text-decoration: none; display: inline-block; }}",
+        "organic": f".cta-btn {{ border-radius: 100px; background: {cta_color}; color: {on_accent}; padding: 14px 36px; text-decoration: none; display: inline-block; }}",
+        "bold": f".cta-btn {{ font-weight: 900; text-transform: uppercase; background: {cta_color}; color: {on_accent}; padding: 16px 48px; border-radius: 4px; text-decoration: none; display: inline-block; }}",
         "retrotech": f".cta-btn {{ background: transparent; border: 1px solid {cta_color}; color: {cta_color}; padding: 10px 24px; border-radius: 0; text-decoration: none; display: inline-block; }}",
-        "corporate": f".cta-btn {{ background: {cta_color}; color: {bg}; padding: 12px 32px; border-radius: 0; text-decoration: none; display: inline-block; }}",
-        "playful": f".cta-btn {{ border-radius: 100px; font-weight: 800; background: {cta_color}; color: {bg}; padding: 14px 36px; text-decoration: none; display: inline-block; }}",
+        "corporate": f".cta-btn {{ background: {cta_color}; color: {on_accent}; padding: 12px 32px; border-radius: 0; text-decoration: none; display: inline-block; }}",
+        "playful": f".cta-btn {{ border-radius: 100px; font-weight: 800; background: {cta_color}; color: {on_accent}; padding: 14px 36px; text-decoration: none; display: inline-block; }}",
     }
     return rules.get(strand, rules["dark"])
 

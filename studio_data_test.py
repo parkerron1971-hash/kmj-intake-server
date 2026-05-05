@@ -227,12 +227,134 @@ def test_design_system_generation():
     print("\n[PASS]\n")
 
 
+def test_session2_patches():
+    """Test 6: verify Session 2's two patches are live.
+
+    Patch A: contrast-aware text colors. Patch B: real palette blending in
+    build_composite (vs Session 1's identity).
+    """
+    print("=" * 64)
+    print("TEST 6: Session 2 patches (contrast + real blending)")
+    print("=" * 64)
+
+    # Patch A — contrast helpers
+    from studio_design_system import _pick_accent_contrast, _pick_contrast_text, _yiq_luminance
+    yellow_lum = _yiq_luminance("#F1C40F")
+    navy_lum = _yiq_luminance("#1A1A2E")
+    print(f"YIQ luminance: yellow #F1C40F = {yellow_lum:.1f}, navy #1A1A2E = {navy_lum:.1f}")
+    on_yellow = _pick_accent_contrast("#F1C40F")
+    on_navy = _pick_contrast_text("#1A1A2E")
+    print(f"  text-on-yellow accent: {on_yellow}  (expect dark text)")
+    print(f"  text-on-navy bg:       {on_navy}  (expect light text)")
+    assert on_yellow == "#1A1A1A", f"yellow needs dark text, got {on_yellow}"
+    assert on_navy.upper() == "#F8F8F8", f"navy needs light text, got {on_navy}"
+
+    # Patch B — palette blending actually runs
+    from studio_composite import build_composite
+    sov_alone = build_composite("sovereign-authority")
+    sov_faith = build_composite("sovereign-authority", "faith-ministry")
+    p_alone = sov_alone["blended_color_system"]["primary"]
+    p_blend = sov_faith["blended_color_system"]["primary"]
+    print(f"\nSovereign primary alone:        {p_alone}")
+    print(f"Sovereign + Faith primary blend: {p_blend}")
+    assert p_alone.lower() != p_blend.lower(), \
+        "blend_palettes is still identity — Session 2 patch B didn't take effect"
+    print("\n[PASS]\n")
+
+
+def test_layout_renderers():
+    """Test 7: every layout renders without error against KMJ Creative sample data."""
+    print("=" * 64)
+    print("TEST 7: All 12 layouts render end-to-end")
+    print("=" * 64)
+
+    from studio_composite import build_composite
+    from studio_design_system import build_design_system
+    from studio_layouts.dispatch import all_layouts, render_layout
+
+    biz = {"name": "KMJ Creative Solutions", "type": "consultant",
+           "tagline": "Strategy. Identity. Execution.",
+           "elevator_pitch": "Helping established consultants articulate their authority."}
+    bundle = {
+        "business": {"name": biz["name"], "type": "consultant", "slug": "kmj-creative-solutions"},
+        "practitioner": {"display_name": "Kevin McCloud Jr."},
+        "voice": {"brand_voice": "corporate"},
+        "design": {"primary_color": "#1A1A2E", "accent_color": "#C9A84C"},
+        "legal": {"in_the_clear": True, "required_disclaimers": []},
+        "footer": {"copyright_line": "(c) 2026 Kevin McCloud Jr.",
+                   "contact_email": "kevin@kmjcreative.com"},
+    }
+    products = [
+        {"name": "Foundation Strategy Sprint", "price": 2500, "description": "Two-week intensive."},
+        {"name": "Brand Audit", "price": 1500, "description": "Comprehensive review."},
+    ]
+    sections = {"hero": {"enabled": True}, "about": {"enabled": True}, "services": {"enabled": True}}
+
+    composite = build_composite("sovereign-authority", "established-authority", "minimalist")
+    ds = build_design_system(composite, business_name=biz["name"], tagline=biz["tagline"])
+
+    layouts = all_layouts()
+    print(f"Rendering {len(layouts)} layouts...")
+    failed = []
+    for lid in layouts:
+        try:
+            html = render_layout(
+                lid,
+                business_data=biz,
+                design_system=ds,
+                composite=composite,
+                sections_config=sections,
+                bundle=bundle,
+                products=products,
+            )
+            assert html.startswith("<!DOCTYPE html>")
+            assert biz["name"] in html
+            assert "<footer" in html
+            print(f"  [OK] {lid:18s}  {len(html):,} bytes")
+        except Exception as e:
+            failed.append((lid, f"{type(e).__name__}: {e}"))
+            print(f"  [FAIL] {lid}: {type(e).__name__}: {e}")
+
+    if failed:
+        raise AssertionError(f"{len(failed)} layout(s) failed: {failed}")
+    print(f"\n[PASS] all {len(layouts)} layouts render valid HTML\n")
+
+
+def test_preview_files_present():
+    """Test 8: confirm studio_preview.py produced the 36 expected files."""
+    print("=" * 64)
+    print("TEST 8: Preview files generated")
+    print("=" * 64)
+
+    from pathlib import Path
+    preview_dir = Path(__file__).parent / "layout_previews"
+    if not preview_dir.exists():
+        print("  layout_previews/ does not exist yet — run `python studio_preview.py` first.")
+        print("[SKIP]\n")
+        return
+
+    files = list(preview_dir.glob("*.html"))
+    business_layout_files = [f for f in files if f.name != "index.html"]
+    print(f"  Total HTML files in layout_previews/: {len(files)}")
+    print(f"  Business x layout files (excluding index.html): {len(business_layout_files)}")
+    print(f"  index.html present: {(preview_dir / 'index.html').exists()}")
+    if business_layout_files:
+        sizes = [f.stat().st_size for f in business_layout_files]
+        print(f"  Total bytes: {sum(sizes):,}  (avg {sum(sizes)//len(sizes):,} per file)")
+    assert len(business_layout_files) == 36, f"Expected 36 preview files, got {len(business_layout_files)}"
+    assert (preview_dir / "index.html").exists(), "index.html missing"
+    print("\n[PASS]\n")
+
+
 if __name__ == "__main__":
     test_data_module()
     test_color_math()
     test_detection_for_real_businesses()
     test_composite_blending()
     test_design_system_generation()
+    test_session2_patches()
+    test_layout_renderers()
+    test_preview_files_present()
     print("=" * 64)
     print("ALL TESTS COMPLETE")
     print("=" * 64)

@@ -109,6 +109,59 @@ def blend_hex_colors(hex_a: str, hex_b: str, ratio: float = 0.5) -> str:
     return hsl_to_hex(h, s, l)
 
 
+def blend_palettes(
+    primary_palette: ColorPalette,
+    secondary_palette: Optional[ColorPalette] = None,
+    aesthetic_palette: Optional[ColorPalette] = None,
+) -> ColorPalette:
+    """Blend up to 3 palettes channel-by-channel. Primary always dominates.
+
+    Pass 3.5 Session 2 fix: Session 1's build_composite was an identity
+    operation (it took primary unchanged and only swapped accent). This
+    function actually blends in HSL space.
+
+    Ratios (primary always the largest weight):
+      - Primary alone:                     identity (no blending)
+      - Primary + secondary:               75 / 25
+      - Primary + aesthetic:               85 / 15
+      - Primary + secondary + aesthetic:   80 / 13 / 7  (retuned in checkpoint 1
+        review — earlier 65/22/13 produced too-strong a shift for triples)
+    """
+    if secondary_palette is None and aesthetic_palette is None:
+        return primary_palette
+
+    channels = ("primary", "secondary", "accent", "background", "text")
+
+    if aesthetic_palette is None:
+        ratio = 0.25  # secondary's contribution
+        return ColorPalette(**{
+            ch: blend_hex_colors(primary_palette[ch], secondary_palette[ch], ratio)
+            for ch in channels
+        })
+
+    if secondary_palette is None:
+        ratio = 0.15
+        return ColorPalette(**{
+            ch: blend_hex_colors(primary_palette[ch], aesthetic_palette[ch], ratio)
+            for ch in channels
+        })
+
+    # Three-way blend: 80 / 13 / 7. Two-step: blend primary with secondary
+    # in their relative proportions (13 / 93), then blend that result with
+    # aesthetic at its 7/100 share of the total. Primary still strongly
+    # dominates so the user's brand voice character is preserved.
+    primary_secondary_ratio = 13 / (80 + 13)  # ~0.140
+    aesthetic_ratio = 0.07
+    return ColorPalette(**{
+        ch: blend_hex_colors(
+            blend_hex_colors(primary_palette[ch], secondary_palette[ch], primary_secondary_ratio),
+            aesthetic_palette[ch],
+            aesthetic_ratio,
+        )
+        for ch in channels
+    })
+
+
 # ─── LAYOUT RANKING — port from compositeEngine.ts ────────────────────
 
 
@@ -178,13 +231,15 @@ def build_composite(
     secondary = VOCABULARIES.get(secondary_vocab_id) if secondary_vocab_id else None
     aesthetic = VOCABULARIES.get(aesthetic_vocab_id) if aesthetic_vocab_id else None
 
-    blended_color_system: ColorPalette = {
-        "primary": primary["color_palette"]["primary"],
-        "secondary": primary["color_palette"]["secondary"],
-        "accent": (secondary or primary)["color_palette"]["accent"],
-        "background": primary["color_palette"]["background"],
-        "text": primary["color_palette"]["text"],
-    }
+    # Pass 3.5 Session 2: actually blend the palettes in HSL space.
+    # Session 1 was an identity operation (primary unchanged, just swapping
+    # accent); now secondary and aesthetic vocabularies measurably shift
+    # the palette while primary still dominates.
+    blended_color_system = blend_palettes(
+        primary["color_palette"],
+        secondary["color_palette"] if secondary else None,
+        aesthetic["color_palette"] if aesthetic else None,
+    )
 
     blended_typography = (
         f"{primary['typography_direction']}. Aesthetic influence: {aesthetic['typography_direction']}"
