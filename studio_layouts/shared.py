@@ -26,6 +26,95 @@ def safe_html(text: Optional[str], default: str = "") -> str:
     )
 
 
+def render_motion_styles() -> str:
+    """Pass 3.7: global CSS for scroll reveals, hover effects, marquee.
+    Honors prefers-reduced-motion and suppresses heavy decorations on
+    mobile (< 640px viewport). One block, included once per page via
+    render_head().
+    """
+    return """
+<style>
+/* Scroll reveal — sections fade up as they enter viewport */
+.reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.8s ease-out, transform 0.8s ease-out;
+}
+.reveal.visible { opacity: 1; transform: translateY(0); }
+
+/* Hover lift — cards rise on hover */
+.hover-lift {
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.hover-lift:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.10);
+}
+
+/* Marquee for ticker bands */
+.marquee { display: flex; overflow: hidden; white-space: nowrap; }
+.marquee-content {
+  display: inline-flex;
+  animation: marquee-roll 30s linear infinite;
+}
+@keyframes marquee-roll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+/* Form-field focus glow */
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+/* Mobile: suppress heavy decorations (corner brackets, glow halos,
+   geometric ornaments). Section dividers stay because they're cheap. */
+@media (max-width: 640px) {
+  .heavy-decoration { display: none !important; }
+}
+
+/* Honor users who prefer reduced motion: kill all animation. */
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
+  .hover-lift { transition: none; }
+  .hover-lift:hover { transform: none; box-shadow: none; }
+  .marquee-content { animation: none; }
+  *, *::before, *::after {
+    animation-duration: 0s !important;
+    transition-duration: 0s !important;
+  }
+}
+</style>
+"""
+
+
+def render_motion_script() -> str:
+    """Pass 3.7: single inline IntersectionObserver script for scroll
+    reveals. Self-contained, no dependencies, no library. Place once
+    per page near </body>.
+    """
+    return """
+<script>
+(function() {
+  if (!('IntersectionObserver' in window)) {
+    document.querySelectorAll('.reveal').forEach(function(el) { el.classList.add('visible'); });
+    return;
+  }
+  var observer = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
+  document.querySelectorAll('.reveal').forEach(function(el) { observer.observe(el); });
+})();
+</script>
+"""
+
+
 def render_head(
     business_name: str,
     design_system: DesignSystem,
@@ -34,8 +123,9 @@ def render_head(
     """Return the <head> section common to all layouts.
 
     Includes meta charset/viewport, title, Google Fonts link, base
-    typography CSS, reveal animation CSS, and any extra meta passed
-    by the caller (favicon/social card from public_site._brand_head_meta_tags).
+    typography CSS, reveal animation CSS, motion styles (Pass 3.7),
+    and any extra meta passed by the caller (favicon/social card from
+    public_site._brand_head_meta_tags).
     """
     google_fonts_link = (
         f'<link href="{design_system["google_fonts_url"]}" rel="stylesheet">'
@@ -52,6 +142,7 @@ def render_head(
 {design_system['typography_css']}
 {design_system['reveal_css']}
 </style>
+{render_motion_styles()}
 </head>"""
 
 
@@ -256,20 +347,21 @@ def render_testimonials_section(
     sections_config: Dict[str, Any],
     bundle: Dict[str, Any],
     bespoke=None,
+    vocab_id: Optional[str] = None,
 ) -> str:
     """Render the testimonials section with try/except safety.
     `bespoke`: optional callable with the same signature as the shared
     renderer; layouts that need a bespoke override (e.g. community-hub)
-    pass it in.
+    pass it in. `vocab_id` (Pass 3.7): drives decoration character.
     """
     cfg = (sections_config or {}).get("testimonials") or {}
     if not cfg.get("enabled", False):
         return ""
     items = cfg.get("items") or []
     if bespoke is not None:
-        return _safe_section_render(bespoke, design_system, items, cfg, bundle)
+        return _safe_section_render(bespoke, design_system, items, cfg, bundle, vocab_id)
     from studio_layouts.sections.testimonials import render as _shared
-    return _safe_section_render(_shared, design_system, items, cfg, bundle)
+    return _safe_section_render(_shared, design_system, items, cfg, bundle, vocab_id)
 
 
 def render_gallery_section(
@@ -277,15 +369,16 @@ def render_gallery_section(
     sections_config: Dict[str, Any],
     bundle: Dict[str, Any],
     bespoke=None,
+    vocab_id: Optional[str] = None,
 ) -> str:
     cfg = (sections_config or {}).get("gallery") or {}
     if not cfg.get("enabled", False):
         return ""
     items = cfg.get("items") or []
     if bespoke is not None:
-        return _safe_section_render(bespoke, design_system, items, cfg, bundle)
+        return _safe_section_render(bespoke, design_system, items, cfg, bundle, vocab_id)
     from studio_layouts.sections.gallery import render as _shared
-    return _safe_section_render(_shared, design_system, items, cfg, bundle)
+    return _safe_section_render(_shared, design_system, items, cfg, bundle, vocab_id)
 
 
 def render_resources_section(
@@ -293,15 +386,16 @@ def render_resources_section(
     sections_config: Dict[str, Any],
     bundle: Dict[str, Any],
     bespoke=None,
+    vocab_id: Optional[str] = None,
 ) -> str:
     cfg = (sections_config or {}).get("resources") or {}
     if not cfg.get("enabled", False):
         return ""
     items = cfg.get("items") or []
     if bespoke is not None:
-        return _safe_section_render(bespoke, design_system, items, cfg, bundle)
+        return _safe_section_render(bespoke, design_system, items, cfg, bundle, vocab_id)
     from studio_layouts.sections.resources import render as _shared
-    return _safe_section_render(_shared, design_system, items, cfg, bundle)
+    return _safe_section_render(_shared, design_system, items, cfg, bundle, vocab_id)
 
 
 def render_contact_section(
@@ -310,14 +404,15 @@ def render_contact_section(
     sections_config: Dict[str, Any],
     bundle: Dict[str, Any],
     bespoke=None,
+    vocab_id: Optional[str] = None,
 ) -> str:
     cfg = (sections_config or {}).get("contact") or {}
     if not cfg.get("enabled", False):
         return ""
     if bespoke is not None:
-        return _safe_section_render(bespoke, design_system, business_id, cfg, bundle)
+        return _safe_section_render(bespoke, design_system, business_id, cfg, bundle, vocab_id)
     from studio_layouts.sections.contact import render as _shared
-    return _safe_section_render(_shared, design_system, business_id, cfg, bundle)
+    return _safe_section_render(_shared, design_system, business_id, cfg, bundle, vocab_id)
 
 
 def render_appendix_sections(
@@ -330,6 +425,7 @@ def render_appendix_sections(
     bespoke_gallery=None,
     bespoke_resources=None,
     bespoke_contact=None,
+    vocab_id: Optional[str] = None,
 ) -> str:
     """Render testimonials + gallery + resources + contact in order.
 
@@ -337,11 +433,14 @@ def render_appendix_sections(
     yields an empty string instead of breaking the layout. Pass a
     `bespoke_*=` callable to swap the default shared renderer for a
     layout-specific override.
+
+    Pass 3.7: `vocab_id` flows through to section renderers so they can
+    apply vocabulary-specific decoration via studio_decoration.
     """
     parts = [
-        render_testimonials_section(design_system, sections_config, bundle, bespoke=bespoke_testimonials),
-        render_gallery_section(design_system, sections_config, bundle, bespoke=bespoke_gallery),
-        render_resources_section(design_system, sections_config, bundle, bespoke=bespoke_resources),
-        render_contact_section(design_system, business_id, sections_config, bundle, bespoke=bespoke_contact),
+        render_testimonials_section(design_system, sections_config, bundle, bespoke=bespoke_testimonials, vocab_id=vocab_id),
+        render_gallery_section(design_system, sections_config, bundle, bespoke=bespoke_gallery, vocab_id=vocab_id),
+        render_resources_section(design_system, sections_config, bundle, bespoke=bespoke_resources, vocab_id=vocab_id),
+        render_contact_section(design_system, business_id, sections_config, bundle, bespoke=bespoke_contact, vocab_id=vocab_id),
     ]
     return "".join(p for p in parts if p)

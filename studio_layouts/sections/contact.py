@@ -6,7 +6,7 @@ underscores so it's a valid JavaScript identifier.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from studio_design_system import DesignSystem, _pick_accent_contrast, _pick_contrast_text
 from studio_layouts.shared import safe_html
@@ -20,6 +20,7 @@ def render(
     business_id: str,
     section_config: Dict[str, Any],
     bundle: Dict[str, Any],
+    vocab_id: Optional[str] = None,
 ) -> str:
     """section_config: {enabled, email, phone, address, show_form, heading, subtext}."""
     if not section_config.get("enabled", False):

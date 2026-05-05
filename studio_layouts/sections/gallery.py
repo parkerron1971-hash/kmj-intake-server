@@ -1,7 +1,7 @@
 """Shared gallery section renderer."""
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from studio_design_system import DesignSystem
 from studio_layouts.shared import safe_html
@@ -12,6 +12,7 @@ def render(
     items: List[Dict[str, Any]],
     section_config: Dict[str, Any],
     bundle: Dict[str, Any],
+    vocab_id: Optional[str] = None,
 ) -> str:
     """items: list of {image_url, caption, order}."""
     if not items or not section_config.get("enabled", False):
@@ -31,7 +32,7 @@ def render(
             if caption else ''
         )
         images.append(f"""
-<figure style="margin:0;">
+<figure class="hover-lift reveal" style="margin:0;">
   <img src="{url}" alt="{caption}" style="width:100%;height:280px;object-fit:cover;border-radius:4px;display:block;" loading="lazy">
   {caption_html}
 </figure>""")

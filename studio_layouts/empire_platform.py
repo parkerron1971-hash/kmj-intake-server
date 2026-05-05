@@ -12,7 +12,7 @@ from studio_composite import CompositeDirection
 from studio_design_system import DesignSystem, _pick_accent_contrast, _pick_contrast_text
 from studio_layouts.shared import (
     render_appendix_sections, render_archetype_touch, render_footer,
-    render_head, render_in_the_clear_badge, render_stripe_button, safe_html,
+    render_head, render_in_the_clear_badge, render_stripe_button, safe_html, render_motion_script,
 )
 
 
@@ -28,6 +28,7 @@ def render(
     products = products or []
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
+    vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
 
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
@@ -296,5 +297,6 @@ def render(
 {after_services}
 {appendix_html}
 {footer_html}
+{render_motion_script()}
 </body>
 </html>"""

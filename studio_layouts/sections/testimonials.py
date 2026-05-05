@@ -5,7 +5,7 @@ override with their own bespoke renderer (e.g. community_hub).
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from studio_design_system import DesignSystem, _pick_contrast_text
 from studio_layouts.shared import safe_html
@@ -16,8 +16,11 @@ def render(
     items: List[Dict[str, Any]],
     section_config: Dict[str, Any],
     bundle: Dict[str, Any],
+    vocab_id: Optional[str] = None,
 ) -> str:
-    """items: list of {quote, author, role, date}."""
+    """items: list of {quote, author, role, date}.
+    Pass 3.7: vocab_id added for future decoration hooks (currently
+    unused in shared renderer; bespoke overrides may use it)."""
     if not items or not section_config.get("enabled", False):
         return ""
 
@@ -39,8 +42,8 @@ def render(
             if role else ''
         )
         cards.append(f"""
-<div style="padding:32px;background:{surface};color:{surface_text};border-radius:8px;border:1px solid color-mix(in srgb,{text} 12%,transparent);">
-  <div style="font-family:'{display_font}',Georgia,serif;font-size:2.5rem;color:{accent};line-height:1;margin-bottom:1rem;">"</div>
+<div class="hover-lift reveal" style="padding:32px;background:{surface};color:{surface_text};border-radius:8px;border:1px solid color-mix(in srgb,{text} 12%,transparent);">
+  <div style="font-family:'{display_font}',Georgia,serif;font-size:2.5rem;color:{accent};line-height:1;margin-bottom:1rem;">&ldquo;</div>
   <p style="font-size:1.05rem;line-height:1.6;color:{surface_text};margin:0 0 1.5rem;">{quote}</p>
   <div style="font-weight:600;color:{surface_text};">{author}</div>
   {role_html}

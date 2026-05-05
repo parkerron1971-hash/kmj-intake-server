@@ -1,7 +1,7 @@
 """Shared resources / lead-magnets section renderer."""
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from studio_design_system import DesignSystem, _pick_contrast_text
 from studio_layouts.shared import safe_html
@@ -21,6 +21,7 @@ def render(
     items: List[Dict[str, Any]],
     section_config: Dict[str, Any],
     bundle: Dict[str, Any],
+    vocab_id: Optional[str] = None,
 ) -> str:
     """items: list of {title, description, link, type}.
     type: 'pdf' | 'video' | 'audio' | 'link' | 'doc'.
@@ -46,7 +47,7 @@ def render(
             if desc else ''
         )
         cards.append(f"""
-<a href="{link}" target="_blank" rel="noopener" style="display:block;padding:24px;background:{surface};color:{surface_text};border-radius:6px;border:1px solid color-mix(in srgb,{text} 10%,transparent);text-decoration:none;transition:transform 0.2s ease;">
+<a href="{link}" target="_blank" rel="noopener" class="hover-lift reveal" style="display:block;padding:24px;background:{surface};color:{surface_text};border-radius:6px;border:1px solid color-mix(in srgb,{text} 10%,transparent);text-decoration:none;">
   <div style="font-family:'{display_font}',Georgia,serif;font-size:0.7rem;letter-spacing:0.18em;text-transform:uppercase;color:{accent};margin-bottom:0.75rem;">{type_label}</div>
   <div style="font-weight:600;font-size:1.1rem;margin-bottom:0.5rem;color:{surface_text};">{title}</div>
   {desc_html}

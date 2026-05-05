@@ -30,7 +30,7 @@ from studio_layouts.shared import (
     render_head,
     render_in_the_clear_badge,
     render_stripe_button,
-    safe_html,
+    safe_html, render_motion_script,
 )
 
 
@@ -58,6 +58,7 @@ def render(
     products = products or []
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
+    vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
 
     # ─── Tokens for f-string interpolation ──────────────────────────
     palette_bg = design_system["palette_bg"]
@@ -292,5 +293,6 @@ def render(
 {after_services}
 {appendix_html}
 {footer_html}
+{render_motion_script()}
 </body>
 </html>"""
