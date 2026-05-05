@@ -1363,14 +1363,32 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
         raise HTTPException(400, "Invalid email")
 
     try:
-        from brand_engine import get_bundle
+        from brand_engine import get_bundle, _sb_get as be_get
         bundle = get_bundle(business_id) or {}
     except Exception as e:
         logger.warning(f"[contact-submit] get_bundle failed for {business_id}: {e}")
         bundle = {}
+        be_get = None
+
+    # Per-site override email from site_config.sections.contact.email
+    # is the displayed "Public email" the visitor sees on the form. Send
+    # to that first; fall back to the canonical bundle footer email.
+    site_contact_email = None
+    if be_get is not None:
+        try:
+            site_rows = be_get(
+                f"/business_sites?business_id=eq.{business_id}&select=site_config&limit=1"
+            ) or []
+            site_cfg = (site_rows[0].get("site_config") if site_rows else {}) or {}
+            site_contact_email = (
+                ((site_cfg.get("sections") or {}).get("contact") or {}).get("email")
+            )
+        except Exception:
+            site_contact_email = None
 
     target_email = (
-        ((bundle.get("footer") or {}).get("contact_email"))
+        site_contact_email
+        or ((bundle.get("footer") or {}).get("contact_email"))
         or os.environ.get("DEFAULT_CONTACT_FALLBACK_EMAIL")
         or ""
     )
