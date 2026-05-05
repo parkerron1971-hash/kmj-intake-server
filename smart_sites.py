@@ -999,7 +999,7 @@ def _try_render_via_studio_layouts(
     import logging
     logger = logging.getLogger("smart_sites")
     try:
-        layout_id, _vocab_id, composite, design_system, business_data, _profile, _matches = (
+        layout_id, _vocab_id, composite, design_system, business_data, business_profile, _matches = (
             resolve_layout_and_vocabulary(business_id, site_config)
         )
         if not (layout_id and design_system and composite and business_data):
@@ -1019,9 +1019,24 @@ def _try_render_via_studio_layouts(
         sections_config = site_config.get("sections") or {}
         products = opts.get("products") or []
 
+        # Layouts read archetype from business_data["type"] for archetype
+        # touches (financial_educator warning, fitness liability, etc.).
+        # The raw `businesses.type` column doesn't always carry the
+        # archetype the user picked in their business profile (e.g. ETS
+        # has `businesses.type="coaching"` but `business_profiles.business_type="financial_educator"`).
+        # Override here so the layout sees the canonical archetype.
+        canonical_archetype = (
+            (business_profile or {}).get("business_type")
+            or (bundle.get("business") or {}).get("type")
+            or business_data.get("type")
+            or "custom"
+        )
+        business_data_for_render = dict(business_data)
+        business_data_for_render["type"] = canonical_archetype
+
         return render_layout(
             layout_id,
-            business_data=business_data,
+            business_data=business_data_for_render,
             design_system=design_system,
             composite=composite,
             sections_config=sections_config,
