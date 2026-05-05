@@ -11,9 +11,54 @@ from typing import Any, Dict, List, Optional
 from studio_composite import CompositeDirection
 from studio_design_system import DesignSystem, _pick_accent_contrast, _pick_contrast_text
 from studio_layouts.shared import (
-    render_archetype_touch, render_footer, render_head,
-    render_in_the_clear_badge, safe_html,
+    render_appendix_sections, render_archetype_touch, render_footer,
+    render_head, render_in_the_clear_badge, render_stripe_button, safe_html,
 )
+
+
+def _bespoke_gallery(design_system, items, section_config, bundle):
+    """Pass 3.6: bespoke studio-portfolio gallery — true masonry via
+    column-fill so portfolio pieces have varied heights, photo-first
+    treatment, minimal captions overlaid on hover."""
+    if not items:
+        return ""
+    text = design_system["palette_text"]
+    accent = design_system["palette_accent"]
+    display_font = design_system["font_display"]
+
+    pieces = []
+    for item in items[:18]:
+        url = safe_html(item.get("image_url", ""))
+        caption = safe_html(item.get("caption", ""))
+        if not url:
+            continue
+        caption_overlay = (
+            f'<figcaption style="position:absolute;left:0;right:0;bottom:0;padding:14px 16px;background:linear-gradient(to top,rgba(0,0,0,0.55),transparent);color:#fff;font-size:0.8rem;letter-spacing:0.05em;">{caption}</figcaption>'
+            if caption else ''
+        )
+        pieces.append(f"""
+<figure style="break-inside:avoid;margin:0 0 16px;position:relative;border-radius:6px;overflow:hidden;">
+  <img src="{url}" alt="{caption}" style="width:100%;display:block;border-radius:6px;" loading="lazy">
+  {caption_overlay}
+</figure>""")
+
+    if not pieces:
+        return ""
+    heading = safe_html(section_config.get("heading") or "Selected work")
+    return f"""
+<section style="max-width:1300px;margin:0 auto;padding:80px 32px;">
+  <h2 style="font-family:'{display_font}',Georgia,serif;font-size:2rem;margin:0 0 2rem;color:{text};">
+    {heading}
+  </h2>
+  <div style="column-count:3;column-gap:16px;">
+    {''.join(pieces)}
+  </div>
+  <style>
+    @media (max-width: 900px) {{ section > div[style*="column-count:3"] {{ column-count: 2; }} }}
+    @media (max-width: 600px) {{ section > div[style*="column-count:3"] {{ column-count: 1; }} }}
+  </style>
+</section>
+"""
 
 
 def render(
@@ -231,7 +276,8 @@ def render(
                 price_label = ""
             price_html = f'<div class="sp-price">{price_label}</div>' if price_label else ""
             desc_html = f"<p>{desc}</p>" if desc else ""
-            portraits.append(f'<a href="#contact" class="sp-portrait-card"><h3>{name}</h3>{desc_html}{price_html}</a>')
+            cta_html = render_stripe_button(p, design_system)
+            portraits.append(f'<a href="#contact" class="sp-portrait-card"><h3>{name}</h3>{desc_html}{price_html}{cta_html}</a>')
         services_html = f"""
 <section class="sp-section">
   <h2>Services</h2>
@@ -252,6 +298,10 @@ def render(
 """
 
     after_services = render_archetype_touch(archetype, "after_services", design_system, bundle)
+    appendix_html = render_appendix_sections(
+        design_system, business_data.get("id", "") or "", sections_config, bundle,
+        bespoke_gallery=_bespoke_gallery,
+    )
     footer_html = render_footer(business_data, bundle, design_system, sections_config.get("footer_extra_text"))
     head = render_head(business_name, design_system, head_meta_extra)
     return f"""<!DOCTYPE html>
@@ -265,6 +315,7 @@ def render(
 {services_html}
 {about_html}
 {after_services}
+{appendix_html}
 {footer_html}
 </body>
 </html>"""

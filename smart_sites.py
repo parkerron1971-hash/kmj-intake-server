@@ -53,6 +53,8 @@ ARCHETYPE_TOUCHES = (
 DEFAULT_SITE_CONFIG: Dict[str, Any] = {
     "use_smart_sites": False,
     "vibe_family_override": None,
+    "vocabulary_override": None,  # Pass 3.5 Session 3
+    "layout_id": None,             # Pass 3.5 Session 3
     "sections": {
         "hero": {
             "enabled": True,
@@ -63,9 +65,34 @@ DEFAULT_SITE_CONFIG: Dict[str, Any] = {
         },
         "about": {"enabled": True, "text": None},
         "services": {"enabled": True},
-        "testimonials": {"enabled": False},
-        "gallery": {"enabled": False},
-        "resources": {"enabled": False},
+        # Pass 3.6 — four new section types. All default disabled so
+        # existing sites do NOT suddenly grow new content from this
+        # deploy. Users opt in via the MySite editor.
+        "testimonials": {
+            "enabled": False,
+            "heading": "What clients say",
+            "items": [],
+        },
+        "gallery": {
+            "enabled": False,
+            "heading": "Gallery",
+            "items": [],
+        },
+        "resources": {
+            "enabled": False,
+            "heading": "Free Resources",
+            "subtext": None,
+            "items": [],
+        },
+        "contact": {
+            "enabled": False,
+            "heading": "Get in touch",
+            "subtext": None,
+            "email": None,
+            "phone": None,
+            "address": None,
+            "show_form": True,
+        },
     },
     "footer_extra_text": None,
     "custom_domain": None,

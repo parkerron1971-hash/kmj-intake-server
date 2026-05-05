@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional
 from studio_composite import CompositeDirection
 from studio_design_system import DesignSystem, _pick_accent_contrast, _pick_contrast_text
 from studio_layouts.shared import (
-    render_archetype_touch, render_footer, render_head,
-    render_in_the_clear_badge, safe_html,
+    render_appendix_sections, render_archetype_touch, render_footer,
+    render_head, render_in_the_clear_badge, render_stripe_button, safe_html,
 )
 
 
@@ -154,7 +154,9 @@ def render(
             except (TypeError, ValueError):
                 price_label = ""
             price_html = f'<span class="price">{price_label}</span>' if price_label else ""
-            items.append(f'<li><span class="name">{name}</span>{price_html}</li>')
+            cta_html = render_stripe_button(p, design_system)
+            cta_inline = f' &middot; {cta_html}' if cta_html else ''
+            items.append(f'<li><span class="name">{name}</span>{price_html}{cta_inline}</li>')
         services_html = f"""
 <div class="cl-divider"></div>
 <section class="cl-section">
@@ -164,6 +166,9 @@ def render(
 """
 
     after_services = render_archetype_touch(archetype, "after_services", design_system, bundle)
+    appendix_html = render_appendix_sections(
+        design_system, business_data.get("id", "") or "", sections_config, bundle,
+    )
     footer_html = render_footer(business_data, bundle, design_system, sections_config.get("footer_extra_text"))
     head = render_head(business_name, design_system, head_meta_extra)
     return f"""<!DOCTYPE html>
@@ -175,6 +180,7 @@ def render(
 {before_about}
 {services_html}
 {after_services}
+{appendix_html}
 {footer_html}
 </body>
 </html>"""

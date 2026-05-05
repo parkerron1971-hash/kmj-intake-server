@@ -24,10 +24,12 @@ from typing import Any, Dict, List, Optional
 from studio_composite import CompositeDirection
 from studio_design_system import DesignSystem, _pick_accent_contrast
 from studio_layouts.shared import (
+    render_appendix_sections,
     render_archetype_touch,
     render_footer,
     render_head,
     render_in_the_clear_badge,
+    render_stripe_button,
     safe_html,
 )
 
@@ -251,8 +253,9 @@ def render(
                 price_label = ""
             desc_html = f"<p>{desc}</p>" if desc else ""
             price_html = f'<div class="mag-price">{price_label}</div>' if price_label else ""
+            cta_html = render_stripe_button(p, design_system)
             cards.append(
-                f'<div class="mag-service-card"><h3>{name}</h3>{desc_html}{price_html}</div>'
+                f'<div class="mag-service-card"><h3>{name}</h3>{desc_html}{price_html}{cta_html}</div>'
             )
         services_html = f"""
 <section class="mag-section">
@@ -263,6 +266,11 @@ def render(
 
     # ─── Archetype touch (after services) ───────────────────────────
     after_services = render_archetype_touch(archetype, "after_services", design_system, bundle)
+
+    # ─── Pass 3.6: appendix sections (testimonials, gallery, resources, contact) ──
+    appendix_html = render_appendix_sections(
+        design_system, business_data.get("id", "") or "", sections_config, bundle,
+    )
 
     # ─── Footer ─────────────────────────────────────────────────────
     footer_html = render_footer(
@@ -282,6 +290,7 @@ def render(
 {about_html}
 {services_html}
 {after_services}
+{appendix_html}
 {footer_html}
 </body>
 </html>"""

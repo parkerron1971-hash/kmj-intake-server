@@ -215,3 +215,133 @@ def render_footer(
   {contact_html}
 </footer>
 """
+
+
+# ─── Pass 3.6: section dispatchers + Stripe button ──────────────────
+
+
+def render_stripe_button(product: Dict[str, Any], design_system: DesignSystem) -> str:
+    """Pass 3.6: when a product has stripe_payment_url set, render a
+    vibe-aware Purchase button. Returns empty string when the URL is
+    absent, so callers can append unconditionally.
+    """
+    if not isinstance(product, dict):
+        return ""
+    url = product.get("stripe_payment_url")
+    if not url or not isinstance(url, str) or not url.strip():
+        return ""
+    accent = design_system["palette_accent"]
+    on_accent = _pick_accent_contrast(accent)
+    return (
+        f'<a href="{safe_html(url)}" target="_blank" rel="noopener" '
+        f'style="display:inline-block;padding:10px 20px;background:{accent};'
+        f'color:{on_accent};text-decoration:none;border-radius:4px;'
+        f'font-weight:500;margin-top:0.75rem;font-size:0.9rem;">Purchase &rarr;</a>'
+    )
+
+
+def _safe_section_render(fn, *args, **kwargs) -> str:
+    """Run a section renderer; swallow any exception and return empty
+    string. Pass 3.6 invariant: a single section's failure must NEVER
+    break the page."""
+    try:
+        result = fn(*args, **kwargs)
+        return result if isinstance(result, str) else ""
+    except Exception:
+        return ""
+
+
+def render_testimonials_section(
+    design_system: DesignSystem,
+    sections_config: Dict[str, Any],
+    bundle: Dict[str, Any],
+    bespoke=None,
+) -> str:
+    """Render the testimonials section with try/except safety.
+    `bespoke`: optional callable with the same signature as the shared
+    renderer; layouts that need a bespoke override (e.g. community-hub)
+    pass it in.
+    """
+    cfg = (sections_config or {}).get("testimonials") or {}
+    if not cfg.get("enabled", False):
+        return ""
+    items = cfg.get("items") or []
+    if bespoke is not None:
+        return _safe_section_render(bespoke, design_system, items, cfg, bundle)
+    from studio_layouts.sections.testimonials import render as _shared
+    return _safe_section_render(_shared, design_system, items, cfg, bundle)
+
+
+def render_gallery_section(
+    design_system: DesignSystem,
+    sections_config: Dict[str, Any],
+    bundle: Dict[str, Any],
+    bespoke=None,
+) -> str:
+    cfg = (sections_config or {}).get("gallery") or {}
+    if not cfg.get("enabled", False):
+        return ""
+    items = cfg.get("items") or []
+    if bespoke is not None:
+        return _safe_section_render(bespoke, design_system, items, cfg, bundle)
+    from studio_layouts.sections.gallery import render as _shared
+    return _safe_section_render(_shared, design_system, items, cfg, bundle)
+
+
+def render_resources_section(
+    design_system: DesignSystem,
+    sections_config: Dict[str, Any],
+    bundle: Dict[str, Any],
+    bespoke=None,
+) -> str:
+    cfg = (sections_config or {}).get("resources") or {}
+    if not cfg.get("enabled", False):
+        return ""
+    items = cfg.get("items") or []
+    if bespoke is not None:
+        return _safe_section_render(bespoke, design_system, items, cfg, bundle)
+    from studio_layouts.sections.resources import render as _shared
+    return _safe_section_render(_shared, design_system, items, cfg, bundle)
+
+
+def render_contact_section(
+    design_system: DesignSystem,
+    business_id: str,
+    sections_config: Dict[str, Any],
+    bundle: Dict[str, Any],
+    bespoke=None,
+) -> str:
+    cfg = (sections_config or {}).get("contact") or {}
+    if not cfg.get("enabled", False):
+        return ""
+    if bespoke is not None:
+        return _safe_section_render(bespoke, design_system, business_id, cfg, bundle)
+    from studio_layouts.sections.contact import render as _shared
+    return _safe_section_render(_shared, design_system, business_id, cfg, bundle)
+
+
+def render_appendix_sections(
+    design_system: DesignSystem,
+    business_id: str,
+    sections_config: Dict[str, Any],
+    bundle: Dict[str, Any],
+    *,
+    bespoke_testimonials=None,
+    bespoke_gallery=None,
+    bespoke_resources=None,
+    bespoke_contact=None,
+) -> str:
+    """Render testimonials + gallery + resources + contact in order.
+
+    Each section is wrapped in `_safe_section_render` so any failure
+    yields an empty string instead of breaking the layout. Pass a
+    `bespoke_*=` callable to swap the default shared renderer for a
+    layout-specific override.
+    """
+    parts = [
+        render_testimonials_section(design_system, sections_config, bundle, bespoke=bespoke_testimonials),
+        render_gallery_section(design_system, sections_config, bundle, bespoke=bespoke_gallery),
+        render_resources_section(design_system, sections_config, bundle, bespoke=bespoke_resources),
+        render_contact_section(design_system, business_id, sections_config, bundle, bespoke=bespoke_contact),
+    ]
+    return "".join(p for p in parts if p)
