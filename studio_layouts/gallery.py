@@ -13,6 +13,7 @@ from studio_layouts.shared import (
     render_appendix_sections, render_archetype_touch, render_footer,
     render_head, render_in_the_clear_badge, render_stripe_button, safe_html, render_motion_script,
 )
+from studio_decoration import render_decoration_for
 
 
 def _bespoke_gallery(design_system, items, section_config, bundle, vocab_id=None):
@@ -69,6 +70,7 @@ def render(
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
     vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
+    section_break = render_decoration_for(vocab_id, design_system, "section_break")
 
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
@@ -192,7 +194,7 @@ def render(
     sub_html = f'<p class="gal-subhead">{subheadline}</p>' if subheadline else ""
     badge_html = f'<div style="margin-bottom:1.5rem;">{badge}</div>' if badge else ""
     hero_html = f"""
-<section class="gal-hero">
+<section class="gal-hero reveal">
   <div class="gal-hero-text">
     {badge_html}
     <h1 class="gal-headline">{headline}</h1>
@@ -223,7 +225,7 @@ def render(
             cta_html = render_stripe_button(p, design_system)
             tiles.append(f'<a href="#work-{i}" class="{tile_class}" id="work"><h3>{name}</h3>{desc_html}{price_html}{cta_html}</a>')
         services_html = f"""
-<section class="gal-grid-section">
+<section class="gal-grid-section reveal">
   <div class="gal-masonry">{''.join(tiles)}</div>
 </section>
 """

@@ -13,6 +13,7 @@ from studio_layouts.shared import (
     render_appendix_sections, render_archetype_touch, render_footer,
     render_head, render_in_the_clear_badge, render_stripe_button, safe_html, render_motion_script,
 )
+from studio_decoration import render_decoration_for
 
 
 def render(
@@ -28,6 +29,7 @@ def render(
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
     vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
+    section_break = render_decoration_for(vocab_id, design_system, "section_break")
 
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
@@ -174,13 +176,13 @@ def render(
     sub_html = f'<p class="auth-subhead">{subheadline}</p>' if subheadline else ""
     badge_html = f'<div style="margin-bottom:1rem;">{badge}</div>' if badge else ""
     hero_html = f"""
-<section class="auth-hero">
+<section class="auth-hero reveal">
   {badge_html}
   <h1 class="auth-headline">{headline}</h1>
   {sub_html}
   <a href="{cta_link}" class="auth-cta">{cta_label}</a>
 </section>
-<section class="auth-credentials">
+<section class="auth-credentials reveal">
   <div class="auth-credential"><span class="num">10+</span><div class="label">Years experience</div></div>
   <div class="auth-credential"><span class="num">200+</span><div class="label">Engagements delivered</div></div>
   <div class="auth-credential"><span class="num">98%</span><div class="label">Client satisfaction</div></div>
@@ -195,7 +197,7 @@ def render(
         about_text = safe_html(about_config.get("text")) or safe_html(business_data.get("elevator_pitch") or "")
         if about_text:
             about_html = f"""
-<section class="auth-section">
+<section class="auth-section reveal">
   <div class="auth-section-num">01 / About</div>
   <h2>About {safe_html((bundle.get("practitioner") or {}).get("display_name") or "the team")}</h2>
   <p class="auth-about-body">{about_text}</p>
@@ -219,7 +221,7 @@ def render(
             cta_html = render_stripe_button(p, design_system)
             cards.append(f'<div class="auth-service-card"><h3>{name}</h3>{desc_html}{price_html}{cta_html}</div>')
         services_html = f"""
-<section class="auth-section">
+<section class="auth-section reveal">
   <div class="auth-section-num">02 / Services</div>
   <h2>Engagements</h2>
   <div class="auth-services-grid">{''.join(cards)}</div>
@@ -241,6 +243,7 @@ def render(
 {before_about}
 {about_html}
 {services_html}
+{section_break}
 {after_services}
 {appendix_html}
 {footer_html}

@@ -14,6 +14,7 @@ from studio_layouts.shared import (
     render_appendix_sections, render_archetype_touch, render_footer,
     render_head, render_in_the_clear_badge, render_stripe_button, safe_html, render_motion_script,
 )
+from studio_decoration import render_decoration_for
 
 
 def _bespoke_contact(design_system, business_id, section_config, bundle, vocab_id=None):
@@ -115,6 +116,7 @@ def render(
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
     vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
+    section_break = render_decoration_for(vocab_id, design_system, "section_break")
 
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
@@ -244,7 +246,7 @@ def render(
     badge_html = f'<div style="margin-bottom:1.5rem;">{badge}</div>' if badge else ""
     tagline_html = f'<p class="mvm-tagline">{tagline}</p>' if tagline else ""
     hero_html = f"""
-<section class="mvm-hero">
+<section class="mvm-hero reveal">
   <div class="mvm-hero-inner">
     {badge_html}
     <h1 class="mvm-statement">{statement}</h1>
@@ -252,7 +254,7 @@ def render(
     <a href="{cta_link}" class="mvm-cta">{cta_label}</a>
   </div>
 </section>
-<section class="mvm-impact">
+<section class="mvm-impact reveal">
   <div class="mvm-stat"><div class="num">10K+</div><div class="label">People reached</div></div>
   <div class="mvm-stat"><div class="num">50+</div><div class="label">Communities served</div></div>
   <div class="mvm-stat"><div class="num">100%</div><div class="label">Mission-driven</div></div>
@@ -267,7 +269,7 @@ def render(
         about_text = safe_html(about_config.get("text")) or safe_html(business_data.get("elevator_pitch") or "")
         if about_text:
             about_html = f"""
-<section class="mvm-section">
+<section class="mvm-section reveal">
   <h2>Why we exist</h2>
   <p>{about_text}</p>
 </section>
@@ -284,7 +286,7 @@ def render(
             cta_html = render_stripe_button(p, design_system)
             cards.append(f'<div class="mvm-service-card"><h3>{name}</h3>{desc_html}{cta_html}</div>')
         services_html = f"""
-<section class="mvm-section">
+<section class="mvm-section reveal">
   <h2>How you can join</h2>
   <div class="mvm-services-list">{''.join(cards)}</div>
 </section>
@@ -306,6 +308,7 @@ def render(
 {before_about}
 {about_html}
 {services_html}
+{section_break}
 {after_services}
 {appendix_html}
 {footer_html}

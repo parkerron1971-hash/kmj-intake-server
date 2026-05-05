@@ -32,6 +32,7 @@ from studio_layouts.shared import (
     render_stripe_button,
     safe_html, render_motion_script,
 )
+from studio_decoration import render_decoration_for
 
 
 def render(
@@ -59,6 +60,7 @@ def render(
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
     vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
+    section_break = render_decoration_for(vocab_id, design_system, "section_break")
 
     # ─── Tokens for f-string interpolation ──────────────────────────
     palette_bg = design_system["palette_bg"]
@@ -206,7 +208,7 @@ def render(
     sub_html = f'<p class="mag-subhead">{subheadline}</p>' if subheadline else ""
     badge_html = f'<div style="margin-bottom:1rem;">{badge}</div>' if badge else ""
     hero_html = f"""
-<section class="mag-hero">
+<section class="mag-hero reveal">
   <div class="mag-hero-content">
     {badge_html}
     <div class="mag-eyebrow">{eyebrow_text}</div>
@@ -229,7 +231,7 @@ def render(
         )
         if about_text:
             about_html = f"""
-<section class="mag-section mag-about">
+<section class="mag-section mag-about reveal">
   <div>
     <div class="mag-about-label">About</div>
   </div>
@@ -259,7 +261,7 @@ def render(
                 f'<div class="mag-service-card"><h3>{name}</h3>{desc_html}{price_html}{cta_html}</div>'
             )
         services_html = f"""
-<section class="mag-section">
+<section class="mag-section reveal">
   <div class="mag-about-label">Services</div>
   <div class="mag-services-grid">{''.join(cards)}</div>
 </section>
@@ -290,6 +292,7 @@ def render(
 {before_about}
 {about_html}
 {services_html}
+{section_break}
 {after_services}
 {appendix_html}
 {footer_html}

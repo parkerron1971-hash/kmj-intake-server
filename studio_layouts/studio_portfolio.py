@@ -14,6 +14,7 @@ from studio_layouts.shared import (
     render_appendix_sections, render_archetype_touch, render_footer,
     render_head, render_in_the_clear_badge, render_stripe_button, safe_html, render_motion_script,
 )
+from studio_decoration import render_decoration_for
 
 
 def _bespoke_gallery(design_system, items, section_config, bundle, vocab_id=None):
@@ -74,6 +75,7 @@ def render(
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
     vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
+    section_break = render_decoration_for(vocab_id, design_system, "section_break")
 
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
@@ -234,7 +236,7 @@ def render(
     marquee_track = (keywords * 4)
 
     hero_html = f"""
-<section class="sp-hero">
+<section class="sp-hero reveal">
   <div class="sp-hero-text">
     {badge_html}
     <h1 class="sp-headline">{headline}</h1>
@@ -258,7 +260,7 @@ def render(
             name = safe_html(p.get("name", "Work"))
             tiles.append(f'<a href="#work" class="sp-portfolio-tile">{name}</a>')
         portfolio_html = f"""
-<section class="sp-section" id="work">
+<section class="sp-section reveal" id="work">
   <h2>Selected work</h2>
   <div class="sp-portfolio-grid">{''.join(tiles)}</div>
 </section>
@@ -280,7 +282,7 @@ def render(
             cta_html = render_stripe_button(p, design_system)
             portraits.append(f'<a href="#contact" class="sp-portrait-card"><h3>{name}</h3>{desc_html}{price_html}{cta_html}</a>')
         services_html = f"""
-<section class="sp-section">
+<section class="sp-section reveal">
   <h2>Services</h2>
   <div class="sp-services-portrait">{''.join(portraits)}</div>
 </section>
@@ -292,7 +294,7 @@ def render(
         about_text = safe_html(about_config.get("text")) or safe_html(business_data.get("elevator_pitch") or "")
         if about_text:
             about_html = f"""
-<section class="sp-section" style="max-width:760px;">
+<section class="sp-section reveal" style="max-width:760px;">
   <h2>Studio</h2>
   <p style="font-family:'{body_font}',sans-serif;font-size:1.1rem;line-height:1.7;color:color-mix(in srgb,{on_bg} 78%,transparent);">{about_text}</p>
 </section>

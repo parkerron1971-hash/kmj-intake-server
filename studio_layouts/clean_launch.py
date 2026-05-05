@@ -14,6 +14,7 @@ from studio_layouts.shared import (
     render_appendix_sections, render_archetype_touch, render_footer,
     render_head, render_in_the_clear_badge, render_stripe_button, safe_html, render_motion_script,
 )
+from studio_decoration import render_decoration_for
 
 
 def render(
@@ -29,6 +30,7 @@ def render(
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
     vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
+    section_break = render_decoration_for(vocab_id, design_system, "section_break")
 
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
@@ -133,7 +135,7 @@ def render(
     sub_html = f'<p class="cl-subhead">{subheadline}</p>' if subheadline else ""
     badge_html = f'<div style="margin-bottom:1rem;">{badge}</div>' if badge else ""
     hero_html = f"""
-<section class="cl-hero">
+<section class="cl-hero reveal">
   {badge_html}
   <h1 class="cl-headline">{headline}</h1>
   {sub_html}
@@ -160,7 +162,7 @@ def render(
             items.append(f'<li><span class="name">{name}</span>{price_html}{cta_inline}</li>')
         services_html = f"""
 <div class="cl-divider"></div>
-<section class="cl-section">
+<section class="cl-section reveal">
   <h2>Offerings</h2>
   <ul class="cl-services-list">{''.join(items)}</ul>
 </section>
@@ -180,6 +182,7 @@ def render(
 {hero_html}
 {before_about}
 {services_html}
+{section_break}
 {after_services}
 {appendix_html}
 {footer_html}

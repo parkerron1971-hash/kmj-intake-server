@@ -14,6 +14,7 @@ from studio_layouts.shared import (
     render_appendix_sections, render_archetype_touch, render_footer,
     render_head, render_in_the_clear_badge, render_stripe_button, safe_html, render_motion_script,
 )
+from studio_decoration import render_decoration_for
 
 
 def render(
@@ -29,6 +30,7 @@ def render(
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
     vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
+    section_break = render_decoration_for(vocab_id, design_system, "section_break")
 
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
@@ -160,7 +162,7 @@ def render(
     sub_html = f'<p class="exp-subhead">{subheadline}</p>' if subheadline else ""
     badge_html = f'<div style="margin-bottom:1.5rem;">{badge}</div>' if badge else ""
     hero_html = f"""
-<section class="exp-fullscreen exp-hero">
+<section class="exp-fullscreen exp-hero reveal">
   {badge_html}
   <div class="exp-tagline">{safe_html(business_data.get("type", "")).replace("_", " ").upper()}</div>
   <h1 class="exp-headline">{headline}</h1>
@@ -177,7 +179,7 @@ def render(
         about_text = safe_html(about_config.get("text")) or safe_html(business_data.get("elevator_pitch") or "")
         if about_text:
             about_html = f"""
-<section class="exp-fullscreen exp-section-alt">
+<section class="exp-fullscreen exp-section-alt reveal">
   <p class="exp-statement">{about_text}</p>
 </section>
 """
@@ -215,6 +217,7 @@ def render(
 {before_about}
 {about_html}
 {services_html}
+{section_break}
 {after_services}
 {appendix_html}
 {footer_html}

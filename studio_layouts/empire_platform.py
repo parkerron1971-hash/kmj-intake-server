@@ -14,6 +14,7 @@ from studio_layouts.shared import (
     render_appendix_sections, render_archetype_touch, render_footer,
     render_head, render_in_the_clear_badge, render_stripe_button, safe_html, render_motion_script,
 )
+from studio_decoration import render_decoration_for
 
 
 def render(
@@ -29,6 +30,7 @@ def render(
     business_name = business_data.get("name") or "Welcome"
     archetype = business_data.get("type") or "custom"
     vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
+    section_break = render_decoration_for(vocab_id, design_system, "section_break")
 
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
@@ -220,7 +222,7 @@ def render(
     sub_html = f'<p class="emp-subhead">{subheadline}</p>' if subheadline else ""
     badge_html = f'<div style="margin-bottom:1.5rem;">{badge}</div>' if badge else ""
     hero_html = f"""
-<section class="emp-hero">
+<section class="emp-hero reveal">
   {badge_html}
   <div class="emp-identity-words">{identity_html}</div>
   <h1 class="emp-headline">{headline}</h1>
@@ -237,7 +239,7 @@ def render(
         about_text = safe_html(about_config.get("text")) or safe_html(business_data.get("elevator_pitch") or "")
         if about_text:
             founder_html = f"""
-<section class="emp-founder">
+<section class="emp-founder reveal">
   <div class="emp-founder-text">
     <h2>About {practitioner}</h2>
     <p>{about_text}</p>
