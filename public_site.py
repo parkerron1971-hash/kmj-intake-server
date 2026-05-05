@@ -1188,6 +1188,138 @@ async def smart_disable_endpoint(business_id: str):
         raise HTTPException(500, "disable failed")
 
 
+# ─── Pass 3.5 Session 3: layout-options + layout-override endpoints ───
+
+
+@router.get("/sites/{business_id}/layout-options")
+async def layout_options_endpoint(business_id: str):
+    """Return detected vocabularies (top 3) + available layouts for the
+    primary vocabulary. Drives the MySite Design System override UI."""
+    try:
+        from brand_engine import _sb_get as be_get
+        from studio_data import LAYOUTS, VOCAB_LAYOUT_MAP
+        from studio_vocab_detect import detect_vocabularies
+
+        biz_rows = be_get(f"/businesses?id=eq.{business_id}&select=*&limit=1") or []
+        if not biz_rows:
+            raise HTTPException(404, "Business not found")
+        business_data = biz_rows[0]
+        voice_profile = business_data.get("voice_profile") or {}
+        brand_kit = (business_data.get("settings") or {}).get("brand_kit") or {}
+
+        profile_rows = be_get(
+            f"/business_profiles?business_id=eq.{business_id}&select=*&limit=1"
+        ) or []
+        business_profile = profile_rows[0] if profile_rows else {}
+
+        site_rows = be_get(
+            f"/business_sites?business_id=eq.{business_id}&select=site_config&limit=1"
+        ) or []
+        site_config = (site_rows[0].get("site_config") if site_rows else {}) or {}
+
+        matches = detect_vocabularies(
+            business_data, business_profile, voice_profile, brand_kit
+        )
+
+        vocab_options = [
+            {
+                "id": m["vocabulary"]["id"],
+                "name": m["vocabulary"]["name"],
+                "section": m["vocabulary"]["section"],
+                "color_palette": m["vocabulary"]["color_palette"],
+                "confidence": round(m["confidence"], 2),
+                "reasons": m["reasons"][:3],
+            }
+            for m in matches
+        ]
+
+        active_vocab = (
+            site_config.get("vocabulary_override")
+            or (matches[0]["vocabulary"]["id"] if matches else None)
+        )
+
+        layout_ids = VOCAB_LAYOUT_MAP.get(active_vocab, []) if active_vocab else []
+        layout_options = [
+            {
+                "id": lid,
+                "name": LAYOUTS[lid]["name"],
+                "description": LAYOUTS[lid]["description"],
+            }
+            for lid in layout_ids
+            if lid in LAYOUTS
+        ]
+
+        active_layout = site_config.get("layout_id") or (
+            layout_ids[0] if layout_ids else None
+        )
+
+        return {
+            "ok": True,
+            "vocab_options": vocab_options,
+            "layout_options": layout_options,
+            "active_vocab": active_vocab,
+            "active_layout": active_layout,
+            "is_using_override": bool(
+                site_config.get("layout_id") or site_config.get("vocabulary_override")
+            ),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[smart_sites] layout-options failed for {business_id}: {e}")
+        raise HTTPException(500, "layout-options failed")
+
+
+@router.post("/sites/{business_id}/layout-override")
+async def layout_override_endpoint(business_id: str, body: Dict[str, Any]):
+    """Save vocabulary or layout override into site_config.
+
+    Body: { vocabulary_override: <vocab-id> | null, layout_id: <layout-id> | null }
+    Pass null (or omit either key) to reset to auto-detect.
+    """
+    try:
+        from brand_engine import _sb_get as be_get, _sb_patch as be_patch
+        from studio_data import LAYOUTS, VOCABULARIES
+
+        body = body or {}
+
+        # Validate against the known sets (None / null is always allowed = clear)
+        vocab_value = body.get("vocabulary_override", "__unset__")
+        layout_value = body.get("layout_id", "__unset__")
+        if vocab_value not in ("__unset__", None) and vocab_value not in VOCABULARIES:
+            raise HTTPException(400, f"Unknown vocabulary: {vocab_value}")
+        if layout_value not in ("__unset__", None) and layout_value not in LAYOUTS:
+            raise HTTPException(400, f"Unknown layout: {layout_value}")
+
+        sites = be_get(
+            f"/business_sites?business_id=eq.{business_id}&select=id,site_config&limit=1"
+        ) or []
+        if not sites:
+            raise HTTPException(404, "No business_sites row")
+        site_id = sites[0]["id"]
+        current = sites[0].get("site_config") or {}
+
+        new_config = dict(current)
+        if vocab_value != "__unset__":
+            if vocab_value is None:
+                new_config.pop("vocabulary_override", None)
+            else:
+                new_config["vocabulary_override"] = vocab_value
+        if layout_value != "__unset__":
+            if layout_value is None:
+                new_config.pop("layout_id", None)
+            else:
+                new_config["layout_id"] = layout_value
+
+        be_patch(f"/business_sites?id=eq.{site_id}", {"site_config": new_config})
+        return {"ok": True, "site_config": new_config}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[smart_sites] layout-override failed for {business_id}: {e}")
+        raise HTTPException(500, "layout-override failed")
+
+
 @router.get("/public/widget/{module_id}")
 async def get_widget(module_id: str):
     """Return a self-contained styled HTML page for iframe embedding."""
