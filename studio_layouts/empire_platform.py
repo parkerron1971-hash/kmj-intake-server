@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional
 from studio_composite import CompositeDirection
 from studio_design_system import DesignSystem, _pick_accent_contrast, _pick_contrast_text
 from studio_layouts.shared import (
-    render_archetype_touch, render_footer, render_head,
-    render_in_the_clear_badge, safe_html,
+    render_appendix_sections, render_archetype_touch, render_footer,
+    render_head, render_in_the_clear_badge, render_stripe_button, safe_html,
 )
 
 
@@ -263,6 +263,7 @@ def render(
             price_html = f'<div class="emp-price">{price_label}</div>' if price_label else ""
             klass = "emp-offering" + (" alt" if i % 2 else "")
             visual_letter = name[:1].upper() if name else "•"
+            stripe_html = render_stripe_button(p, design_system)
             rows.append(f"""
 <section class="{klass}">
   <div class="emp-offering-content">
@@ -270,6 +271,7 @@ def render(
     {desc_html}
     {price_html}
     <a href="#contact" class="emp-offering-cta">Learn more</a>
+    {stripe_html}
   </div>
   <div class="emp-offering-visual">{visual_letter}</div>
 </section>
@@ -277,6 +279,9 @@ def render(
         offerings_html = "".join(rows)
 
     after_services = render_archetype_touch(archetype, "after_services", design_system, bundle)
+    appendix_html = render_appendix_sections(
+        design_system, business_data.get("id", "") or "", sections_config, bundle,
+    )
     footer_html = render_footer(business_data, bundle, design_system, sections_config.get("footer_extra_text"))
     head = render_head(business_name, design_system, head_meta_extra)
     return f"""<!DOCTYPE html>
@@ -289,6 +294,7 @@ def render(
 {founder_html}
 {offerings_html}
 {after_services}
+{appendix_html}
 {footer_html}
 </body>
 </html>"""

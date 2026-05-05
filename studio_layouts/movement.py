@@ -11,9 +11,95 @@ from typing import Any, Dict, List, Optional
 from studio_composite import CompositeDirection
 from studio_design_system import DesignSystem, _pick_accent_contrast, _pick_contrast_text
 from studio_layouts.shared import (
-    render_archetype_touch, render_footer, render_head,
-    render_in_the_clear_badge, safe_html,
+    render_appendix_sections, render_archetype_touch, render_footer,
+    render_head, render_in_the_clear_badge, render_stripe_button, safe_html,
 )
+
+
+def _bespoke_contact(design_system, business_id, section_config, bundle):
+    """Pass 3.6: bespoke movement contact — full-bleed accent band,
+    'Get in touch' as a call to action, oversize form, action-oriented
+    button copy ('Send it', 'Speak up')."""
+    if not section_config.get("enabled", False):
+        return ""
+
+    accent = design_system["palette_accent"]
+    on_accent = _pick_accent_contrast(accent)
+    bg = design_system["palette_bg"]
+    text = design_system["palette_text"]
+    display_font = design_system["font_display"]
+    body_font = design_system["font_body"]
+
+    fallback_email = (bundle.get("footer") or {}).get("contact_email") or ""
+    email = safe_html(section_config.get("email") or fallback_email)
+    phone = safe_html(section_config.get("phone") or "")
+    show_form = bool(section_config.get("show_form", True))
+    js_safe_id = business_id.replace("-", "_")
+
+    info_inline = []
+    if email:
+        info_inline.append(
+            f'<a href="mailto:{email}" style="color:{on_accent};text-decoration:underline;">{email}</a>'
+        )
+    if phone:
+        info_inline.append(
+            f'<a href="tel:{phone}" style="color:{on_accent};text-decoration:underline;">{phone}</a>'
+        )
+    info_html = " &middot; ".join(info_inline) if info_inline else ""
+
+    form_html = ""
+    if show_form:
+        form_html = f"""
+<form id="contact-form-{business_id}" onsubmit="return submitContact_{js_safe_id}(event)" style="display:flex;flex-direction:column;gap:1.25rem;max-width:680px;margin-top:2.5rem;">
+  <input type="text" name="name" required maxlength="200" placeholder="Your name" style="width:100%;padding:18px 22px;border:2px solid {on_accent};border-radius:0;background:transparent;color:{on_accent};font-family:'{body_font}',sans-serif;font-size:1.1rem;">
+  <input type="email" name="email" required maxlength="200" placeholder="Your email" style="width:100%;padding:18px 22px;border:2px solid {on_accent};border-radius:0;background:transparent;color:{on_accent};font-family:'{body_font}',sans-serif;font-size:1.1rem;">
+  <textarea name="message" required rows="5" maxlength="5000" placeholder="What's on your mind?" style="width:100%;padding:18px 22px;border:2px solid {on_accent};border-radius:0;background:transparent;color:{on_accent};font-family:'{body_font}',sans-serif;resize:vertical;font-size:1.1rem;"></textarea>
+  <button type="submit" style="padding:20px 48px;background:{bg};color:{text};border:2px solid {bg};border-radius:0;font-weight:800;cursor:pointer;font-family:'{body_font}',sans-serif;font-size:0.95rem;letter-spacing:0.18em;text-transform:uppercase;align-self:flex-start;">Send it</button>
+  <div id="contact-status-{business_id}" style="font-size:0.95rem;min-height:1.25em;color:{on_accent};"></div>
+</form>
+<script>
+(function() {{
+  window.submitContact_{js_safe_id} = function(e) {{
+    e.preventDefault();
+    var form = e.target;
+    var statusEl = document.getElementById('contact-status-{business_id}');
+    statusEl.textContent = 'Sending...';
+    var data = {{ name: form.name.value, email: form.email.value, message: form.message.value }};
+    fetch('https://kmj-intake-server-production.up.railway.app/sites/{business_id}/contact-submit', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify(data)
+    }})
+      .then(function(r) {{ return r.json().catch(function() {{ return {{ ok: false, error: 'Server error' }}; }}); }})
+      .then(function(d) {{
+        if (d && d.ok) {{ statusEl.textContent = 'Message sent. We will be in touch.'; form.reset(); }}
+        else {{ statusEl.textContent = (d && d.error) || 'Something went wrong. Please email directly.'; }}
+      }})
+      .catch(function() {{ statusEl.textContent = 'Network error. Please email directly.'; }});
+    return false;
+  }};
+}})();
+</script>
+"""
+
+    heading = safe_html(section_config.get("heading") or "Get in")
+    subtext = safe_html(section_config.get("subtext") or "Be part of the work. Reach out.")
+    info_inline_html = (
+        f'<p style="margin:1.5rem 0 0;font-family:\'{body_font}\',sans-serif;font-size:1rem;color:{on_accent};">{info_html}</p>'
+        if info_html else ''
+    )
+    return f"""
+<section style="background:{accent};color:{on_accent};padding:120px 32px;">
+  <div style="max-width:1100px;margin:0 auto;">
+    <h2 style="font-family:'{display_font}',Georgia,serif;font-size:clamp(2.4rem,5vw,4rem);font-weight:800;margin:0 0 1rem;color:{on_accent};text-transform:uppercase;letter-spacing:-0.01em;">
+      {heading}
+    </h2>
+    <p style="font-family:'{body_font}',sans-serif;font-size:1.2rem;color:{on_accent};opacity:0.9;margin:0;">{subtext}</p>
+    {info_inline_html}
+    {form_html}
+  </div>
+</section>
+"""
 
 
 def render(
@@ -194,7 +280,8 @@ def render(
             name = safe_html(p.get("name", "Way to engage"))
             desc = safe_html(p.get("description") or "")
             desc_html = f"<p>{desc}</p>" if desc else ""
-            cards.append(f'<div class="mvm-service-card"><h3>{name}</h3>{desc_html}</div>')
+            cta_html = render_stripe_button(p, design_system)
+            cards.append(f'<div class="mvm-service-card"><h3>{name}</h3>{desc_html}{cta_html}</div>')
         services_html = f"""
 <section class="mvm-section">
   <h2>How you can join</h2>
@@ -203,6 +290,10 @@ def render(
 """
 
     after_services = render_archetype_touch(archetype, "after_services", design_system, bundle)
+    appendix_html = render_appendix_sections(
+        design_system, business_data.get("id", "") or "", sections_config, bundle,
+        bespoke_contact=_bespoke_contact,
+    )
     footer_html = render_footer(business_data, bundle, design_system, sections_config.get("footer_extra_text"))
     head = render_head(business_name, design_system, head_meta_extra)
     return f"""<!DOCTYPE html>
@@ -215,6 +306,7 @@ def render(
 {about_html}
 {services_html}
 {after_services}
+{appendix_html}
 {footer_html}
 </body>
 </html>"""

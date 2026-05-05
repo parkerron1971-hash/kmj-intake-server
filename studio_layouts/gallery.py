@@ -10,9 +10,50 @@ from typing import Any, Dict, List, Optional
 from studio_composite import CompositeDirection
 from studio_design_system import DesignSystem, _pick_accent_contrast, _pick_contrast_text
 from studio_layouts.shared import (
-    render_archetype_touch, render_footer, render_head,
-    render_in_the_clear_badge, safe_html,
+    render_appendix_sections, render_archetype_touch, render_footer,
+    render_head, render_in_the_clear_badge, render_stripe_button, safe_html,
 )
+
+
+def _bespoke_gallery(design_system, items, section_config, bundle):
+    """Pass 3.6: bespoke gallery-layout gallery — full-bleed edge-to-edge
+    images with hover overlays. Even more image-first than the
+    studio-portfolio bespoke version."""
+    if not items:
+        return ""
+    accent = design_system["palette_accent"]
+    text = design_system["palette_text"]
+    display_font = design_system["font_display"]
+
+    tiles = []
+    for item in items[:16]:
+        url = safe_html(item.get("image_url", ""))
+        caption = safe_html(item.get("caption", ""))
+        if not url:
+            continue
+        caption_html = (
+            f'<div style="position:absolute;inset:auto 0 0 0;padding:18px 20px;background:linear-gradient(to top,rgba(0,0,0,0.7),transparent 70%);color:#fff;opacity:0;transition:opacity 0.2s ease;">{caption}</div>'
+            if caption else ''
+        )
+        tiles.append(f"""
+<a href="{url}" target="_blank" rel="noopener" style="position:relative;overflow:hidden;display:block;text-decoration:none;" onmouseover="this.querySelector('div')?.style.setProperty('opacity','1')" onmouseout="this.querySelector('div')?.style.setProperty('opacity','0')">
+  <img src="{url}" alt="{caption}" style="width:100%;height:100%;object-fit:cover;display:block;aspect-ratio:1/1;" loading="lazy">
+  {caption_html}
+</a>""")
+
+    if not tiles:
+        return ""
+    heading = safe_html(section_config.get("heading") or "Work")
+    return f"""
+<section style="padding:64px 0 0;">
+  <h2 style="font-family:'{display_font}',Georgia,serif;font-size:2rem;margin:0 32px 2rem;color:{text};">
+    {heading}
+  </h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:0;">
+    {''.join(tiles)}
+  </div>
+</section>
+"""
 
 
 def render(
@@ -178,7 +219,8 @@ def render(
                 tile_class += " gal-tile-wide"
             price_html = f'<div class="gal-tile-price">{price_label}</div>' if price_label else ""
             desc_html = f"<p>{desc}</p>" if desc else ""
-            tiles.append(f'<a href="#work-{i}" class="{tile_class}" id="work"><h3>{name}</h3>{desc_html}{price_html}</a>')
+            cta_html = render_stripe_button(p, design_system)
+            tiles.append(f'<a href="#work-{i}" class="{tile_class}" id="work"><h3>{name}</h3>{desc_html}{price_html}{cta_html}</a>')
         services_html = f"""
 <section class="gal-grid-section">
   <div class="gal-masonry">{''.join(tiles)}</div>
@@ -200,6 +242,10 @@ def render(
 """
 
     after_services = render_archetype_touch(archetype, "after_services", design_system, bundle)
+    appendix_html = render_appendix_sections(
+        design_system, business_data.get("id", "") or "", sections_config, bundle,
+        bespoke_gallery=_bespoke_gallery,
+    )
     footer_html = render_footer(business_data, bundle, design_system, sections_config.get("footer_extra_text"))
     head = render_head(business_name, design_system, head_meta_extra)
     return f"""<!DOCTYPE html>
@@ -212,6 +258,7 @@ def render(
 {before_about}
 {about_html}
 {after_services}
+{appendix_html}
 {footer_html}
 </body>
 </html>"""

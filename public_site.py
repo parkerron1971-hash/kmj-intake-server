@@ -1320,6 +1320,112 @@ async def layout_override_endpoint(business_id: str, body: Dict[str, Any]):
         raise HTTPException(500, "layout-override failed")
 
 
+# ─── Pass 3.6: contact-form submission via Resend ──────────────────────
+
+# In-memory rate limiter — 5 submissions per minute per IP. Acceptable
+# for v1; restarts reset state.
+_contact_rate: Dict[str, List[float]] = {}
+
+
+def _check_contact_rate(ip: str) -> bool:
+    now = time.time()
+    cutoff = now - 60
+    bucket = [t for t in _contact_rate.get(ip, []) if t > cutoff]
+    if len(bucket) >= 5:
+        _contact_rate[ip] = bucket
+        return False
+    bucket.append(now)
+    _contact_rate[ip] = bucket
+    return True
+
+
+@router.post("/sites/{business_id}/contact-submit")
+async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], request: Request):
+    """Send a contact-form submission via Resend.
+
+    Body: { name, email, message }. Rate-limited per client IP at 5/min.
+    Returns {ok: true} on success or {ok: false, error: str} on email
+    service failure (so the front-end form shows a graceful message
+    rather than crashing).
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_contact_rate(client_ip):
+        raise HTTPException(429, "Too many submissions. Please try again later.")
+
+    body = body or {}
+    name = (body.get("name") or "").strip()[:200]
+    email = (body.get("email") or "").strip()[:200]
+    message = (body.get("message") or "").strip()[:5000]
+
+    if not name or not email or not message:
+        raise HTTPException(400, "Missing required fields")
+    if "@" not in email or "." not in email:
+        raise HTTPException(400, "Invalid email")
+
+    try:
+        from brand_engine import get_bundle
+        bundle = get_bundle(business_id) or {}
+    except Exception as e:
+        logger.warning(f"[contact-submit] get_bundle failed for {business_id}: {e}")
+        bundle = {}
+
+    target_email = (
+        ((bundle.get("footer") or {}).get("contact_email"))
+        or os.environ.get("DEFAULT_CONTACT_FALLBACK_EMAIL")
+        or ""
+    )
+    business_name = (bundle.get("business") or {}).get("name") or "Your Site"
+
+    if not target_email:
+        return {"ok": False, "error": "No contact email configured for this site."}
+
+    resend_api_key = os.environ.get("RESEND_API_KEY")
+    if not resend_api_key:
+        return {"ok": False, "error": "Email service not configured."}
+
+    # Escape user-provided strings before injecting into HTML
+    safe_name = _esc(name)
+    safe_email = _esc(email)
+    safe_message = _esc(message).replace("\n", "<br>")
+
+    subject = f"[{business_name}] Contact form submission from {name}"[:200]
+    html_body = (
+        f"<h2>New contact form submission</h2>"
+        f"<p><strong>From:</strong> {safe_name} (&lt;{safe_email}&gt;)</p>"
+        f"<p><strong>Message:</strong></p>"
+        f'<p style="white-space:pre-wrap;">{safe_message}</p>'
+        f"<hr>"
+        f'<p style="font-size:0.85em;color:#666;">Sent via your {_esc(business_name)} website.</p>'
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": "noreply@mysolutionist.app",
+                    "to": [target_email],
+                    "reply_to": email,
+                    "subject": subject,
+                    "html": html_body,
+                },
+            )
+        if 200 <= r.status_code < 300:
+            return {"ok": True}
+        logger.warning(f"[contact-submit] Resend {r.status_code}: {r.text[:200]}")
+        return {"ok": False, "error": "Email service error."}
+    except httpx.HTTPError as e:
+        logger.warning(f"[contact-submit] HTTPError sending to {target_email}: {e}")
+        return {"ok": False, "error": "Network error."}
+    except Exception as e:
+        logger.warning(f"[contact-submit] unexpected: {e}")
+        return {"ok": False, "error": "Unexpected error."}
+
+
 @router.get("/public/widget/{module_id}")
 async def get_widget(module_id: str):
     """Return a self-contained styled HTML page for iframe embedding."""

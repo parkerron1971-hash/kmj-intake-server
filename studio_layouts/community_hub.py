@@ -11,9 +11,61 @@ from typing import Any, Dict, List, Optional
 from studio_composite import CompositeDirection
 from studio_design_system import DesignSystem, _pick_accent_contrast, _pick_contrast_text
 from studio_layouts.shared import (
-    render_archetype_touch, render_footer, render_head,
-    render_in_the_clear_badge, safe_html,
+    render_appendix_sections, render_archetype_touch, render_footer,
+    render_head, render_in_the_clear_badge, render_stripe_button, safe_html,
 )
+
+
+def _bespoke_testimonials(design_system, items, section_config, bundle):
+    """Pass 3.6: bespoke community-hub testimonials — warm, photo-placeholder
+    avatar circles, larger quote treatment, 'Voices from our community' framing."""
+    if not items:
+        return ""
+    accent = design_system["palette_accent"]
+    text = design_system["palette_text"]
+    surface = design_system["palette_surface"]
+    surface_text = _pick_contrast_text(surface, dark_color=text)
+    display_font = design_system["font_display"]
+
+    cards = []
+    for item in items[:6]:
+        quote = safe_html(item.get("quote", ""))
+        author = safe_html(item.get("author", ""))
+        role = safe_html(item.get("role", ""))
+        if not quote:
+            continue
+        initials = ""
+        if author:
+            initials = "".join(p[0].upper() for p in author.split()[:2] if p)
+        role_html = (
+            f'<div style="font-size:0.85rem;color:color-mix(in srgb,{surface_text} 70%,transparent);">{role}</div>'
+            if role else ''
+        )
+        cards.append(f"""
+<div style="padding:36px;background:color-mix(in srgb,{surface} 70%,white);color:{surface_text};border-radius:24px;border:1px solid color-mix(in srgb,{accent} 22%,transparent);box-shadow:0 4px 20px rgba(0,0,0,0.04);">
+  <p style="font-family:'{display_font}',Georgia,serif;font-size:1.2rem;line-height:1.5;margin:0 0 1.5rem;color:{surface_text};">&ldquo;{quote}&rdquo;</p>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,{accent},color-mix(in srgb,{accent} 60%,{surface}));display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:0.95rem;">{initials or '&bull;'}</div>
+    <div>
+      <div style="font-weight:600;color:{surface_text};">{author}</div>
+      {role_html}
+    </div>
+  </div>
+</div>""")
+
+    if not cards:
+        return ""
+    heading = safe_html(section_config.get("heading") or "Voices from our community")
+    return f"""
+<section style="max-width:1200px;margin:0 auto;padding:96px 48px;">
+  <h2 style="font-family:'{display_font}',Georgia,serif;font-size:2.2rem;margin:0 0 0.75rem;color:{text};text-align:center;">
+    {heading}
+  </h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px;margin-top:3rem;">
+    {''.join(cards)}
+  </div>
+</section>
+"""
 
 
 def render(
@@ -206,7 +258,8 @@ def render(
                 price_label = ""
             desc_html = f"<p>{desc}</p>" if desc else ""
             price_html = f'<div class="ch-price">{price_label}</div>' if price_label else ""
-            cards.append(f'<div class="ch-service-card"><h3>{name}</h3>{desc_html}{price_html}</div>')
+            cta_html = render_stripe_button(p, design_system)
+            cards.append(f'<div class="ch-service-card"><h3>{name}</h3>{desc_html}{price_html}{cta_html}</div>')
         services_html = f"""
 <section class="ch-section">
   <h2>How we help</h2>
@@ -215,6 +268,10 @@ def render(
 """
 
     after_services = render_archetype_touch(archetype, "after_services", design_system, bundle)
+    appendix_html = render_appendix_sections(
+        design_system, business_data.get("id", "") or "", sections_config, bundle,
+        bespoke_testimonials=_bespoke_testimonials,
+    )
     footer_html = render_footer(business_data, bundle, design_system, sections_config.get("footer_extra_text"))
     head = render_head(business_name, design_system, head_meta_extra)
     return f"""<!DOCTYPE html>
@@ -227,6 +284,7 @@ def render(
 {about_html}
 {services_html}
 {after_services}
+{appendix_html}
 {footer_html}
 </body>
 </html>"""
