@@ -13,6 +13,7 @@ from studio_design_system import DesignSystem, _pick_accent_contrast, _pick_cont
 from studio_layouts.shared import (
     render_appendix_sections, render_archetype_touch, render_footer,
     render_head, render_in_the_clear_badge, render_stripe_button, safe_html, render_motion_script,
+    render_decoration_head, render_decoration_scripts, render_scheme_after_hero,
 )
 from studio_decoration import render_decoration_for
 
@@ -25,6 +26,7 @@ def render(
     bundle: Dict[str, Any],
     head_meta_extra: str = "",
     products: Optional[List[Dict[str, Any]]] = None,
+    scheme: Optional[Dict[str, Any]] = None,
 ) -> str:
     products = products or []
     business_name = business_data.get("name") or "Welcome"
@@ -264,7 +266,9 @@ def render(
 <html lang="en">
 {head}
 {layout_css}
+{render_decoration_head(design_system, scheme)}
 <body style="background:{bg};color:{on_bg};margin:0;">
+{render_scheme_after_hero(design_system, scheme)}
 {hero_html}
 <div style="max-width:1100px;margin:0 auto;padding:24px 24px 0;text-align:center;">{eyebrow_html}</div>
 {before_about}
@@ -274,6 +278,7 @@ def render(
 {after_services}
 {appendix_html}
 {footer_html}
+{render_decoration_scripts(scheme)}
 {render_motion_script()}
 </body>
 </html>"""

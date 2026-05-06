@@ -444,3 +444,253 @@ def render_appendix_sections(
         render_contact_section(design_system, business_id, sections_config, bundle, bespoke=bespoke_contact, vocab_id=vocab_id),
     ]
     return "".join(p for p in parts if p)
+
+
+# ─── Pass 3.7c: scheme override slot system ──────────────────────────
+#
+# Layouts use these helpers to read the AI-generated decoration scheme
+# with deterministic fallbacks. When `scheme` is None or any field is
+# missing, the existing Pass 3.7/3.7b deterministic decoration takes
+# over via the fallback argument.
+#
+# Every read goes through safe_read so a malformed scheme can never
+# break a layout — worst case is "fall back to defaults".
+
+
+def get_color_token(scheme, token_name, fallback):
+    """Read a color token from scheme with deterministic fallback.
+
+    token_name: 'bg' | 'bg2' | 'bg3' | 'accent' | 'accent_secondary' |
+                'text' | 'muted' | 'line'
+    """
+    try:
+        from studio_decoration_scheme import safe_read
+        val = safe_read(scheme, f"color_tokens.{token_name}")
+        return val if val else fallback
+    except Exception:
+        return fallback
+
+
+def get_typography(scheme, key, fallback):
+    """Read a typography field with fallback.
+
+    key: 'font_display' | 'font_body' | 'font_accent' | 'h1_size' |
+         'h1_letter_spacing' | 'h2_size' | 'eyebrow_letter_spacing'
+    """
+    try:
+        from studio_decoration_scheme import safe_read
+        val = safe_read(scheme, f"typography.{key}")
+        return val if val else fallback
+    except Exception:
+        return fallback
+
+
+def get_spatial(scheme, key, fallback):
+    """Read a spatial DNA field with fallback."""
+    try:
+        from studio_decoration_scheme import safe_read
+        val = safe_read(scheme, f"spatial_dna.{key}")
+        return val if val else fallback
+    except Exception:
+        return fallback
+
+
+def get_decoration_choice(scheme, key, fallback):
+    """Read a decoration choice field with fallback."""
+    try:
+        from studio_decoration_scheme import safe_read
+        val = safe_read(scheme, f"decorations.{key}")
+        return val if val else fallback
+    except Exception:
+        return fallback
+
+
+def is_motion_enabled(scheme, module):
+    """Test whether a motion module is enabled in the scheme.
+
+    module: 'enable_ghost_numbers' | 'enable_marquee_strips' |
+            'enable_magnetic_buttons' | 'enable_statement_bars' |
+            'parallax_backgrounds'
+    """
+    try:
+        from studio_decoration_scheme import safe_read
+        val = safe_read(scheme, f"motion_richness.{module}")
+        return bool(val) if val is not None else False
+    except Exception:
+        return False
+
+
+def get_marquee_text(scheme):
+    try:
+        from studio_decoration_scheme import safe_read
+        return safe_read(scheme, "marquee_text")
+    except Exception:
+        return None
+
+
+def get_statement_quotes(scheme):
+    try:
+        from studio_decoration_scheme import safe_read
+        val = safe_read(scheme, "statement_bar_quotes", [])
+        return val if isinstance(val, list) else []
+    except Exception:
+        return []
+
+
+def apply_scheme_to_design_system(design_system, scheme):
+    """Apply scheme color/typography overrides to a design_system dict.
+
+    Returns a NEW dict — caller's design_system is not mutated. When
+    scheme is None or has empty token blocks, returns a copy of the
+    original. Layout code below this point reads palette_bg /
+    palette_accent / palette_text / etc. and gets the overridden
+    values transparently.
+    """
+    if not isinstance(design_system, dict):
+        return design_system
+    ds = dict(design_system)
+    if not isinstance(scheme, dict):
+        return ds
+
+    # color_tokens.* -> design_system.palette_*
+    color_map = {
+        "bg":      "palette_bg",
+        "accent":  "palette_accent",
+        "text":    "palette_text",
+        "muted":   "palette_muted",
+        # bg2 maps to palette_surface (the "card / panel" background)
+        "bg2":     "palette_surface",
+    }
+    for scheme_key, ds_key in color_map.items():
+        try:
+            from studio_decoration_scheme import safe_read
+            val = safe_read(scheme, f"color_tokens.{scheme_key}")
+            if val:
+                ds[ds_key] = val
+        except Exception:
+            pass
+
+    # typography.* -> design_system fields
+    type_map = {
+        "font_display": "font_display",
+        "font_body":    "font_body",
+    }
+    for scheme_key, ds_key in type_map.items():
+        try:
+            from studio_decoration_scheme import safe_read
+            val = safe_read(scheme, f"typography.{scheme_key}")
+            if val:
+                ds[ds_key] = val
+        except Exception:
+            pass
+
+    return ds
+
+
+def render_decoration_head(design_system, scheme):
+    """Combined motion-module styles to inject into <head>.
+
+    Each module's styles are loaded only when its enable_* flag is true
+    in the scheme. Any import error swallows silently so a missing
+    module never breaks rendering.
+    """
+    if not scheme:
+        return ""
+    parts = []
+    if is_motion_enabled(scheme, "enable_ghost_numbers"):
+        try:
+            from studio_layouts.motion_modules.ghost_numbers import render_styles as gn_styles
+            parts.append(gn_styles())
+        except Exception:
+            pass
+    if is_motion_enabled(scheme, "enable_marquee_strips"):
+        try:
+            from studio_layouts.motion_modules.marquee_strip import render_styles as ms_styles
+            parts.append(ms_styles(design_system))
+        except Exception:
+            pass
+    if is_motion_enabled(scheme, "enable_magnetic_buttons"):
+        try:
+            from studio_layouts.motion_modules.magnetic_button import render_styles as mb_styles
+            parts.append(mb_styles())
+        except Exception:
+            pass
+    if is_motion_enabled(scheme, "enable_statement_bars"):
+        try:
+            from studio_layouts.motion_modules.statement_bar import render_styles as sb_styles
+            parts.append(sb_styles(design_system))
+        except Exception:
+            pass
+    return "\n".join(parts)
+
+
+def render_decoration_scripts(scheme):
+    """Combined motion-module scripts to inject before </body>."""
+    if not scheme:
+        return ""
+    parts = []
+    if is_motion_enabled(scheme, "enable_ghost_numbers"):
+        try:
+            from studio_layouts.motion_modules.ghost_numbers import render_script as gn_script
+            parts.append(gn_script())
+        except Exception:
+            pass
+    if is_motion_enabled(scheme, "enable_magnetic_buttons"):
+        try:
+            from studio_layouts.motion_modules.magnetic_button import render_script as mb_script
+            parts.append(mb_script())
+        except Exception:
+            pass
+    return "\n".join(parts)
+
+
+def render_scheme_after_hero(design_system, scheme):
+    """Inline modules that go directly after the hero section: a
+    statement bar with the first quote, then a marquee strip if
+    enabled. Returns "" when no modules are enabled or content is
+    missing — safe to inject unconditionally.
+    """
+    if not scheme:
+        return ""
+    parts = []
+    try:
+        if is_motion_enabled(scheme, "enable_statement_bars"):
+            quotes = get_statement_quotes(scheme)
+            if quotes:
+                from studio_layouts.motion_modules.statement_bar import render_inline as sb_inline
+                parts.append(sb_inline(quotes[0]))
+        if is_motion_enabled(scheme, "enable_marquee_strips"):
+            mt = get_marquee_text(scheme)
+            if mt:
+                from studio_layouts.motion_modules.marquee_strip import render_inline as ms_inline
+                parts.append(ms_inline(mt))
+    except Exception:
+        pass
+    return "\n".join(parts)
+
+
+def render_scheme_between_sections(scheme, idx=1):
+    """Optional second statement bar between content sections; uses the
+    next quote if available.
+    """
+    if not scheme:
+        return ""
+    try:
+        if is_motion_enabled(scheme, "enable_statement_bars"):
+            quotes = get_statement_quotes(scheme)
+            if len(quotes) > idx:
+                from studio_layouts.motion_modules.statement_bar import render_inline as sb_inline
+                return sb_inline(quotes[idx])
+    except Exception:
+        pass
+    return ""
+
+
+def magnetic_class(scheme, base_class=""):
+    """Append ' magnetic' to a CSS class list when magnetic CTAs are
+    enabled. Use in layout HTML like:
+        class="auth-cta{magnetic_class(scheme)}"
+    """
+    if is_motion_enabled(scheme, "enable_magnetic_buttons"):
+        return f" magnetic" if not base_class else f"{base_class} magnetic"
+    return base_class

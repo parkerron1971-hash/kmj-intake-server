@@ -1061,15 +1061,29 @@ def _try_render_via_studio_layouts(
         business_data_for_render = dict(business_data)
         business_data_for_render["type"] = canonical_archetype
 
+        # Pass 3.7c: pull the AI-generated decoration scheme (if any)
+        # and apply its color/typography overrides to the design_system
+        # before rendering. The scheme itself is also threaded through
+        # so layouts can render motion modules conditionally. Without a
+        # scheme, this is a no-op and Pass 3.7/3.7b deterministic
+        # decoration applies as before.
+        scheme = site_config.get("generated_decoration") if isinstance(site_config, dict) else None
+        try:
+            from studio_layouts.shared import apply_scheme_to_design_system
+            design_system_for_render = apply_scheme_to_design_system(design_system, scheme)
+        except Exception:
+            design_system_for_render = design_system
+
         return render_layout(
             layout_id,
             business_data=business_data_for_render,
-            design_system=design_system,
+            design_system=design_system_for_render,
             composite=composite,
             sections_config=sections_config,
             bundle=bundle,
             head_meta_extra=head_meta_extra,
             products=products,
+            scheme=scheme,
         )
     except Exception as e:
         logger.warning(

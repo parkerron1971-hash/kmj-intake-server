@@ -621,14 +621,5 @@ def generate_decoration_scheme(
     if warnings:
         scheme["_validation_warnings"] = warnings
 
-    # Diagnostic: surface the voice-signal gate decision so the frontend
-    # (and curl probes during testing) can see whether cold-start fired.
-    breakdown = _voice_signal_breakdown(bundle, products)
-    scheme["_debug_signals"] = {
-        "cold_start_active": cold_start_active,
-        "signal_count": sum(1 for v in breakdown.values() if v),
-        "signals": breakdown,
-    }
-
     scheme["generated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return scheme, None
