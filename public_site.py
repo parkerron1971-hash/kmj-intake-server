@@ -1810,6 +1810,29 @@ async def debug_studio_render(business_id: str):
     after the regression is identified.
     """
     import traceback
+    # Probe: read site_config and report whether use_smart_sites is set
+    try:
+        from brand_engine import _sb_get as be_get
+        site_rows = be_get(
+            f"/business_sites?business_id=eq.{business_id}&select=id,site_config,slug,html_content&order=updated_at.desc&limit=5"
+        ) or []
+        site_summary = []
+        for sr in site_rows:
+            sc = sr.get("site_config") or {}
+            site_summary.append({
+                "id": sr.get("id"),
+                "slug": sr.get("slug"),
+                "has_html_content": bool(sr.get("html_content")),
+                "site_config_keys": sorted(sc.keys()) if isinstance(sc, dict) else None,
+                "use_smart_sites": (sc.get("use_smart_sites") if isinstance(sc, dict) else None),
+                "layout_id": (sc.get("layout_id") if isinstance(sc, dict) else None),
+                "vocabulary_override": (sc.get("vocabulary_override") if isinstance(sc, dict) else None),
+                "has_generated_decoration": (("generated_decoration" in sc) if isinstance(sc, dict) else None),
+                "has_design_recommendation": (("design_recommendation" in sc) if isinstance(sc, dict) else None),
+            })
+    except Exception as e:
+        site_summary = [{"error": str(e)}]
+
     try:
         from smart_sites import resolve_layout_and_vocabulary, get_site_config
         from studio_layouts.dispatch import render_layout
@@ -1874,6 +1897,7 @@ async def debug_studio_render(business_id: str):
                 "html_size": len(html),
                 "intel_keys": list(intel.keys()),
                 "has_scheme": bool(scheme),
+                "site_rows_summary": site_summary,
             }
         except Exception as e:
             return {
