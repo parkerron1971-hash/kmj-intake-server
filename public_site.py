@@ -1444,6 +1444,149 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
         return {"ok": False, "error": "Unexpected error."}
 
 
+# ─── Pass 3.7c: Studio-spirit decoration generation pipeline ───────────
+#
+# In-memory cooldown tracker: business_id -> last unix timestamp of a
+# successful (or attempted) generation. 60-second cooldown prevents
+# accidental rapid-fire regenerations during testing. Resets on Railway
+# redeploy (acceptable for v1).
+_decoration_cooldown: Dict[str, float] = {}
+DECORATION_COOLDOWN_SECONDS = 60
+
+
+def _check_decoration_cooldown(business_id: str):
+    """Return (can_generate: bool, seconds_remaining: int)."""
+    last = _decoration_cooldown.get(business_id, 0)
+    elapsed = time.time() - last
+    if elapsed >= DECORATION_COOLDOWN_SECONDS:
+        return True, 0
+    return False, int(DECORATION_COOLDOWN_SECONDS - elapsed)
+
+
+@router.post("/sites/{business_id}/generate-decoration")
+async def generate_decoration_endpoint(business_id: str):
+    """Generate a unique decoration scheme via the Studio-spirit AI pipeline.
+
+    Flow:
+      1. Check cooldown (60s/business). 429 if still cooling down.
+      2. Resolve current vocab + layout via smart_sites helper.
+      3. Set cooldown BEFORE the slow API call so concurrent calls block.
+      4. Call Claude (creative) + GPT (structural validator).
+      5. Validate output against schema.
+      6. Persist into business_sites.site_config.generated_decoration.
+    """
+    can_generate, seconds_remaining = _check_decoration_cooldown(business_id)
+    if not can_generate:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Cooldown active. Try again in {seconds_remaining} seconds.",
+        )
+
+    try:
+        from brand_engine import _sb_get as be_get, _sb_patch as be_patch, get_bundle
+    except Exception as e:
+        logger.warning(f"[decoration] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    biz_rows = be_get(f"/businesses?id=eq.{business_id}&select=*&limit=1") or []
+    if not biz_rows:
+        raise HTTPException(404, "Business not found")
+    business_data = biz_rows[0]
+
+    try:
+        bundle = get_bundle(business_id) or {}
+    except Exception as e:
+        logger.warning(f"[decoration] get_bundle failed for {business_id}: {e}")
+        bundle = {}
+
+    site_rows = be_get(
+        f"/business_sites?business_id=eq.{business_id}&select=id,site_config&limit=1"
+    ) or []
+    if not site_rows:
+        raise HTTPException(
+            404, "business_sites row missing — enable Smart Sites first"
+        )
+    site_id = site_rows[0]["id"]
+    site_config = site_rows[0].get("site_config") or {}
+
+    try:
+        from smart_sites import resolve_layout_and_vocabulary
+        # Actual signature: (business_id, site_config) -> 7-tuple
+        # (layout_id, vocab_id, composite, design_system, business_data,
+        #  business_profile, detected_matches)
+        resolved = resolve_layout_and_vocabulary(business_id, site_config)
+        layout_id = resolved[0]
+        vocab_id = resolved[1]
+        composite = resolved[2]
+    except Exception as e:
+        logger.warning(f"[decoration] resolve_layout_and_vocabulary failed: {e}")
+        raise HTTPException(500, "Could not resolve layout/vocabulary")
+
+    if not vocab_id or not layout_id:
+        raise HTTPException(
+            400, "Cannot resolve vocab/layout for this business yet"
+        )
+
+    # Stamp cooldown BEFORE the slow Claude+GPT calls so concurrent
+    # requests block immediately.
+    _decoration_cooldown[business_id] = time.time()
+
+    try:
+        from studio_decoration_generator import generate_decoration_scheme
+    except Exception as e:
+        logger.warning(f"[decoration] generator import failed: {e}")
+        raise HTTPException(500, "Generator unavailable")
+
+    scheme, error = generate_decoration_scheme(
+        business_data, bundle, vocab_id, layout_id, composite
+    )
+    if not scheme:
+        raise HTTPException(500, f"Generation failed: {error}")
+
+    new_config = dict(site_config)
+    new_config["generated_decoration"] = scheme
+    try:
+        be_patch(
+            f"/business_sites?id=eq.{site_id}", {"site_config": new_config}
+        )
+    except Exception as e:
+        logger.warning(f"[decoration] persist failed for {business_id}: {e}")
+        raise HTTPException(500, "Generation succeeded but persist failed")
+
+    return {
+        "ok": True,
+        "scheme": scheme,
+        "vocab_id": vocab_id,
+        "layout_id": layout_id,
+    }
+
+
+@router.get("/sites/{business_id}/decoration-status")
+async def decoration_status_endpoint(business_id: str):
+    """Return current decoration scheme + cooldown status."""
+    try:
+        from brand_engine import _sb_get as be_get
+    except Exception as e:
+        logger.warning(f"[decoration] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    site_rows = be_get(
+        f"/business_sites?business_id=eq.{business_id}&select=site_config&limit=1"
+    ) or []
+    site_config = (site_rows[0].get("site_config") if site_rows else {}) or {}
+    scheme = site_config.get("generated_decoration")
+
+    can_generate, seconds_remaining = _check_decoration_cooldown(business_id)
+    return {
+        "ok": True,
+        "has_scheme": bool(scheme),
+        "scheme": scheme,
+        "generated_at": (scheme or {}).get("generated_at"),
+        "can_generate": can_generate,
+        "cooldown_remaining_seconds": seconds_remaining,
+    }
+
+
 @router.get("/public/widget/{module_id}")
 async def get_widget(module_id: str):
     """Return a self-contained styled HTML page for iframe embedding."""
