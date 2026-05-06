@@ -1573,9 +1573,13 @@ async def generate_decoration_endpoint(business_id: str):
 
 @router.get("/sites/{business_id}/decoration-status")
 async def decoration_status_endpoint(business_id: str):
-    """Return current decoration scheme + cooldown status."""
+    """Return current decoration scheme + cooldown status.
+
+    Also surfaces a `cold_start_predicted` field showing whether the
+    next generation would fire the cold-start enforcement branch.
+    """
     try:
-        from brand_engine import _sb_get as be_get
+        from brand_engine import _sb_get as be_get, get_bundle
     except Exception as e:
         logger.warning(f"[decoration] brand_engine import failed: {e}")
         raise HTTPException(500, "Server misconfigured")
@@ -1586,6 +1590,20 @@ async def decoration_status_endpoint(business_id: str):
     site_config = (site_rows[0].get("site_config") if site_rows else {}) or {}
     scheme = site_config.get("generated_decoration")
 
+    # Diagnostic: predict whether cold-start would fire next time.
+    cold_start_predicted = None
+    voice_signals = None
+    try:
+        from studio_decoration_generator import _voice_signal_breakdown, _has_meaningful_voice_signal
+        bundle = get_bundle(business_id) or {}
+        product_rows = be_get(
+            f"/products?business_id=eq.{business_id}&status=eq.active&select=name&limit=12"
+        ) or []
+        voice_signals = _voice_signal_breakdown(bundle, product_rows)
+        cold_start_predicted = not _has_meaningful_voice_signal(bundle, product_rows)
+    except Exception as e:
+        logger.warning(f"[decoration] cold-start prediction failed: {e}")
+
     can_generate, seconds_remaining = _check_decoration_cooldown(business_id)
     return {
         "ok": True,
@@ -1594,6 +1612,8 @@ async def decoration_status_endpoint(business_id: str):
         "generated_at": (scheme or {}).get("generated_at"),
         "can_generate": can_generate,
         "cooldown_remaining_seconds": seconds_remaining,
+        "cold_start_predicted": cold_start_predicted,
+        "voice_signals": voice_signals,
     }
 
 
