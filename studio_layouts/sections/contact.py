@@ -132,11 +132,17 @@ def render(
         f'<p style="font-size:1.1rem;color:color-mix(in srgb,{surface_text} 80%,transparent);margin:0 0 3rem;max-width:600px;">{subtext}</p>'
         if subtext else ''
     )
+    try:
+        from studio_layouts.sections.typography import render_eyebrow
+        eyebrow_html = render_eyebrow("Contact", design_system, vocab_id)
+    except Exception:
+        eyebrow_html = ""
 
     grid_template = "1fr 1.5fr" if (info_html and form_html) else "1fr"
     return f"""
 <section style="background:{surface};color:{surface_text};padding:96px 48px;">
   <div style="max-width:1100px;margin:0 auto;">
+    {eyebrow_html}
     <h2 style="font-family:'{display_font}',Georgia,serif;font-size:2rem;margin:0 0 1rem;color:{surface_text};">
       {heading}
     </h2>

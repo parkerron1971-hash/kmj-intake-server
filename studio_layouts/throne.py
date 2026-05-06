@@ -214,9 +214,14 @@ def render(
                 about_para_html = render_drop_cap_paragraph(about_raw, design_system, vocab_id)
             except Exception:
                 about_para_html = f'<p>{safe_html(about_raw)}</p>'
+            try:
+                from studio_layouts.sections.typography import render_eyebrow
+                about_eyebrow = render_eyebrow("About", design_system, vocab_id)
+            except Exception:
+                about_eyebrow = '<div class="thrn-section-label">About</div>'
             about_html = f"""
 <section class="thrn-section reveal">
-  <div class="thrn-section-label">About</div>
+  {about_eyebrow}
   <div class="thrn-about-body">{about_para_html}</div>
 </section>
 """
@@ -237,9 +242,14 @@ def render(
             price_html = f'<div class="thrn-price">{price_label}</div>' if price_label else ""
             cta_html = render_stripe_button(p, design_system)
             cards.append(f'<div class="thrn-service-card"><h3>{name}</h3>{desc_html}{price_html}{cta_html}</div>')
+        try:
+            from studio_layouts.sections.typography import render_eyebrow
+            services_eyebrow = render_eyebrow("Engagements", design_system, vocab_id)
+        except Exception:
+            services_eyebrow = '<div class="thrn-section-label">Engagements</div>'
         services_html = f"""
 <section class="thrn-section reveal">
-  <div class="thrn-section-label">Engagements</div>
+  {services_eyebrow}
   <div class="thrn-services-grid">{''.join(cards)}</div>
 </section>
 """

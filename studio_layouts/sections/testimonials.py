@@ -53,12 +53,18 @@ def render(
         return ""
 
     heading = safe_html(section_config.get("heading") or "What clients say")
+    try:
+        from studio_layouts.sections.typography import render_eyebrow
+        eyebrow_html = render_eyebrow("Testimonials", design_system, vocab_id)
+    except Exception:
+        eyebrow_html = ""
     return f"""
-<section style="max-width:1200px;margin:0 auto;padding:96px 48px;">
+<section style="max-width:1200px;margin:0 auto;padding:96px 48px;text-align:center;">
+  {eyebrow_html}
   <h2 style="font-family:'{display_font}',Georgia,serif;font-size:2rem;margin:0 0 3rem;color:{text};text-align:center;">
     {heading}
   </h2>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px;">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px;text-align:left;">
     {''.join(cards)}
   </div>
 </section>

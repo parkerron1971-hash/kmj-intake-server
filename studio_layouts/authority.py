@@ -221,9 +221,14 @@ def render(
                 about_para_html = render_drop_cap_paragraph(about_raw, design_system, vocab_id)
             except Exception:
                 about_para_html = f'<p>{safe_html(about_raw)}</p>'
+            try:
+                from studio_layouts.sections.typography import render_eyebrow
+                about_eyebrow = render_eyebrow("01 / About", design_system, vocab_id)
+            except Exception:
+                about_eyebrow = '<div class="auth-section-num">01 / About</div>'
             about_html = f"""
 <section class="auth-section reveal">
-  <div class="auth-section-num">01 / About</div>
+  {about_eyebrow}
   <h2>About {safe_html((bundle.get("practitioner") or {}).get("display_name") or "the team")}</h2>
   <div class="auth-about-body">{about_para_html}</div>
 </section>
@@ -245,9 +250,14 @@ def render(
             price_html = f'<div class="auth-price">{price_label}</div>' if price_label else ""
             cta_html = render_stripe_button(p, design_system)
             cards.append(f'<div class="auth-service-card"><h3>{name}</h3>{desc_html}{price_html}{cta_html}</div>')
+        try:
+            from studio_layouts.sections.typography import render_eyebrow
+            services_eyebrow = render_eyebrow("02 / Services", design_system, vocab_id)
+        except Exception:
+            services_eyebrow = '<div class="auth-section-num">02 / Services</div>'
         services_html = f"""
 <section class="auth-section reveal">
-  <div class="auth-section-num">02 / Services</div>
+  {services_eyebrow}
   <h2>Engagements</h2>
   <div class="auth-services-grid">{''.join(cards)}</div>
 </section>

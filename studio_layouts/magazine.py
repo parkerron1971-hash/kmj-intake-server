@@ -240,10 +240,15 @@ def render(
                 about_para_html = render_drop_cap_paragraph(about_raw, design_system, vocab_id)
             except Exception:
                 about_para_html = f'<p>{safe_html(about_raw)}</p>'
+            try:
+                from studio_layouts.sections.typography import render_eyebrow
+                about_eyebrow = render_eyebrow("About", design_system, vocab_id)
+            except Exception:
+                about_eyebrow = '<div class="mag-about-label">About</div>'
             about_html = f"""
 <section class="mag-section mag-about reveal">
   <div>
-    <div class="mag-about-label">About</div>
+    {about_eyebrow}
   </div>
   <div class="mag-about-body">
     {about_para_html}
@@ -270,9 +275,14 @@ def render(
             cards.append(
                 f'<div class="mag-service-card"><h3>{name}</h3>{desc_html}{price_html}{cta_html}</div>'
             )
+        try:
+            from studio_layouts.sections.typography import render_eyebrow
+            services_eyebrow = render_eyebrow("Services", design_system, vocab_id)
+        except Exception:
+            services_eyebrow = '<div class="mag-about-label">Services</div>'
         services_html = f"""
 <section class="mag-section reveal">
-  <div class="mag-about-label">Services</div>
+  {services_eyebrow}
   <div class="mag-services-grid">{''.join(cards)}</div>
 </section>
 """
