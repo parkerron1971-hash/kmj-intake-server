@@ -147,6 +147,7 @@ def detect_vocabularies(
     business_profile: Optional[Dict[str, Any]] = None,
     voice_profile: Optional[Dict[str, Any]] = None,
     brand_kit: Optional[Dict[str, Any]] = None,
+    practitioner_intelligence: Optional[Dict[str, Any]] = None,
 ) -> List[VocabularyMatch]:
     """Detect top 3 vocabulary candidates with confidence + reasons.
 
@@ -158,10 +159,14 @@ def detect_vocabularies(
             communication_style)
         brand_kit: businesses.settings.brand_kit (kept available for future
             signal extraction; currently unused by scoring)
+        practitioner_intelligence: bundle.practitioner_intelligence dict
+            (Pass 3.8a). Adds signal_words + about_me / about_business /
+            strategy_track text to the corpus when present.
     """
     business_row = business_row or {}
     business_profile = business_profile or {}
     voice_profile = voice_profile or {}
+    practitioner_intelligence = practitioner_intelligence or {}
 
     # Build text corpus from all available fields
     sensitive_areas = business_profile.get("sensitive_areas") or []
@@ -170,6 +175,19 @@ def detect_vocabularies(
         sensitive_areas = [k for k, v in sensitive_areas.items() if v]
     elif not isinstance(sensitive_areas, list):
         sensitive_areas = []
+
+    # Pass 3.8a — pull text from practitioner_intelligence if present
+    intel_about_me = practitioner_intelligence.get("about_me") or ""
+    intel_about_biz = practitioner_intelligence.get("about_business") or ""
+    intel_signal_words = practitioner_intelligence.get("signal_words") or []
+    intel_strategy = practitioner_intelligence.get("strategy_track") or {}
+    if isinstance(intel_strategy, dict):
+        intel_strategy_text = " ".join(
+            str(v) for v in intel_strategy.values()
+            if v and isinstance(v, str)
+        )
+    else:
+        intel_strategy_text = ""
 
     text_parts = [
         str(business_row.get("name") or ""),
@@ -182,6 +200,11 @@ def detect_vocabularies(
         str(voice_profile.get("personality") or ""),
         str(voice_profile.get("communication_style") or ""),
         str(voice_profile.get("audience") or ""),
+        # Pass 3.8a additions
+        intel_about_me,
+        intel_about_biz,
+        intel_strategy_text,
+        " ".join(intel_signal_words) if isinstance(intel_signal_words, list) else "",
     ]
     text_corpus = " ".join(p for p in text_parts if p)
 
@@ -240,3 +263,109 @@ def detect_vocabulary_triple(
             break
 
     return (primary_id, secondary_id, aesthetic_id)
+
+
+# ─── Pass 3.8a — meaningful-signal gate for Designer Agent ─────────
+#
+# Distinct from Pass 3.7c's decoration-generator gate (which is 6-signal).
+# This is the 9-signal version used by the Designer Agent endpoint to
+# decide between rich-data (LLM call) and cold-start (deterministic
+# vocabulary affinity) paths.
+#
+# Per Pass 3.8a Clarification 2: signals 7-9 require non-auto-seeded
+# data. A practitioner_profile that only has audit fields populated
+# does NOT count as about_me signal.
+
+
+def voice_signal_breakdown(
+    bundle: Dict[str, Any],
+    products: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, bool]:
+    """Return the 9-signal breakdown dict.
+
+    Signals 1-6 are simple presence checks. Signals 7-9 (about_me,
+    about_business, strategy_track) apply Clarification 2 filters so
+    auto-seeded-only profiles do NOT count.
+    """
+    products = products or []
+    bundle = bundle or {}
+    business = bundle.get("business") or {}
+    voice = bundle.get("voice") or {}
+    intel = bundle.get("practitioner_intelligence") or {}
+    raw = intel.get("_raw") or {}
+    practitioner_row = raw.get("practitioner_profile") or {}
+    strategy_row = raw.get("strategy_track") or {}
+
+    # Signal 7: about_me — must have name OR title AND voice_samples OR voice_dos
+    has_identity = bool(
+        practitioner_row.get("full_legal_name")
+        or practitioner_row.get("preferred_title")
+    )
+    voice_samples = practitioner_row.get("voice_samples") or {}
+    voice_dos_pp = practitioner_row.get("voice_dos") or []
+    has_voice_depth = bool(
+        (isinstance(voice_samples, dict) and len(voice_samples) > 0)
+        or (isinstance(voice_dos_pp, list) and len(voice_dos_pp) > 0)
+    )
+    about_me_truthy = bool(intel.get("about_me")) and has_identity and has_voice_depth
+
+    # Signal 8: about_business — must have tagline OR elevator_pitch AND
+    # at least one of (business_type, brand_voice, audience, tone) populated.
+    settings = business.get("settings") if isinstance(business, dict) else {}
+    brand_kit = (settings or {}).get("brand_kit") if isinstance(settings, dict) else {}
+    brand_kit = brand_kit or {}
+    business_profile_raw = bundle.get("_business_profile") or {}
+    has_brand_kit_text = bool(
+        (brand_kit.get("tagline") or business.get("tagline"))
+        or (brand_kit.get("elevator_pitch") or business.get("elevator_pitch"))
+    )
+    has_business_meta = bool(
+        business.get("type")
+        or business_profile_raw.get("business_type")
+        or business_profile_raw.get("brand_voice")
+        or voice.get("brand_voice")
+        or voice.get("audience")
+        or voice.get("tone_original")
+        or voice.get("tone")
+    )
+    about_business_truthy = (
+        bool(intel.get("about_business")) and has_brand_kit_text and has_business_meta
+    )
+
+    # Signal 9: strategy_track — phases.discovery has >=2 non-empty values
+    strategy_dict = intel.get("strategy_track") or {}
+    discovery_keys = ("unique_value_proposition", "target_audience", "summary", "practitioner_background")
+    discovery_filled = sum(1 for k in discovery_keys if strategy_dict.get(k))
+    strategy_truthy = discovery_filled >= 2
+
+    return {
+        # 1-6 simple presence
+        "tagline": bool(business.get("tagline")),
+        "elevator_pitch": bool(business.get("elevator_pitch")),
+        "voice_tone": bool(voice.get("tone") or voice.get("tone_original")),
+        "voice_dos": bool(voice.get("voice_dos")),
+        "voice_donts": bool(voice.get("voice_donts")),
+        "products_with_names": bool([p for p in products if isinstance(p, dict) and p.get("name")]),
+        # 7-9 filtered per Pass 3.8a Clarification 2
+        "about_me": about_me_truthy,
+        "about_business": about_business_truthy,
+        "strategy_track": strategy_truthy,
+    }
+
+
+def has_meaningful_voice_signal(
+    bundle: Dict[str, Any],
+    products: Optional[List[Dict[str, Any]]] = None,
+    threshold: int = 2,
+) -> bool:
+    """Pass 3.8a 9-signal threshold gate. Default threshold 2-of-9.
+
+    Below threshold = cold-start path. At/above = rich-data (LLM) path.
+    """
+    breakdown = voice_signal_breakdown(bundle, products)
+    truthy = sum(1 for v in breakdown.values() if v)
+    return truthy >= threshold
+
+
+# Backward-compat alias for callers that prefer the underscore-prefix name
+_has_meaningful_voice_signal = has_meaningful_voice_signal
