@@ -31,6 +31,24 @@ def render(
     vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
     section_break = render_decoration_for(vocab_id, design_system, "section_break")
 
+    # Pass 3.7b — vocab-eyebrow text (letter-spacing: 0.3em)
+    try:
+        from studio_layouts.sections.typography import render_eyebrow
+        eyebrow_html = render_eyebrow(safe_html(business_data.get("type", "")).replace("_", " ").upper() or "STUDIO", design_system, vocab_id)
+    except Exception:
+        eyebrow_html = ""
+
+    # Pass 3.7b — hero gradient + corner ornaments (framed layout)
+    try:
+        from studio_decoration import get_gradient_for_section, render_decorative_corners
+        hero_gradient = get_gradient_for_section(vocab_id, design_system, "hero")
+    except Exception:
+        hero_gradient = design_system.get("palette_bg") or "#fafaf8"
+    try:
+        hero_corners = render_decorative_corners(vocab_id, design_system)
+    except Exception:
+        hero_corners = ""
+
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
     text = design_system["palette_text"]
@@ -42,9 +60,10 @@ def render(
     layout_css = f"""
 <style>
 .auth-hero {{
+  position: relative;
   text-align: center;
   padding: 96px 48px 64px;
-  background: {bg};
+  background: {hero_gradient};
   border-bottom: 1px solid color-mix(in srgb, {on_bg} 12%, transparent);
 }}
 .auth-headline {{
@@ -177,6 +196,7 @@ def render(
     badge_html = f'<div style="margin-bottom:1rem;">{badge}</div>' if badge else ""
     hero_html = f"""
 <section class="auth-hero reveal">
+  {hero_corners}
   {badge_html}
   <h1 class="auth-headline">{headline}</h1>
   {sub_html}
@@ -194,13 +214,18 @@ def render(
     about_html = ""
     about_config = sections_config.get("about") or {}
     if about_config.get("enabled", True):
-        about_text = safe_html(about_config.get("text")) or safe_html(business_data.get("elevator_pitch") or "")
-        if about_text:
+        about_raw = (about_config.get("text") or "") or (business_data.get("elevator_pitch") or "")
+        if about_raw:
+            try:
+                from studio_layouts.sections.typography import render_drop_cap_paragraph
+                about_para_html = render_drop_cap_paragraph(about_raw, design_system, vocab_id)
+            except Exception:
+                about_para_html = f'<p>{safe_html(about_raw)}</p>'
             about_html = f"""
 <section class="auth-section reveal">
   <div class="auth-section-num">01 / About</div>
   <h2>About {safe_html((bundle.get("practitioner") or {}).get("display_name") or "the team")}</h2>
-  <p class="auth-about-body">{about_text}</p>
+  <div class="auth-about-body">{about_para_html}</div>
 </section>
 """
 
@@ -240,6 +265,7 @@ def render(
 {layout_css}
 <body style="background:{bg};color:{on_bg};margin:0;">
 {hero_html}
+<div style="max-width:1100px;margin:0 auto;padding:24px 24px 0;text-align:center;">{eyebrow_html}</div>
 {before_about}
 {about_html}
 {services_html}

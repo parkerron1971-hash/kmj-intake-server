@@ -32,6 +32,20 @@ def render(
     vocab_id = ((composite or {}).get("primary_vocabulary") or {}).get("id")
     section_break = render_decoration_for(vocab_id, design_system, "section_break")
 
+    # Pass 3.7b — vocab-eyebrow text (letter-spacing: 0.3em)
+    try:
+        from studio_layouts.sections.typography import render_eyebrow
+        eyebrow_html = render_eyebrow(safe_html(business_data.get("type", "")).replace("_", " ").upper() or "STUDIO", design_system, vocab_id)
+    except Exception:
+        eyebrow_html = ""
+
+    # Pass 3.7b — corner ornaments (framed layout)
+    try:
+        from studio_decoration import render_decorative_corners
+        hero_corners = render_decorative_corners(vocab_id, design_system)
+    except Exception:
+        hero_corners = ""
+
     bg = design_system["palette_bg"]
     accent = design_system["palette_accent"]
     text = design_system["palette_text"]
@@ -223,6 +237,7 @@ def render(
     badge_html = f'<div style="margin-bottom:1.5rem;">{badge}</div>' if badge else ""
     hero_html = f"""
 <section class="emp-hero reveal">
+  {hero_corners}
   {badge_html}
   <div class="emp-identity-words">{identity_html}</div>
   <h1 class="emp-headline">{headline}</h1>
@@ -236,13 +251,18 @@ def render(
     founder_html = ""
     about_config = sections_config.get("about") or {}
     if about_config.get("enabled", True):
-        about_text = safe_html(about_config.get("text")) or safe_html(business_data.get("elevator_pitch") or "")
-        if about_text:
+        about_raw = (about_config.get("text") or "") or (business_data.get("elevator_pitch") or "")
+        if about_raw:
+            try:
+                from studio_layouts.sections.typography import render_drop_cap_paragraph
+                about_para_html = render_drop_cap_paragraph(about_raw, design_system, vocab_id)
+            except Exception:
+                about_para_html = f'<p>{safe_html(about_raw)}</p>'
             founder_html = f"""
 <section class="emp-founder reveal">
   <div class="emp-founder-text">
     <h2>About {practitioner}</h2>
-    <p>{about_text}</p>
+    {about_para_html}
   </div>
   <div class="emp-founder-portrait">{initial}</div>
 </section>
@@ -293,6 +313,7 @@ def render(
 {layout_css}
 <body style="background:{bg};color:{on_bg};margin:0;">
 {hero_html}
+<div style="max-width:1100px;margin:0 auto;padding:24px 24px 0;text-align:center;">{eyebrow_html}</div>
 {before_about}
 {founder_html}
 {offerings_html}
