@@ -1617,6 +1617,192 @@ async def decoration_status_endpoint(business_id: str):
     }
 
 
+# ─── Pass 3.8a: Designer Agent — strand pair recommendation ───────────
+#
+# In-memory cooldown tracker, per-business, 60s. Reuses Pass 3.7c pattern.
+# Resets on Railway redeploy (acceptable for v1).
+_design_rec_cooldown: Dict[str, float] = {}
+DESIGN_REC_COOLDOWN_SECONDS = 60
+
+
+def _check_design_rec_cooldown(business_id: str):
+    """Returns (can_generate: bool, seconds_remaining: int)."""
+    last = _design_rec_cooldown.get(business_id, 0)
+    elapsed = time.time() - last
+    if elapsed >= DESIGN_REC_COOLDOWN_SECONDS:
+        return True, 0
+    return False, int(DESIGN_REC_COOLDOWN_SECONDS - elapsed)
+
+
+@router.post("/sites/{business_id}/generate-design-recommendation")
+async def generate_design_rec_endpoint(business_id: str):
+    """Run the Designer Agent (LLM #1). Picks strand pair + ratio +
+    sub-strand + layout archetype + accent style + 2 alternatives.
+
+    Cold-start path (deterministic, no LLM) fires when bundle voice
+    signals are below the 2-of-9 threshold.
+    """
+    can_generate, seconds_remaining = _check_design_rec_cooldown(business_id)
+    if not can_generate:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Cooldown active. Try again in {seconds_remaining} seconds.",
+        )
+
+    try:
+        from brand_engine import _sb_get as be_get, _sb_patch as be_patch, get_bundle
+    except Exception as e:
+        logger.warning(f"[design-rec] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    biz_rows = be_get(f"/businesses?id=eq.{business_id}&select=*&limit=1") or []
+    if not biz_rows:
+        raise HTTPException(404, "Business not found")
+    business_data = biz_rows[0]
+
+    try:
+        bundle = get_bundle(business_id) or {}
+    except Exception as e:
+        logger.warning(f"[design-rec] get_bundle failed for {business_id}: {e}")
+        bundle = {}
+
+    profile_rows = be_get(
+        f"/business_profiles?business_id=eq.{business_id}&select=*&limit=1"
+    ) or []
+    business_profile = profile_rows[0] if profile_rows else {}
+    voice_profile = business_data.get("voice_profile") or {}
+    brand_kit = (business_data.get("settings") or {}).get("brand_kit") or {}
+
+    try:
+        product_rows = be_get(
+            f"/products?business_id=eq.{business_id}&is_active=eq.true&select=*&limit=20"
+        ) or []
+    except Exception:
+        product_rows = []
+
+    try:
+        from studio_vocab_detect import detect_vocabulary_triple, has_meaningful_voice_signal
+    except Exception as e:
+        logger.warning(f"[design-rec] studio_vocab_detect import failed: {e}")
+        raise HTTPException(500, "Vocab detector unavailable")
+
+    primary_vocab_id, _, _ = detect_vocabulary_triple(
+        business_data, business_profile, voice_profile, brand_kit
+    )
+    if not primary_vocab_id:
+        raise HTTPException(400, "Cannot resolve vocabulary for this business")
+
+    has_signal = has_meaningful_voice_signal(bundle, product_rows)
+    cold_start = not has_signal
+
+    # Stamp cooldown BEFORE the slow Claude call
+    _design_rec_cooldown[business_id] = time.time()
+
+    try:
+        from studio_designer_agent import generate_design_recommendation
+    except Exception as e:
+        logger.warning(f"[design-rec] designer agent import failed: {e}")
+        raise HTTPException(500, "Designer Agent unavailable")
+
+    rec, error = generate_design_recommendation(
+        bundle, primary_vocab_id, product_rows, cold_start
+    )
+    if not rec:
+        raise HTTPException(500, f"Generation failed: {error}")
+
+    # Persist into business_sites.site_config.design_recommendation
+    site_rows = be_get(
+        f"/business_sites?business_id=eq.{business_id}&select=id,site_config&limit=1"
+    ) or []
+    if site_rows:
+        site_id = site_rows[0]["id"]
+        site_config = site_rows[0].get("site_config") or {}
+        new_config = dict(site_config)
+        new_config["design_recommendation"] = rec
+        try:
+            be_patch(f"/business_sites?id=eq.{site_id}", {"site_config": new_config})
+        except Exception as e:
+            logger.warning(f"[design-rec] persist failed for {business_id}: {e}")
+            # Generation succeeded; persist failure is recoverable next time
+
+    return {
+        "ok": True,
+        "recommendation": rec,
+        "vocab_id": primary_vocab_id,
+        "cold_start": cold_start,
+    }
+
+
+@router.get("/sites/{business_id}/design-signals")
+async def design_signals_endpoint(business_id: str):
+    """Diagnostic — returns the 9-signal breakdown + cold-start prediction.
+
+    Free probe: no LLM call, no DB writes. Used by frontend Design DNA UI
+    (3.8e) to show "your next generation will be cold-start because [X]"
+    before the user clicks Generate.
+    """
+    try:
+        from brand_engine import _sb_get as be_get, get_bundle
+    except Exception as e:
+        logger.warning(f"[design-signals] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    biz_rows = be_get(f"/businesses?id=eq.{business_id}&select=id&limit=1") or []
+    if not biz_rows:
+        raise HTTPException(404, "Business not found")
+
+    try:
+        bundle = get_bundle(business_id) or {}
+    except Exception as e:
+        logger.warning(f"[design-signals] get_bundle failed: {e}")
+        bundle = {}
+
+    try:
+        product_rows = be_get(
+            f"/products?business_id=eq.{business_id}&is_active=eq.true&select=name&limit=20"
+        ) or []
+    except Exception:
+        product_rows = []
+
+    try:
+        from studio_vocab_detect import voice_signal_breakdown
+        signals = voice_signal_breakdown(bundle, product_rows)
+    except Exception as e:
+        logger.warning(f"[design-signals] breakdown failed: {e}")
+        signals = {}
+
+    truthy = sum(1 for v in signals.values() if v)
+    cold_start_predicted = truthy < 2
+
+    # Surface the existing persisted recommendation if any (for the UI to
+    # know whether a regenerate would be a first-time vs replace operation)
+    persisted_rec = None
+    try:
+        site_rows = be_get(
+            f"/business_sites?business_id=eq.{business_id}&select=site_config&limit=1"
+        ) or []
+        if site_rows:
+            sc = site_rows[0].get("site_config") or {}
+            persisted_rec = sc.get("design_recommendation")
+    except Exception:
+        persisted_rec = None
+
+    can_generate, seconds_remaining = _check_design_rec_cooldown(business_id)
+
+    return {
+        "ok": True,
+        "signals": signals,
+        "signal_count": truthy,
+        "threshold": 2,
+        "cold_start_predicted": cold_start_predicted,
+        "has_recommendation": bool(persisted_rec),
+        "recommendation_generated_at": (persisted_rec or {}).get("generated_at"),
+        "recommendation_was_cold_start": (persisted_rec or {}).get("cold_start"),
+        "can_generate": can_generate,
+        "cooldown_remaining_seconds": seconds_remaining,
+    }
+
+
 @router.get("/public/widget/{module_id}")
 async def get_widget(module_id: str):
     """Return a self-contained styled HTML page for iframe embedding."""

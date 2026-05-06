@@ -401,6 +401,309 @@ def _empty_bundle(business_id: str) -> Dict[str, Any]:
     }
 
 
+# ─────────────────────────────────────────────────────────────
+# Pass 3.8a — Practitioner Intelligence composition
+# ─────────────────────────────────────────────────────────────
+#
+# Composes prose blobs (about_me, about_business) and a structured
+# strategy_track dict from existing tables. Used by:
+#   - studio_designer_agent.py (LLM #1 prompt context)
+#   - studio_vocab_detect.py (signal-word matching, threshold gate)
+#
+# Reads from real schema:
+#   - practitioner_profiles (keyed by owner_id) → about_me prose
+#   - businesses.settings.brand_kit + business_profiles + voice_profile
+#     → about_business prose
+#   - strategy_tracks.phases.discovery → strategy_track dict
+#
+# Each read is wrapped; missing/empty data → that source is None.
+
+
+_PRACTITIONER_AUDIT_FIELDS = (
+    "auto_seeded", "auto_seeded_at", "auto_seeded_source",
+    "created_at", "updated_at", "owner_id", "id",
+    "profile_completeness", "proactive_capture_enabled",
+)
+
+
+def _compose_about_me_blob(practitioner_row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Stitch practitioner_profile fields into a creative-brief prose blob.
+    Returns None if the row is empty or has zero meaningful fields populated.
+    """
+    if not practitioner_row or not isinstance(practitioner_row, dict):
+        return None
+
+    full_legal = (practitioner_row.get("full_legal_name") or "").strip()
+    title = (practitioner_row.get("preferred_title") or "").strip()
+    voice_samples = practitioner_row.get("voice_samples") or {}
+    voice_dos = practitioner_row.get("voice_dos") or []
+    voice_donts = practitioner_row.get("voice_donts") or []
+    greeting = (practitioner_row.get("greeting_style") or "").strip()
+    signoff = (practitioner_row.get("signoff_style") or "").strip()
+
+    parts: List[str] = []
+
+    if full_legal and title:
+        parts.append(f"{full_legal}, {title}.")
+    elif full_legal:
+        parts.append(f"{full_legal}.")
+    elif title:
+        parts.append(f"{title}.")
+
+    if isinstance(voice_samples, dict) and voice_samples:
+        sample_values = [
+            str(v).strip() for v in voice_samples.values()
+            if v and isinstance(v, str) and v.strip()
+        ]
+        if sample_values:
+            parts.append(f"Voice samples: {', '.join(sample_values[:6])}.")
+
+    if isinstance(voice_dos, list) and voice_dos:
+        dos = [str(d).strip() for d in voice_dos if d and str(d).strip()]
+        if dos:
+            parts.append(f"Voice dos: {'; '.join(dos[:8])}.")
+
+    if isinstance(voice_donts, list) and voice_donts:
+        donts = [str(d).strip() for d in voice_donts if d and str(d).strip()]
+        if donts:
+            parts.append(f"Voice donts: {'; '.join(donts[:8])}.")
+
+    if greeting:
+        parts.append(f"Signature greeting: '{greeting}'.")
+    if signoff:
+        parts.append(f"Signoff: '{signoff}'.")
+
+    if not parts:
+        return None
+    return " ".join(parts)
+
+
+def _compose_about_business_blob(
+    business: Dict[str, Any],
+    brand_kit: Dict[str, Any],
+    business_profile: Dict[str, Any],
+    voice_profile: Dict[str, Any],
+) -> Optional[str]:
+    """Stitch brand_kit + business_profiles + voice_profile fields into
+    a creative-brief prose blob.
+    """
+    business = business or {}
+    brand_kit = brand_kit or {}
+    business_profile = business_profile or {}
+    voice_profile = voice_profile or {}
+
+    parts: List[str] = []
+
+    biz_name = (business.get("name") or "").strip()
+    biz_type = (business_profile.get("business_type") or business.get("type") or "").strip()
+    biz_subtype = (business_profile.get("business_subtype") or "").strip()
+    if biz_name and (biz_type or biz_subtype):
+        type_label = biz_subtype or biz_type
+        article = "an" if type_label[:1].lower() in ("a", "e", "i", "o", "u") else "a"
+        parts.append(f"{biz_name}, {article} {type_label} business.")
+    elif biz_name:
+        parts.append(f"{biz_name}.")
+
+    tagline = (brand_kit.get("tagline") or "").strip()
+    if tagline:
+        parts.append(f"Tagline: {tagline}.")
+
+    elevator = (brand_kit.get("elevator_pitch") or "").strip()
+    if elevator:
+        parts.append(f"Elevator pitch: {elevator}")
+        if not elevator.endswith(('.', '!', '?')):
+            parts[-1] = parts[-1] + "."
+
+    brand_voice = (business_profile.get("brand_voice") or "").strip()
+    if brand_voice:
+        parts.append(f"Brand voice: {brand_voice}.")
+
+    deliverables = (business_profile.get("deliverables_description") or "").strip()
+    if deliverables:
+        parts.append(f"Deliverables: {deliverables}")
+        if not deliverables.endswith(('.', '!', '?')):
+            parts[-1] = parts[-1] + "."
+
+    tone = (voice_profile.get("tone_original") or voice_profile.get("tone") or "").strip()
+    if tone:
+        parts.append(f"Tone: {tone}.")
+
+    audience = (voice_profile.get("audience") or "").strip()
+    if audience:
+        parts.append(f"Audience: {audience}.")
+
+    comm_style = voice_profile.get("communication_style")
+    if isinstance(comm_style, list) and comm_style:
+        parts.append(f"Communication style: {', '.join(str(c) for c in comm_style if c)}.")
+    elif isinstance(comm_style, str) and comm_style.strip():
+        parts.append(f"Communication style: {comm_style.strip()}.")
+
+    personality = voice_profile.get("personality")
+    if isinstance(personality, list) and personality:
+        parts.append(f"Personality: {', '.join(str(p) for p in personality if p)}.")
+    elif isinstance(personality, str) and personality.strip():
+        parts.append(f"Personality: {personality.strip()}.")
+
+    if not parts:
+        return None
+    return " ".join(parts)
+
+
+def _compose_strategy_track_dict(strategy_row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Pull phases.discovery out of a strategy_tracks row as a flat dict.
+    Returns None if no row, or if discovery has zero non-empty values.
+    """
+    if not strategy_row or not isinstance(strategy_row, dict):
+        return None
+    phases = strategy_row.get("phases")
+    if not isinstance(phases, dict):
+        return None
+    discovery = phases.get("discovery")
+    if not isinstance(discovery, dict):
+        return None
+
+    out = {
+        "unique_value_proposition": discovery.get("unique_value_proposition") or None,
+        "target_audience": discovery.get("target_audience") or None,
+        "summary": discovery.get("summary") or None,
+        "practitioner_background": discovery.get("practitioner_background") or None,
+    }
+    # Drop None values so the caller can count what's actually populated
+    out = {k: v for k, v in out.items() if v}
+    if not out:
+        return None
+
+    # Lightweight session log presence flag for the prompt context
+    session_log = phases.get("session_log") or []
+    if isinstance(session_log, list) and session_log:
+        out["session_count"] = len(session_log)
+
+    return out
+
+
+def _extract_signal_words(text: str) -> list:
+    """Distinctive signal words from blob text — length>=4, dedupe, drop common stopwords.
+    Used for vocabulary detection signal-word matching (Pass 3.8a).
+    """
+    if not text:
+        return []
+    import re
+    text = text.lower()
+    stop = {
+        "the", "and", "for", "with", "that", "this", "have", "from", "they",
+        "their", "what", "when", "where", "make", "made", "more", "your",
+        "work", "also", "into", "than", "then", "been", "will", "about",
+        "they", "them", "have", "has", "would", "could", "should", "much",
+        "very", "just", "some", "such", "only", "even", "most", "after",
+        "before", "still", "every", "while", "those", "these", "which",
+    }
+    words = re.findall(r"[a-z]{4,}", text)
+    seen = []
+    out = []
+    for w in words:
+        if w in stop or w in seen:
+            continue
+        seen.append(w)
+        out.append(w)
+        if len(out) >= 60:
+            break
+    return out
+
+
+def _read_practitioner_intelligence(
+    business: Dict[str, Any],
+    brand_kit: Dict[str, Any],
+    business_profile: Dict[str, Any],
+    practitioner_row: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Compose the practitioner_intelligence bundle block.
+
+    Reads from existing tables only (no schema changes). Returns:
+        {
+          "about_me": str | None,           # prose blob
+          "about_business": str | None,     # prose blob
+          "strategy_track": dict | None,    # phases.discovery flat dict
+          "signal_words": list[str],        # distinctive words from all 3
+          "has_signal": bool,               # any source non-empty
+          "_raw": {                         # raw rows for downstream sig gate
+            "practitioner_profile": dict | None,
+            "strategy_track": dict | None,
+          },
+        }
+    """
+    intel: Dict[str, Any] = {
+        "about_me": None,
+        "about_business": None,
+        "strategy_track": None,
+        "signal_words": [],
+        "has_signal": False,
+        "_raw": {
+            "practitioner_profile": practitioner_row or None,
+            "strategy_track": None,
+        },
+    }
+
+    # about_me prose blob
+    try:
+        intel["about_me"] = _compose_about_me_blob(practitioner_row)
+    except Exception as e:
+        logger.warning(f"_compose_about_me_blob failed: {e}")
+        intel["about_me"] = None
+
+    # about_business prose blob
+    voice_profile = (business or {}).get("voice_profile") or {}
+    try:
+        intel["about_business"] = _compose_about_business_blob(
+            business or {}, brand_kit or {}, business_profile or {}, voice_profile
+        )
+    except Exception as e:
+        logger.warning(f"_compose_about_business_blob failed: {e}")
+        intel["about_business"] = None
+
+    # strategy_track structured dict
+    business_id = (business or {}).get("id")
+    strategy_row = None
+    if business_id:
+        try:
+            rows = _sb_get(
+                f"/strategy_tracks?business_id=eq.{business_id}"
+                f"&order=created_at.desc&limit=1"
+            ) or []
+            if rows:
+                strategy_row = rows[0]
+        except Exception as e:
+            logger.warning(f"strategy_tracks read failed for {business_id}: {e}")
+    intel["_raw"]["strategy_track"] = strategy_row
+    try:
+        intel["strategy_track"] = _compose_strategy_track_dict(strategy_row)
+    except Exception as e:
+        logger.warning(f"_compose_strategy_track_dict failed: {e}")
+        intel["strategy_track"] = None
+
+    # signal_words across all three sources
+    blob_parts: List[str] = []
+    if intel["about_me"]:
+        blob_parts.append(intel["about_me"])
+    if intel["about_business"]:
+        blob_parts.append(intel["about_business"])
+    if intel["strategy_track"]:
+        blob_parts.append(" ".join(
+            str(v) for v in intel["strategy_track"].values()
+            if v and isinstance(v, str)
+        ))
+    text_blob = " ".join(blob_parts)
+    if text_blob.strip():
+        try:
+            intel["signal_words"] = _extract_signal_words(text_blob)
+        except Exception:
+            intel["signal_words"] = []
+
+    intel["has_signal"] = bool(
+        intel["about_me"] or intel["about_business"] or intel["strategy_track"]
+    )
+    return intel
+
+
 def get_bundle(business_id: str) -> Dict[str, Any]:
     """Compose the canonical brand bundle. Single source of truth for every
     downstream artifact (email, invoice, PDF, public site, Stripe page)."""
@@ -465,6 +768,22 @@ def get_bundle(business_id: str) -> Dict[str, Any]:
         "social_card": assets_raw.get("social_card"),
     }
 
+    # Pass 3.8a — practitioner intelligence composition
+    try:
+        intelligence_section = _read_practitioner_intelligence(
+            business, brand_kit, profile, practitioner
+        )
+    except Exception as e:
+        logger.warning(f"practitioner_intelligence composition failed: {e}")
+        intelligence_section = {
+            "about_me": None,
+            "about_business": None,
+            "strategy_track": None,
+            "signal_words": [],
+            "has_signal": False,
+            "_raw": {"practitioner_profile": None, "strategy_track": None},
+        }
+
     bundle = {
         "business": business_section,
         "practitioner": practitioner_section,
@@ -474,6 +793,7 @@ def get_bundle(business_id: str) -> Dict[str, Any]:
         "footer": footer_section,
         "signature_block": signature_section,
         "assets": assets_section,
+        "practitioner_intelligence": intelligence_section,
         "snapshot_count": len(business.get("brand_kit_history") or []),
     }
     completeness, missing = _compute_completeness(bundle)
