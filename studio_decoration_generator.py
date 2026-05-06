@@ -24,6 +24,36 @@ ANTHROPIC_API_BASE = "https://api.anthropic.com/v1/messages"
 OPENAI_API_BASE = "https://api.openai.com/v1/chat/completions"
 
 
+def _voice_signal_breakdown(bundle, products=None):
+    """Return a dict naming which voice-depth signals are present.
+    Used for both the cold-start gate and diagnostics."""
+    if not isinstance(bundle, dict):
+        bundle = {}
+    business = bundle.get("business") or {}
+    voice = bundle.get("voice") or {}
+
+    def _present(v):
+        if v is None:
+            return False
+        if isinstance(v, str):
+            return bool(v.strip())
+        if isinstance(v, (list, tuple, dict)):
+            return len(v) > 0
+        return bool(v)
+
+    return {
+        "tagline": _present(business.get("tagline")),
+        "elevator_pitch": _present(business.get("elevator_pitch")),
+        "voice_tone": _present(voice.get("tone")) or _present(voice.get("tone_original")),
+        "voice_dos": _present(voice.get("voice_dos")),
+        "voice_donts": _present(voice.get("voice_donts")),
+        "products_with_names": any(
+            isinstance(p, dict) and _present(p.get("name"))
+            for p in (products or [])
+        ),
+    }
+
+
 def _has_meaningful_voice_signal(bundle, products=None):
     """Decide whether the prompt should run the rich-data branch.
 
@@ -40,32 +70,8 @@ def _has_meaningful_voice_signal(bundle, products=None):
     us nothing. One signal could be coincidence; two means there is
     enough material for Claude to anchor specific creative choices on.
     """
-    if not isinstance(bundle, dict):
-        bundle = {}
-    business = bundle.get("business") or {}
-    voice = bundle.get("voice") or {}
-
-    def _present(v):
-        if v is None:
-            return False
-        if isinstance(v, str):
-            return bool(v.strip())
-        if isinstance(v, (list, tuple, dict)):
-            return len(v) > 0
-        return bool(v)
-
-    signals = [
-        _present(business.get("tagline")),
-        _present(business.get("elevator_pitch")),
-        _present(voice.get("tone")) or _present(voice.get("tone_original")),
-        _present(voice.get("voice_dos")),
-        _present(voice.get("voice_donts")),
-        any(
-            isinstance(p, dict) and _present(p.get("name"))
-            for p in (products or [])
-        ),
-    ]
-    return sum(1 for s in signals if s) >= 2
+    breakdown = _voice_signal_breakdown(bundle, products)
+    return sum(1 for v in breakdown.values() if v) >= 2
 
 
 def _format_list(items, max_items=8, joiner="; "):
@@ -614,6 +620,15 @@ def generate_decoration_scheme(
 
     if warnings:
         scheme["_validation_warnings"] = warnings
+
+    # Diagnostic: surface the voice-signal gate decision so the frontend
+    # (and curl probes during testing) can see whether cold-start fired.
+    breakdown = _voice_signal_breakdown(bundle, products)
+    scheme["_debug_signals"] = {
+        "cold_start_active": cold_start_active,
+        "signal_count": sum(1 for v in breakdown.values() if v),
+        "signals": breakdown,
+    }
 
     scheme["generated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return scheme, None
