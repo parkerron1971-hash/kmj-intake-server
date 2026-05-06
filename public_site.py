@@ -1803,6 +1803,97 @@ async def design_signals_endpoint(business_id: str):
     }
 
 
+@router.get("/sites/{business_id}/debug-studio-render")
+async def debug_studio_render(business_id: str):
+    """Pass 3.8a TEMPORARY DIAGNOSTIC — surfaces any exception that the
+    smart_sites Studio render path silently swallows. To be removed
+    after the regression is identified.
+    """
+    import traceback
+    try:
+        from smart_sites import resolve_layout_and_vocabulary, get_site_config
+        from studio_layouts.dispatch import render_layout
+        from studio_layouts.shared import apply_scheme_to_design_system
+        from brand_engine import get_bundle
+
+        site_config = get_site_config(business_id)
+        layout_id, vocab_id, composite, design_system, business_data, business_profile, _matches = (
+            resolve_layout_and_vocabulary(business_id, site_config)
+        )
+        if not (layout_id and design_system and composite and business_data):
+            return {
+                "ok": False,
+                "stage": "resolve_layout_and_vocabulary",
+                "layout_id": layout_id,
+                "vocab_id": vocab_id,
+                "design_system_present": bool(design_system),
+                "composite_present": bool(composite),
+                "business_data_present": bool(business_data),
+            }
+        bundle = get_bundle(business_id) or {}
+        intel = bundle.get("practitioner_intelligence") or {}
+
+        scheme = site_config.get("generated_decoration") if isinstance(site_config, dict) else None
+        try:
+            design_system_for_render = apply_scheme_to_design_system(design_system, scheme)
+        except Exception as e:
+            return {"ok": False, "stage": "apply_scheme", "error": str(e), "traceback": traceback.format_exc()}
+
+        from public_site import _brand_head_meta_tags
+        head_meta_extra = ""
+        try:
+            head_meta_extra = _brand_head_meta_tags(business_id) or ""
+        except Exception as e:
+            head_meta_extra = ""
+
+        canonical_archetype = (
+            (business_profile or {}).get("business_type")
+            or (bundle.get("business") or {}).get("type")
+            or business_data.get("type")
+            or "custom"
+        )
+        business_data_for_render = dict(business_data)
+        business_data_for_render["type"] = canonical_archetype
+
+        try:
+            html = render_layout(
+                layout_id,
+                business_data=business_data_for_render,
+                design_system=design_system_for_render,
+                composite=composite,
+                sections_config=site_config.get("sections") or {},
+                bundle=bundle,
+                head_meta_extra=head_meta_extra,
+                products=[],
+                scheme=scheme,
+            )
+            return {
+                "ok": True,
+                "layout_id": layout_id,
+                "vocab_id": vocab_id,
+                "html_size": len(html),
+                "intel_keys": list(intel.keys()),
+                "has_scheme": bool(scheme),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "stage": "render_layout",
+                "layout_id": layout_id,
+                "error": str(e),
+                "type": type(e).__name__,
+                "traceback": traceback.format_exc(),
+            }
+    except Exception as e:
+        return {
+            "ok": False,
+            "stage": "outer",
+            "error": str(e),
+            "type": type(e).__name__,
+            "traceback": traceback.format_exc(),
+        }
+
+
 @router.get("/public/widget/{module_id}")
 async def get_widget(module_id: str):
     """Return a self-contained styled HTML page for iframe embedding."""
