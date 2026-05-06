@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from typing import Optional
@@ -222,7 +223,9 @@ def build_director_prompt(
             'vocabulary archetype.'
         )
 
-    return f"""You are the Director of design generation for Smart Sites — a multi-tenant practitioner platform that renders unique websites per business by combining 12 deterministic layouts with vocabulary-driven design intelligence and per-business decoration schemes.
+    cold_start_active = not has_signal
+
+    prompt = f"""You are the Director of design generation for Smart Sites — a multi-tenant practitioner platform that renders unique websites per business by combining 12 deterministic layouts with vocabulary-driven design intelligence and per-business decoration schemes.
 
 Your task: generate a UNIQUE decoration scheme for this specific business. The scheme will override default decoration on top of the chosen layout structure. Same layout x different scheme = visually distinct sites.
 
@@ -338,6 +341,8 @@ Output a JSON object that conforms EXACTLY to this schema:
 - Output ONLY the JSON object. No commentary before or after.
 
 Generate the decoration scheme now."""
+
+    return prompt, cold_start_active
 
 
 def build_validator_prompt(claude_output):
@@ -506,7 +511,7 @@ def generate_decoration_scheme(
     a `_validation_warnings` field on the scheme so downstream code can
     surface the fact that we sanitized.
     """
-    director_prompt = build_director_prompt(
+    director_prompt, cold_start_active = build_director_prompt(
         business_data, bundle, vocab_id, layout_id, composite, products=products
     )
 
@@ -582,6 +587,30 @@ def generate_decoration_scheme(
         warnings.append(
             "banned_hits=" + ",".join(f"{f}:{p}" for f, p in banned_hits)
         )
+
+    # ─── Cold-start contract enforcement ─────────────────────────────
+    # Cold-start MUST rules ("statement_bar_quotes is []", "enable_statement_bars
+    # is false", marquee uses single ceremonial words separated by " • ") are
+    # platform guarantees, not prompt suggestions. Claude reliably follows the
+    # marquee single-word structure but soft-ignores the "MUST be empty" /
+    # "MUST be false" hard constraints. Enforce them server-side here.
+    if cold_start_active:
+        scheme["statement_bar_quotes"] = []
+        motion = scheme.setdefault("motion_richness", {})
+        if isinstance(motion, dict):
+            motion["enable_statement_bars"] = False
+
+        mt = scheme.get("marquee_text")
+        if isinstance(mt, str) and mt.strip():
+            # Replace any " — " / " - " / " | " / "/" / "–" separator with
+            # " • " (bullet with surrounding spaces). Then collapse double
+            # bullets and trim leading/trailing bullet-spaces.
+            normalized = re.sub(r"\s*[—–|/\-]\s*", " • ", mt)
+            normalized = re.sub(r"(\s*•\s*)+", " • ", normalized)
+            stripped = normalized.strip(" •")
+            scheme["marquee_text"] = stripped or normalized.strip()
+
+        warnings.append("cold_start_enforced")
 
     if warnings:
         scheme["_validation_warnings"] = warnings
