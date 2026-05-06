@@ -23,6 +23,50 @@ ANTHROPIC_API_BASE = "https://api.anthropic.com/v1/messages"
 OPENAI_API_BASE = "https://api.openai.com/v1/chat/completions"
 
 
+def _has_meaningful_voice_signal(bundle, products=None):
+    """Decide whether the prompt should run the rich-data branch.
+
+    Returns True if AT LEAST 2 of the following exist non-empty:
+      - business.tagline
+      - business.elevator_pitch
+      - voice.tone (or tone_original)
+      - voice.voice_dos (signature phrases)
+      - voice.voice_donts (don't-say list)
+      - any product with a non-empty name
+
+    The threshold (2-of-6) is deliberately permissive — we only want to
+    fall into the empty-data branch when the practitioner has truly given
+    us nothing. One signal could be coincidence; two means there is
+    enough material for Claude to anchor specific creative choices on.
+    """
+    if not isinstance(bundle, dict):
+        bundle = {}
+    business = bundle.get("business") or {}
+    voice = bundle.get("voice") or {}
+
+    def _present(v):
+        if v is None:
+            return False
+        if isinstance(v, str):
+            return bool(v.strip())
+        if isinstance(v, (list, tuple, dict)):
+            return len(v) > 0
+        return bool(v)
+
+    signals = [
+        _present(business.get("tagline")),
+        _present(business.get("elevator_pitch")),
+        _present(voice.get("tone")) or _present(voice.get("tone_original")),
+        _present(voice.get("voice_dos")),
+        _present(voice.get("voice_donts")),
+        any(
+            isinstance(p, dict) and _present(p.get("name"))
+            for p in (products or [])
+        ),
+    ]
+    return sum(1 for s in signals if s) >= 2
+
+
 def _format_list(items, max_items=8, joiner="; "):
     """Render a list of strings into a single comma-or-semicolon-joined
     line, truncating long lists. Returns '(none)' if empty."""
@@ -109,6 +153,75 @@ def build_director_prompt(
     products_line = _format_products(products)
     elevator_pitch_full = (business.get("elevator_pitch") or "").strip() or "(none)"
 
+    # ─── Empty-data vs rich-data branching ───────────────────────────
+    has_signal = _has_meaningful_voice_signal(bundle, products)
+
+    if has_signal:
+        marquee_template = '"WORD1 - WORD2 - WORD3 - WORD4"'
+        quotes_template = '["Short quote 1.", "Short quote 2."]'
+        statement_bars_default = "true"
+        guideline_5 = (
+            '5. AVOID generic agency-speak in marquee_text and statement_bar_quotes. '
+            'Banned phrases (NEVER use these or close paraphrases of them): "elevate '
+            'the vision", "amplify the impact", "strategy meets craft", "built with '
+            'intention", "crafted with intention", "creative excellence", "transform '
+            'your business", "unlock potential", "deliver projects", "elevate entire '
+            'visions", "strategic command", "forward-thinking", "breakthrough work", '
+            '"earned through", "innovative solutions", "trusted partner", "drive '
+            'results". These are the cliche phrases every consultant brand uses. '
+            'Instead, draw from THIS practitioner\'s actual voice: their tagline, '
+            'their elevator pitch wording, their signature phrases (listed above), '
+            'their product names. The marquee should be 3-5 single words or very '
+            'short phrases that feel ceremonial / specific to this practitioner. '
+            'Example of strong marquee for a Sovereign Authority consultant: '
+            '"CEREMONY - CRAFT - PRESENCE - CLARITY" - single words with weight, '
+            'not agency phrases. Statement quotes should sound like the practitioner '
+            'ACTUALLY SAID THEM, not like marketing copy. If you find yourself '
+            'writing a complete sentence with subject-verb-object that sounds like '
+            'a website footer, rewrite it as something terser, stranger, or more '
+            'specific to their craft.'
+        )
+        empty_data_notice = ""
+    else:
+        # Empty-data branch: refuse to fabricate voice. The marquee uses
+        # only ceremonial single words from the vocabulary's signal_words.
+        # Statement bars are disabled until voice depth exists.
+        marquee_template = (
+            '"SIGNAL_WORD1 • SIGNAL_WORD2 • SIGNAL_WORD3 • SIGNAL_WORD4"  '
+            '// 3-5 SINGLE words separated by " • " (BULLET with spaces). '
+            'NO sentences, NO multi-word phrases. Pull words ONLY from the vocabulary\'s signal_words above.'
+        )
+        quotes_template = "[]  // MUST be empty array"
+        statement_bars_default = "false  // MUST be false; no quotes = no statement bars"
+        empty_data_notice = (
+            "\n\n# COLD-START NOTICE — empty practitioner voice\n\n"
+            "This practitioner has not yet filled out their voice profile. "
+            "We refuse to generate content that pretends to know their voice. "
+            "Marquee uses only ceremonial single words from the vocabulary's "
+            "signal_words list. Statement bars are disabled until voice depth "
+            "exists. Color tokens, typography, decorations, and other motion "
+            "modules can still be intentional based on the vocabulary archetype "
+            "alone.\n\nExamples of correct empty-data marquee output for various "
+            "vocabularies:\n"
+            "  - sovereign-authority: \"THRONE • RULE • CEREMONY • CRAFT • GOLD\"\n"
+            "  - scholar-educator: \"INQUIRY • RIGOR • EVIDENCE • CLARITY\"\n"
+            "  - faith-ministry: \"GRACE • PRESENCE • LIGHT • OFFERING\"\n"
+            "  - wellness-healing: \"BREATH • ROOTS • RHYTHM • TENDER\"\n"
+            "  - creative-artist: \"FLAME • RAW • MAKE • RISK\"\n"
+        )
+        guideline_5 = (
+            '5. EMPTY-DATA RULE: marquee_text MUST be 3-5 single words separated '
+            'by " • " (bullet character with spaces on each side). Words MUST '
+            'come from the vocabulary signal_words list above (or be the same '
+            'kind of single ceremonial word). NO multi-word phrases, NO sentences, '
+            'NO English idioms, NO marketing copy. statement_bar_quotes MUST be '
+            '[] (empty). motion_richness.enable_statement_bars MUST be false. '
+            'Refuse to fabricate quotes the practitioner never said. The rest '
+            'of the scheme (colors, typography, decorations, ghost numbers, '
+            'marquee, magnetic buttons) can still be intentional based on the '
+            'vocabulary archetype.'
+        )
+
     return f"""You are the Director of design generation for Smart Sites — a multi-tenant practitioner platform that renders unique websites per business by combining 12 deterministic layouts with vocabulary-driven design intelligence and per-business decoration schemes.
 
 Your task: generate a UNIQUE decoration scheme for this specific business. The scheme will override default decoration on top of the chosen layout structure. Same layout x different scheme = visually distinct sites.
@@ -146,7 +259,7 @@ Primary vocabulary: {vocab_id}
   Signal words: {vocab_signals}
 
 Chosen layout: {layout_id}
-  Description: {layout_desc}
+  Description: {layout_desc}{empty_data_notice}
 
 # Deliverable
 
@@ -188,12 +301,12 @@ Output a JSON object that conforms EXACTLY to this schema:
     "enable_ghost_numbers": true,
     "enable_marquee_strips": true,
     "enable_magnetic_buttons": true,
-    "enable_statement_bars": true,
+    "enable_statement_bars": {statement_bars_default},
     "stagger_delays": [0.08, 0.16, 0.24, 0.32],
     "parallax_backgrounds": false
   }},
-  "marquee_text": "WORD1 - WORD2 - WORD3 - WORD4",
-  "statement_bar_quotes": ["Quote 1.", "Quote 2."]
+  "marquee_text": {marquee_template},
+  "statement_bar_quotes": {quotes_template}
 }}
 
 # Creative direction guidelines
@@ -212,7 +325,7 @@ Output a JSON object that conforms EXACTLY to this schema:
 
 4. Motion richness should feel intentional, not maxed-out. Enable 2-3 modules max. Loud brands (expressive, celebration, sovereign) can have more motion. Restrained brands (minimalist, scholar) should have less.
 
-5. AVOID generic agency-speak in marquee_text and statement_bar_quotes. Banned phrases: "elevate the vision", "amplify the impact", "strategy meets craft", "built with intention", "creative excellence", "transform your business", "unlock potential", "deliver projects", "elevate entire visions", "every brand we touch", "earned through strategic discipline", "built deliberately". These are the cliche phrases every consultant brand uses. Instead, draw from THIS practitioner's actual voice: their tagline, their elevator pitch wording, their signature phrases (listed above), their product names. The marquee should be 3-5 single words or very short phrases that feel ceremonial / specific to this practitioner. Example of strong marquee for a Sovereign Authority consultant: "CEREMONY - CRAFT - PRESENCE - CLARITY" — single words with weight, not agency phrases. Statement quotes should sound like the practitioner ACTUALLY SAID THEM, not like marketing copy. If you find yourself writing a complete sentence with subject-verb-object that sounds like a website footer, rewrite it as something terser, stranger, or more specific to their craft.
+{guideline_5}
 
 # Constraints
 
@@ -352,24 +465,18 @@ def extract_json(raw_text):
     return None
 
 
-def generate_decoration_scheme(
-    business_data, bundle, vocab_id, layout_id, composite, products=None
-):
-    """Run the full Studio-spirit pipeline. Returns (scheme, error_message).
-    scheme is None on failure; error_message describes what went wrong.
-    """
+def _run_creative_pass(prompt, retry_addendum=""):
+    """One Claude → (try GPT, fall back to Claude raw) → JSON extract pass.
+    Returns (scheme_or_none, error_or_none, raw_claude_output)."""
+    claude_input = prompt + (("\n\n" + retry_addendum) if retry_addendum else "")
     try:
-        director_prompt = build_director_prompt(
-            business_data, bundle, vocab_id, layout_id, composite, products=products
-        )
-        claude_output = call_claude(director_prompt, max_tokens=2500)
+        claude_output = call_claude(claude_input, max_tokens=2500)
     except Exception as e:
         print(f"[decoration_gen] Claude call failed: {e}", file=sys.stderr)
-        return None, f"Creative generation failed: {type(e).__name__}: {e}"
+        return None, f"Creative generation failed: {type(e).__name__}: {e}", ""
 
     try:
-        validator_prompt = build_validator_prompt(claude_output)
-        gpt_output = call_gpt(validator_prompt, max_tokens=2500)
+        gpt_output = call_gpt(build_validator_prompt(claude_output), max_tokens=2500)
     except Exception as e:
         print(
             f"[decoration_gen] GPT validator failed ({type(e).__name__}: {e}); "
@@ -381,12 +488,103 @@ def generate_decoration_scheme(
     scheme = extract_json(gpt_output)
     if not scheme:
         print("[decoration_gen] JSON extraction failed", file=sys.stderr)
-        return None, "Generated content was not valid JSON"
+        return None, "Generated content was not valid JSON", claude_output
+    return scheme, None, claude_output
 
-    is_valid, error = validate_decoration_scheme(scheme)
+
+def generate_decoration_scheme(
+    business_data, bundle, vocab_id, layout_id, composite, products=None
+):
+    """Run the full Studio-spirit pipeline. Returns (scheme, error_message).
+    scheme is None on failure; error_message describes what went wrong.
+
+    Banned-phrase handling: if the first generation lands cliche phrases
+    in marquee_text or statement_bar_quotes, append a feedback addendum
+    naming the offending phrases and retry the whole creative pass once.
+    If the second pass still produces banned phrases, strip the bad
+    fields (marquee_text -> null, statement_bar_quotes -> []) and stamp
+    a `_validation_warnings` field on the scheme so downstream code can
+    surface the fact that we sanitized.
+    """
+    director_prompt = build_director_prompt(
+        business_data, bundle, vocab_id, layout_id, composite, products=products
+    )
+
+    # First creative pass
+    scheme, err, _claude1 = _run_creative_pass(director_prompt)
+    if err:
+        return None, err
+    is_valid, error, banned_hits = validate_decoration_scheme(scheme)
     if not is_valid:
         print(f"[decoration_gen] Schema validation failed: {error}", file=sys.stderr)
         return None, f"Generated scheme failed validation: {error}"
+
+    warnings = []
+
+    if banned_hits:
+        # Tell Claude exactly what it did wrong and try once more.
+        offending = sorted({phrase for _field, phrase in banned_hits})
+        print(
+            f"[decoration_gen] First-pass banned phrases: {offending}; retrying",
+            file=sys.stderr,
+        )
+        retry_addendum = (
+            "RETRY — your previous output contained banned phrases: "
+            + ", ".join(f'"{p}"' for p in offending)
+            + ". These phrases (or close paraphrases) are forbidden. "
+            "Generate the scheme again. For marquee_text and statement_bar_quotes, "
+            "use ONLY single ceremonial words drawn from the vocabulary's "
+            "signal_words list, OR phrases the practitioner actually uses (from "
+            'their tagline / elevator pitch / signature phrases listed above). '
+            "If you have no specific practitioner voice signal, use single "
+            'words from signal_words separated by " • " for marquee_text and '
+            "make statement_bar_quotes an empty array []. Output ONLY the "
+            "corrected JSON, no commentary."
+        )
+        retry_scheme, retry_err, _claude2 = _run_creative_pass(director_prompt, retry_addendum)
+        if retry_err:
+            print(
+                f"[decoration_gen] Retry failed ({retry_err}); falling back to strip",
+                file=sys.stderr,
+            )
+        else:
+            retry_valid, retry_verr, retry_hits = validate_decoration_scheme(retry_scheme)
+            if retry_valid and not retry_hits:
+                # Retry succeeded — use the cleaner scheme.
+                scheme = retry_scheme
+                banned_hits = []
+                warnings.append("regenerated_after_banned_phrase_first_pass")
+            elif retry_valid and retry_hits:
+                # Retry valid but still cliche — strip the bad fields.
+                still_offending = sorted({p for _f, p in retry_hits})
+                print(
+                    f"[decoration_gen] Retry still had banned phrases {still_offending}; stripping",
+                    file=sys.stderr,
+                )
+                # Fall through to strip on the retry result so we keep
+                # any other improvements it produced.
+                scheme = retry_scheme
+                banned_hits = retry_hits
+            # If retry was invalid, keep first-pass scheme and strip below.
+
+    if banned_hits:
+        # Scrub marquee/quotes; keep everything else.
+        scheme["marquee_text"] = None
+        scheme["statement_bar_quotes"] = []
+        try:
+            mr = scheme.setdefault("motion_richness", {})
+            if isinstance(mr, dict):
+                mr["enable_statement_bars"] = False
+                mr["enable_marquee_strips"] = False
+        except Exception:
+            pass
+        warnings.append("stripped_banned_phrases")
+        warnings.append(
+            "banned_hits=" + ",".join(f"{f}:{p}" for f, p in banned_hits)
+        )
+
+    if warnings:
+        scheme["_validation_warnings"] = warnings
 
     scheme["generated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return scheme, None

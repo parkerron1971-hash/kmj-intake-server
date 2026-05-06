@@ -79,6 +79,54 @@ class DecorationScheme(TypedDict, total=False):
     statement_bar_quotes: list
 
 
+# Cliché agency-speak that any halfway-coherent practitioner brand
+# should never publish. Matched case-insensitively as substring.
+# Both phrases the system has produced unprompted AND the user-supplied
+# canonical ban list are included.
+BANNED_PHRASES = (
+    "elevate the vision",
+    "amplify the impact",
+    "strategy meets craft",
+    "built with intention",
+    "crafted with intention",
+    "creative excellence",
+    "transform your business",
+    "unlock potential",
+    "deliver projects",
+    "elevate entire visions",
+    "strategic command",
+    "forward-thinking",
+    "breakthrough work",
+    "earned through",
+    "innovative solutions",
+    "trusted partner",
+    "drive results",
+)
+
+
+def _scan_banned_phrases(scheme):
+    """Return a list of (field_path, banned_phrase) hits across marquee
+    and statement bar quotes. Substring match, case-insensitive."""
+    hits = []
+    if not isinstance(scheme, dict):
+        return hits
+    marquee = scheme.get("marquee_text")
+    if isinstance(marquee, str) and marquee:
+        lower = marquee.lower()
+        for phrase in BANNED_PHRASES:
+            if phrase in lower:
+                hits.append(("marquee_text", phrase))
+    quotes = scheme.get("statement_bar_quotes") or []
+    if isinstance(quotes, list):
+        for idx, q in enumerate(quotes):
+            if isinstance(q, str) and q:
+                lower = q.lower()
+                for phrase in BANNED_PHRASES:
+                    if phrase in lower:
+                        hits.append((f"statement_bar_quotes[{idx}]", phrase))
+    return hits
+
+
 VALID_DIVIDER_STYLES = {
     "gold-rule-diamond", "double-hairline", "ornamental", "geometric",
     "organic", "thin-line", "minimal",
@@ -174,47 +222,53 @@ def validate_clamp_or_simple_size(value) -> bool:
 
 
 def validate_decoration_scheme(scheme):
-    """Validate a decoration scheme. Returns (is_valid, error_message).
+    """Validate a decoration scheme.
+
+    Returns (is_valid, error_message, banned_phrase_hits) — three-tuple.
+    `banned_phrase_hits` is a list of (field_path, phrase) tuples; empty
+    when nothing matched.
 
     Mutates `scheme` in place to normalize Windows-1252 mojibake in any
-    string field before checking constraints.
+    string field before checking constraints. Banned-phrase hits are
+    *informational* — they do NOT cause is_valid=False; the caller
+    (generator) decides whether to retry, strip, or accept.
     """
     if not isinstance(scheme, dict):
-        return False, "Scheme must be a dict"
+        return False, "Scheme must be a dict", []
 
     _walk_normalize(scheme)
 
     if scheme.get("schema_version") != 1:
-        return False, "schema_version must be 1"
+        return False, "schema_version must be 1", []
 
     color_tokens = scheme.get("color_tokens", {})
     if color_tokens:
         for key in ("bg", "bg2", "bg3", "accent", "accent_secondary", "text", "muted"):
             if key in color_tokens and not validate_color(color_tokens[key]):
-                return False, f"Invalid color in color_tokens.{key}: {color_tokens[key]}"
+                return False, f"Invalid color in color_tokens.{key}: {color_tokens[key]}", []
 
     decorations = scheme.get("decorations", {})
     if decorations:
         if "section_divider_style" in decorations and decorations["section_divider_style"] not in VALID_DIVIDER_STYLES:
-            return False, "Invalid section_divider_style"
+            return False, "Invalid section_divider_style", []
         if "accent_style" in decorations and decorations["accent_style"] not in VALID_ACCENT_STYLES:
-            return False, "Invalid accent_style"
+            return False, "Invalid accent_style", []
         if "corner_treatment" in decorations and decorations["corner_treatment"] not in VALID_CORNER_TREATMENTS:
-            return False, "Invalid corner_treatment"
+            return False, "Invalid corner_treatment", []
         if "strand" in decorations and decorations["strand"] not in VALID_STRANDS:
-            return False, "Invalid strand"
+            return False, "Invalid strand", []
 
     typography = scheme.get("typography", {})
     if typography:
         for size_key in ("h1_size", "h2_size"):
             if size_key in typography and not validate_clamp_or_simple_size(typography[size_key]):
-                return False, f"Invalid typography.{size_key}: must be clamp() or simple size"
+                return False, f"Invalid typography.{size_key}: must be clamp() or simple size", []
 
     spatial = scheme.get("spatial_dna", {})
     if spatial:
         for key in ("section_x", "section_y"):
             if key in spatial and not validate_clamp_or_simple_size(spatial[key]):
-                return False, f"Invalid spatial_dna.{key}"
+                return False, f"Invalid spatial_dna.{key}", []
 
     motion = scheme.get("motion_richness", {})
     if motion:
@@ -224,27 +278,28 @@ def validate_decoration_scheme(scheme):
             "parallax_backgrounds",
         ):
             if bool_key in motion and not isinstance(motion[bool_key], bool):
-                return False, f"motion_richness.{bool_key} must be boolean"
+                return False, f"motion_richness.{bool_key} must be boolean", []
         if "stagger_delays" in motion:
             delays = motion["stagger_delays"]
             if not isinstance(delays, list) or not all(
                 isinstance(d, (int, float)) and 0 <= d <= 2 for d in delays
             ):
-                return False, "stagger_delays must be list of numbers 0-2"
+                return False, "stagger_delays must be list of numbers 0-2", []
 
     quotes = scheme.get("statement_bar_quotes", [])
     if not isinstance(quotes, list) or len(quotes) > 5:
-        return False, "statement_bar_quotes must be list with at most 5 items"
+        return False, "statement_bar_quotes must be list with at most 5 items", []
     for q in quotes:
         if not isinstance(q, str) or len(q) > 200:
-            return False, "Each statement bar quote must be string under 200 chars"
+            return False, "Each statement bar quote must be string under 200 chars", []
 
     if "marquee_text" in scheme:
         mt = scheme["marquee_text"]
         if mt is not None and (not isinstance(mt, str) or len(mt) > 500):
-            return False, "marquee_text must be string under 500 chars or null"
+            return False, "marquee_text must be string under 500 chars or null", []
 
-    return True, ""
+    banned_hits = _scan_banned_phrases(scheme)
+    return True, "", banned_hits
 
 
 def get_default_scheme(vocab_id=None):
