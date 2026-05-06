@@ -1527,6 +1527,15 @@ async def generate_decoration_endpoint(business_id: str):
             400, "Cannot resolve vocab/layout for this business yet"
         )
 
+    # Fetch products so the Director prompt can reference real engagement
+    # names instead of generic "services".
+    try:
+        product_rows = be_get(
+            f"/products?business_id=eq.{business_id}&status=eq.active&select=name,description,price&limit=12"
+        ) or []
+    except Exception:
+        product_rows = []
+
     # Stamp cooldown BEFORE the slow Claude+GPT calls so concurrent
     # requests block immediately.
     _decoration_cooldown[business_id] = time.time()
@@ -1538,7 +1547,8 @@ async def generate_decoration_endpoint(business_id: str):
         raise HTTPException(500, "Generator unavailable")
 
     scheme, error = generate_decoration_scheme(
-        business_data, bundle, vocab_id, layout_id, composite
+        business_data, bundle, vocab_id, layout_id, composite,
+        products=product_rows,
     )
     if not scheme:
         raise HTTPException(500, f"Generation failed: {error}")

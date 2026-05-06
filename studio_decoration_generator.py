@@ -23,13 +23,58 @@ ANTHROPIC_API_BASE = "https://api.anthropic.com/v1/messages"
 OPENAI_API_BASE = "https://api.openai.com/v1/chat/completions"
 
 
-def build_director_prompt(business_data, bundle, vocab_id, layout_id, composite):
+def _format_list(items, max_items=8, joiner="; "):
+    """Render a list of strings into a single comma-or-semicolon-joined
+    line, truncating long lists. Returns '(none)' if empty."""
+    if not items:
+        return "(none)"
+    cleaned = [str(x).strip() for x in items if x and str(x).strip()]
+    if not cleaned:
+        return "(none)"
+    truncated = cleaned[:max_items]
+    suffix = "" if len(cleaned) == max_items else (
+        f" (+{len(cleaned) - max_items} more)" if len(cleaned) > max_items else ""
+    )
+    return joiner.join(truncated) + suffix
+
+
+def _format_voice_samples(samples):
+    """voice_samples is a dict like {greeting: '...', habit_phrase: '...'}."""
+    if not isinstance(samples, dict) or not samples:
+        return "(none)"
+    parts = []
+    for k, v in samples.items():
+        if v and isinstance(v, str):
+            parts.append(f'{k}: "{v.strip()}"')
+        if len(parts) >= 6:
+            break
+    return _format_list(parts, max_items=6, joiner=" | ")
+
+
+def _format_products(products):
+    """products is a list of rows from the products table."""
+    if not products:
+        return "(none — no products defined yet)"
+    names = []
+    for p in products:
+        if not isinstance(p, dict):
+            continue
+        name = (p.get("name") or "").strip()
+        if name:
+            names.append(name)
+    return _format_list(names, max_items=8, joiner=" / ")
+
+
+def build_director_prompt(
+    business_data, bundle, vocab_id, layout_id, composite, products=None
+):
     """Director-style prompt: gives Claude the full business context to make creative decisions."""
     vocab = VOCABULARIES.get(vocab_id, {}) if vocab_id else {}
     layout = LAYOUTS.get(layout_id, {}) if layout_id else {}
     voice = (bundle or {}).get("voice", {}) or {}
     practitioner = (bundle or {}).get("practitioner", {}) or {}
     business = (bundle or {}).get("business", {}) or {}
+    legal = (bundle or {}).get("legal", {}) or {}
 
     vocab_section = vocab.get("section", "?") if isinstance(vocab, dict) else "?"
     vocab_desc = vocab.get("description", "?") if isinstance(vocab, dict) else "?"
@@ -37,6 +82,32 @@ def build_director_prompt(business_data, bundle, vocab_id, layout_id, composite)
         (vocab.get("signal_words") or []) if isinstance(vocab, dict) else []
     )
     layout_desc = layout.get("description", "?") if isinstance(layout, dict) else "?"
+
+    # Practitioner depth — read defensively. `bio` may live on the
+    # practitioner row, in business.settings, or nowhere; check both.
+    practitioner_bio = (
+        practitioner.get("bio")
+        or ((business_data or {}).get("settings") or {}).get("practitioner_bio")
+        or ""
+    ).strip()
+    preferred_title = (practitioner.get("preferred_title") or "").strip()
+
+    # Voice depth — surface what brand_engine.py already composes.
+    voice_dos = voice.get("voice_dos") or []  # phrases they consistently use
+    voice_donts = voice.get("voice_donts") or []  # phrases they explicitly avoid
+    voice_samples = voice.get("voice_samples") or {}
+    audience = voice.get("audience") or ""
+
+    # Foundation Track stance — a meaningful brand signal.
+    in_the_clear = bool(legal.get("in_the_clear"))
+    foundation_line = (
+        "Foundation Track: COMPLETE — practitioner has earned the In-The-Clear stance."
+        if in_the_clear
+        else "Foundation Track: in progress."
+    )
+
+    products_line = _format_products(products)
+    elevator_pitch_full = (business.get("elevator_pitch") or "").strip() or "(none)"
 
     return f"""You are the Director of design generation for Smart Sites — a multi-tenant practitioner platform that renders unique websites per business by combining 12 deterministic layouts with vocabulary-driven design intelligence and per-business decoration schemes.
 
@@ -47,13 +118,25 @@ Your task: generate a UNIQUE decoration scheme for this specific business. The s
 Name: {business.get("name", "Unknown")}
 Type: {business.get("type", "custom")}
 Tagline: {business.get("tagline") or "(none)"}
-Elevator pitch: {business.get("elevator_pitch") or "(none)"}
+Elevator pitch (full): {elevator_pitch_full}
+{foundation_line}
 
 # Practitioner context
 
 Display name: {practitioner.get("display_name") or "(none)"}
-Voice tone (free-text): {voice.get("tone") or "(none)"}
+Preferred title: {preferred_title or "(none)"}
+Bio: {practitioner_bio or "(none)"}
+
+Voice tone (free-text): {voice.get("tone_original") or voice.get("tone") or "(none)"}
 Brand voice (canonical): {voice.get("brand_voice") or "(none)"}
+Audience: {audience or "(none)"}
+Voice samples (greetings/sign-offs/habit phrases): {_format_voice_samples(voice_samples)}
+Phrases they consistently use (signature phrases): {_format_list(voice_dos)}
+Phrases they explicitly avoid (don't say): {_format_list(voice_donts)}
+
+# Their actual offerings (use these names, don't invent generic services)
+
+Products / engagements: {products_line}
 
 # Detected design intelligence
 
@@ -129,7 +212,7 @@ Output a JSON object that conforms EXACTLY to this schema:
 
 4. Motion richness should feel intentional, not maxed-out. Enable 2-3 modules max. Loud brands (expressive, celebration, sovereign) can have more motion. Restrained brands (minimalist, scholar) should have less.
 
-5. Marquee text and statement bar quotes should sound like they were written FOR this practitioner. Use their actual language patterns. Reference their work, their craft, their stance. Don't write generic phrases.
+5. AVOID generic agency-speak in marquee_text and statement_bar_quotes. Banned phrases: "elevate the vision", "amplify the impact", "strategy meets craft", "built with intention", "creative excellence", "transform your business", "unlock potential", "deliver projects", "elevate entire visions", "every brand we touch", "earned through strategic discipline", "built deliberately". These are the cliche phrases every consultant brand uses. Instead, draw from THIS practitioner's actual voice: their tagline, their elevator pitch wording, their signature phrases (listed above), their product names. The marquee should be 3-5 single words or very short phrases that feel ceremonial / specific to this practitioner. Example of strong marquee for a Sovereign Authority consultant: "CEREMONY - CRAFT - PRESENCE - CLARITY" — single words with weight, not agency phrases. Statement quotes should sound like the practitioner ACTUALLY SAID THEM, not like marketing copy. If you find yourself writing a complete sentence with subject-verb-object that sounds like a website footer, rewrite it as something terser, stranger, or more specific to their craft.
 
 # Constraints
 
@@ -174,6 +257,17 @@ def build_validator_prompt(claude_output):
 Output the corrected JSON object now."""
 
 
+def _decode_utf8_response(response):
+    """Force UTF-8 interpretation of the response body, regardless of any
+    missing/incorrect charset header. Returns the parsed JSON dict.
+
+    httpx defaults to charset from Content-Type, falling back to a guess
+    that can land on Latin-1 — which corrupts smart-punctuation glyphs
+    on the way back. Bypass that by decoding raw bytes ourselves.
+    """
+    return json.loads(response.content.decode("utf-8"))
+
+
 def call_claude(prompt, max_tokens=2500):
     """Call Claude Opus via Anthropic API. Returns text response."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -185,17 +279,19 @@ def call_claude(prompt, max_tokens=2500):
         headers={
             "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept-Charset": "utf-8",
         },
-        json={
+        content=json.dumps({
             "model": CLAUDE_MODEL,
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
-        },
+        }, ensure_ascii=False).encode("utf-8"),
         timeout=60,
     )
     response.raise_for_status()
-    data = response.json()
+    response.encoding = "utf-8"
+    data = _decode_utf8_response(response)
     return "".join(
         block.get("text", "")
         for block in data.get("content", [])
@@ -213,18 +309,20 @@ def call_gpt(prompt, max_tokens=2500):
         OPENAI_API_BASE,
         headers={
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept-Charset": "utf-8",
         },
-        json={
+        content=json.dumps({
             "model": GPT_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": 0.0,
-        },
+        }, ensure_ascii=False).encode("utf-8"),
         timeout=60,
     )
     response.raise_for_status()
-    data = response.json()
+    response.encoding = "utf-8"
+    data = _decode_utf8_response(response)
     return data["choices"][0]["message"]["content"]
 
 
@@ -254,13 +352,15 @@ def extract_json(raw_text):
     return None
 
 
-def generate_decoration_scheme(business_data, bundle, vocab_id, layout_id, composite):
+def generate_decoration_scheme(
+    business_data, bundle, vocab_id, layout_id, composite, products=None
+):
     """Run the full Studio-spirit pipeline. Returns (scheme, error_message).
     scheme is None on failure; error_message describes what went wrong.
     """
     try:
         director_prompt = build_director_prompt(
-            business_data, bundle, vocab_id, layout_id, composite
+            business_data, bundle, vocab_id, layout_id, composite, products=products
         )
         claude_output = call_claude(director_prompt, max_tokens=2500)
     except Exception as e:

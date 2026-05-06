@@ -98,6 +98,69 @@ CLAMP_RE = re.compile(
 SIMPLE_SIZE_RE = re.compile(r"^[\d.]+(?:rem|px|em|vh|vw)$")
 
 
+# Mojibake indicators: Latin-1 view of common UTF-8 multi-byte prefixes.
+# 0xE2 prefixes the smart-punctuation block (em-dash, smart quotes,
+# bullet, ellipsis); 0xC3 prefixes most Western Latin-1+ glyphs;
+# 0xC2 prefixes the C1 control / NBSP block.
+_MOJIBAKE_INDICATORS = ("â", "Ã", "Â ")
+
+# Explicit fallback table — used only when the round-trip can't recover
+# (e.g. a single mojibake glyph mixed with already-correct UTF-8). Keys
+# are written with \x escapes so the file stays plain ASCII safe.
+_MOJIBAKE_FALLBACK = (
+    ("â", "—"),  # em-dash
+    ("â", "–"),  # en-dash
+    ("â", "’"),  # right single quote
+    ("â", "‘"),  # left single quote
+    ("â", "“"),  # left double quote
+    ("â", "”"),  # right double quote
+    ("â¢", "•"),  # bullet
+    ("â¦", "…"),  # ellipsis
+    ("Â ", " "),             # NBSP
+)
+
+
+def _normalize_unicode(s):
+    """Recover from Windows-1252/Latin-1 mojibake of UTF-8.
+
+    Anthropic / OpenAI responses occasionally arrive without a charset
+    header; httpx then guesses Latin-1 and multi-byte UTF-8 codepoints
+    (em-dashes, smart quotes, bullets) round-trip into broken sequences.
+    Detect the pattern and re-decode.
+    """
+    if not isinstance(s, str):
+        return s
+    if not any(ind in s for ind in _MOJIBAKE_INDICATORS):
+        return s
+    # Primary fix: re-decode the whole string as if it were Latin-1 bytes
+    # mistakenly read as Latin-1, then interpret as UTF-8.
+    try:
+        candidate = s.encode("latin-1").decode("utf-8")
+        # Sanity check: candidate should contain fewer mojibake markers
+        if not any(ind in candidate for ind in _MOJIBAKE_INDICATORS):
+            return candidate
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    # Fallback: explicit replacements (handles partial-mojibake cases).
+    fixed = s
+    for needle, replacement in _MOJIBAKE_FALLBACK:
+        fixed = fixed.replace(needle, replacement)
+    return fixed
+
+
+def _walk_normalize(obj):
+    """In-place walk of scheme; normalize every string field."""
+    if isinstance(obj, dict):
+        for k, v in list(obj.items()):
+            obj[k] = _walk_normalize(v)
+        return obj
+    if isinstance(obj, list):
+        return [_walk_normalize(x) for x in obj]
+    if isinstance(obj, str):
+        return _normalize_unicode(obj)
+    return obj
+
+
 def validate_color(value) -> bool:
     return isinstance(value, str) and bool(HEX_COLOR_RE.match(value))
 
@@ -111,9 +174,15 @@ def validate_clamp_or_simple_size(value) -> bool:
 
 
 def validate_decoration_scheme(scheme):
-    """Validate a decoration scheme. Returns (is_valid, error_message)."""
+    """Validate a decoration scheme. Returns (is_valid, error_message).
+
+    Mutates `scheme` in place to normalize Windows-1252 mojibake in any
+    string field before checking constraints.
+    """
     if not isinstance(scheme, dict):
         return False, "Scheme must be a dict"
+
+    _walk_normalize(scheme)
 
     if scheme.get("schema_version") != 1:
         return False, "schema_version must be 1"
