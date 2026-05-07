@@ -1610,6 +1610,9 @@ async def decoration_status_endpoint(business_id: str):
     # so existing UI consumers see brief state without a separate fetch.
     brief = site_config.get("design_brief")
 
+    # Pass 3.8d — surface Builder Agent state alongside scheme + brief.
+    generated_html = site_config.get("generated_html")
+
     return {
         "ok": True,
         "has_scheme": bool(scheme),
@@ -1623,6 +1626,12 @@ async def decoration_status_endpoint(business_id: str):
         "has_brief": bool(brief),
         "brief_generated_at": (brief or {}).get("generatedAt"),
         "brief_warnings": (brief or {}).get("_validation_warnings") or [],
+        # Pass 3.8d additions — Builder Agent state
+        "has_generated_html": bool(generated_html),
+        "html_generated_at": site_config.get("html_generated_at"),
+        "html_build_error": site_config.get("html_build_error"),
+        "html_validation_errors": site_config.get("html_validation_errors") or [],
+        "html_build_failed_at": site_config.get("html_build_failed_at"),
     }
 
 
@@ -1638,6 +1647,11 @@ DESIGN_REC_COOLDOWN_SECONDS = 60
 _brief_expand_cooldown: Dict[str, float] = {}
 BRIEF_EXPAND_COOLDOWN_SECONDS = 60
 
+# Pass 3.8d: Builder Agent (LLM #3) — separate cooldown so manual
+# /generate-html calls respect the 60-s window after auto-fire.
+_html_build_cooldown: Dict[str, float] = {}
+HTML_BUILD_COOLDOWN_SECONDS = 60
+
 
 def _check_brief_expand_cooldown(business_id: str):
     """Returns (can_expand: bool, seconds_remaining: int)."""
@@ -1646,6 +1660,15 @@ def _check_brief_expand_cooldown(business_id: str):
     if elapsed >= BRIEF_EXPAND_COOLDOWN_SECONDS:
         return True, 0
     return False, int(BRIEF_EXPAND_COOLDOWN_SECONDS - elapsed)
+
+
+def _check_html_build_cooldown(business_id: str):
+    """Returns (can_build: bool, seconds_remaining: int)."""
+    last = _html_build_cooldown.get(business_id, 0)
+    elapsed = time.time() - last
+    if elapsed >= HTML_BUILD_COOLDOWN_SECONDS:
+        return True, 0
+    return False, int(HTML_BUILD_COOLDOWN_SECONDS - elapsed)
 
 
 def _check_design_rec_cooldown(business_id: str):
@@ -1778,12 +1801,79 @@ async def generate_design_rec_endpoint(business_id: str):
     except Exception as e:
         logger.warning(f"[design-rec] auto-brief expansion failed: {e}")
 
+    # Pass 3.8d — auto-fire Builder Agent (LLM #3) once the brief expansion
+    # succeeded. Non-fatal: a Builder failure must never 500 the
+    # recommendation request, since the recommendation + brief are still
+    # useful on their own (the user can manually retry via /generate-html).
+    auto_built_html = False
+    if auto_brief and site_id:
+        try:
+            from studio_builder_agent import build_html
+            scheme_for_build = (
+                site_config.get("generated_decoration") if isinstance(site_config, dict) else None
+            )
+            try:
+                builder_products = be_get(
+                    f"/products?business_id=eq.{business_id}"
+                    f"&status=eq.active&display_on_website=eq.true"
+                    f"&select=*&limit=20"
+                ) or []
+                if not builder_products:
+                    builder_products = be_get(
+                        f"/products?business_id=eq.{business_id}"
+                        f"&status=eq.active&select=*&limit=20"
+                    ) or []
+            except Exception:
+                builder_products = product_rows or []
+            try:
+                builder_testimonials = be_get(
+                    f"/testimonials?business_id=eq.{business_id}&select=*&limit=10"
+                ) or []
+            except Exception:
+                builder_testimonials = []
+
+            html, html_err, html_val_errs = build_html(
+                auto_brief, bundle, scheme_for_build,
+                builder_products, builder_testimonials,
+            )
+            if html:
+                fresh_rows = be_get(
+                    f"/business_sites?id=eq.{site_id}&select=site_config&limit=1"
+                ) or []
+                fresh_config = (
+                    fresh_rows[0].get("site_config") if fresh_rows else {}
+                ) or {}
+                fresh_config["generated_html"] = html
+                fresh_config["html_generated_at"] = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                )
+                fresh_config.pop("html_build_failed_at", None)
+                fresh_config.pop("html_build_error", None)
+                fresh_config.pop("html_validation_errors", None)
+                try:
+                    be_patch(
+                        f"/business_sites?id=eq.{site_id}",
+                        {"site_config": fresh_config},
+                    )
+                    _html_build_cooldown[business_id] = time.time()
+                    auto_built_html = True
+                except Exception as e:
+                    logger.warning(f"[design-rec] auto-build persist failed: {e}")
+            else:
+                logger.warning(
+                    f"[design-rec] Builder auto-fire failed: {html_err}; "
+                    f"validation errors: {html_val_errs}"
+                )
+        except Exception as e:
+            logger.warning(f"[design-rec] Builder auto-fire raised: {e}")
+
     response = {
         "ok": True,
         "recommendation": rec,
         "vocab_id": primary_vocab_id,
         "cold_start": cold_start,
         "auto_expanded": auto_expanded,
+        "auto_built_html": auto_built_html,
     }
     if auto_brief:
         response["brief"] = auto_brief
@@ -1949,6 +2039,130 @@ async def expand_brief_endpoint(business_id: str):
         "brief": brief,
         "had_warnings": bool(brief.get("_validation_warnings")),
         "warnings": brief.get("_validation_warnings") or [],
+    }
+
+
+@router.post("/sites/{business_id}/generate-html")
+async def generate_html_endpoint(business_id: str):
+    """Pass 3.8d — manual idempotent Builder Agent call (LLM #3).
+
+    Reads the persisted design_brief and decoration scheme, runs LLM #3 to
+    produce a complete bespoke HTML document, and persists it at
+    site_config.generated_html. Used when the auto-fire chain in
+    /generate-design-recommendation failed, or to regenerate a fresh
+    Builder pass without changing the upstream pick.
+    """
+    can_build, seconds_remaining = _check_html_build_cooldown(business_id)
+    if not can_build:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Cooldown active. Try again in {seconds_remaining} seconds.",
+        )
+
+    try:
+        from brand_engine import _sb_get as be_get, _sb_patch as be_patch, get_bundle
+    except Exception as e:
+        logger.warning(f"[generate-html] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    site_rows = be_get(
+        f"/business_sites?business_id=eq.{business_id}&select=id,site_config&limit=1"
+    ) or []
+    if not site_rows:
+        raise HTTPException(
+            404, "business_sites row missing — enable Smart Sites first"
+        )
+    site_id = site_rows[0]["id"]
+    site_config = site_rows[0].get("site_config") or {}
+
+    brief = site_config.get("design_brief")
+    if not brief:
+        raise HTTPException(
+            400,
+            "No design_brief found. Run /generate-design-recommendation first.",
+        )
+
+    scheme = site_config.get("generated_decoration")
+
+    try:
+        bundle = get_bundle(business_id) or {}
+    except Exception as e:
+        logger.warning(f"[generate-html] get_bundle failed: {e}")
+        bundle = {}
+
+    try:
+        products = be_get(
+            f"/products?business_id=eq.{business_id}"
+            f"&status=eq.active&display_on_website=eq.true&select=*&limit=20"
+        ) or []
+        if not products:
+            products = be_get(
+                f"/products?business_id=eq.{business_id}"
+                f"&status=eq.active&select=*&limit=20"
+            ) or []
+    except Exception:
+        products = []
+
+    try:
+        testimonials = be_get(
+            f"/testimonials?business_id=eq.{business_id}&select=*&limit=10"
+        ) or []
+    except Exception:
+        testimonials = []
+
+    # Stamp cooldown BEFORE the slow Claude call.
+    _html_build_cooldown[business_id] = time.time()
+
+    try:
+        from studio_builder_agent import build_html
+    except Exception as e:
+        logger.warning(f"[generate-html] builder import failed: {e}")
+        raise HTTPException(500, "Builder Agent unavailable")
+
+    html, error, validation_errors = build_html(
+        brief, bundle, scheme, products, testimonials,
+    )
+
+    # Re-fetch site_config so we don't clobber any concurrent write
+    fresh_rows = be_get(
+        f"/business_sites?id=eq.{site_id}&select=site_config&limit=1"
+    ) or []
+    fresh_config = (fresh_rows[0].get("site_config") if fresh_rows else {}) or {}
+
+    if not html:
+        # Persist failure metadata so /decoration-status can surface it.
+        fresh_config["html_build_failed_at"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+        )
+        fresh_config["html_build_error"] = error or "Unknown failure"
+        fresh_config["html_validation_errors"] = validation_errors or []
+        try:
+            be_patch(f"/business_sites?id=eq.{site_id}", {"site_config": fresh_config})
+        except Exception as e:
+            logger.warning(f"[generate-html] failure persist failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Build failed: {error}. Validation errors: {validation_errors}",
+        )
+
+    # Success — persist and clear any prior failure markers.
+    fresh_config["generated_html"] = html
+    fresh_config["html_generated_at"] = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+    )
+    fresh_config.pop("html_build_failed_at", None)
+    fresh_config.pop("html_build_error", None)
+    fresh_config.pop("html_validation_errors", None)
+    try:
+        be_patch(f"/business_sites?id=eq.{site_id}", {"site_config": fresh_config})
+    except Exception as e:
+        logger.warning(f"[generate-html] success persist failed: {e}")
+        raise HTTPException(500, f"Build succeeded but persist failed: {e}")
+
+    return {
+        "ok": True,
+        "html_length": len(html),
+        "generated_at": fresh_config["html_generated_at"],
     }
 
 

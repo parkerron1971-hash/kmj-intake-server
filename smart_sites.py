@@ -1093,14 +1093,120 @@ def _try_render_via_studio_layouts(
         return None
 
 
+def _try_serve_builder_html(
+    business_id: str,
+    site_config: Dict[str, Any],
+) -> Optional[str]:
+    """Pass 3.8d Layer 1 — serve persisted Builder-generated HTML if present.
+
+    Returns the (motion-injected) HTML on hit, or None on miss / any error
+    so the caller can fall through to layer 2.
+    """
+    import logging
+    import sys
+    logger = logging.getLogger("smart_sites")
+
+    generated_html = site_config.get("generated_html")
+    if not (
+        generated_html
+        and isinstance(generated_html, str)
+        and len(generated_html) > 1000
+    ):
+        return None
+
+    try:
+        from studio_html_validator import inject_motion_modules
+        scheme = site_config.get("generated_decoration")
+        return inject_motion_modules(generated_html, scheme)
+    except Exception as e:
+        logger.warning(
+            f"[smart_sites] Builder HTML serve failed for {business_id}, "
+            f"falling through: {e}"
+        )
+        print(
+            f"[smart_sites] Builder HTML serve exception: {e}",
+            file=sys.stderr,
+        )
+        return None
+
+
+def _try_render_via_archetype(
+    business_id: str,
+    site_config: Dict[str, Any],
+) -> Optional[str]:
+    """Pass 3.8d Layer 2 — render via Pass 3.8c archetype renderer.
+
+    Fires when a design_brief with a layoutArchetype exists but Builder
+    output is unavailable. Returns rendered HTML or None on any failure.
+    """
+    import logging
+    logger = logging.getLogger("smart_sites")
+
+    brief = site_config.get("design_brief")
+    if not (brief and brief.get("layoutArchetype")):
+        return None
+
+    try:
+        from studio_render_context import build_context
+        from studio_archetypes.dispatch import render_archetype
+
+        biz_rows = _sb_get(
+            f"/businesses?id=eq.{business_id}&select=*&limit=1"
+        ) or []
+        if not biz_rows:
+            return None
+        business_data = biz_rows[0]
+
+        bundle = get_bundle(business_id) or {}
+        scheme = site_config.get("generated_decoration")
+
+        try:
+            products = _sb_get(
+                f"/products?business_id=eq.{business_id}"
+                f"&status=eq.active&display_on_website=eq.true&select=*&limit=20"
+            ) or []
+            if not products:
+                products = _sb_get(
+                    f"/products?business_id=eq.{business_id}"
+                    f"&status=eq.active&select=*&limit=20"
+                ) or []
+        except Exception:
+            products = []
+
+        try:
+            testimonials = _sb_get(
+                f"/testimonials?business_id=eq.{business_id}&select=*&limit=10"
+            ) or []
+        except Exception:
+            testimonials = []
+
+        context = build_context(
+            business_id, business_data, bundle, brief, scheme,
+            products, testimonials, [], [],
+        )
+        return render_archetype(brief["layoutArchetype"], context)
+    except Exception as e:
+        logger.warning(
+            f"[smart_sites] Archetype render failed for {business_id}, "
+            f"falling through: {e}"
+        )
+        return None
+
+
 def render_smart_site_page(business_id: str, page_type: str, **opts: Any) -> str:
     """Render a Smart Sites page from bundle + persisted site_config.
 
-    Pass 3.5 Session 3: home pages first attempt the new Studio layout
-    system (23 vocabularies × 12 layouts with auto-detection or override).
-    Any failure falls through to the legacy 3-vibe-family rendering —
-    the safety net is non-negotiable: a layout bug must never break a
-    live site.
+    Fallback chain (home pages only — other page types stay on the legacy
+    renderer until Session 4+):
+
+    1. Pass 3.8d Builder Agent generated_html (with motion injection)
+    2. Pass 3.8c archetype renderer (when brief has layoutArchetype)
+    3. Pass 3.7c / 3.5 Studio layout system (12 layouts × 23 vocabs)
+    4. Legacy 3-vibe-family renderer — final safety net
+
+    Each layer returns None on miss / failure and we fall through. A bug
+    in any new layer must never break a live site; that's why the legacy
+    renderer is the terminal fallback.
 
     Args:
       business_id: target business
@@ -1109,14 +1215,23 @@ def render_smart_site_page(business_id: str, page_type: str, **opts: Any) -> str
     """
     site_config = get_site_config(business_id)
 
-    # Only home pages route through the new layout system in v1; other
-    # page types stay on the legacy renderer until Session 4+.
     if page_type == "home":
+        # Layer 1: Builder Agent output
+        builder_html = _try_serve_builder_html(business_id, site_config)
+        if builder_html:
+            return builder_html
+
+        # Layer 2: 3.8c archetype renderer
+        archetype_html = _try_render_via_archetype(business_id, site_config)
+        if archetype_html:
+            return archetype_html
+
+        # Layer 3: existing 3.7c Studio layout system
         layout_html = _try_render_via_studio_layouts(business_id, site_config, opts)
         if layout_html:
             return layout_html
 
-    # Legacy 3-vibe-family rendering — the safety net.
+    # Layer 4: legacy 3-vibe-family rendering — terminal safety net.
     return _render_page(business_id, page_type, site_config, opts)
 
 
