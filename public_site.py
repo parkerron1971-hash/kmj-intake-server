@@ -1605,6 +1605,11 @@ async def decoration_status_endpoint(business_id: str):
         logger.warning(f"[decoration] cold-start prediction failed: {e}")
 
     can_generate, seconds_remaining = _check_decoration_cooldown(business_id)
+
+    # Pass 3.8b — surface brief presence on the Pass 3.7c status endpoint
+    # so existing UI consumers see brief state without a separate fetch.
+    brief = site_config.get("design_brief")
+
     return {
         "ok": True,
         "has_scheme": bool(scheme),
@@ -1614,6 +1619,10 @@ async def decoration_status_endpoint(business_id: str):
         "cooldown_remaining_seconds": seconds_remaining,
         "cold_start_predicted": cold_start_predicted,
         "voice_signals": voice_signals,
+        # Pass 3.8b additions
+        "has_brief": bool(brief),
+        "brief_generated_at": (brief or {}).get("generatedAt"),
+        "brief_warnings": (brief or {}).get("_validation_warnings") or [],
     }
 
 
@@ -1623,6 +1632,20 @@ async def decoration_status_endpoint(business_id: str):
 # Resets on Railway redeploy (acceptable for v1).
 _design_rec_cooldown: Dict[str, float] = {}
 DESIGN_REC_COOLDOWN_SECONDS = 60
+
+# Pass 3.8b: Brief Expander — separate cooldown so manual /expand calls
+# don't conflict with the auto-fire chain from /generate-design-recommendation.
+_brief_expand_cooldown: Dict[str, float] = {}
+BRIEF_EXPAND_COOLDOWN_SECONDS = 60
+
+
+def _check_brief_expand_cooldown(business_id: str):
+    """Returns (can_expand: bool, seconds_remaining: int)."""
+    last = _brief_expand_cooldown.get(business_id, 0)
+    elapsed = time.time() - last
+    if elapsed >= BRIEF_EXPAND_COOLDOWN_SECONDS:
+        return True, 0
+    return False, int(BRIEF_EXPAND_COOLDOWN_SECONDS - elapsed)
 
 
 def _check_design_rec_cooldown(business_id: str):
@@ -1711,6 +1734,7 @@ async def generate_design_rec_endpoint(business_id: str):
         raise HTTPException(500, f"Generation failed: {error}")
 
     # Persist into business_sites.site_config.design_recommendation
+    site_id = None
     site_rows = be_get(
         f"/business_sites?business_id=eq.{business_id}&select=id,site_config&limit=1"
     ) or []
@@ -1725,12 +1749,45 @@ async def generate_design_rec_endpoint(business_id: str):
             logger.warning(f"[design-rec] persist failed for {business_id}: {e}")
             # Generation succeeded; persist failure is recoverable next time
 
-    return {
+    # Pass 3.8b — auto-fire Brief Expander after recommendation succeeds.
+    # Wrap in try/except so a brief failure does NOT 500 the recommendation
+    # request. The recommendation itself is still useful even if the brief
+    # expansion fails (user can manually retry via /expand-design-brief).
+    auto_brief = None
+    auto_expanded = False
+    try:
+        from studio_brief_expander import expand_design_brief
+        auto_brief, brief_err = expand_design_brief(bundle, rec, product_rows)
+        if auto_brief and site_id:
+            # Re-fetch site_config so we don't clobber any concurrent write
+            fresh_rows = be_get(
+                f"/business_sites?id=eq.{site_id}&select=site_config&limit=1"
+            ) or []
+            fresh_config = (fresh_rows[0].get("site_config") if fresh_rows else {}) or {}
+            fresh_config["design_brief"] = auto_brief
+            try:
+                be_patch(
+                    f"/business_sites?id=eq.{site_id}", {"site_config": fresh_config}
+                )
+                # Stamp brief cooldown so explicit /expand-design-brief calls
+                # respect the 60s window after auto-fire.
+                _brief_expand_cooldown[business_id] = time.time()
+                auto_expanded = True
+            except Exception as e:
+                logger.warning(f"[design-rec] auto-brief persist failed: {e}")
+    except Exception as e:
+        logger.warning(f"[design-rec] auto-brief expansion failed: {e}")
+
+    response = {
         "ok": True,
         "recommendation": rec,
         "vocab_id": primary_vocab_id,
         "cold_start": cold_start,
+        "auto_expanded": auto_expanded,
     }
+    if auto_brief:
+        response["brief"] = auto_brief
+    return response
 
 
 @router.get("/sites/{business_id}/design-signals")
@@ -1774,9 +1831,10 @@ async def design_signals_endpoint(business_id: str):
     truthy = sum(1 for v in signals.values() if v)
     cold_start_predicted = truthy < 2
 
-    # Surface the existing persisted recommendation if any (for the UI to
-    # know whether a regenerate would be a first-time vs replace operation)
+    # Surface the existing persisted recommendation + brief if any (for
+    # the UI to know whether a regenerate would be first-time vs replace)
     persisted_rec = None
+    persisted_brief = None
     try:
         site_rows = be_get(
             f"/business_sites?business_id=eq.{business_id}&select=site_config&limit=1"
@@ -1784,10 +1842,13 @@ async def design_signals_endpoint(business_id: str):
         if site_rows:
             sc = site_rows[0].get("site_config") or {}
             persisted_rec = sc.get("design_recommendation")
+            persisted_brief = sc.get("design_brief")
     except Exception:
         persisted_rec = None
+        persisted_brief = None
 
     can_generate, seconds_remaining = _check_design_rec_cooldown(business_id)
+    can_expand_brief, brief_cooldown_remaining = _check_brief_expand_cooldown(business_id)
 
     return {
         "ok": True,
@@ -1798,8 +1859,96 @@ async def design_signals_endpoint(business_id: str):
         "has_recommendation": bool(persisted_rec),
         "recommendation_generated_at": (persisted_rec or {}).get("generated_at"),
         "recommendation_was_cold_start": (persisted_rec or {}).get("cold_start"),
+        # Pass 3.8b — brief presence
+        "has_brief": bool(persisted_brief),
+        "brief_generated_at": (persisted_brief or {}).get("generatedAt"),
+        "brief_warnings": (persisted_brief or {}).get("_validation_warnings") or [],
         "can_generate": can_generate,
         "cooldown_remaining_seconds": seconds_remaining,
+        "can_expand_brief": can_expand_brief,
+        "brief_cooldown_remaining_seconds": brief_cooldown_remaining,
+    }
+
+
+@router.post("/sites/{business_id}/expand-design-brief")
+async def expand_brief_endpoint(business_id: str):
+    """Pass 3.8b — manual idempotent Brief Expander call.
+
+    Reads the persisted design_recommendation, runs LLM #2 to expand it
+    into a full DesignBrief, and persists at site_config.design_brief.
+    Used when the auto-fire chain in /generate-design-recommendation
+    failed, OR when the user wants to regenerate just the brief without
+    regenerating the strand pick.
+    """
+    can_expand, seconds_remaining = _check_brief_expand_cooldown(business_id)
+    if not can_expand:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Cooldown active. Try again in {seconds_remaining} seconds.",
+        )
+
+    try:
+        from brand_engine import _sb_get as be_get, _sb_patch as be_patch, get_bundle
+    except Exception as e:
+        logger.warning(f"[expand-brief] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    site_rows = be_get(
+        f"/business_sites?business_id=eq.{business_id}&select=id,site_config&limit=1"
+    ) or []
+    if not site_rows:
+        raise HTTPException(
+            404, "business_sites row missing — enable Smart Sites first"
+        )
+    site_id = site_rows[0]["id"]
+    site_config = site_rows[0].get("site_config") or {}
+
+    recommendation = site_config.get("design_recommendation")
+    if not recommendation:
+        raise HTTPException(
+            400,
+            "No design_recommendation found. Run /generate-design-recommendation first.",
+        )
+
+    try:
+        bundle = get_bundle(business_id) or {}
+    except Exception as e:
+        logger.warning(f"[expand-brief] get_bundle failed: {e}")
+        bundle = {}
+
+    try:
+        product_rows = be_get(
+            f"/products?business_id=eq.{business_id}&is_active=eq.true&select=*&limit=20"
+        ) or []
+    except Exception:
+        product_rows = []
+
+    # Stamp cooldown BEFORE the slow Claude call
+    _brief_expand_cooldown[business_id] = time.time()
+
+    try:
+        from studio_brief_expander import expand_design_brief
+    except Exception as e:
+        logger.warning(f"[expand-brief] expander import failed: {e}")
+        raise HTTPException(500, "Brief Expander unavailable")
+
+    brief, error = expand_design_brief(bundle, recommendation, product_rows)
+    if not brief:
+        raise HTTPException(500, f"Brief expansion failed: {error}")
+
+    # Persist
+    new_config = dict(site_config)
+    new_config["design_brief"] = brief
+    try:
+        be_patch(f"/business_sites?id=eq.{site_id}", {"site_config": new_config})
+    except Exception as e:
+        logger.warning(f"[expand-brief] persist failed for {business_id}: {e}")
+
+    return {
+        "ok": True,
+        "brief": brief,
+        "had_warnings": bool(brief.get("_validation_warnings")),
+        "warnings": brief.get("_validation_warnings") or [],
     }
 
 
