@@ -1994,10 +1994,20 @@ async def preview_archetype_endpoint(business_id: str, archetype_id: str):
 
     # Defensive content reads — these tables may or may not exist depending
     # on how the business is set up. Missing tables degrade silently to [].
+    # The products table uses status/display_on_website (not is_active).
     try:
         products = be_get(
-            f"/products?business_id=eq.{business_id}&is_active=eq.true&select=*&limit=20"
+            f"/products?business_id=eq.{business_id}"
+            f"&status=eq.active&display_on_website=eq.true"
+            f"&select=*&limit=20"
         ) or []
+        if not products:
+            # Fallback: some legacy rows may not have display_on_website set.
+            # Try just status=active so the preview surfaces real catalog items.
+            products = be_get(
+                f"/products?business_id=eq.{business_id}"
+                f"&status=eq.active&select=*&limit=20"
+            ) or []
     except Exception:
         products = []
     try:

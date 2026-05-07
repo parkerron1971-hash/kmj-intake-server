@@ -159,6 +159,18 @@ def render(context: dict) -> str:
   {items}
 </section>
 """
+    else:
+        contact_email = context.get("contact_email") or ""
+        contact_line = (
+            f'Reach out: <a href="mailto:{safe(contact_email)}">{safe(contact_email)}</a>.'
+            if contact_email else 'Use the form below to begin.'
+        )
+        products_html = f"""
+<section class="editorial-section">
+  <h2>Currently Accepting Conversations</h2>
+  <p>This practice works through invitation and conversation. {contact_line}</p>
+</section>
+"""
 
     cta = f"""
 <div class="editorial-cta">
