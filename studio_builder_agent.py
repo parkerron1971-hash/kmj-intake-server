@@ -329,10 +329,10 @@ def build_html(
     except Exception as e:
         return None, f"Prompt construction failed: {type(e).__name__}: {e}", []
 
-    # 2. Call Claude — Builder is heavy. Generous token budget; the
-    # underlying _call_claude has a 60 s HTTP timeout.
+    # 2. Call Claude — Builder is heavy. ~12k output tokens on Opus can run
+    # 60-120 s, so we lift the HTTP timeout well above the default.
     try:
-        raw = _call_claude(prompt, max_tokens=12000)
+        raw = _call_claude(prompt, max_tokens=12000, timeout=240.0)
     except Exception as e:
         print(f"[builder] Claude call failed: {e}", file=sys.stderr)
         return None, f"Claude call failed: {type(e).__name__}: {e}", []

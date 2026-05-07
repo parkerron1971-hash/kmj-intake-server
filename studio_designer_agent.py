@@ -313,7 +313,7 @@ def cold_start_recommendation(vocab_id: str) -> DesignRecommendation:
 # ─── Claude call + JSON extraction ────────────────────────────────
 
 
-def _call_claude(prompt: str, max_tokens: int = 2500) -> str:
+def _call_claude(prompt: str, max_tokens: int = 2500, timeout: float = 60.0) -> str:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
@@ -330,7 +330,7 @@ def _call_claude(prompt: str, max_tokens: int = 2500) -> str:
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
         }, ensure_ascii=False).encode("utf-8"),
-        timeout=60,
+        timeout=timeout,
     )
     response.raise_for_status()
     response.encoding = "utf-8"
