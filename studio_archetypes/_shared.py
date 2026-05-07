@@ -54,8 +54,42 @@ def base_html_shell(context: dict, body: str, custom_styles: str, scripts: str =
 </html>"""
 
 
+def _strip_style_tags(css_blob: str) -> str:
+    """Strip outer <style>...</style> wrappers from a CSS blob.
+
+    Pass 3.7c motion modules return their CSS wrapped in <style>...</style>
+    because they were originally injected directly into legacy layouts'
+    HTML. The Pass 3.8c archetype renderers concatenate motion module CSS
+    into a single combined CSS block that base_html_shell wraps in ONE
+    <style> tag. Without stripping, we end up with nested <style> tags
+    which break HTML parsing — the browser closes the outer <style> at
+    the first inner </style> and the rest of the CSS spills into the
+    body as visible text (and typography rules below the break never
+    apply).
+    """
+    if not css_blob:
+        return ""
+    s = css_blob.strip()
+    # Strip leading <style> (with attributes if any)
+    if s.lower().startswith("<style"):
+        gt = s.find(">")
+        if gt > 0:
+            s = s[gt + 1 :].lstrip()
+    # Strip trailing </style>
+    if s.lower().endswith("</style>"):
+        s = s[: -len("</style>")].rstrip()
+    return s
+
+
 def render_motion_modules_styles(context: dict) -> str:
-    """Output CSS for any motion modules enabled by scheme."""
+    """Output CSS for any motion modules enabled by scheme.
+
+    Each motion module's render_styles() returns its CSS wrapped in a
+    <style>...</style> block (legacy layout convention). We strip those
+    wrappers here so the result is RAW CSS the archetype renderer can
+    concatenate with base_styles() and pass to base_html_shell, which
+    will wrap the combined CSS in a SINGLE <style> tag.
+    """
     parts = []
     palette = context.get("palette") or {}
     pseudo_ds_full = {
@@ -66,19 +100,19 @@ def render_motion_modules_styles(context: dict) -> str:
     try:
         if context.get("enable_ghost_numbers"):
             from studio_layouts.motion_modules.ghost_numbers import render_styles as gn
-            parts.append(gn())
+            parts.append(_strip_style_tags(gn()))
         if context.get("enable_marquee_strips"):
             from studio_layouts.motion_modules.marquee_strip import render_styles as ms
-            parts.append(ms(pseudo_ds_full))
+            parts.append(_strip_style_tags(ms(pseudo_ds_full)))
         if context.get("enable_magnetic_buttons"):
             from studio_layouts.motion_modules.magnetic_button import render_styles as mb
-            parts.append(mb())
+            parts.append(_strip_style_tags(mb()))
         if context.get("enable_statement_bars"):
             from studio_layouts.motion_modules.statement_bar import render_styles as sb
-            parts.append(sb(pseudo_ds_full))
+            parts.append(_strip_style_tags(sb(pseudo_ds_full)))
     except Exception as e:
         print(f"[archetypes._shared] motion module styles failed: {e}", file=sys.stderr)
-    return "\n".join(parts)
+    return "\n".join(p for p in parts if p)
 
 
 def render_motion_modules_scripts(context: dict) -> str:

@@ -427,55 +427,34 @@ _PRACTITIONER_AUDIT_FIELDS = (
 
 
 def _compose_about_me_blob(practitioner_row: Optional[Dict[str, Any]]) -> Optional[str]:
-    """Stitch practitioner_profile fields into a creative-brief prose blob.
-    Returns None if the row is empty or has zero meaningful fields populated.
+    """Compose the practitioner's identity blurb for VISIBLE rendering.
+
+    Pass 3.8c bug fix: this output is rendered as the practitioner bio in
+    archetype renderers — so it MUST contain only identity-level content
+    (name + title), NEVER voice guidance (voice_dos / voice_donts /
+    greeting_style / signoff_style). Voice guidance is creative-direction
+    metadata for the Brief Expander prompt; it leaks as cringe copy if
+    rendered as bio text. Voice signal still flows to the Brief Expander
+    via bundle.voice.voice_dos / voice_donts (composed by _compose_voice).
+
+    Returns None when practitioner row has neither name nor title.
     """
     if not practitioner_row or not isinstance(practitioner_row, dict):
         return None
 
     full_legal = (practitioner_row.get("full_legal_name") or "").strip()
     title = (practitioner_row.get("preferred_title") or "").strip()
-    voice_samples = practitioner_row.get("voice_samples") or {}
-    voice_dos = practitioner_row.get("voice_dos") or []
-    voice_donts = practitioner_row.get("voice_donts") or []
-    greeting = (practitioner_row.get("greeting_style") or "").strip()
-    signoff = (practitioner_row.get("signoff_style") or "").strip()
-
-    parts: List[str] = []
 
     if full_legal and title:
-        parts.append(f"{full_legal}, {title}.")
-    elif full_legal:
-        parts.append(f"{full_legal}.")
-    elif title:
-        parts.append(f"{title}.")
-
-    if isinstance(voice_samples, dict) and voice_samples:
-        sample_values = [
-            str(v).strip() for v in voice_samples.values()
-            if v and isinstance(v, str) and v.strip()
-        ]
-        if sample_values:
-            parts.append(f"Voice samples: {', '.join(sample_values[:6])}.")
-
-    if isinstance(voice_dos, list) and voice_dos:
-        dos = [str(d).strip() for d in voice_dos if d and str(d).strip()]
-        if dos:
-            parts.append(f"Voice dos: {'; '.join(dos[:8])}.")
-
-    if isinstance(voice_donts, list) and voice_donts:
-        donts = [str(d).strip() for d in voice_donts if d and str(d).strip()]
-        if donts:
-            parts.append(f"Voice donts: {'; '.join(donts[:8])}.")
-
-    if greeting:
-        parts.append(f"Signature greeting: '{greeting}'.")
-    if signoff:
-        parts.append(f"Signoff: '{signoff}'.")
-
-    if not parts:
-        return None
-    return " ".join(parts)
+        # Avoid double-period when full_legal already ends in punctuation
+        # (e.g., "Kevin McCloud Jr." or "Dr. Smith").
+        base = full_legal.rstrip(".!?")
+        return f"{base}, {title}."
+    if full_legal:
+        return full_legal if full_legal.endswith((".", "!", "?")) else f"{full_legal}."
+    if title:
+        return f"{title}."
+    return None
 
 
 def _compose_about_business_blob(
