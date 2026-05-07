@@ -335,6 +335,19 @@ def _call_claude(prompt: str, max_tokens: int = 2500, timeout: float = 60.0) -> 
     response.raise_for_status()
     response.encoding = "utf-8"
     data = json.loads(response.content.decode("utf-8"))
+    # Log truncation explicitly — callers (notably the Builder) need to see
+    # a max_tokens stop so they can react instead of treating a partial
+    # response as a successful completion.
+    stop_reason = data.get("stop_reason")
+    if stop_reason == "max_tokens":
+        import sys
+        usage = data.get("usage") or {}
+        print(
+            f"[claude] OUTPUT TRUNCATED — stop_reason=max_tokens, "
+            f"output_tokens={usage.get('output_tokens')}, "
+            f"max_tokens={max_tokens}",
+            file=sys.stderr,
+        )
     return "".join(
         b.get("text", "")
         for b in data.get("content", [])

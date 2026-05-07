@@ -329,10 +329,13 @@ def build_html(
     except Exception as e:
         return None, f"Prompt construction failed: {type(e).__name__}: {e}", []
 
-    # 2. Call Claude — Builder is heavy. ~12k output tokens on Opus can run
-    # 60-120 s, so we lift the HTTP timeout well above the default.
+    # 2. Call Claude — Builder is heavy. A complete bespoke HTML page with
+    # inline CSS, custom hero treatments and section blocks routinely
+    # exceeds 12 k output tokens; we observed the first run truncate at
+    # 12 k mid-document, so the ceiling is lifted to 24 k. The HTTP timeout
+    # is bumped accordingly (Opus generates ~150 tokens/sec).
     try:
-        raw = _call_claude(prompt, max_tokens=12000, timeout=240.0)
+        raw = _call_claude(prompt, max_tokens=24000, timeout=300.0)
     except Exception as e:
         print(f"[builder] Claude call failed: {e}", file=sys.stderr)
         return None, f"Claude call failed: {type(e).__name__}: {e}", []
