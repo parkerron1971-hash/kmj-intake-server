@@ -1952,6 +1952,89 @@ async def expand_brief_endpoint(business_id: str):
     }
 
 
+@router.get("/sites/{business_id}/preview-archetype/{archetype_id}")
+async def preview_archetype_endpoint(business_id: str, archetype_id: str):
+    """Pass 3.8c — render an archetype for a business and return HTML directly.
+
+    Uses the business's stored design_brief. If brief missing, returns 404.
+    Does NOT change live URL behavior — preview only. NO writes.
+    """
+    try:
+        from brand_engine import _sb_get as be_get, get_bundle
+    except Exception as e:
+        logger.warning(f"[preview-archetype] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    biz_rows = be_get(f"/businesses?id=eq.{business_id}&select=*&limit=1") or []
+    if not biz_rows:
+        raise HTTPException(404, "Business not found")
+    business_data = biz_rows[0]
+
+    site_rows = be_get(
+        f"/business_sites?business_id=eq.{business_id}&select=site_config&limit=1"
+    ) or []
+    if not site_rows:
+        raise HTTPException(404, "business_sites missing — enable Smart Sites first")
+    site_config = site_rows[0].get("site_config") or {}
+
+    brief = site_config.get("design_brief")
+    if not brief:
+        raise HTTPException(
+            404,
+            "design_brief missing — run /generate-design-recommendation first",
+        )
+
+    scheme = site_config.get("generated_decoration")
+
+    try:
+        bundle = get_bundle(business_id) or {}
+    except Exception as e:
+        logger.warning(f"[preview-archetype] get_bundle failed: {e}")
+        bundle = {}
+
+    # Defensive content reads — these tables may or may not exist depending
+    # on how the business is set up. Missing tables degrade silently to [].
+    try:
+        products = be_get(
+            f"/products?business_id=eq.{business_id}&is_active=eq.true&select=*&limit=20"
+        ) or []
+    except Exception:
+        products = []
+    try:
+        testimonials = be_get(
+            f"/testimonials?business_id=eq.{business_id}&select=*&limit=10"
+        ) or []
+    except Exception:
+        testimonials = []
+    # gallery_images and resources may be in JSONB module_entries — leave empty
+    # for v1; archetypes that need them already fall back to product-cards.
+    gallery: list = []
+    resources: list = []
+
+    try:
+        from studio_render_context import build_context
+        from studio_archetypes.dispatch import render_archetype
+    except Exception as e:
+        logger.warning(f"[preview-archetype] archetype import failed: {e}")
+        raise HTTPException(500, "Archetype renderer unavailable")
+
+    context = build_context(
+        business_id, business_data, bundle, brief, scheme,
+        products, testimonials, gallery, resources,
+    )
+
+    html = render_archetype(archetype_id, context)
+    if not html:
+        raise HTTPException(400, f"Unknown or failed archetype: {archetype_id}")
+
+    return HTMLResponse(
+        content=html,
+        status_code=200,
+        media_type="text/html",
+        headers={"X-Solutionist-Source": f"archetype-preview:{archetype_id}"},
+    )
+
+
 @router.get("/public/widget/{module_id}")
 async def get_widget(module_id: str):
     """Return a self-contained styled HTML page for iframe embedding."""
