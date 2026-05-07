@@ -13,7 +13,7 @@ def render_styles(context: dict) -> str:
     return base_styles(context) + render_motion_modules_styles(context) + """
 .showcase-page { max-width: 100%; }
 .showcase-hero {
-  min-height: 70vh;
+  min-height: min(70vh, 640px);
   background: linear-gradient(135deg, var(--bg) 0%, var(--bg2) 100%);
   display: flex;
   flex-direction: column;

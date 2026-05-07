@@ -17,7 +17,7 @@ def render_styles(context: dict) -> str:
     return base_styles(context) + render_motion_modules_styles(context) + f"""
 .immersive-page {{ max-width: 100%; }}
 .immersive-section {{
-  min-height: 70vh;
+  min-height: min(70vh, 640px);
   padding: clamp(4rem, 10vh, 8rem) clamp(1.5rem, 6vw, 5rem);
   display: flex;
   flex-direction: column;

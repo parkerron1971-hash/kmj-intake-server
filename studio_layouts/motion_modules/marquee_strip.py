@@ -29,7 +29,7 @@ def render_styles(design_system) -> str:
 }}
 @keyframes marquee-scroll {{
   from {{ transform: translateX(0); }}
-  to {{ transform: translateX(-50%); }}
+  to {{ transform: translateX(-33.3333%); }}
 }}
 @media (prefers-reduced-motion: reduce) {{
   .marquee-track {{ animation: none; }}
@@ -39,13 +39,22 @@ def render_styles(design_system) -> str:
 
 
 def render_inline(text: str) -> str:
-    """Render a marquee strip with the given dot-separated keywords."""
+    """Render a marquee strip with the given dot-separated keywords.
+
+    The track is tripled with a consistent " • " separator so the loop is
+    seamless: the keyframe translates -33.333% (one full copy width), at
+    which point the second copy occupies the position of the first and the
+    seam is invisible. Duplication alone (-50%) leaves a visible cut at
+    wide viewports because the second copy starts where the first ended,
+    not where the first started.
+    """
     if not text:
         return ""
     safe = safe_html(text)
-    duplicated = f"{safe} • {safe}"
+    sep = "  •  "
+    looped = f"{safe}{sep}{safe}{sep}{safe}{sep}"
     return f"""
 <div class="marquee-strip" aria-hidden="true">
-  <div class="marquee-track">{duplicated}</div>
+  <div class="marquee-track">{looped}</div>
 </div>
 """

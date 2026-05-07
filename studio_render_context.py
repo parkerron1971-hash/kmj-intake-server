@@ -38,6 +38,7 @@ class RenderContext(TypedDict, total=False):
     # Bundle data
     practitioner_name: Optional[str]
     practitioner_bio: Optional[str]
+    practitioner_photo_url: Optional[str]
     about_me: Optional[str]
     about_business: Optional[str]
     products: list
@@ -116,6 +117,19 @@ def build_context(
         or (bundle.get("footer") or {}).get("contact_email")
     )
 
+    # Practitioner photo — check practitioner row + brand_kit for any usable
+    # avatar URL. Returns None when no photo is available so the renderer
+    # can hide the photo column instead of showing an empty placeholder.
+    brand_kit = settings.get("brand_kit") or {}
+    photo_url = (
+        practitioner.get("photo_url")
+        or practitioner.get("avatar_url")
+        or practitioner.get("headshot_url")
+        or brand_kit.get("practitioner_photo")
+        or brand_kit.get("headshot_url")
+        or None
+    )
+
     return {
         "business_id": business_id,
         "business_name": business.get("name") or "Welcome",
@@ -138,6 +152,7 @@ def build_context(
         "sub_strand_id": brief.get("subStrandId"),
         "practitioner_name": practitioner.get("display_name") or practitioner.get("full_legal_name"),
         "practitioner_bio": intel.get("about_me"),
+        "practitioner_photo_url": photo_url,
         "about_me": intel.get("about_me"),
         "about_business": intel.get("about_business"),
         "products": products or [],

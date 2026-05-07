@@ -426,35 +426,68 @@ _PRACTITIONER_AUDIT_FIELDS = (
 )
 
 
-def _compose_about_me_blob(practitioner_row: Optional[Dict[str, Any]]) -> Optional[str]:
+def _compose_about_me_blob(
+    practitioner_row: Optional[Dict[str, Any]],
+    business_profile_row: Optional[Dict[str, Any]] = None,
+    brand_kit_row: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     """Compose the practitioner's identity blurb for VISIBLE rendering.
 
     Pass 3.8c bug fix: this output is rendered as the practitioner bio in
     archetype renderers — so it MUST contain only identity-level content
-    (name + title), NEVER voice guidance (voice_dos / voice_donts /
-    greeting_style / signoff_style). Voice guidance is creative-direction
-    metadata for the Brief Expander prompt; it leaks as cringe copy if
-    rendered as bio text. Voice signal still flows to the Brief Expander
-    via bundle.voice.voice_dos / voice_donts (composed by _compose_voice).
+    (name + title) and creative-positioning prose, NEVER voice guidance
+    (voice_dos / voice_donts / greeting_style / signoff_style). Voice
+    guidance is creative-direction metadata for the Brief Expander prompt;
+    it leaks as cringe copy if rendered as bio text.
 
-    Returns None when practitioner row has neither name nor title.
+    Pass 3.8c.1: a name-only result rendered as just "Kevin McCloud Jr."
+    feels sparse, so we synthesize a richer blurb by adding business-level
+    positioning prose (brand_voice, elevator_pitch). When the result is
+    still too thin (under 2 sentences), we return None so the renderer
+    can hide the section entirely instead of showing a one-word bio.
     """
     if not practitioner_row or not isinstance(practitioner_row, dict):
         return None
 
+    parts: List[str] = []
+
     full_legal = (practitioner_row.get("full_legal_name") or "").strip()
     title = (practitioner_row.get("preferred_title") or "").strip()
 
-    if full_legal and title:
+    if full_legal and title and full_legal.rstrip(".!?") != title.rstrip(".!?"):
         # Avoid double-period when full_legal already ends in punctuation
         # (e.g., "Kevin McCloud Jr." or "Dr. Smith").
         base = full_legal.rstrip(".!?")
-        return f"{base}, {title}."
-    if full_legal:
-        return full_legal if full_legal.endswith((".", "!", "?")) else f"{full_legal}."
-    if title:
-        return f"{title}."
-    return None
+        parts.append(f"{base}, {title}.")
+    elif full_legal:
+        parts.append(full_legal if full_legal.endswith((".", "!", "?")) else f"{full_legal}.")
+    elif title:
+        parts.append(f"{title}.")
+
+    # Positioning prose — pull from public-facing copy fields (not voice
+    # coaching rules). brand_kit.elevator_pitch and business_profile.brand_voice
+    # are written for public consumption.
+    bp = business_profile_row or {}
+    bk = brand_kit_row or {}
+
+    elevator = (bk.get("elevator_pitch") or "").strip()
+    if elevator and len(elevator) > 30:
+        if not elevator.endswith((".", "!", "?")):
+            elevator += "."
+        parts.append(elevator)
+
+    brand_voice = (bp.get("brand_voice") or "").strip()
+    if brand_voice and len(brand_voice) > 40:
+        if not brand_voice.endswith((".", "!", "?")):
+            brand_voice += "."
+        parts.append(brand_voice)
+
+    # Threshold: a single name fragment is too thin to render. Require at
+    # least two sentences (identity + at least one positioning sentence).
+    if len(parts) < 2:
+        return None
+
+    return " ".join(parts)
 
 
 def _compose_about_business_blob(
@@ -622,9 +655,12 @@ def _read_practitioner_intelligence(
         },
     }
 
-    # about_me prose blob
+    # about_me prose blob — pass business_profile + brand_kit for richer
+    # positioning when practitioner row alone would yield only a name.
     try:
-        intel["about_me"] = _compose_about_me_blob(practitioner_row)
+        intel["about_me"] = _compose_about_me_blob(
+            practitioner_row, business_profile, brand_kit
+        )
     except Exception as e:
         logger.warning(f"_compose_about_me_blob failed: {e}")
         intel["about_me"] = None

@@ -18,7 +18,7 @@ def render_styles(context: dict) -> str:
   grid-template-columns: 1.2fr 1fr;
   gap: 4rem;
   padding: clamp(3rem, 8vh, 6rem) clamp(1.5rem, 6vw, 5rem);
-  min-height: 80vh;
+  min-height: min(80vh, 720px);
   align-items: center;
   position: relative;
 }
@@ -49,6 +49,10 @@ def render_styles(context: dict) -> str:
   max-width: 1280px;
   margin: 0 auto;
 }
+.split-section-soft {
+  padding-top: clamp(2rem, 4vh, 3rem);
+  padding-bottom: clamp(2rem, 4vh, 3rem);
+}
 .split-section h2 { margin-bottom: 1rem; }
 .split-section .section-lead { font-size: 1.1rem; max-width: 60ch; margin-bottom: 2rem; opacity: 0.9; }
 .split-grid {
@@ -78,10 +82,14 @@ def render_styles(context: dict) -> str:
   gap: 3rem;
   align-items: start;
 }
+.split-about-no-photo {
+  display: block;
+  max-width: 720px;
+}
 .split-about-photo {
   width: 100%;
   aspect-ratio: 3/4;
-  background: var(--bg2);
+  background: var(--bg2) center/cover no-repeat;
   border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .split-footer {
@@ -125,16 +133,29 @@ def render(context: dict) -> str:
     marquee = render_marquee_inline(context)
     statement = render_statement_inline(context, 0)
 
+    # About section: only render when bio passed the synthesis threshold.
+    # _compose_about_me_blob returns None when input is too thin, so a missing
+    # about_me means "hide this section" rather than "show placeholder text."
     about = ""
-    if about_me or practitioner_name:
+    if about_me:
+        photo_url = context.get("practitioner_photo_url") or ""
+        if photo_url:
+            photo_html = (
+                f'<div class="split-about-photo" '
+                f'style="background-image:url({safe(photo_url)})"></div>'
+            )
+            grid_class = "split-about"
+        else:
+            photo_html = ""
+            grid_class = "split-about-no-photo"
         about = f"""
 <section class="split-section">
   <span class="eyebrow">About</span>
   <h2>{practitioner_name or 'About'}</h2>
-  <div class="split-about">
-    <div class="split-about-photo"></div>
+  <div class="{grid_class}">
+    {photo_html}
     <div>
-      <p>{about_me or 'Practitioner bio coming soon.'}</p>
+      <p>{about_me}</p>
     </div>
   </div>
 </section>
@@ -166,6 +187,25 @@ def render(context: dict) -> str:
   <div class="split-grid">
     {cards}
   </div>
+</section>
+"""
+    else:
+        # Soft fallback when the catalog is empty — render a brief
+        # "currently accepting conversations" block so the page doesn't
+        # leave a void where offerings would go.
+        contact_email = context.get("contact_email") or ""
+        if contact_email:
+            contact_line = (
+                f'Reach out: <a href="mailto:{safe(contact_email)}">'
+                f'{safe(contact_email)}</a>.'
+            )
+        else:
+            contact_line = "Use the form below to begin."
+        products_html = f"""
+<section class="split-section split-section-soft">
+  <span class="eyebrow">Inquiries</span>
+  <h2>Currently Accepting Conversations</h2>
+  <p>This practice works through invitation and conversation. {contact_line}</p>
 </section>
 """
 
