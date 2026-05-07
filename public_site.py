@@ -123,7 +123,7 @@ def _brand_head_meta_tags(business_id: str) -> str:
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1652,6 +1652,11 @@ BRIEF_EXPAND_COOLDOWN_SECONDS = 60
 _html_build_cooldown: Dict[str, float] = {}
 HTML_BUILD_COOLDOWN_SECONDS = 60
 
+# Pass 3.8d: an in-flight set so we don't kick off two background Builder
+# jobs for the same business inside one Railway worker (the cooldown
+# already blocks new POSTs, but the auto-fire path can race the user).
+_html_build_in_flight: set = set()
+
 
 def _check_brief_expand_cooldown(business_id: str):
     """Returns (can_expand: bool, seconds_remaining: int)."""
@@ -1802,70 +1807,34 @@ async def generate_design_rec_endpoint(business_id: str):
         logger.warning(f"[design-rec] auto-brief expansion failed: {e}")
 
     # Pass 3.8d — auto-fire Builder Agent (LLM #3) once the brief expansion
-    # succeeded. Non-fatal: a Builder failure must never 500 the
-    # recommendation request, since the recommendation + brief are still
-    # useful on their own (the user can manually retry via /generate-html).
-    auto_built_html = False
+    # succeeded. The Builder takes 60-120 s, longer than Railway's edge
+    # gateway timeout (~60 s), so we kick it off in a background daemon
+    # thread and return the recommendation + brief immediately. The user
+    # polls /decoration-status to see when the HTML lands.
+    auto_built_html_kicked_off = False
     if auto_brief and site_id:
         try:
-            from studio_builder_agent import build_html
-            scheme_for_build = (
-                site_config.get("generated_decoration") if isinstance(site_config, dict) else None
-            )
-            try:
-                builder_products = be_get(
-                    f"/products?business_id=eq.{business_id}"
-                    f"&status=eq.active&display_on_website=eq.true"
-                    f"&select=*&limit=20"
-                ) or []
-                if not builder_products:
-                    builder_products = be_get(
-                        f"/products?business_id=eq.{business_id}"
-                        f"&status=eq.active&select=*&limit=20"
-                    ) or []
-            except Exception:
-                builder_products = product_rows or []
-            try:
-                builder_testimonials = be_get(
-                    f"/testimonials?business_id=eq.{business_id}&select=*&limit=10"
-                ) or []
-            except Exception:
-                builder_testimonials = []
-
-            html, html_err, html_val_errs = build_html(
-                auto_brief, bundle, scheme_for_build,
-                builder_products, builder_testimonials,
-            )
-            if html:
-                fresh_rows = be_get(
-                    f"/business_sites?id=eq.{site_id}&select=site_config&limit=1"
-                ) or []
-                fresh_config = (
-                    fresh_rows[0].get("site_config") if fresh_rows else {}
-                ) or {}
-                fresh_config["generated_html"] = html
-                fresh_config["html_generated_at"] = time.strftime(
-                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                )
-                fresh_config.pop("html_build_failed_at", None)
-                fresh_config.pop("html_build_error", None)
-                fresh_config.pop("html_validation_errors", None)
-                try:
-                    be_patch(
-                        f"/business_sites?id=eq.{site_id}",
-                        {"site_config": fresh_config},
-                    )
-                    _html_build_cooldown[business_id] = time.time()
-                    auto_built_html = True
-                except Exception as e:
-                    logger.warning(f"[design-rec] auto-build persist failed: {e}")
+            # Verify Builder module loads before launching the thread.
+            from studio_builder_agent import build_html  # noqa: F401
+            can_build, _ = _check_html_build_cooldown(business_id)
+            if can_build and business_id not in _html_build_in_flight:
+                _html_build_cooldown[business_id] = time.time()
+                import threading
+                threading.Thread(
+                    target=_run_builder_job,
+                    args=(business_id, site_id),
+                    name=f"builder-auto-{business_id[:8]}",
+                    daemon=True,
+                ).start()
+                auto_built_html_kicked_off = True
             else:
-                logger.warning(
-                    f"[design-rec] Builder auto-fire failed: {html_err}; "
-                    f"validation errors: {html_val_errs}"
+                logger.info(
+                    f"[design-rec] Builder auto-fire skipped — "
+                    f"cooldown_active={not can_build}, "
+                    f"in_flight={business_id in _html_build_in_flight}"
                 )
         except Exception as e:
-            logger.warning(f"[design-rec] Builder auto-fire raised: {e}")
+            logger.warning(f"[design-rec] Builder auto-fire setup failed: {e}")
 
     response = {
         "ok": True,
@@ -1873,7 +1842,7 @@ async def generate_design_rec_endpoint(business_id: str):
         "vocab_id": primary_vocab_id,
         "cold_start": cold_start,
         "auto_expanded": auto_expanded,
-        "auto_built_html": auto_built_html,
+        "auto_built_html_kicked_off": auto_built_html_kicked_off,
     }
     if auto_brief:
         response["brief"] = auto_brief
@@ -2042,15 +2011,141 @@ async def expand_brief_endpoint(business_id: str):
     }
 
 
+def _run_builder_job(business_id: str, site_id: str) -> None:
+    """Run the Builder Agent + persist outcome. Designed to be called from
+    a daemon thread so it does not block the request thread.
+
+    Reads its own bundle / products / testimonials / brief / scheme inside
+    the worker so the caller doesn't have to gather them. All persistence
+    paths (success and failure) write to site_config so /decoration-status
+    reflects the outcome.
+
+    Cooldown is stamped by the CALLER before launching the thread. The
+    in-flight set is owned by this function: entered at the top, removed
+    in the finally block.
+    """
+    if business_id in _html_build_in_flight:
+        logger.warning(f"[builder-job] {business_id} already in flight; skip")
+        return
+    _html_build_in_flight.add(business_id)
+
+    try:
+        try:
+            from brand_engine import (
+                _sb_get as be_get, _sb_patch as be_patch, get_bundle,
+            )
+            from studio_builder_agent import build_html
+        except Exception as e:
+            logger.warning(f"[builder-job] import failed: {e}")
+            return
+
+        # Fetch fresh state inside the worker — site_config may have been
+        # updated by /expand-design-brief or /generate-design-recommendation
+        # between cooldown stamp and now.
+        site_rows = be_get(
+            f"/business_sites?id=eq.{site_id}&select=site_config&limit=1"
+        ) or []
+        if not site_rows:
+            logger.warning(f"[builder-job] business_sites row vanished for {site_id}")
+            return
+        site_config = site_rows[0].get("site_config") or {}
+
+        brief = site_config.get("design_brief")
+        if not brief:
+            logger.warning(f"[builder-job] design_brief missing for {business_id}")
+            return
+
+        scheme = site_config.get("generated_decoration")
+
+        try:
+            bundle = get_bundle(business_id) or {}
+        except Exception as e:
+            logger.warning(f"[builder-job] get_bundle failed: {e}")
+            bundle = {}
+
+        try:
+            products = be_get(
+                f"/products?business_id=eq.{business_id}"
+                f"&status=eq.active&display_on_website=eq.true&select=*&limit=20"
+            ) or []
+            if not products:
+                products = be_get(
+                    f"/products?business_id=eq.{business_id}"
+                    f"&status=eq.active&select=*&limit=20"
+                ) or []
+        except Exception:
+            products = []
+
+        try:
+            testimonials = be_get(
+                f"/testimonials?business_id=eq.{business_id}&select=*&limit=10"
+            ) or []
+        except Exception:
+            testimonials = []
+
+        html, error, validation_errors = build_html(
+            brief, bundle, scheme, products, testimonials,
+        )
+
+        # Re-fetch site_config so we don't clobber any concurrent write
+        # while the slow Claude call was running (e.g., a brief regen).
+        fresh_rows = be_get(
+            f"/business_sites?id=eq.{site_id}&select=site_config&limit=1"
+        ) or []
+        fresh_config = (
+            fresh_rows[0].get("site_config") if fresh_rows else {}
+        ) or {}
+
+        if not html:
+            fresh_config["html_build_failed_at"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+            )
+            fresh_config["html_build_error"] = error or "Unknown failure"
+            fresh_config["html_validation_errors"] = validation_errors or []
+            try:
+                be_patch(
+                    f"/business_sites?id=eq.{site_id}",
+                    {"site_config": fresh_config},
+                )
+            except Exception as e:
+                logger.warning(f"[builder-job] failure persist failed: {e}")
+            logger.warning(
+                f"[builder-job] {business_id} build failed: {error}; "
+                f"validation_errors={validation_errors}"
+            )
+            return
+
+        fresh_config["generated_html"] = html
+        fresh_config["html_generated_at"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+        )
+        fresh_config.pop("html_build_failed_at", None)
+        fresh_config.pop("html_build_error", None)
+        fresh_config.pop("html_validation_errors", None)
+        try:
+            be_patch(
+                f"/business_sites?id=eq.{site_id}",
+                {"site_config": fresh_config},
+            )
+            logger.info(
+                f"[builder-job] {business_id} build OK; "
+                f"html_length={len(html)}"
+            )
+        except Exception as e:
+            logger.warning(f"[builder-job] success persist failed: {e}")
+    finally:
+        _html_build_in_flight.discard(business_id)
+
+
 @router.post("/sites/{business_id}/generate-html")
 async def generate_html_endpoint(business_id: str):
     """Pass 3.8d — manual idempotent Builder Agent call (LLM #3).
 
-    Reads the persisted design_brief and decoration scheme, runs LLM #3 to
-    produce a complete bespoke HTML document, and persists it at
-    site_config.generated_html. Used when the auto-fire chain in
-    /generate-design-recommendation failed, or to regenerate a fresh
-    Builder pass without changing the upstream pick.
+    Returns 202 immediately; the build runs in a background daemon thread
+    because Railway's edge gateway times out long-running requests at ~60 s
+    and a complete Builder pass takes 60-120 s. Poll /decoration-status to
+    observe completion: `has_generated_html: true` means success;
+    `html_build_failed_at` set means the most recent build failed.
     """
     can_build, seconds_remaining = _check_html_build_cooldown(business_id)
     if not can_build:
@@ -2060,7 +2155,7 @@ async def generate_html_endpoint(business_id: str):
         )
 
     try:
-        from brand_engine import _sb_get as be_get, _sb_patch as be_patch, get_bundle
+        from brand_engine import _sb_get as be_get
     except Exception as e:
         logger.warning(f"[generate-html] brand_engine import failed: {e}")
         raise HTTPException(500, "Server misconfigured")
@@ -2075,95 +2170,44 @@ async def generate_html_endpoint(business_id: str):
     site_id = site_rows[0]["id"]
     site_config = site_rows[0].get("site_config") or {}
 
-    brief = site_config.get("design_brief")
-    if not brief:
+    if not site_config.get("design_brief"):
         raise HTTPException(
             400,
             "No design_brief found. Run /generate-design-recommendation first.",
         )
 
-    scheme = site_config.get("generated_decoration")
-
+    # Validate the Builder module loads before we kick off the thread, so
+    # configuration errors surface to the user as a 500 here, not silently
+    # vanish into a daemon thread that never persists anything.
     try:
-        bundle = get_bundle(business_id) or {}
-    except Exception as e:
-        logger.warning(f"[generate-html] get_bundle failed: {e}")
-        bundle = {}
-
-    try:
-        products = be_get(
-            f"/products?business_id=eq.{business_id}"
-            f"&status=eq.active&display_on_website=eq.true&select=*&limit=20"
-        ) or []
-        if not products:
-            products = be_get(
-                f"/products?business_id=eq.{business_id}"
-                f"&status=eq.active&select=*&limit=20"
-            ) or []
-    except Exception:
-        products = []
-
-    try:
-        testimonials = be_get(
-            f"/testimonials?business_id=eq.{business_id}&select=*&limit=10"
-        ) or []
-    except Exception:
-        testimonials = []
-
-    # Stamp cooldown BEFORE the slow Claude call.
-    _html_build_cooldown[business_id] = time.time()
-
-    try:
-        from studio_builder_agent import build_html
+        from studio_builder_agent import build_html  # noqa: F401
     except Exception as e:
         logger.warning(f"[generate-html] builder import failed: {e}")
         raise HTTPException(500, "Builder Agent unavailable")
 
-    html, error, validation_errors = build_html(
-        brief, bundle, scheme, products, testimonials,
+    # Stamp cooldown BEFORE launching the thread.
+    _html_build_cooldown[business_id] = time.time()
+
+    import threading
+    threading.Thread(
+        target=_run_builder_job,
+        args=(business_id, site_id),
+        name=f"builder-{business_id[:8]}",
+        daemon=True,
+    ).start()
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "ok": True,
+            "accepted": True,
+            "message": (
+                "Build started in background. Poll /decoration-status to "
+                "observe completion (has_generated_html, html_generated_at, "
+                "html_build_error, html_validation_errors)."
+            ),
+        },
     )
-
-    # Re-fetch site_config so we don't clobber any concurrent write
-    fresh_rows = be_get(
-        f"/business_sites?id=eq.{site_id}&select=site_config&limit=1"
-    ) or []
-    fresh_config = (fresh_rows[0].get("site_config") if fresh_rows else {}) or {}
-
-    if not html:
-        # Persist failure metadata so /decoration-status can surface it.
-        fresh_config["html_build_failed_at"] = time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-        )
-        fresh_config["html_build_error"] = error or "Unknown failure"
-        fresh_config["html_validation_errors"] = validation_errors or []
-        try:
-            be_patch(f"/business_sites?id=eq.{site_id}", {"site_config": fresh_config})
-        except Exception as e:
-            logger.warning(f"[generate-html] failure persist failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Build failed: {error}. Validation errors: {validation_errors}",
-        )
-
-    # Success — persist and clear any prior failure markers.
-    fresh_config["generated_html"] = html
-    fresh_config["html_generated_at"] = time.strftime(
-        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-    )
-    fresh_config.pop("html_build_failed_at", None)
-    fresh_config.pop("html_build_error", None)
-    fresh_config.pop("html_validation_errors", None)
-    try:
-        be_patch(f"/business_sites?id=eq.{site_id}", {"site_config": fresh_config})
-    except Exception as e:
-        logger.warning(f"[generate-html] success persist failed: {e}")
-        raise HTTPException(500, f"Build succeeded but persist failed: {e}")
-
-    return {
-        "ok": True,
-        "html_length": len(html),
-        "generated_at": fresh_config["html_generated_at"],
-    }
 
 
 @router.get("/sites/{business_id}/preview-archetype/{archetype_id}")
