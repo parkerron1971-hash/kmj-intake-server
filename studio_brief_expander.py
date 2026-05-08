@@ -356,3 +356,129 @@ def expand_design_brief(bundle, recommendation, products):
         brief["_validation_warnings"] = warnings
 
     return brief, None
+
+
+# ─── Pass 3.8g: per-page brief expansion ──────────────────────────────
+
+def expand_page_brief(
+    bundle: dict,
+    recommendation: dict,
+    products: list,
+    page_id: str,
+    base_brief: dict,
+):
+    """Produce a brief variant for a specific page in a multi-page site.
+
+    Returns (brief, error). On any failure (unknown page, LLM error, JSON
+    parse error) returns a copy of base_brief with the page metadata
+    stamped on it — never None except when page_id is unknown. The
+    multi-page Builder is wired so a missing brief still falls back to
+    base_brief, so this function is allowed to be conservative.
+
+    Home page is the canonical brief — return it unchanged.
+    """
+    from studio_page_types import get_page_type
+
+    page = get_page_type(page_id)
+    if not page:
+        return None, f"Unknown page type: {page_id}"
+
+    if page_id == "home":
+        # Home == base brief. Stamp page metadata so the Builder knows
+        # which page it is rendering even on the home pass.
+        brief = dict(base_brief or {})
+        brief["_page_id"] = "home"
+        brief["_page_name"] = page["name"]
+        brief["_page_slug"] = page["slug"]
+        return brief, None
+
+    page_focus_prompt = (
+        "\n\n# PAGE FOCUS (override for this page)\n"
+        f"Page: {page['name']} ({page['slug']})\n"
+        f"Role: {page['role']}\n"
+        f"Focus: {page['brief_focus']}\n"
+        f"Typical sections: {', '.join(page['typical_sections'])}\n"
+        "\nThe base brief gave you the brand DNA. For THIS page, the structural emphasis shifts:\n"
+        f"- {page['name']} is NOT the home page. Don't repeat hero content from home.\n"
+        f"- The {page['name']} page exists to {page['role'].lower()}\n"
+        f"- Sections should focus on: {page['brief_focus']}\n"
+    )
+
+    # Cold-start path: skip LLM, derive deterministic page brief from base.
+    if recommendation.get("cold_start"):
+        page_brief = dict(base_brief or {})
+        page_brief["_page_id"] = page_id
+        page_brief["_page_name"] = page["name"]
+        page_brief["_page_slug"] = page["slug"]
+        # Inherit creative anchors
+        for k in ("signature_moment", "pacing_rhythm", "voice_proof_quote"):
+            if recommendation.get(k):
+                page_brief.setdefault(k, recommendation[k])
+        return page_brief, None
+
+    # Rich-data path: same expander prompt + page focus addendum.
+    try:
+        base_prompt = _build_expander_prompt(bundle, recommendation, products)
+        page_prompt = base_prompt + page_focus_prompt
+        raw_output = _call_claude(page_prompt, max_tokens=4500)
+    except Exception as e:
+        print(
+            f"[brief_expander] page_brief Claude call failed for {page_id}: {e}",
+            file=sys.stderr,
+        )
+        page_brief = dict(base_brief or {})
+        page_brief["_page_id"] = page_id
+        page_brief["_page_name"] = page["name"]
+        page_brief["_page_slug"] = page["slug"]
+        page_brief["_validation_warnings"] = [
+            f"Page brief LLM failed: {type(e).__name__}; using base brief"
+        ]
+        return page_brief, None
+
+    page_brief = _extract_json(raw_output)
+    if not page_brief:
+        print(
+            f"[brief_expander] page_brief JSON extraction failed for {page_id}",
+            file=sys.stderr,
+        )
+        page_brief = dict(base_brief or {})
+        page_brief["_page_id"] = page_id
+        page_brief["_page_name"] = page["name"]
+        page_brief["_page_slug"] = page["slug"]
+        page_brief["_validation_warnings"] = [
+            "Page brief JSON extraction failed; using base brief"
+        ]
+        return page_brief, None
+
+    # Standard validation — soft. Validation failures fall back to a copy
+    # of the base brief rather than the deterministic default, because
+    # for a sub-page the base brief is the better safety net.
+    is_valid, errors, warnings = validate_design_brief(page_brief)
+    if not is_valid:
+        print(
+            f"[brief_expander] page_brief validation errors for {page_id}: {errors}",
+            file=sys.stderr,
+        )
+        page_brief = dict(base_brief or {})
+        page_brief["_page_id"] = page_id
+        page_brief["_page_name"] = page["name"]
+        page_brief["_page_slug"] = page["slug"]
+        page_brief["_validation_warnings"] = [
+            f"Page brief validation failed: {'; '.join(errors[:3])}; using base brief"
+        ] + warnings
+        return page_brief, None
+
+    # Post-process for fonts + metadata, then stamp page id + inherit anchors.
+    page_brief = _post_process_brief(page_brief, recommendation)
+    for k in ("signature_moment", "pacing_rhythm", "voice_proof_quote"):
+        if recommendation.get(k):
+            page_brief.setdefault(k, recommendation[k])
+
+    page_brief["_page_id"] = page_id
+    page_brief["_page_name"] = page["name"]
+    page_brief["_page_slug"] = page["slug"]
+
+    if warnings:
+        page_brief["_validation_warnings"] = warnings
+
+    return page_brief, None

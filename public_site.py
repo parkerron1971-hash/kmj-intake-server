@@ -1658,7 +1658,25 @@ async def decoration_status_endpoint(business_id: str):
         "threshold": threshold,
         "can_regenerate_recommendation": can_regen_rec,
         "recommendation_cooldown_remaining_seconds": rec_cooldown_remaining,
+        # Pass 3.8g — multi-page architecture state
+        "site_type": site_config.get("site_type", "landing-page"),
+        "site_pages": site_config.get("site_pages") or [],
+        "generated_pages_count": len(site_config.get("generated_pages") or {}),
+        "generated_page_ids": list((site_config.get("generated_pages") or {}).keys()),
+        "pages_generated_at": site_config.get("pages_generated_at"),
+        "pages_errors": site_config.get("pages_errors") or [],
+        "cost_cap_status": _get_cost_cap_summary(),
     }
+
+
+def _get_cost_cap_summary() -> dict:
+    """Return current cost-cap status for UI display. Soft-fail on import
+    error so /decoration-status keeps working if studio_cost_cap is gone."""
+    try:
+        from studio_cost_cap import get_status
+        return get_status()
+    except Exception:
+        return {}
 
 
 # ─── Pass 3.8f.2: MySite preview endpoint ─────────────────────────────
@@ -1706,6 +1724,57 @@ async def preview_site_endpoint(business_id: str, v: Optional[int] = None):
             # do NOT set X-Frame-Options at all so any origin can embed the
             # preview — this endpoint serves only Builder/archetype-derived
             # HTML the practitioner already controls.
+        },
+    )
+
+
+# ─── Pass 3.8g: per-page preview (multi-page architecture) ────────────
+
+@router.get("/sites/{business_id}/preview-page/{page_id}")
+async def preview_page_endpoint(
+    business_id: str, page_id: str, v: Optional[int] = None,
+):
+    """Preview a specific page (home, about, services, contact) from a
+    multi-page site. Same cache-busting headers + iframe-friendly behavior
+    as /preview. Returns 404 if the page hasn't been generated yet."""
+    try:
+        from brand_engine import _sb_get as be_get
+    except Exception as e:
+        logger.warning(f"[preview-page] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    biz_rows = be_get(f"/businesses?id=eq.{business_id}&select=id&limit=1") or []
+    if not biz_rows:
+        raise HTTPException(404, "Business not found")
+
+    site_rows = be_get(
+        f"/business_sites?business_id=eq.{business_id}&select=site_config&limit=1"
+    ) or []
+    site_config = (site_rows[0].get("site_config") if site_rows else {}) or {}
+
+    pages = site_config.get("generated_pages") or {}
+    html = pages.get(page_id)
+    if not html:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Page '{page_id}' not generated. Run /generate-multi-page first.",
+        )
+
+    try:
+        from studio_html_validator import inject_motion_modules
+        scheme = site_config.get("generated_decoration")
+        brief = site_config.get("design_brief")
+        html = inject_motion_modules(html, scheme, brief)
+    except Exception as e:
+        logger.warning(f"[preview-page] inject_motion_modules failed: {e}")
+
+    return HTMLResponse(
+        content=html,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Solutionist-Source": f"preview-page/{page_id}",
         },
     )
 
@@ -2107,6 +2176,222 @@ async def promote_alternative_endpoint(business_id: str, alternative_index: int)
         "brief_ready": auto_brief is not None,
         "builder_kicked_off": builder_kicked,
         "html_status": "building" if builder_kicked else "idle",
+    }
+
+
+# ─── Pass 3.8g: site-type + multi-page generation ─────────────────────
+
+# In-flight set so two concurrent /generate-multi-page calls for the same
+# business can't race each other through the cost-cap counter.
+_multi_page_in_flight: set = set()
+
+
+@router.post("/sites/{business_id}/set-site-type")
+async def set_site_type_endpoint(business_id: str, site_type: str):
+    """Switch a business between landing-page and multi-page rendering.
+
+    Persists site_config.site_type. Routing reads this on every public
+    page load. Switching to multi-page does NOT immediately generate
+    pages — the user must call /generate-multi-page.
+    """
+    if site_type not in ("landing-page", "multi-page"):
+        raise HTTPException(
+            status_code=400,
+            detail="site_type must be 'landing-page' or 'multi-page'",
+        )
+
+    try:
+        from brand_engine import _sb_get as be_get, _sb_patch as be_patch
+    except Exception as e:
+        logger.warning(f"[set-site-type] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    site_rows = be_get(
+        f"/business_sites?business_id=eq.{business_id}&select=id,site_config&limit=1"
+    ) or []
+    if not site_rows:
+        raise HTTPException(404, "business_sites missing")
+    site_id = site_rows[0]["id"]
+    site_config = site_rows[0].get("site_config") or {}
+    site_config["site_type"] = site_type
+    try:
+        be_patch(
+            f"/business_sites?id=eq.{site_id}",
+            {"site_config": site_config},
+        )
+    except Exception as e:
+        logger.warning(f"[set-site-type] persist failed: {e}")
+        raise HTTPException(500, "Persist failed")
+    return {"ok": True, "site_type": site_type}
+
+
+@router.post("/sites/{business_id}/generate-multi-page")
+async def generate_multi_page_endpoint(business_id: str):
+    """Generate every page in a multi-page site.
+
+    Runs Brief Expander + Builder once per page. Persists
+    site_config.generated_pages[page_id] = html. Cost-cap-gated AND
+    kill-switch-gated. Builds in a background daemon thread because a
+    full 4-page run takes ~4-8 minutes (longer than Railway's 60s edge
+    timeout).
+    """
+    try:
+        from studio_config import MULTI_PAGE_ENABLED
+    except Exception as e:
+        logger.warning(f"[gen-multi-page] config import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    if not MULTI_PAGE_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Multi-page generation is disabled (kill switch).",
+        )
+
+    try:
+        from studio_cost_cap import can_generate
+        allowed, current, cap = can_generate()
+    except Exception:
+        allowed, current, cap = True, 0, 0
+    if not allowed:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Daily Builder cap reached ({current}/{cap}). "
+                "Try again tomorrow."
+            ),
+        )
+
+    if business_id in _multi_page_in_flight:
+        raise HTTPException(
+            status_code=429,
+            detail="Multi-page generation already running for this business.",
+        )
+
+    try:
+        from brand_engine import (
+            _sb_get as be_get, _sb_patch as be_patch, get_bundle,
+        )
+    except Exception as e:
+        logger.warning(f"[gen-multi-page] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    site_rows = be_get(
+        f"/business_sites?business_id=eq.{business_id}&select=id,site_config&limit=1"
+    ) or []
+    if not site_rows:
+        raise HTTPException(404, "business_sites missing")
+    site_id = site_rows[0]["id"]
+    site_config = site_rows[0].get("site_config") or {}
+
+    base_brief = site_config.get("design_brief")
+    if not base_brief:
+        raise HTTPException(
+            status_code=400,
+            detail="No design_brief. Run /generate-design-recommendation first.",
+        )
+
+    recommendation = site_config.get("design_recommendation") or {}
+    scheme = site_config.get("generated_decoration")
+
+    # Determine the page set from site_type. multi-page → 4 pages,
+    # landing-page → 1 page (still goes through the same orchestrator
+    # so the cost cap counts it).
+    site_type = site_config.get("site_type", "multi-page")
+    try:
+        from studio_page_types import default_page_set, landing_page_set
+        site_pages = (
+            default_page_set() if site_type == "multi-page" else landing_page_set()
+        )
+    except Exception:
+        site_pages = ["home"]
+
+    _multi_page_in_flight.add(business_id)
+
+    def _build_in_background():
+        try:
+            try:
+                bundle = get_bundle(business_id) or {}
+            except Exception:
+                bundle = {}
+            try:
+                products = be_get(
+                    f"/products?business_id=eq.{business_id}"
+                    f"&status=eq.active&display_on_website=eq.true"
+                    f"&select=*&limit=20"
+                ) or []
+                if not products:
+                    products = be_get(
+                        f"/products?business_id=eq.{business_id}"
+                        f"&status=eq.active&select=*&limit=20"
+                    ) or []
+            except Exception:
+                products = []
+            try:
+                testimonials = be_get(
+                    f"/testimonials?business_id=eq.{business_id}"
+                    f"&select=*&limit=10"
+                ) or []
+            except Exception:
+                testimonials = []
+
+            from studio_multi_page_builder import build_pages
+            pages, errors = build_pages(
+                site_pages, base_brief, bundle, scheme,
+                products, testimonials, recommendation,
+            )
+
+            fresh_rows = be_get(
+                f"/business_sites?id=eq.{site_id}&select=site_config&limit=1"
+            ) or []
+            fresh_config = (
+                fresh_rows[0].get("site_config") if fresh_rows else {}
+            ) or {}
+            # Merge with existing pages so a single-page failure doesn't
+            # blow away previously-good pages from a prior run.
+            existing_pages = fresh_config.get("generated_pages") or {}
+            existing_pages.update(pages)
+            fresh_config["generated_pages"] = existing_pages
+            fresh_config["pages_generated_at"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+            )
+            if errors:
+                fresh_config["pages_errors"] = errors
+            else:
+                fresh_config.pop("pages_errors", None)
+            fresh_config["site_pages"] = site_pages
+            try:
+                be_patch(
+                    f"/business_sites?id=eq.{site_id}",
+                    {"site_config": fresh_config},
+                )
+                logger.info(
+                    f"[gen-multi-page] {business_id} built "
+                    f"{len(pages)}/{len(site_pages)} pages; errors={len(errors)}"
+                )
+            except Exception as e:
+                logger.warning(f"[gen-multi-page] persist failed: {e}")
+        except Exception as e:
+            import sys as _sys
+            print(
+                f"[gen-multi-page] background failed for {business_id}: {e}",
+                file=_sys.stderr,
+            )
+            logger.warning(f"[gen-multi-page] background failed: {e}")
+        finally:
+            _multi_page_in_flight.discard(business_id)
+
+    import threading
+    threading.Thread(
+        target=_build_in_background,
+        name=f"multipage-{business_id[:8]}",
+        daemon=True,
+    ).start()
+
+    return {
+        "ok": True,
+        "status": "building",
+        "site_pages": site_pages,
+        "site_type": site_type,
     }
 
 
@@ -3305,6 +3590,18 @@ async def public_health():
     }
 
 
+# ─── Pass 3.8g: cost cap diagnostic ───────────────────────────────────
+@router.get("/system/cost-cap-status")
+async def cost_cap_status_endpoint():
+    """Snapshot of today's Builder counter. Used by ops + frontend."""
+    try:
+        from studio_cost_cap import get_status
+        return get_status()
+    except Exception as e:
+        logger.warning(f"[cost-cap] status read failed: {e}")
+        return {"error": "cost_cap unavailable"}
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # SUBDOMAIN ROUTING — Root domain + catch-all
 # ═══════════════════════════════════════════════════════════════════════
@@ -3391,10 +3688,12 @@ async def _try_render_smart_site(business_id: str, page_type: str, **opts) -> Op
         return None
 
 
-async def _serve_site_by_slug(slug: str) -> HTMLResponse:
+async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
     """Shared logic: look up site by slug and return HTML.
     Pass 3: when site_config.use_smart_sites is true, attempt Smart Sites
-    render first. ANY failure falls through to legacy."""
+    render first. ANY failure falls through to legacy.
+    Pass 3.8g: `path` is forwarded to render_smart_site_page so multi-page
+    sites can route /about, /services, /contact correctly."""
     async with httpx.AsyncClient() as client:
         sites = await _sb(client,
             f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
@@ -3409,7 +3708,9 @@ async def _serve_site_by_slug(slug: str) -> HTMLResponse:
             products = await _sb(client,
                 f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
                 f"&order=sort_order.asc,created_at.desc&select=*&limit=100") or []
-            smart_html = await _try_render_smart_site(biz_id, "home", products=products)
+            smart_html = await _try_render_smart_site(
+                biz_id, "home", products=products, path=path,
+            )
             if smart_html:
                 return HTMLResponse(content=smart_html, media_type="text/html",
                                     headers={"X-Solutionist-Source": "smart-sites"})
@@ -3421,9 +3722,10 @@ async def _serve_site_by_slug(slug: str) -> HTMLResponse:
         return HTMLResponse(content=html, media_type="text/html")
 
 
-async def _serve_site_by_custom_domain(domain: str) -> HTMLResponse:
+async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResponse:
     """Look up a site by its custom domain.
-    Pass 3: same flag check as _serve_site_by_slug."""
+    Pass 3: same flag check as _serve_site_by_slug.
+    Pass 3.8g: forwards `path` for multi-page routing."""
     async with httpx.AsyncClient() as client:
         sites = await _sb(client,
             f"/business_sites?site_config->>custom_domain=eq.{domain}"
@@ -3439,7 +3741,9 @@ async def _serve_site_by_custom_domain(domain: str) -> HTMLResponse:
             products = await _sb(client,
                 f"/products?business_id=eq.{biz_id}&status=eq.active&display_on_website=eq.true"
                 f"&order=sort_order.asc,created_at.desc&select=*&limit=100") or []
-            smart_html = await _try_render_smart_site(biz_id, "home", products=products)
+            smart_html = await _try_render_smart_site(
+                biz_id, "home", products=products, path=path,
+            )
             if smart_html:
                 return HTMLResponse(content=smart_html, media_type="text/html",
                                     headers={"X-Solutionist-Source": "smart-sites"})
@@ -3488,23 +3792,31 @@ async def subdomain_catch_all(request: Request, path: str):
     """Catch-all for subdomain requests. Serves the practitioner's site
     regardless of path (SPA routing). API-host requests MUST 404 here so
     they fall through to the real API routers — otherwise this handler
-    shadows /email/health, /agents/*, everything."""
+    shadows /email/health, /agents/*, everything.
+
+    Pass 3.8g: when the host is a practitioner subdomain, the captured
+    `path` is forwarded into the renderer. Multi-page sites use it to
+    serve /about, /services, /contact off the same site_config."""
     host = (request.headers.get("host") or "").split(":")[0].lower()
 
     # API / local dev: bail immediately. Don't even look at the body.
     if _is_api_host(host):
         raise HTTPException(404, "Not found")
 
+    # Normalize: FastAPI strips the leading slash from path:path, but the
+    # downstream renderer expects /about, /services, etc.
+    request_path = "/" + (path or "")
+
     slug = extract_slug_from_host(request)
     if slug:
         if not _check_rate(slug):
             raise HTTPException(429, "Rate limit exceeded")
-        return await _serve_site_by_slug(slug)
+        return await _serve_site_by_slug(slug, request_path)
 
     # Custom domain check
     is_known_base = any(host == base or host.endswith(f".{base}") for base in BASE_DOMAINS)
     if not is_known_base and "." in host:
-        result = await _serve_site_by_custom_domain(host)
+        result = await _serve_site_by_custom_domain(host, request_path)
         if result:
             return result
 
