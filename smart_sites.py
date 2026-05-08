@@ -1117,7 +1117,10 @@ def _try_serve_builder_html(
     try:
         from studio_html_validator import inject_motion_modules
         scheme = site_config.get("generated_decoration")
-        return inject_motion_modules(generated_html, scheme)
+        # Pass 3.8e — pass design_brief so the reactivity layer can render
+        # strand-aware gradients on every page load (no regeneration needed).
+        brief = site_config.get("design_brief")
+        return inject_motion_modules(generated_html, scheme, brief)
     except Exception as e:
         logger.warning(
             f"[smart_sites] Builder HTML serve failed for {business_id}, "
