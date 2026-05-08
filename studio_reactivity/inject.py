@@ -42,6 +42,18 @@ def render_reactivity_styles(brief: Optional[dict]) -> str:
     except Exception as e:
         print(f"[reactivity] strand_gradients failed: {e}", file=sys.stderr)
 
+    # Pass 3.8g — Solutionist motion (film grain, shimmer, pulse glow,
+    # signature reveal timing, accent-word styling). Behind the
+    # SOLUTIONIST_QUALITY_ENABLED kill switch so we can disable the
+    # entire layer with a config flip.
+    try:
+        from studio_config import SOLUTIONIST_QUALITY_ENABLED
+        if SOLUTIONIST_QUALITY_ENABLED:
+            from studio_reactivity.solutionist_motion import render_solutionist_styles
+            parts.append(render_solutionist_styles())
+    except Exception as e:
+        print(f"[reactivity] solutionist_motion failed: {e}", file=sys.stderr)
+
     return "\n".join(p for p in parts if p)
 
 

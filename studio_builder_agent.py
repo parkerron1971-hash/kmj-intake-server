@@ -151,6 +151,48 @@ def _build_builder_prompt(
             )
         anchors_block = "\n".join(anchor_lines)
 
+    # ── Pass 3.8g — Solutionist Quality rules block ─────────────────
+    # Embedded directly in the prompt so Builder receives the measurable
+    # rules verbatim. Behind the SOLUTIONIST_QUALITY_ENABLED kill switch.
+    solutionist_block = ""
+    try:
+        from studio_config import SOLUTIONIST_QUALITY_ENABLED
+        if SOLUTIONIST_QUALITY_ENABLED:
+            from studio_solutionist_quality import get_quality_rules_block_for_prompt
+            solutionist_block = get_quality_rules_block_for_prompt()
+    except Exception as e:
+        import sys as _sys
+        print(f"[builder] solutionist block import failed: {e}", file=_sys.stderr)
+
+    # ── Pass 3.8g — multi-page navigation context (optional) ────────
+    # When the multi-page builder is active, brief carries _nav_html +
+    # _other_pages + _current_page so the Builder knows it is producing
+    # one of N pages, not a standalone landing page.
+    multipage_block = ""
+    other_pages = brief.get("_other_pages") if isinstance(brief, dict) else None
+    current_page = brief.get("_current_page") if isinstance(brief, dict) else None
+    page_id = brief.get("_page_id") if isinstance(brief, dict) else None
+    page_name = brief.get("_page_name") if isinstance(brief, dict) else None
+    if (other_pages and current_page) or page_id:
+        mp_lines = [
+            "═══════════════════════════════════════",
+            "MULTI-PAGE CONTEXT",
+            "═══════════════════════════════════════",
+        ]
+        if page_name or page_id:
+            mp_lines.append(
+                f"\nThis is the {page_name or page_id} page of a multi-page site."
+            )
+        if other_pages:
+            mp_lines.append(
+                f"Other pages exist at: {', '.join(other_pages)}. "
+                "Do NOT repeat the home-page hero verbatim — this page has its own role."
+            )
+        mp_lines.append(
+            "A site-wide nav bar will be injected at <body>. Do NOT design your own nav."
+        )
+        multipage_block = "\n".join(mp_lines)
+
     # ── Practitioner / business context ─────────────────────────────
     practitioner_block = ""
     if intel.get("about_me"):
@@ -347,6 +389,10 @@ This is how space MOVES through the page. Rhythm. Compression. Release. Where he
 
 {anchors_block}
 
+{solutionist_block}
+
+{multipage_block}
+
 # COPY VOICE
 
 {brief.get('copyVoice', '')}
@@ -413,6 +459,20 @@ These are guidance, not script. The order, treatment, and layout of each section
 - The VOICE PROOF QUOTE (if specified, non-empty) must appear in the page — verbatim, or as a very close paraphrase that preserves voice. Place it where it belongs (pull-quote, statement bar, sub-headline) — that's your creative call.
 - Section ordering must reflect the PACING RHYTHM. compression-release alternates dense/quiet; cathedral grand-quiet-grand; essay-arc setup→tension→development→resolution; etc.
 - Section labels are SPECIFIC to this practice. Avoid: "What Clients Say", "Our Process", "Why Choose Us", "Trusted By", "Get Started Today". CTAs are SPECIFIC: never "Get Started" / "Learn More" / "Click Here".
+
+# RULES (Pass 3.8g — Solutionist Quality additions)
+
+- Every h2 MUST contain ONE italic accent word wrapped in <em class="accent-word">. The accent word is the emotional core of the heading.
+- Every h2 MUST be preceded by (1) a 3px-tall gold accent line (about 48px wide), AND (2) a small uppercase letter-spaced eyebrow label.
+- All buttons MUST be pill-shaped (border-radius: 999px). NEVER 4-12px corners on buttons.
+- All cards MUST have border-radius: 28px or greater. NEVER use 4-12px corners on cards.
+- All section padding MUST be 80px minimum top/bottom (120-140px ideal on desktop).
+- Use warm whites: #F8F6F1 backgrounds, #F4F0E8 text on dark. NEVER pure #FFFFFF anywhere.
+- Every primary CTA button MUST have class="cta-button" so the reactivity layer applies the shimmer pass.
+- Every section MUST be a <section> tag OR carry a data-reveal attribute so the scroll-reveal layer animates it.
+- Hero photo / feature image wrapper MUST carry data-headshot-frame so the pulse-glow layer attaches.
+- Use the custom easing curve cubic-bezier(0.16, 1, 0.3, 1) for all transitions (it will be reinforced by the reactivity layer; specifying it locally on hover transforms is correct).
+- h1 weight MUST be 900; h2 weight MUST be 800. h1 letter-spacing -2.4px; h2 letter-spacing -1.6px.
 
 # DESIGN APPROACH
 
@@ -515,8 +575,24 @@ def build_html(
             )
             return None, "HTML failed validation", html_errors
 
-        # 5. Quality validation
+        # 5. Quality validation — Pass 3.8f checks (signature moment, voice
+        # quote, banned labels, palette discipline) PLUS Pass 3.8g
+        # Solutionist Quality checks (italic accent words, padding, radii,
+        # warm whites, heading weights, generic colors).
         quality_ok, quality_warnings = validate_quality(html, brief or {})
+        try:
+            from studio_config import SOLUTIONIST_QUALITY_ENABLED
+            if SOLUTIONIST_QUALITY_ENABLED:
+                from studio_solutionist_quality import validate_solutionist_quality
+                sq_ok, sq_warnings = validate_solutionist_quality(html)
+                if not sq_ok:
+                    quality_warnings = list(quality_warnings) + list(sq_warnings)
+                    quality_ok = False
+        except Exception as e:
+            print(
+                f"[builder] solutionist quality validate failed: {e}",
+                file=sys.stderr,
+            )
         if quality_ok:
             try:
                 html = inject_motion_modules(html, scheme, brief)
