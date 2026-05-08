@@ -147,60 +147,90 @@ def extract_html_from_response(raw: str) -> Optional[str]:
     return None
 
 
-def inject_motion_modules(html: str, scheme: Optional[dict]) -> str:
-    """Inject Pass 3.7c motion module styles + scripts into Builder HTML.
+def inject_motion_modules(
+    html: str,
+    scheme: Optional[dict],
+    brief: Optional[dict] = None,
+) -> str:
+    """Inject Pass 3.7c motion modules + Pass 3.8e reactivity layer.
 
-    Adds CSS just before </head> and JS just before </body>. Only the JS-
-    bearing modules (ghost_numbers, magnetic_button) are injected here:
-    marquee_strip and statement_bar are inline-call modules that need a
-    design-system arg and a bespoke render site, so the Builder is
-    expected to author those itself if its brief mentions them.
+    Pass 3.7c: ghost_numbers / magnetic_button CSS+JS, gated by
+    `scheme.motion_richness`. (marquee_strip and statement_bar are
+    inline-call modules that need a design-system arg and a bespoke
+    render site, so the Builder is expected to author those itself if
+    its brief mentions them.)
+
+    Pass 3.8e: micro-interactions, scroll behaviors, and strand-aware
+    gradients — these are universally useful and run on every page that
+    has reached the validator, regardless of scheme. They read the brief
+    only for the strand-specific gradient character; without a brief,
+    the strand block is skipped and the rest still applies.
     """
-    if not html or not scheme:
+    if not html:
         return html
 
-    motion = scheme.get("motion_richness") or {}
-    needs_ghost = bool(motion.get("enable_ghost_numbers"))
-    needs_magnetic = bool(motion.get("enable_magnetic_buttons"))
+    # ── Pass 3.7c motion modules (gated by scheme.motion_richness) ──
+    if scheme:
+        motion = scheme.get("motion_richness") or {}
+        needs_ghost = bool(motion.get("enable_ghost_numbers"))
+        needs_magnetic = bool(motion.get("enable_magnetic_buttons"))
 
-    if not (needs_ghost or needs_magnetic):
-        return html
+        if needs_ghost or needs_magnetic:
+            style_parts: List[str] = []
+            script_parts: List[str] = []
+            try:
+                if needs_ghost:
+                    from studio_layouts.motion_modules.ghost_numbers import (
+                        render_styles as gn_styles,
+                        render_script as gn_script,
+                    )
+                    style_parts.append(gn_styles())
+                    script_parts.append(gn_script())
+                if needs_magnetic:
+                    from studio_layouts.motion_modules.magnetic_button import (
+                        render_styles as mb_styles,
+                        render_script as mb_script,
+                    )
+                    style_parts.append(mb_styles())
+                    script_parts.append(mb_script())
+            except Exception as e:
+                print(
+                    f"[validator] motion injection failed: {e}",
+                    file=sys.stderr,
+                )
+                style_parts = []
+                script_parts = []
 
-    style_parts: List[str] = []
-    script_parts: List[str] = []
+            if style_parts:
+                injected_style = "\n".join(p for p in style_parts if p)
+                if "</head>" in html:
+                    html = html.replace(
+                        "</head>", f"{injected_style}\n</head>", 1,
+                    )
+                elif "</HEAD>" in html:
+                    html = html.replace(
+                        "</HEAD>", f"{injected_style}\n</HEAD>", 1,
+                    )
 
+            if script_parts:
+                injected_scripts = "\n".join(p for p in script_parts if p)
+                if "</body>" in html:
+                    html = html.replace(
+                        "</body>", f"{injected_scripts}\n</body>", 1,
+                    )
+                elif "</BODY>" in html:
+                    html = html.replace(
+                        "</BODY>", f"{injected_scripts}\n</BODY>", 1,
+                    )
+
+    # ── Pass 3.8e reactivity layer (universal — runs even without scheme) ──
     try:
-        if needs_ghost:
-            from studio_layouts.motion_modules.ghost_numbers import (
-                render_styles as gn_styles, render_script as gn_script,
-            )
-            style_parts.append(gn_styles())
-            script_parts.append(gn_script())
-        if needs_magnetic:
-            from studio_layouts.motion_modules.magnetic_button import (
-                render_styles as mb_styles, render_script as mb_script,
-            )
-            style_parts.append(mb_styles())
-            script_parts.append(mb_script())
+        from studio_reactivity.inject import inject_reactivity
+        html = inject_reactivity(html, brief)
     except Exception as e:
-        print(f"[validator] motion injection failed: {e}", file=sys.stderr)
-        return html
-
-    # Inject styles before </head>. Try lowercase first (most common), then
-    # uppercase as a defensive fallback.
-    if style_parts:
-        injected_style = "\n".join(p for p in style_parts if p)
-        if "</head>" in html:
-            html = html.replace("</head>", f"{injected_style}\n</head>", 1)
-        elif "</HEAD>" in html:
-            html = html.replace("</HEAD>", f"{injected_style}\n</HEAD>", 1)
-
-    # Inject scripts before </body>
-    if script_parts:
-        injected_scripts = "\n".join(p for p in script_parts if p)
-        if "</body>" in html:
-            html = html.replace("</body>", f"{injected_scripts}\n</body>", 1)
-        elif "</BODY>" in html:
-            html = html.replace("</BODY>", f"{injected_scripts}\n</BODY>", 1)
+        print(
+            f"[validator] reactivity injection failed: {e}",
+            file=sys.stderr,
+        )
 
     return html

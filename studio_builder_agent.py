@@ -352,11 +352,12 @@ def build_html(
         print(f"[builder] Validation failed: {errors}", file=sys.stderr)
         return None, "HTML failed validation", errors
 
-    # 5. Inject motion modules (post-validation)
+    # 5. Inject motion modules + reactivity layer (post-validation).
+    # Brief flows through so strand-aware gradients (Pass 3.8e) can render.
     try:
-        html = inject_motion_modules(html, scheme)
+        html = inject_motion_modules(html, scheme, brief)
     except Exception as e:
-        # Non-fatal: if motion injection fails we still ship the validated HTML
-        print(f"[builder] motion inject failed: {e}", file=sys.stderr)
+        # Non-fatal: if injection fails we still ship the validated HTML.
+        print(f"[builder] motion/reactivity inject failed: {e}", file=sys.stderr)
 
     return html, None, []
