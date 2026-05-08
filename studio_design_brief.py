@@ -102,6 +102,12 @@ class DesignBrief(TypedDict, total=False):
     # Validation flags
     _validation_warnings: Optional[list]
 
+    # Pass 3.8f creative anchors (optional — old briefs without these still work)
+    signature_moment: Optional[str]
+    pacing_rhythm: Optional[str]
+    voice_proof_quote: Optional[str]
+    _quality_warnings: Optional[list]
+
 
 # ── Validators ──
 
@@ -212,6 +218,28 @@ def validate_design_brief(brief):
     if brief.get("schemaVersion") not in (None, 1):
         warnings.append("schemaVersion should be 1")
 
+    # Pass 3.8f creative anchors — optional, soft-warn only.
+    if "signature_moment" in brief:
+        sm = brief["signature_moment"]
+        if sm is not None and (not isinstance(sm, str) or len(sm) > 500):
+            warnings.append("signature_moment should be string under 500 chars")
+    if "pacing_rhythm" in brief:
+        pr = brief["pacing_rhythm"]
+        if pr is not None and pr != "":
+            try:
+                from studio_design_primitives import all_pacing_ids
+                valid_pacings = all_pacing_ids()
+            except Exception:
+                valid_pacings = []
+            if valid_pacings and pr not in valid_pacings:
+                warnings.append(
+                    f"pacing_rhythm should be one of: {', '.join(valid_pacings)}"
+                )
+    if "voice_proof_quote" in brief:
+        vq = brief["voice_proof_quote"]
+        if vq is not None and (not isinstance(vq, str) or len(vq) > 400):
+            warnings.append("voice_proof_quote should be string under 400 chars")
+
     is_valid = len(errors) == 0
     return is_valid, errors, warnings
 
@@ -299,4 +327,13 @@ def get_default_brief(recommendation, business_name: str, industry: str):
         "buildNotes": "Deterministic default brief. Generated without LLM expansion.",
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "schemaVersion": 1,
+        # Pass 3.8f — pull creative anchors from recommendation; fall back to
+        # safe defaults so default briefs remain valid even when the
+        # recommendation lacks them (e.g., very-old persisted recommendations).
+        "signature_moment": recommendation.get(
+            "signature_moment",
+            "Eyebrow text in small caps above each section heading",
+        ),
+        "pacing_rhythm": recommendation.get("pacing_rhythm", "essay-arc"),
+        "voice_proof_quote": recommendation.get("voice_proof_quote", ""),
     }

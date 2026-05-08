@@ -1632,6 +1632,8 @@ async def decoration_status_endpoint(business_id: str):
         "html_build_error": site_config.get("html_build_error"),
         "html_validation_errors": site_config.get("html_validation_errors") or [],
         "html_build_failed_at": site_config.get("html_build_failed_at"),
+        # Pass 3.8f — quality validator residual warnings (empty on clean pass)
+        "quality_warnings": site_config.get("quality_warnings") or [],
     }
 
 
@@ -2083,7 +2085,12 @@ def _run_builder_job(business_id: str, site_id: str) -> None:
         except Exception:
             testimonials = []
 
-        html, error, validation_errors = build_html(
+        # Pass 3.8f — third element is now warnings (quality heuristics).
+        # On hard failure html is None and the third element holds the
+        # structural validator's errors. On success-with-warnings the
+        # third element is the quality validator's residual warnings
+        # after one retry; HTML still ships.
+        html, error, warnings = build_html(
             brief, bundle, scheme, products, testimonials,
         )
 
@@ -2101,7 +2108,7 @@ def _run_builder_job(business_id: str, site_id: str) -> None:
                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
             )
             fresh_config["html_build_error"] = error or "Unknown failure"
-            fresh_config["html_validation_errors"] = validation_errors or []
+            fresh_config["html_validation_errors"] = warnings or []
             try:
                 be_patch(
                     f"/business_sites?id=eq.{site_id}",
@@ -2111,7 +2118,7 @@ def _run_builder_job(business_id: str, site_id: str) -> None:
                 logger.warning(f"[builder-job] failure persist failed: {e}")
             logger.warning(
                 f"[builder-job] {business_id} build failed: {error}; "
-                f"validation_errors={validation_errors}"
+                f"errors={warnings}"
             )
             return
 
@@ -2122,15 +2129,29 @@ def _run_builder_job(business_id: str, site_id: str) -> None:
         fresh_config.pop("html_build_failed_at", None)
         fresh_config.pop("html_build_error", None)
         fresh_config.pop("html_validation_errors", None)
+
+        # Pass 3.8f — persist quality warnings (or clear them on a clean
+        # pass) so /decoration-status can surface the diagnostic.
+        if warnings:
+            fresh_config["quality_warnings"] = warnings
+        else:
+            fresh_config.pop("quality_warnings", None)
+
         try:
             be_patch(
                 f"/business_sites?id=eq.{site_id}",
                 {"site_config": fresh_config},
             )
-            logger.info(
-                f"[builder-job] {business_id} build OK; "
-                f"html_length={len(html)}"
-            )
+            if warnings:
+                logger.info(
+                    f"[builder-job] {business_id} build OK with "
+                    f"{len(warnings)} quality warnings; html_length={len(html)}"
+                )
+            else:
+                logger.info(
+                    f"[builder-job] {business_id} build OK; "
+                    f"html_length={len(html)}"
+                )
         except Exception as e:
             logger.warning(f"[builder-job] success persist failed: {e}")
     finally:

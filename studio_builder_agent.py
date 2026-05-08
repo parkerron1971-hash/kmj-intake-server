@@ -78,6 +78,79 @@ def _build_builder_prompt(
     sub_id = brief.get("subStrandId")
     sub_strand = get_substrand(sub_id) if sub_id else None
 
+    # ── Pass 3.8f — strand primitives reference ─────────────────────
+    # Resolve the dominant strand id from blendRatio ("60% Editorial /
+    # 40% Luxury" → "editorial"). Fall back to subStrandId's parent or
+    # to "minimal" so we never crash in primitive lookup.
+    dominant_strand_id = ""
+    blend_ratio = (brief.get("blendRatio") or "").strip()
+    if blend_ratio:
+        import re as _re
+        m = _re.match(r"\s*\d+%\s+([A-Za-z\-]+)", blend_ratio)
+        if m:
+            dominant_strand_id = m.group(1).lower()
+    if not dominant_strand_id and sub_strand:
+        dominant_strand_id = (sub_strand.get("parentStrandId") or "").lower()
+    if not dominant_strand_id:
+        dominant_strand_id = "minimal"
+
+    primitives_block = ""
+    try:
+        from studio_design_primitives import get_primitives_for_strand
+        primitives = get_primitives_for_strand(dominant_strand_id)
+    except Exception:
+        primitives = []
+    if primitives:
+        lines = [
+            "═══════════════════════════════════════",
+            f"PRIMITIVE PATTERNS FOR {dominant_strand_id.upper()}",
+            "═══════════════════════════════════════",
+            "",
+            "These are reference patterns that fit this strand. Pick one or synthesize across them. They are inspiration, not templates.",
+        ]
+        for i, p in enumerate(primitives, 1):
+            lines.append(f"\n{i}. {p.get('name', '')}")
+            lines.append(f"   What it is: {p.get('description', '')}")
+            lines.append(f"   Spatial logic: {p.get('spatial_logic', '')}")
+            lines.append(f"   When to use: {p.get('when_to_use', '')}")
+        primitives_block = "\n".join(lines)
+
+    # ── Pass 3.8f — creative anchors block ──────────────────────────
+    signature_moment = (brief.get("signature_moment") or "").strip()
+    pacing_rhythm = (brief.get("pacing_rhythm") or "").strip()
+    voice_proof_quote = (brief.get("voice_proof_quote") or "").strip()
+    pacing_description = ""
+    if pacing_rhythm:
+        try:
+            from studio_design_primitives import get_pacing_description
+            pacing_description = get_pacing_description(pacing_rhythm)
+        except Exception:
+            pacing_description = ""
+
+    anchors_block = ""
+    if signature_moment or pacing_rhythm or voice_proof_quote:
+        anchor_lines = [
+            "═══════════════════════════════════════",
+            "CREATIVE ANCHORS — NON-NEGOTIABLE",
+            "═══════════════════════════════════════",
+        ]
+        if signature_moment:
+            anchor_lines.append(f"\nSIGNATURE MOMENT: {signature_moment}")
+            anchor_lines.append(
+                "This specific detail MUST be visible in the rendered HTML. Not approximated. Present."
+            )
+        if pacing_rhythm:
+            anchor_lines.append(f"\nPACING RHYTHM: {pacing_rhythm}")
+            if pacing_description:
+                anchor_lines.append(f"  {pacing_description}")
+            anchor_lines.append("Order the sections to express this rhythm.")
+        if voice_proof_quote:
+            anchor_lines.append(f'\nVOICE PROOF QUOTE: "{voice_proof_quote}"')
+            anchor_lines.append(
+                "This exact sentence (or very close paraphrase preserving voice) MUST appear in the rendered site. Decide where it lives — likely a pull-quote, statement bar, or sub-headline."
+            )
+        anchors_block = "\n".join(anchor_lines)
+
     # ── Practitioner / business context ─────────────────────────────
     practitioner_block = ""
     if intel.get("about_me"):
@@ -205,6 +278,44 @@ def _build_builder_prompt(
 Output ONLY raw HTML starting with <!DOCTYPE html>. Nothing before. Nothing after. No markdown fences. No explanation. No commentary.
 
 ═══════════════════════════════════════
+WHAT GREAT LOOKS LIKE vs WHAT MEDIOCRE LOOKS LIKE
+═══════════════════════════════════════
+
+GREAT (Power-In-Restraint barbershop site, real reference):
+- Hero is a single line of display serif at lower-third of viewport
+- Beneath: a quote in italic from the founder, attributed
+- Right column holds a thin gold rule and a single client testimonial in 14px serif
+- No image of a chair. No tagline like "premium grooming."
+- Section break is a single horizontal rule — gold, 1px, 60% width, centered
+- Service section is a numbered list (I, II, III) — not cards. Each service has a price right-aligned and a single sentence of description
+- About section: practitioner's words about the work, not bio. Photo is small, monochrome, far right
+- Closing CTA is a single line: "Schedule a chair, by appointment."
+
+MEDIOCRE (what to avoid):
+- Hero with centered "Welcome to [Business Name]" + generic value prop + "Get Started" button
+- Three-card services grid with stock icons (clock, checkmark, gear)
+- Testimonial section with three quote bubbles laid out in a row
+- About section with practitioner photo as circular avatar + "I help businesses..." copy
+- Generic gradient background that could belong to any SaaS
+- "What clients say" / "Why choose us" / "Our process" — generic section labels
+
+The difference is specificity. Great design encodes THIS practice's actual character. Mediocre design fills a template with this practice's data.
+
+═══════════════════════════════════════
+ANTI-PATTERNS — DO NOT DO THESE
+═══════════════════════════════════════
+
+- DO NOT center every headline. Decide where it sits.
+- DO NOT use generic icons (checkmarks, clocks, gears) as section decoration.
+- DO NOT label sections "What Clients Say", "Our Process", "Why Choose Us", "Trusted By", "Get Started Today". Name them after THIS practice's actual rhythm.
+- DO NOT default to a 3-column card grid for services. Decide if they're a numbered list, a vertical sequence, an editorial spread.
+- DO NOT use stock photography references. If no real photo exists, use typographic dignity instead.
+- DO NOT add filler sections (FAQ, Stats with random numbers, "Trusted by") to fill space.
+- DO NOT use "Get Started", "Learn More", "Click Here", "Find Out More" as CTA copy. Write the actual invitation.
+- DO NOT forget the SIGNATURE MOMENT. If the brief specifies one, it MUST be visible.
+- DO NOT drop the VOICE PROOF QUOTE. If the brief specifies one, it MUST appear somewhere on the page.
+
+═══════════════════════════════════════
 BUILD A HOME PAGE FOR {business_name.upper()}
 ═══════════════════════════════════════
 
@@ -232,6 +343,10 @@ This tension IS the brand signature. Every layout decision expresses it. The pag
 
 This is how space MOVES through the page. Rhythm. Compression. Release. Where headlines sit. How sections relate.
 {sub_block}
+{primitives_block}
+
+{anchors_block}
+
 # COPY VOICE
 
 {brief.get('copyVoice', '')}
@@ -292,15 +407,25 @@ These are guidance, not script. The order, treatment, and layout of each section
 - The tension statement should be visible in the design, not just the copy.
 - Every section earns its place. Empty space is design — but voids are bugs.
 
+# RULES (Pass 3.8f additions)
+
+- The SIGNATURE MOMENT from CREATIVE ANCHORS must be visible in the output. If the brief specifies a gold rule above section headings, render that rule. If it specifies roman-numeral section numbers, render them.
+- The VOICE PROOF QUOTE (if specified, non-empty) must appear in the page — verbatim, or as a very close paraphrase that preserves voice. Place it where it belongs (pull-quote, statement bar, sub-headline) — that's your creative call.
+- Section ordering must reflect the PACING RHYTHM. compression-release alternates dense/quiet; cathedral grand-quiet-grand; essay-arc setup→tension→development→resolution; etc.
+- Section labels are SPECIFIC to this practice. Avoid: "What Clients Say", "Our Process", "Why Choose Us", "Trusted By", "Get Started Today". CTAs are SPECIFIC: never "Get Started" / "Learn More" / "Click Here".
+
 # DESIGN APPROACH
 
+0. Read the CREATIVE ANCHORS first. Internalize the signature moment, the pacing rhythm, the voice proof quote. These are non-negotiable. The rest of your design decisions flow around honoring them.
 1. Read the tension statement again. Internalize it.
-2. Decide the hero treatment. Where does the headline sit? What flanks it? Does it have a pull-quote? A manifesto? An asymmetric grid? The hero is the strongest expression of the tension.
-3. Map the section rhythm. Compression and release. Loud and quiet. The brief gives you sections; you decide how they pace.
-4. Make typographic decisions that express the strand. Luxury sets headlines in the lower third. Editorial uses asymmetric grids. Brutalist uses raw borders. Don't default to centered everything.
-5. Use color with restraint. Accent appears once per section unless the brief explicitly allows more.
-6. Write real copy that sounds like the practitioner. Not "We help businesses grow." Specific, voiced, honest.
-7. Build it.
+2. Look at the PRIMITIVE PATTERNS for this strand. Pick one or synthesize across them — they're inspiration, not templates. Reject any that fight the signature moment.
+3. Decide the hero treatment. Where does the headline sit? What flanks it? Does it have a pull-quote? A manifesto? An asymmetric grid? The hero is the strongest expression of the tension.
+4. Map the section rhythm to the pacing_rhythm. Compression and release. Loud and quiet. The brief gives you sections; you decide how they pace.
+5. Make typographic decisions that express the strand. Luxury sets headlines in the lower third. Editorial uses asymmetric grids. Brutalist uses raw borders. Don't default to centered everything.
+6. Use color with restraint. Accent appears once per section unless the brief explicitly allows more.
+7. Write real copy that sounds like the practitioner. Not "We help businesses grow." Specific, voiced, honest.
+8. Place the voice_proof_quote (if any) somewhere visible. Render the signature moment. Verify before finishing.
+9. Build it.
 
 Now generate the complete production HTML for {business_name}. Begin with <!DOCTYPE html>."""
 
@@ -314,50 +439,113 @@ def build_html(
     products: list,
     testimonials: list,
 ) -> Tuple[Optional[str], Optional[str], List[str]]:
-    """Run the Builder Agent.
+    """Run the Builder Agent with quality validation and one auto-retry.
 
-    Returns (html, error_message, validation_errors).
-    On any failure html is None and error_message describes the cause.
-    Validation errors (if any) are returned for diagnostics on the failure
-    path; on success the list is empty.
+    Returns (html, error_message, warnings).
+    Three outcome shapes:
+      • (html, None, [])           — clean success, no warnings
+      • (html, None, warnings)     — success but quality heuristics found
+                                     issues; html still ships
+      • (None, error_message, errs)— hard failure; errs is the structural
+                                     validator's error list when applicable
+
+    Up to 2 attempts. The retry, when triggered by quality failure on the
+    first attempt, appends corrective guidance to the prompt before the
+    second LLM call. Hard failures (Claude error, extraction error, HTML
+    structural validation) do NOT retry — those are not quality issues.
     """
-    # 1. Construct prompt
-    try:
-        prompt = _build_builder_prompt(
-            brief or {}, bundle or {}, scheme, products or [], testimonials or [],
+    from studio_quality_validator import validate_quality
+
+    quality_warnings_first_pass: List[str] = []
+
+    for attempt in range(2):
+        # 1. Construct prompt (with retry guidance on attempt #2)
+        try:
+            prompt = _build_builder_prompt(
+                brief or {}, bundle or {}, scheme,
+                products or [], testimonials or [],
+            )
+        except Exception as e:
+            return (
+                None,
+                f"Prompt construction failed: {type(e).__name__}: {e}",
+                [],
+            )
+
+        if attempt == 1 and quality_warnings_first_pass:
+            corrective = (
+                "\n\n# RETRY GUIDANCE\n\n"
+                "Your previous attempt had these quality issues:\n"
+                + "\n".join(f"- {w}" for w in quality_warnings_first_pass)
+                + "\n\nFix all of these in this attempt. The signature moment "
+                "and voice proof quote especially must be visibly present."
+            )
+            prompt = prompt + corrective
+
+        # 2. Call Claude
+        try:
+            raw = _call_claude(prompt, max_tokens=24000, timeout=300.0)
+        except Exception as e:
+            print(
+                f"[builder] Claude call failed (attempt {attempt+1}): {e}",
+                file=sys.stderr,
+            )
+            return (
+                None,
+                f"Claude call failed: {type(e).__name__}: {e}",
+                [],
+            )
+
+        # 3. Extract
+        html = extract_html_from_response(raw or "")
+        if not html:
+            print(
+                f"[builder] HTML extraction failed (attempt {attempt+1})",
+                file=sys.stderr,
+            )
+            return None, "Could not extract HTML from response", []
+
+        # 4. Structural validation
+        is_valid_html, html_errors = validate_html(html)
+        if not is_valid_html:
+            print(
+                f"[builder] HTML validation failed (attempt {attempt+1}): "
+                f"{html_errors}",
+                file=sys.stderr,
+            )
+            return None, "HTML failed validation", html_errors
+
+        # 5. Quality validation
+        quality_ok, quality_warnings = validate_quality(html, brief or {})
+        if quality_ok:
+            try:
+                html = inject_motion_modules(html, scheme, brief)
+            except Exception as e:
+                print(
+                    f"[builder] motion/reactivity inject failed: {e}",
+                    file=sys.stderr,
+                )
+            return html, None, []
+
+        # Quality fail
+        print(
+            f"[builder] Quality validation failed (attempt {attempt+1}): "
+            f"{quality_warnings}",
+            file=sys.stderr,
         )
-    except Exception as e:
-        return None, f"Prompt construction failed: {type(e).__name__}: {e}", []
+        if attempt == 0:
+            quality_warnings_first_pass = quality_warnings
+            continue
 
-    # 2. Call Claude — Builder is heavy. A complete bespoke HTML page with
-    # inline CSS, custom hero treatments and section blocks routinely
-    # exceeds 12 k output tokens; we observed the first run truncate at
-    # 12 k mid-document, so the ceiling is lifted to 24 k. The HTTP timeout
-    # is bumped accordingly (Opus generates ~150 tokens/sec).
-    try:
-        raw = _call_claude(prompt, max_tokens=24000, timeout=300.0)
-    except Exception as e:
-        print(f"[builder] Claude call failed: {e}", file=sys.stderr)
-        return None, f"Claude call failed: {type(e).__name__}: {e}", []
+        # Second attempt also failed — ship anyway with warnings persisted.
+        try:
+            html = inject_motion_modules(html, scheme, brief)
+        except Exception as e:
+            print(
+                f"[builder] motion/reactivity inject failed: {e}",
+                file=sys.stderr,
+            )
+        return html, None, quality_warnings
 
-    # 3. Extract HTML from the raw response
-    html = extract_html_from_response(raw or "")
-    if not html:
-        print("[builder] Could not extract HTML from response", file=sys.stderr)
-        return None, "Could not extract HTML from response", []
-
-    # 4. Validate
-    is_valid, errors = validate_html(html)
-    if not is_valid:
-        print(f"[builder] Validation failed: {errors}", file=sys.stderr)
-        return None, "HTML failed validation", errors
-
-    # 5. Inject motion modules + reactivity layer (post-validation).
-    # Brief flows through so strand-aware gradients (Pass 3.8e) can render.
-    try:
-        html = inject_motion_modules(html, scheme, brief)
-    except Exception as e:
-        # Non-fatal: if injection fails we still ship the validated HTML.
-        print(f"[builder] motion/reactivity inject failed: {e}", file=sys.stderr)
-
-    return html, None, []
+    # Defensive — the for-loop always returns. Reaching here is a logic bug.
+    return None, "Builder retry loop fell through unexpectedly", []
