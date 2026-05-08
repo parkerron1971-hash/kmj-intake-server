@@ -1238,6 +1238,29 @@ def render_smart_site_page(business_id: str, page_type: str, **opts: Any) -> str
     return _render_page(business_id, page_type, site_config, opts)
 
 
+def render_full_site_html(business_id: str) -> str:
+    """Pass 3.8f.2 — render the home page through the full fallback chain.
+
+    Thin alias so /sites/{id}/preview and the live URL renderer call the
+    same code path. Same fallback chain: Builder → archetype → Studio →
+    legacy. Loads its own products from the DB so the 3.8c archetype path
+    has data to render.
+    """
+    try:
+        products = _sb_get(
+            f"/products?business_id=eq.{business_id}"
+            f"&status=eq.active&display_on_website=eq.true&select=*&limit=20"
+        ) or []
+        if not products:
+            products = _sb_get(
+                f"/products?business_id=eq.{business_id}"
+                f"&status=eq.active&select=*&limit=20"
+            ) or []
+    except Exception:
+        products = []
+    return render_smart_site_page(business_id, "home", products=products)
+
+
 def render_smart_site_preview(business_id: str, draft_config: Dict[str, Any]) -> str:
     """Render Smart Sites home from a DRAFT config (no persistence).
     Used by MySite.tsx live preview iframe.
