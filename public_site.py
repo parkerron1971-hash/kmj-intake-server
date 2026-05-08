@@ -1613,6 +1613,23 @@ async def decoration_status_endpoint(business_id: str):
     # Pass 3.8d — surface Builder Agent state alongside scheme + brief.
     generated_html = site_config.get("generated_html")
 
+    # Pass 3.8f.2 — surface the full design_recommendation object so the
+    # MySite Design DNA panel can show the current strand pair, archetype,
+    # signature_moment, alternatives, etc. without a second roundtrip.
+    recommendation = site_config.get("design_recommendation")
+
+    # Pass 3.8f.2 — signal_count + threshold so the panel can display
+    # "{n}/9 voice signals" without re-deriving the truthy count.
+    signal_count = sum(1 for v in (voice_signals or {}).values() if v)
+    threshold = 2
+
+    # Pass 3.8f.2 — also surface the design-rec cooldown alongside the
+    # decoration cooldown. The MySite "Regenerate Design" button drives
+    # /generate-design-recommendation, so its cooldown is what gates the
+    # button. Old `can_generate` / `cooldown_remaining_seconds` fields
+    # remain (decoration cooldown) for backward compatibility.
+    can_regen_rec, rec_cooldown_remaining = _check_design_rec_cooldown(business_id)
+
     return {
         "ok": True,
         "has_scheme": bool(scheme),
@@ -1634,7 +1651,63 @@ async def decoration_status_endpoint(business_id: str):
         "html_build_failed_at": site_config.get("html_build_failed_at"),
         # Pass 3.8f — quality validator residual warnings (empty on clean pass)
         "quality_warnings": site_config.get("quality_warnings") or [],
+        # Pass 3.8f.2 — full recommendation + signal counts for MySite panel
+        "has_recommendation": bool(recommendation),
+        "recommendation": recommendation,
+        "signal_count": signal_count,
+        "threshold": threshold,
+        "can_regenerate_recommendation": can_regen_rec,
+        "recommendation_cooldown_remaining_seconds": rec_cooldown_remaining,
     }
+
+
+# ─── Pass 3.8f.2: MySite preview endpoint ─────────────────────────────
+#
+# Serves the home page through the same fallback chain the live URL uses
+# (Builder HTML → archetype → Studio → legacy), so the MySite preview
+# iframe stays in sync with the public site after every regeneration.
+# Cache-busted via no-store headers; the React iframe also passes a
+# ?v={timestamp} query string so the browser cannot serve a stale copy.
+
+@router.get("/sites/{business_id}/preview")
+async def preview_site_endpoint(business_id: str, v: Optional[int] = None):
+    """Render the full site through the fallback chain.
+
+    Same output as the live URL would serve. Accessible by business_id so
+    the MySite editor doesn't need to know the slug. The optional `v`
+    query parameter is the iframe cache-bust token; ignored server-side
+    but used by the browser/CDN cache key.
+    """
+    try:
+        from brand_engine import _sb_get as be_get
+    except Exception as e:
+        logger.warning(f"[preview] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    biz_rows = be_get(f"/businesses?id=eq.{business_id}&select=id&limit=1") or []
+    if not biz_rows:
+        raise HTTPException(404, "Business not found")
+
+    try:
+        from smart_sites import render_full_site_html
+        html = render_full_site_html(business_id)
+    except Exception as e:
+        logger.warning(f"[preview] render failed for {business_id}: {e}")
+        raise HTTPException(500, "Render failed")
+
+    return HTMLResponse(
+        content=html,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Solutionist-Source": "preview",
+            # Allow iframing from the Tauri / MySite shell. We deliberately
+            # do NOT set X-Frame-Options at all so any origin can embed the
+            # preview — this endpoint serves only Builder/archetype-derived
+            # HTML the practitioner already controls.
+        },
+    )
 
 
 # ─── Pass 3.8a: Designer Agent — strand pair recommendation ───────────
@@ -1849,6 +1922,192 @@ async def generate_design_rec_endpoint(business_id: str):
     if auto_brief:
         response["brief"] = auto_brief
     return response
+
+
+# ─── Pass 3.8f.2: promote alternative recommendation ──────────────────
+#
+# The Designer Agent returns a primary recommendation plus 2 alternatives
+# representing genuinely different creative positions. Promote-alternative
+# swaps an alternative into primary, then re-fires the Brief Expander +
+# Builder Agent so the live URL + preview pick up the new direction.
+
+@router.post("/sites/{business_id}/promote-alternative")
+async def promote_alternative_endpoint(business_id: str, alternative_index: int):
+    """Promote one of the Designer Agent's alternatives to primary.
+
+    Reuses the design-rec cooldown (60s window) so the user can't thrash
+    LLM calls. Re-fires Brief Expander + Builder in a background thread
+    using the same _run_builder_job helper as /generate-design-recommendation.
+    Returns immediately; client polls /decoration-status to see when
+    html_generated_at advances past the call timestamp.
+    """
+    if alternative_index not in (0, 1):
+        raise HTTPException(
+            status_code=400, detail="alternative_index must be 0 or 1",
+        )
+
+    try:
+        from brand_engine import (
+            _sb_get as be_get, _sb_patch as be_patch, get_bundle,
+        )
+    except Exception as e:
+        logger.warning(f"[promote-alt] brand_engine import failed: {e}")
+        raise HTTPException(500, "Server misconfigured")
+
+    site_rows = be_get(
+        f"/business_sites?business_id=eq.{business_id}&select=id,site_config&limit=1"
+    ) or []
+    if not site_rows:
+        raise HTTPException(404, "business_sites missing")
+    site_id = site_rows[0]["id"]
+    site_config = site_rows[0].get("site_config") or {}
+
+    current_rec = site_config.get("design_recommendation")
+    if not current_rec:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No current recommendation. "
+                "Run /generate-design-recommendation first."
+            ),
+        )
+
+    alternatives = current_rec.get("alternatives") or []
+    if alternative_index >= len(alternatives):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only {len(alternatives)} alternatives available",
+        )
+
+    alt = alternatives[alternative_index]
+
+    # Reuse the design-rec cooldown — promotion costs an LLM call (the
+    # Brief Expander) plus an Opus call (the Builder), so the same 60s
+    # gate that governs /generate-design-recommendation applies here.
+    can_generate, seconds_remaining = _check_design_rec_cooldown(business_id)
+    if not can_generate:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Cooldown active. Try again in {seconds_remaining} seconds.",
+        )
+
+    new_rec: Dict[str, Any] = {
+        "strand_a_id": alt["strand_a_id"],
+        "strand_a_name": alt.get("strand_a_name"),
+        "ratio_a": alt["ratio_a"],
+        "strand_b_id": alt["strand_b_id"],
+        "strand_b_name": alt.get("strand_b_name"),
+        "ratio_b": alt["ratio_b"],
+        # Keep the rest of the current direction so we don't lose
+        # signature_moment / pacing_rhythm / voice_proof_quote when
+        # promoting. These were tuned against the practitioner; the
+        # alternative is a strand-pair swap, not a full re-tuning.
+        "sub_strand_id": current_rec.get("sub_strand_id"),
+        "layout_archetype": current_rec.get("layout_archetype"),
+        "accent_style": current_rec.get("accent_style"),
+        "site_type": current_rec.get("site_type", "full-site"),
+        "signature_moment": current_rec.get("signature_moment"),
+        "pacing_rhythm": current_rec.get("pacing_rhythm"),
+        "voice_proof_quote": current_rec.get("voice_proof_quote"),
+        "rationale": (
+            f"Promoted from alternative: {alt.get('rationale', '')}"
+            + (f". Tradeoff: {alt['tradeoff']}" if alt.get('tradeoff') else "")
+        ),
+        "alternatives": [],  # alternatives reset on promotion
+        "cold_start": False,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "promoted_from_alternative": alternative_index,
+    }
+
+    # Stamp cooldown BEFORE the Brief Expander call so concurrent clicks
+    # don't double-fire while we're computing.
+    _design_rec_cooldown[business_id] = time.time()
+
+    # Persist new recommendation immediately so /decoration-status reflects
+    # the promotion even before the brief and HTML rebuild.
+    site_config["design_recommendation"] = new_rec
+    try:
+        be_patch(
+            f"/business_sites?id=eq.{site_id}",
+            {"site_config": site_config},
+        )
+    except Exception as e:
+        logger.warning(f"[promote-alt] persist new_rec failed: {e}")
+
+    # Fetch deps for Brief Expander
+    try:
+        bundle = get_bundle(business_id) or {}
+    except Exception as e:
+        logger.warning(f"[promote-alt] get_bundle failed: {e}")
+        bundle = {}
+
+    try:
+        product_rows = be_get(
+            f"/products?business_id=eq.{business_id}&is_active=eq.true&select=*&limit=20"
+        ) or []
+    except Exception:
+        product_rows = []
+
+    # Re-fire Brief Expander (synchronous — fast)
+    auto_brief = None
+    try:
+        from studio_brief_expander import expand_design_brief
+        auto_brief, brief_err = expand_design_brief(bundle, new_rec, product_rows)
+        if auto_brief:
+            fresh_rows = be_get(
+                f"/business_sites?id=eq.{site_id}&select=site_config&limit=1"
+            ) or []
+            fresh_config = (
+                fresh_rows[0].get("site_config") if fresh_rows else {}
+            ) or {}
+            fresh_config["design_brief"] = auto_brief
+            try:
+                be_patch(
+                    f"/business_sites?id=eq.{site_id}",
+                    {"site_config": fresh_config},
+                )
+                _brief_expand_cooldown[business_id] = time.time()
+            except Exception as e:
+                logger.warning(f"[promote-alt] brief persist failed: {e}")
+        elif brief_err:
+            logger.warning(f"[promote-alt] brief expansion failed: {brief_err}")
+    except Exception as e:
+        logger.warning(f"[promote-alt] brief expansion exception: {e}")
+
+    # Kick Builder in background — same pattern as /generate-design-recommendation
+    builder_kicked = False
+    if auto_brief:
+        try:
+            from studio_builder_agent import build_html  # noqa: F401
+            can_build, _ = _check_html_build_cooldown(business_id)
+            if can_build and business_id not in _html_build_in_flight:
+                _html_build_cooldown[business_id] = time.time()
+                import threading
+                threading.Thread(
+                    target=_run_builder_job,
+                    args=(business_id, site_id),
+                    name=f"builder-promote-{business_id[:8]}",
+                    daemon=True,
+                ).start()
+                builder_kicked = True
+            else:
+                logger.info(
+                    f"[promote-alt] Builder auto-fire skipped — "
+                    f"cooldown_active={not can_build}, "
+                    f"in_flight={business_id in _html_build_in_flight}"
+                )
+        except Exception as e:
+            logger.warning(f"[promote-alt] Builder auto-fire setup failed: {e}")
+
+    return {
+        "ok": True,
+        "promoted": alt,
+        "promoted_index": alternative_index,
+        "recommendation": new_rec,
+        "brief_ready": auto_brief is not None,
+        "builder_kicked_off": builder_kicked,
+        "html_status": "building" if builder_kicked else "idle",
+    }
 
 
 @router.get("/sites/{business_id}/design-signals")
