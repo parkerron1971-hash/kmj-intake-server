@@ -9,7 +9,12 @@ from __future__ import annotations
 # Multi-page architecture (Home / About / Services / Contact). Set False
 # to fall back to single-page Builder for every site, regardless of the
 # site_type stored on a business_sites row.
-MULTI_PAGE_ENABLED: bool = True
+#
+# Pass 3.8g hotfix — kept FALSE until the multi-page path is re-validated
+# end-to-end. Single-page Builder + Solutionist Quality + cost cap are
+# all still active; only the multi-page render Layer 0 + the
+# /generate-multi-page endpoint go through this flag.
+MULTI_PAGE_ENABLED: bool = False
 
 # Hard daily Builder cap. Disabling this means Builder runs are unmetered;
 # only useful for local dev or after a verified cost-control change.
