@@ -18,6 +18,19 @@ from studio_design_brief import get_default_brief, validate_design_brief
 from studio_designer_agent import _call_claude, _extract_json
 
 
+def _pacing_description(pacing_id: Optional[str]) -> str:
+    """Return the pacing-rhythm description from the primitives module.
+    Returns empty string if the id is unknown or import fails.
+    """
+    if not pacing_id:
+        return ""
+    try:
+        from studio_design_primitives import get_pacing_description
+        return get_pacing_description(pacing_id) or ""
+    except Exception:
+        return ""
+
+
 def _build_expander_prompt(bundle, recommendation, products) -> str:
     """Compose the Brief Expander LLM prompt. Pure function — no IO."""
     bundle = bundle or {}
@@ -74,6 +87,16 @@ Reference brands: {sub_strand.get('exampleBrands', '')}
     voice_donts = voice.get("voice_donts") or []
     voice_dos_str = ", ".join(str(d) for d in voice_dos) or "(none)"
     voice_donts_str = ", ".join(str(d) for d in voice_donts) or "(none)"
+
+    # Pass 3.8f — creative anchors threaded from the Designer recommendation
+    # into the Brief Expander prompt. The expander's job is to thread these
+    # into the brief (sections[].designNote, buildNotes) so the Builder
+    # sees them. Post-process backfill ensures they survive even when the
+    # LLM elides them.
+    sig_moment = recommendation.get("signature_moment") or "Eyebrow text in small caps above each section heading"
+    pacing_id = recommendation.get("pacing_rhythm") or "essay-arc"
+    voice_quote = recommendation.get("voice_proof_quote") or ""
+    pacing_desc = _pacing_description(pacing_id)
 
     return f"""You are a senior creative director at KMJ Creative Solutions. Respond ONLY with a raw JSON object matching the DesignBrief shape. No markdown. No explanation.
 
@@ -141,6 +164,20 @@ Voice donts: {voice_donts_str}
 PRODUCTS / OFFERINGS:
 {products_block or '(none)'}
 
+# CREATIVE ANCHORS (NON-NEGOTIABLE — must be reflected in the brief)
+
+SIGNATURE MOMENT: {sig_moment}
+This is the ONE specific design detail that must be present in the rendered site. Reflect it in the brief's buildNotes AND, where it applies, reference it in the relevant sections[] entries' designNote.
+
+PACING RHYTHM: {pacing_id}
+{pacing_desc}
+Order and shape the sections[] array to express this rhythm.
+
+VOICE PROOF QUOTE: {voice_quote or '(none provided)'}
+{('This sentence MUST appear in the rendered site. Decide which section it lives in and add a designNote to that section saying "Includes voice proof quote: [quote]".' if voice_quote else 'No proof quote provided — Builder will work without one.')}
+
+Pass through these three fields verbatim into the brief at the top level: signature_moment, pacing_rhythm, voice_proof_quote. They become anchors the Builder reads.
+
 # DELIVERABLE — DesignBrief shape
 
 {{
@@ -188,7 +225,10 @@ PRODUCTS / OFFERINGS:
     "fullyGenerated": true,
     "summary": "one sentence — what colors came from the client and what was designed"
   }},
-  "buildNotes": "string — technical notes for the builder: spacing rules, animation notes, special considerations specific to this brief"
+  "buildNotes": "string — technical notes for the builder: spacing rules, animation notes, special considerations specific to this brief",
+  "signature_moment": "string — pass through verbatim from CREATIVE ANCHORS above (the SIGNATURE MOMENT line)",
+  "pacing_rhythm": "string — pass through verbatim from CREATIVE ANCHORS above (the PACING RHYTHM id)",
+  "voice_proof_quote": "string — pass through verbatim from CREATIVE ANCHORS above; empty string if none was provided"
 }}
 
 # RULES
@@ -237,6 +277,17 @@ def _post_process_brief(brief, recommendation, selected_tagline=None):
     brief.setdefault("layoutArchetype", recommendation["layout_archetype"])
     brief.setdefault("siteType", recommendation["site_type"])
     brief.setdefault("subStrandId", recommendation.get("sub_strand_id"))
+
+    # Pass 3.8f — backfill creative anchors from the recommendation if the
+    # LLM elided them. The Builder reads these directly, so they must
+    # survive any expansion path. setdefault preserves any value the LLM
+    # actually wrote, including a deliberately-empty voice_proof_quote.
+    if recommendation.get("signature_moment"):
+        brief.setdefault("signature_moment", recommendation["signature_moment"])
+    if recommendation.get("pacing_rhythm"):
+        brief.setdefault("pacing_rhythm", recommendation["pacing_rhythm"])
+    if "voice_proof_quote" in recommendation:
+        brief.setdefault("voice_proof_quote", recommendation.get("voice_proof_quote") or "")
 
     brief["generatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     brief["schemaVersion"] = 1

@@ -202,6 +202,13 @@ Signal words: {", ".join(vocab.get("signal_words") or [])}
 - Pick a sub-strand that refines the dominant strand's flavor — its id MUST belong to strand_a_id's parent group.
 - Provide 2 alternatives that are genuinely different creative positions, not ratio variations of the same pair.
 
+# DECISION RULES — CREATIVE ANCHORS (Pass 3.8f additions)
+
+- signature_moment must be SPECIFIC, not vague. NOT "gold accents" — DO say "gold rule above each section heading". NOT "serif typography" — DO say "drop cap on first paragraph of every section". One concrete detail that, if missing, makes the design feel generic.
+- pacing_rhythm must match the brand's rhetorical structure: coaching practices typically use essay-arc; premium services use cathedral; editorial brands use list-form or essay-arc; manifesto brands use two-act.
+- voice_proof_quote MUST come from the practitioner's actual content (About Me / About My Business / Strategy Track / brand_voice). NEVER invent something the practitioner wouldn't say. Trim to one sentence the practitioner would say in conversation. NOT a tagline.
+- These three fields are creative anchors — they constrain the Builder enough to produce non-conventional output without rigidly templating it.
+
 # DELIVERABLE
 
 Output JSON exactly matching this shape:
@@ -216,6 +223,9 @@ Output JSON exactly matching this shape:
   "accent_style": "one of: {', '.join(ACCENT_STYLE_IDS)}",
   "site_type": "one of: {', '.join(SITE_TYPE_IDS)}",
   "rationale": "2-3 sentences explaining the creative logic of this pick for THIS practitioner specifically. Reference what you saw in their About Me / About My Business / Strategy Track that drove the choice.",
+  "signature_moment": "ONE specific design detail that MUST be present in the rendered site. A non-negotiable creative anchor. Examples: 'Gold rule diamond above each section heading', 'First letter of every section is a drop cap in display serif', 'Pull-quote in italic on the right side of hero', 'Section numbers in roman numerals'. Pick ONE thing that makes this specific brand visually unmistakable. <= 500 chars.",
+  "pacing_rhythm": "one of: compression-release, building-momentum, circular, essay-arc, cathedral, list-form, two-act",
+  "voice_proof_quote": "A specific sentence in the practitioner's actual voice (drawn from About Me / About My Business / Strategy / brand_voice) that the Builder MUST place somewhere visible. Empty string ('') is acceptable when the practitioner has no captured voice yet. <= 400 chars.",
   "alternatives": [
     {{
       "strand_a_id": "...",
@@ -304,6 +314,12 @@ def cold_start_recommendation(vocab_id: str) -> DesignRecommendation:
             f"{vocab_id} vocabulary affinity. Practitioner intelligence was insufficient "
             f"to drive a unique creative call; this is the safe default for the {section} section."
         ),
+        # Pass 3.8f creative anchors — deterministic safe defaults for
+        # cold-start. voice_proof_quote stays empty since cold-start is
+        # triggered precisely when we have no voice signal to draw from.
+        "signature_moment": "Eyebrow with practice category in small caps above each section heading",
+        "pacing_rhythm": "essay-arc",
+        "voice_proof_quote": "",
         "alternatives": [],
         "cold_start": True,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -406,6 +422,26 @@ def _validate_recommendation(rec) -> tuple:
         return False, f"Invalid accent_style: {rec.get('accent_style')}"
     if rec.get("site_type") not in SITE_TYPE_IDS:
         return False, f"Invalid site_type: {rec.get('site_type')}"
+
+    # Pass 3.8f creative anchors — optional, but type-checked when present.
+    sig = rec.get("signature_moment")
+    if sig is not None and sig != "":
+        if not isinstance(sig, str) or len(sig) > 500:
+            return False, "signature_moment must be string under 500 chars"
+    pacing = rec.get("pacing_rhythm")
+    if pacing is not None and pacing != "":
+        try:
+            from studio_design_primitives import all_pacing_ids
+            valid_pacings = all_pacing_ids()
+        except Exception:
+            valid_pacings = []
+        if valid_pacings and pacing not in valid_pacings:
+            return False, f"pacing_rhythm must be one of: {', '.join(valid_pacings)}"
+    quote = rec.get("voice_proof_quote")
+    if quote is not None and quote != "":
+        if not isinstance(quote, str) or len(quote) > 400:
+            return False, "voice_proof_quote must be string under 400 chars"
+
     return True, ""
 
 
