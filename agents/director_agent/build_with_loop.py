@@ -221,6 +221,7 @@ def run_build_loop(
     vocab_id: str = "sovereign-authority",
     max_attempts: int = 2,
     include_html: bool = True,
+    business_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run the full Director build-with-loop pipeline.
 
@@ -232,12 +233,22 @@ def run_build_loop(
         "regenerated": bool,
         "final_html": str | None,   # only when include_html=True
         "html_length": int,
+        "persistence": dict | None,  # {site_id, preview_url} on persist
       }
 
     `status` reflects the final critique verdict — "success" when the
     last critique returns verdict=pass, "fail" when it still reports
     HIGH violations after the regenerate cap, "error" only when a step
     raised an unrecoverable exception that prevented a final HTML.
+
+    `business_id` (Pass 4.0b.4): when supplied AND final_html is
+    non-empty, the orchestrator writes the HTML to the matching
+    business_sites row's site_config.generated_html, mirroring the
+    persistence pattern at public_site.py:2710. This surfaces the
+    build at /sites/{business_id}/preview without any frontend work.
+    Persists regardless of pass/fail verdict (a failing build is still
+    useful to inspect). Soft-fails: a persist exception is captured
+    in the response payload, never raised.
     """
     start = time.time()
     steps: List[Dict[str, Any]] = []
@@ -323,6 +334,16 @@ def run_build_loop(
     # ── 4. Builder v1 ────────────────────────────────────────────
     from studio_builder_agent import build_html
     from agents.director_agent.critique import critique_site
+    # Pass 4.0b.4: load the rubric ONCE and pass it into Builder v2 so
+    # the regenerate prompt gets the MAINTAIN — DO NOT REGRESS block.
+    # Builder v1 (no punch list) doesn't need the rubric — first attempts
+    # use the legacy creative-director prompt.
+    rubric_for_builder: Optional[Dict] = None
+    try:
+        from agents.design_intelligence.rubrics import load_rubric
+        rubric_for_builder = load_rubric(module_id)
+    except Exception as e:
+        logger.warning(f"[build-with-loop] rubric load for builder failed: {e}")
 
     t0 = time.time()
     html_v1: Optional[str] = None
@@ -382,7 +403,7 @@ def run_build_loop(
         and max_attempts >= 2
         and html_v1 is not None
     ):
-        # ── 7. Builder v2 (with punch list) ─────────────────────
+        # ── 7. Builder v2 (with punch list + rubric for MAINTAIN block) ─
         t0 = time.time()
         html_v2: Optional[str] = None
         builder_v2_error: Optional[str] = None
@@ -391,6 +412,7 @@ def run_build_loop(
             html_v2, builder_v2_error, errs2 = build_html(
                 brief, bundle, None, [], [],
                 punch_list=v1_violations,
+                rubric=rubric_for_builder,
             )
             if errs2:
                 builder_v2_warnings = list(errs2)
@@ -441,6 +463,60 @@ def run_build_loop(
     else:
         status = "fail"
 
+    # ── 9. Persistence (Pass 4.0b.4) ────────────────────────────
+    # Mirror the persistence pattern at public_site.py:2710 so the
+    # build is immediately viewable at /sites/{business_id}/preview
+    # and inside the MySite iframe. Persist even on verdict=fail —
+    # the user wants to see and debug failing builds, not just
+    # passing ones. Soft-fails so a Supabase blip never wrecks the
+    # response.
+    persistence: Optional[Dict[str, Any]] = None
+    if business_id and final_html:
+        try:
+            from brand_engine import _sb_get as be_get, _sb_patch as be_patch
+            rows = be_get(
+                f"/business_sites?business_id=eq.{business_id}"
+                "&select=id,site_config&limit=1"
+            ) or []
+            if not rows:
+                persistence = {
+                    "persisted": False,
+                    "error": (
+                        f"no business_sites row for business_id={business_id}"
+                    ),
+                }
+            else:
+                site_id = rows[0]["id"]
+                cfg = dict(rows[0].get("site_config") or {})
+                cfg["generated_html"] = final_html
+                cfg["html_generated_at"] = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                )
+                cfg["html_source"] = "build-with-loop"
+                # Clear any prior failure markers so /preview falls through
+                # to the new HTML cleanly.
+                cfg.pop("html_build_failed_at", None)
+                cfg.pop("html_build_error", None)
+                be_patch(
+                    f"/business_sites?id=eq.{site_id}",
+                    {"site_config": cfg},
+                )
+                persistence = {
+                    "persisted": True,
+                    "site_id": site_id,
+                    "preview_path": f"/sites/{business_id}/preview",
+                    "html_length": len(final_html),
+                }
+        except Exception as e:
+            logger.warning(
+                f"[build-with-loop] persistence failed for {business_id}: "
+                f"{type(e).__name__}: {e}"
+            )
+            persistence = {
+                "persisted": False,
+                "error": f"{type(e).__name__}: {e}",
+            }
+
     return {
         "status": status,
         "elapsed_total_seconds": round(time.time() - start, 3),
@@ -448,4 +524,5 @@ def run_build_loop(
         "steps": steps,
         "final_html": final_html if include_html else None,
         "html_length": len(final_html or ""),
+        "persistence": persistence,
     }

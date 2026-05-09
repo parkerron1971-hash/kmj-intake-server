@@ -43,6 +43,11 @@ class BuildWithLoopRequest(BaseModel):
     vocab_id: str = "sovereign-authority"
     max_attempts: int = 2
     include_html: bool = True
+    # Pass 4.0b.4: when supplied, the orchestrator persists final_html
+    # to business_sites.site_config.generated_html for that row, making
+    # the build viewable at /sites/{business_id}/preview without any
+    # frontend changes. Optional — omit for ephemeral verification runs.
+    business_id: Optional[str] = None
 
 
 @router.get("/health")
@@ -113,6 +118,7 @@ def build_with_loop(req: BuildWithLoopRequest):
             vocab_id=req.vocab_id,
             max_attempts=req.max_attempts,
             include_html=req.include_html,
+            business_id=req.business_id,
         )
     except Exception as e:
         logger.warning(
