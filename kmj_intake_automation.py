@@ -44,6 +44,8 @@ from voice_depth_router import router as voice_depth_router
 from agents.sparse_input_enrichment_router import router as sparse_enrichment_router
 # Pass 4.0b — Director Agent: Critique loop
 from agents.director_agent.router import router as director_router
+# Pass 4.0b.5 — Slot system (image retrieval + management)
+from agents.slot_system.router import router as slot_router
 
 app = FastAPI(title="KMJ Intake Automation")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -70,6 +72,8 @@ app.include_router(foundation_router)
 app.include_router(sparse_enrichment_router)
 # Pass 4.0b — Director Agent: Critique loop
 app.include_router(director_router)
+# Pass 4.0b.5 — Slot system (image retrieval + management)
+app.include_router(slot_router)
 # public_site_router MUST remain LAST — it defines `/` and `/{path:path}`
 # catch-alls that would otherwise shadow every specific API route.
 app.include_router(public_site_router)
