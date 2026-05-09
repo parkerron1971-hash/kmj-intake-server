@@ -7,19 +7,25 @@ Mounts under `/director`. Pass 4.0b ships:
                                        (conditional) regenerate, with a
                                        structured audit trail
 
+Pass 4.0c PART 2 adds:
+  POST /director/_diag/enrich_feedback  — diagnostic: enrich one feedback
+                                           string into expanded moves.
+                                           No persistence, no Builder call.
+
 Registration order: BEFORE `public_site_router` in
 `kmj_intake_automation.py`. `public_site_router` stays LAST.
 """
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from agents.director_agent.critique import critique_site
 from agents.director_agent.build_with_loop import run_build_loop
+from agents.director_agent.feedback_enrichment import enrich_feedback
 
 logger = logging.getLogger(__name__)
 
@@ -125,3 +131,27 @@ def build_with_loop(req: BuildWithLoopRequest):
             f"[director.build-with-loop] handler crashed: {type(e).__name__}: {e}"
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Pass 4.0c PART 2 — Feedback enrichment diagnostic ─────────────
+
+class EnrichFeedbackDiagRequest(BaseModel):
+    user_text: str
+    module_id: str = "cinematic_authority"
+    enriched_brief: Optional[Dict[str, Any]] = None
+    design_pick: Optional[Dict[str, Any]] = None
+
+
+@router.post("/_diag/enrich_feedback")
+def diag_enrich_feedback(req: EnrichFeedbackDiagRequest) -> Dict[str, Any]:
+    """Diagnostic: run feedback_enrichment.enrich_feedback against the
+    given inputs. No persistence, no Builder call. Used by Pass 4.0c
+    PART 2 verification curls so we can see the expanded_moves shape
+    before wiring the production /director/refine endpoint in PART 3.
+    """
+    return enrich_feedback(
+        user_text=req.user_text,
+        module_id=req.module_id,
+        enriched_brief=req.enriched_brief,
+        design_pick=req.design_pick,
+    )
