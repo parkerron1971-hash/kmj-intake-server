@@ -9,3 +9,8 @@ reportlab>=4.0.0
 # Pass 4.0b — Director Agent Critique loop: deterministic_checker uses
 # BeautifulSoup to parse generated HTML before scoring against rubric.
 beautifulsoup4==4.12.3
+# Pass 4.0b.5 PART 5 — Slot upload endpoint validates image dimensions
+# server-side against SLOT_DEFINITIONS.min_dimensions before accepting
+# the upload. Pillow reads JPEG/PNG/WebP/AVIF headers without decoding
+# the full image (uses Image.size).
+Pillow>=10.4.0

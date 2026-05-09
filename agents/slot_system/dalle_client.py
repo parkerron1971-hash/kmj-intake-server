@@ -159,6 +159,49 @@ def _log_dalle_spend(
     return _patch_site_config(site_id, cfg)
 
 
+def clear_synthetic_spend(business_id: str) -> Dict[str, Any]:
+    """Diagnostic-only: drop every spend log entry tagged with
+    slot_name=='_synthetic_test'. Real spend (entries with real slot
+    names + storage_path) is preserved. Returns
+    {removed_count, kept_count, removed_total_usd, kept_total_usd_today}.
+
+    Mounted via /_diag/dalle_spend_clear so PART 5 verification can
+    fire a real DALL-E reroll without the synthetic budget-cap
+    entries from PART 3 blocking it."""
+    site_id, cfg = _fetch_site_row(business_id)
+    if not site_id:
+        return {
+            "removed_count": 0, "kept_count": 0,
+            "removed_total_usd": 0.0, "kept_total_usd_today": 0.0,
+            "error": "no business_sites row",
+        }
+    log = list(cfg.get("dalle_spend_log") or [])
+    removed: list = []
+    kept: list = []
+    for entry in log:
+        if isinstance(entry, dict) and entry.get("slot_name") == "_synthetic_test":
+            removed.append(entry)
+        else:
+            kept.append(entry)
+    cfg["dalle_spend_log"] = kept
+    _patch_site_config(site_id, cfg)
+    today = _utc_date_today()
+    return {
+        "removed_count": len(removed),
+        "kept_count": len(kept),
+        "removed_total_usd": round(
+            sum(float(e.get("cost_usd") or 0) for e in removed), 4
+        ),
+        "kept_total_usd_today": round(
+            sum(
+                float(e.get("cost_usd") or 0) for e in kept
+                if e.get("date") == today
+            ),
+            4,
+        ),
+    }
+
+
 def add_synthetic_spend_for_testing(
     business_id: str,
     cost_usd: float,
