@@ -611,18 +611,34 @@ def reroll_slot(
     if strategy in ("unsplash", "unsplash_with_dalle_fallback"):
         cached_query = record.get("default_query")
         if not cached_query:
-            raise HTTPException(
-                409,
-                {
-                    "error": "no_reroll_context",
-                    "advice": (
-                        "Slot has no cached query — it was likely "
-                        "populated by an older build before the reroll "
-                        "context cache existed. Re-run /director/"
-                        "build-with-loop to populate slots with "
-                        "reroll-enabled metadata."
-                    ),
+            # Legacy-slot fallback: this slot was populated by an older
+            # build before the reroll-context cache fields existed.
+            # Recompose a reasonable query from the business row's
+            # available fields so the reroll still works. Quality may
+            # drop slightly vs the original build's query (no
+            # enriched_brief or designer_pick to flavor mood) but the
+            # subject keyword still maps via _BUSINESS_TYPE_KEYWORDS.
+            try:
+                from brand_engine import _sb_get as be_get
+                rows = be_get(
+                    f"/businesses?id=eq.{business_id}"
+                    "&select=name,settings,voice_profile&limit=1"
+                ) or []
+                biz = rows[0] if rows else {}
+            except Exception:
+                biz = {}
+            cached_query = build_unsplash_query(
+                slot_name=slot_name,
+                enriched_brief={},
+                designer_pick={},
+                business={
+                    "name": biz.get("name") or "",
+                    "elevator_pitch": "",
                 },
+            )
+            logger.info(
+                f"[slot_reroll] legacy slot {slot_name} for {business_id}: "
+                f"recomposed query={cached_query!r} from business row"
             )
         orientation = _aspect_ratio_to_orientation(defn.get("aspect_ratio"))
         min_w = (defn.get("min_dimensions") or {}).get("width", 1200)
