@@ -432,13 +432,53 @@ Available slot names (pick the most fitting role for each position):
     decorative_2    — Texture / abstract accent (1:1)
     decorative_3    — Texture / abstract accent (1:1)
 
-Rules:
-  - Pick slots that fit the design — not every site needs all 11.
+Slot Usage Floor — by content archetype:
+
+A complete site demands visual richness layered with typographic restraint.
+The 'less is more' principle applies to TYPE, COPY, and SECTIONING — NOT
+to imagery. A premium site with one hero image and nothing else reads as
+undercooked, regardless of how strong the typography is.
+
+Required slots by archetype:
+  - service_business / coaching_practice:
+      hero_main, about_subject (the practitioner is the brand),
+      2-3 gallery slots showing the work or environment,
+      1 decorative accent. Minimum 5 image-bearing slots.
+  - knowledge_brand / course_creator:
+      hero_main, founder_photo (or about_subject),
+      1-2 gallery slots, 2 decorative accents. Minimum 5 slots.
+  - ministry / community_platform:
+      hero_main, founder_photo, chamber_main,
+      2 gallery slots. Minimum 5 slots.
+  - product_business / ecommerce:
+      hero_main, 4 gallery slots, 1-2 decorative.
+      Minimum 6 slots.
+  - creative_agency / consultant:
+      hero_main, founder_photo, 2-3 gallery slots,
+      2 decorative. Minimum 6 slots.
+  - custom / general:
+      hero_main, about_subject, 2 gallery slots,
+      1 decorative. Minimum 5 slots.
+
+Profile slots (about_subject, founder_photo) are critical — they
+represent the human at the center of the brand. Always include at
+least one profile slot for service-led businesses. The slot will
+render as a styled "Add your photo" placeholder until the practitioner
+uploads — that placeholder IS part of the design language, not a
+missing image.
+
+Decorative slots are NOT optional for premium aesthetic. They provide
+texture and atmosphere that typography alone cannot deliver. Use at
+least one for every site claiming Cinematic Authority, Cathedral, or
+premium positioning.
+
+Other rules:
   - Each slot can appear AT MOST ONCE per page.
   - Match role to position: hero gets atmosphere (hero_main), about
     section gets profile (about_subject), accent shapes get decorative.
-  - Profile slots stay as placeholders for the practitioner to upload —
-    your alt text is a prompt, not a stock substitution.
+  - Profile slot alt text is a prompt for the practitioner — describe
+    what kind of photo would suit ("Practitioner portrait, three-quarter
+    angle, warm low light"), not what to fill in temporarily.
   - Atmosphere slot alt text becomes the Unsplash search seed — be
     specific and evocative ("leather barber chair under tungsten light"
     beats "barber chair").
