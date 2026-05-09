@@ -454,6 +454,57 @@ def run_build_loop(
             regenerated = True
             final_critique = critique_v2
 
+    # ── 8.5. Slot population (Pass 4.0b.5 PART 4) ───────────────
+    # Walk the final HTML for data-slot tags and populate each slot
+    # default via its strategy (Unsplash / DALL-E / placeholder).
+    # Runs ONCE per build, after Builder + Critique are settled.
+    # Independent of the regenerate loop — slots get populated against
+    # the final shipping HTML, not per Builder iteration.
+    #
+    # Skipped without a business_id (no row to persist into) or without
+    # final_html. Soft-fails — exceptions captured in the audit, never
+    # block persistence.
+    slot_population: Optional[Dict[str, Any]] = None
+    if business_id and final_html:
+        t0 = time.time()
+        try:
+            from agents.slot_system.builder_post_process import (
+                populate_slots_for_site,
+            )
+            biz_for_slots = bundle.get("business") or {}
+            slot_population = populate_slots_for_site(
+                html=final_html,
+                business_id=business_id,
+                enriched_brief=enriched_brief,
+                designer_pick=rec,
+                business=biz_for_slots,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[build-with-loop] slot population crashed: "
+                f"{type(e).__name__}: {e}"
+            )
+            slot_population = {
+                "elapsed_seconds": round(time.time() - t0, 3),
+                "slots_found": [],
+                "slots_populated": [],
+                "slots_skipped": [],
+                "budget_used_usd": 0.0,
+                "warnings": [f"crash: {type(e).__name__}: {e}"],
+            }
+        steps.append(_stamp(
+            "slot_population", t0,
+            result={
+                "slots_found": slot_population.get("slots_found", []),
+                "populated_count": len(slot_population.get("slots_populated") or []),
+                "skipped_count": len(slot_population.get("slots_skipped") or []),
+                "budget_used_usd": slot_population.get("budget_used_usd", 0.0),
+                "populated": slot_population.get("slots_populated", []),
+                "skipped": slot_population.get("slots_skipped", []),
+                "warnings": slot_population.get("warnings", []),
+            },
+        ))
+
     # ── Final status ────────────────────────────────────────────
     final_verdict = (final_critique or {}).get("summary", {}).get("verdict")
     if final_html is None:
@@ -525,4 +576,5 @@ def run_build_loop(
         "final_html": final_html if include_html else None,
         "html_length": len(final_html or ""),
         "persistence": persistence,
+        "slot_population": slot_population,
     }

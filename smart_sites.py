@@ -1120,7 +1120,7 @@ def _try_serve_builder_html(
         # Pass 3.8e — pass design_brief so the reactivity layer can render
         # strand-aware gradients on every page load (no regeneration needed).
         brief = site_config.get("design_brief")
-        return inject_motion_modules(generated_html, scheme, brief)
+        html_with_motion = inject_motion_modules(generated_html, scheme, brief)
     except Exception as e:
         logger.warning(
             f"[smart_sites] Builder HTML serve failed for {business_id}, "
@@ -1131,6 +1131,30 @@ def _try_serve_builder_html(
             file=sys.stderr,
         )
         return None
+
+    # Pass 4.0b.5 PART 4 — slot resolution at render time.
+    # Replace <img data-slot="X" src=""> with the populated URL or a
+    # styled placeholder, and inject Unsplash credits in the footer.
+    # Soft-fails to the motion-injected HTML on any error so a slot
+    # bug never breaks the whole page render.
+    try:
+        from agents.slot_system.slot_resolver import resolve_html_slots
+        slots = site_config.get("slots") or {}
+        html_resolved, credits, found = resolve_html_slots(
+            html_with_motion, slots,
+        )
+        if found:
+            logger.info(
+                f"[smart_sites] resolved {len(found)} slot tag(s) for "
+                f"{business_id}: {found} ({len(credits)} credit(s))"
+            )
+        return html_resolved
+    except Exception as e:
+        logger.warning(
+            f"[smart_sites] slot resolution failed for {business_id}, "
+            f"serving motion-injected HTML unmodified: {e}"
+        )
+        return html_with_motion
 
 
 def _try_render_via_archetype(

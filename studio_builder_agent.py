@@ -394,7 +394,66 @@ def _build_builder_prompt(
     # without a rubric supplied (legacy callers) get the legacy prompt.
     maintain_block = _format_maintain_block(rubric) if punch_list else ""
 
-    return f"""{punch_list_block}{maintain_block}You are a senior creative director and master frontend developer. You build production websites that feel genuinely designed — not assembled from templates. You read a creative brief the way a designer reads one: you understand the tension, feel the spatial logic, hear the copy voice. Then you build.
+    # Pass 4.0b.5 PART 4: SLOT TAGS instruction. Tells the Builder to
+    # emit <img data-slot="..." src=""> for image positions; the slot
+    # system populates src at render time from Unsplash / DALL-E / user
+    # uploads. Without this block the model invents ad-hoc placeholders
+    # like 'PRE-IMAGE' / 'PRO-IMAGE' (seen in Pass 4.0b.4 output).
+    slot_tags_block = """═══════════════════════════════════════
+IMAGE SLOTS — USE THE SLOT SYSTEM
+═══════════════════════════════════════
+
+When an image is needed, embed it as:
+
+    <img data-slot="<slot_name>" src="" alt="<one-sentence description>">
+
+Leave src="" empty. The platform fills it at render time from Unsplash
+(atmosphere), DALL-E (decorative), or practitioner uploads (profile).
+Do NOT hardcode image URLs. Do NOT invent placeholder text like
+"PRE-IMAGE", "[hero image goes here]", or empty <div> rectangles.
+
+Available slot names (pick the most fitting role for each position):
+
+  PROFILE — practitioner / founder portraits.
+  Render as upload-prompt placeholders by default. Never auto-fill.
+    about_subject   — Practitioner headshot/portrait (4:5)
+    founder_photo   — Founder portrait (1:1)
+
+  ATMOSPHERE — environmental / contextual photography (Unsplash).
+    hero_main       — Primary hero image (16:9)
+    chamber_main    — Atmospheric / environmental (3:2)
+    gallery_1       — Gallery image 1 (4:3)
+    gallery_2       — Gallery image 2 (4:3)
+    gallery_3       — Gallery image 3 (4:3)
+    gallery_4       — Gallery image 4 (4:3)
+
+  DECORATIVE — abstract textures, accents (DALL-E).
+    decorative_1    — Texture / abstract accent (1:1)
+    decorative_2    — Texture / abstract accent (1:1)
+    decorative_3    — Texture / abstract accent (1:1)
+
+Rules:
+  - Pick slots that fit the design — not every site needs all 11.
+  - Each slot can appear AT MOST ONCE per page.
+  - Match role to position: hero gets atmosphere (hero_main), about
+    section gets profile (about_subject), accent shapes get decorative.
+  - Profile slots stay as placeholders for the practitioner to upload —
+    your alt text is a prompt, not a stock substitution.
+  - Atmosphere slot alt text becomes the Unsplash search seed — be
+    specific and evocative ("leather barber chair under tungsten light"
+    beats "barber chair").
+  - Decorative slot alt text becomes part of the DALL-E prompt — describe
+    the texture or shape, not a literal subject.
+
+Example:
+
+    <img data-slot="hero_main" src=""
+         alt="Royal Palace Barbershop interior at dusk, leather chairs
+              catching low gold light, deep shadows in the corners">
+
+"""
+
+    return f"""{punch_list_block}{maintain_block}{slot_tags_block}You are a senior creative director and master frontend developer. You build production websites that feel genuinely designed — not assembled from templates. You read a creative brief the way a designer reads one: you understand the tension, feel the spatial logic, hear the copy voice. Then you build.
 
 Output ONLY raw HTML starting with <!DOCTYPE html>. Nothing before. Nothing after. No markdown fences. No explanation. No commentary.
 
