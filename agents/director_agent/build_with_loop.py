@@ -180,6 +180,62 @@ def _brief_summary(brief: Optional[Dict]) -> Dict[str, Any]:
     }
 
 
+# Per-archetype slot floor (Pass 4.0b.5.1). Mirrors the table in the
+# Builder's SLOT TAGS prompt block. Used by _check_slot_coverage to
+# raise an audit warning when Builder ships a site below the floor.
+ARCHETYPE_SLOT_MINIMUMS: Dict[str, int] = {
+    "service_business":   5,
+    "coaching_practice":  5,
+    "knowledge_brand":    5,
+    "course_creator":     5,
+    "ministry":           5,
+    "community_platform": 5,
+    "product_business":   6,
+    "ecommerce":          6,
+    "creative_agency":    6,
+    "consultant":         6,
+    "custom":             5,
+}
+
+
+def _check_slot_coverage(
+    html: Optional[str],
+    enriched_brief: Optional[Dict],
+) -> Optional[Dict[str, Any]]:
+    """Diagnostic: compare distinct data-slot count in shipping HTML
+    against the per-archetype minimum. Returns a warning dict when
+    under floor, None when at-or-above. Non-blocking — the audit
+    surfaces this so operators can decide to re-run or enrich slots
+    via the management UI."""
+    import re as _re
+    if not html:
+        return None
+    archetype = (enriched_brief or {}).get("content_archetype") or "custom"
+    minimum = ARCHETYPE_SLOT_MINIMUMS.get(archetype, 5)
+    found = set(
+        _re.findall(
+            r'data-slot\s*=\s*["\']?([a-z_0-9]+)',
+            html,
+            _re.IGNORECASE,
+        )
+    )
+    slots_used = len(found)
+    if slots_used >= minimum:
+        return None
+    return {
+        "warning": "slot_coverage_below_archetype_minimum",
+        "slots_used": slots_used,
+        "minimum_for_archetype": minimum,
+        "archetype": archetype,
+        "slot_names": sorted(found),
+        "advisory": (
+            "Builder used fewer slots than recommended for this "
+            "archetype. Consider re-running or manual slot enrichment "
+            "via the management UI."
+        ),
+    }
+
+
 def _critique_summary(critique: Optional[Dict], top_n: int = 5) -> Dict[str, Any]:
     """Extract critique verdict + counts + top-N violations for audit."""
     if not isinstance(critique, dict):
@@ -453,6 +509,20 @@ def run_build_loop(
             ))
             regenerated = True
             final_critique = critique_v2
+
+    # ── 8.4. Slot coverage check (Pass 4.0b.5.1) ────────────────
+    # Diagnostic warning when Builder used fewer data-slot tags than
+    # the per-archetype minimum. NON-blocking — recorded in the audit
+    # for operator review. Runs on the final shipping HTML so the
+    # warning reflects the version the practitioner actually sees.
+    coverage_warning = _check_slot_coverage(final_html, enriched_brief)
+    if coverage_warning:
+        steps.append({
+            "step": "slot_coverage_warning",
+            "elapsed_seconds": 0.0,
+            "result": coverage_warning,
+            "error": None,
+        })
 
     # ── 8.5. Slot population (Pass 4.0b.5 PART 4) ───────────────
     # Walk the final HTML for data-slot tags and populate each slot
