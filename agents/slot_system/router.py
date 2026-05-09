@@ -44,6 +44,7 @@ from agents.slot_system.dalle_client import (
     can_dalle_generate,
     dalle_cost,
     generate_dalle_image,
+    generate_dalle_image_debug,
     get_site_dalle_spend_today,
 )
 from agents.slot_system import slot_storage
@@ -182,7 +183,7 @@ def diag_dalle_generate(req: DiagDalleRequest):
             },
         )
 
-    result = generate_dalle_image(
+    debug = generate_dalle_image_debug(
         prompt=composed_prompt,
         business_id=req.business_id,
         slot_name=req.slot_name,
@@ -190,24 +191,36 @@ def diag_dalle_generate(req: DiagDalleRequest):
         size=req.size,
         style=req.style,
     )
-    if not result:
+    if debug.get("status") != "ok":
+        # Surface the exact failure stage instead of a generic 502.
+        # Maps cleanly to status codes per failure type.
+        status_to_http = {
+            "no_api_key": 503,
+            "empty_prompt": 400,
+            "budget_cap_exceeded": 402,
+            "openai_http_error": 502,
+            "openai_call_exception": 502,
+            "openai_no_data": 502,
+            "openai_no_url": 502,
+            "rehost_failed": 502,
+        }
         raise HTTPException(
-            status_code=502,
-            detail="DALL-E generation or rehost failed (see Railway logs)",
+            status_code=status_to_http.get(debug.get("status"), 502),
+            detail=debug,
         )
 
     # Persist as the slot's default so /preview surfaces it.
     persisted = slot_storage.set_slot_default(
         business_id=req.business_id,
         slot_name=req.slot_name,
-        url=result["url"],
+        url=debug["url"],
         source="dalle",
         credit=None,
     )
 
     return {
         "composed_prompt": composed_prompt,
-        "result": result,
+        "result": debug,
         "persisted_to_slot": persisted,
         "spend_today_usd_after": get_site_dalle_spend_today(req.business_id),
     }
