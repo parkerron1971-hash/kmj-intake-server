@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from agents.sparse_input_enrichment import enrich_intake
+from agents.design_intelligence import find_module_for_strands, MODULE_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,12 @@ class EnrichmentRequest(BaseModel):
     colors: Optional[List[str]] = None
     practitioner_voice: Optional[str] = None
     strategy_track_summary: Optional[str] = None
+
+
+class ModuleMatchRequest(BaseModel):
+    strand_a: str
+    strand_b: str
+    ratio_a: int
 
 
 @router.post("/enrich")
@@ -67,4 +74,32 @@ def health():
     return {
         "status": "ok",
         "anthropic_key_present": bool(os.environ.get("ANTHROPIC_API_KEY")),
+    }
+
+
+@router.post("/match-module")
+def match_module(req: ModuleMatchRequest):
+    """Pass 4.0a.1 — frontend module-match preview.
+
+    Wraps `find_module_for_strands(strand_a, strand_b, ratio_a)` so the
+    Studio Enrichment Test Panel can show 'this would route to
+    Cinematic Authority' without duplicating registry logic in JS.
+    Single source of truth lives in agents/design_intelligence/__init__.py.
+
+    Response shape:
+      {"module_id": "<id>" | null,
+       "module_meta": {"name": "...", "tagline": "...",
+                        "canonical_example": "..."} | null}
+    """
+    module_id = find_module_for_strands(req.strand_a, req.strand_b, req.ratio_a)
+    if module_id is None:
+        return {"module_id": None, "module_meta": None}
+    meta = MODULE_REGISTRY.get(module_id, {})
+    return {
+        "module_id": module_id,
+        "module_meta": {
+            "name": meta.get("name"),
+            "tagline": meta.get("tagline"),
+            "canonical_example": meta.get("canonical_example"),
+        },
     }
