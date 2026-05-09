@@ -59,12 +59,44 @@ def _format_sections(sections: list) -> str:
 
 # ─── Prompt construction ──────────────────────────────────────────────
 
+def _format_punch_list_block(punch_list: Optional[List[dict]]) -> str:
+    """Render Director's critique punch list as a leading prompt block.
+    Empty string when punch_list is None or empty (preserves the legacy
+    prompt for first-attempt builds)."""
+    if not punch_list:
+        return ""
+    lines = [
+        "═══════════════════════════════════════",
+        "PUNCH LIST — FIX EACH ITEM",
+        "═══════════════════════════════════════",
+        "",
+        "The previous build attempt failed these specific design quality",
+        "rules. Fix each one in this build:",
+        "",
+    ]
+    for v in punch_list:
+        if not isinstance(v, dict):
+            continue
+        sev = (v.get("severity") or "MEDIUM").upper()
+        rid = v.get("rule_id") or "(unknown_rule)"
+        desc = (v.get("description") or "").strip()
+        fix = (v.get("fix_hint") or "").strip()
+        lines.append(f"[{sev}] {rid}: {desc}")
+        if fix:
+            lines.append(f"  Fix: {fix}")
+        lines.append("")
+    lines.append("Do NOT repeat these mistakes. The fixes are non-negotiable.")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _build_builder_prompt(
     brief: dict,
     bundle: dict,
     scheme: Optional[dict],
     products: list,
     testimonials: list,
+    punch_list: Optional[List[dict]] = None,
 ) -> str:
     """Construct the creative-director prompt for the Builder."""
     brief = brief or {}
@@ -315,7 +347,9 @@ def _build_builder_prompt(
     body_font = (typography.get("body") or {}).get("name", "")
     accent_font = (typography.get("accent") or {}).get("name", "")
 
-    return f"""You are a senior creative director and master frontend developer. You build production websites that feel genuinely designed — not assembled from templates. You read a creative brief the way a designer reads one: you understand the tension, feel the spatial logic, hear the copy voice. Then you build.
+    punch_list_block = _format_punch_list_block(punch_list)
+
+    return f"""{punch_list_block}You are a senior creative director and master frontend developer. You build production websites that feel genuinely designed — not assembled from templates. You read a creative brief the way a designer reads one: you understand the tension, feel the spatial logic, hear the copy voice. Then you build.
 
 Output ONLY raw HTML starting with <!DOCTYPE html>. Nothing before. Nothing after. No markdown fences. No explanation. No commentary.
 
@@ -498,6 +532,7 @@ def build_html(
     scheme: Optional[dict],
     products: list,
     testimonials: list,
+    punch_list: Optional[List[dict]] = None,
 ) -> Tuple[Optional[str], Optional[str], List[str]]:
     """Run the Builder Agent with quality validation and one auto-retry.
 
@@ -513,6 +548,14 @@ def build_html(
     first attempt, appends corrective guidance to the prompt before the
     second LLM call. Hard failures (Claude error, extraction error, HTML
     structural validation) do NOT retry — those are not quality issues.
+
+    `punch_list` (Pass 4.0b PART 3) is the Director's external critique
+    output — a list of violation dicts {rule_id, severity, description,
+    fix_hint}. When provided, it's prepended to the prompt as a
+    non-negotiable fix list. The internal first-pass→retry quality loop
+    still runs after; punch list addresses Director's findings, internal
+    retry addresses Builder's own quality warnings. Default None preserves
+    backward compatibility for first-attempt builds.
     """
     from studio_quality_validator import validate_quality
 
@@ -524,6 +567,7 @@ def build_html(
             prompt = _build_builder_prompt(
                 brief or {}, bundle or {}, scheme,
                 products or [], testimonials or [],
+                punch_list=punch_list,
             )
         except Exception as e:
             return (
