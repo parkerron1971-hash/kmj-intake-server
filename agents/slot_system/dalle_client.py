@@ -273,6 +273,133 @@ def download_and_rehost(
 
 # ─── DALL-E 3 generation ────────────────────────────────────────────
 
+def generate_dalle_image_debug(
+    prompt: str,
+    business_id: str,
+    slot_name: str,
+    quality: str = "hd",
+    size: str = "1024x1024",
+    style: str = "natural",
+) -> Dict[str, Any]:
+    """Debug variant of generate_dalle_image. Returns a structured
+    status dict with the exact failure stage instead of returning None.
+    Used by /slots/_diag/dalle to surface OpenAI vs rehost failures
+    distinctly during PART 3 verification.
+
+    Status values:
+      ok                         success — payload includes url + cost
+      no_api_key                 OPENAI_API_KEY not set
+      empty_prompt               prompt was blank
+      budget_cap_exceeded        would overrun PER_SITE_DAILY_CAP_USD
+      openai_http_error          OpenAI returned >= 400
+      openai_call_exception      network/timeout/json failure
+      openai_no_data             response had no items
+      openai_no_url              first item missing url field
+      rehost_failed              download or Supabase upload failed
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return {"status": "no_api_key"}
+    if not (prompt or "").strip():
+        return {"status": "empty_prompt"}
+
+    if quality not in ("standard", "hd"):
+        quality = "hd"
+    if size not in ("1024x1024", "1792x1024", "1024x1792"):
+        size = "1024x1024"
+    if style not in ("natural", "vivid"):
+        style = "natural"
+
+    expected_cost = dalle_cost(quality, size)
+    allowed, current = can_dalle_generate(business_id, expected_cost)
+    if not allowed:
+        return {
+            "status": "budget_cap_exceeded",
+            "current_spend_today_usd": current,
+            "expected_cost_usd": expected_cost,
+        }
+
+    body = {
+        "model": DALLE_MODEL,
+        "prompt": prompt,
+        "n": 1,
+        "size": size,
+        "quality": quality,
+        "style": style,
+    }
+    try:
+        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
+            resp = client.post(
+                OPENAI_IMAGES_ENDPOINT,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                content=json.dumps(body).encode("utf-8"),
+            )
+    except Exception as e:
+        return {
+            "status": "openai_call_exception",
+            "exception_type": type(e).__name__,
+            "exception_msg": str(e)[:300],
+        }
+
+    if resp.status_code >= 400:
+        return {
+            "status": "openai_http_error",
+            "http_status": resp.status_code,
+            "body_excerpt": resp.text[:500],
+        }
+
+    try:
+        data = resp.json()
+    except Exception as e:
+        return {
+            "status": "openai_call_exception",
+            "exception_type": "JSONDecodeError",
+            "exception_msg": str(e)[:300],
+        }
+
+    items = data.get("data") or []
+    if not items:
+        return {"status": "openai_no_data", "raw": data}
+    item = items[0]
+    openai_url = item.get("url")
+    revised_prompt = item.get("revised_prompt")
+    if not openai_url:
+        return {"status": "openai_no_url", "item": item}
+
+    rehosted = download_and_rehost(
+        openai_url=openai_url,
+        business_id=business_id,
+        slot_name=slot_name,
+        suffix=quality,
+    )
+    if not rehosted:
+        return {
+            "status": "rehost_failed",
+            "openai_url_prefix": (openai_url or "")[:80],
+            "revised_prompt": revised_prompt,
+        }
+
+    _log_dalle_spend(
+        business_id=business_id,
+        slot_name=slot_name,
+        cost_usd=expected_cost,
+        revised_prompt=revised_prompt,
+        storage_path=rehosted["storage_path"],
+    )
+    return {
+        "status": "ok",
+        "url": rehosted["url"],
+        "storage_path": rehosted["storage_path"],
+        "revised_prompt": revised_prompt,
+        "cost_usd": expected_cost,
+        "quality": quality,
+        "size": size,
+    }
+
+
 def generate_dalle_image(
     prompt: str,
     business_id: str,
