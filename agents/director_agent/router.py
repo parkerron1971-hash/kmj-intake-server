@@ -228,3 +228,49 @@ def chat_history_delete(business_id: str) -> Dict[str, Any]:
     UX path in the frontend dock."""
     ok = delete_chat_history(business_id)
     return {"success": ok, "business_id": business_id}
+
+
+@router.get("/_diag/site_state/{business_id}")
+def diag_site_state(business_id: str) -> Dict[str, Any]:
+    """Diagnostic: report the presence of the four Pass 4.0c persistence
+    keys on a business's site_config. Mirrors the pre-PART-4 seed
+    verification SQL — equivalent of:
+
+      SELECT site_config ? 'build_inputs' AS has_build_inputs, ...
+
+    Returns presence flags + sample values for the keys that should
+    confirm Royal Palace identity made it into the persisted state."""
+    from brand_engine import _sb_get as be_get
+    rows = be_get(
+        f"/business_sites?business_id=eq.{business_id}&select=site_config&limit=1"
+    ) or []
+    if not rows:
+        return {
+            "business_id": business_id,
+            "found": False,
+            "error": "no business_sites row",
+        }
+    cfg = rows[0].get("site_config") or {}
+    bi = cfg.get("build_inputs") or {}
+    eb = cfg.get("enriched_brief") or {}
+    dr = cfg.get("design_recommendation") or {}
+    gh = cfg.get("generated_html") or ""
+    return {
+        "business_id": business_id,
+        "found": True,
+        "has_build_inputs": bool(cfg.get("build_inputs")),
+        "has_enriched_brief": bool(cfg.get("enriched_brief")),
+        "has_design_recommendation": bool(cfg.get("design_recommendation")),
+        "has_generated_html": bool(gh),
+        "html_length": len(gh) if isinstance(gh, str) else 0,
+        "html_generated_at": cfg.get("html_generated_at"),
+        "persisted_business_name": bi.get("business_name") if isinstance(bi, dict) else None,
+        "persisted_module_id": bi.get("module_id") if isinstance(bi, dict) else None,
+        "persisted_brand_metaphor": eb.get("brand_metaphor") if isinstance(eb, dict) else None,
+        "persisted_inferred_vibe": eb.get("inferred_vibe") if isinstance(eb, dict) else None,
+        "persisted_strand_pair": (
+            f"{dr.get('strand_a_id')}/{dr.get('strand_b_id')}"
+            if isinstance(dr, dict) else None
+        ),
+        "persisted_sub_strand_id": dr.get("sub_strand_id") if isinstance(dr, dict) else None,
+    }
