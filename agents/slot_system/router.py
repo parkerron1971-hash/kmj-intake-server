@@ -39,6 +39,8 @@ from agents.slot_system.unsplash_client import (
 )
 from agents.slot_system.dalle_client import (
     PER_SITE_DAILY_CAP_USD,
+    SITE_IMAGES_BUCKET,
+    _upload_site_image_debug,
     add_synthetic_spend_for_testing,
     build_dalle_prompt,
     can_dalle_generate,
@@ -247,6 +249,28 @@ class SimulateSpendRequest(BaseModel):
     business_id: str
     cost_usd: float
     note: Optional[str] = "synthetic budget-cap test"
+
+
+@router.post("/_diag/storage_probe")
+def diag_storage_probe(business_id: str) -> Dict[str, Any]:
+    """Diagnostic: upload a 1KB synthetic PNG to the site_images bucket
+    to isolate Supabase Storage failures from OpenAI download issues.
+    Returns the structured status dict from _upload_site_image_debug
+    plus the storage_path attempted. Used during PART 3 debugging."""
+    import time as _time
+    # Minimal valid 1x1 PNG (transparent)
+    PNG_1X1 = bytes.fromhex(
+        "89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4"
+        "890000000D49444154789C636060606000000004000133D58E000000004945"
+        "4E44AE426082"
+    )
+    storage_path = f"{business_id}/_diag_probe_{int(_time.time())}.png"
+    debug = _upload_site_image_debug(storage_path, PNG_1X1, "image/png")
+    return {
+        "bucket": SITE_IMAGES_BUCKET,
+        "storage_path": storage_path,
+        "upload_status": debug,
+    }
 
 
 @router.post("/_diag/dalle_spend_simulate")

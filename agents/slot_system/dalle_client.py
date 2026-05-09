@@ -192,20 +192,23 @@ def _site_image_storage_url(storage_path: str) -> str:
     return f"{base}/storage/v1/object/public/{SITE_IMAGES_BUCKET}/{storage_path}"
 
 
-def _upload_site_image(
+def _upload_site_image_debug(
     storage_path: str,
     file_bytes: bytes,
     content_type: str = "image/png",
-) -> Optional[str]:
-    """POST raw bytes to the site_images bucket. Returns public URL on
-    success, None on failure. Mirrors the helper at brand_engine.py:1146
-    but targeted at the new bucket and using x-upsert: true so the same
-    storage_path can be safely re-rolled."""
+) -> Dict[str, Any]:
+    """Upload helper that always returns a structured status dict.
+
+    Status values:
+      ok                    payload includes url
+      no_supabase_env       SUPABASE_URL or SUPABASE_ANON missing
+      http_error            Supabase returned >= 400 (body excerpt included)
+      http_exception        network/timeout failure
+    """
     base = os.environ.get("SUPABASE_URL", "").rstrip("/")
     anon = os.environ.get("SUPABASE_ANON", "")
     if not base or not anon:
-        logger.warning("[dalle] Supabase env not set; cannot rehost")
-        return None
+        return {"status": "no_supabase_env"}
     url = f"{base}/storage/v1/object/{SITE_IMAGES_BUCKET}/{storage_path}"
     headers = {
         "apikey": anon,
@@ -216,16 +219,43 @@ def _upload_site_image(
     try:
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(url, content=file_bytes, headers=headers)
-        if resp.status_code >= 400:
-            logger.warning(
-                f"[dalle] storage upload {storage_path} failed: "
-                f"{resp.status_code} {resp.text[:200]}"
-            )
-            return None
     except httpx.HTTPError as e:
-        logger.warning(f"[dalle] storage upload {storage_path} HTTP error: {e}")
-        return None
-    return _site_image_storage_url(storage_path)
+        return {
+            "status": "http_exception",
+            "exception_type": type(e).__name__,
+            "exception_msg": str(e)[:300],
+        }
+    if resp.status_code >= 400:
+        return {
+            "status": "http_error",
+            "http_status": resp.status_code,
+            "body_excerpt": resp.text[:300],
+            "upload_url": url,
+        }
+    return {
+        "status": "ok",
+        "url": _site_image_storage_url(storage_path),
+    }
+
+
+def _upload_site_image(
+    storage_path: str,
+    file_bytes: bytes,
+    content_type: str = "image/png",
+) -> Optional[str]:
+    """Compatibility wrapper that returns just the URL or None.
+    Used by download_and_rehost; debug variant exposed via the
+    diagnostic endpoint."""
+    debug = _upload_site_image_debug(storage_path, file_bytes, content_type)
+    if debug.get("status") == "ok":
+        return debug.get("url")
+    logger.warning(
+        f"[dalle] storage upload {storage_path} failed: "
+        f"status={debug.get('status')} "
+        f"http={debug.get('http_status')} "
+        f"body={debug.get('body_excerpt', '')[:200]}"
+    )
+    return None
 
 
 def download_and_rehost(
