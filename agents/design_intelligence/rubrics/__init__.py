@@ -44,3 +44,39 @@ def list_rubrics() -> list:
         p.name.replace("_rubric.json", "")
         for p in RUBRIC_DIR.glob("*_rubric.json")
     )
+
+
+_SEVERITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+
+
+def rubric_to_canonical_checklist(rubric: Optional[Dict]) -> str:
+    """Render a rubric as a bulleted checklist of canonical rule
+    descriptions, sorted HIGH → MEDIUM → LOW. Includes both deterministic
+    and LLM-judged rules so the Builder Agent has the full standard in
+    front of it on regenerate.
+
+    Used by the MAINTAIN — DO NOT REGRESS prompt block (Pass 4.0b.4):
+    when Builder regenerates against a Director punch list, this list
+    tells it what already-correct work it must NOT regress on while
+    fixing the punch list items. Sourcing from the rubric file means
+    the prompt block updates automatically when the rubric changes.
+
+    Returns an empty string when the rubric is missing or has no rules,
+    so the caller can simply concatenate without a falsy guard.
+    """
+    if not isinstance(rubric, dict):
+        return ""
+    rules = list(rubric.get("layer_1_deterministic") or []) + \
+            list(rubric.get("layer_2_llm_judged") or [])
+    if not rules:
+        return ""
+    rules.sort(key=lambda r: _SEVERITY_ORDER.get(r.get("severity", "LOW"), 99))
+    lines = []
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        sev = (r.get("severity") or "MEDIUM").upper()
+        desc = (r.get("description") or "").strip()
+        if desc:
+            lines.append(f"- [{sev}] {desc}")
+    return "\n".join(lines)

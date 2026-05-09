@@ -90,6 +90,46 @@ def _format_punch_list_block(punch_list: Optional[List[dict]]) -> str:
     return "\n".join(lines)
 
 
+def _format_maintain_block(rubric: Optional[Dict]) -> str:
+    """Render the MAINTAIN — DO NOT REGRESS block (Pass 4.0b.4).
+
+    When the Builder regenerates against a Director punch list, fixing
+    the listed violations sometimes regresses on rules the previous
+    attempt already satisfied (e.g., v2 introduces pure #FFFFFF that
+    v1 didn't have). This block lists every canonical rule from the
+    rubric so the Builder sees what it must preserve while fixing the
+    punch list items. Source is the rubric file via
+    rubric_to_canonical_checklist, so the prompt updates automatically
+    when the rubric is edited.
+
+    Returns empty string when rubric is missing — caller can concatenate
+    unconditionally."""
+    try:
+        from agents.design_intelligence.rubrics import rubric_to_canonical_checklist
+    except Exception:
+        return ""
+    checklist = rubric_to_canonical_checklist(rubric)
+    if not checklist:
+        return ""
+    return (
+        "═══════════════════════════════════════\n"
+        "MAINTAIN — DO NOT REGRESS\n"
+        "═══════════════════════════════════════\n"
+        "\n"
+        "While fixing the punch list above, you MUST preserve every rule\n"
+        "below. These are the canonical standards of this Design\n"
+        "Intelligence Module. Fixing one violation by introducing another\n"
+        "is not progress.\n"
+        "\n"
+        f"{checklist}\n"
+        "\n"
+        "If the previous attempt already satisfied any of these, keep\n"
+        "doing what worked. Only change what's needed to address the\n"
+        "punch list.\n"
+        "\n"
+    )
+
+
 def _build_builder_prompt(
     brief: dict,
     bundle: dict,
@@ -97,6 +137,7 @@ def _build_builder_prompt(
     products: list,
     testimonials: list,
     punch_list: Optional[List[dict]] = None,
+    rubric: Optional[Dict] = None,
 ) -> str:
     """Construct the creative-director prompt for the Builder."""
     brief = brief or {}
@@ -348,8 +389,12 @@ def _build_builder_prompt(
     accent_font = (typography.get("accent") or {}).get("name", "")
 
     punch_list_block = _format_punch_list_block(punch_list)
+    # Pass 4.0b.4: MAINTAIN block only renders when there's a punch list
+    # AND a rubric. First-attempt builds (no punch list) and regenerates
+    # without a rubric supplied (legacy callers) get the legacy prompt.
+    maintain_block = _format_maintain_block(rubric) if punch_list else ""
 
-    return f"""{punch_list_block}You are a senior creative director and master frontend developer. You build production websites that feel genuinely designed — not assembled from templates. You read a creative brief the way a designer reads one: you understand the tension, feel the spatial logic, hear the copy voice. Then you build.
+    return f"""{punch_list_block}{maintain_block}You are a senior creative director and master frontend developer. You build production websites that feel genuinely designed — not assembled from templates. You read a creative brief the way a designer reads one: you understand the tension, feel the spatial logic, hear the copy voice. Then you build.
 
 Output ONLY raw HTML starting with <!DOCTYPE html>. Nothing before. Nothing after. No markdown fences. No explanation. No commentary.
 
@@ -533,6 +578,7 @@ def build_html(
     products: list,
     testimonials: list,
     punch_list: Optional[List[dict]] = None,
+    rubric: Optional[Dict] = None,
 ) -> Tuple[Optional[str], Optional[str], List[str]]:
     """Run the Builder Agent with quality validation and one auto-retry.
 
@@ -556,18 +602,44 @@ def build_html(
     still runs after; punch list addresses Director's findings, internal
     retry addresses Builder's own quality warnings. Default None preserves
     backward compatibility for first-attempt builds.
+
+    `rubric` (Pass 4.0b.4) is the Design Intelligence Module rubric
+    dict. When supplied alongside a non-empty punch_list, the prompt
+    also gets a MAINTAIN — DO NOT REGRESS block listing every canonical
+    rule from the rubric, so fixing the punch list doesn't regress on
+    rules the previous attempt already satisfied. Ignored without a
+    punch list (first-attempt builds don't need a maintenance check).
     """
     from studio_quality_validator import validate_quality
 
     quality_warnings_first_pass: List[str] = []
+    # Pass 4.0b.4 observability: every iteration of the internal retry
+    # logs its start + outcome so Railway logs prove the retry runs even
+    # on punch-list-driven (regenerate) builds. Otherwise it's hard to
+    # tell from outside whether v2 quality warnings come from a single
+    # attempt that gave up or a true 2-attempt retry that still failed.
+    print(
+        f"[builder] build_html invoked: "
+        f"punch_list_size={len(punch_list or [])}, "
+        f"rubric_supplied={bool(rubric)}",
+        file=sys.stderr,
+    )
 
     for attempt in range(2):
+        print(
+            f"[builder] attempt {attempt+1}/2 starting "
+            f"(punch_list={'present' if punch_list else 'absent'}, "
+            f"maintain_block={'present' if (punch_list and rubric) else 'absent'})",
+            file=sys.stderr,
+        )
+
         # 1. Construct prompt (with retry guidance on attempt #2)
         try:
             prompt = _build_builder_prompt(
                 brief or {}, bundle or {}, scheme,
                 products or [], testimonials or [],
                 punch_list=punch_list,
+                rubric=rubric,
             )
         except Exception as e:
             return (
@@ -638,6 +710,10 @@ def build_html(
                 file=sys.stderr,
             )
         if quality_ok:
+            print(
+                f"[builder] attempt {attempt+1}/2 quality_ok=True; shipping clean",
+                file=sys.stderr,
+            )
             try:
                 html = inject_motion_modules(html, scheme, brief)
             except Exception as e:
@@ -649,7 +725,7 @@ def build_html(
 
         # Quality fail
         print(
-            f"[builder] Quality validation failed (attempt {attempt+1}): "
+            f"[builder] Quality validation failed (attempt {attempt+1}/2): "
             f"{quality_warnings}",
             file=sys.stderr,
         )
@@ -658,6 +734,11 @@ def build_html(
             continue
 
         # Second attempt also failed — ship anyway with warnings persisted.
+        print(
+            f"[builder] retry loop completed; both attempts had quality "
+            f"warnings; shipping with {len(quality_warnings)} warnings",
+            file=sys.stderr,
+        )
         try:
             html = inject_motion_modules(html, scheme, brief)
         except Exception as e:
