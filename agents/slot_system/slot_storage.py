@@ -91,6 +91,12 @@ def _empty_slot_record() -> Dict[str, Any]:
         "default_url": None,
         "default_source": None,
         "default_credit": None,
+        # Pass 4.0b.5 PART 5: reroll context. populate_slots_for_site
+        # caches the original Unsplash query and DALL-E prompt at
+        # populate time so /slots/{id}/{slot}/reroll can re-fire the
+        # same retrieval without re-running enrichment + designer.
+        "default_query": None,           # Unsplash search string
+        "default_dalle_prompt": None,    # DALL-E prompt
         "custom_url": None,
         "custom_uploaded_at": None,
         "reroll_count_today": 0,
@@ -124,10 +130,18 @@ def set_slot_default(
     url: str,
     source: str,
     credit: Optional[Dict[str, Any]] = None,
+    query: Optional[str] = None,
+    dalle_prompt: Optional[str] = None,
 ) -> bool:
     """Set the default (auto-suggested) URL for a slot. Custom uploads
     are NOT touched — they continue to win in resolution. Source must
-    be 'unsplash' or 'dalle' (the two non-placeholder strategies)."""
+    be 'unsplash' or 'dalle' (the two non-placeholder strategies).
+
+    `query` and `dalle_prompt` are the reroll-context cache (PART 5).
+    Pass `query` for Unsplash sources so /reroll can re-fire the same
+    search; pass `dalle_prompt` for DALL-E sources so /reroll can
+    re-generate against the same brief. Existing values are preserved
+    when None is passed — to clear, pass an empty string."""
     site_id, cfg = _fetch_site_row(business_id)
     if not site_id:
         return False
@@ -136,6 +150,10 @@ def set_slot_default(
     record["default_url"] = url
     record["default_source"] = source
     record["default_credit"] = credit
+    if query is not None:
+        record["default_query"] = query or None
+    if dalle_prompt is not None:
+        record["default_dalle_prompt"] = dalle_prompt or None
     slots[slot_name] = record
     cfg["slots"] = slots
     return _patch_site_config(site_id, cfg)

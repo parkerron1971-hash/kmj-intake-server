@@ -203,12 +203,15 @@ def populate_slots_for_site(
                 result = None
 
             if result and result.get("url"):
+                # PART 5 reroll-context: cache the query string so
+                # /slots/{id}/{slot}/reroll can re-fire the same search.
                 ok = slot_storage.set_slot_default(
                     business_id=business_id,
                     slot_name=slot_name,
                     url=result["url"],
                     source="unsplash",
                     credit=result.get("credit"),
+                    query=query,
                 )
                 if ok:
                     populated.append({
@@ -278,12 +281,16 @@ def populate_slots_for_site(
                 })
                 continue
 
+            # PART 5 reroll-context: cache the DALL-E prompt so
+            # /slots/{id}/{slot}/reroll can re-generate against the
+            # same brief without re-running enrichment + designer.
             ok = slot_storage.set_slot_default(
                 business_id=business_id,
                 slot_name=slot_name,
                 url=gen["url"],
                 source="dalle",
                 credit=None,
+                dalle_prompt=prompt,
             )
             if not ok:
                 warnings.append(f"persist failed for {slot_name} (DALL-E URL)")

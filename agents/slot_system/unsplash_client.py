@@ -41,6 +41,7 @@ def query_unsplash(
     orientation: str = "landscape",
     min_width: int = 1200,
     min_relevance_score: float = 0.5,
+    result_index: int = 0,
 ) -> Optional[Dict[str, Any]]:
     """Query Unsplash for the most relevant photo matching the query.
 
@@ -52,12 +53,20 @@ def query_unsplash(
     surfaced in the returned payload (as a synthetic rank-derived
     value) but never used to drop a result today.
 
+    `result_index` (Pass 4.0b.5 PART 5) selects which qualifying result
+    to return — 0 returns the most relevant (default), 1 the second,
+    etc. Used by the /reroll endpoint to walk the qualifying results
+    list across rerolls (per_page=10 lets us reroll up to 9 times on
+    the same query before paginating). When result_index exceeds the
+    qualifying-results length, the function returns None.
+
     Returns None when:
       - UNSPLASH_ACCESS_KEY is not set
       - query is empty
       - the HTTP call fails (any exception)
       - Unsplash returns 429 rate-limit
       - no results clear the min_width filter
+      - result_index >= number of qualifying results
     """
     api_key = os.environ.get("UNSPLASH_ACCESS_KEY")
     if not api_key:
@@ -112,8 +121,18 @@ def query_unsplash(
         )
         return None
 
-    top = qualified[0]
-    rank = results.index(top) if top in results else 0
+    # Honor result_index for reroll variety. Clamp to non-negative;
+    # return None when the index runs past the qualifying list (caller
+    # interprets as 'no more variety on this query').
+    idx = max(0, int(result_index or 0))
+    if idx >= len(qualified):
+        logger.info(
+            f"[unsplash] result_index={idx} exceeds qualifying count "
+            f"{len(qualified)} for query={q!r}"
+        )
+        return None
+    top = qualified[idx]
+    rank = results.index(top) if top in results else idx
     # Synthetic relevance score: rank-derived, in [0, 1]. 1.0 means top
     # of the unfiltered list. Lets future code threshold on it without
     # relying on Unsplash exposing a real score.
