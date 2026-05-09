@@ -1,0 +1,280 @@
+{
+  "module_id": "cinematic_authority",
+  "module_name": "Cinematic Authority",
+  "source_doc": "agents/design_intelligence/cinematic_authority_intelligence.md",
+  "rubric_version": "4.0b.1",
+  "_authoring_notes": "Rules extracted verbatim or near-verbatim from sections 2 (Color), 3 (Typography), 4 (Spacing), 5 (Components), 6 (Animation), 7 (Layout), 10 (Emotional Details), 11 (What Makes It Solutionist Quality). Layer 1 = deterministic (parseable HTML/CSS). Layer 2 = LLM-judged (qualitative).",
+
+  "layer_1_deterministic": [
+    {
+      "id": "hero_h1_size",
+      "description": "Hero h1 must use clamp(>=3rem, _, _) or be at least 76px on desktop.",
+      "severity": "HIGH",
+      "check_type": "css_property",
+      "check_spec": {
+        "selector": "h1, .hero h1, [data-section='hero'] h1, header h1",
+        "property": "font-size",
+        "min_value_px": 76,
+        "accept_clamp_min_rem": 3.0
+      },
+      "fix_hint": "Set hero h1 font-size to clamp(3.7rem, 9vw, 5.4rem) or larger. Hero is a statement, not a label."
+    },
+    {
+      "id": "hero_h1_weight",
+      "description": "Hero h1 must be font-weight 800 or 900.",
+      "severity": "HIGH",
+      "check_type": "css_property",
+      "check_spec": {
+        "selector": "h1, .hero h1, [data-section='hero'] h1, header h1",
+        "property": "font-weight",
+        "allowed_values": ["800", "900"]
+      },
+      "fix_hint": "Increase hero h1 font-weight to 900. The site stops whispering and starts declaring."
+    },
+    {
+      "id": "hero_h1_letter_spacing",
+      "description": "Hero h1 must use negative letter-spacing (-1px to -3px).",
+      "severity": "MEDIUM",
+      "check_type": "css_property",
+      "check_spec": {
+        "selector": "h1, .hero h1, [data-section='hero'] h1, header h1",
+        "property": "letter-spacing",
+        "max_value_px": -1,
+        "min_value_px": -3
+      },
+      "fix_hint": "Add letter-spacing: -2.4px to hero h1. Tight letters at large sizes feel confident."
+    },
+    {
+      "id": "section_h2_size",
+      "description": "Section h2 must use clamp(>=2rem, _, _) or be at least 48px on desktop.",
+      "severity": "HIGH",
+      "check_type": "css_property",
+      "check_spec": {
+        "selector": "h2, section h2",
+        "property": "font-size",
+        "min_value_px": 48,
+        "accept_clamp_min_rem": 2.0
+      },
+      "fix_hint": "Set section h2 font-size to clamp(2.4rem, 5vw, 3.5rem). Sections must announce themselves."
+    },
+    {
+      "id": "section_h2_weight",
+      "description": "Section h2 must be font-weight 800 or 900.",
+      "severity": "HIGH",
+      "check_type": "css_property",
+      "check_spec": {
+        "selector": "h2, section h2",
+        "property": "font-weight",
+        "allowed_values": ["800", "900"]
+      },
+      "fix_hint": "Increase section h2 font-weight to 800."
+    },
+    {
+      "id": "button_border_radius",
+      "description": "Primary CTA buttons must be pill-shaped (border-radius >= 999px).",
+      "severity": "HIGH",
+      "check_type": "css_property",
+      "check_spec": {
+        "selector": "button, .btn, .btn-primary, .btn-gold, .cta-button, [data-cta], a.btn, a.cta",
+        "property": "border-radius",
+        "min_value_px": 999
+      },
+      "fix_hint": "Set primary button border-radius to 999px. Pills are the signature interactive shape; never 4-8px corners."
+    },
+    {
+      "id": "card_border_radius",
+      "description": "Cards must have border-radius >= 20px (target 28px).",
+      "severity": "MEDIUM",
+      "check_type": "css_property",
+      "check_spec": {
+        "selector": ".card, .package-card, .feature-card, [data-card], .pricing-card",
+        "property": "border-radius",
+        "min_value_px": 20
+      },
+      "fix_hint": "Set card border-radius to 28px. The 'premium app' zone — never 4-12px."
+    },
+    {
+      "id": "section_padding_desktop",
+      "description": "Sections must have at least 100px top/bottom padding on desktop.",
+      "severity": "HIGH",
+      "check_type": "css_property",
+      "check_spec": {
+        "selector": "section, .section, main > div",
+        "property": "padding",
+        "min_value_px_y": 100,
+        "axis": "y"
+      },
+      "fix_hint": "Set section padding to 120px top/bottom on desktop (clamp(100px, 12vw, 140px)). Generous space signals importance; cramped sections kill premium feel."
+    },
+    {
+      "id": "italic_gold_word_in_headings",
+      "description": "Every section h2 must contain at least one italic word in the brand accent color (the signature emphasis pattern).",
+      "severity": "HIGH",
+      "check_type": "html_structure",
+      "check_spec": {
+        "selector": "h2",
+        "must_contain_child_matching": ["em", "i", "[class*='italic']", "[class*='accent-word']", "[style*='font-style: italic']", "[style*='font-style:italic']"],
+        "child_should_use_accent_color": true,
+        "min_match_ratio": 0.66
+      },
+      "fix_hint": "Wrap one word in every h2 with <em class=\"accent-word\"> styled italic + accent color (gold). This is the signature emphasis pattern: HEAVY heavy heavy *light* — like a musical accent."
+    },
+    {
+      "id": "gold_accent_line_per_section",
+      "description": "Every section must have a 3px-tall, ~48px-wide gold accent line element above its heading.",
+      "severity": "HIGH",
+      "check_type": "html_structure",
+      "check_spec": {
+        "selector": "section, .section",
+        "must_contain_descendant_matching": [".gold-line", ".accent-line", "[data-gold-line]", "[class*='gold-line']", "[class*='accent-line']"],
+        "min_match_ratio": 0.66
+      },
+      "fix_hint": "Add <div class=\"gold-line\" style=\"width:48px;height:3px;background:linear-gradient(90deg, var(--gold), var(--gold-light));margin-bottom:24px;\"></div> above each section heading. The eye learns to look for it as a section marker."
+    },
+    {
+      "id": "eyebrow_label_per_section",
+      "description": "Every section must have an uppercase, letter-spaced eyebrow label above the heading.",
+      "severity": "MEDIUM",
+      "check_type": "html_structure",
+      "check_spec": {
+        "selector": "section, .section",
+        "must_contain_descendant_matching": [".eyebrow", "[class*='eyebrow']", "[data-eyebrow]"],
+        "alternative_text_pattern": "uppercase short text >=12px <=14px with letter-spacing >=2px above an h2",
+        "min_match_ratio": 0.5
+      },
+      "fix_hint": "Add an eyebrow label (12px, weight 700, letter-spacing 4px, uppercase, gold) above each section h2. Eyebrows are wayfinding."
+    },
+    {
+      "id": "alternating_section_backgrounds",
+      "description": "Sections must alternate between dark (navy) and light (white/cream) backgrounds for visual rhythm.",
+      "severity": "HIGH",
+      "check_type": "global_pattern",
+      "check_spec": {
+        "pattern": "alternating_section_backgrounds",
+        "min_alternations": 2,
+        "dark_threshold_lightness": 0.25,
+        "light_threshold_lightness": 0.85
+      },
+      "fix_hint": "Set sections so they alternate dark/light. e.g. hero=navy, about=white, packages=off-white, how-it-works=navy. Rhythm comes from contrast — like chapters in a book."
+    },
+    {
+      "id": "cta_band_present",
+      "description": "At least one full-bleed gold CTA band must exist (visual punctuation between sections).",
+      "severity": "MEDIUM",
+      "check_type": "global_pattern",
+      "check_spec": {
+        "pattern": "full_bleed_accent_band",
+        "min_count": 1,
+        "accent_color_required": true
+      },
+      "fix_hint": "Add a full-bleed section with gold gradient background (linear-gradient(135deg, var(--gold), var(--gold-light))) — typically the closing CTA section. Demands attention; bold punctuation."
+    },
+    {
+      "id": "film_grain_overlay",
+      "description": "Body must have a fixed-position film grain overlay at low opacity (~0.018).",
+      "severity": "LOW",
+      "check_type": "global_pattern",
+      "check_spec": {
+        "pattern": "film_grain_overlay",
+        "must_match_one_of": [
+          "body::before",
+          ".grain",
+          "[class*='grain']",
+          "feTurbulence",
+          "background-image: url(\"data:image/svg+xml"
+        ],
+        "expected_opacity_max": 0.05
+      },
+      "fix_hint": "Add a fixed body::before with feTurbulence noise SVG at opacity 0.018. Subliminal texture — removes the 'too clean' digital feeling."
+    },
+    {
+      "id": "cubic_bezier_transitions",
+      "description": "Transitions must use cubic-bezier(0.16, 1, 0.3, 1) or similar premium decelerating easing.",
+      "severity": "LOW",
+      "check_type": "global_pattern",
+      "check_spec": {
+        "pattern": "css_contains_substring",
+        "needles": ["cubic-bezier(0.16", "cubic-bezier(.16", "cubic-bezier(0.16, 1, 0.3, 1)"],
+        "min_count": 1
+      },
+      "fix_hint": "Use cubic-bezier(0.16, 1, 0.3, 1) for transitions on cards, buttons, reveals. Starts fast, decelerates — feels like a luxury car braking."
+    },
+    {
+      "id": "brand_metaphor_in_ctas",
+      "description": "Primary CTAs must NOT use generic phrases when the enriched brief includes a brand_metaphor.",
+      "severity": "HIGH",
+      "check_type": "text_pattern",
+      "check_spec": {
+        "selector": "button, a.cta, a.btn, .btn-primary, .btn-gold, [data-cta]",
+        "forbidden_phrases_ci": ["Get Started", "Learn More", "Sign Up", "Click Here", "Book Now", "Subscribe", "Submit", "Contact Us", "Read More"],
+        "condition": "enriched_brief.brand_metaphor IS NOT NULL"
+      },
+      "fix_hint": "Replace generic CTAs with metaphor-reframed copy from enriched_brief.brand_metaphor_application. Example: 'Claim Your Throne' instead of 'Book Now' for a Royal Palace brand."
+    },
+    {
+      "id": "brand_metaphor_in_eyebrows",
+      "description": "Eyebrow labels must reflect the brand metaphor (when one exists).",
+      "severity": "MEDIUM",
+      "check_type": "text_pattern",
+      "check_spec": {
+        "selector": ".eyebrow, [class*='eyebrow'], [data-eyebrow]",
+        "forbidden_phrases_ci": ["FEATURES", "ABOUT", "SERVICES", "WHY US", "OUR PROCESS"],
+        "condition": "enriched_brief.brand_metaphor IS NOT NULL",
+        "soft": true
+      },
+      "fix_hint": "Replace generic eyebrows with metaphor-flavored labels per enriched_brief.brand_metaphor_application. Example: 'THE COURT' instead of 'TESTIMONIALS' for a Royal Palace brand."
+    },
+    {
+      "id": "warm_whites_not_pure_white",
+      "description": "Light section backgrounds should be warm (#F8F6F1, #FAFAF7) not pure #FFFFFF.",
+      "severity": "LOW",
+      "check_type": "global_pattern",
+      "check_spec": {
+        "pattern": "no_pure_white_section_bg",
+        "forbidden_values_ci": ["#fff", "#ffffff", "white", "rgb(255,255,255)", "rgb(255, 255, 255)"],
+        "selectors": ["section", ".section", "body"],
+        "tolerance": 0
+      },
+      "fix_hint": "Use warm whites like #F8F6F1 or #FAFAF7 for light section backgrounds. Pure white feels clinical; warm whites feel like premium paper."
+    }
+  ],
+
+  "layer_2_llm_judged": [
+    {
+      "id": "bold_without_shouting",
+      "description": "Page uses extreme weight and large type with restraint — confidence not aggression.",
+      "severity": "HIGH",
+      "judgment_prompt": "Examine the page's typography, color usage, and visual hierarchy. Does the page use extreme font weight (800-900) and large type (clamp scales) with restraint — meaning the boldness reads as confident authority — or does it feel aggressive, shouting, or template-like? Generous whitespace, muted secondary text, and slow reveal animations should balance the bold elements. Pass only if the boldness genuinely projects confidence."
+    },
+    {
+      "id": "rhythm_through_contrast",
+      "description": "Sections alternate dark/light in a way that feels like chapters, not arbitrary.",
+      "severity": "HIGH",
+      "judgment_prompt": "Read the page top to bottom. Do sections alternate between dark (navy) and light (white/cream/off-white) backgrounds in a deliberate, narrative-feeling rhythm — like chapters in a book, with the gold stats band and gold CTA band acting as bold punctuation? Or do the section backgrounds feel arbitrary, repetitive, or chosen without intent? Pass only if the rhythm reads as intentional storytelling."
+    },
+    {
+      "id": "depth_over_flatness",
+      "description": "Page has visible layers (grain, decorations, gradients, glow effects) — nothing sits flat.",
+      "severity": "MEDIUM",
+      "judgment_prompt": "Look at the page's visual depth. Does it have layers — film grain overlay, floating diamond decorations, radial gradient glows, parallax/scroll reveal animations, hover state transformations, glass-morphism effects, pulsing glows? Or does it sit flat, like a static brochure? Pass if the eye can find at least 3-4 distinct depth-creating layers."
+    },
+    {
+      "id": "emotional_progression_present",
+      "description": "Top-to-bottom emotional journey: Authority → Credibility → Trust → Belonging → Clarity → Ease → Urgency.",
+      "severity": "HIGH",
+      "judgment_prompt": "Read the page top to bottom and trace the emotional progression: Hero (Authority + intrigue) → Stats (Credibility + scale) → About (Trust + connection) → Who It's For (Belonging) → Packages (Clarity + desire) → How It Works (Ease) → Final CTA (Urgency + safety). Does the page deliver this seven-step emotional arc, or does it skip steps, mix the order, or fail to evoke each emotion? Pass only if the visitor would be carried through the full progression."
+    },
+    {
+      "id": "brand_metaphor_consistency",
+      "description": "Brand metaphor (from enriched_brief) carried through CTAs, eyebrow labels, section titles, copy voice — not just one place.",
+      "severity": "HIGH",
+      "judgment_prompt": "If the enriched_brief includes a brand_metaphor (e.g. royalty/palace/court for Royal Palace, transformation/shift for Embrace the Shift), verify the metaphor appears CONSISTENTLY across CTAs, eyebrow labels, section titles, and copy voice — not just in one place. The metaphor_application field of the brief lists specific reframings; check whether they're actually applied. Fail if the metaphor shows up in CTAs but not eyebrows, or vice versa, or if generic phrasing leaks through anywhere primary."
+    },
+    {
+      "id": "nothing_decorative_for_decoration",
+      "description": "Every visual element earns its place: revealing content, providing feedback, or creating atmosphere.",
+      "severity": "MEDIUM",
+      "judgment_prompt": "Examine each visual element on the page. Does each one serve a purpose — reveal content (scroll animations), provide feedback (hover states), or create atmosphere (grain, decorations) — or are some elements present purely because they look nice? Pass only if every animation, decoration, and visual effect is justified. Flag specific elements that feel like decoration-for-decoration."
+    }
+  ]
+}
