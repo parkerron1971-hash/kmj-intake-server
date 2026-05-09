@@ -395,12 +395,21 @@ def _slot_record_for_response(
     record = slot_storage.get_slot(business_id, slot_name) or {}
     defn = SLOT_DEFINITIONS.get(slot_name)
     resolved = resolve_slot_url(record, slot_name)
-    can_reroll_now, current_count = (
-        slot_storage.can_reroll(business_id, slot_name)
-        if defn and defn.get("default_strategy") != "placeholder"
-        else (False, 0)
+    is_placeholder_strategy = (
+        defn and defn.get("default_strategy") == "placeholder"
     )
-    rerolls_remaining = max(0, MAX_REROLLS_PER_DAY - current_count)
+    if is_placeholder_strategy:
+        # Placeholder slots are uploads-only. Both flags are 0/False so
+        # the UI can render the reroll button disabled with the "uploads
+        # only" tooltip without further special-casing.
+        can_reroll_now = False
+        current_count = 0
+        rerolls_remaining = 0
+    else:
+        can_reroll_now, current_count = slot_storage.can_reroll(
+            business_id, slot_name
+        )
+        rerolls_remaining = max(0, MAX_REROLLS_PER_DAY - current_count)
     return {
         "slot_name": slot_name,
         "definition": defn,
