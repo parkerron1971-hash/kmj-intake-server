@@ -51,6 +51,18 @@ def judge_all_llm(
     enriched_brief: Optional[Dict] = None,
 ) -> List[Dict]:
     """Run every Layer 2 rule. Returns a list of violation dicts."""
+    stripped_len = len((html or "").strip())
+    if stripped_len < 200:
+        # Builder failure short-circuit. Replace the entire Layer 2 output
+        # with one informative rule so regenerate gets a clear punch-list
+        # signal instead of hallucinated evidence from judging empty HTML.
+        return [{
+            "rule_id": "html_too_short_for_llm_judgment",
+            "severity": "HIGH",
+            "description": "HTML too short for LLM judgment (Layer 2 skipped).",
+            "evidence": f"HTML length {stripped_len} chars, minimum 200 required.",
+            "fix_hint": "Builder Agent appears to have returned empty or near-empty HTML. This is a Builder failure, not a design quality issue — check Builder Agent output before retrying critique.",
+        }]
     if not rubric:
         return []
     if not os.environ.get("ANTHROPIC_API_KEY"):
