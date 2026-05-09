@@ -1899,8 +1899,49 @@ async def generate_design_rec_endpoint(business_id: str):
         logger.warning(f"[design-rec] designer agent import failed: {e}")
         raise HTTPException(500, "Designer Agent unavailable")
 
+    # Pass 4.0b PART 3 — feed Sparse-Input Enrichment to Designer.
+    # Soft-fail: enrichment failure must NOT block recommendation. The
+    # Designer's prompt simply omits the ENRICHMENT BRIEF block when
+    # enriched_brief is None. We still run enrichment for cold-start so
+    # the rec carries `_enrichment_available: True` for observability.
+    enriched_brief = None
+    try:
+        from agents.sparse_input_enrichment import enrich_intake
+        biz_for_enrich = bundle.get("business") or {}
+        voice_for_enrich = bundle.get("voice") or {}
+        intel_for_enrich = bundle.get("practitioner_intelligence") or {}
+        strategy_for_enrich = (intel_for_enrich.get("strategy_track") or {})
+
+        colors_in: list = []
+        bk = brand_kit or {}
+        for k in ("primary_color", "accent_color", "secondary_color"):
+            v = bk.get(k)
+            if v:
+                colors_in.append(v)
+
+        enriched_brief = enrich_intake(
+            business_name=biz_for_enrich.get("name") or business_data.get("name") or "",
+            description=(
+                biz_for_enrich.get("elevator_pitch")
+                or biz_for_enrich.get("tagline")
+                or intel_for_enrich.get("about_business")
+                or None
+            ),
+            colors=colors_in or None,
+            practitioner_voice=(
+                voice_for_enrich.get("brand_voice")
+                or voice_for_enrich.get("tone_original")
+                or None
+            ),
+            strategy_track_summary=strategy_for_enrich.get("summary") or None,
+        )
+    except Exception as e:
+        logger.warning(f"[design-rec] enrichment soft-failed for {business_id}: {e}")
+        enriched_brief = None
+
     rec, error = generate_design_recommendation(
-        bundle, primary_vocab_id, product_rows, cold_start
+        bundle, primary_vocab_id, product_rows, cold_start,
+        enriched_brief=enriched_brief,
     )
     if not rec:
         raise HTTPException(500, f"Generation failed: {error}")

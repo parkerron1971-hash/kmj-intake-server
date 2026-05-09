@@ -92,10 +92,58 @@ def _build_substrand_index() -> str:
     return "\n".join(lines)
 
 
+def _format_enrichment_block(enriched_brief: Optional[dict]) -> str:
+    """Render the Pass 4.0a enrichment brief as a prompt block. Empty
+    string when no enrichment provided (keeps the prompt unchanged for
+    legacy callers)."""
+    if not enriched_brief or not isinstance(enriched_brief, dict):
+        return ""
+
+    inferred_vibe = (enriched_brief.get("inferred_vibe") or "").strip()
+    metaphor = enriched_brief.get("brand_metaphor")
+    metaphor_app = enriched_brief.get("brand_metaphor_application")
+    palette_roles = enriched_brief.get("palette_roles") or {}
+    audience = (enriched_brief.get("audience_profile") or "").strip()
+    archetype = (enriched_brief.get("content_archetype") or "").strip()
+    progression = enriched_brief.get("emotional_progression") or []
+
+    palette_lines = []
+    if isinstance(palette_roles, dict) and palette_roles:
+        for role, color in palette_roles.items():
+            palette_lines.append(f"  - {role}: {color}")
+    palette_block = "\n".join(palette_lines) if palette_lines else "  (none assigned)"
+
+    progression_lines = []
+    if isinstance(progression, list) and progression:
+        for i, emo in enumerate(progression, 1):
+            progression_lines.append(f"  {i}. {emo}")
+    progression_block = "\n".join(progression_lines) if progression_lines else "  (none specified)"
+
+    metaphor_line = (metaphor or "").strip() or "(none — proceed with structural strand selection)"
+    metaphor_app_line = (metaphor_app or "").strip() or "(N/A)"
+
+    return f"""
+# ENRICHMENT BRIEF (from Sparse-Input Enrichment)
+
+Inferred vibe: {inferred_vibe or "(none)"}
+Brand metaphor: {metaphor_line}
+Brand metaphor application: {metaphor_app_line}
+Palette roles:
+{palette_block}
+Audience profile: {audience or "(none)"}
+Content archetype: {archetype or "(none)"}
+Emotional progression:
+{progression_block}
+
+Use this enriched context to inform your strand pick. The brand_metaphor in particular should shape signature_moment and rationale. If brand_metaphor is null, fall back to structural strand selection based on archetype.
+"""
+
+
 def build_director_prompt(
     bundle: dict,
     vocab_id: str,
     products: list,
+    enriched_brief: Optional[dict] = None,
 ) -> str:
     """Build the full Director prompt for Claude. Pure function — no IO."""
     bundle = bundle or {}
@@ -117,6 +165,7 @@ def build_director_prompt(
     strand_options = _build_strand_options_block()
     archetype_options = _build_archetype_options_block()
     substrand_index = _build_substrand_index()
+    enrichment_block = _format_enrichment_block(enriched_brief)
 
     return f"""You are the Designer Agent for The Solutionist System — a senior creative director who makes visual identity decisions for practitioners on a multi-tenant platform.
 
@@ -180,7 +229,7 @@ Signal words: {", ".join(vocab.get("signal_words") or [])}
 - cultural-african: Adinkra symbols, kente patterns, geometric grid marks (Black diaspora brands)
 - botanical: leaf motifs, vine dividers, organic curves (wellness, natural)
 - structural: grid lines, hard rules, technical marks (corporate, technical)
-
+{enrichment_block}
 # DECISION RULES
 
 - The ratio (30-70 range) controls copy tone, spacing aggression, warmth, and structural weight simultaneously.
@@ -475,17 +524,32 @@ def generate_design_recommendation(
     vocab_id: str,
     products: list,
     cold_start: bool,
+    enriched_brief: Optional[dict] = None,
 ) -> tuple:
     """Run the Designer Agent.
 
     Returns (recommendation: dict | None, error_message: str | None).
+
+    `enriched_brief` (Pass 4.0b PART 3) is the Sparse-Input Enrichment
+    output (inferred_vibe / brand_metaphor / palette_roles / etc). When
+    provided, it's injected into the prompt above DECISION RULES so the
+    LLM picks strands consistent with the inferred vibe and applies the
+    metaphor in signature_moment / rationale. Passing None preserves
+    the legacy prompt verbatim.
     """
+    enrichment_used = bool(enriched_brief) and isinstance(enriched_brief, dict)
+
     if cold_start:
         rec = cold_start_recommendation(vocab_id)
+        # Cold-start path is deterministic and doesn't see the prompt; the
+        # flag tells the caller that enrichment was available but skipped
+        # because there wasn't enough voice signal to drive an LLM call.
+        rec["_enrichment_used"] = False
+        rec["_enrichment_available"] = enrichment_used
         return rec, None
 
     try:
-        prompt = build_director_prompt(bundle, vocab_id, products)
+        prompt = build_director_prompt(bundle, vocab_id, products, enriched_brief)
     except Exception as e:
         print(f"[designer] prompt build failed: {e}", file=sys.stderr)
         return None, f"Prompt build failed: {type(e).__name__}: {e}"
@@ -509,4 +573,5 @@ def generate_design_recommendation(
     _normalize_alternatives(rec)
     rec["cold_start"] = False
     rec["generated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    rec["_enrichment_used"] = enrichment_used
     return rec, None
