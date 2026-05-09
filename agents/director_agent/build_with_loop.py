@@ -278,6 +278,7 @@ def run_build_loop(
     max_attempts: int = 2,
     include_html: bool = True,
     business_id: Optional[str] = None,
+    initial_punch_list: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Run the full Director build-with-loop pipeline.
 
@@ -406,8 +407,14 @@ def run_build_loop(
     builder_v1_error: Optional[str] = None
     builder_v1_warnings: List[str] = []
     try:
+        # Pass 4.0c: when called from /director/refine, initial_punch_list
+        # carries the user's enriched feedback moves. Builder v1 sees
+        # them as the active punch list (alongside the Cinematic Authority
+        # MAINTAIN block via rubric=rubric_for_builder).
         html_v1, builder_v1_error, errs = build_html(
-            brief, bundle, None, [], [], punch_list=None,
+            brief, bundle, None, [], [],
+            punch_list=initial_punch_list,
+            rubric=rubric_for_builder if initial_punch_list else None,
         )
         if errs:
             builder_v1_warnings = list(errs)
@@ -614,6 +621,25 @@ def run_build_loop(
                     "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
                 )
                 cfg["html_source"] = "build-with-loop"
+                # Pass 4.0c: persist the brief/pick/inputs so /director/
+                # refine can reload them without re-running enrichment +
+                # designer + brief expander on every refine call. Only
+                # write the keys we actually have — preserves any
+                # hand-edited values from earlier passes.
+                if enriched_brief is not None:
+                    cfg["enriched_brief"] = enriched_brief
+                if rec is not None:
+                    cfg["design_recommendation"] = rec
+                cfg["build_inputs"] = {
+                    "business_name": business_name,
+                    "module_id": module_id,
+                    "description": description,
+                    "colors": colors,
+                    "practitioner_voice": practitioner_voice,
+                    "strategy_track_summary": strategy_track_summary,
+                    "vocab_id": vocab_id,
+                    "max_attempts": max_attempts,
+                }
                 # Clear any prior failure markers so /preview falls through
                 # to the new HTML cleanly.
                 cfg.pop("html_build_failed_at", None)
