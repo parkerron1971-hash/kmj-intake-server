@@ -26,6 +26,12 @@ from pydantic import BaseModel
 from agents.director_agent.critique import critique_site
 from agents.director_agent.build_with_loop import run_build_loop
 from agents.director_agent.feedback_enrichment import enrich_feedback
+from agents.director_agent.refine import (
+    delete_chat_history,
+    get_chat_history,
+    get_diagnose_question,
+    run_refine,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,3 +161,70 @@ def diag_enrich_feedback(req: EnrichFeedbackDiagRequest) -> Dict[str, Any]:
         enriched_brief=req.enriched_brief,
         design_pick=req.design_pick,
     )
+
+
+# ─── Pass 4.0c PART 3 — Refine + diagnose + chat history ────────────
+
+class RefineRequest(BaseModel):
+    business_id: str
+    user_text: str
+    quality: Optional[str] = "hd"
+
+
+@router.post("/refine")
+def refine(req: RefineRequest) -> Dict[str, Any]:
+    """Run the Director refine flow.
+
+    Insert user message → enrich feedback → insert system message →
+    either trigger a slot reroll (estimated_regenerate_needed=False)
+    or call build_with_loop with the enriched moves as the initial
+    punch list.
+
+    Synchronous: the slow path (Builder regenerate) blocks for 3-5
+    minutes. Frontend polls /director/chat-history while inFlight to
+    detect completion via build_status='completed' on the system
+    message — the chat row is the source of truth even if this HTTP
+    request times out at the proxy layer.
+
+    409 Conflict when an in-flight build for this business exists
+    within the last 10 minutes (prevents double-spend on parallel
+    refine requests).
+    """
+    result = run_refine(
+        business_id=req.business_id,
+        user_text=req.user_text,
+        quality=req.quality or "hd",
+    )
+    if result.get("status") == "in_flight":
+        raise HTTPException(status_code=409, detail=result)
+    if result.get("status") == "no_business_state":
+        raise HTTPException(status_code=404, detail=result)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=result)
+    return result
+
+
+@router.post("/diagnose")
+def diagnose() -> Dict[str, Any]:
+    """Return the multi-select diagnose question. Pass 4.0c v1: fixed
+    6 options. Future passes can make it module-aware."""
+    return get_diagnose_question()
+
+
+@router.get("/chat-history/{business_id}")
+def chat_history(business_id: str) -> Dict[str, Any]:
+    """Return all chat messages for a business, ordered by created_at
+    ascending. Used by the frontend dock for both initial hydration
+    and polling-to-detect-completion."""
+    return {
+        "business_id": business_id,
+        "messages": get_chat_history(business_id),
+    }
+
+
+@router.delete("/chat-history/{business_id}")
+def chat_history_delete(business_id: str) -> Dict[str, Any]:
+    """Wipe all chat history for a business. Used by the 'start fresh'
+    UX path in the frontend dock."""
+    ok = delete_chat_history(business_id)
+    return {"success": ok, "business_id": business_id}
