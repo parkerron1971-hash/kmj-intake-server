@@ -202,16 +202,16 @@ def _handle_color_swap(
             "Couldn't save the color change.",
             {"persisted_row": None},
         )
-    # Honest framing — the override persists but the render pipeline
-    # ignores color_role until PART 3 ships.
+    # Pass 4.0d PART 3 wired the render-time injection (brand_kit_renderer
+    # picks up color_role overrides from site_content_overrides and writes
+    # them into the :root block on every render). Sites whose Builder
+    # output uses var(--brand-*) re-theme instantly; pre-PART-3 sites with
+    # hardcoded hex need a rebuild to gain re-themability.
     return _ok(
         "color_swap",
-        (
-            f"Saved color override: {role} → {new_color}. "
-            f"This will visually apply when Pass 4.0d PART 3 ships "
-            f"(brand-kit → CSS-vars wiring); the row is persisted now."
-        ),
-        {"override_row": row, "deferred_until": "pass-4-0d-part-3"},
+        f"Saved color override: {role} → {new_color}. Refresh preview to see the change.",
+        {"override_row": row},
+        next_actions=["refresh the preview"],
     )
 
 
