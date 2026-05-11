@@ -1183,13 +1183,29 @@ def _try_serve_builder_html(
     # to the slot-resolved HTML on any error.
     try:
         from agents.override_system.override_resolver import resolve_html_overrides
-        return resolve_html_overrides(html_resolved, business_id)
+        html_with_overrides = resolve_html_overrides(html_resolved, business_id)
     except Exception as e:
         logger.warning(
             f"[smart_sites] override resolution failed for {business_id}, "
             f"serving slot-resolved HTML unmodified: {e}"
         )
-        return html_resolved
+        html_with_overrides = html_resolved
+
+    # Pass 4.0e PART 1 — inject the inline edit-mode script. Adds a
+    # self-contained <script> block to <head> that listens for parent
+    # postMessage and surfaces element_clicked / element_hovered events
+    # back to the Studio app. Inert when no data-override-target attrs
+    # are present (pre-PART-2 builds). Soft-fails to the override-resolved
+    # HTML on any error.
+    try:
+        from agents.edit_mode.injector import inject_edit_mode_script
+        return inject_edit_mode_script(html_with_overrides)
+    except Exception as e:
+        logger.warning(
+            f"[smart_sites] edit-mode script injection failed for {business_id}, "
+            f"serving override-resolved HTML unmodified: {e}"
+        )
+        return html_with_overrides
 
 
 def _try_render_via_archetype(
