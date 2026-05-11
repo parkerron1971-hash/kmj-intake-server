@@ -1148,13 +1148,28 @@ def _try_serve_builder_html(
                 f"[smart_sites] resolved {len(found)} slot tag(s) for "
                 f"{business_id}: {found} ({len(credits)} credit(s))"
             )
-        return html_resolved
     except Exception as e:
         logger.warning(
             f"[smart_sites] slot resolution failed for {business_id}, "
             f"serving motion-injected HTML unmodified: {e}"
         )
-        return html_with_motion
+        html_resolved = html_with_motion
+
+    # Pass 4.0d PART 1 — content overrides applied after slot resolution.
+    # Replaces inner text of every <... data-override-target="path">
+    # with the practitioner's override_value from site_content_overrides.
+    # color_role overrides land in PART 3; slot_image overrides are
+    # no-ops here (site_config.slots remains authoritative). Soft-fails
+    # to the slot-resolved HTML on any error.
+    try:
+        from agents.override_system.override_resolver import resolve_html_overrides
+        return resolve_html_overrides(html_resolved, business_id)
+    except Exception as e:
+        logger.warning(
+            f"[smart_sites] override resolution failed for {business_id}, "
+            f"serving slot-resolved HTML unmodified: {e}"
+        )
+        return html_resolved
 
 
 def _try_render_via_archetype(
