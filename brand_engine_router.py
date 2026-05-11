@@ -104,3 +104,56 @@ def remove_brand_asset(business_id: str, body: Dict[str, Any]) -> JSONResponse:
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Remove failed"))
     return JSONResponse(result)
+
+
+# ─── Pass 4.0d PART 3 — Brand kit inspection diagnostic ────────────
+
+@router.get("/_diag/recent")
+def diag_recent_brand_kits(limit: int = 20, name_filter: str = "") -> JSONResponse:
+    """List recently-updated businesses + their brand_kit color shapes.
+    Read-only. Used by the Pass 4.0d PART 3 role-mapping verification
+    to inspect what shape the brand_kit field actually has in the wild
+    (and to find specific businesses like the Royal Palace test by name)
+    without needing the practitioner to remember every business_id.
+
+    Returns at most `limit` businesses. Optional `name_filter` is an
+    ilike pattern against businesses.name (the param is wrapped in % so
+    callers pass 'royal' not '%royal%').
+    """
+    from brand_engine import _sb_get as be_get
+    qs = "select=id,name,updated_at,settings"
+    if name_filter:
+        # Wrap with wildcards so practitioners can pass plain substrings.
+        # URL-encode by leaving %25 (literal %) — be_get handles the rest.
+        safe = name_filter.replace(" ", "%20")
+        qs += f"&name=ilike.%25{safe}%25"
+    qs += f"&order=updated_at.desc&limit={max(1, min(50, limit))}"
+    rows = be_get(f"/businesses?{qs}") or []
+    out = []
+    for r in rows:
+        settings = r.get("settings") or {}
+        bk = settings.get("brand_kit") or {}
+        colors = bk.get("colors") or {}
+        out.append({
+            "id": r.get("id"),
+            "name": r.get("name"),
+            "updated_at": r.get("updated_at"),
+            "brand_kit_present": bool(bk),
+            "brand_kit_color_keys": sorted(list(colors.keys())) if colors else [],
+            "colors_nested": colors or None,
+            "colors_flat": {
+                k: bk.get(k) for k in
+                ["primary_color", "secondary_color", "accent_color",
+                 "background_color", "text_color"]
+                if bk.get(k)
+            },
+            "font_pair": bk.get("font_pair"),
+            "tagline": bk.get("tagline"),
+        })
+    return JSONResponse({
+        "ok": True,
+        "count": len(out),
+        "limit_requested": limit,
+        "name_filter": name_filter or None,
+        "businesses": out,
+    })
