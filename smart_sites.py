@@ -1132,6 +1132,26 @@ def _try_serve_builder_html(
         )
         return None
 
+    # Pass 4.0d PART 3 — brand-kit-driven CSS variable injection.
+    # Pulls businesses.settings.brand_kit + any color_role overrides from
+    # site_content_overrides, composes a :root {--brand-X: ...} block,
+    # injects it just after <head>. Builds rendered against this pipeline
+    # (Builder Agent emits var(--brand-*) after Pass 4.0d PART 3) re-theme
+    # when the brand_kit changes — without firing a rebuild. Legacy sites
+    # whose HTML still uses raw hex are unaffected; the injected vars are
+    # additive. Soft-fails to the motion-injected HTML on any error.
+    try:
+        from agents.design_intelligence.brand_kit_renderer import render_with_brand_kit
+        html_with_brand_vars = render_with_brand_kit(
+            html_with_motion, business_id, site_config
+        )
+    except Exception as e:
+        logger.warning(
+            f"[smart_sites] brand_kit var injection failed for {business_id}, "
+            f"serving motion-injected HTML unmodified: {e}"
+        )
+        html_with_brand_vars = html_with_motion
+
     # Pass 4.0b.5 PART 4 — slot resolution at render time.
     # Replace <img data-slot="X" src=""> with the populated URL or a
     # styled placeholder, and inject Unsplash credits in the footer.
@@ -1141,7 +1161,7 @@ def _try_serve_builder_html(
         from agents.slot_system.slot_resolver import resolve_html_slots
         slots = site_config.get("slots") or {}
         html_resolved, credits, found = resolve_html_slots(
-            html_with_motion, slots,
+            html_with_brand_vars, slots,
         )
         if found:
             logger.info(
@@ -1151,9 +1171,9 @@ def _try_serve_builder_html(
     except Exception as e:
         logger.warning(
             f"[smart_sites] slot resolution failed for {business_id}, "
-            f"serving motion-injected HTML unmodified: {e}"
+            f"serving brand-kit-injected HTML unmodified: {e}"
         )
-        html_resolved = html_with_motion
+        html_resolved = html_with_brand_vars
 
     # Pass 4.0d PART 1 — content overrides applied after slot resolution.
     # Replaces inner text of every <... data-override-target="path">

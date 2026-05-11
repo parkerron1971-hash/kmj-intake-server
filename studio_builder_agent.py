@@ -581,7 +581,41 @@ Write copy in this voice. Don't write generic web copy.
 
 {brief.get('mood', '')}
 
-# COLOR DISCIPLINE
+# BRAND PALETTE — USE CSS VARIABLES (Pass 4.0d PART 3)
+
+The platform injects brand-kit-driven CSS variables at render time. EVERY palette use in your output MUST reference a variable, NOT a raw hex code, for the practitioner's brand_kit to flow through to the live site without rebuilding.
+
+```css
+var(--brand-authority)         /* Deep anchor — hero bg, primary CTA bg, dark sections */
+var(--brand-signal)            /* Warm accent — italic emphasis words, accent lines, signal band */
+var(--brand-warm-neutral)      /* Light breathing surface — alternating section bg */
+var(--brand-deep-secondary)    /* Optional second tone — dividers, secondary CTAs */
+var(--brand-text-primary)      /* Body text on light surfaces */
+var(--brand-text-on-authority) /* Auto-derived — text on var(--brand-authority) bgs */
+var(--brand-text-on-signal)    /* Auto-derived — text on var(--brand-signal) bgs */
+```
+
+Composition patterns (apply, don't copy verbatim):
+- Hero / dark section: `background: var(--brand-authority); color: var(--brand-text-on-authority);`
+- Light section:       `background: var(--brand-warm-neutral); color: var(--brand-text-primary);`
+- Signal band (CTA):   `background: var(--brand-signal); color: var(--brand-text-on-signal);`
+- Italic emphasis word inside an h2: `color: var(--brand-signal); font-style: italic;`
+- Accent line above headings: `background: var(--brand-signal); width: 48px; height: 3px;`
+- Card on a light section: `background: #fff` is still fine for card surfaces specifically (cards sit on the warm-neutral page bg and need a contrast pop). Reach for var(--brand-warm-neutral) when the card should disappear into the page; for raised cards keep pure white or a near-white with a `box-shadow`.
+
+ABSOLUTELY DO NOT hardcode the following palette-role hex codes:
+- #0A1628, #122040, #1B3060 (these belong inside `var(--brand-authority)` / `--brand-deep-secondary`)
+- #C6952F, #DCAD4A, #F0D590 (these belong inside `var(--brand-signal)`)
+- #F8F6F1, #FAFAFA, #EDE8DC (these belong inside `var(--brand-warm-neutral)`)
+
+You MAY use raw hex for:
+- Subtle alpha overlays (e.g., rgba(0,0,0,0.04) for shadows)
+- Card surfaces that intentionally don't theme with the brand (e.g., a pure white card on a warm-neutral page)
+- Decoration-specific tints that don't represent a brand role
+
+When in doubt: if the color carries brand identity, USE THE VARIABLE.
+
+# COLOR DISCIPLINE (from the design brief — values below are guides for your CHOICES, not values to hardcode)
 
 {_format_palette(brief.get('palette') or [])}
 
@@ -589,6 +623,8 @@ Accent rule: {color_disc.get('accentRule', '')}
 CTA color: {color_disc.get('ctaColor', '')}
 Max accent per section: {color_disc.get('maxAccentPerSection', 1)}
 Neutral usage: {color_disc.get('neutralUsage', '')}
+
+Translate these guidance values into the appropriate var(--brand-*) reference. The brief's palette describes the DESIGNER'S color INTENT; the rendered CSS uses the brand_kit-fed variables.
 
 # TYPOGRAPHY
 
@@ -640,12 +676,12 @@ These are guidance, not script. The order, treatment, and layout of each section
 
 # RULES (Pass 3.8g — Solutionist Quality additions)
 
-- Every h2 MUST contain ONE italic accent word wrapped in <em class="accent-word">. The accent word is the emotional core of the heading.
-- Every h2 MUST be preceded by (1) a 3px-tall gold accent line (about 48px wide), AND (2) a small uppercase letter-spaced eyebrow label.
+- Every h2 MUST contain ONE italic accent word wrapped in <em class="accent-word" style="color: var(--brand-signal); font-style: italic;">. The accent word is the emotional core of the heading.
+- Every h2 MUST be preceded by (1) a 3px-tall var(--brand-signal) accent line (about 48px wide) — e.g. <div class="accent-line" style="width:48px;height:3px;background:var(--brand-signal);margin-bottom:24px"></div>, AND (2) a small uppercase letter-spaced eyebrow label.
 - All buttons MUST be pill-shaped (border-radius: 999px). NEVER 4-12px corners on buttons.
 - All cards MUST have border-radius: 28px or greater. NEVER use 4-12px corners on cards.
 - All section padding MUST be 80px minimum top/bottom (120-140px ideal on desktop).
-- Use warm whites: #F8F6F1 backgrounds, #F4F0E8 text on dark. NEVER pure #FFFFFF anywhere.
+- Use var(--brand-warm-neutral) for light section backgrounds and var(--brand-text-on-authority) for text on var(--brand-authority) backgrounds. NEVER pure #FFFFFF for a section bg.
 - Every primary CTA button MUST have class="cta-button" so the reactivity layer applies the shimmer pass.
 - Every section MUST be a <section> tag OR carry a data-reveal attribute so the scroll-reveal layer animates it.
 - Hero photo / feature image wrapper MUST carry data-headshot-frame so the pulse-glow layer attaches.
