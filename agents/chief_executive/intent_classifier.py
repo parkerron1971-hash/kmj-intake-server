@@ -74,7 +74,20 @@ INTENT DEFINITIONS:
   params: { "slot_name": "<best-guess slot identifier like hero_image | about_photo | testimonial_1>", "action": "<reroll | upload_prompt | clear>" }
 
 - color_swap — the user wants to change a specific palette ROLE'S color value. Examples: "change the authority color to navy", "the gold is wrong, try purple", "swap the warm neutral to off-white".
-  params: { "role": "<authority | signal | warm_neutral | text_dark | text_light>", "new_color": "<hex or color description>" }
+  params: { "role": "<authority | signal | warm_neutral | text_dark | text_light>", "new_color": "<7-character hex code like #6B46C1>" }
+
+  COLOR VALUE EXTRACTION (strict):
+  - ALWAYS output new_color as a 7-character hex code starting with #
+  - NEVER output color names like "deep amber" or "royal purple" — convert to hex
+  - "warm gold"        → "#D4A03A" (or similar warm gold hex)
+  - "royal purple"     → "#6B46C1" (or similar deep purple)
+  - "navy"             → "#0A1628" (or similar deep navy)
+  - "off-white"        → "#FAFAFA" (or similar near-white)
+  - "deep amber"       → "#D97706" (or similar deep amber)
+  - "burgundy"         → "#7C1D2E" or similar
+  - If the user gives an exact hex already, use it verbatim
+  - If genuinely ambiguous ("make it a different color", no target color given), set confidence below threshold (so the request demotes to ambiguous)
+  - Use your color knowledge to pick a sensible hex that matches the descriptive name; the practitioner can always override the exact value later
 
 - operational_task — the user is asking Chief to do business-operational work: tasks, contacts, invoices, contracts, products. Examples: "add a task to follow up with the Davidson lead", "create an invoice for $500".
   params: { "task_description": "<what the user wants done>" }
