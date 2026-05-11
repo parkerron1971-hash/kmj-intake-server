@@ -2,8 +2,8 @@
   "module_id": "cinematic_authority",
   "module_name": "Cinematic Authority",
   "source_doc": "agents/design_intelligence/cinematic_authority_intelligence.md",
-  "rubric_version": "4.0b.1",
-  "_authoring_notes": "Rules extracted verbatim or near-verbatim from sections 2 (Color), 3 (Typography), 4 (Spacing), 5 (Components), 6 (Animation), 7 (Layout), 10 (Emotional Details), 11 (What Makes It Solutionist Quality). Layer 1 = deterministic (parseable HTML/CSS). Layer 2 = LLM-judged (qualitative).",
+  "rubric_version": "4.0d.3",
+  "_authoring_notes": "Rules extracted verbatim or near-verbatim from sections 2 (Color), 3 (Typography), 4 (Spacing), 5 (Components), 6 (Animation), 7 (Layout), 10 (Emotional Details), 11 (What Makes It Solutionist Quality). Layer 1 = deterministic (parseable HTML/CSS). Layer 2 = LLM-judged (qualitative). 4.0d.3 — color rules express palette ROLES not specific hex codes (Pass 4.0d PART 3 brand-kit linking). New rule uses_brand_css_vars enforces var(--brand-*) over raw hex so the render layer's brand-kit injection actually changes the site appearance.",
 
   "layer_1_deterministic": [
     {
@@ -107,29 +107,29 @@
       "fix_hint": "Set section padding to 120px top/bottom on desktop (clamp(100px, 12vw, 140px)). Generous space signals importance; cramped sections kill premium feel."
     },
     {
-      "id": "italic_gold_word_in_headings",
-      "description": "Every section h2 must contain at least one italic word in the brand accent color (the signature emphasis pattern).",
+      "id": "italic_signal_word_in_headings",
+      "description": "Every section h2 must contain at least one italic word in the brand signal color (the signature emphasis pattern).",
       "severity": "HIGH",
       "check_type": "html_structure",
       "check_spec": {
         "selector": "h2",
         "must_contain_child_matching": ["em", "i", "[class*='italic']", "[class*='accent-word']", "[style*='font-style: italic']", "[style*='font-style:italic']"],
-        "child_should_use_accent_color": true,
+        "child_should_use_signal_role": true,
         "min_match_ratio": 0.66
       },
-      "fix_hint": "Wrap one word in every h2 with <em class=\"accent-word\"> styled italic + accent color (gold). This is the signature emphasis pattern: HEAVY heavy heavy *light* — like a musical accent."
+      "fix_hint": "Wrap one word in every h2 with <em class=\"accent-word\" style=\"color: var(--brand-signal); font-style: italic;\">. This is the signature emphasis pattern: HEAVY heavy heavy *light* — like a musical accent. Use var(--brand-signal), not a raw gold hex, so the emphasis re-themes when the brand_kit changes."
     },
     {
-      "id": "gold_accent_line_per_section",
-      "description": "Every section must have a 3px-tall, ~48px-wide gold accent line element above its heading.",
+      "id": "signal_accent_line_per_section",
+      "description": "Every section must have a 3px-tall, ~48px-wide accent line in the brand signal color above its heading.",
       "severity": "HIGH",
       "check_type": "html_structure",
       "check_spec": {
         "selector": "section, .section",
-        "must_contain_descendant_matching": [".gold-line", ".accent-line", "[data-gold-line]", "[class*='gold-line']", "[class*='accent-line']"],
+        "must_contain_descendant_matching": [".gold-line", ".accent-line", ".signal-line", "[data-gold-line]", "[data-accent-line]", "[class*='gold-line']", "[class*='accent-line']", "[class*='signal-line']"],
         "min_match_ratio": 0.66
       },
-      "fix_hint": "Add <div class=\"gold-line\" style=\"width:48px;height:3px;background:linear-gradient(90deg, var(--gold), var(--gold-light));margin-bottom:24px;\"></div> above each section heading. The eye learns to look for it as a section marker."
+      "fix_hint": "Add <div class=\"accent-line\" style=\"width:48px;height:3px;background:var(--brand-signal);margin-bottom:24px;\"></div> above each section heading. The eye learns to look for it as a section marker. Use var(--brand-signal) so the line re-themes with the brand_kit."
     },
     {
       "id": "eyebrow_label_per_section",
@@ -146,7 +146,7 @@
     },
     {
       "id": "alternating_section_backgrounds",
-      "description": "Sections must alternate between dark (navy) and light (white/cream) backgrounds for visual rhythm.",
+      "description": "Sections must alternate between authority (deep) and warm-neutral (light) backgrounds for visual rhythm.",
       "severity": "HIGH",
       "check_type": "global_pattern",
       "check_spec": {
@@ -155,11 +155,11 @@
         "dark_threshold_lightness": 0.25,
         "light_threshold_lightness": 0.85
       },
-      "fix_hint": "Set sections so they alternate dark/light. e.g. hero=navy, about=white, packages=off-white, how-it-works=navy. Rhythm comes from contrast — like chapters in a book."
+      "fix_hint": "Set sections so they alternate authority/warm-neutral. e.g. hero=var(--brand-authority), about=var(--brand-warm-neutral), packages=var(--brand-warm-neutral), how-it-works=var(--brand-authority). Rhythm comes from contrast — like chapters in a book."
     },
     {
       "id": "cta_band_present",
-      "description": "At least one full-bleed gold CTA band must exist (visual punctuation between sections).",
+      "description": "At least one full-bleed signal-colored CTA band must exist (visual punctuation between sections).",
       "severity": "MEDIUM",
       "check_type": "global_pattern",
       "check_spec": {
@@ -167,7 +167,7 @@
         "min_count": 1,
         "accent_color_required": true
       },
-      "fix_hint": "Add a full-bleed section with gold gradient background (linear-gradient(135deg, var(--gold), var(--gold-light))) — typically the closing CTA section. Demands attention; bold punctuation."
+      "fix_hint": "Add a full-bleed section with background: var(--brand-signal) (or a subtle gradient using it) — typically the closing CTA section. Demands attention; bold punctuation. Text inside should use var(--brand-text-on-signal) for contrast."
     },
     {
       "id": "film_grain_overlay",
@@ -225,8 +225,8 @@
       "fix_hint": "Replace generic eyebrows with metaphor-flavored labels per enriched_brief.brand_metaphor_application. Example: 'THE COURT' instead of 'TESTIMONIALS' for a Royal Palace brand."
     },
     {
-      "id": "warm_whites_not_pure_white",
-      "description": "Light section backgrounds should be warm (#F8F6F1, #FAFAF7) not pure #FFFFFF.",
+      "id": "warm_neutral_not_pure_white",
+      "description": "Light section backgrounds must use var(--brand-warm-neutral), not pure #FFFFFF.",
       "severity": "LOW",
       "check_type": "global_pattern",
       "check_spec": {
@@ -235,7 +235,20 @@
         "selectors": ["section", ".section", "body"],
         "tolerance": 0
       },
-      "fix_hint": "Use warm whites like #F8F6F1 or #FAFAF7 for light section backgrounds. Pure white feels clinical; warm whites feel like premium paper."
+      "fix_hint": "Use background: var(--brand-warm-neutral) for light section backgrounds. The brand_kit fills it with a warm tinted near-white (cream / off-white / FAFAFA) per business — pure white feels clinical and breaks brand re-theming."
+    },
+    {
+      "id": "uses_brand_css_vars",
+      "description": "Builder output must use var(--brand-authority/signal/warm-neutral/text-*) variables instead of hardcoded hex for palette roles. Without this, brand_kit changes don't propagate to the rendered site.",
+      "severity": "HIGH",
+      "check_type": "global_pattern",
+      "check_spec": {
+        "pattern": "css_contains_substring",
+        "needles": ["var(--brand-authority", "var(--brand-signal", "var(--brand-warm-neutral"],
+        "min_distinct_count": 2,
+        "alternative_failure_signal_hex_in_section_bg": ["#0A1628", "#0a1628", "#C6952F", "#c6952f", "#EDE8DC", "#edede8dc", "#F8F6F1", "#f8f6f1"]
+      },
+      "fix_hint": "Replace every literal navy/gold/cream hex in section backgrounds, primary CTAs, and accent decorations with the appropriate var(--brand-*) reference. The render layer fills these vars from the practitioner's brand_kit so the site re-themes when colors change — hardcoding hex breaks that contract."
     }
   ],
 
@@ -248,9 +261,9 @@
     },
     {
       "id": "rhythm_through_contrast",
-      "description": "Sections alternate dark/light in a way that feels like chapters, not arbitrary.",
+      "description": "Sections alternate authority/warm-neutral in a way that feels like chapters, not arbitrary.",
       "severity": "HIGH",
-      "judgment_prompt": "Read the page top to bottom. Do sections alternate between dark (navy) and light (white/cream/off-white) backgrounds in a deliberate, narrative-feeling rhythm — like chapters in a book, with the gold stats band and gold CTA band acting as bold punctuation? Or do the section backgrounds feel arbitrary, repetitive, or chosen without intent? Pass only if the rhythm reads as intentional storytelling."
+      "judgment_prompt": "Read the page top to bottom. Do sections alternate between deep (var(--brand-authority)) and light (var(--brand-warm-neutral)) backgrounds in a deliberate, narrative-feeling rhythm — like chapters in a book, with one or more full-bleed signal-color bands (var(--brand-signal)) acting as bold punctuation? Or do the section backgrounds feel arbitrary, repetitive, or chosen without intent? Pass only if the rhythm reads as intentional storytelling."
     },
     {
       "id": "depth_over_flatness",

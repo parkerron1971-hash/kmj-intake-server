@@ -315,7 +315,45 @@ Every design choice serves this progression. Nothing is decorative for decoratio
 
 ## 2. COLOR SYSTEM
 
-### Primary Palette
+### Palette Role Mapping (Pass 4.0d PART 3)
+
+Cinematic Authority describes its palette in STRUCTURAL ROLES, not specific colors. Every color in the system is identified by what JOB it does, not what hue it happens to be. This is what makes the module portable across brands — Embrace the Shift's navy/gold/cream and RoyalTeez Designz's purple/amber/near-white can both wear Cinematic Authority faithfully.
+
+The Builder MUST emit CSS variables for every palette use; the render layer (`agents/design_intelligence/brand_kit_renderer.py`) injects the actual hex values from each business's `brand_kit` at serve time. Changing a brand's colors flows through to the live site WITHOUT a rebuild.
+
+```css
+:root {
+  /* Filled per-business from businesses.settings.brand_kit at render. */
+
+  --brand-authority:          /* Anchor color — hero/dark sections, primary CTA bg */
+  --brand-signal:             /* Warm accent — italic emphasis, accent lines, gold band */
+  --brand-warm-neutral:       /* Light breathing surface — alternating section bg */
+  --brand-deep-secondary:     /* Optional second-tone — dividers, secondary CTAs */
+  --brand-text-primary:       /* Body text on light surfaces */
+
+  /* Auto-derived (WCAG-contrast picker — white or near-black): */
+  --brand-text-on-authority:  /* Text on --brand-authority backgrounds */
+  --brand-text-on-signal:     /* Text on --brand-signal backgrounds */
+}
+```
+
+**Role definitions:**
+
+- **`--brand-authority`** is the deep, saturated anchor color. It carries hero backgrounds, primary CTA backgrounds, and "this is the brand's seat" surfaces. For Embrace the Shift it's the navy `#0A1628`. For RoyalTeez Designz it's the royal purple `#6B46C1`. The role is the same; the hex changes.
+
+- **`--brand-signal`** is the warm accent color. It says "this matters." It carries italic emphasis words inside h2 headings, the 3px accent line above every section heading, the full-bleed signal band (stats / CTA), and decorative diamond marks. ETS uses gold `#C6952F`; RoyalTeez uses amber `#F59E0B`.
+
+- **`--brand-warm-neutral`** is the light breathing-room surface — alternating section backgrounds, card surfaces inside light sections. Never pure white; always a warm tinted near-white. ETS uses cream `#F8F6F1`; RoyalTeez uses `#FAFAFA`.
+
+- **`--brand-deep-secondary`** is the optional fifth tone. For Cinematic Authority sites built off a 3-tone brand_kit (authority/signal/warm-neutral) this often equals `--brand-authority` or near-black. It's used for dividers, hover state shading, secondary CTA backgrounds. Not required for every layout decision; reach for it only when the design genuinely needs a second dark tone.
+
+- **`--brand-text-primary`** is body copy on light surfaces. Dark, settled. Never pure black (which reads as dead) — a deep slate or near-navy.
+
+- **`--brand-text-on-authority` / `--brand-text-on-signal`** are auto-derived at render time using a WCAG contrast picker. White on navy/purple authority; dark on gold/amber signal. The Builder must reference these variables rather than hardcoding a text color on those backgrounds, so contrast stays correct when the brand colors change.
+
+**Source of truth: `brand_kit_renderer._ROLE_TO_BRAND_KIT_KEY`** maps each role to the brand_kit field it reads from (authority←primary, signal←accent, warm_neutral←background, deep_secondary←secondary, text_primary←text). When a role is missing in the brand_kit, the renderer falls back to the Cinematic Authority canonical values defined below — so a site without a populated brand_kit still gets the navy/gold/cream defaults this module was authored against.
+
+### Primary Palette (default values when brand_kit is missing)
 
 ```css
 --navy: #0A1628;        /* Primary dark — backgrounds, headings on light */
