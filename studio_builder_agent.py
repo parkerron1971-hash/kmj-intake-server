@@ -610,7 +610,141 @@ of their site.
 
 """
 
-    return f"""{punch_list_block}{maintain_block}{slot_tags_block}{override_tags_block}You are a senior creative director and master frontend developer. You build production websites that feel genuinely designed — not assembled from templates. You read a creative brief the way a designer reads one: you understand the tension, feel the spatial logic, hear the copy voice. Then you build.
+    # Pass 4.0e PART 3: IMAGE + COLOR EDIT MARKERS. Extends the text-only
+    # override tagging from PART 2 to cover image swaps and palette-color
+    # swaps. Together with EDITABLE TEXT MARKERS, this gives the Studio
+    # app's Edit Mode complete coverage of practitioner-editable surfaces.
+    image_color_tags_block = """═══════════════════════════════════════
+EDITABLE IMAGE + COLOR MARKERS — DATA-OVERRIDE-TYPE
+═══════════════════════════════════════
+
+Beyond text, two more element classes carry data-override-target +
+data-override-type markers so the Studio app's Edit Mode can click-to-edit:
+
+─── IMAGE elements ────────────────────────────────────────
+
+Every <img> that already carries data-slot="<slot_name>" (see IMAGE
+SLOTS block above) ALSO carries:
+
+  data-override-target="<slot_name>"      (mirror of data-slot)
+  data-override-type="image"
+
+Same slot_name on both attributes. Edit Mode reads data-override-target
+to detect the click; the slot system reads data-slot to populate src
+at render. They are partners, not duplicates.
+
+Examples:
+
+  <img data-slot="hero_main"
+       data-override-target="hero_main"
+       data-override-type="image"
+       src="" alt="Royal Palace Barbershop interior at dusk">
+
+  <img data-slot="about_subject"
+       data-override-target="about_subject"
+       data-override-type="image"
+       src="" alt="Practitioner portrait, three-quarter angle">
+
+  <img data-slot="decorative_1"
+       data-override-target="decorative_1"
+       data-override-type="image"
+       src="" alt="Abstract texture, warm metallic">
+
+DO NOT add image markers to:
+  - Pure background SVG / decorative div backgrounds that aren't a
+    slot (those have no slot system entry to swap to)
+  - Icon-only elements (lucide-style SVG strokes that are part of
+    typography rather than image content)
+
+─── COLOR elements ────────────────────────────────────────
+
+Every element whose visible color is a BRAND PALETTE ROLE expression
+AND that the practitioner might want to recolor independently carries:
+
+  data-override-target="<semantic.dotted.path>"
+  data-override-type="color"
+
+The path identifies WHICH role-bearing element on the page, not which
+role — the BrandPalettePicker shows all 5 brand_kit colors as swatches
+regardless of the target.
+
+WHICH elements get color markers:
+  - Section-marker accent lines (3px gold rule above section headings):
+      data-override-target="hero.accent_line"
+      data-override-target="services.accent_line"
+      …per section
+  - Full-bleed signal-color bands (the gold-CTA-band pattern):
+      data-override-target="cta_band.background"
+  - Decorative diamond / shape marks that use brand colors:
+      data-override-target="hero.diamond_1"
+  - Italic emphasis word INSIDE an h2 (already has data-override-type="text"
+    on the em element — do NOT add a second color marker; text color
+    follows --brand-signal automatically via var() and the color_role
+    override changes the variable).
+
+DO NOT add color markers to:
+  - Section backgrounds that switch between authority and warm-neutral
+    in the alternating rhythm (those flip automatically based on
+    section position, not per-element overrides)
+  - Body text (--brand-text-primary applies globally; recoloring body
+    per-element breaks rhythm)
+  - Buttons (their background tracks --brand-signal via the variable;
+    recoloring per-button breaks consistency)
+  - Generic SVG icons whose color isn't a brand-palette role
+
+NAMING for color targets — semantic, dotted, lowercase, matches the
+nearest text section. Examples:
+
+  hero.accent_line
+  hero.diamond_1
+  about.accent_line
+  services.divider
+  services.item_1.accent_line
+  pricing.tier_1.accent_line
+  pricing.divider
+  testimonials.accent_line
+  cta_band.background
+  footer.divider
+
+Example HTML — accent line above a section heading:
+
+  <section data-section="services">
+    <div class="accent-line"
+         data-override-target="services.accent_line"
+         data-override-type="color"
+         style="width: 48px; height: 3px;
+                background: var(--brand-signal); margin-bottom: 24px;">
+    </div>
+    <span class="eyebrow"
+          data-override-target="services.eyebrow"
+          data-override-type="text">THE TABLE</span>
+    <h2 data-override-target="services.heading"
+        data-override-type="text">What the work <em class="accent-word"
+        style="color: var(--brand-signal); font-style: italic;"
+        data-override-target="services.heading_emphasis"
+        data-override-type="text">looks like.</em></h2>
+  </section>
+
+Example — full-bleed signal band:
+
+  <section data-section="cta_band"
+           data-override-target="cta_band.background"
+           data-override-type="color"
+           style="background: var(--brand-signal); padding: 80px 24px;">
+    <h2 data-override-target="cta_band.heading"
+        data-override-type="text"
+        style="color: var(--brand-text-on-signal);">…</h2>
+  </section>
+
+TARGET COVERAGE for image + color markers on a typical Cinematic
+Authority build: 5+ image markers (matches slot floor from IMAGE SLOTS
+block) + 6-10 color markers (accent lines on each major section + the
+signal band + any decorative diamonds). Together with the 30+ text
+markers, total override-target attrs land around 45-55 per build.
+
+"""
+
+    return f"""{punch_list_block}{maintain_block}{slot_tags_block}{override_tags_block}{image_color_tags_block}You are a senior creative director and master frontend developer. You build production websites that feel genuinely designed — not assembled from templates. You read a creative brief the way a designer reads one: you understand the tension, feel the spatial logic, hear the copy voice. Then you build.
 
 Output ONLY raw HTML starting with <!DOCTYPE html>. Nothing before. Nothing after. No markdown fences. No explanation. No commentary.
 
