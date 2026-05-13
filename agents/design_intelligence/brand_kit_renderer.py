@@ -240,6 +240,84 @@ def inject_brand_kit_vars(html: str, css_vars: Dict[str, str]) -> str:
     return html[:insert_at] + "\n" + block + html[insert_at:]
 
 
+# ─── Pass 4.0e PART 3 — per-element color overrides ────────────────
+
+# Strip any prior per-element color block on re-render so values don't
+# stack. Tag block via the same data-attribute pattern used elsewhere.
+_PRIOR_PER_ELEMENT_RE = re.compile(
+    r'<style[^>]*data-per-element-colors="1"[^>]*>.*?</style>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_role_target_path(target_path: str) -> bool:
+    """A color_role override row whose target_path matches one of the 5
+    palette role names re-themes the :root variable globally (handled by
+    compose_brand_kit_vars). Anything else is a per-element override
+    (e.g. 'hero.accent_line') and gets applied via attribute-selector
+    CSS rules in apply_per_element_color_overrides."""
+    return target_path in _ROLE_DEFAULTS
+
+
+def _escape_css_attr_value(value: str) -> str:
+    """Escape an attribute value for use inside a CSS [attr="..."] selector.
+    Replace " and \\ with their CSS-escape equivalents. target_paths are
+    practitioner-controlled so we don't trust them implicitly."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _format_per_element_color_block(overrides_by_path: Dict[str, str]) -> str:
+    """Render CSS rules for per-element color overrides. Each rule uses
+    an attribute selector targeting the element by its
+    data-override-target. !important wins over the inline
+    `background: var(--brand-signal)` the Builder emits.
+
+    Both background and color are set so the override applies to the
+    element regardless of whether it's a filled shape (accent line,
+    diamond, full-bleed band — uses background) or a colored character
+    target (would use color). For accent-line + diamond patterns —
+    most common — background is the right hit."""
+    lines = ['<style data-per-element-colors="1">']
+    for path in sorted(overrides_by_path.keys()):
+        hex_val = overrides_by_path[path]
+        safe = _escape_css_attr_value(path)
+        lines.append(
+            f'[data-override-target="{safe}"][data-override-type="color"] '
+            f'{{ background: {hex_val} !important; color: {hex_val} !important; }}'
+        )
+        # SVG-children color (for icon-style targets). Cheap and matches
+        # nothing for non-SVG accent-line/diamond patterns.
+        lines.append(
+            f'[data-override-target="{safe}"][data-override-type="color"] svg '
+            f'{{ fill: {hex_val} !important; stroke: {hex_val} !important; }}'
+        )
+    lines.append('</style>')
+    return "\n".join(lines)
+
+
+def inject_per_element_color_overrides(
+    html: str,
+    overrides_by_path: Dict[str, str],
+) -> str:
+    """Insert a per-element color overrides <style> block after the
+    brand-kit-vars block. Idempotent: prior block stripped first.
+
+    overrides_by_path maps target_path → hex value. Empty dict → no-op
+    (caller filters role names out before passing)."""
+    if not html or not isinstance(html, str):
+        return html or ""
+    # Strip prior block (idempotency).
+    html = _PRIOR_PER_ELEMENT_RE.sub("", html)
+    if not overrides_by_path:
+        return html
+    block = _format_per_element_color_block(overrides_by_path)
+    m = _HEAD_OPEN_RE.search(html)
+    if not m:
+        return block + "\n" + html
+    insert_at = m.end()
+    return html[:insert_at] + "\n" + block + html[insert_at:]
+
+
 # ─── Public entrypoint ─────────────────────────────────────────────
 
 def render_with_brand_kit(
@@ -285,13 +363,28 @@ def render_with_brand_kit(
         )
 
     try:
+        # Role-level overrides (target_path matches one of the 5 role
+        # names) update :root --brand-* vars and re-theme globally.
         css_vars = compose_brand_kit_vars(brand_kit, color_overrides)
         new_html = inject_brand_kit_vars(html, css_vars)
+
+        # Pass 4.0e PART 3 — per-element overrides (target_path = e.g.
+        # 'hero.accent_line'). Generate attribute-selector CSS rules so
+        # each tagged element re-themes independently. The inline edit
+        # mode picker writes these.
+        per_element = {
+            path: row.get("override_value")
+            for path, row in color_overrides.items()
+            if path and not _is_role_target_path(path) and row.get("override_value")
+        }
+        new_html = inject_per_element_color_overrides(new_html, per_element)
+
         if color_overrides:
+            role_count = len(color_overrides) - len(per_element)
             logger.info(
-                f"[brand_kit_renderer] injected brand_kit vars for "
-                f"{business_id} with {len(color_overrides)} color_role "
-                f"override(s) applied"
+                f"[brand_kit_renderer] {business_id}: "
+                f"{role_count} role-level, {len(per_element)} per-element "
+                f"color override(s) applied"
             )
         return new_html
     except Exception as e:
