@@ -125,6 +125,13 @@ _EDIT_MODE_SCRIPT = """
     var rect = el.getBoundingClientRect();
     var isMulti = !!(e.shiftKey || e.ctrlKey || e.metaKey);
 
+    // Pass 4.0e PART 3.1 — diagnostic log so iframe-side console shows
+    // that ALL types (text, image, color) post element_clicked upstream.
+    // The previous bug report attributed missing pickers to this script
+    // bailing on non-text; the script routes all types correctly. The
+    // log confirms that for visual verification in browser DevTools.
+    try { console.log('[edit-mode iframe] element_clicked posted', { target_path: path, target_type: type, isMulti: isMulti }); } catch (e) { }
+
     postToParent({
       type: 'element_clicked',
       target_path: path,
