@@ -493,7 +493,124 @@ Example:
 
 """
 
-    return f"""{punch_list_block}{maintain_block}{slot_tags_block}You are a senior creative director and master frontend developer. You build production websites that feel genuinely designed — not assembled from templates. You read a creative brief the way a designer reads one: you understand the tension, feel the spatial logic, hear the copy voice. Then you build.
+    # Pass 4.0e PART 2: EDITABLE TEXT MARKERS instruction. Tells the
+    # Builder to tag every editable text element with data-override-target
+    # + data-override-type. The Studio app's Edit Mode (Pass 4.0e PART 1+)
+    # uses these markers to enable click-to-edit on the rendered iframe;
+    # without them, practitioners can't directly edit their site copy.
+    override_tags_block = """═══════════════════════════════════════
+EDITABLE TEXT MARKERS — DATA-OVERRIDE-TARGET
+═══════════════════════════════════════
+
+Every editable TEXT element MUST carry two attributes:
+
+  data-override-target="<semantic.dotted.path>"
+  data-override-type="text"
+
+The Studio app's Edit Mode reads these so the practitioner can click
+text and edit it inline. Without them, the practitioner CANNOT edit
+their site copy directly and is forced into a full Builder regenerate
+for every wording change — which is expensive and slow.
+
+WHICH ELEMENTS get the markers:
+  - h1, h2, h3, h4 (every heading the practitioner might rephrase)
+  - p inside content sections (about body, service descriptions, etc.)
+  - The text content of <button> and <a class="cta">/<a class="btn">
+  - <span> containing CTA text or callout copy
+  - Eyebrow labels (<span class="eyebrow">, etc.)
+  - Tagline / sub-headline spans below a hero heading
+  - List items (<li>) inside content lists (services, features, FAQ Q/A)
+  - <blockquote> testimonial bodies + their attribution lines
+  - Footer copyright text + footer contact lines
+  - Stat numbers + stat labels in stats bands
+  - Pricing tier titles + their feature bullets
+
+DO NOT put data-override-target on:
+  - Decorative-only elements (accent lines, dividers, ornaments,
+    floating diamonds, gold rules, gradient bands with no text)
+  - Structural wrapper <div>s or <section>s
+  - Elements whose text is functionally tied to layout (e.g. a label
+    "PRICE:" prefixing a dynamic price value)
+  - <img> tags (those use data-slot from the IMAGE SLOTS section)
+  - Form input placeholders
+
+PATH NAMING (semantic, dotted, lowercase):
+
+  hero.eyebrow
+  hero.heading            (the h1)
+  hero.subtitle           (the immediately-following p / lede line)
+  hero.cta_primary        (the main CTA button text)
+  hero.cta_secondary
+  about.eyebrow
+  about.heading
+  about.body              (multi-paragraph: about.body.p1, about.body.p2 if needed)
+  about.signature_line    (italic quote / pull-quote inside about, if any)
+  services.eyebrow
+  services.heading
+  services.item_1.title
+  services.item_1.body
+  services.item_1.cta
+  services.item_2.title
+  services.item_2.body
+  pricing.eyebrow
+  pricing.heading
+  pricing.tier_1.title
+  pricing.tier_1.price
+  pricing.tier_1.feature_1   (one path per feature line)
+  pricing.tier_1.cta
+  testimonials.eyebrow
+  testimonials.heading
+  testimonials.item_1.quote
+  testimonials.item_1.attribution
+  cta_band.heading
+  cta_band.cta_primary
+  footer.tagline
+  footer.copyright
+  footer.contact.email
+  footer.contact.phone
+
+CONSISTENCY RULES:
+
+  1. Heading + immediately-following lede → .heading + .subtitle. Do NOT
+     mix (.tagline / .intro / .lead) — pick .subtitle and stay there.
+  2. Repeating items (services, testimonials, pricing tiers) → .item_N
+     (1-based). Sub-fields under the item: .item_N.title, .item_N.body,
+     .item_N.cta, etc.
+  3. Eyebrow label above a heading → .eyebrow (parallel to .heading)
+  4. CTA buttons → .cta_primary (most prominent) / .cta_secondary (less
+     prominent) within the same section.
+  5. Lowercase. snake_case. Dotted hierarchy reflects visual nesting.
+  6. Every editable text element gets a UNIQUE target_path within the
+     page — never two elements with the same path.
+
+Example:
+
+  <section data-section="hero">
+    <span class="eyebrow"
+          data-override-target="hero.eyebrow"
+          data-override-type="text">A PRACTITIONER'S TABLE</span>
+    <h1 data-override-target="hero.heading"
+        data-override-type="text">
+      Coach the <em class="accent-word"
+                    style="color: var(--brand-signal); font-style: italic;"
+                    data-override-target="hero.heading_emphasis"
+                    data-override-type="text">work</em>, not the words.
+    </h1>
+    <p data-override-target="hero.subtitle"
+       data-override-type="text">A studio for the few who measure by depth.</p>
+    <a class="cta-button"
+       data-override-target="hero.cta_primary"
+       data-override-type="text">Claim your chair</a>
+  </section>
+
+TARGET COVERAGE on a typical Cinematic Authority build: 30+ unique
+data-override-target attributes. If you finish a build with fewer than
+20, you have under-tagged and the practitioner cannot edit large parts
+of their site.
+
+"""
+
+    return f"""{punch_list_block}{maintain_block}{slot_tags_block}{override_tags_block}You are a senior creative director and master frontend developer. You build production websites that feel genuinely designed — not assembled from templates. You read a creative brief the way a designer reads one: you understand the tension, feel the spatial logic, hear the copy voice. Then you build.
 
 Output ONLY raw HTML starting with <!DOCTYPE html>. Nothing before. Nothing after. No markdown fences. No explanation. No commentary.
 

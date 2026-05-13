@@ -107,13 +107,24 @@ _EDIT_MODE_SCRIPT = """
 
   function handleClick(e) {
     if (!editModeActive) return;
+    // Clicks INSIDE an active contenteditable should propagate normally
+    // (caret placement, text selection) — only intercept when not editing.
+    if (activeEditEl && activeEditEl.contains && activeEditEl.contains(e.target)) {
+      return;
+    }
     var el = e.target.closest ? e.target.closest('[data-override-target]') : null;
-    if (!el) return;
+    if (!el) {
+      // Click landed outside any editable — close any active edit.
+      if (activeEditEl) leaveEditMode(activeEditEl);
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     var path = el.getAttribute('data-override-target');
     var type = el.getAttribute('data-override-type') || 'text';
     var rect = el.getBoundingClientRect();
+    var isMulti = !!(e.shiftKey || e.ctrlKey || e.metaKey);
+
     postToParent({
       type: 'element_clicked',
       target_path: path,
@@ -137,6 +148,17 @@ _EDIT_MODE_SCRIPT = """
         h: Math.round(rect.height)
       }
     });
+
+    // Pass 4.0e PART 2 — single-click on a text target with no modifier
+    // engages inline contenteditable directly. Parent's selection state
+    // updates in parallel via the element_clicked round-trip.
+    if (!isMulti && type === 'text') {
+      // Defer one tick so the parent's select_target message can
+      // visually flip 'selected' before we enter edit mode.
+      setTimeout(function() {
+        makeTextEditable(el);
+      }, 0);
+    }
   }
 
   var lastHover = null;
@@ -147,6 +169,93 @@ _EDIT_MODE_SCRIPT = """
     if (path === lastHover) return;
     lastHover = path;
     postToParent({ type: 'element_hovered', target_path: path });
+  }
+
+  // Pass 4.0e PART 2 — inline contenteditable for text targets.
+  var activeEditEl = null;
+  var activeEditSaveTimer = null;
+  var activeEditLastSaved = '';
+
+  function leaveEditMode(el) {
+    if (!el || el !== activeEditEl) return;
+    if (activeEditSaveTimer) {
+      clearTimeout(activeEditSaveTimer);
+      activeEditSaveTimer = null;
+    }
+    // Final flush — only if the value actually changed.
+    var current = (el.textContent || '');
+    if (current !== activeEditLastSaved) {
+      postToParent({
+        type: 'edit_saved',
+        target_path: el.getAttribute('data-override-target'),
+        new_value: current,
+        override_type: 'text'
+      });
+      activeEditLastSaved = current;
+    }
+    el.contentEditable = 'false';
+    el.style.borderBottom = '';
+    el.style.outline = '';
+    activeEditEl = null;
+  }
+
+  function makeTextEditable(el) {
+    if (!editModeActive) return;
+    if ((el.getAttribute('data-override-type') || 'text') !== 'text') return;
+    if (activeEditEl && activeEditEl !== el) {
+      leaveEditMode(activeEditEl);
+    }
+    if (activeEditEl === el) return;
+
+    el.contentEditable = 'true';
+    // Suppress browser's default focus ring; we draw a gold underline.
+    el.style.outline = 'none';
+    el.style.borderBottom = '2px solid var(--brand-signal, #C6952F)';
+    activeEditEl = el;
+    activeEditLastSaved = (el.textContent || '');
+
+    function scheduleSave() {
+      if (activeEditSaveTimer) clearTimeout(activeEditSaveTimer);
+      activeEditSaveTimer = setTimeout(function() {
+        var current = (el.textContent || '');
+        if (current !== activeEditLastSaved) {
+          postToParent({
+            type: 'edit_saved',
+            target_path: el.getAttribute('data-override-target'),
+            new_value: current,
+            override_type: 'text'
+          });
+          activeEditLastSaved = current;
+        }
+      }, 300);
+    }
+
+    el.addEventListener('input', scheduleSave);
+    el.addEventListener('blur', function onBlur() {
+      el.removeEventListener('blur', onBlur);
+      el.removeEventListener('input', scheduleSave);
+      leaveEditMode(el);
+    }, false);
+    // Commit on Enter (without Shift). Tab also commits.
+    el.addEventListener('keydown', function onKey(e) {
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Escape' || e.key === 'Tab') {
+        e.preventDefault();
+        el.blur();
+        el.removeEventListener('keydown', onKey);
+      }
+    }, false);
+
+    el.focus();
+    // Select all text so the practitioner can type to replace.
+    try {
+      var range = document.createRange();
+      range.selectNodeContents(el);
+      var sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    } catch (e) { /* selection unavailable — focus alone is fine */ }
   }
 
   function originAllowed(origin) {
