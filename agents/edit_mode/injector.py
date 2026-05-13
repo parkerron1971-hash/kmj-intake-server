@@ -274,6 +274,17 @@ _EDIT_MODE_SCRIPT = """
     var msg = event.data;
     if (!msg || typeof msg !== 'object' || !msg.type) return;
 
+    // Pass 4.0e PART 2.1 — Bug B safety net. body may not yet exist if a
+    // message arrives while <body> is still parsing. Drop and let the
+    // parent's syncMode retry catch up after DOMContentLoaded.
+    var needsBody = (
+      msg.type === 'edit_mode_changed' ||
+      msg.type === 'clear_selection' ||
+      msg.type === 'select_target' ||
+      msg.type === 'chief_edit_applied'
+    );
+    if (needsBody && !document.body) return;
+
     switch (msg.type) {
       case 'ping':
         postToParent({ type: 'pong', token: msg.token || null });
@@ -339,8 +350,20 @@ _EDIT_MODE_SCRIPT = """
     }
   }, false);
 
-  document.body.addEventListener('click', handleClick, true);
-  document.body.addEventListener('mouseover', handleHover, true);
+  // Pass 4.0e PART 2.1 — Bug B fix. This <script> lives in <head>, so
+  // document.body is null at parse time. Defer the body event-listener
+  // binding until DOM is ready. Style + window message listener above
+  // are safe immediately (document.head exists; window is always ready).
+  function bindBodyListeners() {
+    if (!document.body) return;
+    document.body.addEventListener('click', handleClick, true);
+    document.body.addEventListener('mouseover', handleHover, true);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bindBodyListeners, { once: true });
+  } else {
+    bindBodyListeners();
+  }
 })();
 """
 
