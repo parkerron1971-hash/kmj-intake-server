@@ -41,11 +41,31 @@ _EDIT_MODE_SCRIPT = """
     'http://tauri.localhost'
   ];
 
-  // Style injection — hover + selected outline + numbered badge.
+  // Style injection — always-on type-colored outline + hover + selected
+  // outline + numbered badge. Pass 4.0e PART 3.2 adds the always-on
+  // outline so every editable element is visible at a glance while in
+  // Edit Mode (was previously hover-only — practitioner couldn't tell
+  // what was editable without sweeping the page).
   var style = document.createElement('style');
   style.setAttribute('data-edit-mode-style', '1');
   style.textContent = [
     '[data-override-target] { transition: outline 0.15s ease; }',
+    // Always-on subtle outline when Edit Mode is active. Color-coded
+    // by data-override-type so the practitioner can tell text / image
+    // / color targets apart at a glance.
+    'body.edit-mode-active [data-override-target][data-override-type="text"] {',
+    '  outline: 1px solid rgba(198, 149, 47, 0.30);',
+    '  outline-offset: 2px;',
+    '}',
+    'body.edit-mode-active [data-override-target][data-override-type="image"] {',
+    '  outline: 1px solid rgba(95, 168, 211, 0.45);',
+    '  outline-offset: 2px;',
+    '}',
+    'body.edit-mode-active [data-override-target][data-override-type="color"] {',
+    '  outline: 1px solid rgba(157, 122, 241, 0.50);',
+    '  outline-offset: 2px;',
+    '}',
+    // Hover — strengthen to the brand signal color (gold).
     'body.edit-mode-active [data-override-target]:hover {',
     '  outline: 1px dashed var(--brand-signal, #C6952F);',
     '  outline-offset: 2px;',
@@ -104,6 +124,88 @@ _EDIT_MODE_SCRIPT = """
       }
     }
   }
+
+  // ─── Pass 4.0e PART 3.2 — floating edit-mode labels ─────────────────
+  // When Edit Mode is on, every editable element gets a small floating
+  // label above its top-left corner showing its data-override-target
+  // path. Labels are color-coded by data-override-type (text=gold,
+  // image=blue, color=purple). pointer-events: none so they never
+  // block clicks. Repositioned on scroll + resize.
+  var editModeLabels = [];
+
+  function _labelBgFor(type) {
+    if (type === 'image') return '#5fa8d3';
+    if (type === 'color') return '#9d7af1';
+    return '#c6952f'; // text — brand signal gold
+  }
+
+  function showEditModeLabels() {
+    hideEditModeLabels();
+    var nodes = document.querySelectorAll('[data-override-target]');
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var type = el.getAttribute('data-override-type') || 'text';
+      var path = el.getAttribute('data-override-target');
+      var label = document.createElement('div');
+      label.className = 'edit-mode-label';
+      label.textContent = path;
+      label.style.cssText = [
+        'position: fixed',
+        'z-index: 99999',
+        'background: ' + _labelBgFor(type),
+        'color: #0b0b14',
+        'font-size: 9px',
+        'font-weight: 700',
+        'font-family: ui-monospace, SFMono-Regular, Menlo, monospace',
+        'padding: 1px 5px',
+        'border-radius: 2px',
+        'letter-spacing: 0.4px',
+        'pointer-events: none',
+        'white-space: nowrap',
+        'box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35)',
+        'opacity: 0.85',
+        'line-height: 1.4',
+      ].join(';');
+      document.body.appendChild(label);
+      editModeLabels.push({ el: label, target: el });
+    }
+    updateEditModeLabelPositions();
+  }
+
+  function hideEditModeLabels() {
+    for (var i = 0; i < editModeLabels.length; i++) {
+      try { editModeLabels[i].el.remove(); } catch (e) { }
+    }
+    editModeLabels = [];
+  }
+
+  function updateEditModeLabelPositions() {
+    for (var i = 0; i < editModeLabels.length; i++) {
+      var item = editModeLabels[i];
+      // If the target was removed from the DOM (rare during dynamic
+      // re-renders), skip — the label will be cleared next showLabels.
+      if (!item.target.isConnected) { item.el.style.display = 'none'; continue; }
+      var rect = item.target.getBoundingClientRect();
+      // Hide labels for elements scrolled out of view to reduce clutter.
+      var inView = rect.bottom > 0 && rect.top < window.innerHeight &&
+                   rect.right > 0 && rect.left < window.innerWidth;
+      if (!inView || rect.width < 4 && rect.height < 4) {
+        item.el.style.display = 'none';
+        continue;
+      }
+      item.el.style.display = 'block';
+      // Place above the element's top edge; clamp to viewport.
+      var top = Math.max(2, rect.top - 14);
+      var left = Math.max(2, Math.min(rect.left, window.innerWidth - 200));
+      item.el.style.top = top + 'px';
+      item.el.style.left = left + 'px';
+    }
+  }
+
+  // Reposition labels on scroll + resize. Capture phase so we get
+  // scroll events from any scroll container, not just window.
+  window.addEventListener('scroll', updateEditModeLabelPositions, true);
+  window.addEventListener('resize', updateEditModeLabelPositions);
 
   function handleClick(e) {
     // Pass 4.0e PART 3.1 — simplified per user prescription. The previous
@@ -302,11 +404,14 @@ _EDIT_MODE_SCRIPT = """
         editModeActive = !!msg.enabled;
         if (editModeActive) {
           document.body.classList.add('edit-mode-active');
+          // Pass 4.0e PART 3.2 — show floating per-element path labels.
+          showEditModeLabels();
         } else {
           document.body.classList.remove('edit-mode-active');
           selectedPaths.clear();
           selectionOrder.clear();
           updateSelectionVisual();
+          hideEditModeLabels();
         }
         break;
 
