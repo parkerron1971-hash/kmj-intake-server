@@ -150,6 +150,19 @@ DEFAULT_PALETTE = TYPE_PALETTES["consulting"]
 
 BASE_DOMAINS = ["mysolutionist.app", "solutionistsystem.com", "getsolutionist.com", "mysolutionist.com"]
 
+# Pass 4.0e cache-headers-fix — applied to every public subdomain +
+# custom-domain HTML response. Matches the existing /sites/{id}/preview
+# admin path (which has had no-store since Pass 3.8f.2). Without these
+# headers, browsers heuristically cache HTML responses (RFC 7234 §4.2.2)
+# and practitioner regenerates + inline edits don't show up on the live
+# subdomain until hard refresh. With them, every subdomain request hits
+# the FastAPI render pipeline fresh.
+_PUBLIC_SITE_NO_STORE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
 # Hosts where the Railway API is served directly. When the incoming
 # Host matches one of these, the root + catch-all handlers MUST 404 so
 # requests fall through to the real API routers (chief, email, etc.)
@@ -3753,14 +3766,22 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
                 biz_id, "home", products=products, path=path,
             )
             if smart_html:
-                return HTMLResponse(content=smart_html, media_type="text/html",
-                                    headers={"X-Solutionist-Source": "smart-sites"})
+                return HTMLResponse(
+                    content=smart_html, media_type="text/html",
+                    headers={
+                        "X-Solutionist-Source": "smart-sites",
+                        **_PUBLIC_SITE_NO_STORE_HEADERS,
+                    },
+                )
             # else: fall through to legacy
 
         if not site.get("html_content"):
             raise HTTPException(404, "Site not found")
         html = await _augment_html(client, biz_id, slug, site["html_content"])
-        return HTMLResponse(content=html, media_type="text/html")
+        return HTMLResponse(
+            content=html, media_type="text/html",
+            headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
+        )
 
 
 async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResponse:
@@ -3786,13 +3807,21 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
                 biz_id, "home", products=products, path=path,
             )
             if smart_html:
-                return HTMLResponse(content=smart_html, media_type="text/html",
-                                    headers={"X-Solutionist-Source": "smart-sites"})
+                return HTMLResponse(
+                    content=smart_html, media_type="text/html",
+                    headers={
+                        "X-Solutionist-Source": "smart-sites",
+                        **_PUBLIC_SITE_NO_STORE_HEADERS,
+                    },
+                )
 
         if not site.get("html_content"):
             return None  # type: ignore
         html = await _augment_html(client, biz_id, slug, site["html_content"])
-        return HTMLResponse(content=html, media_type="text/html")
+        return HTMLResponse(
+            content=html, media_type="text/html",
+            headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
+        )
 
 
 @router.get("/", include_in_schema=False)
