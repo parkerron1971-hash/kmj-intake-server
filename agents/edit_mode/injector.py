@@ -106,32 +106,35 @@ _EDIT_MODE_SCRIPT = """
   }
 
   function handleClick(e) {
+    // Pass 4.0e PART 3.1 — simplified per user prescription. The previous
+    // version had two extra guards (activeEditEl.contains short-circuit;
+    // defensive closest? check; leaveEditMode-on-outside-click) that did
+    // not block image/color clicks in static review but were observed
+    // breaking those flows in browser. Strip them down to the minimal
+    // routing that fires element_clicked for every type, then only the
+    // contenteditable activation is gated to text + no-modifier.
     if (!editModeActive) return;
-    // Clicks INSIDE an active contenteditable should propagate normally
-    // (caret placement, text selection) — only intercept when not editing.
-    if (activeEditEl && activeEditEl.contains && activeEditEl.contains(e.target)) {
-      return;
-    }
-    var el = e.target.closest ? e.target.closest('[data-override-target]') : null;
-    if (!el) {
-      // Click landed outside any editable — close any active edit.
-      if (activeEditEl) leaveEditMode(activeEditEl);
-      return;
-    }
+    var el = e.target.closest('[data-override-target]');
+    if (!el) return;
+
     e.preventDefault();
     e.stopPropagation();
-    var path = el.getAttribute('data-override-target');
+
     var type = el.getAttribute('data-override-type') || 'text';
+    var path = el.getAttribute('data-override-target');
     var rect = el.getBoundingClientRect();
     var isMulti = !!(e.shiftKey || e.ctrlKey || e.metaKey);
 
-    // Pass 4.0e PART 3.1 — diagnostic log so iframe-side console shows
-    // that ALL types (text, image, color) post element_clicked upstream.
-    // The previous bug report attributed missing pickers to this script
-    // bailing on non-text; the script routes all types correctly. The
-    // log confirms that for visual verification in browser DevTools.
-    try { console.log('[edit-mode iframe] element_clicked posted', { target_path: path, target_type: type, isMulti: isMulti }); } catch (e) { }
+    // Diagnostic — visible in the iframe document's console.
+    try {
+      console.log('[edit-mode iframe] element_clicked posted', {
+        target_path: path,
+        target_type: type,
+        isMulti: isMulti,
+      });
+    } catch (err) { /* noop */ }
 
+    // Post click event to parent for ALL types (text, image, color).
     postToParent({
       type: 'element_clicked',
       target_path: path,
@@ -156,12 +159,10 @@ _EDIT_MODE_SCRIPT = """
       }
     });
 
-    // Pass 4.0e PART 2 — single-click on a text target with no modifier
-    // engages inline contenteditable directly. Parent's selection state
-    // updates in parallel via the element_clicked round-trip.
-    if (!isMulti && type === 'text') {
-      // Defer one tick so the parent's select_target message can
-      // visually flip 'selected' before we enter edit mode.
+    // Text-only: schedule contenteditable activation after a tick so
+    // parent's select_target message paints the gold outline first.
+    // Image/color clicks delegate to parent for picker invocation.
+    if (type === 'text' && !isMulti) {
       setTimeout(function() {
         makeTextEditable(el);
       }, 0);
