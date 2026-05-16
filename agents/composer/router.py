@@ -1,8 +1,14 @@
-"""Composer Agent diagnostic router. Four endpoints:
+"""Composer Agent diagnostic router. Five endpoints:
 
   POST /composer/_diag/compose_hero { business_id, dry_run }
     Pass 4.0f Phase 3 — runs Composer only, returns the composition
     JSON (variant + treatments + content + reasoning).
+
+  POST /composer/_diag/route_module { business_id, dry_run }
+    Pass 4.0g Phase D — runs the Module Router only, returns the
+    routing decision (module_id + confidence + reasoning + optional
+    alternative_module). Module Router runs BEFORE the module-specific
+    Composer in the full pipeline.
 
   POST /composer/_spike/render_hero/{business_id}
     Pass 4.0f Phase 4 — runs Composer + the four-step render pipeline,
@@ -59,6 +65,28 @@ def diag_compose_hero(req: DiagComposeRequest) -> Dict[str, Any]:
     /_spike/render_hero is the live render path."""
     composition = compose_cathedral_hero(req.business_id)
     return composition
+
+
+# ─── Phase D Module Router diagnostic endpoint ──────────────────────
+
+class DiagRouteModuleRequest(BaseModel):
+    business_id: str
+    dry_run: bool = True  # placeholder for forward-compat — router
+                           # doesn't write anything regardless
+
+
+@router.post("/_diag/route_module")
+def diag_route_module(req: DiagRouteModuleRequest) -> Dict[str, Any]:
+    """Run the Module Router for a business. Returns the routing
+    decision (module_id + confidence + reasoning + alternative_module
+    + _route_metadata diagnostic envelope).
+
+    Phase D-era endpoint: dry_run is reserved for forward-compat;
+    routing is pure (no DB writes) so dry_run is effectively a no-op
+    today. The endpoint is the canonical surface the future composition
+    pipeline (Module Router -> Composer -> render) wires through."""
+    from agents.composer.module_router import route_module
+    return route_module(req.business_id)
 
 
 # ─── Phase 4 spike render endpoints ────────────────────────────────
