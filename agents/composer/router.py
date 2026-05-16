@@ -34,6 +34,16 @@
     composition metadata. Reviewers judge intent against the visible
     rationale. ~$0.15/visit (3 fresh Composer calls).
 
+  GET /composer/_spike/multi_module_comparison
+    Pass 4.0g Phase F — multi-module comparison page. Same three
+    spike businesses, but each routed through the FULL Pass 4.0g
+    pipeline (Module Router -> module-specific Composer -> module-
+    specific render). Each block surfaces routing rationale + module
+    label + composer choice + rendered iframe + optional force-
+    Cathedral column for visual contrast. In-memory caches pipeline
+    output per business; ?refresh=1 invalidates. ~$0.45 on cache
+    miss (9 Sonnet calls); $0 on cache hits.
+
 NOT WIRED into kmj_intake_automation.py during the spike — testing
 happens via the standalone agents/composer/_spike_app.py FastAPI app
 (spike-only mounting, never merges to main). The /_diag endpoint
@@ -168,6 +178,38 @@ def spike_comparison_page() -> HTMLResponse:
     Cache-Control: no-store keeps spike output fresh during review."""
     from agents.composer.comparison_page import render_comparison_page_html
     html = render_comparison_page_html()
+    return HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+# ─── Phase F multi-module comparison page ──────────────────────────
+
+@router.get("/_spike/multi_module_comparison", response_class=HTMLResponse)
+def spike_multi_module_comparison(refresh: int = 0) -> HTMLResponse:
+    """Pass 4.0g Phase F — multi-module comparison page.
+
+    Renders all three spike businesses through the full Pass 4.0g
+    pipeline (Module Router -> module-specific Composer -> module-
+    specific render). Each block surfaces routing decision + module
+    label + composer choice + rendered hero, plus an optional
+    forced-Cathedral column so RoyalTeez Designz's Studio Brut output
+    can be compared directly against what Cathedral would have
+    produced (the spike's failed case).
+
+    Pipeline output is cached in process memory per business so
+    repeat visits cost $0. Pass ?refresh=1 to invalidate cache and
+    re-fire the pipeline. On cache miss the page costs ~$0.45 (9
+    Sonnet calls: 3 router + 3 composer + 3 force-Cathedral composer).
+
+    Cache-Control: no-store on the response itself so the BROWSER
+    doesn't cache stale HTML — the in-memory pipeline cache is what
+    saves cost on repeat visits."""
+    from agents.composer.multi_module_comparison_page import (
+        render_multi_module_comparison_html,
+    )
+    html = render_multi_module_comparison_html(refresh=bool(refresh))
     return HTMLResponse(
         content=html,
         headers={"Cache-Control": "no-store, no-cache, must-revalidate"},

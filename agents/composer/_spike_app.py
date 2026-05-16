@@ -10,12 +10,16 @@ Run via:
 
 Endpoints exposed:
   POST /composer/_diag/compose_hero
+  POST /composer/_diag/route_module                 (Phase D)
+  POST /composer/_diag/compose_and_render_hero      (Phase E)
   POST /composer/_spike/render_hero/{business_id}
   GET  /composer/_spike/render_hero_html/{business_id}
-  GET  /composer/_spike/comparison_page  — Phase 5 side-by-side
+  GET  /composer/_spike/comparison_page             — Phase 5 side-by-side
+  GET  /composer/_spike/multi_module_comparison     — Phase F multi-module
   GET  /  — index page listing the three spike businesses + their
            render URLs (CHECKPOINT 4) plus the comparison page link
-           (CHECKPOINT 5)
+           (CHECKPOINT 5) plus the multi-module comparison link
+           (CHECKPOINT F)
 """
 from __future__ import annotations
 
@@ -79,10 +83,20 @@ def spike_index() -> str:
   <p class="meta">Three test businesses. Each link fires Composer (Sonnet 4.5)
   then renders through the canonical four-step pipeline.</p>
 
+  <h2 style="font-size: 1em; margin: 28px 0 6px;">Phase F — multi-module comparison</h2>
+  <p style="margin: 0 0 14px;">
+    <a href="/composer/_spike/multi_module_comparison" target="_blank"><strong>
+    Multi-module comparison page</strong></a>
+    <span class="meta"> · full Pass 4.0g pipeline (Router + Composer +
+    Render) for all three businesses, with routing rationale + module
+    labels + force-Cathedral comparison column · ~$0.45 first visit,
+    $0 cached, ?refresh=1 to invalidate</span>
+  </p>
+
   <h2 style="font-size: 1em; margin: 28px 0 6px;">Phase 5 — comparison page</h2>
   <p style="margin: 0 0 14px;">
     <a href="/composer/_spike/comparison_page" target="_blank"><strong>
-    Side-by-side comparison</strong></a>
+    Side-by-side comparison (Cathedral only)</strong></a>
     <span class="meta"> · all three Heros + Composer reasoning in one view
     (~$0.15/visit)</span>
   </p>
