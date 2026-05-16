@@ -10,6 +10,14 @@ Sizes:
 
 target_path makes the motif Edit-Mode-addressable so the practitioner
 can recolor it via the BrandPalettePicker.
+
+Phase 2.6 depth dimensions:
+  ornament=minimal/signature/heavy → multiplies opacity + size via
+    --ca-ornament-opacity-mult + --ca-ornament-size-mult CSS vars.
+    Variants that want even larger ornaments (e.g. layered_diamond's
+    xlarge anchor) get extra prominence with heavy.
+  color_depth=radial_glows → diamond gains drop-shadow halo via
+    --ca-diamond-glow filter.
 """
 from __future__ import annotations
 
@@ -41,19 +49,27 @@ def render_diamond_motif(
     use diamonds in different layout positions.
     `color_var` defaults to the brand signal CSS variable but can be
     overridden (e.g. authority color on a full-bleed overlay).
+
+    Size + opacity are passed through calc() so the ornament_treatment
+    var multipliers can scale them at render time. Defaults of mult=1.0
+    keep the variant's intent intact when no ornament treatment is set.
     """
-    px = _SIZE_PX.get(size, _SIZE_PX["medium"])
+    base_px = _SIZE_PX.get(size, _SIZE_PX["medium"])
     safe_target = escape(target_path)
     safe_position = position_style.strip().strip(";")
     suffix = f"; {safe_position}" if safe_position else ""
+    # calc() with CSS var multipliers — falls back to 1.0 when unset.
+    size_expr = f"calc({base_px}px * var(--ca-ornament-size-mult, 1))"
+    opacity_expr = f"calc({opacity} * var(--ca-ornament-opacity-mult, 1))"
     return (
         f'<div class="ca-hero-diamond ca-hero-diamond-{size}" '
         f'data-override-target="{safe_target}" '
         f'data-override-type="color" '
-        f'style="width: {px}px; '
-        f'height: {px}px; '
+        f'style="width: {size_expr}; '
+        f'height: {size_expr}; '
         f'background: {color_var}; '
-        f'opacity: {opacity}; '
+        f'opacity: {opacity_expr}; '
+        f'filter: var(--ca-diamond-glow, none); '
         f'transform: rotate(45deg); '
         f'pointer-events: none{suffix}">'
         f"</div>"

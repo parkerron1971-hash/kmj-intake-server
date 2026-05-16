@@ -93,9 +93,24 @@ CONTENTS = [
 ]
 
 TREATMENTS = [
-    Treatments(color_emphasis="signal_dominant",   spacing_density="generous", emphasis_weight="heading_dominant"),
-    Treatments(color_emphasis="authority_dominant", spacing_density="standard", emphasis_weight="balanced"),
-    Treatments(color_emphasis="dual_emphasis",     spacing_density="compact",  emphasis_weight="eyebrow_dominant"),
+    # Restrained — Phase 2 baseline. All 5 depth dims at default.
+    Treatments(
+        color_emphasis="signal_dominant",   spacing_density="generous", emphasis_weight="heading_dominant",
+        background="flat",          color_depth="flat",
+        ornament="minimal",         typography="editorial", image_treatment="clean",
+    ),
+    # Mid — depth-aware, structurally classic.
+    Treatments(
+        color_emphasis="authority_dominant", spacing_density="standard", emphasis_weight="balanced",
+        background="soft_gradient", color_depth="gradient_accents",
+        ornament="signature",        typography="bold", image_treatment="filtered",
+    ),
+    # Rich — depth-maxed, structurally compact.
+    Treatments(
+        color_emphasis="dual_emphasis",     spacing_density="compact",  emphasis_weight="eyebrow_dominant",
+        background="textured",       color_depth="radial_glows",
+        ornament="heavy",            typography="playful", image_treatment="dramatic",
+    ),
 ]
 
 BRANDS = [ETS_BRAND, ROYALTEE_BRAND, KMJ_BRAND]

@@ -35,6 +35,7 @@ from ..primitives import (
     render_heading,
     render_cta_button,
 )
+from ._depth_helpers import render_satellite_diamonds
 
 
 def _format_inline_vars(var_dict: Dict[str, str]) -> str:
@@ -144,7 +145,12 @@ def render_quote_anchor(
   class="ca-hero ca-hero-quote-anchor"
   style="{section_style};
     position: relative;
-    background: var(--brand-warm-neutral, #F8F6F1);
+    background-color: var(--ca-bg-color, var(--brand-warm-neutral, #F8F6F1));
+    background-image: var(--ca-bg-image, none);
+    background-size: var(--ca-bg-size, auto);
+    background-repeat: var(--ca-bg-repeat, no-repeat);
+    background-position: center center;
+    background-blend-mode: var(--ca-bg-blend, normal);
     padding-top: var(--hero-section-padding-y, 100px);
     padding-bottom: var(--hero-section-padding-y, 100px);
     padding-left: var(--hero-section-padding-x, 64px);
@@ -169,4 +175,5 @@ def render_quote_anchor(
     </div>
     {close_quote}
   </div>
+{render_satellite_diamonds(treatments.ornament, 'quote_anchor')}
 </section>"""

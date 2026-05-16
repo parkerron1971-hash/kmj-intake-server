@@ -43,9 +43,16 @@ from agents.design_modules.cinematic_authority.hero.types import (
 )
 from agents.design_modules.cinematic_authority.hero.variants import VARIANT_REGISTRY
 from agents.design_modules.cinematic_authority.hero.treatments import (
+    # Phase 2 — structural rhythm
     color_emphasis_vars,
     emphasis_weight_vars,
     spacing_density_vars,
+    # Phase 2.6 — visual depth
+    background_treatment_vars,
+    color_depth_vars,
+    image_treatment_vars,
+    ornament_treatment_vars,
+    typography_personality_vars,
 )
 
 logger = logging.getLogger(__name__)
@@ -147,12 +154,23 @@ def build_render_context(
 
 
 def _build_treatment_vars(composition: CathedralHeroComposition) -> Dict[str, str]:
-    """Translate composition.treatments into CSS variable values."""
+    """Translate composition.treatments into CSS variable values.
+
+    Merges all 8 dimensions (3 structural + 5 depth, Phase 2.6) into
+    one dict. Order doesn't matter — none of the translators emit
+    overlapping CSS variable names."""
     t = composition.treatments
     out: Dict[str, str] = {}
+    # Structural (Phase 2)
     out.update(color_emphasis_vars(t.color_emphasis))
     out.update(spacing_density_vars(t.spacing_density))
     out.update(emphasis_weight_vars(t.emphasis_weight))
+    # Visual depth (Phase 2.6)
+    out.update(background_treatment_vars(t.background))
+    out.update(color_depth_vars(t.color_depth))
+    out.update(ornament_treatment_vars(t.ornament))
+    out.update(typography_personality_vars(t.typography))
+    out.update(image_treatment_vars(t.image_treatment))
     return out
 
 

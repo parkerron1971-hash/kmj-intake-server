@@ -5,6 +5,11 @@ Treatment sensitivity:
   emphasis_weight=eyebrow_dominant → larger size + bolder weight
   color_emphasis=authority_dominant → eyebrow shifts to text_primary
   spacing_density=compact → tighter bottom margin
+
+Phase 2.6 depth dimension:
+  typography=refined → looser tracking (0.28em), lighter weight (500)
+  typography=bold    → tighter tracking (0.18em), heavier weight (800)
+  typography=playful → loosest tracking (0.32em), medium weight (600)
 """
 from __future__ import annotations
 
@@ -35,7 +40,6 @@ def render_eyebrow(
         "standard": "24px",
         "compact": "16px",
     }[treatments.spacing_density]
-    weight = "800" if treatments.emphasis_weight == "eyebrow_dominant" else "700"
 
     safe_text = escape(text or "")
     return (
@@ -43,9 +47,9 @@ def render_eyebrow(
         f'data-override-target="{escape(target_path)}" '
         f'data-override-type="text" '
         f'style="font-size: {size_px}; '
-        f'letter-spacing: 0.22em; '
+        f'letter-spacing: var(--ca-eyebrow-tracking, 0.22em); '
         f'text-transform: uppercase; '
-        f'font-weight: {weight}; '
+        f'font-weight: var(--ca-eyebrow-weight, 700); '
         f'color: var(--eyebrow-color, var(--brand-signal, #C6952F)); '
         f'font-family: var(--ca-sans, system-ui, -apple-system, sans-serif); '
         f'margin-bottom: {bottom_margin}; '

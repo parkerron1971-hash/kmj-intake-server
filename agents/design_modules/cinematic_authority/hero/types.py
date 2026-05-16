@@ -50,20 +50,53 @@ IMAGE_USING_VARIANTS: frozenset = frozenset(
 
 # ─── Treatment dimensions ───────────────────────────────────────────
 
+# Original 3 dimensions (Phase 2)
 ColorEmphasis = Literal["signal_dominant", "authority_dominant", "dual_emphasis"]
 SpacingDensity = Literal["generous", "standard", "compact"]
 EmphasisWeight = Literal["heading_dominant", "balanced", "eyebrow_dominant"]
 
+# Phase 2.6 — visual depth dimensions. The original 3 control structural
+# rhythm; these 5 control how the variant FEELS. Combinatorial space:
+#   11 variants × 3 × 3 × 3 × 4 × 3 × 3 × 4 × 4 = 51,840 unique compositions
+# before content + brand kit variation.
+BackgroundTreatment = Literal["flat", "soft_gradient", "textured", "vignette"]
+ColorDepthTreatment = Literal["flat", "gradient_accents", "radial_glows"]
+OrnamentTreatment = Literal["minimal", "signature", "heavy"]
+TypographyPersonality = Literal["editorial", "bold", "refined", "playful"]
+ImageTreatment = Literal["clean", "filtered", "dramatic", "soft"]
+
 
 class Treatments(BaseModel):
-    """Three orthogonal style dimensions applied to any variant. Each
-    dimension has 3 options → 27 treatment combinations per variant.
-    Treatment values translate to CSS-variable assignments scoped to
-    the rendered section (see treatments/*.py)."""
+    """Eight orthogonal style dimensions applied to any variant.
 
+    Original 3 (structural rhythm — Phase 2):
+      color_emphasis, spacing_density, emphasis_weight
+
+    Visual depth 5 (Phase 2.6 — how the variant FEELS):
+      background        — section bg (flat/gradient/textured/vignette)
+      color_depth       — gradient/glow treatment on accents
+      ornament          — diamond density + prominence
+      typography        — heading personality (editorial/bold/refined/playful)
+      image_treatment   — filter on image elements (only relevant to
+                          IMAGE_USING_VARIANTS; passed through as 'clean'
+                          for text-only variants without effect)
+
+    All 8 are required at the composition layer. The Composer Agent
+    is responsible for picking all 8 from business archetype context;
+    the post-validation in compose_cathedral_hero defaults to safe
+    values (flat/flat/minimal/editorial/clean) if any are missing
+    after one retry."""
+
+    # Structural
     color_emphasis: ColorEmphasis
     spacing_density: SpacingDensity
     emphasis_weight: EmphasisWeight
+    # Visual depth (Phase 2.6)
+    background: BackgroundTreatment = "flat"
+    color_depth: ColorDepthTreatment = "flat"
+    ornament: OrnamentTreatment = "minimal"
+    typography: TypographyPersonality = "editorial"
+    image_treatment: ImageTreatment = "clean"
 
 
 # ─── Hero content ───────────────────────────────────────────────────
