@@ -18,12 +18,19 @@ from pydantic import BaseModel, Field
 # ─── Variant identifiers ────────────────────────────────────────────
 
 VariantId = Literal[
+    # Phase 2 — original 6 variants
     "manifesto_center",
     "asymmetric_left",
     "asymmetric_right",
     "full_bleed_overlay",
     "split_stacked",
     "layered_diamond",
+    # Phase 2.5 — library expansion (5 new)
+    "quote_anchor",
+    "tabular_authority",
+    "vertical_manifesto",
+    "annotated_hero",
+    "cinematic_caption",
 ]
 
 # Subset of variants that use an image (hero_main slot). Image-using
@@ -31,7 +38,13 @@ VariantId = Literal[
 # it null. The Composer Agent honors this; the post-validation step in
 # Phase 3 enforces it.
 IMAGE_USING_VARIANTS: frozenset = frozenset(
-    {"asymmetric_left", "asymmetric_right", "full_bleed_overlay", "split_stacked"}
+    {
+        "asymmetric_left",
+        "asymmetric_right",
+        "full_bleed_overlay",
+        "split_stacked",
+        "cinematic_caption",  # Phase 2.5 — image on top, caption below
+    }
 )
 
 
