@@ -268,14 +268,21 @@ def render_spot_check(variant_id: str, output_path: str, brand: BrandKitColors,
 
 def main():
     """Run smoke tests + write spot-check HTML for each variant."""
-    print("=== Phase 2 variant smoke tests ===")
+    print("=== Phase 2.5 variant smoke tests (11 variants total) ===")
     variants = [
+        # Phase 2
         ("manifesto_center",   1),
         ("asymmetric_left",    2),
         ("asymmetric_right",   3),
         ("full_bleed_overlay", 4),
         ("split_stacked",      5),
         ("layered_diamond",    6),
+        # Phase 2.5
+        ("quote_anchor",       7),
+        ("tabular_authority",  8),
+        ("vertical_manifesto", 9),
+        ("annotated_hero",    10),
+        ("cinematic_caption", 11),
     ]
     # Smoke check: each variant × 3 treatment combos × 3 content fixtures
     total_renders = 0
@@ -315,21 +322,97 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     print(f"=== Writing spot-check HTML to {out_dir} ===")
 
+    # Phase 2.5 — quote_anchor needs a quote-shaped heading for the
+    # variant to read correctly. Use a custom content fixture for V7.
+    QUOTE_CONTENT = HeroContent(
+        eyebrow="WHAT CLIENTS SAY",
+        heading="They reframed everything in the first hour.",
+        heading_emphasis="reframed everything",
+        subtitle="Anna Stewart, Founder of Hearth Studio",
+        cta_primary="Book a discovery call",
+        cta_target="#contact",
+        image_slot_ref=None,
+    )
+
     spot_check_set = [
-        # (variant, idx, brand, content_idx, treatments_idx, brand_label)
-        ("manifesto_center",   1, ETS_BRAND,     0, 0, "ETS (navy/gold/cream)"),
-        ("asymmetric_left",    2, ROYALTEE_BRAND, 1, 1, "RoyalTee (purple/amber/white)"),
-        ("asymmetric_right",   3, KMJ_BRAND,     2, 2, "KMJ (black/yellow/light)"),
-        ("full_bleed_overlay", 4, ETS_BRAND,     0, 0, "ETS"),
-        ("split_stacked",      5, ROYALTEE_BRAND, 1, 1, "RoyalTee"),
-        ("layered_diamond",    6, ETS_BRAND,     2, 0, "ETS"),
+        # Phase 2 — original 6
+        ("manifesto_center",   1, ETS_BRAND,     CONTENTS[0],     TREATMENTS[0], "ETS (navy/gold/cream)"),
+        ("asymmetric_left",    2, ROYALTEE_BRAND, CONTENTS[1],     TREATMENTS[1], "RoyalTee (purple/amber/white)"),
+        ("asymmetric_right",   3, KMJ_BRAND,     CONTENTS[2],     TREATMENTS[2], "KMJ (black/yellow/light)"),
+        ("full_bleed_overlay", 4, ETS_BRAND,     CONTENTS[0],     TREATMENTS[0], "ETS"),
+        ("split_stacked",      5, ROYALTEE_BRAND, CONTENTS[1],     TREATMENTS[1], "RoyalTee"),
+        ("layered_diamond",    6, ETS_BRAND,     CONTENTS[2],     TREATMENTS[0], "ETS"),
+        # Phase 2.5 — 5 new
+        ("quote_anchor",       7, ETS_BRAND,     QUOTE_CONTENT,    TREATMENTS[0], "ETS (testimony fixture)"),
+        ("tabular_authority",  8, ETS_BRAND,     CONTENTS[2],     TREATMENTS[1], "ETS (authority-dominant)"),
+        ("vertical_manifesto", 9, KMJ_BRAND,     CONTENTS[0],     TREATMENTS[0], "KMJ (signal-dominant, generous)"),
+        ("annotated_hero",    10, ROYALTEE_BRAND, CONTENTS[2],     TREATMENTS[1], "RoyalTee (method fixture)"),
+        ("cinematic_caption", 11, KMJ_BRAND,     CONTENTS[1],     TREATMENTS[2], "KMJ (dual-emphasis, compact)"),
     ]
-    for variant_id, idx, brand, c_i, t_i, brand_label in spot_check_set:
-        path = os.path.join(out_dir, f"spike_variant_{idx}_{variant_id}.html")
-        render_spot_check(variant_id, path, brand, CONTENTS[c_i], TREATMENTS[t_i], brand_label, idx)
+    for variant_id, idx, brand, content, treatments, brand_label in spot_check_set:
+        path = os.path.join(out_dir, f"spike_variant_{idx:02d}_{variant_id}.html")
+        # Render directly with the chosen content (not by index — quote_anchor
+        # uses a custom content fixture).
+        render_spot_check_direct(variant_id, path, brand, content, treatments, brand_label, idx)
         print(f"  -> {path}")
 
     print(f"\nOpen each file in a browser to spot-check visual distinctness.")
+
+
+def render_spot_check_direct(variant_id: str, output_path: str, brand: BrandKitColors,
+                              content: HeroContent, treatments: Treatments, brand_label: str, idx: int):
+    """Same as render_spot_check but accepts an explicit content object
+    rather than indexing into CONTENTS. Lets V7 (quote_anchor) use a
+    quote-shaped content fixture instead of a manifesto."""
+    tvars: Dict[str, str] = {}
+    tvars.update(color_emphasis_vars(treatments.color_emphasis))
+    tvars.update(spacing_density_vars(treatments.spacing_density))
+    tvars.update(emphasis_weight_vars(treatments.emphasis_weight))
+
+    # Pydantic v2: prefer model_copy over deprecated copy().
+    _content_copy = content.model_copy() if hasattr(content, "model_copy") else (
+        content.copy() if hasattr(content, "copy") else content
+    )
+    composition = CathedralHeroComposition(
+        variant=variant_id,  # type: ignore[arg-type]
+        treatments=treatments,
+        content=_content_copy,
+        reasoning=f"Spike spot-check render for {variant_id}",
+    )
+
+    from agents.design_modules.cinematic_authority.hero.types import IMAGE_USING_VARIANTS
+    if variant_id in IMAGE_USING_VARIANTS:
+        composition.content.image_slot_ref = "hero_main"
+    else:
+        composition.content.image_slot_ref = None
+
+    context = RenderContext(
+        composition=composition,
+        brand_kit=brand,
+        business_id="spike-test",
+        slot_resolutions=SLOT_RESOLUTIONS,
+    )
+
+    brand_vars: Dict[str, str] = {}
+    renderer = VARIANT_REGISTRY[variant_id]
+    hero_html = renderer(context, brand_vars, tvars)
+
+    treatments_label = f"{treatments.color_emphasis} / {treatments.spacing_density} / {treatments.emphasis_weight}"
+    doc = DOC_TEMPLATE.format(
+        idx=idx,
+        variant_id=variant_id,
+        primary=brand.primary,
+        secondary=brand.secondary,
+        accent=brand.accent,
+        background=brand.background,
+        text=brand.text,
+        brand_label=brand_label,
+        treatments_label=treatments_label,
+        hero_html=hero_html,
+    )
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(doc)
 
 
 if __name__ == "__main__":
