@@ -10,6 +10,12 @@
     alternative_module). Module Router runs BEFORE the module-specific
     Composer in the full pipeline.
 
+  POST /composer/_diag/compose_and_render_hero { business_id, dry_run }
+    Pass 4.0g Phase E — full end-to-end pipeline. Module Router decides
+    module, module-specific Composer composes within that module, then
+    module-specific render produces standalone HTML5. Returns
+    {business_id, module_id, routing_decision, composition, html}.
+
   POST /composer/_spike/render_hero/{business_id}
     Pass 4.0f Phase 4 — runs Composer + the four-step render pipeline,
     returns { composition, html, business_id } as JSON. Phase 5
@@ -87,6 +93,29 @@ def diag_route_module(req: DiagRouteModuleRequest) -> Dict[str, Any]:
     pipeline (Module Router -> Composer -> render) wires through."""
     from agents.composer.module_router import route_module
     return route_module(req.business_id)
+
+
+# ─── Phase E end-to-end pipeline endpoint ──────────────────────────
+
+class DiagComposeAndRenderRequest(BaseModel):
+    business_id: str
+    dry_run: bool = True  # reserved for forward-compat; the full
+                           # pipeline doesn't currently write to DB
+
+
+@router.post("/_diag/compose_and_render_hero")
+def diag_compose_and_render_hero(req: DiagComposeAndRenderRequest) -> Dict[str, Any]:
+    """Run the full Pass 4.0g multi-module pipeline for one business.
+
+    Module Router decides cathedral vs studio_brut. Module-specific
+    Composer composes within that module. Module-specific render
+    produces a standalone HTML5 document.
+
+    Returns: {business_id, module_id, routing_decision, composition, html}
+
+    Cost: ~$0.06 per call (1 Sonnet routing + 1 Sonnet composer)."""
+    from agents.composer.render_pipeline import compose_and_render_hero
+    return compose_and_render_hero(req.business_id)
 
 
 # ─── Phase 4 spike render endpoints ────────────────────────────────
