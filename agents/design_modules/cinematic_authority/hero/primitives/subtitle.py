@@ -6,6 +6,11 @@ Treatment sensitivity:
   emphasis_weight=heading_dominant → smaller (18-20px), subordinate
   emphasis_weight=eyebrow_dominant → small (16-18px), unobtrusive
   spacing_density=generous         → wider max-width, larger bottom margin
+
+Phase 2.6 depth dimension:
+  typography=playful → subtitle picks up italic (--ca-subtitle-italic)
+  typography=refined → lighter weight (--ca-subtitle-weight: 300)
+  typography=bold    → slightly heavier weight (--ca-subtitle-weight: 500)
 """
 from __future__ import annotations
 
@@ -43,7 +48,8 @@ def render_subtitle(
         f'data-override-type="text" '
         f'style="font-size: {size_clamp}; '
         f'line-height: 1.55; '
-        f'font-weight: 400; '
+        f'font-weight: var(--ca-subtitle-weight, 400); '
+        f'font-style: var(--ca-subtitle-italic, normal); '
         f'color: var(--subtitle-color, var(--brand-text-primary, #0F172A)); '
         f'opacity: 0.78; '
         f'font-family: var(--ca-sans, system-ui, -apple-system, sans-serif); '

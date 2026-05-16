@@ -93,10 +93,15 @@ THE 11 VARIANTS
     Best for: visual portfolios needing image dominance AND fully-legible text. Photographers, designers, studios with strong establishing shots who want NO overlay drama.
 
 ═══════════════════════════════════════════════════════════════
-THE 3 TREATMENT DIMENSIONS
+THE 8 TREATMENT DIMENSIONS
 ═══════════════════════════════════════════════════════════════
 
-Each variant accepts THREE independent treatment options.
+Each variant accepts EIGHT independent treatment dimensions. The first
+three control structural rhythm; the last five control how the variant
+FEELS (visual depth — added in Phase 2.6 because visual variety alone
+wasn't enough to make different businesses feel different).
+
+─── Structural (3 dimensions) ───
 
 COLOR_EMPHASIS:
   signal_dominant   — italic emphasis word + eyebrow + CTA all in signal color (gold/amber/accent). Heading uses text primary.
@@ -116,6 +121,98 @@ EMPHASIS_WEIGHT:
                       Most common for declarative manifestos.
   balanced          — heading and subtitle roughly equal. Heading clamp(2.5-4rem). Two-thought hero structures.
   eyebrow_dominant  — eyebrow visually prominent. Heading slightly smaller. For category-defining brands.
+
+─── Visual depth (5 dimensions — Phase 2.6) ───
+
+BACKGROUND:
+  flat           — solid bg color, no variation. Editorial restraint.
+  soft_gradient  — gentle 135-deg gradient from warm-neutral through 9% signal tint to 6% authority tint.
+                   Adds depth without drama. Premium / lifestyle feel.
+  textured       — solid bg + tiled SVG noise texture overlaid via multiply blend. Tactile, crafted feel.
+                   Custom apparel, artisan brands, anything that wants visible craft.
+  vignette       — radial darken from center outward (18% authority tint at edges). Cinematic focus toward content.
+                   Dramatic, authority brands, premium experiences.
+
+COLOR_DEPTH:
+  flat              — solid colors throughout. Clean, minimal, classic Cathedral.
+  gradient_accents  — italic emphasis word uses LINEAR-GRADIENT text fill (signal-to-secondary). CTA bg becomes a
+                      2-stop signal-to-darken gradient. Accent lines fade at endcaps. Dynamic, alive.
+  radial_glows      — italic emphasis word keeps solid color BUT gains a subtle text-shadow halo. CTA gains a radial
+                      signal-color glow behind it. Diamonds get a soft glow filter. Luxe, ethereal, premium.
+
+ORNAMENT:
+  minimal    — diamond opacity 0.55x, size 0.8x. Variants skip optional ornament clusters. Restrained.
+               For editorial / authority brands where words carry weight, not decoration.
+  signature  — diamond opacity 0.9x, size 1.0x. Variants render default ornament set. The Cathedral classic.
+               Brand-stated without being decorated.
+  heavy      — diamond opacity 1.0x, size 1.4x. Variants ALSO render 4 scattered satellite diamonds beyond their base set.
+               Ornament becomes visual co-star. Bold, decorated. For brands whose identity IS visual character.
+
+TYPOGRAPHY:
+  editorial — Playfair Display, weight 900, tight tracking. The Cathedral default. Authority, classic editorial.
+  bold      — same Playfair, tighter line-height (0.95), tighter tracking (-0.04em). Confident, declarative.
+  refined   — lighter weight (500), looser line-height (1.15), looser tracking (-0.005em). Poetic, elegant.
+  playful   — italic-leaning headings + subtitles, weight 600, looser tracking (0.005em). Creative, lively.
+              Best for: creative practitioners, custom-anything businesses, brands that want personality.
+
+IMAGE_TREATMENT (only meaningful for IMAGE-USING variants — asymmetric_left/right, full_bleed_overlay, split_stacked, cinematic_caption):
+  clean    — no filter. Photo as-shot.
+  filtered — subtle editorial grade: saturate(0.88), contrast(0.96). Slightly desaturated, magazine feel.
+  dramatic — high impact: saturate(1.15), contrast(1.18), brightness(0.96). Richer, cinematic.
+  soft     — slight feathered edges via mask-image. Crisp center, dreamlike edges. Premium experience feel.
+
+  For text-only variants, set image_treatment to 'clean' — it's a no-op there but the schema requires it.
+
+═══════════════════════════════════════════════════════════════
+HOW TO PICK DEPTH TREATMENTS
+═══════════════════════════════════════════════════════════════
+
+Depth treatments are how you tell different businesses APART VISUALLY beyond layout.
+Same variant + same colors + DIFFERENT depth = different brand feel.
+
+Lean into business personality. Don't default to flat/flat/minimal/editorial/clean unless the brand specifically demands restraint.
+
+Business-archetype guidance:
+
+  custom apparel / creative practitioner / designer (e.g. RoyalTee)
+    → soft_gradient or textured background
+    → gradient_accents or radial_glows color_depth
+    → signature or heavy ornament
+    → playful or bold typography
+    → dramatic or filtered image
+    Reason: the work IS the brand; visual character is the value proposition.
+
+  creative agency / studio (e.g. KMJ)
+    → vignette or soft_gradient background
+    → gradient_accents color_depth
+    → signature ornament
+    → bold or editorial typography
+    → dramatic or filtered image
+    Reason: confident authority paired with editorial polish.
+
+  technical consultancy / process-driven (e.g. Director Loop Test)
+    → flat or textured background
+    → flat or gradient_accents color_depth
+    → minimal or signature ornament
+    → editorial or refined typography
+    → clean image (likely text-only variant anyway)
+    Reason: precision + restraint; let the words and structure carry weight.
+
+  pastoral / community / ceremonial brand
+    → soft_gradient background
+    → radial_glows or gradient_accents color_depth
+    → signature ornament
+    → refined typography
+    → soft image treatment (if image variant)
+    Reason: warmth + contemplation; let depth feel ambient, not pushy.
+
+  authority expert / consultant / professional
+    → flat or vignette background
+    → flat color_depth
+    → signature ornament
+    → editorial or bold typography
+    → filtered or dramatic image
+    Reason: command + clarity; depth supports rather than competes.
 
 ═══════════════════════════════════════════════════════════════
 HOW TO PICK
@@ -176,7 +273,12 @@ You output ONE JSON object. No markdown fences. No prose outside the JSON. The s
   \"treatments\": {
     \"color_emphasis\": \"<signal_dominant | authority_dominant | dual_emphasis>\",
     \"spacing_density\": \"<generous | standard | compact>\",
-    \"emphasis_weight\": \"<heading_dominant | balanced | eyebrow_dominant>\"
+    \"emphasis_weight\": \"<heading_dominant | balanced | eyebrow_dominant>\",
+    \"background\": \"<flat | soft_gradient | textured | vignette>\",
+    \"color_depth\": \"<flat | gradient_accents | radial_glows>\",
+    \"ornament\": \"<minimal | signature | heavy>\",
+    \"typography\": \"<editorial | bold | refined | playful>\",
+    \"image_treatment\": \"<clean | filtered | dramatic | soft>\"
   },
   \"content\": {
     \"eyebrow\": \"<3-6 word uppercase label>\",
@@ -187,8 +289,10 @@ You output ONE JSON object. No markdown fences. No prose outside the JSON. The s
     \"cta_target\": \"<#anchor or mailto: or URL>\",
     \"image_slot_ref\": \"hero_main\" OR null
   },
-  \"reasoning\": \"<2-3 sentences. Why this variant + treatments for this business. Note any variant gap if no perfect fit existed.>\"
+  \"reasoning\": \"<2-3 sentences. Why this variant + treatments for this business. Reference the DEPTH choices, not just variant + structural treatments — explain how background / color_depth / ornament / typography / image_treatment serve the business personality. Note any variant gap if no perfect fit existed.>\"
 }
+
+All 8 treatment fields are REQUIRED. Do not omit any. If you're unsure about a depth dimension, pick the option that best matches the business archetype guidance above. Defaulting everything to flat/flat/minimal/editorial/clean is allowed only for true authority-expert brands; for everyone else, lean into depth.
 
 Output ONLY the JSON object. No markdown fences. No commentary outside it."""
 
@@ -386,6 +490,52 @@ only the JSON object specified in the system prompt."""
 
 # ─── Post-validation ────────────────────────────────────────────────
 
+# Phase 2.6 — safe defaults for the 5 depth dimensions. Applied only
+# when the Composer omits a depth field (the prompt instructs it to
+# always emit all 8, and the retry path nags if any are missing).
+# Defaults are deliberately RESTRAINED: a Composer that defaults across
+# the board looks similar to the Phase 2.5 baseline, so divergence
+# from default = intentional depth choice.
+_DEPTH_DEFAULTS = {
+    "background": "flat",
+    "color_depth": "flat",
+    "ornament": "minimal",
+    "typography": "editorial",
+    "image_treatment": "clean",
+}
+
+# Allowed values for each depth dimension. Anything else gets coerced
+# to the default for that dimension (Composer hallucinations stay
+# bounded).
+_DEPTH_ALLOWED = {
+    "background": {"flat", "soft_gradient", "textured", "vignette"},
+    "color_depth": {"flat", "gradient_accents", "radial_glows"},
+    "ornament": {"minimal", "signature", "heavy"},
+    "typography": {"editorial", "bold", "refined", "playful"},
+    "image_treatment": {"clean", "filtered", "dramatic", "soft"},
+}
+
+
+def _missing_depth_fields(comp_dict: Dict[str, Any]) -> list:
+    """Return the list of depth dimensions the Composer didn't emit.
+    Used to decide whether to retry with explicit feedback."""
+    treatments = comp_dict.get("treatments") or {}
+    return [k for k in _DEPTH_DEFAULTS if not treatments.get(k)]
+
+
+def _enforce_depth_treatments(comp_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Backfill missing depth treatment fields with safe defaults +
+    coerce unknown values to defaults. Applied after Composer's retry
+    so the Pydantic model always validates."""
+    treatments = comp_dict.get("treatments") or {}
+    for field, default in _DEPTH_DEFAULTS.items():
+        v = treatments.get(field)
+        if v not in _DEPTH_ALLOWED[field]:
+            treatments[field] = default
+    comp_dict["treatments"] = treatments
+    return comp_dict
+
+
 def _enforce_image_slot_consistency(comp_dict: Dict[str, Any]) -> Dict[str, Any]:
     """Set image_slot_ref to 'hero_main' iff variant uses images; else
     null. The variant choice is the source of truth — the Composer is
@@ -466,6 +616,38 @@ def compose_cathedral_hero(business_id: str) -> Dict[str, Any]:
     if not isinstance(parsed, dict):
         return _safe_fallback(business_id, "Model returned non-object", raw=text)
 
+    # Phase 2.6 — if Composer omitted any of the 5 depth treatment
+    # fields, retry once with explicit feedback before falling back to
+    # safe defaults. The retry path nudges Composer toward intentional
+    # depth picks rather than passive defaulting.
+    missing_depth = _missing_depth_fields(parsed)
+    if missing_depth:
+        logger.warning(
+            f"[composer] depth fields missing on first attempt: "
+            f"{missing_depth} — retrying with feedback"
+        )
+        retry_msg = (
+            f"\n\nYour previous response was missing the depth treatment "
+            f"fields: {', '.join(missing_depth)}. ALL 8 treatment fields "
+            f"are required — pick intentional depth treatments per the "
+            f"business-archetype guidance in the system prompt, not safe "
+            f"defaults. Output the full JSON again."
+        )
+        try:
+            raw_retry = _call(retry_msg)
+            text_retry = _strip_code_fence(raw_retry)
+            re_parsed = json.loads(text_retry)
+            if isinstance(re_parsed, dict):
+                parsed = re_parsed
+        except Exception as retry_e:
+            logger.warning(
+                f"[composer] depth-retry failed: {retry_e}; "
+                f"falling back to safe depth defaults"
+            )
+
+    # Backfill any still-missing depth fields with safe defaults so the
+    # Pydantic model validates. Composer's gap is captured in logs.
+    parsed = _enforce_depth_treatments(parsed)
     parsed = _enforce_image_slot_consistency(parsed)
 
     # Ensure 'section' field is present (Literal default).

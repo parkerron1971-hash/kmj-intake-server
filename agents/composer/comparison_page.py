@@ -69,14 +69,30 @@ def _gather_renders() -> List[Dict[str, Any]]:
     return out
 
 
+def _pill(value: str, css_class: str = "treatment-pill") -> str:
+    return f'<span class="{css_class}">{html_lib.escape(value)}</span>'
+
+
 def _render_metadata_panel(name: str, business_id: str, comp: Dict[str, Any]) -> str:
-    """Right-side panel: variant + treatments + heading_emphasis + reasoning."""
+    """Right-side panel: variant + all 8 treatments + content + reasoning.
+
+    Phase 2.6 — treatments now span 8 dimensions (3 structural + 5
+    visual depth). Surface them grouped so reviewers can read
+    structure vs depth at a glance."""
     treatments = comp.get("treatments") or {}
     content = comp.get("content") or {}
     variant = comp.get("variant", "(unknown)")
+    # Structural
     color_emphasis = treatments.get("color_emphasis", "?")
     spacing_density = treatments.get("spacing_density", "?")
     emphasis_weight = treatments.get("emphasis_weight", "?")
+    # Visual depth (Phase 2.6)
+    background = treatments.get("background", "?")
+    color_depth = treatments.get("color_depth", "?")
+    ornament = treatments.get("ornament", "?")
+    typography = treatments.get("typography", "?")
+    image_treatment = treatments.get("image_treatment", "?")
+    # Content
     heading = content.get("heading", "")
     heading_emphasis = content.get("heading_emphasis", "")
     eyebrow = content.get("eyebrow", "")
@@ -94,14 +110,24 @@ def _render_metadata_panel(name: str, business_id: str, comp: Dict[str, Any]) ->
       </div>
       <div class="meta-row">
         <span class="meta-label">variant</span>
-        <span class="meta-value variant-pill">{html_lib.escape(variant)}</span>
+        <span class="meta-value">{_pill(variant, "variant-pill")}</span>
       </div>
       <div class="meta-row">
-        <span class="meta-label">treatments</span>
+        <span class="meta-label">structural</span>
         <span class="meta-value">
-          <span class="treatment-pill">{html_lib.escape(color_emphasis)}</span>
-          <span class="treatment-pill">{html_lib.escape(spacing_density)}</span>
-          <span class="treatment-pill">{html_lib.escape(emphasis_weight)}</span>
+          {_pill(color_emphasis)}
+          {_pill(spacing_density)}
+          {_pill(emphasis_weight)}
+        </span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">depth</span>
+        <span class="meta-value">
+          {_pill(f"bg: {background}", "depth-pill")}
+          {_pill(f"color: {color_depth}", "depth-pill")}
+          {_pill(f"orn: {ornament}", "depth-pill")}
+          {_pill(f"type: {typography}", "depth-pill")}
+          {_pill(f"img: {image_treatment}", "depth-pill")}
         </span>
       </div>
       <div class="meta-row">
@@ -310,6 +336,15 @@ _COMPARISON_SHELL = """<!DOCTYPE html>
     background: var(--pill-bg); color: var(--pill-fg);
     padding: 3px 8px; border-radius: 3px;
     font-family: ui-monospace, monospace; font-size: 11px;
+    margin-right: 4px; margin-bottom: 4px;
+  }}
+  .depth-pill {{
+    display: inline-block;
+    background: color-mix(in srgb, var(--variant-bg) 22%, var(--panel-bg));
+    color: var(--pill-fg);
+    border: 1px solid color-mix(in srgb, var(--variant-bg) 35%, transparent);
+    padding: 3px 8px; border-radius: 3px;
+    font-family: ui-monospace, monospace; font-size: 10.5px;
     margin-right: 4px; margin-bottom: 4px;
   }}
   .reasoning-row {{ padding-top: 14px; }}

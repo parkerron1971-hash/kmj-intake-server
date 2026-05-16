@@ -49,6 +49,7 @@ from ..primitives import (
     render_cta_button,
     render_diamond_motif,
 )
+from ._depth_helpers import render_satellite_diamonds
 
 
 def _format_inline_vars(var_dict: Dict[str, str]) -> str:
@@ -122,6 +123,12 @@ def render_full_bleed_overlay(
     overflow: hidden;
     min-height: 640px;
     background: var(--brand-authority, #0A1628);
+    background-color: var(--ca-bg-color, var(--brand-warm-neutral, #F8F6F1));
+    background-image: var(--ca-bg-image, none);
+    background-size: var(--ca-bg-size, auto);
+    background-repeat: var(--ca-bg-repeat, no-repeat);
+    background-position: center center;
+    background-blend-mode: var(--ca-bg-blend, normal);
   "
 >
   <!-- Full-bleed background image -->
@@ -137,8 +144,7 @@ def render_full_bleed_overlay(
       width: 100%;
       height: 100%;
       object-fit: cover;
-      z-index: 1;
-    "
+      z-index: 1; filter: var(--ca-image-filter, none); -webkit-mask-image: var(--ca-image-mask, none); mask-image: var(--ca-image-mask, none);"
   />
   <!-- Dark overlay derived from authority color -->
   <div
@@ -175,4 +181,5 @@ def render_full_bleed_overlay(
     {subtitle_html}
     {cta_html}
   </div>
+{render_satellite_diamonds(treatments.ornament, 'full_bleed_overlay')}
 </section>"""
