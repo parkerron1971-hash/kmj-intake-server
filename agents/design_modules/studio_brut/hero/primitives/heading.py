@@ -67,32 +67,53 @@ _EMPHASIS_MODE_BY_TYPOGRAPHY = {
 }
 
 
+# color_depth treatment layers on top of EVERY emphasis mode — gradient
+# text-fill, glow halos, etc. apply regardless of which typography
+# mode is active. Defaults from color_depth_treatment_vars are
+# conservative no-ops (transparent bg, border-box clip, etc.) so this
+# block is safe to attach uniformly. Phase C audit surfaced that
+# without these uniform overlays, color_depth=radial_glows / =gradient_
+# accents would only fire when typography=playful — a real coupling bug.
+_COLOR_DEPTH_OVERLAY = (
+    "background: var(--sb-emphasis-bg, transparent); "
+    "-webkit-background-clip: var(--sb-emphasis-bg-clip, border-box); "
+    "background-clip: var(--sb-emphasis-bg-clip, border-box); "
+    "-webkit-text-fill-color: var(--sb-emphasis-text-fill, currentColor); "
+    "text-shadow: var(--sb-emphasis-glow, none); "
+)
+
+
 def _emphasis_span_style(mode: str) -> str:
     """Return inline style fragment for the emphasis span based on
-    typography treatment mode."""
+    typography treatment mode + color_depth overlay.
+
+    Order of declarations matters here: the typography mode's font /
+    color / scale rules come FIRST, then the color_depth overlay
+    appends. Browsers apply later declarations on top, so the overlay
+    can override `color` with `-webkit-text-fill-color: transparent`
+    when gradient_accents fires."""
     if mode == "color":
         return (
             "color: var(--sb-emphasis-color, var(--brand-signal, #FACC15)); "
             "font-weight: 900; "
+            + _COLOR_DEPTH_OVERLAY
         )
     if mode == "weight":
         return (
-            # Surrounding heading runs heavy (700-800); emphasis runs
-            # heavier still (900) AND increased letter-spacing tightness
             "font-weight: 900; "
             "letter-spacing: -0.02em; "
             "color: var(--sb-heading-color, var(--brand-text-primary, #09090B)); "
+            + _COLOR_DEPTH_OVERLAY
         )
     if mode == "scale":
         return (
-            # Oversized within line — em-relative so it scales with the
-            # heading clamp
             "font-size: 1.4em; "
             "font-weight: 700; "
             "letter-spacing: -0.03em; "
             "line-height: 0.85; "
             "vertical-align: -0.05em; "
             "color: var(--sb-heading-color, var(--brand-text-primary, #09090B)); "
+            + _COLOR_DEPTH_OVERLAY
         )
     # scale_color (playful)
     return (
@@ -102,7 +123,7 @@ def _emphasis_span_style(mode: str) -> str:
         "line-height: 0.85; "
         "vertical-align: -0.05em; "
         "color: var(--sb-emphasis-color, var(--brand-signal, #FACC15)); "
-        "text-shadow: var(--sb-emphasis-glow, none); "
+        + _COLOR_DEPTH_OVERLAY
     )
 
 

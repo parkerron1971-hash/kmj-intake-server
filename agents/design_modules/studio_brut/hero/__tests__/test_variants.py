@@ -292,33 +292,278 @@ def _spot_check(variant_id: str, idx: int, brand: BrandKitColors,
         f.write(doc)
 
 
-def main():
-    print("=== Phase B Studio Brut variant smoke tests ===")
+VARIANT_LIST = [
+    ("color_block_split",   1),
+    ("oversize_statement",  2),
+    ("diagonal_band",       3),
+    ("stacked_blocks",      4),
+    ("edge_bleed_portrait", 5),
+    ("type_collage",        6),
+    ("layered_card",        7),
+    ("stat_strip",          8),
+    ("massive_letterform",  9),
+    ("double_split",       10),
+    ("rotated_anchor",     11),
+]
 
-    variant_list = [
-        ("color_block_split",   1),
-        ("oversize_statement",  2),
-        ("diagonal_band",       3),
-        ("stacked_blocks",      4),
-        ("edge_bleed_portrait", 5),
-        ("type_collage",        6),
-        ("layered_card",        7),
-        ("stat_strip",          8),
-        ("massive_letterform",  9),
-        ("double_split",       10),
-        ("rotated_anchor",     11),
-    ]
+
+# ─── Phase C per-dimension coverage assertions ──────────────────────
+
+def assert_dimension_coverage(variant_id: str, treatments: Treatments, html: str):
+    """Per-dimension coverage check — for each treatment option, the
+    distinguishing CSS variable assignment MUST appear in the section's
+    inline style. Catches treatment translator regressions where a
+    dimension's output silently degrades to the default no-op.
+
+    Strategy: check for the literal CSS variable ASSIGNMENT string
+    (e.g. `--sb-bg-image: linear-gradient...`), not the resolved CSS
+    property usage. The translator's job is to emit the var; the
+    primitive's job is to consume it. This test only verifies the
+    translator side. The cross-module isolation gate + DNA gates in
+    assert_variant_output verify the primitive side."""
+
+    # ─── background_treatment ───
+    if treatments.background == "soft_gradient":
+        assert "linear-gradient(135deg" in html, (
+            f"{variant_id}: background=soft_gradient missing 135deg gradient assignment"
+        )
+    if treatments.background == "textured":
+        assert "data:image/svg+xml" in html, (
+            f"{variant_id}: background=textured missing SVG data URI assignment"
+        )
+    if treatments.background == "vignette":
+        assert "radial-gradient(ellipse at center" in html, (
+            f"{variant_id}: background=vignette missing radial-gradient assignment"
+        )
+
+    # ─── color_depth ───
+    if treatments.color_depth == "gradient_accents":
+        # The translator emits `--sb-emphasis-bg-clip: text` AND
+        # `--sb-emphasis-bg: linear-gradient(135deg, ...)`. Both must
+        # appear in the section style for gradient_accents to fire.
+        assert "--sb-emphasis-bg-clip: text" in html, (
+            f"{variant_id}: color_depth=gradient_accents missing "
+            f"--sb-emphasis-bg-clip: text assignment"
+        )
+        assert "--sb-emphasis-text-fill: transparent" in html, (
+            f"{variant_id}: color_depth=gradient_accents missing "
+            f"--sb-emphasis-text-fill: transparent assignment"
+        )
+    if treatments.color_depth == "radial_glows":
+        # `--sb-emphasis-glow` non-`none` value (matches the saturated
+        # glow string from the translator).
+        assert "--sb-emphasis-glow: 0 0 32px" in html, (
+            f"{variant_id}: color_depth=radial_glows missing "
+            f"--sb-emphasis-glow saturated assignment"
+        )
+        assert "--sb-ornament-glow: drop-shadow" in html, (
+            f"{variant_id}: color_depth=radial_glows missing "
+            f"--sb-ornament-glow drop-shadow assignment"
+        )
+
+    # ─── ornament ───
+    if treatments.ornament == "heavy":
+        sat_count = html.count("hero.sat_")
+        assert sat_count == 6, (
+            f"{variant_id}: ornament=heavy expected 6 satellites, found {sat_count}"
+        )
+    if treatments.ornament == "minimal":
+        # Multiplier should land at 0.7 / 0.85 (Studio Brut minimal)
+        assert "--sb-ornament-opacity-mult: 0.7" in html, (
+            f"{variant_id}: ornament=minimal missing 0.7 opacity multiplier"
+        )
+
+    # ─── typography → emphasis-mode wiring ───
+    expected_mode = {
+        "editorial": "color",
+        "bold": "weight",
+        "refined": "scale",
+        "playful": "scale_color",
+    }[treatments.typography]
+    assert f'data-emphasis-mode="{expected_mode}"' in html, (
+        f"{variant_id}: typography={treatments.typography} expected "
+        f"emphasis-mode={expected_mode} on heading-emphasis span"
+    )
+    # Typography also drives heading case for `bold`
+    if treatments.typography == "bold":
+        assert "--sb-heading-case: uppercase" in html, (
+            f"{variant_id}: typography=bold missing uppercase case assignment"
+        )
+
+    # ─── image_treatment ─── (only for image-using variants)
+    if variant_id in IMAGE_USING_VARIANTS:
+        if treatments.image_treatment == "filtered":
+            assert "--sb-image-filter: saturate(0.85)" in html, (
+                f"{variant_id}: image_treatment=filtered missing saturate(0.85)"
+            )
+            assert "--sb-image-overlay" in html and "12%" in html, (
+                f"{variant_id}: image_treatment=filtered missing 12% signal overlay"
+            )
+        if treatments.image_treatment == "dramatic":
+            assert "--sb-image-filter: saturate(1.2)" in html, (
+                f"{variant_id}: image_treatment=dramatic missing saturate(1.2)"
+            )
+            assert "--sb-image-overlay" in html and "22%" in html, (
+                f"{variant_id}: image_treatment=dramatic missing 22% authority overlay"
+            )
+        if treatments.image_treatment == "soft":
+            assert "--sb-image-mask: radial-gradient" in html, (
+                f"{variant_id}: image_treatment=soft missing radial mask"
+            )
+
+
+# ─── Three-tier overview page (Phase C CHECKPOINT C surface) ────────
+
+TIER_LABELS = ["restrained", "mid", "rich"]
+
+
+TIER_OVERVIEW_SHELL = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio Brut — {tier_label} treatment tier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Bebas+Neue&family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {{
+  --brand-authority: {primary};
+  --brand-deep-secondary: {secondary};
+  --brand-secondary: {secondary};
+  --brand-signal: {accent};
+  --brand-warm-neutral: {background};
+  --brand-text-primary: {text};
+  --brand-text-on-authority: #FFFFFF;
+  --brand-text-on-signal: #09090B;
+  --sb-display-stack: 'Archivo Black', 'Bebas Neue', 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  --sb-sans-stack: 'Inter', 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --sb-mono-stack: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+}}
+*, *::before, *::after {{ box-sizing: border-box; }}
+html, body {{ margin: 0; padding: 0; font-family: var(--sb-sans-stack); background: #0F172A; color: #E2E8F0; }}
+.tier-header {{
+  position: sticky; top: 0; z-index: 50;
+  padding: 22px 32px;
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid #1E293B;
+}}
+.tier-header h1 {{ margin: 0 0 4px; font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }}
+.tier-header .meta {{ color: #94A3B8; font-size: 13px; }}
+.tier-header code {{ background: #1E293B; padding: 2px 6px; border-radius: 3px; font-family: ui-monospace, monospace; font-size: 12px; }}
+.variant-block {{
+  border-bottom: 1px solid #1E293B;
+  padding: 24px 32px;
+  background: #0F172A;
+}}
+.variant-block h2 {{
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: #F1F5F9;
+}}
+.variant-block h2 small {{ color: #94A3B8; font-weight: 400; margin-left: 8px; font-size: 12px; }}
+.variant-shell {{
+  background: #fff;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+}}
+.variant-shell iframe {{
+  width: 100%;
+  border: none;
+  display: block;
+  background: #fff;
+  /* Studio Brut hero minimum-heights run 540-720px; iframe sized
+     for the largest. */
+  height: 760px;
+}}
+</style>
+</head>
+<body>
+<header class="tier-header">
+  <h1>Studio Brut — <code>{tier_label}</code> treatment tier</h1>
+  <p class="meta">All 11 variants rendered with RoyalTeez brand (purple authority + amber signal) at the {tier_label} treatment tier.<br>
+  Treatment fingerprint: <code>{tier_fingerprint}</code></p>
+</header>
+
+{variant_blocks}
+
+</body>
+</html>"""
+
+
+def _render_tier_overview(tier_idx: int, brand: BrandKitColors,
+                         brand_label: str, content: HeroContent,
+                         output_path: str):
+    """Build a single tier-overview page with all 11 variants stacked
+    at the specified treatment tier (0=restrained, 1=mid, 2=rich).
+    Each variant renders inside an iframe srcdoc so CSS scopes are
+    isolated per variant."""
+    treatments = TREATMENTS[tier_idx]
+    tier_label = TIER_LABELS[tier_idx]
+    tier_fingerprint = (
+        f"{treatments.color_emphasis} / {treatments.spacing_density} / "
+        f"{treatments.emphasis_weight} | bg:{treatments.background} | "
+        f"color:{treatments.color_depth} | orn:{treatments.ornament} | "
+        f"type:{treatments.typography} | img:{treatments.image_treatment}"
+    )
+
+    blocks = []
+    for variant_id, idx in VARIANT_LIST:
+        hero_html = _render(variant_id, brand, content, treatments)
+        # Wrap each hero in its own minimal doc so the iframe srcdoc
+        # carries fonts + CSS vars per variant.
+        variant_doc = DOC_TEMPLATE.format(
+            idx=idx, variant_id=variant_id,
+            primary=brand.primary, secondary=brand.secondary,
+            accent=brand.accent, background=brand.background, text=brand.text,
+            brand_label=brand_label,
+            treatments_label=f"{tier_label} tier",
+            hero_html=hero_html,
+        )
+        # HTML-escape for srcdoc attribute value (need &quot; for inner ")
+        import html as html_lib
+        srcdoc = html_lib.escape(variant_doc, quote=True)
+        blocks.append(
+            f'<section class="variant-block" id="v{idx:02d}">'
+            f'  <h2>#{idx:02d} {variant_id} <small>({tier_label} tier)</small></h2>'
+            f'  <div class="variant-shell">'
+            f'    <iframe srcdoc="{srcdoc}" loading="lazy" '
+            f'sandbox="allow-same-origin" title="{variant_id} — {tier_label}"></iframe>'
+            f'  </div>'
+            f'</section>'
+        )
+
+    doc = TIER_OVERVIEW_SHELL.format(
+        tier_label=tier_label,
+        tier_fingerprint=tier_fingerprint,
+        primary=brand.primary, secondary=brand.secondary,
+        accent=brand.accent, background=brand.background, text=brand.text,
+        variant_blocks="\n".join(blocks),
+    )
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(doc)
+
+
+def main():
+    print("=== Studio Brut variant smoke tests + Phase C coverage ===")
 
     # Smoke pass — 11 variants x 3 treatments x 3 contents = 99 renders.
+    # Phase C addition: assert_dimension_coverage on each render too.
     total = 0
-    for variant_id, _ in variant_list:
+    for variant_id, _ in VARIANT_LIST:
         for t in TREATMENTS:
             for c in CONTENTS:
                 html = _render(variant_id, ROYALTEE_BRAND, c, t)
                 assert_variant_output(variant_id, html)
+                assert_dimension_coverage(variant_id, t, html)
                 total += 1
         print(f"  {variant_id}: 9 renders OK (3 treatments x 3 contents)")
-    print(f"\nTotal smoke renders: {total}")
+    print(f"\nTotal smoke renders: {total} (each passes assert_variant_output +")
+    print(f"assert_dimension_coverage Phase C gates)")
 
     # Spot-check pass — each variant rendered with RoyalTee brand
     # (the spike's failing case) at the MID treatment tier, plus a
@@ -335,8 +580,7 @@ def main():
     # All 11 variants with RoyalTee brand + mid treatment (depth-aware
     # but not maxed). This is the headline visual review surface for
     # CHECKPOINT B.
-    for variant_id, idx in variant_list:
-        content = CONTENTS[0] if "royal" in CONTENTS[0].eyebrow.lower() else CONTENTS[0]
+    for variant_id, idx in VARIANT_LIST:
         path = os.path.join(out_dir, f"sb_variant_{idx:02d}_{variant_id}_royaltee.html")
         _spot_check(
             variant_id, idx, ROYALTEE_BRAND, CONTENTS[0],
@@ -349,7 +593,7 @@ def main():
     # Bonus: same 11 variants with Studio Brut's CANONICAL DEFAULTS
     # (red + yellow + near-black) so reviewers can see the module's
     # DNA palette without practitioner brand_kit overrides.
-    for variant_id, idx in variant_list:
+    for variant_id, idx in VARIANT_LIST:
         path = os.path.join(out_dir, f"sb_variant_{idx:02d}_{variant_id}_defaults.html")
         _spot_check(
             variant_id, idx, SB_DEFAULTS, CONTENTS[1],
@@ -359,8 +603,33 @@ def main():
         )
         print(f"  -> {path}")
 
-    print(f"\nOpen the *_royaltee.html files to verify Studio Brut delivers")
-    print(f"distinct creative-apparel character for the brand Cathedral failed on.")
+    # Phase C addition — three tier-overview pages. Each page renders
+    # all 11 variants stacked vertically at one treatment tier with
+    # the RoyalTee brand. Reviewer scans top-to-bottom to compare
+    # treatment impact across the variant family.
+    print(f"\n=== Phase C: 3 tier-overview pages ===")
+    for tier_idx in (0, 1, 2):
+        path = os.path.join(out_dir, f"sb_tier_{TIER_LABELS[tier_idx]}_overview_royaltee.html")
+        _render_tier_overview(
+            tier_idx, ROYALTEE_BRAND, "RoyalTeez (purple/amber)",
+            CONTENTS[0], path,
+        )
+        print(f"  -> {path}")
+
+    # Also generate one tier-overview at the rich tier with Studio Brut
+    # defaults so reviewers can see the module's canonical palette at
+    # peak depth.
+    path = os.path.join(out_dir, "sb_tier_rich_overview_defaults.html")
+    _render_tier_overview(
+        2, SB_DEFAULTS, "SB defaults (red/yellow/near-black)",
+        CONTENTS[1], path,
+    )
+    print(f"  -> {path}")
+
+    print(f"\nOpen the *_overview_*.html files to verify treatment dimensions")
+    print(f"carry visible weight across the variant family. Compare the same")
+    print(f"variant across restrained/mid/rich tiers to see depth-equipped")
+    print(f"differentiation in action.")
 
 
 if __name__ == "__main__":
