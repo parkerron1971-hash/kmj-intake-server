@@ -12,8 +12,10 @@ Endpoints exposed:
   POST /composer/_diag/compose_hero
   POST /composer/_spike/render_hero/{business_id}
   GET  /composer/_spike/render_hero_html/{business_id}
+  GET  /composer/_spike/comparison_page  — Phase 5 side-by-side
   GET  /  — index page listing the three spike businesses + their
-           render URLs (for CHECKPOINT 4 convenience)
+           render URLs (CHECKPOINT 4) plus the comparison page link
+           (CHECKPOINT 5)
 """
 from __future__ import annotations
 
@@ -73,9 +75,19 @@ def spike_index() -> str:
 </style>
 </head>
 <body>
-  <h1>Cathedral Hero Spike — Phase 4</h1>
+  <h1>Cathedral Hero Spike — Phases 4 + 5</h1>
   <p class="meta">Three test businesses. Each link fires Composer (Sonnet 4.5)
   then renders through the canonical four-step pipeline.</p>
+
+  <h2 style="font-size: 1em; margin: 28px 0 6px;">Phase 5 — comparison page</h2>
+  <p style="margin: 0 0 14px;">
+    <a href="/composer/_spike/comparison_page" target="_blank"><strong>
+    Side-by-side comparison</strong></a>
+    <span class="meta"> · all three Heros + Composer reasoning in one view
+    (~$0.15/visit)</span>
+  </p>
+
+  <h2 style="font-size: 1em; margin: 28px 0 6px;">Phase 4 — individual renders</h2>
   <ul>
 {rows}
   </ul>
