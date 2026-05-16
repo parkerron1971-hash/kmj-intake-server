@@ -1,4 +1,4 @@
-"""Composer Agent diagnostic router. Three endpoints:
+"""Composer Agent diagnostic router. Four endpoints:
 
   POST /composer/_diag/compose_hero { business_id, dry_run }
     Pass 4.0f Phase 3 — runs Composer only, returns the composition
@@ -7,13 +7,20 @@
   POST /composer/_spike/render_hero/{business_id}
     Pass 4.0f Phase 4 — runs Composer + the four-step render pipeline,
     returns { composition, html, business_id } as JSON. Phase 5
-    comparison page will use this when it wants the composition AND
+    comparison page uses this when it wants the composition AND
     the rendered HTML in one trip.
 
   GET /composer/_spike/render_hero_html/{business_id}
     Pass 4.0f Phase 4 — runs Composer + render pipeline, returns the
-    standalone HTML5 document directly (text/html). This is the URL
-    artifact for CHECKPOINT 4 + Phase 5 browser-side comparison.
+    standalone HTML5 document directly (text/html). URL artifact for
+    CHECKPOINT 4 + Phase 5 browser-side review.
+
+  GET /composer/_spike/comparison_page
+    Pass 4.0f Phase 5 — server-side comparison page rendering all
+    three spike businesses' Heros side-by-side (vertically stacked
+    iframes), each paired with its Composer reasoning text and
+    composition metadata. Reviewers judge intent against the visible
+    rationale. ~$0.15/visit (3 fresh Composer calls).
 
 NOT WIRED into kmj_intake_automation.py during the spike — testing
 happens via the standalone agents/composer/_spike_app.py FastAPI app
@@ -83,5 +90,28 @@ def spike_render_hero_html(business_id: str) -> HTMLResponse:
     result = compose_and_render(business_id, standalone=True)
     return HTMLResponse(
         content=result["html"],
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+# ─── Phase 5 spike comparison page ─────────────────────────────────
+
+@router.get("/_spike/comparison_page", response_class=HTMLResponse)
+def spike_comparison_page() -> HTMLResponse:
+    """Phase 5 — side-by-side comparison page.
+
+    Server-side renders all three spike businesses' Heros + reasoning
+    in one document. Each Hero embeds via <iframe srcdoc=...> so the
+    Hero markup runs in its own document scope (no CSS bleed between
+    Heros or between Hero and the comparison shell). The reasoning
+    panel sits adjacent so reviewers can judge variant choice intent
+    against the visible explanation.
+
+    Cost-aware: fires Composer once per business (~$0.15/visit).
+    Cache-Control: no-store keeps spike output fresh during review."""
+    from agents.composer.comparison_page import render_comparison_page_html
+    html = render_comparison_page_html()
+    return HTMLResponse(
+        content=html,
         headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
     )
