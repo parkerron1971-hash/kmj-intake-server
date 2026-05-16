@@ -433,7 +433,11 @@ def compose_and_render(
 
 # ─── Phase E end-to-end pipeline ───────────────────────────────────
 
-def compose_and_render_hero(business_id: str) -> Dict[str, Any]:
+def compose_and_render_hero(
+    business_id: str,
+    *,
+    apply_overrides: bool = True,
+) -> Dict[str, Any]:
     """Phase E full multi-module pipeline:
 
       1. Module Router decides cathedral vs studio_brut
@@ -445,6 +449,14 @@ def compose_and_render_hero(business_id: str) -> Dict[str, Any]:
         business_id, module_id, routing_decision (full),
         composition (module-specific shape), html (standalone doc)
       }
+
+    apply_overrides=True (default) runs the practitioner override
+    resolver as the final render step (Pass 4.0d PART 1). Callers
+    that are surfacing the COMPOSITION (e.g. the Phase F multi-
+    module comparison page) should pass apply_overrides=False so
+    stored text overrides don't visually mask what the composer
+    chose — overrides happen on top of composition; they aren't
+    part of what the composition pipeline produces.
 
     Soft-fails: any step's error propagates via the dict's
     _composer_metadata + _composer_error / _router_error fields rather
@@ -459,7 +471,10 @@ def compose_and_render_hero(business_id: str) -> Dict[str, Any]:
     composition = compose_hero(business_id, module_id=module_id)
 
     # Step 3: module-specific render (standalone HTML5 doc)
-    html = render_hero_standalone(composition, business_id, module_id)
+    html = render_hero_standalone(
+        composition, business_id, module_id,
+        apply_overrides=apply_overrides,
+    )
 
     return {
         "business_id": business_id,

@@ -130,9 +130,18 @@ def _gather_one(name: str, business_id: str, *, include_force_cathedral: bool) -
         }
 
         # Step 1+2+3: full pipeline (Router -> Composer -> Render).
+        # apply_overrides=False: this page surfaces what the COMPOSER
+        # chose. Practitioner text/color overrides (Pass 4.0d PART 1)
+        # are a downstream edit layer that runs AFTER composition; if
+        # they were applied here they'd mask the composer's heading
+        # under whatever the practitioner last edited on the live site.
+        # Diagnosed in Pass 4.0g.x (L12): RoyalTee had a stored
+        # hero.heading='Test Title' override-row that was bleeding into
+        # the comparison page's iframes and hiding the composed
+        # "Wear your crown loud" heading.
         try:
             from agents.composer.render_pipeline import compose_and_render_hero
-            pipeline = compose_and_render_hero(business_id)
+            pipeline = compose_and_render_hero(business_id, apply_overrides=False)
             entry["routing"] = pipeline.get("routing_decision") or {}
             entry["composition"] = pipeline.get("composition") or {}
             entry["html"] = pipeline.get("html") or ""
@@ -142,10 +151,18 @@ def _gather_one(name: str, business_id: str, *, include_force_cathedral: bool) -
             entry["pipeline_error"] = str(exc)
 
         # Step 4 (optional): force Cathedral for the comparison column.
+        # apply_overrides=False here for the same reason as above —
+        # the force-Cathedral column is part of the same architecture-
+        # review surface.
         if include_force_cathedral:
             try:
                 from agents.composer.render_pipeline import compose_and_render
-                forced = compose_and_render(business_id, module_id="cathedral", standalone=True)
+                forced = compose_and_render(
+                    business_id,
+                    module_id="cathedral",
+                    standalone=True,
+                    apply_overrides=False,
+                )
                 entry["force_cathedral_composition"] = forced.get("composition") or {}
                 entry["force_cathedral_html"] = forced.get("html") or ""
             except Exception as exc:

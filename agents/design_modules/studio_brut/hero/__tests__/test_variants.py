@@ -548,6 +548,88 @@ def _render_tier_overview(tier_idx: int, brand: BrandKitColors,
         f.write(doc)
 
 
+# ─── Pass 4.0g.x L12 regression — large-typography heading rendering ──
+
+# Variants whose primary visual surface is a large heading or letterform
+# block. If any of these silently drops composition.content.heading
+# (hardcoded fixture, broken substitution, swapped slot), the spike
+# review surfaces become misleading. This regression test catches the
+# variant-side class of the L12 symptom even though the original L12
+# root cause was data-side (a Supabase override).
+LARGE_TYPOGRAPHY_VARIANTS = (
+    "edge_bleed_portrait",
+    "oversize_statement",
+    "massive_letterform",
+    "type_collage",
+)
+
+# Three deliberately different heading shapes — short, medium, long.
+# Each carries a non-empty emphasis word so massive_letterform /
+# type_collage can derive their initial letter / echo word from it.
+L12_HEADING_FIXTURES = [
+    ("Wear your crown loud", "crown"),
+    ("Cut the noise", "noise"),
+    ("Build what compounds across generations of practitioners", "compounds"),
+]
+
+
+def assert_heading_renders_composition_content(
+    variant_id: str, heading: str, emphasis: str, html: str
+) -> None:
+    """Verify the composition's heading is the heading actually rendered
+    inside the variant's <h1>. Strips inline HTML (e.g. the emphasis
+    <span>) so the assertion compares plain text.
+
+    Pass 4.0g.x — regression test for L12. The L12 symptom in Phase F
+    was RoyalTee's edge_bleed_portrait showing 'Test Title' instead of
+    the composed heading. Root cause was a stored text override, fixed
+    by passing apply_overrides=False on the comparison page. This
+    assertion guards against the OTHER possible cause path — a variant
+    accidentally dropping composition.content.heading."""
+    h1_match = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.DOTALL)
+    assert h1_match, f"{variant_id}: no <h1> element rendered"
+    h1_inner_text = re.sub(r"<[^>]+>", "", h1_match.group(1)).strip()
+    # Normalise whitespace — render_heading may insert &nbsp; or extra
+    # spaces around the emphasis span.
+    h1_normalised = re.sub(r"\s+", " ", h1_inner_text)
+    heading_normalised = re.sub(r"\s+", " ", heading)
+    assert h1_normalised == heading_normalised, (
+        f"{variant_id}: <h1> text {h1_normalised!r} != composition.content.heading "
+        f"{heading_normalised!r}"
+    )
+    # Belt-and-suspenders — emphasis word should also appear somewhere
+    # in the rendered HTML (variants render it inside <h1> OR as a
+    # separate echo element).
+    if emphasis:
+        assert emphasis in html, (
+            f"{variant_id}: emphasis word {emphasis!r} not present in rendered HTML"
+        )
+
+
+def run_l12_heading_regression() -> int:
+    """Per-fixture, per-variant heading-content assertion. Returns the
+    number of renders verified."""
+    print("\n=== Pass 4.0g.x L12 regression — large-typography heading rendering ===")
+    total = 0
+    for variant_id in LARGE_TYPOGRAPHY_VARIANTS:
+        for heading, emphasis in L12_HEADING_FIXTURES:
+            content = HeroContent(
+                eyebrow="EYEBROW",
+                heading=heading,
+                heading_emphasis=emphasis,
+                subtitle="Regression test fixture.",
+                cta_primary="Click",
+                cta_target="#",
+                image_slot_ref="hero_main" if variant_id in IMAGE_USING_VARIANTS else None,
+            )
+            html = _render(variant_id, ROYALTEE_BRAND, content, TREATMENTS[1])
+            assert_heading_renders_composition_content(variant_id, heading, emphasis, html)
+            total += 1
+        print(f"  {variant_id}: 3 fixtures OK")
+    print(f"L12 regression: {total} renders verified.")
+    return total
+
+
 def main():
     print("=== Studio Brut variant smoke tests + Phase C coverage ===")
 
@@ -630,6 +712,10 @@ def main():
     print(f"carry visible weight across the variant family. Compare the same")
     print(f"variant across restrained/mid/rich tiers to see depth-equipped")
     print(f"differentiation in action.")
+
+    # Pass 4.0g.x L12 regression — large-typography variants must
+    # render composition.content.heading verbatim into their <h1>.
+    run_l12_heading_regression()
 
 
 if __name__ == "__main__":
