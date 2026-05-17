@@ -11,3 +11,7 @@ venv/
 .vscode/
 .DS_Store
 .claude/
+# Legacy preview artifacts predating Pass 4.0. Kept locally as
+# reference; gitignored so they stop polluting `git status` on every
+# branch checkout. Safe to delete from disk if no longer useful.
+layout_previews/
