@@ -109,3 +109,49 @@ The new `business_sites.hero_composer_module` column (Phase A migration) is set 
 | https://embracetheshift.live/                                | 200  |    702 |
 
 After the Phase A migration applies, the same curls should return the same status codes (bytes may vary slightly due to dynamic-section injection, products list, etc.). Any non-200 after migration → rollback investigation.
+
+---
+
+## Post-migration verification (2026-05-17, after manual SQL Editor apply)
+
+**Supabase SQL Editor `information_schema` verification (run by user):**
+
+```
+business_sites | hero_composer_module | text    | YES | null
+businesses     | use_composer         | boolean | NO  | false
+```
+
+Both columns landed with the expected types, nullability, and defaults.
+
+**Anon-key readability (run via PostgREST):**
+
+`businesses.use_composer` — readable; backfill correct (all sampled rows = `False`):
+
+| business id (8) | use_composer | name                    |
+|-----------------|--------------|-------------------------|
+| `1593d297`      | `False`      | Embrace the Shift       |
+| `0203083b`      | `False`      | KMJ Creative Solutions  |
+| `f0316230`      | `False`      | KMJ Creative Solutions  |
+| `e482a60b`      | `False`      | KMJ Creative Solutions  |
+| `9c917dba`      | `False`      | KMJ Creative  Solutions |
+| `a8d1abb7`      | `False`      | RoyalTeez Designz       |
+
+`business_sites.hero_composer_module` — readable; backfill correct (all `None`):
+
+| business id (8) | slug                       | hero_composer_module |
+|-----------------|----------------------------|----------------------|
+| `1593d297`      | `embrace-the-shift`        | `None`               |
+| `a8d1abb7`      | `royalteez-designz`        | `None`               |
+| `12773842`      | `kmj-creative-solutions`   | `None`               |
+| `aaaf0579`      | `director-loop-test`       | `None`               |
+| `c8b7e157`      | `director-loop-test-v2`    | `None`               |
+
+**Post-migration backwards-compat curls (identical to baseline):**
+
+| URL                                                          | HTTP | Bytes  | Δ baseline |
+|--------------------------------------------------------------|-----:|-------:|-----------:|
+| https://royalteez-designz.mysolutionist.app/                 | 200  | 70,607 | 0          |
+| https://kmj-creative-solutions.mysolutionist.app/            | 200  | 77,016 | 0          |
+| https://embracetheshift.live/                                | 200  |    702 | 0          |
+
+No regression. CHECKPOINT A closed.
