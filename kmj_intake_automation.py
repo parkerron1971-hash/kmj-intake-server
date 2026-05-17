@@ -50,6 +50,8 @@ from agents.slot_system.router import router as slot_router
 from agents.override_system.router import router as override_router
 # Pass 4.0d PART 2 — Chief unification (intent classifier + dispatcher)
 from agents.chief_executive.router import router as chief_executive_router
+# Pass 4.0g — Multi-module composition (Cathedral + Studio Brut + Module Router)
+from agents.composer.router import router as composer_router
 
 app = FastAPI(title="KMJ Intake Automation")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -82,6 +84,14 @@ app.include_router(slot_router)
 app.include_router(override_router)
 # Pass 4.0d PART 2 — Chief unification (/chief/message, /chief/_diag/classify)
 app.include_router(chief_executive_router)
+# Pass 4.0g — Composer (/composer/_diag/*, /composer/_spike/*).
+# Wired during the Pass 4.0g final merge to bring the multi-module
+# pipeline into production. Endpoints are read-only diagnostics: route
+# decision, hero composition, end-to-end pipeline, multi-module
+# comparison page. Composer/router.py docstring previously flagged
+# this wiring as "forward compatibility with the Pass 4.0g production
+# wiring" — this is that wiring moment.
+app.include_router(composer_router)
 # public_site_router MUST remain LAST — it defines `/` and `/{path:path}`
 # catch-alls that would otherwise shadow every specific API route.
 app.include_router(public_site_router)
