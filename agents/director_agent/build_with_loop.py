@@ -616,6 +616,50 @@ def run_build_loop(
             else:
                 site_id = rows[0]["id"]
                 cfg = dict(rows[0].get("site_config") or {})
+
+                # ── Pass 4.0h Phase C: Composer post-processing ──
+                # Replace Builder's Hero with a Composer-generated one
+                # when the business has opted in (businesses.use_composer
+                # = TRUE). post_process_hero gates on the flag itself —
+                # on opt-out it's a no-op fast return and no LLM calls
+                # fire. The function is async + uses httpx.AsyncClient
+                # for the gate read + asyncio.to_thread for the Router
+                # + Composer sync calls; run_build_loop is sync, so we
+                # bridge with asyncio.run() (FastAPI sync handlers run
+                # in a threadpool with no active event loop, so this is
+                # safe in the live call shape).
+                #
+                # Mutates `cfg` to add/update cfg["composer_cache"] on
+                # cache write-throughs; the PATCH below picks that up
+                # in the same round-trip. hero_composer_module top-
+                # level column is set explicitly on the PATCH body
+                # (separate from site_config JSONB).
+                hero_composer_module: Optional[str] = None
+                try:
+                    import asyncio
+                    from agents.composer.post_processor import post_process_hero
+                    final_html, hero_composer_module = asyncio.run(
+                        post_process_hero(
+                            business_id=business_id,
+                            builder_html=final_html,
+                            enriched_brief=enriched_brief,
+                            site_config=cfg,
+                        )
+                    )
+                except Exception as e:
+                    # post_process_hero catches internally and returns
+                    # (builder_html, None); reaching here means the
+                    # integration layer itself (import, event-loop
+                    # setup, etc.) failed. Log and proceed with
+                    # Builder's HTML — a wiring bug must never break
+                    # a build.
+                    logger.error(
+                        f"[build-with-loop] post_process_hero integration "
+                        f"failed for {business_id}: {type(e).__name__}: {e}",
+                        exc_info=True,
+                    )
+                    hero_composer_module = None
+
                 cfg["generated_html"] = final_html
                 cfg["html_generated_at"] = time.strftime(
                     "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
@@ -644,9 +688,24 @@ def run_build_loop(
                 # to the new HTML cleanly.
                 cfg.pop("html_build_failed_at", None)
                 cfg.pop("html_build_error", None)
+                # PATCH body covers both site_config (JSONB — carries
+                # composer_cache write-through ride-along) AND
+                # hero_composer_module (top-level column added in
+                # Pass 4.0h Phase A). Writing both in one request
+                # avoids a second round-trip and keeps the row
+                # consistent — if the build wrote a composed Hero,
+                # the column reflects that immediately. When
+                # post-processing was skipped or failed,
+                # hero_composer_module is None, which explicitly
+                # clears any prior value on the row (correct rollback
+                # behaviour — flipping use_composer to FALSE then
+                # rebuilding clears the column).
                 be_patch(
                     f"/business_sites?id=eq.{site_id}",
-                    {"site_config": cfg},
+                    {
+                        "site_config": cfg,
+                        "hero_composer_module": hero_composer_module,
+                    },
                 )
                 persistence = {
                     "persisted": True,
