@@ -854,6 +854,18 @@ Composition patterns (apply, don't copy verbatim):
 - Accent line above headings: `background: var(--brand-signal); width: 48px; height: 3px;`
 - Card on a light section: `background: #fff` is still fine for card surfaces specifically (cards sit on the warm-neutral page bg and need a contrast pop). Reach for var(--brand-warm-neutral) when the card should disappear into the page; for raised cards keep pure white or a near-white with a `box-shadow`.
 
+DO NOT emit any <style>:root { ... }</style> block defining or redefining
+--brand-* CSS custom properties. The platform injects --brand-authority,
+--brand-signal, --brand-warm-neutral, --brand-deep-secondary, --brand-text-primary,
+--brand-text-on-authority, and --brand-text-on-signal via a separate
+<style id="brand-kit-vars"> block at render time. Your HTML output must
+CONSUME var(--brand-*) values throughout, but must NEVER DEFINE them.
+
+If you need design tokens for non-brand colors (paper, ink, ease curves,
+section-specific accent colors, etc.), use distinct names that do NOT start
+with --brand-. Examples: --paper, --ink, --linen, --ease-out, --section-bg.
+Reserve the --brand-* namespace exclusively for the platform's brand kit injection.
+
 ABSOLUTELY DO NOT hardcode the following palette-role hex codes:
 - #0A1628, #122040, #1B3060 (these belong inside `var(--brand-authority)` / `--brand-deep-secondary`)
 - #C6952F, #DCAD4A, #F0D590 (these belong inside `var(--brand-signal)`)
