@@ -884,6 +884,32 @@ document.querySelectorAll('[data-interactive="reveal"]').forEach(el => {{
 Use data-* attributes to mark elements that need behavior. Never inline JavaScript
 into HTML element attributes.
 
+DISPLAY TYPE — MINIMUM SIZES AND WEIGHTS (CRITICAL — these are platform-rule floors,
+not stylistic suggestions). The design quality rubric runs a deterministic checker
+against your output and rejects every build that falls below these floors:
+
+Hero h1 (the page's focal headline — selector `h1, .hero h1, [data-section='hero'] h1, header h1`):
+- font-size: MINIMUM `clamp(3rem, ...)` — the first clamp argument MUST be at least
+  3rem (= 76px). Below 3rem fails rubric rule `hero_h1_size` (HIGH severity).
+  Target value: `clamp(3.7rem, 9vw, 5.4rem)`. Go larger if the brief calls for it,
+  NEVER smaller. The hero h1 is the visual anchor — it should dominate the viewport
+  above the fold.
+- font-weight: 800 OR 900 — nothing else. font-weight 400/500/600/700 fails rubric
+  rule `hero_h1_weight` (HIGH severity). Default to 900 for hero h1.
+
+Section h2 (every section heading on the page — selector `h2, section h2`):
+- font-size: MINIMUM `clamp(2rem, ...)` — the first clamp argument MUST be at least
+  2rem (= 48px). Below 2rem fails rubric rule `section_h2_size` (HIGH severity).
+  Target value: `clamp(2.4rem, 5vw, 3.5rem)`.
+- font-weight: 800 OR 900. Below 800 fails rubric rule `section_h2_weight` (HIGH severity).
+  Default to 800 for section h2.
+- Visual hierarchy: distinctly larger than body text, distinctly smaller than hero h1.
+
+Editorial restraint is welcome in body copy, taglines, and supporting prose. Display
+headlines must DECLARE — extreme weight (800-900) and extreme scale (clamp with min
+3rem for h1, 2rem for h2) read as confident authority. Smaller/lighter display type
+reads as a label, not a statement, and fails the rubric.
+
 ABSOLUTELY DO NOT hardcode the following palette-role hex codes:
 - #0A1628, #122040, #1B3060 (these belong inside `var(--brand-authority)` / `--brand-deep-secondary`)
 - #C6952F, #DCAD4A, #F0D590 (these belong inside `var(--brand-signal)`)
