@@ -193,9 +193,13 @@ def compose_brand_kit_vars(
 
 # ─── Injection ─────────────────────────────────────────────────────
 
-# Match the opening <head> tag (with any attributes). Used to find the
-# spot just after <head> where the brand-kit-vars style block goes.
+# Match opening <head> and closing </head> tags. Pass 4.0h.x: prefer
+# inserting just before </head> so brand-kit-vars wins the CSS cascade
+# against any <style>:root{...}</style> the Builder LLM may have placed
+# earlier in the document. <head> opening is kept as a fallback for
+# malformed HTML missing </head>.
 _HEAD_OPEN_RE = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
+_HEAD_CLOSE_RE = re.compile(r"</head\s*>", re.IGNORECASE)
 # Strip any prior brand-kit-vars block so re-renders don't accumulate.
 _PRIOR_BLOCK_RE = re.compile(
     r'<style\s+id="brand-kit-vars">.*?</style>',
@@ -215,11 +219,18 @@ def _format_css_block(css_vars: Dict[str, str]) -> str:
 
 
 def inject_brand_kit_vars(html: str, css_vars: Dict[str, str]) -> str:
-    """Insert the brand-kit-vars `<style>` block just after `<head>` in
-    `html`. If a previous brand-kit-vars block exists (e.g. the renderer
-    is re-running on cached HTML), strip it first so values don't stack.
+    """Insert the brand-kit-vars `<style>` block at the END of `<head>`
+    (just before `</head>`). End-of-head placement guarantees that any
+    earlier <style>:root{...}</style> from the Builder loses the CSS
+    cascade against brand-kit-vars — Pass 4.0h.x fix for the --brand-*
+    redefinition collision.
 
-    Soft-fails to the input HTML unchanged if `<head>` is missing.
+    Idempotent: strips any prior brand-kit-vars block first so values
+    don't stack across re-renders.
+
+    Fallbacks: if `</head>` is missing, inserts just after `<head>`; if
+    both are missing, prepends to the document so the variables are at
+    least in scope.
     """
     if not html or not isinstance(html, str) or not css_vars:
         return html or ""
@@ -229,15 +240,21 @@ def inject_brand_kit_vars(html: str, css_vars: Dict[str, str]) -> str:
     # Strip any prior block (idempotency).
     html = _PRIOR_BLOCK_RE.sub("", html)
 
-    m = _HEAD_OPEN_RE.search(html)
-    if not m:
-        # No <head> tag — try injecting at the very top so the variables
-        # are at least in scope. Fully-headless HTML is rare but the
-        # builder occasionally trims <head> when prompted aggressively.
-        return block + "\n" + html
+    # Preferred: end-of-<head> placement so brand-kit-vars wins the
+    # cascade against any Builder-emitted :root{--brand-*} block.
+    m_close = _HEAD_CLOSE_RE.search(html)
+    if m_close:
+        insert_at = m_close.start()
+        return html[:insert_at] + block + "\n" + html[insert_at:]
 
-    insert_at = m.end()
-    return html[:insert_at] + "\n" + block + html[insert_at:]
+    # Fallback: missing </head>. Insert just after <head> opening.
+    m_open = _HEAD_OPEN_RE.search(html)
+    if m_open:
+        insert_at = m_open.end()
+        return html[:insert_at] + "\n" + block + html[insert_at:]
+
+    # Fully-headless HTML: prepend so variables are at least in scope.
+    return block + "\n" + html
 
 
 # ─── Pass 4.0e PART 3 — per-element color overrides ────────────────
