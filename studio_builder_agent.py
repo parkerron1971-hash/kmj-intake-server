@@ -866,6 +866,24 @@ section-specific accent colors, etc.), use distinct names that do NOT start
 with --brand-. Examples: --paper, --ink, --linen, --ease-out, --section-bg.
 Reserve the --brand-* namespace exclusively for the platform's brand kit injection.
 
+DO NOT emit any inline event handler attributes on HTML elements. This includes
+but is not limited to: onclick, onmouseenter, onmouseleave, onmouseover, onmouseout,
+onfocus, onblur, onchange, onsubmit, oninput, onkeydown, onkeyup, onload, onerror,
+onscroll, ontouchstart, ontouchend, ontransitionend, onanimationend.
+
+If you need interactive behavior, emit a separate <script> block at the end of <body>
+that uses addEventListener() to attach handlers programmatically. Example pattern:
+
+<script>
+document.querySelectorAll('[data-interactive="reveal"]').forEach(el => {{
+  el.addEventListener('mouseenter', () => el.classList.add('is-active'));
+  el.addEventListener('mouseleave', () => el.classList.remove('is-active'));
+}});
+</script>
+
+Use data-* attributes to mark elements that need behavior. Never inline JavaScript
+into HTML element attributes.
+
 ABSOLUTELY DO NOT hardcode the following palette-role hex codes:
 - #0A1628, #122040, #1B3060 (these belong inside `var(--brand-authority)` / `--brand-deep-secondary`)
 - #C6952F, #DCAD4A, #F0D590 (these belong inside `var(--brand-signal)`)

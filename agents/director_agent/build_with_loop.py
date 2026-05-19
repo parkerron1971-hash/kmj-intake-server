@@ -432,6 +432,27 @@ def run_build_loop(
     ))
     final_html = html_v1
 
+    # Pass 4.0h.y — synthesize a punch list from validator failures so
+    # builder_v2 can retry even when v1 returned empty html. studio_html_validator
+    # returns (None, error, errs) on banned-pattern matches (inline event
+    # handlers, external scripts, etc.); pre-4.0h.y the retry guard
+    # short-circuited on `html_v1 is None` and the whole build failed.
+    # Surfacing the validator's warnings as a punch_list teaches v2 what
+    # to avoid on the second attempt.
+    validation_punch_list: List[Dict[str, Any]] = []
+    if html_v1 is None and builder_v1_warnings:
+        for w in builder_v1_warnings:
+            validation_punch_list.append({
+                "severity": "HIGH",
+                "rule_id": "html_validation",
+                "description": f"v1 was rejected by HTML validator: {w}",
+                "fix_hint": (
+                    "Re-emit the document without this pattern. See the "
+                    "platform-rules block in the prompt for the full list "
+                    "of banned constructs."
+                ),
+            })
+
     # ── 5. Critique v1 ───────────────────────────────────────────
     t0 = time.time()
     critique_v1: Optional[Dict] = None
@@ -456,16 +477,31 @@ def run_build_loop(
     # Trigger when v1 verdict == "fail" (any HIGH violation) AND we
     # have attempts left. MEDIUM/LOW alone never trigger regenerate
     # (per Pass 4.0b spec — they're advisory, not blocking).
+    #
+    # Pass 4.0h.y — also trigger retry when v1 returned empty html
+    # due to validator rejection. retry_trigger surfaces which path
+    # caused the regenerate so audits can distinguish quality retries
+    # (critique_failed) from structural retries (validation_failed).
     v1_verdict = (critique_v1 or {}).get("summary", {}).get("verdict")
     v1_violations = (critique_v1 or {}).get("violations") or []
     regenerated = False
     final_critique = critique_v1
 
-    if (
-        v1_verdict == "fail"
-        and max_attempts >= 2
-        and html_v1 is not None
-    ):
+    retry_trigger: Optional[str] = None
+    retry_punch_list: List[Dict[str, Any]] = []
+    if max_attempts >= 2:
+        if v1_verdict == "fail" and html_v1 is not None:
+            retry_trigger = "critique_failed"
+            retry_punch_list = list(v1_violations)
+        elif html_v1 is None and validation_punch_list:
+            retry_trigger = "validation_failed"
+            retry_punch_list = list(validation_punch_list)
+
+    if retry_trigger:
+        logger.info(
+            f"[build-with-loop] builder_v2 triggered: "
+            f"reason={retry_trigger} punch_items={len(retry_punch_list)}"
+        )
         # ── 7. Builder v2 (with punch list + rubric for MAINTAIN block) ─
         t0 = time.time()
         html_v2: Optional[str] = None
@@ -474,7 +510,7 @@ def run_build_loop(
         try:
             html_v2, builder_v2_error, errs2 = build_html(
                 brief, bundle, None, [], [],
-                punch_list=v1_violations,
+                punch_list=retry_punch_list,
                 rubric=rubric_for_builder,
             )
             if errs2:
@@ -488,7 +524,8 @@ def run_build_loop(
                 "html_length": len(html_v2 or ""),
                 "first_3_ctas": _extract_first_n_ctas(html_v2 or "", 3),
                 "warnings": builder_v2_warnings,
-                "punch_list_size": len(v1_violations),
+                "punch_list_size": len(retry_punch_list),
+                "retry_trigger": retry_trigger,
             },
             error=builder_v2_error,
         ))
