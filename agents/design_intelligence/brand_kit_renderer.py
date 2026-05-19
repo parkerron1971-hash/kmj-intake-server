@@ -27,8 +27,11 @@ Three pure-function surfaces:
 
   inject_brand_kit_vars(html, css_vars)
     Inserts a `<style id="brand-kit-vars">:root { ... }</style>` block
-    just inside `<head>` (or just before `</head>` if `<head>` isn't
-    found). Soft-fails to the input HTML on any error.
+    immediately before `</head>` (end-of-head placement, per Pass 4.0h.x).
+    Late position wins the CSS cascade against any LLM-emitted `:root`
+    blocks earlier in the document. Falls back to just-after-`<head>` if
+    `</head>` is missing, or prepends to the document if both head tags
+    are absent. Soft-fails to the input HTML on any error.
 
 Role mapping (Cinematic Authority — same shape future modules should adopt):
   --brand-authority         ← brand_kit.colors.primary
