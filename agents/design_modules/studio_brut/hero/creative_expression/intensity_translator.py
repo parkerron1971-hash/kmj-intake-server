@@ -41,17 +41,14 @@ INTENSITY_CONFIG: Dict[str, Dict] = {
     "restrained": {
         "multiplier": 1.0,
         "weight": 800,
-        "letter_spacing_px": -1.6,
     },
     "confident": {
         "multiplier": 1.15,
         "weight": 800,
-        "letter_spacing_px": -2.4,
     },
     "bold": {
         "multiplier": 1.3,
         "weight": 900,
-        "letter_spacing_px": -3.0,
     },
 }
 
@@ -82,18 +79,21 @@ def intensity_css_vars(intensity: str,
 
       --hero-h1-font-size           effective h1 size in rem (e.g. "4.000rem")
       --hero-h2-font-size           effective h2 size in rem
-      --hero-display-weight         font-weight value ("800" or "900")
-      --hero-letter-spacing         letter-spacing in px (e.g. "-2.40px")
+      --hero-display-weight         font-weight value ("800" or "900") — may
+                                    be overridden in the primitive's chain by
+                                    --hero-font-fixed-weight when the font
+                                    declares weight_locked=True
       --hero-treatment-amplitude    multiplier for treatments that scale
                                     (background opacity, gradient stops, etc.)
       --hero-element-spacing-mult   multiplier for inter-element gaps
 
-    Note (Phase B fix): pre-fix output emitted `--hero-h1-size-rem` (no
-    units, raw number) which couldn't be consumed directly by `font-size`
-    in CSS. Renamed to `--hero-h1-font-size` with full units so the
-    primitive can read it as `font-size: var(--hero-h1-font-size, ...)`
-    with a fluid clamp() fallback. Same rename for h2 + letter-spacing
-    (dropped the type-suffix from name; value carries the type).
+    Phase B finalize ownership rule: intensity owns size + weight TIER.
+    Font owns tracking (--hero-letter-spacing is emitted by font_resolver,
+    NOT here) and case (--hero-text-transform from font_resolver). Pre-
+    finalize this translator also emitted --hero-letter-spacing with a
+    -1.6/-2.4/-3.0px progression — that's been removed so the font's
+    per-font base tracking applies regardless of intensity, matching
+    the ownership rule.
     """
     cfg = INTENSITY_CONFIG.get(intensity)
     if cfg is None:
@@ -111,7 +111,6 @@ def intensity_css_vars(intensity: str,
         "--hero-h1-font-size": f"{h1_effective:.3f}rem",
         "--hero-h2-font-size": f"{h2_effective:.3f}rem",
         "--hero-display-weight": str(cfg["weight"]),
-        "--hero-letter-spacing": f"{cfg['letter_spacing_px']:.2f}px",
         "--hero-treatment-amplitude": f"{mult:.3f}",
         "--hero-element-spacing-mult": f"{mult:.3f}",
     }

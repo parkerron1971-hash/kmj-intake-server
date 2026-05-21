@@ -41,22 +41,39 @@ def font_css_vars(font_id: str) -> Dict[str, str]:
 
       --hero-font-display          full display font-family stack
       --hero-font-body             full body font-family stack
-      --hero-font-display-weight   numeric weight (subject to intensity override)
-      --hero-font-code             monospace stack (set only for fonts that
-                                   declare a 'code' face, else absent)
+      --hero-text-transform        case treatment per font (uppercase|none)
+      --hero-letter-spacing        per-font base tracking (carries CSS units)
+      --hero-font-code             monospace stack (only when font declares a 'code' face)
+      --hero-font-fixed-weight     locked weight (ONLY when weight_locked=True);
+                                   primitive consumes this with precedence
+                                   over intensity's --hero-display-weight so a
+                                   single-weight serif (DM Serif Display)
+                                   doesn't get faux-bold synthesized
 
-    Variants reference these via var(--hero-font-display) etc., with explicit
-    fallbacks to the existing --sb-display-stack / --sb-sans-stack so an
-    older composition without creative_expression still renders.
+    Variants reference these via var(--hero-...) with --sb-* fallbacks so
+    older compositions without creative_expression still render unchanged.
+
+    Phase B finalize: font now owns case + tracking (the user's locked
+    ownership rule). Intensity stops emitting --hero-letter-spacing; only
+    this resolver sets it. text-transform is a new dimension introduced
+    here — pre-finalize all 5 fonts inherited the variant's hardcoded
+    uppercase from the bold typography treatment.
     """
     cfg = resolve_font(font_id)
     out = {
         "--hero-font-display": cfg["display"],
         "--hero-font-body": cfg["body"],
-        "--hero-font-display-weight": str(cfg["display_weight"]),
+        "--hero-text-transform": cfg["case"],
+        "--hero-letter-spacing": cfg["tracking"],
     }
     if "code" in cfg:
         out["--hero-font-code"] = cfg["code"]
+    # Weight-lock for single-weight display faces (currently only
+    # brutalist_editorial / DM Serif Display). The primitive's font-weight
+    # var chain reads --hero-font-fixed-weight FIRST so a bold-intensity
+    # editorial Hero still renders at the font's authentic 400 weight.
+    if cfg.get("weight_locked"):
+        out["--hero-font-fixed-weight"] = str(cfg["base_weight"])
     return out
 
 

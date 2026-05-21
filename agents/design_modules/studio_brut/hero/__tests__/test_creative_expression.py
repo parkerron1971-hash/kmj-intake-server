@@ -152,16 +152,25 @@ def _render(variant_id: str, intensity: str,
     return VARIANT_REGISTRY[variant_id](ctx, {}, _build_treatment_vars(TREATMENTS))
 
 
-# Pass 4.0i Phase B (post-fix): vars carry CSS units in their values
-# (--hero-h1-font-size = "4.000rem", --hero-letter-spacing = "-2.40px").
-# Regexes extract the numeric component for arithmetic assertions; the
-# string form is also checked when verifying consumption by primitives.
+# Pass 4.0i Phase B (finalize): font and intensity now own DIFFERENT vars
+# per the locked ownership rule.
+#   font_resolver emits:    --hero-font-display, --hero-font-body,
+#                           --hero-text-transform, --hero-letter-spacing,
+#                           --hero-font-code (only fonts with a code face),
+#                           --hero-font-fixed-weight (only weight_locked fonts)
+#   intensity_translator emits: --hero-h1-font-size, --hero-h2-font-size,
+#                           --hero-display-weight, --hero-treatment-amplitude,
+#                           --hero-element-spacing-mult
+# letter-spacing is now sourced from font (not intensity); --hero-letter-spacing
+# value may carry px OR em units depending on the font's tracking style.
 _RE_H1_FONT_SIZE = re.compile(r"--hero-h1-font-size:\s*([0-9.]+)rem")
 _RE_H2_FONT_SIZE = re.compile(r"--hero-h2-font-size:\s*([0-9.]+)rem")
 _RE_WEIGHT = re.compile(r"--hero-display-weight:\s*(\d+)")
-_RE_LETTER_SPACING = re.compile(r"--hero-letter-spacing:\s*(-?[0-9.]+)px")
 _RE_FONT_DISPLAY = re.compile(r"--hero-font-display:\s*([^;]+);")
 _RE_FONT_BODY = re.compile(r"--hero-font-body:\s*([^;]+);")
+_RE_TEXT_TRANSFORM = re.compile(r"--hero-text-transform:\s*(\S+?);")
+_RE_LETTER_SPACING_VAL = re.compile(r"--hero-letter-spacing:\s*([^;]+);")
+_RE_FIXED_WEIGHT = re.compile(r"--hero-font-fixed-weight:\s*(\d+)")
 
 # Match the entire <h1> opening tag (the variant's only one). Extract its
 # inline style attribute value so we can assert which vars the h1 actually
@@ -267,21 +276,37 @@ class IntensityRubricMatrixTests(unittest.TestCase):
 class FontResolverTests(unittest.TestCase):
 
     def test_all_font_ids_resolve_to_complete_css_vars(self):
-        required_keys = {"--hero-font-display", "--hero-font-body", "--hero-font-display-weight"}
+        """Every font_id emits the universal Phase B finalize set:
+        font-family display + body, text-transform (case), letter-spacing
+        (tracking). Optional fields (code face, fixed weight) are not
+        asserted here."""
+        required_keys = {
+            "--hero-font-display",
+            "--hero-font-body",
+            "--hero-text-transform",
+            "--hero-letter-spacing",
+        }
         for fid in STUDIO_BRUT_FONT_IDS:
             vars = font_css_vars(fid)
             missing = required_keys - set(vars.keys())
             self.assertEqual(missing, set(), f"{fid} missing CSS vars: {missing}")
-            # weight should be numeric string
-            self.assertTrue(vars["--hero-font-display-weight"].isdigit(),
-                            f"{fid} weight not numeric: {vars['--hero-font-display-weight']}")
+            self.assertIn(vars["--hero-text-transform"], ("uppercase", "none"),
+                          f"{fid} case must be uppercase|none, got {vars['--hero-text-transform']!r}")
 
-    def test_brutalist_geometric_includes_code_font(self):
-        """brutalist_geometric is the only font_id that ships a 'code' face
-        for the code_label accent (JetBrains Mono). Verify the var is emitted."""
-        vars = font_css_vars("brutalist_geometric")
-        self.assertIn("--hero-font-code", vars)
-        self.assertIn("JetBrains Mono", vars["--hero-font-code"])
+    def test_fonts_with_code_face_emit_hero_font_code(self):
+        """brutalist_geometric ships JetBrains Mono; brutalist_mono ships
+        Space Mono. Both must emit --hero-font-code so the code_label
+        accent renders in the right monospace face."""
+        geo = font_css_vars("brutalist_geometric")
+        self.assertIn("--hero-font-code", geo)
+        self.assertIn("JetBrains Mono", geo["--hero-font-code"])
+        mono = font_css_vars("brutalist_mono")
+        self.assertIn("--hero-font-code", mono)
+        self.assertIn("Space Mono", mono["--hero-font-code"])
+        # Fonts without code faces don't emit it.
+        for fid in ("brutalist_default", "brutalist_editorial", "brutalist_sharp"):
+            self.assertNotIn("--hero-font-code", font_css_vars(fid),
+                             f"{fid} unexpectedly emits --hero-font-code")
 
     def test_unknown_font_id_falls_back_to_default(self):
         vars = font_css_vars("nonsense_font_id_999")
@@ -498,6 +523,159 @@ class H1VarConsumptionTests(unittest.TestCase):
         # h1 consumes the var
         h1_r = _extract_h1_inline_style(html_r)
         self.assertIn("var(--hero-h1-font-size", h1_r)
+
+
+class PerFontSignatureTests(unittest.TestCase):
+    """Pass 4.0i Phase B finalize — assert each font's per-font signature
+    actually lands on the rendered section, AND that the h1 consumes the
+    --hero-text-transform var so the case treatment actually takes effect.
+
+    The KEY DIFFERENTIATOR Phase B finalize ships: brutalist_editorial +
+    brutalist_sharp render text-transform=none (mixed case), while
+    default/geometric/mono render uppercase. Pre-finalize all 5 fonts
+    inherited the variant's hardcoded uppercase from the bold typography
+    treatment, collapsing the visual differentiation.
+
+    These tests guarantee the case differentiation lands. If a future
+    primitive change drops the --hero-text-transform reference from h1,
+    test_h1_consumes_text_transform fails with a named error message.
+    """
+
+    # Expected per-font signature, locked in fonts.py.
+    EXPECTED_CASE = {
+        "brutalist_default":   "uppercase",
+        "brutalist_geometric": "uppercase",
+        "brutalist_editorial": "none",
+        "brutalist_mono":      "uppercase",
+        "brutalist_sharp":     "none",
+    }
+
+    def test_each_font_emits_expected_case_on_section(self):
+        for fid, expected_case in self.EXPECTED_CASE.items():
+            html = _render("edge_bleed_portrait", "confident", font_id=fid)
+            m = _RE_TEXT_TRANSFORM.search(html)
+            self.assertIsNotNone(
+                m, f"{fid}: --hero-text-transform missing from section style",
+            )
+            actual = m.group(1)
+            self.assertEqual(
+                actual, expected_case,
+                f"{fid}: section --hero-text-transform={actual!r}, "
+                f"expected {expected_case!r}",
+            )
+
+    def test_h1_consumes_text_transform(self):
+        """LOAD-BEARING: h1 inline style MUST reference --hero-text-transform
+        so the case differentiation actually affects render. This is the
+        bug-catches-bug for the Phase B finalize text-transform wiring.
+        If heading.py stops consuming this var, font case goes inert."""
+        h1_style = _extract_h1_inline_style(
+            _render("edge_bleed_portrait", "confident", font_id="brutalist_editorial")
+        )
+        self.assertIn(
+            "var(--hero-text-transform",
+            h1_style,
+            "h1 text-transform does NOT reference --hero-text-transform — "
+            "per-font case (uppercase vs mixed) will not flow into h1 rendering",
+        )
+
+    def test_letter_spacing_now_sourced_from_font(self):
+        """Ownership rule: font owns tracking. Different fonts must emit
+        different --hero-letter-spacing values (default tight -1.6px,
+        mono wide 0.05em, editorial near-0). Pre-finalize intensity owned
+        tracking and all fonts at the same intensity had identical
+        letter-spacing."""
+        default_vars = font_css_vars("brutalist_default")
+        mono_vars = font_css_vars("brutalist_mono")
+        editorial_vars = font_css_vars("brutalist_editorial")
+        self.assertNotEqual(
+            default_vars["--hero-letter-spacing"],
+            mono_vars["--hero-letter-spacing"],
+            "default and mono should have distinct tracking signatures",
+        )
+        # Mono is wide (positive em); default is tight (negative px). Sanity.
+        self.assertIn("em", mono_vars["--hero-letter-spacing"],
+                      "mono tracking should be in em (wide-track signature)")
+        self.assertIn("-", default_vars["--hero-letter-spacing"],
+                      "default tracking should be negative px (tight signature)")
+        self.assertIn("-", editorial_vars["--hero-letter-spacing"],
+                      "editorial tracking should be near-zero negative px")
+
+    def test_intensity_no_longer_emits_letter_spacing(self):
+        """Phase B finalize ownership rule: intensity owns size + weight tier
+        only. font_resolver owns letter-spacing. Confirms intensity_translator
+        output does NOT include --hero-letter-spacing — otherwise both layers
+        would set it, and CSS cascade order would decide who wins, defeating
+        the ownership rule."""
+        for intensity in INTENSITY_CONFIG.keys():
+            i_vars = intensity_css_vars(intensity, 4.0, 2.5)
+            self.assertNotIn(
+                "--hero-letter-spacing", i_vars,
+                f"intensity={intensity} unexpectedly emits --hero-letter-spacing — "
+                "ownership rule violated (font owns tracking, intensity does not)",
+            )
+
+
+class WeightLockTests(unittest.TestCase):
+    """Pass 4.0i Phase B finalize — verify brutalist_editorial weight-locks
+    at 400 so bold-intensity Heros don't render with synthesized faux-bold
+    on the single-weight DM Serif Display face."""
+
+    def test_editorial_emits_fixed_weight_400(self):
+        vars = font_css_vars("brutalist_editorial")
+        self.assertIn("--hero-font-fixed-weight", vars,
+                      "brutalist_editorial must emit --hero-font-fixed-weight "
+                      "(weight_locked=True in fonts.py)")
+        self.assertEqual(vars["--hero-font-fixed-weight"], "400")
+
+    def test_unlocked_fonts_do_not_emit_fixed_weight(self):
+        """Non-locked fonts must NOT emit --hero-font-fixed-weight so
+        intensity's --hero-display-weight wins via the chain."""
+        for fid in ("brutalist_default", "brutalist_geometric",
+                    "brutalist_mono", "brutalist_sharp"):
+            vars = font_css_vars(fid)
+            self.assertNotIn(
+                "--hero-font-fixed-weight", vars,
+                f"{fid} unexpectedly emits --hero-font-fixed-weight — "
+                "intensity's weight tier will be overridden unnecessarily",
+            )
+
+    def test_h1_font_weight_chain_includes_fixed_weight_first(self):
+        """LOAD-BEARING: h1 font-weight chain must read --hero-font-fixed-weight
+        BEFORE --hero-display-weight so a weight_locked font (editorial)
+        renders at its authentic weight regardless of intensity. Order
+        matters — chain reversed would let intensity's 900 still synthesize
+        faux-bold on the single-weight serif."""
+        h1_style = _extract_h1_inline_style(
+            _render("edge_bleed_portrait", "bold", font_id="brutalist_editorial")
+        )
+        # The font-weight property in the h1 inline style must reference
+        # --hero-font-fixed-weight as its OUTERMOST var() — meaning when
+        # the fixed-weight is set, intensity's display-weight is ignored.
+        # Use a focused regex to confirm chain order.
+        m = re.search(r"font-weight:\s*var\(--hero-font-fixed-weight,\s*var\(--hero-display-weight", h1_style)
+        self.assertIsNotNone(
+            m,
+            "h1 font-weight chain does NOT start with --hero-font-fixed-weight "
+            "— a weight_locked font (e.g. brutalist_editorial DM Serif Display) "
+            "will get faux-bold synthesized when intensity wants bold",
+        )
+
+    def test_editorial_bold_intensity_yields_authentic_weight_at_render(self):
+        """End-to-end: render editorial at bold intensity, assert section
+        emits BOTH --hero-display-weight=900 (intensity's tier) AND
+        --hero-font-fixed-weight=400 (font's lock). The chain in heading.py
+        means the rendered h1 effectively uses 400 — but BOTH vars must
+        be present so the chain has the right inputs."""
+        html = _render("edge_bleed_portrait", "bold", font_id="brutalist_editorial")
+        m_disp = _RE_WEIGHT.search(html)
+        m_fix = _RE_FIXED_WEIGHT.search(html)
+        self.assertIsNotNone(m_disp, "missing --hero-display-weight")
+        self.assertIsNotNone(m_fix, "missing --hero-font-fixed-weight on editorial")
+        self.assertEqual(int(m_disp.group(1)), 900,
+                         "intensity=bold should set --hero-display-weight=900")
+        self.assertEqual(int(m_fix.group(1)), 400,
+                         "editorial weight_locked should set --hero-font-fixed-weight=400")
 
 
 class SecondaryPrimitiveVarConsumptionTests(unittest.TestCase):

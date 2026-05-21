@@ -39,53 +39,82 @@ Pass 4.0i adds three coordinated creative-expression dimensions to the Composer 
 
 ## 3. Three creative-expression components
 
-### 3.1 Studio Brut font vocabulary
+### 3.1 Studio Brut font vocabulary (FINALIZED Phase B)
 
-Five font options. All Google Fonts. Each pairing is a display face + a body face + (where applicable) a code-style accent face. Practitioner picks one `font_id`; system defaults to `brutalist_default` if no choice made.
+**Ownership rule** (locked Phase B finalize, after a visual review of the original 5-sans vocabulary showed convergence):
 
-Module-compatibility check: practitioner's `font_id` must be a Studio Brut option. Cross-module picks (e.g., Cathedral font on Studio Brut business) are rejected at save and default applied at render.
+| Layer | Owns |
+|---|---|
+| **Font choice** (`font_id`) | typeface (font-family), text-transform (case), base letter-spacing character |
+| **Intensity** (`intensity`) | final h1 size + weight TIER (800 vs 900) via the two-sided clamp |
+| **Treatments** (`treatments.*`) | color, emphasis span style, layout, everything else |
 
-#### `brutalist_default` (default — current production state)
+Precedence is expressed in CSS via var-with-fallback chains in the primitives (`heading.py` reads `var(--hero-text-transform, var(--sb-heading-case, none))`), NOT via dict-merge ordering. The Pass 4.0h.x lesson — cascade-order fragility for `:root { --brand-* }` collisions — is the reason we keep the namespaces distinct and precedence CSS-level-explicit.
 
-- **Display:** `'Bebas Neue', 'Anton', Impact, sans-serif`
-- **Body:** `'Space Grotesk', sans-serif`
-- **Character:** graphic poster, urban streetwear, narrow stacked-display authority
+#### Vocabulary change from the original Phase A spec
+
+Original Phase A vocabulary (5 sans-serifs, uniform uppercase-heavy treatment) caused visual convergence in the first review — the variant's hardcoded uppercase + 900-weight + tight tracking flattened font personality across all 5. Path B prototype validated a spread across font categories WITH per-font case/weight/tracking signatures. The finalized vocabulary below replaces the original:
+
+| Original (Phase A) | → | Finalized (Phase B post-prototype) |
+|---|---|---|
+| `brutalist_default` (Bebas Neue) | kept (retained, signature explicit) | `brutalist_default` |
+| `brutalist_wide` (Oswald) | **DROPPED** (too sibling-similar to default) | — |
+| `brutalist_geometric` (Bricolage Grotesque) | kept, signature explicit | `brutalist_geometric` |
+| `brutalist_display` (DM Serif Display) | **RENAMED** to clearer label | `brutalist_editorial` |
+| — | **ADDED** (technical voice / mono category) | `brutalist_mono` (Space Mono) |
+| `brutalist_sharp` (Inter) | kept, signature explicit | `brutalist_sharp` |
+
+#### `brutalist_default`
+
+- **Display:** `'Bebas Neue', Impact, sans-serif` · **Body:** `'Space Grotesk', system-ui, sans-serif`
+- **Signature:** case `UPPERCASE` · base-weight 800 · tracking `-1.6px`
+- **Character:** condensed poster, urban streetwear, narrow stacked-display authority
 - **Best for:** streetwear, custom apparel, design studios with edge
-- **Google Fonts subset:** `Bebas+Neue:400` + `Space+Grotesk:wght@400;500;700`
-- **Note:** Druk (the original premium pick) is Adobe-only; Bebas Neue is the close Google equivalent. Anton serves as fallback for missing characters.
-
-#### `brutalist_wide`
-
-- **Display:** `'Oswald', 'Archivo', Impact, sans-serif` at weight 900
-- **Body:** `'Space Grotesk', sans-serif`
-- **Character:** stretched-letter authority, broader stance, narrow-tall display energy
-- **Best for:** confident product brands, statement-makers
-- **Google Fonts subset:** `Oswald:wght@500;700;900` + `Space+Grotesk:wght@400;500;700`
 
 #### `brutalist_geometric`
 
-- **Display:** `'Bricolage Grotesque', 'Space Grotesk', sans-serif` at weight 800/900
-- **Body:** `'Inter', sans-serif`
-- **Code accent (for `code_label` accent):** `'JetBrains Mono', monospace`
+- **Display:** `'Bricolage Grotesque', 'Helvetica Neue', sans-serif` · **Body:** `'Inter', system-ui, sans-serif` · **Code accent:** `'JetBrains Mono', ui-monospace, monospace`
+- **Signature:** case `UPPERCASE` · base-weight 700 · tracking `-0.5px`
 - **Character:** engineered precision, architectural, machined geometric
 - **Best for:** tech-adjacent creative, design firms, makers with precision aesthetic
-- **Google Fonts subset:** `Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800;12..96,900` + `Inter:wght@400;500;700` + `JetBrains+Mono:wght@400;700`
 
-#### `brutalist_display`
+#### `brutalist_editorial`
 
-- **Display:** `'DM Serif Display', Georgia, serif`
-- **Body:** `'Space Grotesk', sans-serif`
-- **Character:** serif touch within the graphic frame, hand-touched maker feel
-- **Best for:** independent makers, artists, personality-led brands
-- **Google Fonts subset:** `DM+Serif+Display:ital@0;1` + `Space+Grotesk:wght@400;500;700`
+- **Display:** `'DM Serif Display', Georgia, serif` · **Body:** `'Space Grotesk', system-ui, sans-serif`
+- **Signature:** case **`MIXED`** · base-weight 400 · tracking `-0.5px` · `weight_locked=True`
+- **Character:** serif display, editorial-maker dialect, mixed-case authority
+- **Best for:** writers, publishers, narrative-driven brands, design-aware editorial voices
+- **Key role:** the serif that breaks the uppercase mold. Validates the spread-across-categories thesis.
+- **Weight-lock note:** DM Serif Display ships single-weight at 400. `font_resolver` emits `--hero-font-fixed-weight: 400`; primitive's chain `var(--hero-font-fixed-weight, var(--hero-display-weight, ...))` resolves to 400 regardless of intensity, so bold-intensity editorial Heros render with size + scale drama, not synthesized faux-bold on serif display type.
+
+#### `brutalist_mono`
+
+- **Display:** `'Space Mono', 'JetBrains Mono', ui-monospace, monospace` · **Body:** `'Space Grotesk', system-ui, sans-serif` · **Code accent:** `'Space Mono', 'JetBrains Mono', ...` (mono itself doubles as code accent)
+- **Signature:** case `UPPERCASE` · base-weight 700 · tracking `0.05em` (wide)
+- **Character:** technical voice, code aesthetic, wide-tracked monospace
+- **Best for:** developer tools, technical creative, software studios, makers with code-native aesthetic
 
 #### `brutalist_sharp`
 
-- **Display:** `'Inter', sans-serif` at weight 900 with tight letter-spacing
-- **Body:** `'Manrope', sans-serif`
-- **Character:** refined-brutalist, less posterly, more confident-cool
+- **Display:** `'Inter', system-ui, sans-serif` · **Body:** `'Manrope', system-ui, sans-serif`
+- **Signature:** case **`MIXED`** · base-weight 900 · tracking `-0.5px`
+- **Character:** refined-heavy, considered-fashion, mixed-case minimal
 - **Best for:** premium streetwear, design-aware fashion, considered urban brands
-- **Google Fonts subset:** `Inter:wght@400;500;700;900` + `Manrope:wght@400;500;700`
+
+#### Intensity-vs-font weight resolution (the editorial special case)
+
+Intensity emits `--hero-display-weight` (800 for restrained/confident, 900 for bold). Font emits `--hero-font-fixed-weight` **only when `weight_locked=True`** (currently brutalist_editorial only). Primitive's chain:
+
+```css
+font-weight: var(--hero-font-fixed-weight, var(--hero-display-weight, var(--sb-heading-weight, 800)));
+```
+
+- **Most fonts** (unlocked): `--hero-font-fixed-weight` unset → chain falls through to intensity's `--hero-display-weight` → bold intensity = 900 weight rendered.
+- **Editorial** (locked at 400): `--hero-font-fixed-weight` = 400 → chain stops there → bold intensity does NOT synthesize faux-bold on DM Serif Display. The serif renders at its authentic 400. Bold intensity still increases size via `--hero-h1-font-size`, just not weight.
+
+Decision rationale: faux-bold synthesis on single-weight serif display faces produces visually-rough fake-bold characters (browsers algorithmically thicken glyph outlines), which undermines the editorial signature. Better to let intensity drive size and let the font's authentic weight stand.
+
+Module-compatibility check: practitioner's `font_id` must be a Studio Brut option. Cross-module picks (e.g., Cathedral font on Studio Brut business) are rejected at save and default applied at render.
 
 ### 3.2 Studio Brut accent vocabulary
 
@@ -212,7 +241,7 @@ Letter-spacing intensity progression:
     "colors": { ... existing ... },
     "fonts": { ... existing typography fields ... },
     "creative_expression": {
-      "font_id": "brutalist_default" | "brutalist_wide" | "brutalist_geometric" | "brutalist_display" | "brutalist_sharp",
+      "font_id": "brutalist_default" | "brutalist_geometric" | "brutalist_editorial" | "brutalist_mono" | "brutalist_sharp",
       "accent_id": "no_accent" | "oversized_punctuation" | "geometric_stamp" | "type_initial" | "code_label" | "color_block_accent",
       "intensity": "restrained" | "confident" | "bold"
     }
