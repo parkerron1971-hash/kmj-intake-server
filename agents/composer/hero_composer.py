@@ -446,6 +446,115 @@ cta_target:        anchor (#contact / #book) or mailto: or URL.
 image_slot_ref:    'hero_main' if variant uses an image (variants 5, 7, 10), null otherwise.
 
 ═══════════════════════════════════════════════════════════════
+CREATIVE EXPRESSION — FONT / ACCENT / INTENSITY (Pass 4.0i)
+═══════════════════════════════════════════════════════════════
+
+Three additional dimensions you pick alongside variant + treatments. These
+let the same Studio Brut variant carry brand-specific character beyond
+color: a different typographic voice, an optional signature decoration,
+and a magnitude of declaration.
+
+OWNERSHIP: practitioner's brand_kit may pin one or more of these (the
+user prompt lists which fields are practitioner-set). For pinned fields,
+USE THE PRACTITIONER'S VALUE VERBATIM — do NOT override. For unpinned
+fields, INFER from the brand archetype + metaphor + tone using the
+guidance below, and explain your choice in `reasoning`.
+
+─── FONT (5 options, Google Fonts; choose one font_id) ───
+
+  brutalist_default   Bebas Neue + Space Grotesk
+                      UPPERCASE / weight 800 / tight tracking.
+                      Condensed poster, urban-streetwear, narrow display.
+                      Best for: streetwear, custom apparel, design studios
+                      with edge, music/culture, makers leading with poster.
+
+  brutalist_geometric Bricolage Grotesque + Inter (+ JetBrains Mono code)
+                      UPPERCASE / weight 700 / -0.5px tracking.
+                      Engineered, machined, architectural precision.
+                      Best for: tech-adjacent creative, design firms,
+                      makers with precision aesthetic, SaaS-adjacent.
+
+  brutalist_editorial DM Serif Display + Space Grotesk
+                      MIXED CASE / weight 400 (locked) / near-0 tracking.
+                      Serif display, editorial-maker, narrative-driven.
+                      Best for: writers, publishers, narrative brands,
+                      editorial voices, refined-maker positioning.
+                      Note: weight stays at 400 regardless of intensity —
+                      DM Serif Display ships single-weight; bold intensity
+                      drives SIZE drama, not weight.
+
+  brutalist_mono      Space Mono + Space Grotesk
+                      UPPERCASE / weight 700 / +0.05em wide tracking.
+                      Technical voice, code aesthetic, wide-tracked mono.
+                      Best for: developer tools, technical creative,
+                      software studios, code-native makers, dev brands.
+
+  brutalist_sharp     Inter + Manrope
+                      MIXED CASE / weight 900 / -0.5px tracking.
+                      Refined-heavy, considered-fashion, minimal-cool.
+                      Best for: premium streetwear, considered urban,
+                      design-aware fashion, refined-cool category.
+
+─── ACCENT (6 options including no_accent default; choose one accent_id) ───
+
+  no_accent              No decorative element. Clean variant render.
+                         Default unless an accent strongly fits the brand.
+
+  oversized_punctuation  Large graphic punctuation mark (ampersand, quote,
+                         exclamation). Reads as poster-graphic flourish.
+                         Best for: quote-led, declarative, manifesto brands.
+
+  geometric_stamp        Geometric shape with short text inside (badge).
+                         EST. YYYY / category label / business code.
+                         Best for: design firms, identity-driven brands,
+                         brands with stamp/badge aesthetic.
+
+  type_initial           First letter of heading at massive scale as
+                         architectural background mark. Brutalist,
+                         not illuminated. Best for: single-character
+                         monogram brands (RoyalTee's R, KMJ's K).
+
+  code_label             Vertical or horizontal monospace code mark
+                         (VOL.II, SVC.04, EST.YYYY). Reads as edition /
+                         volume / catalog framing.
+                         Best for: founded-year businesses, editorial /
+                         publishing brands, label / catalog framing.
+
+  color_block_accent     Small skewed colored block for visual punctuation.
+                         CSS-only graphic accent.
+                         Best for: color-confident brands, minimal-graphic
+                         positioning, brands where color IS the brand.
+
+─── INTENSITY (3 levels; choose one intensity value) ───
+
+  restrained   Conservative scale, breathing room, single dominant element.
+               Studio Brut at its quietest. Bold-tier weight 800.
+               Best for: authority / established / professional brands;
+               consultancies; thought-leadership voices.
+
+  confident    Mid-tier scale, layered cues, present without shouting.
+               Studio Brut's "lean loud" baseline. Weight 800.
+               Best for: creative / personality-led / maker brands;
+               most brands without a strong restrained or bold signal.
+
+  bold         Maximum drama within module DNA. Heading at peak scale,
+               layered visual elements firing together. Weight 900.
+               Best for: statement-making / identity-forward / loud brands;
+               poster-grade compositions; declarative claim-led heros.
+
+─── ARCHETYPE-TO-CREATIVE-EXPRESSION QUICK GUIDE ───
+
+  streetwear / custom apparel / urban       -> default + (no_accent or type_initial) + bold
+  design studio / branding agency           -> geometric or sharp + geometric_stamp + confident
+  editorial / publisher / writer / narrative -> editorial + code_label + confident or restrained
+  tech-adjacent / developer tools           -> mono + code_label + confident
+  premium / fashion / refined-considered    -> sharp + (no_accent or color_block) + confident
+  consultancy / thought leadership           -> default or sharp + no_accent + restrained
+  music / culture / nightlife                -> default + oversized_punctuation + bold
+
+These are starting points — adjust per the SPECIFIC business's metaphor.
+
+═══════════════════════════════════════════════════════════════
 GAP REASONING
 ═══════════════════════════════════════════════════════════════
 
@@ -478,10 +587,15 @@ Output ONE JSON object. No markdown fences. The schema:
     \"cta_target\": \"<#anchor or mailto: or URL>\",
     \"image_slot_ref\": \"hero_main\" OR null
   },
-  \"reasoning\": \"<2-3 sentences. Why this variant + treatments for this business. Reference Studio Brut DNA (color-as-architecture / type-as-graphic / asymmetry-baseline / sharp-commits / density). Note variant gap if no perfect fit.>\"
+  \"creative_expression\": {
+    \"font_id\":   \"<brutalist_default | brutalist_geometric | brutalist_editorial | brutalist_mono | brutalist_sharp>\",
+    \"accent_id\": \"<no_accent | oversized_punctuation | geometric_stamp | type_initial | code_label | color_block_accent>\",
+    \"intensity\": \"<restrained | confident | bold>\"
+  },
+  \"reasoning\": \"<2-3 sentences. Why this variant + treatments + creative expression (font/accent/intensity) for this business. Reference Studio Brut DNA (color-as-architecture / type-as-graphic / asymmetry-baseline / sharp-commits / density). If any creative_expression field was practitioner-pinned per the user prompt, note that. Note variant gap if no perfect fit.>\"
 }
 
-All 8 treatment fields are REQUIRED. Output ONLY the JSON object."""
+All 8 treatment fields are REQUIRED. All 3 creative_expression fields are REQUIRED. Output ONLY the JSON object."""
 
 
 # ─── Module specification table ────────────────────────────────────
@@ -668,8 +782,39 @@ def fetch_business_context(business_id: str) -> Dict[str, Any]:
     return ctx
 
 
-def build_user_prompt(ctx: Dict[str, Any]) -> str:
+def _format_pinned_ce(
+    stored_ce: Optional[Dict[str, Any]],
+    stored_meta: Optional[Dict[str, Any]],
+) -> str:
+    """Format the practitioner-pinned creative_expression fields for the
+    user prompt. Composer must honor pinned fields verbatim and infer
+    the rest. Returns a multi-line indented string for embedding."""
+    stored_ce = stored_ce or {}
+    stored_meta = stored_meta or {}
+    pinned: List[str] = []
+    unpinned: List[str] = []
+    for field in ("font_id", "accent_id", "intensity"):
+        source = stored_meta.get(f"{field}_source")
+        value = stored_ce.get(field)
+        if source == "practitioner" and value:
+            pinned.append(f"  {field}: {value}  (PRACTITIONER-PINNED — use verbatim)")
+        else:
+            unpinned.append(f"  {field}: (no practitioner choice — infer from brand context)")
+    lines = pinned + unpinned
+    return "\n".join(lines) if lines else "  (no practitioner choices stored — infer all three)"
+
+
+def build_user_prompt(
+    ctx: Dict[str, Any],
+    stored_ce: Optional[Dict[str, Any]] = None,
+    stored_meta: Optional[Dict[str, Any]] = None,
+) -> str:
     """Format the business context into a Composer user prompt.
+
+    Pass 4.0i Phase C — `stored_ce` + `stored_meta` arguments inject the
+    practitioner-pinned creative_expression fields so the Composer honors
+    them and only infers the unpinned fields.
+
     Module-agnostic — the system prompt provides module-specific
     guidance; the user prompt provides business context."""
     tone_words = ctx.get("tone_words") or []
@@ -677,6 +822,7 @@ def build_user_prompt(ctx: Dict[str, Any]) -> str:
     slots = ctx.get("available_slots") or []
     slots_str = ", ".join(slots) if slots else "(none populated yet)"
     bk = ctx.get("brand_kit") or {}
+    ce_block = _format_pinned_ce(stored_ce, stored_meta)
 
     return f"""Compose a Hero section for the following business.
 
@@ -698,13 +844,18 @@ BRAND KIT COLORS:
   background: {bk.get('background', '?')}
   text:       {bk.get('text', '?')}
 
+CREATIVE EXPRESSION (Pass 4.0i):
+{ce_block}
+
 AVAILABLE IMAGE SLOTS: {slots_str}
   Note: if the variant uses an image but the slot doesn't exist yet, pick the variant anyway
   and set image_slot_ref to 'hero_main' — the slot resolver will render a
   placeholder until the practitioner uploads.
 
-Pick ONE variant from the 11. Pick treatments. Write the content. Output
-only the JSON object specified in the system prompt."""
+Pick ONE variant from the 11. Pick treatments. Pick creative_expression
+(font_id, accent_id, intensity) honoring any PRACTITIONER-PINNED values
+above. Write the content. Output only the JSON object specified in the
+system prompt."""
 
 
 # ─── Post-validation ────────────────────────────────────────────────
@@ -762,6 +913,7 @@ def _enforce_image_slot_consistency(comp_dict: Dict[str, Any],
 def compose_hero(
     business_id: str,
     module_id: str = "cathedral",
+    persist_creative_expression_to_brand_kit: bool = True,
 ) -> Dict[str, Any]:
     """Run the Composer Agent for one business in the specified module.
 
@@ -773,7 +925,23 @@ def compose_hero(
 
     One Sonnet call (~5-8 seconds typical), one Pydantic validation,
     one post-validation pass. One retry on JSON parse failure. One
-    retry on missing depth fields with explicit feedback."""
+    retry on missing depth fields with explicit feedback.
+
+    Pass 4.0i Phase C — for Studio Brut module:
+      * Loads brand_kit.creative_expression + creative_expression_meta
+        from businesses.settings.brand_kit and passes them into the
+        user prompt so Composer honors practitioner-pinned fields.
+      * After Pydantic validation, normalizes the composition's
+        creative_expression via per-field vocabulary check + inference
+        fallback for missing/invalid values.
+      * Applies sticky-with-source resolution: practitioner-pinned
+        fields stay pinned, unpinned fields take Composer's choice
+        marked as 'inferred'.
+      * Persists the resolved creative_expression + meta back to
+        businesses.settings.brand_kit (surgical PATCH, no history
+        snapshot) unless persist_creative_expression_to_brand_kit=False
+        (mainly for spike scripts that don't want to mutate prod data).
+    """
     spec = MODULES.get(module_id)
     if spec is None:
         # Hard error — caller passed an unknown module. Fall back to
@@ -789,7 +957,25 @@ def compose_hero(
         return _safe_fallback(spec, business_id, "ANTHROPIC_API_KEY not configured")
 
     ctx = fetch_business_context(business_id)
-    user_prompt = build_user_prompt(ctx)
+
+    # Pass 4.0i Phase C — Studio Brut loads practitioner-pinned
+    # creative_expression for the user prompt. Cathedral path leaves
+    # both None so the prompt's CE block reads "no practitioner choices".
+    stored_ce: Optional[Dict[str, Any]] = None
+    stored_meta: Optional[Dict[str, Any]] = None
+    if spec.module_id == "studio_brut":
+        try:
+            from agents.composer.creative_expression import (
+                load_stored_creative_expression,
+            )
+            stored_ce, stored_meta = load_stored_creative_expression(business_id)
+        except Exception as e:
+            logger.warning(
+                f"[composer] CE load failed for {business_id}: "
+                f"{type(e).__name__}: {e}"
+            )
+
+    user_prompt = build_user_prompt(ctx, stored_ce=stored_ce, stored_meta=stored_meta)
 
     client = Anthropic(api_key=api_key)
 
@@ -877,6 +1063,51 @@ def compose_hero(
     if spec.module_id == "studio_brut":
         parsed.setdefault("module", "studio_brut")
 
+    # Pass 4.0i Phase C — normalize creative_expression BEFORE Pydantic
+    # validation. Composer might emit an invalid font_id / accent_id /
+    # intensity OR omit the field entirely. Per-field validation with
+    # inference fallback keeps the composition shippable when Composer
+    # makes a vocabulary mistake — better than tossing the whole
+    # composition to _safe_fallback.
+    ce_warnings: List[str] = []
+    ce_meta_audit: Optional[Dict[str, str]] = None
+    if spec.module_id == "studio_brut":
+        try:
+            from agents.composer.creative_expression import (
+                validate_creative_expression,
+                resolve_creative_expression,
+                persist_creative_expression,
+            )
+            ctx_brief = {
+                "content_archetype": ctx.get("inferred_archetype"),
+                "inferred_archetype": ctx.get("inferred_archetype"),
+                "inferred_vibe": ctx.get("inferred_vibe"),
+                "brand_metaphor": ctx.get("brand_metaphor"),
+                "business_description": ctx.get("business_description"),
+                "business_name": ctx.get("business_name"),
+                "tone_words": ctx.get("tone_words") or [],
+            }
+            raw_ce = parsed.get("creative_expression")
+            validated_ce, ce_warnings = validate_creative_expression(
+                raw_ce if isinstance(raw_ce, dict) else None,
+                brief=ctx_brief,
+            )
+            for w in ce_warnings:
+                logger.warning(f"[composer] CE: {w}")
+            # Sticky-with-source resolution: practitioner pins win.
+            final_ce, final_meta = resolve_creative_expression(
+                stored_ce=stored_ce,
+                stored_meta=stored_meta,
+                composer_ce=validated_ce,
+            )
+            parsed["creative_expression"] = final_ce
+            ce_meta_audit = final_meta
+        except Exception as e:
+            logger.warning(
+                f"[composer] CE normalization failed for {business_id}: "
+                f"{type(e).__name__}: {e}"
+            )
+
     try:
         composition = spec.composition_type.model_validate(parsed)
     except ValidationError as ve:
@@ -893,4 +1124,38 @@ def compose_hero(
         "module_id": spec.module_id,
         "business_id": business_id,
     }
+
+    # Pass 4.0i Phase C — persist resolved CE back to brand_kit so the
+    # Brand Kit UI shows what Composer inferred, and so subsequent
+    # rebuilds see the same stored values (or re-infer if archetype
+    # context has evolved). Opt-out via the function parameter for
+    # spike scripts.
+    if (
+        spec.module_id == "studio_brut"
+        and ce_meta_audit is not None
+        and persist_creative_expression_to_brand_kit
+    ):
+        try:
+            from agents.composer.creative_expression import (
+                persist_creative_expression,
+            )
+            persisted = persist_creative_expression(
+                business_id,
+                ce=out.get("creative_expression") or {},
+                meta=ce_meta_audit,
+            )
+            out["_composer_metadata"]["ce_persisted"] = persisted
+        except Exception as e:
+            logger.warning(
+                f"[composer] CE persist failed for {business_id}: "
+                f"{type(e).__name__}: {e}"
+            )
+            out["_composer_metadata"]["ce_persisted"] = False
+
+    # Surface CE audit info regardless of persistence path.
+    if spec.module_id == "studio_brut":
+        out["_composer_metadata"]["ce_meta"] = ce_meta_audit
+        if ce_warnings:
+            out["_composer_metadata"]["ce_warnings"] = ce_warnings
+
     return out
