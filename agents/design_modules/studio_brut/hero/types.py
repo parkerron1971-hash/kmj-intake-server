@@ -129,9 +129,9 @@ class HeroContent(BaseModel):
 
 FontId = Literal[
     "brutalist_default",
-    "brutalist_wide",
     "brutalist_geometric",
-    "brutalist_display",
+    "brutalist_editorial",
+    "brutalist_mono",
     "brutalist_sharp",
 ]
 

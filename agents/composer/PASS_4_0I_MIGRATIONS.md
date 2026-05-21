@@ -38,7 +38,7 @@ If a future pass wants to enforce the shape at the database level (e.g., via a `
 
 | Field | Type | Required | Valid values (Pass 4.0i — Studio Brut only) | Default behavior when missing |
 |---|---|---|---|---|
-| `creative_expression.font_id` | `string` | No | `brutalist_default` \| `brutalist_wide` \| `brutalist_geometric` \| `brutalist_display` \| `brutalist_sharp` | Composer defaults to `brutalist_default` |
+| `creative_expression.font_id` | `string` | No | `brutalist_default` \| `brutalist_geometric` \| `brutalist_editorial` \| `brutalist_mono` \| `brutalist_sharp` | Composer defaults to `brutalist_default` |
 | `creative_expression.accent_id` | `string` | No | `no_accent` \| `oversized_punctuation` \| `geometric_stamp` \| `type_initial` \| `code_label` \| `color_block_accent` | Composer defaults to `no_accent` unless brand archetype strongly suggests an accent (see PASS_4_0I_DESIGN.md §6.2) |
 | `creative_expression.intensity` | `string` | No | `restrained` \| `confident` \| `bold` | Composer infers from brand archetype (authority → restrained, creative → confident, statement-making → bold) |
 
