@@ -52,8 +52,10 @@ def render_subtitle(
         f'font-style: var(--sb-subtitle-italic, normal); '
         f'color: var(--sb-subtitle-color, var(--brand-text-primary, #09090B)); '
         f'opacity: 0.88; '
-        f'font-family: var(--sb-sans-stack, "Inter", "Space Grotesk", '
-        f'system-ui, -apple-system, sans-serif); '
+        # Pass 4.0i Phase B (fix): font-family reads --hero-font-body first
+        # so practitioner's font_id flows through; --sb-sans-stack fallback.
+        f'font-family: var(--hero-font-body, var(--sb-sans-stack, "Inter", "Space Grotesk", '
+        f'system-ui, -apple-system, sans-serif)); '
         f'max-width: {max_width}; '
         f'margin: 0 0 {bottom_margin} 0;">'
         f"{safe_text}"

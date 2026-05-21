@@ -47,8 +47,11 @@ def render_eyebrow(
         f'font-weight: var(--sb-eyebrow-weight, 800); '
         f'font-style: var(--sb-eyebrow-style, normal); '
         f'color: var(--sb-eyebrow-color, var(--brand-signal, #FACC15)); '
-        f'font-family: var(--sb-sans-stack, "Inter", "Space Grotesk", '
-        f'system-ui, -apple-system, sans-serif); '
+        # Pass 4.0i Phase B (fix): font-family reads --hero-font-body first
+        # so practitioner's font_id choice flows through; --sb-sans-stack
+        # remains the treatment-layer fallback.
+        f'font-family: var(--hero-font-body, var(--sb-sans-stack, "Inter", "Space Grotesk", '
+        f'system-ui, -apple-system, sans-serif)); '
         f'margin-bottom: {bottom_margin}; '
         f'line-height: 1.1;">'
         f"{safe_text}"
