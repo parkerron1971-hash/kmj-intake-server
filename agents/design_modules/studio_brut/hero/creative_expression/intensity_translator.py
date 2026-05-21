@@ -77,15 +77,23 @@ def intensity_css_vars(intensity: str,
     color_block_split might use 3.2. Translator clamps to safe range.
 
     Returns string values so the variant can interpolate directly into
-    inline style declarations. CSS variables produced:
+    inline style declarations. CSS variables produced (all values carry
+    their CSS units inline so primitives can consume via var() directly):
 
-      --hero-h1-size-rem            effective h1 size in rem (number-only)
-      --hero-h2-size-rem            effective h2 size in rem
-      --hero-display-weight         font-weight value (800 or 900)
-      --hero-letter-spacing-px      letter-spacing in px (negative)
+      --hero-h1-font-size           effective h1 size in rem (e.g. "4.000rem")
+      --hero-h2-font-size           effective h2 size in rem
+      --hero-display-weight         font-weight value ("800" or "900")
+      --hero-letter-spacing         letter-spacing in px (e.g. "-2.40px")
       --hero-treatment-amplitude    multiplier for treatments that scale
                                     (background opacity, gradient stops, etc.)
       --hero-element-spacing-mult   multiplier for inter-element gaps
+
+    Note (Phase B fix): pre-fix output emitted `--hero-h1-size-rem` (no
+    units, raw number) which couldn't be consumed directly by `font-size`
+    in CSS. Renamed to `--hero-h1-font-size` with full units so the
+    primitive can read it as `font-size: var(--hero-h1-font-size, ...)`
+    with a fluid clamp() fallback. Same rename for h2 + letter-spacing
+    (dropped the type-suffix from name; value carries the type).
     """
     cfg = INTENSITY_CONFIG.get(intensity)
     if cfg is None:
@@ -100,10 +108,10 @@ def intensity_css_vars(intensity: str,
     )
 
     return {
-        "--hero-h1-size-rem": f"{h1_effective:.3f}",
-        "--hero-h2-size-rem": f"{h2_effective:.3f}",
+        "--hero-h1-font-size": f"{h1_effective:.3f}rem",
+        "--hero-h2-font-size": f"{h2_effective:.3f}rem",
         "--hero-display-weight": str(cfg["weight"]),
-        "--hero-letter-spacing-px": f"{cfg['letter_spacing_px']:.2f}px",
+        "--hero-letter-spacing": f"{cfg['letter_spacing_px']:.2f}px",
         "--hero-treatment-amplitude": f"{mult:.3f}",
         "--hero-element-spacing-mult": f"{mult:.3f}",
     }

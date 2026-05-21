@@ -59,8 +59,10 @@ def render_cta_button(
         # 0px is welcome when the brand calls for it (set via brand-kit
         # convention or a Studio Brut variant override).
         f'border-radius: var(--sb-cta-radius, 4px); '
-        f'font-family: var(--sb-sans-stack, "Inter", "Space Grotesk", '
-        f'system-ui, -apple-system, sans-serif); '
+        # Pass 4.0i Phase B (fix): font-family reads --hero-font-body first
+        # so practitioner's font_id flows through; --sb-sans-stack fallback.
+        f'font-family: var(--hero-font-body, var(--sb-sans-stack, "Inter", "Space Grotesk", '
+        f'system-ui, -apple-system, sans-serif)); '
         f'box-shadow: var(--sb-cta-glow, '
         f'4px 4px 0 var(--brand-text-primary, #09090B)); '
         f'transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), '
