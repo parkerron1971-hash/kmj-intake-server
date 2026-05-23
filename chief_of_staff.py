@@ -3736,7 +3736,15 @@ async def handle_list_projects(client, biz, action) -> Dict:
 # businesses.settings.content_calendar.planned_posts. Both are JSONB
 # blobs that the corresponding GROW UI panels render.
 
-VALID_GOAL_CATEGORIES = ("contacts", "revenue", "sessions", "engagement", "custom")
+VALID_GOAL_CATEGORIES = (
+    "contacts", "revenue", "sessions", "engagement",
+    # 2026-05-23: expanded for the Goals redesign — solo practitioner
+    # categories that lensFor() groups into Business / Team Building /
+    # Personal in the UI. Auto-track defaults to off for these (no
+    # data source); the practitioner enters current_override manually.
+    "marketing", "growth", "learning", "wellness",
+    "custom",
+)
 VALID_GOAL_PERIODS = ("weekly", "monthly", "quarterly", "yearly")
 VALID_GOAL_METRICS = (
     "total_contacts", "new_contacts",
@@ -9149,10 +9157,25 @@ ACTIONS — BATCH EMAIL:
 ACTIONS — GROW (goals + content):
   [ACTION:{{"type":"create_goal","title":"Reach 50 contacts","category":"contacts","target":50,"period":"quarterly","end":"2026-06-30","auto_track":true}}]
   [ACTION:{{"type":"create_goal","title":"Generate $15,000 in revenue","category":"revenue","target":15000,"period":"quarterly","metric":"revenue_collected"}}]
+  [ACTION:{{"type":"create_goal","title":"Hire 2 contractors","category":"growth","target":2,"period":"quarterly"}}]
+  [ACTION:{{"type":"create_goal","title":"Read 12 books","category":"learning","target":12,"period":"yearly"}}]
   [ACTION:{{"type":"check_goals"}}]
   [ACTION:{{"type":"plan_content","title":"3 ways to build trust","platform":"linkedin","scheduled_date":"2026-04-29","status":"draft"}}]
-    — Categories: contacts | revenue | sessions | engagement | custom. Periods: weekly | monthly | quarterly | yearly.
-    — auto_track=true (default) computes progress from live data; metric is inferred from category but can be set explicitly.
+    — Categories grouped by LENS so the practitioner can keep buckets separate:
+        BUSINESS:      contacts | revenue | sessions | engagement | marketing
+        TEAM BUILDING: growth   (hiring contractors, partnerships, expansion)
+        PERSONAL:      learning | wellness
+        CUSTOM:        custom
+      Pick the most specific category that fits — fall back to custom only when nothing else matches.
+    — Periods: weekly | monthly | quarterly | yearly.
+    — auto_track=true (default) computes progress from live data for contacts/revenue/sessions/engagement. Marketing/growth/learning/wellness/custom have NO live data source — the system stores them with auto_track=false; the practitioner updates current_override manually. You do NOT need to apologize for this; just say "I'll track manual updates" if relevant.
+    — GOAL COACHING: when the practitioner says "help me set a goal", "let's build a goal for X", "I want to set a goal but I'm not sure how", "build with chief", or any phrasing where they're asking you to help DESIGN the goal (not just create one they've fully specified), don't immediately emit create_goal. First ASK:
+        1. What outcome are you after? (the win condition)
+        2. By when? (timeframe → period)
+        3. What would count as winning? (the target — number, dollar amount, etc.)
+        4. Which lens / category does it fit?
+      Then propose the goal back ("Sounds like: 'Hit $25k in client revenue by end of Q3' — category=revenue, target=25000, period=quarterly. Look right?") and ONLY emit create_goal after they confirm. Don't grind through all four questions in one message — make it conversational. One question, wait for the answer, build up.
+    — When the practitioner SAYS something fully specified ("Set a goal to reach 50 contacts by June"), skip the coaching and emit create_goal directly.
     — Platforms for plan_content: instagram | linkedin | twitter | facebook | tiktok | youtube | blog | other.
 
 ACTIONS — NAVIGATION + MEMORY:
@@ -9216,7 +9239,8 @@ When the practitioner says...                       You should emit...
   "Add a service/product" / "I sell..."         →   create_product
   "What products/services do I have?"           →   list_products
   "Change the price of [X]..."                  →   update_product
-  "Set a goal to..." / "Track [X] by [date]"    →   create_goal
+  "Set a goal to..." / "Track [X] by [date]"    →   create_goal (already specified — emit directly)
+  "Help me set a goal" / "Build a goal with me" →   COACH the goal first (ask outcome/when/target/lens), THEN create_goal after confirmation
   "How am I doing on my goals?"                 →   check_goals
   "Plan a post about..." / "Schedule [post]"    →   plan_content
   "Run my weekly briefing"                      →   generate_briefing
