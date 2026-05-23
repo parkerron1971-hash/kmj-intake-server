@@ -3871,12 +3871,30 @@ async def handle_create_goal(client, biz, action) -> Dict:
         return _fail("create_goal", f"save failed: {e}")
 
     label_target = f"${int(target):,}" if category == "revenue" else f"{int(target)}"
+    # Lens label tells the practitioner which bucket the goal landed
+    # in (Personal / Business / Team Building / Custom). Matches the
+    # frontend's lensFor() mapping.
+    if category in ("contacts", "revenue", "sessions", "engagement", "marketing"):
+        lens_label = "Business"
+    elif category == "growth":
+        lens_label = "Team Building"
+    elif category in ("learning", "wellness"):
+        lens_label = "Personal"
+    else:
+        lens_label = "Custom"
     return {
         "type": "create_goal",
-        "result": "created",
-        "label": f"🎯 New goal: {title} — {label_target} by {end}",
+        "result": f"created in {lens_label}",
+        "label": f"🎯 New {lens_label} goal: {title} — {label_target} by {end}",
         "goal_id": new_goal["id"],
         "nav": _nav("grow", "goals"),
+        # Frontend hook — ChiefOfStaff dispatches this as a window
+        # CustomEvent. GoalsPanel listens for it and triggers a
+        # business refetch so the new goal shows up without a reload.
+        "frontend_event": {
+            "name": "solutionist-business-refetch",
+            "detail": {"reason": "goal_created", "goal_id": new_goal["id"], "lens": lens_label.lower().replace(" ", "_")},
+        },
     }
 
 
