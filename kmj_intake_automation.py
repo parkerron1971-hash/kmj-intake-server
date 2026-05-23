@@ -33,6 +33,7 @@ from notification_engine import router as notification_router
 from whisper_proxy import router as whisper_router
 from public_site import router as public_site_router
 from email_sender import router as email_router
+from meta_oauth import router as meta_router
 from stripe_proxy import router as stripe_router
 from sms_service import router as sms_router
 from foundation_router import router as foundation_router
@@ -67,6 +68,7 @@ app.include_router(chief_router)
 app.include_router(notification_router)
 app.include_router(whisper_router)
 app.include_router(email_router)
+app.include_router(meta_router)
 app.include_router(stripe_router)
 app.include_router(sms_router)
 app.include_router(brand_engine_router)

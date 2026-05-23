@@ -4263,6 +4263,174 @@ async def handle_plan_content(client, biz, action) -> Dict:
     }
 
 
+async def handle_publish_post(client, biz, action) -> Dict:
+    """Publish an existing planned post (FB + optional IG) via Meta.
+
+    Resolution priority: post_id (preferred), then post_title fuzzy
+    match (case-insensitive exact, then substring). Page is the
+    connected Meta page — picks the only one if there's exactly one,
+    or matches by page_name when given, else fails with a clear
+    "which page?" prompt.
+
+    Action shape:
+      {
+        "type":"publish_post",
+        "post_id":"post-...",         # OR
+        "post_title":"Why we raised pricing",  # fuzzy match
+        "page_name":"KMJ Creative Solutions",  # optional disambiguator
+        "to_instagram": false          # optional, defaults false
+      }
+
+    Returns the published URL(s). Flips the post from planned →
+    posted in settings.content_calendar.
+    """
+    from meta_oauth import _publish_facebook, _publish_instagram, _fb_post_url
+
+    biz_id = biz["id"]
+    _, settings = await _fetch_business_settings(client, biz_id)
+    cal = settings.get("content_calendar") if isinstance(settings.get("content_calendar"), dict) else {}
+    planned = list(cal.get("planned_posts") or [])
+    posted_list = list(cal.get("posted") or [])
+
+    if not planned:
+        return _fail("publish_post", "no planned posts to publish")
+
+    # Resolve post — id wins, then fuzzy title match.
+    post_id = (action.get("post_id") or "").strip()
+    post_title_raw = (action.get("post_title") or "").strip().lower()
+    target_idx = -1
+    if post_id:
+        for i, p in enumerate(planned):
+            if p.get("id") == post_id:
+                target_idx = i; break
+    if target_idx < 0 and post_title_raw:
+        for i, p in enumerate(planned):
+            if (p.get("title") or "").strip().lower() == post_title_raw:
+                target_idx = i; break
+        if target_idx < 0:
+            for i, p in enumerate(planned):
+                if post_title_raw in (p.get("title") or "").strip().lower():
+                    target_idx = i; break
+    if target_idx < 0:
+        return _fail("publish_post", f"could not find planned post matching {post_id or post_title_raw or '(none)'}")
+    post = planned[target_idx]
+
+    message = (post.get("body") or post.get("title") or "").strip()
+    if not message:
+        return _fail("publish_post", "post has no body or title to publish")
+
+    # Resolve target Page — connected accounts table.
+    rows = await _sb(client, "GET",
+        f"/social_accounts?business_id=eq.{biz_id}&provider=eq.meta&status=eq.connected"
+        f"&select=page_id,page_name,page_token,ig_user_id&order=connected_at.desc") or []
+    if not rows:
+        return _fail("publish_post", "no Facebook page connected — connect one in Build → Integrations")
+
+    requested_page_name = (action.get("page_name") or "").strip().lower()
+    page = None
+    if requested_page_name:
+        for r in rows:
+            if (r.get("page_name") or "").strip().lower() == requested_page_name:
+                page = r; break
+        if not page:
+            for r in rows:
+                if requested_page_name in (r.get("page_name") or "").strip().lower():
+                    page = r; break
+        if not page:
+            return _fail("publish_post", f"no connected page matches '{action.get('page_name')}'")
+    elif len(rows) == 1:
+        page = rows[0]
+    else:
+        names = ", ".join((r.get("page_name") or r.get("page_id")) for r in rows)
+        return _fail("publish_post", f"multiple pages connected — specify page_name (options: {names})")
+
+    page_token = page.get("page_token")
+    if not page_token:
+        return _fail("publish_post", "page token missing — reconnect needed")
+
+    to_instagram = bool(action.get("to_instagram", False))
+    ig_user_id = page.get("ig_user_id")
+    image_url = post.get("image_url") or None
+
+    if to_instagram and not ig_user_id:
+        return _fail("publish_post", "Instagram not linked to that Page — link IG Business account first")
+    if to_instagram and not image_url:
+        return _fail("publish_post", "Instagram publishing requires an image — add image_url to the post first")
+
+    # ── Facebook publish ──
+    try:
+        fb_result = await _publish_facebook(client, page["page_id"], page_token, message, image_url)
+    except HTTPException as e:
+        # Mark connection expired on auth errors.
+        if "190" in str(e.detail) or "OAuth" in str(e.detail):
+            await _sb(client, "PATCH",
+                f"/social_accounts?business_id=eq.{biz_id}&page_id=eq.{page['page_id']}",
+                {"status": "expired", "last_error": str(e.detail)[:300]})
+        return _fail("publish_post", f"FB publish failed: {e.detail}")
+    fb_url = _fb_post_url(page["page_id"], fb_result)
+
+    # ── Instagram publish (optional) ──
+    ig_url = None
+    if to_instagram:
+        try:
+            await _publish_instagram(client, ig_user_id, page_token, message, image_url)
+        except HTTPException as e:
+            # Partial success — FB went, IG didn't. Surface clearly.
+            return {
+                "type": "publish_post",
+                "result": f"published to {page.get('page_name')} (IG failed)",
+                "label": f"📱 Posted to Facebook — IG failed: {str(e.detail)[:120]}",
+                "ok": False,
+                "facebook_url": fb_url,
+                "nav": _nav("grow", "content"),
+                "frontend_event": {
+                    "name": "solutionist-business-refetch",
+                    "detail": {"reason": "content_published_partial", "post_id": post.get("id")},
+                },
+            }
+
+    # ── Move planned → posted, attach URL ──
+    posted_post = {
+        **post,
+        "status": "posted",
+        "posted_date": datetime.now(timezone.utc).date().isoformat(),
+    }
+    if fb_url:
+        posted_post["published_url"] = fb_url
+    posted_post["published_to_page_id"] = page["page_id"]
+    planned.pop(target_idx)
+    posted_list.append(posted_post)
+    next_settings = {
+        **settings,
+        "content_calendar": {
+            **cal,
+            "planned_posts": planned,
+            "posted": posted_list,
+        },
+    }
+    try:
+        await _sb(client, "PATCH", f"/businesses?id=eq.{biz_id}", {"settings": next_settings})
+    except Exception as e:
+        logger.warning(f"publish_post: post shipped but local update failed: {e}")
+
+    target_label = f"{page.get('page_name')}"
+    if to_instagram:
+        target_label += " + Instagram"
+    return {
+        "type": "publish_post",
+        "result": f"published to {target_label}",
+        "label": f"📱 Published to {target_label}: {post.get('title')}",
+        "ok": True,
+        "facebook_url": fb_url,
+        "instagram_url": ig_url,
+        "nav": _nav("grow", "content"),
+        "frontend_event": {
+            "name": "solutionist-business-refetch",
+            "detail": {"reason": "content_published", "post_id": post.get("id"), "url": fb_url},
+        },
+    }
+
+
 async def handle_capture_idea(client, biz, action) -> Dict:
     """Drop a half-formed content idea into the Idea Inbox. Lighter
     than plan_content — no scheduled date or platform required, just
@@ -7326,6 +7494,7 @@ ACTION_HANDLERS = {
     "check_goals":            handle_check_goals,
     "plan_content":           handle_plan_content,
     "capture_idea":           handle_capture_idea,
+    "publish_post":           handle_publish_post,
     "run_agent":             handle_run_agent,
     "create_module_entry":   handle_create_module_entry,
     "update_module_entry":   handle_update_module_entry,
@@ -9455,7 +9624,10 @@ ACTIONS — GROW (goals + content):
   [ACTION:{{"type":"plan_content","title":"3 ways to build trust","platform":"linkedin","scheduled_date":"2026-04-29","status":"draft"}}]
   [ACTION:{{"type":"plan_content","title":"Why we raised our pricing","platform":"linkedin","scheduled_date":"2026-06-12","body":"Last quarter we doubled the time we spent per client and our results jumped 40%. So we raised our prices. Here's what changed and why we're calling it a win for both sides...","pillar_name":"Client Wins","reminders":[{{"date":"2026-06-11","message":"Final review before posting"}}]}}]
   [ACTION:{{"type":"capture_idea","title":"5 lessons from the launch","notes":"focus on what we'd do differently","pillar_name":"Building in Public"}}]
+  [ACTION:{{"type":"publish_post","post_title":"Why we raised pricing","to_instagram":false}}]
+  [ACTION:{{"type":"publish_post","post_id":"post-1234567890","page_name":"KMJ Creative Solutions","to_instagram":true}}]
     — CONTENT WRITING + SCHEDULING: when the practitioner says "draft a post about X", "write me a LinkedIn post about Y", or "schedule a post for Friday about Z" → use plan_content and INCLUDE the drafted `body` text directly in the action. Don't just chat the draft — emit it as the post body so the post lands ready to ship. The frontend opens the new post in edit mode automatically.
+    — PUBLISHING (FB / IG): when the practitioner says "publish my Friday post to Facebook", "post that to FB now", "send the launch post to Instagram" → use publish_post. Resolves by post_id (preferred) or post_title (fuzzy match). For multiple connected pages, you MUST include page_name. For Instagram, set to_instagram=true (the post must have an image_url already saved). If you don't know which post they mean and there's ambiguity, ASK first before publishing — publishing is irreversible.
     — IDEAS VS POSTS: when the practitioner says "I have an idea about X", "capture this thought", "remind me to write about Y someday" → use capture_idea (lighter, no date or platform required). When they say "schedule a post" / "draft a post" / "plan one for Friday" → use plan_content (committed to the calendar).
     — PILLARS: posts can be tagged to a pillar via `pillar_id` (when you have it from CONTEXT) or `pillar_name` (fuzzy match, case-insensitive). When the practitioner mentions a pillar by name in their request, include it. When they don't but you can tell which pillar fits, infer it — don't ask.
     — REMINDERS: plan_content accepts an optional reminders array — same shape as create_goal's reminders. Use this when the practitioner explicitly asks for a reminder ("set a reminder the day before").
@@ -9548,6 +9720,7 @@ When the practitioner says...                       You should emit...
   "Plan a post about..." / "Schedule [post]"    →   plan_content (include drafted body in the same action if requested)
   "Draft me a [LinkedIn] post about..."         →   plan_content with body filled in (don't just chat the draft — emit it as the post)
   "Capture this idea:" / "Remember this for later" →   capture_idea (Idea Inbox)
+  "Publish my [post] to Facebook" / "Post that to FB now" →   publish_post (resolves planned post by id or title)
   "Run my weekly briefing"                      →   generate_briefing
   "Generate new insights" / "What's new?"       →   generate_insights
 If the request maps to an action, ALWAYS emit the action tag. NEVER just describe what you would do.
