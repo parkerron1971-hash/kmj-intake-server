@@ -6995,6 +6995,12 @@ async def handle_send_report(client, biz, action) -> Dict:
 
     return {
         "type": "send_report",
+        # ActionsTaken in the frontend calls a.result.toLowerCase() and
+        # renders a.label — both fields are required to avoid a render
+        # crash. Match _fail's shape conventions ("Failed: …" vs anything
+        # else).
+        "result": f"Sent to {to_email} ({fmt.upper()})",
+        "label": f"💰 Revenue report sent to {to_email}",
         "ok": True,
         "to_email": to_email,
         "period": period,
