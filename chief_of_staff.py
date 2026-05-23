@@ -4147,7 +4147,11 @@ VALID_PLATFORMS = ("instagram", "linkedin", "twitter", "facebook", "tiktok", "yo
 
 
 async def handle_plan_content(client, biz, action) -> Dict:
-    """Add a planned post to settings.content_calendar.planned_posts."""
+    """Add a planned post to settings.content_calendar.planned_posts.
+    Now supports pillar tagging (pillar_id or pillar_name fuzzy
+    match) and optional reminders. Returns a frontend_event so the
+    Content page refetches and the new post shows up immediately.
+    """
     biz_id = biz["id"]
     title = (action.get("title") or "").strip()
     if not title:
@@ -4165,9 +4169,54 @@ async def handle_plan_content(client, biz, action) -> Dict:
     if status_v not in ("planned", "draft", "posted", "cancelled"):
         status_v = "planned"
 
-    body = action.get("body") or None
+    body_raw = action.get("body")
+    body = body_raw.strip() if isinstance(body_raw, str) else None
 
-    new_post = {
+    _, settings = await _fetch_business_settings(client, biz_id)
+    cal = settings.get("content_calendar") if isinstance(settings.get("content_calendar"), dict) else {}
+    pillars = list(cal.get("pillars") or [])
+
+    # Resolve pillar — id wins; fall back to fuzzy title match
+    # (case-insensitive exact, then substring). None if neither.
+    pillar_id = (action.get("pillar_id") or "").strip() or None
+    pillar_name_raw = (action.get("pillar_name") or "").strip().lower()
+    if not pillar_id and pillar_name_raw:
+        for p in pillars:
+            if (p.get("name") or "").strip().lower() == pillar_name_raw:
+                pillar_id = p.get("id"); break
+        if not pillar_id:
+            for p in pillars:
+                if pillar_name_raw in (p.get("name") or "").strip().lower():
+                    pillar_id = p.get("id"); break
+    resolved_pillar_name = ""
+    if pillar_id:
+        for p in pillars:
+            if p.get("id") == pillar_id:
+                resolved_pillar_name = p.get("name") or ""
+                break
+
+    # Optional reminders — same shape as the goal-reminder parser.
+    reminders_raw = action.get("reminders")
+    reminders: List[Dict[str, Any]] = []
+    if isinstance(reminders_raw, list):
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        for i, r in enumerate(reminders_raw):
+            if not isinstance(r, dict):
+                continue
+            date_val = (r.get("date") or "").strip()
+            if not date_val or len(date_val) < 8:
+                continue
+            msg = r.get("message")
+            entry: Dict[str, Any] = {
+                "id": f"rem-{now_ms}-{i}",
+                "date": date_val[:10],
+                "fired": False,
+            }
+            if isinstance(msg, str) and msg.strip():
+                entry["message"] = msg.strip()
+            reminders.append(entry)
+
+    new_post: Dict[str, Any] = {
         "id": f"post-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
         "title": title,
         "body": body,
@@ -4176,9 +4225,11 @@ async def handle_plan_content(client, biz, action) -> Dict:
         "status": status_v,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if pillar_id:
+        new_post["pillar_id"] = pillar_id
+    if reminders:
+        new_post["reminders"] = reminders
 
-    _, settings = await _fetch_business_settings(client, biz_id)
-    cal = settings.get("content_calendar") if isinstance(settings.get("content_calendar"), dict) else {}
     planned = list(cal.get("planned_posts") or [])
     posted = list(cal.get("posted") or [])
     planned.append(new_post)
@@ -4195,12 +4246,102 @@ async def handle_plan_content(client, biz, action) -> Dict:
     except Exception as e:
         return _fail("plan_content", f"save failed: {e}")
 
+    pillar_label = f" · {resolved_pillar_name}" if resolved_pillar_name else ""
+    body_label = " (drafted)" if body and len(body) > 30 else ""
     return {
         "type": "plan_content",
-        "result": "scheduled",
-        "label": f"📱 Planned {platform} post: {title} — {scheduled_date}",
+        "result": f"scheduled for {scheduled_date}{pillar_label}",
+        "label": f"📱 Planned {platform} post: {title}{body_label} — {scheduled_date}{pillar_label}",
         "post_id": new_post["id"],
         "nav": _nav("grow", "content"),
+        # Refetch business settings so the new post + any reminders
+        # appear on the Content page without a reload.
+        "frontend_event": {
+            "name": "solutionist-business-refetch",
+            "detail": {"reason": "content_planned", "post_id": new_post["id"]},
+        },
+    }
+
+
+async def handle_capture_idea(client, biz, action) -> Dict:
+    """Drop a half-formed content idea into the Idea Inbox. Lighter
+    than plan_content — no scheduled date or platform required, just
+    title + optional notes + optional pillar. The practitioner can
+    promote it to a scheduled post later from the UI.
+
+    Action shape:
+      {
+        "type":"capture_idea",
+        "title":"5 lessons from the launch",     # required
+        "notes":"focus on what we'd do differently", # optional
+        "pillar_id":"pillar-...",                # optional
+        "pillar_name":"Client Wins"              # optional fuzzy match
+      }
+    """
+    biz_id = biz["id"]
+    title = (action.get("title") or "").strip()
+    if not title:
+        return _fail("capture_idea", "title is required")
+
+    notes_raw = action.get("notes")
+    notes = notes_raw.strip() if isinstance(notes_raw, str) else ""
+
+    _, settings = await _fetch_business_settings(client, biz_id)
+    cal = settings.get("content_calendar") if isinstance(settings.get("content_calendar"), dict) else {}
+    pillars = list(cal.get("pillars") or [])
+
+    pillar_id = (action.get("pillar_id") or "").strip() or None
+    pillar_name_raw = (action.get("pillar_name") or "").strip().lower()
+    if not pillar_id and pillar_name_raw:
+        for p in pillars:
+            if (p.get("name") or "").strip().lower() == pillar_name_raw:
+                pillar_id = p.get("id"); break
+        if not pillar_id:
+            for p in pillars:
+                if pillar_name_raw in (p.get("name") or "").strip().lower():
+                    pillar_id = p.get("id"); break
+    resolved_pillar_name = ""
+    if pillar_id:
+        for p in pillars:
+            if p.get("id") == pillar_id:
+                resolved_pillar_name = p.get("name") or ""
+                break
+
+    new_idea: Dict[str, Any] = {
+        "id": f"idea-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+        "title": title,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if notes:
+        new_idea["notes"] = notes
+    if pillar_id:
+        new_idea["pillar_id"] = pillar_id
+
+    idea_inbox = list(cal.get("idea_inbox") or [])
+    idea_inbox.append(new_idea)
+    next_settings = {
+        **settings,
+        "content_calendar": {
+            **cal,
+            "idea_inbox": idea_inbox,
+        },
+    }
+    try:
+        await _sb(client, "PATCH", f"/businesses?id=eq.{biz_id}", {"settings": next_settings})
+    except Exception as e:
+        return _fail("capture_idea", f"save failed: {e}")
+
+    pillar_label = f" · {resolved_pillar_name}" if resolved_pillar_name else ""
+    return {
+        "type": "capture_idea",
+        "result": f"added to Idea Inbox{pillar_label}",
+        "label": f"💡 Idea captured: {title}{pillar_label}",
+        "idea_id": new_idea["id"],
+        "nav": _nav("grow", "content"),
+        "frontend_event": {
+            "name": "solutionist-business-refetch",
+            "detail": {"reason": "content_idea_captured", "idea_id": new_idea["id"]},
+        },
     }
 
 
@@ -7184,6 +7325,7 @@ ACTION_HANDLERS = {
     "add_reminder":           handle_add_reminder,
     "check_goals":            handle_check_goals,
     "plan_content":           handle_plan_content,
+    "capture_idea":           handle_capture_idea,
     "run_agent":             handle_run_agent,
     "create_module_entry":   handle_create_module_entry,
     "update_module_entry":   handle_update_module_entry,
@@ -9311,6 +9453,12 @@ ACTIONS — GROW (goals + content):
   [ACTION:{{"type":"add_reminder","goal_title":"Read 12 books","date":"2026-06-15","message":"Pick up the next book"}}]
   [ACTION:{{"type":"add_reminder","goal_id":"goal-1234567","date":"2026-07-01"}}]
   [ACTION:{{"type":"plan_content","title":"3 ways to build trust","platform":"linkedin","scheduled_date":"2026-04-29","status":"draft"}}]
+  [ACTION:{{"type":"plan_content","title":"Why we raised our pricing","platform":"linkedin","scheduled_date":"2026-06-12","body":"Last quarter we doubled the time we spent per client and our results jumped 40%. So we raised our prices. Here's what changed and why we're calling it a win for both sides...","pillar_name":"Client Wins","reminders":[{{"date":"2026-06-11","message":"Final review before posting"}}]}}]
+  [ACTION:{{"type":"capture_idea","title":"5 lessons from the launch","notes":"focus on what we'd do differently","pillar_name":"Building in Public"}}]
+    — CONTENT WRITING + SCHEDULING: when the practitioner says "draft a post about X", "write me a LinkedIn post about Y", or "schedule a post for Friday about Z" → use plan_content and INCLUDE the drafted `body` text directly in the action. Don't just chat the draft — emit it as the post body so the post lands ready to ship. The frontend opens the new post in edit mode automatically.
+    — IDEAS VS POSTS: when the practitioner says "I have an idea about X", "capture this thought", "remind me to write about Y someday" → use capture_idea (lighter, no date or platform required). When they say "schedule a post" / "draft a post" / "plan one for Friday" → use plan_content (committed to the calendar).
+    — PILLARS: posts can be tagged to a pillar via `pillar_id` (when you have it from CONTEXT) or `pillar_name` (fuzzy match, case-insensitive). When the practitioner mentions a pillar by name in their request, include it. When they don't but you can tell which pillar fits, infer it — don't ask.
+    — REMINDERS: plan_content accepts an optional reminders array — same shape as create_goal's reminders. Use this when the practitioner explicitly asks for a reminder ("set a reminder the day before").
     — Categories grouped by LENS so the practitioner can keep buckets separate:
         BUSINESS:      contacts | revenue | sessions | engagement | marketing
         TEAM BUILDING: growth   (hiring contractors, partnerships, expansion)
@@ -9397,7 +9545,9 @@ When the practitioner says...                       You should emit...
   "Remind me about [goal] on [date]"             →   add_reminder (fuzzy-match goal_title)
   "Set a reminder for [date] on [goal]"          →   add_reminder
   "How am I doing on my goals?"                 →   check_goals
-  "Plan a post about..." / "Schedule [post]"    →   plan_content
+  "Plan a post about..." / "Schedule [post]"    →   plan_content (include drafted body in the same action if requested)
+  "Draft me a [LinkedIn] post about..."         →   plan_content with body filled in (don't just chat the draft — emit it as the post)
+  "Capture this idea:" / "Remember this for later" →   capture_idea (Idea Inbox)
   "Run my weekly briefing"                      →   generate_briefing
   "Generate new insights" / "What's new?"       →   generate_insights
 If the request maps to an action, ALWAYS emit the action tag. NEVER just describe what you would do.
