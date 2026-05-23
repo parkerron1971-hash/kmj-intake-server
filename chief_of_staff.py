@@ -3837,6 +3837,28 @@ async def handle_create_goal(client, biz, action) -> Dict:
     description_raw = action.get("description")
     description = description_raw.strip() if isinstance(description_raw, str) else ""
 
+    # Optional reminders attached to the new goal. Each is
+    # {date: YYYY-MM-DD, message?: str}; we coerce loose inputs.
+    reminders_raw = action.get("reminders")
+    reminders: List[Dict[str, Any]] = []
+    if isinstance(reminders_raw, list):
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        for i, r in enumerate(reminders_raw):
+            if not isinstance(r, dict):
+                continue
+            date_val = (r.get("date") or "").strip()
+            if not date_val or len(date_val) < 8:
+                continue
+            msg = r.get("message")
+            entry: Dict[str, Any] = {
+                "id": f"rem-{now_ms}-{i}",
+                "date": date_val[:10],
+                "fired": False,
+            }
+            if isinstance(msg, str) and msg.strip():
+                entry["message"] = msg.strip()
+            reminders.append(entry)
+
     new_goal: Dict[str, Any] = {
         "id": f"goal-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
         "title": title,
@@ -3851,6 +3873,8 @@ async def handle_create_goal(client, biz, action) -> Dict:
     }
     if description:
         new_goal["description"] = description
+    if reminders:
+        new_goal["reminders"] = reminders
 
     _, settings = await _fetch_business_settings(client, biz_id)
     goals = settings.get("goals") if isinstance(settings.get("goals"), dict) else {}
@@ -3894,6 +3918,102 @@ async def handle_create_goal(client, biz, action) -> Dict:
         "frontend_event": {
             "name": "solutionist-business-refetch",
             "detail": {"reason": "goal_created", "goal_id": new_goal["id"], "lens": lens_label.lower().replace(" ", "_")},
+        },
+    }
+
+
+async def handle_add_reminder(client, biz, action) -> Dict:
+    """Attach a reminder to an existing goal. The practitioner says
+    "remind me about my book goal next Friday" → Chief fuzzy-matches
+    the goal by title (or accepts goal_id), then appends a reminder
+    entry to settings.goals.active_goals[i].reminders.
+
+    Action shape:
+      {
+        "type":"add_reminder",
+        "goal_id":"goal-...",         # OR
+        "goal_title":"Read 12 books", # fuzzy match
+        "date":"2026-06-15",          # YYYY-MM-DD
+        "message":"Check book #6 progress"  # optional
+      }
+    """
+    biz_id = biz["id"]
+    date_val = (action.get("date") or "").strip()
+    if not date_val or len(date_val) < 8:
+        return _fail("add_reminder", "date is required (YYYY-MM-DD)")
+    date_val = date_val[:10]
+
+    msg_raw = action.get("message")
+    message = msg_raw.strip() if isinstance(msg_raw, str) else ""
+
+    # Resolve goal — id wins; fall back to title fuzzy-match (lowercase
+    # substring, then exact). Returns the index in active_goals.
+    _, settings = await _fetch_business_settings(client, biz_id)
+    goals = settings.get("goals") if isinstance(settings.get("goals"), dict) else {}
+    active = list(goals.get("active_goals") or [])
+    if not active:
+        return _fail("add_reminder", "no active goals to attach a reminder to")
+
+    goal_id = (action.get("goal_id") or "").strip()
+    goal_title = (action.get("goal_title") or "").strip().lower()
+    target_idx = -1
+    if goal_id:
+        for i, g in enumerate(active):
+            if g.get("id") == goal_id:
+                target_idx = i; break
+    if target_idx < 0 and goal_title:
+        # Exact (case-insensitive) first, then substring
+        for i, g in enumerate(active):
+            if (g.get("title") or "").strip().lower() == goal_title:
+                target_idx = i; break
+        if target_idx < 0:
+            for i, g in enumerate(active):
+                if goal_title in (g.get("title") or "").strip().lower():
+                    target_idx = i; break
+    if target_idx < 0:
+        return _fail("add_reminder", f"could not find goal matching {goal_id or goal_title or '(none)'}")
+
+    target_goal = active[target_idx]
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    new_reminder: Dict[str, Any] = {
+        "id": f"rem-{now_ms}",
+        "date": date_val,
+        "fired": False,
+    }
+    if message:
+        new_reminder["message"] = message
+
+    existing_reminders = list(target_goal.get("reminders") or [])
+    existing_reminders.append(new_reminder)
+    active[target_idx] = {**target_goal, "reminders": existing_reminders}
+
+    next_settings = {
+        **settings,
+        "goals": {**goals, "active_goals": active},
+    }
+    try:
+        await _sb(client, "PATCH", f"/businesses?id=eq.{biz_id}", {"settings": next_settings})
+    except Exception as e:
+        return _fail("add_reminder", f"save failed: {e}")
+
+    pretty_date = ""
+    try:
+        from datetime import date as _date_cls
+        d = _date_cls.fromisoformat(date_val)
+        pretty_date = d.strftime("%b %-d") if hasattr(d, "strftime") else date_val
+    except Exception:
+        pretty_date = date_val
+
+    return {
+        "type": "add_reminder",
+        "result": f"reminder added for {pretty_date}",
+        "label": f"🔔 Reminder set for {pretty_date} on '{target_goal.get('title')}'",
+        "goal_id": target_goal.get("id"),
+        "reminder_id": new_reminder["id"],
+        "nav": _nav("grow", "goals"),
+        "frontend_event": {
+            "name": "solutionist-business-refetch",
+            "detail": {"reason": "reminder_added", "goal_id": target_goal.get("id")},
         },
     }
 
@@ -7061,6 +7181,7 @@ ACTION_HANDLERS = {
     "open_calendar":          handle_open_calendar,
     "show_revenue":           handle_show_revenue,
     "create_goal":            handle_create_goal,
+    "add_reminder":           handle_add_reminder,
     "check_goals":            handle_check_goals,
     "plan_content":           handle_plan_content,
     "run_agent":             handle_run_agent,
@@ -9185,8 +9306,10 @@ ACTIONS — GROW (goals + content):
   [ACTION:{{"type":"create_goal","title":"Reach 50 contacts","category":"contacts","target":50,"period":"quarterly","end":"2026-06-30","auto_track":true,"description":"Building out the outreach pipeline before Q3 launch."}}]
   [ACTION:{{"type":"create_goal","title":"Generate $15,000 in revenue","category":"revenue","target":15000,"period":"quarterly","metric":"revenue_collected","description":"Float that covers payroll + Q4 operating costs."}}]
   [ACTION:{{"type":"create_goal","title":"Hire 2 contractors","category":"growth","target":2,"period":"quarterly","description":"Free up admin time so I can take on more strategy clients."}}]
-  [ACTION:{{"type":"create_goal","title":"Read 12 books","category":"learning","target":12,"period":"yearly","description":"One a month. Mix of leadership + craft."}}]
+  [ACTION:{{"type":"create_goal","title":"Read 12 books","category":"learning","target":12,"period":"yearly","description":"One a month. Mix of leadership + craft.","reminders":[{{"date":"2026-06-01","message":"Mid-year check: are we on book #6?"}}]}}]
   [ACTION:{{"type":"check_goals"}}]
+  [ACTION:{{"type":"add_reminder","goal_title":"Read 12 books","date":"2026-06-15","message":"Pick up the next book"}}]
+  [ACTION:{{"type":"add_reminder","goal_id":"goal-1234567","date":"2026-07-01"}}]
   [ACTION:{{"type":"plan_content","title":"3 ways to build trust","platform":"linkedin","scheduled_date":"2026-04-29","status":"draft"}}]
     — Categories grouped by LENS so the practitioner can keep buckets separate:
         BUSINESS:      contacts | revenue | sessions | engagement | marketing
@@ -9205,6 +9328,7 @@ ACTIONS — GROW (goals + content):
       Then propose the goal back ("Sounds like: 'Hit $25k in client revenue by end of Q3' — category=revenue, target=25000, period=quarterly. The why: 'Float that covers Q4 ops.' Look right?") and ONLY emit create_goal after they confirm. Don't grind through all five questions in one message — make it conversational. One question, wait for the answer, build up. The description question is optional; if they wave you off, just skip it.
     — When the practitioner SAYS something fully specified ("Set a goal to reach 50 contacts by June, because we're prepping for the Q3 launch"), skip the coaching and emit create_goal directly — capture any "because" or "to..." rationale they include as the `description`.
     — The `description` field is OPTIONAL on the action but VALUABLE on Personal / Team Building / Custom lens goals where the why matters more than the metric. Include it whenever the practitioner gives you one, even casually.
+    — REMINDERS: when the practitioner asks for a reminder ("remind me about this goal next Friday", "set a reminder for June 15th", "ping me weekly to check this"), use add_reminder for existing goals (resolve by goal_id when known, else goal_title — fuzzy match works). For brand-new goals, include reminders directly in the create_goal action so they land in one shot. When you create a goal, OFFER a reminder if the practitioner hasn't mentioned one and the goal stretches >30 days — phrase it as a question, don't auto-add. Format: dates are YYYY-MM-DD; message is optional but recommended for clarity.
     — Platforms for plan_content: instagram | linkedin | twitter | facebook | tiktok | youtube | blog | other.
 
 ACTIONS — NAVIGATION + MEMORY:
@@ -9270,6 +9394,8 @@ When the practitioner says...                       You should emit...
   "Change the price of [X]..."                  →   update_product
   "Set a goal to..." / "Track [X] by [date]"    →   create_goal (already specified — emit directly)
   "Help me set a goal" / "Build a goal with me" →   COACH the goal first (ask outcome/when/target/lens), THEN create_goal after confirmation
+  "Remind me about [goal] on [date]"             →   add_reminder (fuzzy-match goal_title)
+  "Set a reminder for [date] on [goal]"          →   add_reminder
   "How am I doing on my goals?"                 →   check_goals
   "Plan a post about..." / "Schedule [post]"    →   plan_content
   "Run my weekly briefing"                      →   generate_briefing
