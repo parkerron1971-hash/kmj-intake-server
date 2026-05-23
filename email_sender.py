@@ -52,6 +52,15 @@ if not logger.handlers:
 router = APIRouter(tags=["email"])
 
 
+class EmailAttachment(BaseModel):
+    """Resend attachment — either inline content (base64-encoded) OR a
+    `path` URL Resend will fetch. Most callers should use `content`."""
+    filename: str
+    content: Optional[str] = None       # base64-encoded file bytes
+    path: Optional[str] = None          # alternative — a URL Resend fetches
+    content_type: Optional[str] = None  # e.g. 'text/csv'
+
+
 class SendEmailRequest(BaseModel):
     to_email: str
     to_name: Optional[str] = None
@@ -61,6 +70,9 @@ class SendEmailRequest(BaseModel):
     body: str  # HTML or plain text
     reply_to: Optional[str] = None
     business_id: str
+    # Optional file attachments — passed through to Resend's `attachments`
+    # field. Resend accepts a list of {filename, content (base64), ...}.
+    attachments: Optional[List[EmailAttachment]] = None
 
 
 class SendEmailResponse(BaseModel):
@@ -94,8 +106,13 @@ async def send_via_resend(
     subject: str,
     body: str,
     reply_to: Optional[str],
+    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Low-level Resend client. Raises on API error."""
+    """Low-level Resend client. Raises on API error.
+
+    `attachments` is a list of {filename, content (base64) | path (url),
+    content_type?} dicts. Passed through to Resend verbatim.
+    """
     key = os.environ.get("RESEND_API_KEY")
     if not key:
         raise RuntimeError("RESEND_API_KEY is not configured")
@@ -111,6 +128,18 @@ async def send_via_resend(
         payload["text"] = body
     if reply_to:
         payload["reply_to"] = reply_to
+    if attachments:
+        cleaned = []
+        for a in attachments:
+            if not isinstance(a, dict):
+                continue
+            if not a.get("filename"):
+                continue
+            if not (a.get("content") or a.get("path")):
+                continue
+            cleaned.append(a)
+        if cleaned:
+            payload["attachments"] = cleaned
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         resp = await client.post(
@@ -143,6 +172,21 @@ async def send_email(req: SendEmailRequest):
     from_name = req.from_name or DEFAULT_FROM_NAME
 
     try:
+        # Convert attachment models to plain dicts; drop malformed
+        # entries so a single bad attachment doesn't take the send down.
+        attachments_list: Optional[List[Dict[str, Any]]] = None
+        if req.attachments:
+            attachments_list = [
+                {
+                    "filename": a.filename,
+                    **({"content": a.content} if a.content else {}),
+                    **({"path": a.path} if a.path else {}),
+                    **({"content_type": a.content_type} if a.content_type else {}),
+                }
+                for a in req.attachments
+                if a.filename and (a.content or a.path)
+            ]
+
         data = await send_via_resend(
             to_email=req.to_email,
             to_name=req.to_name,
@@ -151,6 +195,7 @@ async def send_email(req: SendEmailRequest):
             subject=req.subject,
             body=req.body,
             reply_to=req.reply_to or from_email,
+            attachments=attachments_list,
         )
     except RuntimeError as e:
         raise HTTPException(502, str(e))

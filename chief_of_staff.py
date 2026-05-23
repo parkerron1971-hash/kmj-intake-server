@@ -173,6 +173,8 @@ VALID_CONTACT_STATUSES = {"active", "lead", "vip", "inactive", "churned"}
 VALID_ACTION_TYPES = {
     "email", "sms", "follow_up", "proposal", "invoice",
     "check_in", "onboarding", "alert", "other",
+    # Report sender — see handle_send_report.
+    "report",
 }
 
 logger = logging.getLogger("chief_of_staff")
@@ -2046,14 +2048,16 @@ async def handle_open_calendar(client, biz, action) -> Dict:
 
 
 async def handle_show_revenue(client, biz, action) -> Dict:
-    nav = _nav("operate", "invoices")
-    if isinstance(nav, dict):
-        nav = {**nav, "view": "revenue"}
+    # Canonical home for Revenue analytics — GROW → Revenue. Mounts
+    # RevenueAnalytics: Stack hero + Summary + Allocator (planned-vs-
+    # actual) + Expenses + Send-to-Accountant + Export PDF/CSV.
+    # The legacy OPERATE → Invoices Revenue toggle still works as a
+    # tactical embed, but rich surface lives under GROW.
     return {
         "type": "show_revenue",
         "result": "navigating",
-        "label": "💰 Opening Revenue Dashboard",
-        "nav": nav,
+        "label": "💰 Opening Revenue Analytics",
+        "nav": _nav("grow", "revenue"),
     }
 
 
@@ -6789,6 +6793,216 @@ async def handle_update_business_profile_field(client, biz, action) -> Dict:
     }
 
 
+# ─── send_report ───────────────────────────────────────────────────────
+# Lets the Chief actually email reports to a recipient (typically the
+# user's accountant) without bouncing through the UI. The user can say
+# "send my revenue report to my accountant" and this handler:
+#   1. Resolves the recipient (action.to_email, else
+#      businesses.settings.financial.accountant_email).
+#   2. Pulls invoices for the requested period (default: current month).
+#   3. Builds an HTML summary email body.
+#   4. Optionally generates a real CSV file and attaches it.
+#   5. Calls send_via_resend directly to dispatch the email.
+#
+# Action shape:
+#   [ACTION:{
+#     "type":"send_report",
+#     "report":"revenue",                # 'revenue' (only supported for now)
+#     "to_email":"acc@x.com",            # optional; falls back to settings.financial.accountant_email
+#     "period":"month",                  # 'day' | 'week' | 'month' | 'quarter' | 'year' (default 'month')
+#     "format":"pdf"                     # 'pdf' | 'csv' | 'both' (default 'pdf')
+#   }]
+
+def _period_range_iso(period: str):
+    """Return (start_iso, end_iso, human_label) for the given period."""
+    from datetime import date, timedelta
+    today = date.today()
+    if period == "day":
+        return today.isoformat(), today.isoformat(), "Today"
+    if period == "week":
+        # Anchor to Sunday — matches the frontend RevenueStack convention.
+        start = today - timedelta(days=(today.weekday() + 1) % 7)
+        return start.isoformat(), today.isoformat(), "This Week"
+    if period == "quarter":
+        q = (today.month - 1) // 3
+        start = date(today.year, q * 3 + 1, 1)
+        return start.isoformat(), today.isoformat(), f"Q{q+1} {today.year}"
+    if period == "year":
+        return f"{today.year}-01-01", today.isoformat(), f"{today.year} YTD"
+    # default 'month'
+    start = date(today.year, today.month, 1)
+    return start.isoformat(), today.isoformat(), today.strftime("%B %Y")
+
+
+async def handle_send_report(client, biz, action) -> Dict:
+    biz_id = biz["id"]
+    biz_name = biz.get("name", "Business")
+    settings = biz.get("settings") or {}
+    fin = (settings.get("financial") or {}) if isinstance(settings, dict) else {}
+
+    report_kind = (action.get("report") or "revenue").lower()
+    if report_kind != "revenue":
+        return _fail("send_report", f"report kind '{report_kind}' not yet supported")
+
+    # 1) Resolve recipient.
+    to_email = (action.get("to_email") or "").strip()
+    if not to_email:
+        to_email = (fin.get("accountant_email") or "").strip()
+    if not to_email or "@" not in to_email:
+        return _fail("send_report", "no recipient email (action.to_email missing and no accountant_email saved)")
+
+    period = (action.get("period") or "month").lower()
+    if period not in ("day", "week", "month", "quarter", "year"):
+        period = "month"
+    fmt = (action.get("format") or "pdf").lower()
+    if fmt not in ("pdf", "csv", "both"):
+        fmt = "pdf"
+
+    start_iso, end_iso, period_label = _period_range_iso(period)
+
+    # 2) Pull invoices for the period.
+    invoices = await _sb(client, "GET",
+        f"/invoices?business_id=eq.{biz_id}"
+        f"&created_at=gte.{start_iso}&created_at=lte.{end_iso}T23:59:59"
+        f"&select=id,invoice_number,contact_id,total,status,category,paid_at,sent_at,created_at,due_date,payment_method,contacts(name)"
+        f"&order=created_at.desc&limit=1000") or []
+
+    currency = fin.get("currency") or "USD"
+    tax_rate = float(fin.get("tax_rate") or 25)
+
+    def to_num(v):
+        try: return float(v or 0)
+        except: return 0.0
+
+    sent_or_paid = [i for i in invoices if i.get("status") not in ("draft", "cancelled")]
+    paid         = [i for i in invoices if i.get("status") == "paid"]
+    outstanding  = [i for i in invoices if i.get("status") in ("sent", "viewed", "overdue")]
+    total_invoiced   = sum(to_num(i.get("total")) for i in sent_or_paid)
+    total_collected  = sum(to_num(i.get("total")) for i in paid)
+    total_outstanding = sum(to_num(i.get("total")) for i in outstanding)
+    collection_rate = round((total_collected / total_invoiced * 100) if total_invoiced > 0 else 0)
+    tax_set_aside = total_collected * tax_rate / 100
+    net_after_tax = total_collected - tax_set_aside
+
+    def fmt_money(n: float) -> str:
+        sym = {"USD": "$", "EUR": "€", "GBP": "£", "CAD": "$", "AUD": "$"}.get(currency, "$")
+        return f"{sym}{n:,.2f}"
+
+    # 3) Build the HTML body (self-contained, renders in webmail).
+    brand = (settings.get("brand_kit") or {}) if isinstance(settings, dict) else {}
+    primary = (brand.get("colors") or {}).get("primary") or "#1A365D"
+    logo_url = brand.get("logo_url") or ""
+    tagline = brand.get("tagline") or ""
+    today_human = __import__("datetime").datetime.now().strftime("%B %d, %Y")
+
+    logo_block = (
+        f'<img src="{logo_url}" alt="" style="max-height:64px;max-width:180px;object-fit:contain;">'
+        if logo_url else
+        f'<div style="font-size:24px;font-weight:700;color:{primary};">{biz_name}</div>'
+    )
+
+    html = f"""<!DOCTYPE html><html><body style="font-family:'Helvetica Neue',Arial,sans-serif;color:#222;padding:24px;max-width:820px;margin:0 auto;background:#fff;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;padding-bottom:14px;border-bottom:3px solid {primary};margin-bottom:22px;">
+        <div>{logo_block}{f'<div style="font-size:12px;color:#666;font-style:italic;margin-top:6px;">{tagline}</div>' if tagline else ''}</div>
+        <div style="text-align:right;">
+          <div style="font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#999;">Revenue Report</div>
+          <div style="font-size:18px;font-weight:700;color:{primary};">{biz_name}</div>
+          <div style="font-size:12px;color:#555;margin-top:4px;">{period_label}</div>
+          <div style="font-size:10px;color:#999;">Generated {today_human}</div>
+        </div>
+      </div>
+      <h2 style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:{primary};border-bottom:1px solid #eee;padding-bottom:4px;">Summary</h2>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <tr><td style="padding:6px 0;color:#666;">Total Invoiced</td><td style="text-align:right;padding:6px 0;font-weight:600;">{fmt_money(total_invoiced)}</td></tr>
+        <tr><td style="padding:6px 0;color:#666;">Total Collected</td><td style="text-align:right;padding:6px 0;font-weight:600;">{fmt_money(total_collected)}</td></tr>
+        <tr><td style="padding:6px 0;color:#666;">Outstanding</td><td style="text-align:right;padding:6px 0;font-weight:600;">{fmt_money(total_outstanding)}</td></tr>
+        <tr><td style="padding:6px 0;color:#666;">Collection Rate</td><td style="text-align:right;padding:6px 0;font-weight:600;">{collection_rate}%</td></tr>
+        <tr><td style="padding:6px 0;color:#666;">Tax ({tax_rate:g}%) set aside</td><td style="text-align:right;padding:6px 0;font-weight:600;">{fmt_money(tax_set_aside)}</td></tr>
+        <tr><td style="padding:6px 0;color:#666;">Net after tax</td><td style="text-align:right;padding:6px 0;font-weight:600;">{fmt_money(net_after_tax)}</td></tr>
+      </table>
+      <div style="margin-top:24px;font-size:11px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:10px;">Generated by Solutionist System · {biz_name}</div>
+    </body></html>"""
+
+    # 4) Build a real CSV attachment when csv/both is requested.
+    attachments_payload = None
+    if fmt in ("csv", "both"):
+        import base64
+        import csv
+        import io
+        sio = io.StringIO()
+        w = csv.writer(sio)
+        w.writerow(["Invoice Number", "Date", "Client", "Category", "Amount", "Status", "Paid Date", "Payment Method"])
+        for inv in invoices:
+            client_name = ""
+            if isinstance(inv.get("contacts"), dict):
+                client_name = inv["contacts"].get("name") or ""
+            w.writerow([
+                inv.get("invoice_number") or "",
+                (inv.get("created_at") or "")[:10],
+                client_name,
+                inv.get("category") or "",
+                f"{to_num(inv.get('total')):.2f}",
+                inv.get("status") or "",
+                (inv.get("paid_at") or "")[:10],
+                inv.get("payment_method") or "",
+            ])
+        csv_bytes = sio.getvalue().encode("utf-8")
+        attachments_payload = [{
+            "filename": f"revenue-{start_iso}-{end_iso}.csv",
+            "content": base64.b64encode(csv_bytes).decode("ascii"),
+            "content_type": "text/csv",
+        }]
+
+    subject = f"Revenue report — {biz_name} — {period_label}"
+
+    # 5) Dispatch via send_via_resend (direct Python call — same as
+    # handle_send_invoice).
+    sig = (settings.get("email_templates") or {}).get("signature") or {}
+    try:
+        from email_sender import send_via_resend
+        data = await send_via_resend(
+            to_email=to_email,
+            to_name=None,
+            from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
+            from_name=sig.get("name") or biz_name,
+            subject=subject,
+            body=html,
+            reply_to=sig.get("email") or None,
+            attachments=attachments_payload,
+        )
+    except RuntimeError as e:
+        return _fail("send_report", f"Resend refused: {e}")
+    except Exception as e:
+        return _fail("send_report", f"unexpected error: {type(e).__name__}: {e}")
+
+    # 6) Log to events so activity feed reflects the send.
+    await _sb(client, "POST", "/events", {
+        "business_id": biz_id,
+        "event_type": "report_sent",
+        "data": {
+            "report": "revenue",
+            "period": period,
+            "to_email": to_email,
+            "format": fmt,
+            "totals": {
+                "invoiced": total_invoiced,
+                "collected": total_collected,
+                "outstanding": total_outstanding,
+            },
+        },
+        "source": "chief_of_staff",
+    })
+
+    return {
+        "type": "send_report",
+        "ok": True,
+        "to_email": to_email,
+        "period": period,
+        "format": fmt,
+        "resend_id": (data or {}).get("id"),
+    }
+
+
 ACTION_HANDLERS = {
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
@@ -6846,6 +7060,7 @@ ACTION_HANDLERS = {
     "log_activity":               handle_log_activity,
     "create_invoice":             handle_create_invoice,
     "send_invoice":               handle_send_invoice,
+    "send_report":                handle_send_report,
     "mark_invoice_paid":          handle_mark_invoice_paid,
     "cancel_recurring_invoice":   handle_cancel_recurring_invoice,
     "batch_email":                handle_batch_email,
@@ -8857,6 +9072,17 @@ ACTIONS — INVOICES:
   [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[...],"is_recurring":true,"recurrence_frequency":"monthly","recurrence_start":"2026-05-01","recurrence_end_type":"never","auto_send":true}}]  — recurring invoice template; freq is weekly/biweekly/monthly/quarterly/annually. recurrence_end_type is never/after_count/on_date and recurrence_end_value carries the count or end-date. Server auto-generates each occurrence on its due date.
   [ACTION:{{"type":"cancel_recurring_invoice","invoice_id":"<template-uuid>","mode":"pause|cancel"}}]
 
+ACTIONS — REPORTS:
+  [ACTION:{{"type":"send_report","report":"revenue","to_email":"acc@example.com","period":"month","format":"pdf"}}]  — emails a branded revenue report directly to the recipient via Resend. Omit `to_email` to use the saved accountant email (settings.financial.accountant_email). period is day|week|month|quarter|year (default month). format is pdf|csv|both (default pdf).
+
+  YES — you CAN generate and attach files directly. You do NOT need the practitioner to download anything manually first.
+    • format="pdf"  → the visual revenue report renders inline as the email body (looks like a PDF in the recipient's inbox).
+    • format="csv"  → a real CSV file is generated server-side from the invoice data and attached to the email.
+    • format="both" → the visual report inline AS the body PLUS the CSV attached as a real file.
+  When the practitioner says "send the actual files", "send the PDF and CSV", or asks for attached files → use format="both". Do NOT respond that you can't generate or attach files — you can.
+
+  When the practitioner says "send my revenue report to my accountant", "email last month's numbers to Jane", "send the Q3 report to <name>" → send_report. You do NOT need to ask for the email if accountant_email is saved.
+
 ACTIONS — PRODUCTS & SERVICES:
   [ACTION:{{"type":"create_product","name":"Leadership Coaching","product_type":"service","price":200,"pricing_type":"per_session","duration":60,"description":"...","display_on_website":true}}]
   [ACTION:{{"type":"create_product","name":"Born for the Time","product_type":"digital","price":14.99,"description":"...","auto_deliver":true}}]
@@ -8927,7 +9153,7 @@ ACTIONS — NAVIGATION + MEMORY:
   [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"dashboard|queue|contacts|projects|calendar|invoices|tasks|documents|agents|briefing|insights|goals|revenue|content|funnel","contact_id":"<uuid-optional>","page":"<page-id-optional>"}}]
   [ACTION:{{"type":"open_documents"}}]   — shortcut: navigate straight to the Documents tab.
   [ACTION:{{"type":"open_calendar"}}]    — shortcut: navigate straight to the Calendar tab.
-  [ACTION:{{"type":"show_revenue"}}]     — shortcut: open OPERATE → Invoices in Revenue view.
+  [ACTION:{{"type":"show_revenue"}}]     — opens GROW → Revenue (the canonical Revenue Analytics surface: Allocator, Expenses, planned-vs-actual, Export, Send to Accountant).
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
   [ACTION:{{"type":"update_business_profile_field","field_path":"governing_state|produces_deliverables|sensitive_areas.health_advice|sensitive_areas.session_recording|sensitive_areas.physical_activity","value":"<their answer>"}}]
   — used ONLY after the user has explicitly confirmed a value for a previously-missing profile field. Never emit on speculation. The JIT-CAPTURE PRIORITY block (when present at the top of this prompt) tells you which field to ask about and what brand-voice phrasing to use.
