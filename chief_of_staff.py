@@ -3830,7 +3830,14 @@ async def handle_create_goal(client, biz, action) -> Dict:
 
     auto_track = bool(action.get("auto_track", True)) and metric != "custom"
 
-    new_goal = {
+    # Optional free-form context from the practitioner. Lands in the
+    # goal card UI + the Custom hero scrapbook. JSONB-stored, no
+    # schema migration. Trim and drop empties so the goal row stays
+    # clean when no description is provided.
+    description_raw = action.get("description")
+    description = description_raw.strip() if isinstance(description_raw, str) else ""
+
+    new_goal: Dict[str, Any] = {
         "id": f"goal-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
         "title": title,
         "category": category,
@@ -3842,6 +3849,8 @@ async def handle_create_goal(client, biz, action) -> Dict:
         "metric": metric,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if description:
+        new_goal["description"] = description
 
     _, settings = await _fetch_business_settings(client, biz_id)
     goals = settings.get("goals") if isinstance(settings.get("goals"), dict) else {}
@@ -9155,10 +9164,10 @@ ACTIONS — BATCH EMAIL:
   NOTE: "create_invoice + send_invoice in one turn" works — emit both in the same response. The server automatically threads the new invoice_id into send_invoice.
 
 ACTIONS — GROW (goals + content):
-  [ACTION:{{"type":"create_goal","title":"Reach 50 contacts","category":"contacts","target":50,"period":"quarterly","end":"2026-06-30","auto_track":true}}]
-  [ACTION:{{"type":"create_goal","title":"Generate $15,000 in revenue","category":"revenue","target":15000,"period":"quarterly","metric":"revenue_collected"}}]
-  [ACTION:{{"type":"create_goal","title":"Hire 2 contractors","category":"growth","target":2,"period":"quarterly"}}]
-  [ACTION:{{"type":"create_goal","title":"Read 12 books","category":"learning","target":12,"period":"yearly"}}]
+  [ACTION:{{"type":"create_goal","title":"Reach 50 contacts","category":"contacts","target":50,"period":"quarterly","end":"2026-06-30","auto_track":true,"description":"Building out the outreach pipeline before Q3 launch."}}]
+  [ACTION:{{"type":"create_goal","title":"Generate $15,000 in revenue","category":"revenue","target":15000,"period":"quarterly","metric":"revenue_collected","description":"Float that covers payroll + Q4 operating costs."}}]
+  [ACTION:{{"type":"create_goal","title":"Hire 2 contractors","category":"growth","target":2,"period":"quarterly","description":"Free up admin time so I can take on more strategy clients."}}]
+  [ACTION:{{"type":"create_goal","title":"Read 12 books","category":"learning","target":12,"period":"yearly","description":"One a month. Mix of leadership + craft."}}]
   [ACTION:{{"type":"check_goals"}}]
   [ACTION:{{"type":"plan_content","title":"3 ways to build trust","platform":"linkedin","scheduled_date":"2026-04-29","status":"draft"}}]
     — Categories grouped by LENS so the practitioner can keep buckets separate:
@@ -9174,8 +9183,10 @@ ACTIONS — GROW (goals + content):
         2. By when? (timeframe → period)
         3. What would count as winning? (the target — number, dollar amount, etc.)
         4. Which lens / category does it fit?
-      Then propose the goal back ("Sounds like: 'Hit $25k in client revenue by end of Q3' — category=revenue, target=25000, period=quarterly. Look right?") and ONLY emit create_goal after they confirm. Don't grind through all four questions in one message — make it conversational. One question, wait for the answer, build up.
-    — When the practitioner SAYS something fully specified ("Set a goal to reach 50 contacts by June"), skip the coaching and emit create_goal directly.
+        5. (Optional) Why does it matter? (becomes the `description` field — gives the goal context the practitioner reads later.)
+      Then propose the goal back ("Sounds like: 'Hit $25k in client revenue by end of Q3' — category=revenue, target=25000, period=quarterly. The why: 'Float that covers Q4 ops.' Look right?") and ONLY emit create_goal after they confirm. Don't grind through all five questions in one message — make it conversational. One question, wait for the answer, build up. The description question is optional; if they wave you off, just skip it.
+    — When the practitioner SAYS something fully specified ("Set a goal to reach 50 contacts by June, because we're prepping for the Q3 launch"), skip the coaching and emit create_goal directly — capture any "because" or "to..." rationale they include as the `description`.
+    — The `description` field is OPTIONAL on the action but VALUABLE on Personal / Team Building / Custom lens goals where the why matters more than the metric. Include it whenever the practitioner gives you one, even casually.
     — Platforms for plan_content: instagram | linkedin | twitter | facebook | tiktok | youtube | blog | other.
 
 ACTIONS — NAVIGATION + MEMORY:
