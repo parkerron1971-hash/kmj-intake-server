@@ -3690,7 +3690,14 @@ p{font-size:1.05em;color:#8B8880;line-height:1.7;margin-bottom:32px;}
 <h1>An AI-powered <span>operating system</span> for your business</h1>
 <p>Contacts, sessions, proposals, payments, website, and a Chief of Staff that manages it all — built for pastors, coaches, consultants, and practitioners who serve people.</p>
 <a href="https://kmjcreate.com" class="cta">Get Started</a>
-<div class="footer">Built by KMJ Creative Solutions</div>
+<div class="footer" style="margin-top:48px;font-size:11px;color:#4A4F5E;">
+  Built by KMJ Creative Solutions LLC<br><br>
+  <a href="/privacy" style="color:#8B8880;text-decoration:none;margin:0 8px;">Privacy</a>
+  <a href="/data-deletion" style="color:#8B8880;text-decoration:none;margin:0 8px;">Data Deletion</a>
+  <a href="/help" style="color:#8B8880;text-decoration:none;margin:0 8px;">Help</a>
+  <a href="/terms" style="color:#8B8880;text-decoration:none;margin:0 8px;">Terms</a>
+  <a href="mailto:kmjcreativesolution@gmail.com" style="color:#8B8880;text-decoration:none;margin:0 8px;">Contact</a>
+</div>
 </div>
 </body>
 </html>"""
@@ -3855,6 +3862,33 @@ async def subdomain_root(request: Request):
 
     # Known base domain with no subdomain — serve the marketing page.
     return HTMLResponse(content=MARKETING_HTML, media_type="text/html")
+
+
+# ─── Public legal + help pages ────────────────────────────────────────
+# Live at mysolutionist.app/{privacy,data-deletion,terms,help}. MUST be
+# registered BEFORE the subdomain catch-all below or they'll fall through
+# to a 404. Content lives in legal_content.py — edit copy there.
+
+from legal_content import (
+    render_privacy_html, render_data_deletion_html,
+    render_terms_html, render_help_html,
+)
+
+@router.get("/privacy", include_in_schema=False)
+async def public_privacy():
+    return HTMLResponse(content=render_privacy_html(), media_type="text/html")
+
+@router.get("/data-deletion", include_in_schema=False)
+async def public_data_deletion():
+    return HTMLResponse(content=render_data_deletion_html(), media_type="text/html")
+
+@router.get("/terms", include_in_schema=False)
+async def public_terms():
+    return HTMLResponse(content=render_terms_html(), media_type="text/html")
+
+@router.get("/help", include_in_schema=False)
+async def public_help():
+    return HTMLResponse(content=render_help_html(), media_type="text/html")
 
 
 @router.get("/{path:path}", include_in_schema=False)
