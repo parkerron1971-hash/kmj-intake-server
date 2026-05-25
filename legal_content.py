@@ -35,6 +35,11 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{title} — The Solutionist System</title>
 <meta name="description" content="{description}">
+<meta property="og:title" content="{title} — The Solutionist System">
+<meta property="og:description" content="{description}">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   /* Mirrors the marketing site so legal pages feel like the same product. */
@@ -59,8 +64,14 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
   a:hover{{text-decoration-color:var(--accent);}}
   .nav{{position:sticky;top:0;z-index:50;background:rgba(10,10,14,0.78);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--border);}}
   .nav-inner{{max-width:820px;margin:0 auto;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;}}
-  .brand{{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;text-decoration:none;}}
-  .brand .dot{{display:inline-block;width:8px;height:8px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--info));margin-right:9px;box-shadow:0 0 10px var(--glow);}}
+  .brand{{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;text-decoration:none;display:inline-flex;align-items:center;gap:10px;}}
+  .brand .logo{{height:32px;width:auto;display:block;filter:drop-shadow(0 0 8px var(--glow));animation:logoGlow 3s ease-in-out infinite;}}
+  @keyframes logoGlow {{
+    0%, 100% {{ filter: drop-shadow(0 0 8px var(--glow)); }}
+    50%      {{ filter: drop-shadow(0 0 14px var(--glow)) drop-shadow(0 0 4px color-mix(in srgb, var(--info) 60%, transparent)); }}
+  }}
+  .brand-text{{display:inline-block;}}
+  @media (max-width: 540px){{.brand-text{{display:none;}}}}
   .nav-links{{display:flex;gap:18px;font-size:13px;font-weight:500;}}
   .nav-links a{{color:var(--text-muted);text-decoration:none;transition:color 0.15s;}}
   .nav-links a:hover{{color:var(--text-primary);}}
@@ -104,7 +115,10 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
 
 <nav class="nav">
   <div class="nav-inner">
-    <a class="brand" href="/"><span class="dot"></span>The Solutionist System</a>
+    <a class="brand" href="/">
+      <img class="logo" src="/assets/logo-nav.png" alt="The Solutionist System">
+      <span class="brand-text">The Solutionist System</span>
+    </a>
     <div class="nav-links">
       <a href="/help">Help</a>
       <a href="/privacy">Privacy</a>

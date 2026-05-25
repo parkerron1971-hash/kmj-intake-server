@@ -4593,6 +4593,44 @@ from marketing_pages import (
     handle_lead_intake, LeadIntakeRequest,
 )
 
+# ─── Static brand assets ──────────────────────────────────────────────
+# Logo + OG image + favicon served straight off disk with long-lived
+# cache headers. Sourced from kmj-intake-server/static/brand/.
+import pathlib as _pathlib
+from fastapi.responses import FileResponse as _FileResponse
+
+_STATIC_BRAND = _pathlib.Path(__file__).resolve().parent / "static" / "brand"
+_BRAND_CACHE_HEADERS = {"Cache-Control": "public, max-age=604800, immutable"}  # 7 days
+
+def _brand_file(name: str, media_type: str):
+    fp = _STATIC_BRAND / name
+    if not fp.exists():
+        raise HTTPException(404, f"asset not found: {name}")
+    return _FileResponse(str(fp), media_type=media_type, headers=_BRAND_CACHE_HEADERS)
+
+@router.get("/assets/logo.png", include_in_schema=False)
+async def asset_logo_full():
+    return _brand_file("solutionist-logo.png", "image/png")
+
+@router.get("/assets/logo-nav.png", include_in_schema=False)
+async def asset_logo_nav():
+    return _brand_file("solutionist-logo-nav.png", "image/png")
+
+@router.get("/assets/og.png", include_in_schema=False)
+async def asset_og():
+    return _brand_file("solutionist-og.png", "image/png")
+
+@router.get("/favicon.png", include_in_schema=False)
+async def asset_favicon_png():
+    return _brand_file("favicon.png", "image/png")
+
+@router.get("/favicon.ico", include_in_schema=False)
+async def asset_favicon_ico():
+    # Browsers ask for /favicon.ico by default. Serve the PNG with the
+    # correct media type — modern browsers accept PNG favicons.
+    return _brand_file("favicon.png", "image/png")
+
+
 # Marketing routes
 @router.get("/features", include_in_schema=False)
 async def public_features():
