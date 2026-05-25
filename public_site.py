@@ -3667,38 +3667,344 @@ async def cost_cap_status_endpoint():
 MARKETING_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>The Solutionist System — AI-Powered Operating System for Your Business</title>
-<meta name="description" content="An AI-powered operating system that runs your contacts, sessions, proposals, payments, and website — so you can focus on the people you serve.">
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>The Solutionist System — One workspace that runs your whole practice</title>
+<meta name="description" content="The Solutionist System is one AI-powered workspace that replaces 8+ tools for solo practitioners. Contacts, invoices, sessions, content, goals, and a Chief of Staff that knows your business.">
+<meta property="og:title" content="The Solutionist System">
+<meta property="og:description" content="One AI-powered workspace that runs your whole practice. Built for pastors, coaches, consultants, and solo studios.">
+<meta property="og:url" content="https://mysolutionist.app">
+<meta property="og:type" content="website">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-*{margin:0;padding:0;box-sizing:border-box;}
-body{font-family:'Inter',sans-serif;background:#0d0d12;color:#E8E4DD;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:40px 24px;}
-.wrap{max-width:600px;text-align:center;}
-.badge{display:inline-block;padding:6px 16px;font-size:10px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#C8973E;border:1px solid rgba(200,151,62,0.3);border-radius:99px;margin-bottom:24px;}
-h1{font-family:'Cormorant Garamond',Georgia,serif;font-size:3em;font-weight:300;line-height:1.1;margin-bottom:16px;letter-spacing:-0.5px;}
-h1 span{color:#C8973E;}
-p{font-size:1.05em;color:#8B8880;line-height:1.7;margin-bottom:32px;}
-.cta{display:inline-block;padding:14px 32px;font-size:14px;font-weight:700;color:#0C1120;background:linear-gradient(135deg,#C8973E,#B8872E);border:none;border-radius:10px;text-decoration:none;box-shadow:0 4px 20px rgba(200,151,62,0.3);transition:transform 0.15s;}
-.cta:hover{transform:translateY(-2px);}
-.footer{margin-top:60px;font-size:11px;color:#4A4F5E;}
+  /* ─── tokens (mirrors the app's Neon Command theme) ─── */
+  :root {
+    --bg: #0a0a0e;
+    --bg-2: #11111a;
+    --surface: rgba(255,255,255,0.04);
+    --surface-2: rgba(255,255,255,0.06);
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.14);
+    --text-primary: #fafafa;
+    --text-secondary: #d4d4d4;
+    --text-muted: #a1a1a1;
+    --text-dim: #737373;
+    --accent: #7c3aed;
+    --accent-2: #6366f1;
+    --info: #06b6d4;
+    --success: #34d399;
+    --warning: #fbbf24;
+    --danger: #f87171;
+    --glow: rgba(124, 58, 237, 0.35);
+    --glow-cyan: rgba(6, 182, 212, 0.28);
+    --font-heading: 'Space Grotesk', system-ui, sans-serif;
+    --font-body: 'Inter', system-ui, sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{background:var(--bg);color:var(--text-primary);font-family:var(--font-body);line-height:1.6;-webkit-font-smoothing:antialiased;}
+  body{overflow-x:hidden;}
+  a{color:inherit;text-decoration:none;}
+
+  /* ─── shared atoms ─── */
+  .container{max-width:1140px;margin:0 auto;padding:0 28px;}
+  .eyebrow{display:inline-flex;align-items:center;gap:8px;padding:5px 14px;font-size:10px;font-weight:700;letter-spacing:2.4px;text-transform:uppercase;color:var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent);border:1px solid color-mix(in srgb, var(--accent) 28%, transparent);border-radius:99px;}
+  .gradient-text{background:linear-gradient(135deg, var(--accent), var(--info));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
+  h1,h2,h3{font-family:var(--font-heading);letter-spacing:-0.015em;line-height:1.1;}
+  h1{font-size:clamp(38px, 6vw, 64px);font-weight:600;}
+  h2{font-size:clamp(28px, 4vw, 40px);font-weight:600;margin-bottom:14px;}
+  h3{font-size:18px;font-weight:600;color:var(--text-primary);margin-bottom:6px;}
+  p{color:var(--text-secondary);font-size:16px;}
+  .lead{font-size:18px;color:var(--text-muted);line-height:1.65;}
+
+  /* ─── nav ─── */
+  .nav{position:sticky;top:0;z-index:50;background:rgba(10,10,14,0.78);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--border);}
+  .nav-inner{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;max-width:1140px;margin:0 auto;}
+  .brand{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;}
+  .brand .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--info));margin-right:9px;box-shadow:0 0 10px var(--glow);}
+  .nav-links{display:flex;align-items:center;gap:22px;font-size:13px;font-weight:500;}
+  .nav-links a{color:var(--text-muted);transition:color 0.15s;}
+  .nav-links a:hover{color:var(--text-primary);}
+  .nav-cta{padding:8px 16px;background:linear-gradient(135deg, var(--accent), var(--info));color:var(--text-primary);border-radius:8px;font-weight:600;font-size:13px;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 28%, transparent);transition:transform 0.15s, box-shadow 0.15s;}
+  .nav-cta:hover{transform:translateY(-1px);box-shadow:0 4px 18px color-mix(in srgb, var(--accent) 42%, transparent);}
+  @media (max-width: 720px){.nav-links{gap:12px;font-size:12px;} .nav-links a:not(.nav-cta){display:none;}}
+
+  /* ─── hero ─── */
+  .hero{position:relative;padding:88px 0 96px;text-align:center;overflow:hidden;}
+  .hero::before{content:'';position:absolute;inset:-80px 0 auto;height:520px;background:radial-gradient(60% 80% at 50% 0%, var(--glow), transparent 70%);pointer-events:none;}
+  .hero::after{content:'';position:absolute;left:50%;top:-40px;transform:translateX(-50%);width:560px;height:560px;border-radius:50%;background:radial-gradient(circle at center, var(--glow-cyan), transparent 65%);pointer-events:none;opacity:0.5;}
+  .hero .container{position:relative;z-index:1;}
+  .hero h1{margin:18px auto 22px;max-width:900px;}
+  .hero h1 .accent{background:linear-gradient(135deg, var(--accent), var(--info));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
+  .hero .lead{max-width:680px;margin:0 auto 36px;}
+  .hero-ctas{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;}
+  .btn-primary{display:inline-flex;align-items:center;gap:8px;padding:13px 26px;background:linear-gradient(135deg, var(--accent), var(--info));color:var(--text-primary);font-weight:600;font-size:14px;border-radius:10px;border:none;cursor:pointer;box-shadow:0 4px 22px color-mix(in srgb, var(--accent) 35%, transparent);transition:transform 0.15s, box-shadow 0.15s;}
+  .btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 30px color-mix(in srgb, var(--accent) 50%, transparent);}
+  .btn-secondary{display:inline-flex;align-items:center;gap:8px;padding:13px 22px;background:var(--surface);color:var(--text-primary);font-weight:600;font-size:14px;border-radius:10px;border:1px solid var(--border-strong);cursor:pointer;transition:background 0.15s, border-color 0.15s;}
+  .btn-secondary:hover{background:var(--surface-2);border-color:color-mix(in srgb, var(--accent) 50%, transparent);}
+  .hero-note{margin-top:22px;font-size:12px;color:var(--text-dim);}
+
+  /* ─── section base ─── */
+  section{position:relative;padding:80px 0;}
+  .section-head{text-align:center;max-width:680px;margin:0 auto 56px;}
+  .section-head .eyebrow{margin-bottom:14px;}
+  .section-head p{color:var(--text-muted);margin-top:8px;}
+
+  /* ─── glass card ─── */
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:26px;transition:transform 0.18s, border-color 0.18s, background 0.18s;}
+  .card:hover{transform:translateY(-2px);border-color:color-mix(in srgb, var(--accent) 35%, transparent);background:color-mix(in srgb, var(--surface) 100%, transparent);}
+  .card-icon{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:10px;background:color-mix(in srgb, var(--accent) 14%, transparent);color:var(--accent);font-size:20px;margin-bottom:14px;border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);}
+
+  /* ─── features grid ─── */
+  .features-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:18px;}
+  @media (max-width: 920px){.features-grid{grid-template-columns:repeat(2, 1fr);}}
+  @media (max-width: 600px){.features-grid{grid-template-columns:1fr;}}
+  .feature-card p{font-size:14px;color:var(--text-muted);line-height:1.6;}
+
+  /* ─── audience ─── */
+  .audience{padding:64px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent) 4%, transparent), transparent);}
+  .audience-grid{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;}
+  .audience-pill{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;background:var(--surface);border:1px solid var(--border);border-radius:99px;font-size:14px;font-weight:500;color:var(--text-secondary);transition:border-color 0.18s, background 0.18s;}
+  .audience-pill:hover{border-color:color-mix(in srgb, var(--accent) 40%, transparent);background:color-mix(in srgb, var(--accent) 8%, transparent);}
+  .audience-pill .emoji{font-size:18px;}
+
+  /* ─── how it works ─── */
+  .how-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:18px;position:relative;}
+  @media (max-width: 920px){.how-grid{grid-template-columns:1fr;}}
+  .step-card{position:relative;}
+  .step-num{position:absolute;top:-14px;left:24px;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--info));color:var(--text-primary);font-family:var(--font-heading);font-weight:700;font-size:13px;letter-spacing:0;box-shadow:0 0 16px var(--glow);}
+
+  /* ─── why us ─── */
+  .why-grid{display:grid;grid-template-columns:repeat(2, 1fr);gap:18px;}
+  @media (max-width: 760px){.why-grid{grid-template-columns:1fr;}}
+  .why-card{display:flex;gap:16px;}
+  .why-card .check{flex-shrink:0;width:32px;height:32px;border-radius:8px;background:color-mix(in srgb, var(--success) 18%, transparent);color:var(--success);display:inline-flex;align-items:center;justify-content:center;font-weight:700;border:1px solid color-mix(in srgb, var(--success) 40%, transparent);}
+
+  /* ─── meta callout ─── */
+  .meta-callout{padding:36px;background:linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--info) 8%, transparent));border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:18px;text-align:center;}
+  .meta-callout .platforms{display:inline-flex;align-items:center;gap:10px;margin-bottom:18px;font-size:12px;font-weight:600;letter-spacing:1.6px;text-transform:uppercase;color:var(--text-muted);}
+  .meta-callout .platforms .badge-pill{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:99px;background:var(--surface-2);border:1px solid var(--border);font-size:11px;color:var(--text-secondary);text-transform:none;letter-spacing:0;}
+
+  /* ─── final CTA ─── */
+  .final-cta{padding:96px 0;text-align:center;position:relative;overflow:hidden;}
+  .final-cta::before{content:'';position:absolute;inset:0;background:radial-gradient(60% 100% at 50% 50%, var(--glow), transparent 65%);pointer-events:none;opacity:0.65;}
+  .final-cta .container{position:relative;z-index:1;}
+  .final-cta h2{margin-bottom:14px;}
+  .final-cta p{max-width:520px;margin:0 auto 32px;color:var(--text-muted);}
+
+  /* ─── footer ─── */
+  footer{background:var(--bg-2);border-top:1px solid var(--border);padding:42px 0 32px;}
+  .footer-inner{max-width:1140px;margin:0 auto;padding:0 28px;display:flex;justify-content:space-between;align-items:flex-start;gap:24px;flex-wrap:wrap;}
+  .footer-brand{display:flex;flex-direction:column;gap:6px;}
+  .footer-brand .small{font-size:12px;color:var(--text-dim);}
+  .footer-links{display:flex;flex-wrap:wrap;gap:18px;font-size:13px;}
+  .footer-links a{color:var(--text-muted);transition:color 0.15s;}
+  .footer-links a:hover{color:var(--text-primary);}
+  .footer-bottom{max-width:1140px;margin:32px auto 0;padding:16px 28px 0;border-top:1px solid var(--border);font-size:11px;color:var(--text-dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;}
 </style>
 </head>
 <body>
-<div class="wrap">
-<div class="badge">The Solutionist System</div>
-<h1>An AI-powered <span>operating system</span> for your business</h1>
-<p>Contacts, sessions, proposals, payments, website, and a Chief of Staff that manages it all — built for pastors, coaches, consultants, and practitioners who serve people.</p>
-<a href="https://kmjcreate.com" class="cta">Get Started</a>
-<div class="footer" style="margin-top:48px;font-size:11px;color:#4A4F5E;">
-  Built by KMJ Creative Solutions LLC<br><br>
-  <a href="/privacy" style="color:#8B8880;text-decoration:none;margin:0 8px;">Privacy</a>
-  <a href="/data-deletion" style="color:#8B8880;text-decoration:none;margin:0 8px;">Data Deletion</a>
-  <a href="/help" style="color:#8B8880;text-decoration:none;margin:0 8px;">Help</a>
-  <a href="/terms" style="color:#8B8880;text-decoration:none;margin:0 8px;">Terms</a>
-  <a href="mailto:kmjcreativesolution@gmail.com" style="color:#8B8880;text-decoration:none;margin:0 8px;">Contact</a>
-</div>
-</div>
+
+<!-- ═══ NAV ═══ -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="/"><span class="dot"></span>The Solutionist System</a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#audience">Who it's for</a>
+      <a href="#how">How it works</a>
+      <a href="/help">Help</a>
+      <a class="nav-cta" href="mailto:kmjcreativesolution@gmail.com?subject=Get%20Started%20with%20Solutionist">Get Started</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══ HERO ═══ -->
+<section class="hero">
+  <div class="container">
+    <span class="eyebrow">For solo practitioners + small studios</span>
+    <h1>One workspace that runs your <span class="accent">whole practice.</span></h1>
+    <p class="lead">Contacts, invoices, sessions, content, goals, and an AI Chief of Staff that knows your business — replacing eight tools and the friction between them.</p>
+    <div class="hero-ctas">
+      <a class="btn-primary" href="mailto:kmjcreativesolution@gmail.com?subject=Get%20Started%20with%20Solutionist">Get Started →</a>
+      <a class="btn-secondary" href="#features">See what it does</a>
+    </div>
+    <div class="hero-note">Currently in private beta · Email us to request access</div>
+  </div>
+</section>
+
+<!-- ═══ FEATURES ═══ -->
+<section id="features">
+  <div class="container">
+    <div class="section-head">
+      <span class="eyebrow">What it does</span>
+      <h2>Six surfaces, one workspace.</h2>
+      <p>Each tab is its own command center. They share contacts, content, brand, and your Chief — so nothing falls between the cracks.</p>
+    </div>
+    <div class="features-grid">
+      <div class="card feature-card">
+        <div class="card-icon">🏠</div>
+        <h3>Command Center</h3>
+        <p>Daily dashboard: today's schedule, what needs attention, recent activity. Voice-first option — wake your Chief by name.</p>
+      </div>
+      <div class="card feature-card">
+        <div class="card-icon">🧱</div>
+        <h3>Build</h3>
+        <p>Practitioner sites, brand kits, intake forms, integrations. Connect Stripe, Facebook Pages, and the tools you already use.</p>
+      </div>
+      <div class="card feature-card">
+        <div class="card-icon">⚙️</div>
+        <h3>Operate</h3>
+        <p>Contacts, invoices, calendar, tasks, email + SMS hubs. The day-to-day plumbing that keeps clients moving forward.</p>
+      </div>
+      <div class="card feature-card">
+        <div class="card-icon">📈</div>
+        <h3>Grow</h3>
+        <p>Revenue analytics, goals across five lenses (Business / Team / Personal / Custom), sales funnel, and a content calendar with pillars.</p>
+      </div>
+      <div class="card feature-card">
+        <div class="card-icon">🤖</div>
+        <h3>Chief of Staff</h3>
+        <p>An AI that reads your real data every turn. Drafts emails, plans posts, sets goals, sends reports, and gives tactical input on what to push.</p>
+      </div>
+      <div class="card feature-card">
+        <div class="card-icon">📣</div>
+        <h3>Publish anywhere</h3>
+        <p>Connect your Facebook Page and linked Instagram Business account, then publish from the Content tab in one click. Posts and engagement live next to your goals.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ AUDIENCE ═══ -->
+<section id="audience" class="audience">
+  <div class="container">
+    <div class="section-head" style="margin-bottom:32px;">
+      <span class="eyebrow">Who it's for</span>
+      <h2 style="margin-top:14px;">Built for people who serve people.</h2>
+    </div>
+    <div class="audience-grid">
+      <span class="audience-pill"><span class="emoji">⛪</span> Pastors</span>
+      <span class="audience-pill"><span class="emoji">🎯</span> Coaches</span>
+      <span class="audience-pill"><span class="emoji">💼</span> Consultants</span>
+      <span class="audience-pill"><span class="emoji">🎨</span> Creatives</span>
+      <span class="audience-pill"><span class="emoji">🧘</span> Practitioners</span>
+      <span class="audience-pill"><span class="emoji">🏠</span> Solo Studios</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ HOW IT WORKS ═══ -->
+<section id="how">
+  <div class="container">
+    <div class="section-head">
+      <span class="eyebrow">How it works</span>
+      <h2>Three steps to a working practice.</h2>
+    </div>
+    <div class="how-grid">
+      <div class="card step-card">
+        <span class="step-num">1</span>
+        <h3 style="margin-top:14px;">Sign up</h3>
+        <p style="font-size:14px;color:var(--text-muted);">Create your account, set up your business profile, and tell Chief what you do. Onboarding takes about 10 minutes.</p>
+      </div>
+      <div class="card step-card">
+        <span class="step-num">2</span>
+        <h3 style="margin-top:14px;">Connect your tools</h3>
+        <p style="font-size:14px;color:var(--text-muted);">Plug in Stripe, Facebook Page, Gmail, Calendar — whatever you already use. Tokens stay server-side; you control disconnection.</p>
+      </div>
+      <div class="card step-card">
+        <span class="step-num">3</span>
+        <h3 style="margin-top:14px;">Run your practice</h3>
+        <p style="font-size:14px;color:var(--text-muted);">Use the workspace daily. Track contacts, invoice clients, plan posts, hit goals. Ask Chief for input anytime.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ META CALLOUT ═══ -->
+<section style="padding:48px 0;">
+  <div class="container">
+    <div class="meta-callout">
+      <div class="platforms">
+        <span class="badge-pill">f Facebook</span>
+        <span class="badge-pill">📷 Instagram</span>
+      </div>
+      <h2 style="font-size:28px;">Publish to Facebook + Instagram from one place.</h2>
+      <p style="max-width:560px;margin:14px auto 0;color:var(--text-muted);">Connect your Facebook Page once. Draft posts in the Content tab, publish to your Page (and linked Instagram Business account) in one click. Tokens are stored securely on our servers — your browser never sees them, and you can disconnect anytime.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ WHY US ═══ -->
+<section>
+  <div class="container">
+    <div class="section-head">
+      <span class="eyebrow">Why Solutionist</span>
+      <h2>One workspace replacing the chaos of eight.</h2>
+    </div>
+    <div class="why-grid">
+      <div class="card why-card">
+        <div class="check">✓</div>
+        <div>
+          <h3>One brain, not eight</h3>
+          <p style="font-size:14px;color:var(--text-muted);">Your CRM, invoicing, calendar, content, and analytics all talk to each other. Update a contact once; every tool sees it.</p>
+        </div>
+      </div>
+      <div class="card why-card">
+        <div class="check">✓</div>
+        <div>
+          <h3>AI that knows your business</h3>
+          <p style="font-size:14px;color:var(--text-muted);">Chief reads your real data every turn — not a generic LLM. Asks for context once, then uses it forever.</p>
+        </div>
+      </div>
+      <div class="card why-card">
+        <div class="check">✓</div>
+        <div>
+          <h3>Real-time, not weekly reports</h3>
+          <p style="font-size:14px;color:var(--text-muted);">Every metric — revenue, contacts at risk, goals on pace — updates as data changes. No CSV exports, no waiting for someone to refresh.</p>
+        </div>
+      </div>
+      <div class="card why-card">
+        <div class="check">✓</div>
+        <div>
+          <h3>Built for solo, not enterprise</h3>
+          <p style="font-size:14px;color:var(--text-muted);">No teams, no seat math, no Slack-integration sprawl. Designed for one operator running their whole practice.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ FINAL CTA ═══ -->
+<section class="final-cta">
+  <div class="container">
+    <span class="eyebrow">Ready when you are</span>
+    <h2 style="margin-top:14px;">Run your practice from one place.</h2>
+    <p>Currently in private beta. Email us — we'll set you up with access and walk you through onboarding.</p>
+    <a class="btn-primary" href="mailto:kmjcreativesolution@gmail.com?subject=Get%20Started%20with%20Solutionist">Email us to get started →</a>
+  </div>
+</section>
+
+<!-- ═══ FOOTER ═══ -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <span class="brand"><span class="dot"></span>The Solutionist System</span>
+      <span class="small">Built by KMJ Creative Solutions LLC · Michigan, USA</span>
+    </div>
+    <div class="footer-links">
+      <a href="/help">Help</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/data-deletion">Data Deletion</a>
+      <a href="/terms">Terms</a>
+      <a href="mailto:kmjcreativesolution@gmail.com">Contact</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>&copy; 2026 KMJ Creative Solutions LLC</span>
+    <span>mysolutionist.app</span>
+  </div>
+</footer>
+
 </body>
 </html>"""
 
