@@ -35,64 +35,104 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{title} — The Solutionist System</title>
 <meta name="description" content="{description}">
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  /* Mirrors the marketing site so legal pages feel like the same product. */
+  :root {{
+    --bg: #0a0a0e;
+    --bg-2: #11111a;
+    --surface: rgba(255,255,255,0.04);
+    --border: rgba(255,255,255,0.08);
+    --text-primary: #fafafa;
+    --text-secondary: #d4d4d4;
+    --text-muted: #a1a1a1;
+    --text-dim: #737373;
+    --accent: #7c3aed;
+    --info: #06b6d4;
+    --glow: rgba(124, 58, 237, 0.35);
+    --font-heading: 'Space Grotesk', system-ui, sans-serif;
+    --font-body: 'Inter', system-ui, sans-serif;
+  }}
   *{{margin:0;padding:0;box-sizing:border-box;}}
-  body{{font-family:'Inter',sans-serif;background:#0d0d12;color:#E8E4DD;min-height:100vh;padding:48px 24px;line-height:1.65;}}
-  .nav{{max-width:820px;margin:0 auto 36px;display:flex;align-items:center;justify-content:space-between;padding-bottom:18px;border-bottom:1px solid rgba(255,255,255,0.06);}}
-  .nav-brand{{font-family:'Cormorant Garamond',Georgia,serif;font-size:18px;font-weight:300;color:#E8E4DD;text-decoration:none;letter-spacing:0.2px;}}
-  .nav-brand strong{{color:#C8973E;font-weight:700;}}
-  .nav-links{{display:flex;gap:18px;font-size:12px;}}
-  .nav-links a{{color:#8B8880;text-decoration:none;transition:color 0.15s;}}
-  .nav-links a:hover{{color:#C8973E;}}
-  .wrap{{max-width:820px;margin:0 auto;}}
-  .badge{{display:inline-block;padding:5px 14px;font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:#C8973E;border:1px solid rgba(200,151,62,0.3);border-radius:99px;margin-bottom:18px;}}
-  h1{{font-family:'Cormorant Garamond',Georgia,serif;font-size:2.6em;font-weight:300;line-height:1.1;letter-spacing:-0.5px;color:#fafafa;margin-bottom:8px;}}
-  h2{{font-family:'Cormorant Garamond',Georgia,serif;font-size:1.6em;font-weight:400;color:#C8973E;margin-top:36px;margin-bottom:12px;line-height:1.2;}}
-  h3{{font-family:'Inter',sans-serif;font-size:1.05em;font-weight:600;color:#fafafa;margin-top:24px;margin-bottom:6px;}}
-  p{{color:#A8A39A;margin-bottom:14px;font-size:15px;}}
-  p strong{{color:#E8E4DD;font-weight:600;}}
-  ul, ol{{padding-left:24px;margin-bottom:14px;color:#A8A39A;}}
+  html,body{{background:var(--bg);color:var(--text-primary);font-family:var(--font-body);line-height:1.65;-webkit-font-smoothing:antialiased;}}
+  a{{color:var(--accent);text-decoration:underline;text-decoration-color:color-mix(in srgb, var(--accent) 50%, transparent);text-underline-offset:3px;transition:text-decoration-color 0.15s;}}
+  a:hover{{text-decoration-color:var(--accent);}}
+  .nav{{position:sticky;top:0;z-index:50;background:rgba(10,10,14,0.78);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--border);}}
+  .nav-inner{{max-width:820px;margin:0 auto;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;}}
+  .brand{{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;text-decoration:none;}}
+  .brand .dot{{display:inline-block;width:8px;height:8px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--info));margin-right:9px;box-shadow:0 0 10px var(--glow);}}
+  .nav-links{{display:flex;gap:18px;font-size:13px;font-weight:500;}}
+  .nav-links a{{color:var(--text-muted);text-decoration:none;transition:color 0.15s;}}
+  .nav-links a:hover{{color:var(--text-primary);}}
+  .page{{position:relative;padding:64px 24px 32px;}}
+  .page::before{{content:'';position:absolute;inset:-40px 0 auto;height:280px;background:radial-gradient(60% 80% at 50% 0%, var(--glow), transparent 70%);pointer-events:none;opacity:0.6;}}
+  .wrap{{max-width:820px;margin:0 auto;position:relative;}}
+  .badge{{display:inline-flex;align-items:center;gap:8px;padding:5px 14px;font-size:10px;font-weight:700;letter-spacing:2.4px;text-transform:uppercase;color:var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent);border:1px solid color-mix(in srgb, var(--accent) 28%, transparent);border-radius:99px;margin-bottom:18px;}}
+  h1{{font-family:var(--font-heading);font-size:clamp(32px, 5vw, 48px);font-weight:600;line-height:1.1;letter-spacing:-0.015em;color:var(--text-primary);margin-bottom:8px;}}
+  h2{{font-family:var(--font-heading);font-size:24px;font-weight:600;color:var(--text-primary);margin-top:38px;margin-bottom:14px;line-height:1.2;letter-spacing:-0.01em;}}
+  h2::before{{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--info));margin-right:10px;vertical-align:middle;transform:translateY(-2px);box-shadow:0 0 8px var(--glow);}}
+  h3{{font-family:var(--font-body);font-size:16px;font-weight:600;color:var(--text-primary);margin-top:22px;margin-bottom:6px;}}
+  p{{color:var(--text-secondary);margin-bottom:14px;font-size:15px;}}
+  p strong{{color:var(--text-primary);font-weight:600;}}
+  ul, ol{{padding-left:24px;margin-bottom:14px;color:var(--text-secondary);}}
   ul li, ol li{{margin-bottom:6px;font-size:15px;}}
-  a{{color:#C8973E;text-decoration:underline;text-decoration-color:rgba(200,151,62,0.4);text-underline-offset:3px;}}
-  a:hover{{text-decoration-color:#C8973E;}}
-  .meta{{color:#6B665E;font-size:12px;font-style:italic;margin-bottom:24px;display:block;}}
-  .help-cat{{margin-top:42px;padding-top:24px;border-top:1px solid rgba(255,255,255,0.06);}}
-  .help-cat:first-of-type{{border-top:none;padding-top:0;}}
-  .help-cat-name{{font-family:'Cormorant Garamond',Georgia,serif;font-size:1.4em;font-weight:400;color:#C8973E;margin-bottom:18px;}}
-  .help-article{{margin-bottom:20px;}}
-  .help-article-title{{font-weight:600;color:#fafafa;margin-bottom:6px;font-size:15px;}}
-  .help-article-body{{color:#A8A39A;font-size:14.5px;}}
-  .footer{{max-width:820px;margin:64px auto 0;padding-top:24px;border-top:1px solid rgba(255,255,255,0.06);font-size:12px;color:#6B665E;text-align:center;}}
-  .footer a{{color:#8B8880;text-decoration:none;margin:0 10px;}}
-  .footer a:hover{{color:#C8973E;}}
+  ul li strong, ol li strong{{color:var(--text-primary);}}
+  .meta{{color:var(--text-dim);font-size:12px;font-style:italic;margin-bottom:24px;display:block;}}
+  /* Help center */
+  .help-cat{{margin-top:36px;padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:14px;}}
+  .help-cat:first-of-type{{margin-top:32px;}}
+  .help-cat-name{{font-family:var(--font-heading);font-size:18px;font-weight:600;color:var(--accent);margin-bottom:18px;letter-spacing:-0.01em;}}
+  .help-article{{margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--border);}}
+  .help-article:last-child{{margin-bottom:0;padding-bottom:0;border-bottom:none;}}
+  .help-article-title{{font-weight:600;color:var(--text-primary);margin-bottom:6px;font-size:15px;}}
+  .help-article-body{{color:var(--text-secondary);font-size:14.5px;}}
+  .help-article-body p{{margin-bottom:0;font-size:14.5px;color:var(--text-secondary);}}
+  /* Footer */
+  .footer{{background:var(--bg-2);border-top:1px solid var(--border);padding:32px 24px;margin-top:48px;}}
+  .footer-inner{{max-width:820px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--text-dim);}}
+  .footer-links{{display:flex;flex-wrap:wrap;gap:16px;}}
+  .footer-links a{{color:var(--text-muted);text-decoration:none;transition:color 0.15s;}}
+  .footer-links a:hover{{color:var(--text-primary);}}
   @media (max-width: 640px) {{
-    h1{{font-size:2em;}}
-    .nav{{flex-direction:column;gap:14px;align-items:flex-start;}}
+    .page{{padding:40px 20px 24px;}}
+    .nav-inner{{flex-direction:column;gap:10px;align-items:flex-start;}}
+    .footer-inner{{flex-direction:column;align-items:flex-start;}}
   }}
 </style>
 </head>
 <body>
+
 <nav class="nav">
-  <a class="nav-brand" href="/">The <strong>Solutionist</strong> System</a>
-  <div class="nav-links">
-    <a href="/help">Help</a>
-    <a href="/privacy">Privacy</a>
-    <a href="/terms">Terms</a>
-    <a href="mailto:{contact_email}">Contact</a>
+  <div class="nav-inner">
+    <a class="brand" href="/"><span class="dot"></span>The Solutionist System</a>
+    <div class="nav-links">
+      <a href="/help">Help</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="mailto:{contact_email}">Contact</a>
+    </div>
   </div>
 </nav>
-<div class="wrap">
-{content}
+
+<div class="page">
+  <div class="wrap">
+    {content}
+  </div>
 </div>
-<div class="footer">
-  &copy; {year} {business_name} &middot;
-  <a href="/privacy">Privacy</a>
-  <a href="/data-deletion">Data Deletion</a>
-  <a href="/help">Help</a>
-  <a href="/terms">Terms</a>
-  <a href="mailto:{contact_email}">Contact</a>
-</div>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <span>&copy; {year} {business_name}</span>
+    <div class="footer-links">
+      <a href="/privacy">Privacy</a>
+      <a href="/data-deletion">Data Deletion</a>
+      <a href="/help">Help</a>
+      <a href="/terms">Terms</a>
+      <a href="mailto:{contact_email}">Contact</a>
+    </div>
+  </div>
+</footer>
+
 </body>
 </html>"""
 
