@@ -88,8 +88,12 @@ SHARED_CSS = """
   /* ─── nav ─── */
   .nav{position:sticky;top:0;z-index:50;background:rgba(10,10,14,0.78);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--border);}
   .nav-inner{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;max-width:1140px;margin:0 auto;}
-  .brand{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;display:inline-flex;align-items:center;}
-  .brand .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--info));margin-right:9px;box-shadow:0 0 10px var(--glow);}
+  .brand{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;display:inline-flex;align-items:center;gap:10px;}
+  .brand .logo{height:32px;width:auto;display:block;filter:drop-shadow(0 0 8px var(--glow));}
+  .footer .brand .logo{height:28px;}
+  .brand .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--info));box-shadow:0 0 8px var(--glow);}
+  .brand-text{display:inline-block;}
+  @media (max-width: 540px){.brand-text{display:none;}}
   .nav-links{display:flex;align-items:center;gap:22px;font-size:13px;font-weight:500;}
   .nav-links a{color:var(--text-muted);transition:color 0.15s;position:relative;}
   .nav-links a:hover, .nav-links a.is-active{color:var(--text-primary);}
@@ -110,7 +114,12 @@ SHARED_CSS = """
     0%, 100% { box-shadow: 0 0 10px var(--glow); }
     50%      { box-shadow: 0 0 16px var(--glow), 0 0 4px color-mix(in srgb, var(--accent) 80%, transparent); }
   }
-  .brand .dot, .footer-brand .brand .dot { animation: brandPulse 2.6s ease-in-out infinite; }
+  @keyframes logoGlow {
+    0%, 100% { filter: drop-shadow(0 0 8px var(--glow)); }
+    50%      { filter: drop-shadow(0 0 14px var(--glow)) drop-shadow(0 0 4px color-mix(in srgb, var(--info) 60%, transparent)); }
+  }
+  .brand .logo { animation: logoGlow 3s ease-in-out infinite; }
+  .brand .dot  { animation: brandPulse 2.6s ease-in-out infinite; }
   .orb{position:absolute;border-radius:50%;filter:blur(50px);opacity:0.55;pointer-events:none;z-index:0;}
   .orb-1{top:10%;left:8%;width:280px;height:280px;background:radial-gradient(circle, var(--glow), transparent 70%);animation:orbDrift1 18s ease-in-out infinite;}
   .orb-2{top:60%;right:6%;width:220px;height:220px;background:radial-gradient(circle, var(--glow-cyan), transparent 70%);animation:orbDrift2 22s ease-in-out infinite;}
@@ -208,9 +217,15 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 <meta property="og:url" content="https://mysolutionist.app{path}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="The Solutionist System">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="{og_title}">
 <meta name="twitter:description" content="{description}">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>{shared_css}{extra_css}</style>
 </head>
@@ -218,7 +233,10 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 
 <nav class="nav">
   <div class="nav-inner">
-    <a class="brand" href="/"><span class="dot"></span>The Solutionist System</a>
+    <a class="brand" href="/">
+      <img class="logo" src="/assets/logo-nav.png" alt="The Solutionist System">
+      <span class="brand-text">The Solutionist System</span>
+    </a>
     <div class="nav-links">
       <a href="/features" class="{ax_features}">Features</a>
       <a href="/compare" class="{ax_compare}">Compare</a>
@@ -235,7 +253,10 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 <footer>
   <div class="footer-inner">
     <div class="footer-brand">
-      <span class="brand"><span class="dot"></span>The Solutionist System</span>
+      <span class="brand">
+        <img class="logo" src="/assets/logo-nav.png" alt="The Solutionist System" style="height:28px;">
+        <span class="brand-text">The Solutionist System</span>
+      </span>
       <span class="small">Built by KMJ Creative Solutions LLC · Michigan, USA</span>
     </div>
     <div class="footer-links">
