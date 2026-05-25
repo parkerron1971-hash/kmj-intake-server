@@ -4572,20 +4572,54 @@ async def subdomain_root(request: Request):
     if _is_api_host(host):
         raise HTTPException(404, "Not found")
 
-    # Known base domain with no subdomain — serve the marketing page.
-    return HTMLResponse(content=MARKETING_HTML, media_type="text/html")
+    # Known base domain with no subdomain — serve the new multi-page
+    # home (from marketing_pages.py). The legacy MARKETING_HTML
+    # constant stays defined for reference but is no longer served.
+    from marketing_pages import render_home
+    return HTMLResponse(content=render_home(), media_type="text/html")
 
 
-# ─── Public legal + help pages ────────────────────────────────────────
-# Live at mysolutionist.app/{privacy,data-deletion,terms,help}. MUST be
-# registered BEFORE the subdomain catch-all below or they'll fall through
-# to a 404. Content lives in legal_content.py — edit copy there.
+# ─── Public marketing + legal + help pages ────────────────────────────
+# All live at mysolutionist.app/{path}. MUST be registered BEFORE the
+# subdomain catch-all or they fall through to a 404. Marketing pages
+# in marketing_pages.py; legal/help in legal_content.py.
 
 from legal_content import (
     render_privacy_html, render_data_deletion_html,
     render_terms_html, render_help_html,
 )
+from marketing_pages import (
+    render_features, render_compare, render_faq, render_about, render_get_started,
+    handle_lead_intake, LeadIntakeRequest,
+)
 
+# Marketing routes
+@router.get("/features", include_in_schema=False)
+async def public_features():
+    return HTMLResponse(content=render_features(), media_type="text/html")
+
+@router.get("/compare", include_in_schema=False)
+async def public_compare():
+    return HTMLResponse(content=render_compare(), media_type="text/html")
+
+@router.get("/faq", include_in_schema=False)
+async def public_faq():
+    return HTMLResponse(content=render_faq(), media_type="text/html")
+
+@router.get("/about", include_in_schema=False)
+async def public_about():
+    return HTMLResponse(content=render_about(), media_type="text/html")
+
+@router.get("/get-started", include_in_schema=False)
+async def public_get_started():
+    return HTMLResponse(content=render_get_started(), media_type="text/html")
+
+# Intake form submission — POSTed via fetch() from /get-started.
+@router.post("/api/leads", include_in_schema=False)
+async def post_lead(req: LeadIntakeRequest):
+    return await handle_lead_intake(req)
+
+# Legal + help routes
 @router.get("/privacy", include_in_schema=False)
 async def public_privacy():
     return HTMLResponse(content=render_privacy_html(), media_type="text/html")
