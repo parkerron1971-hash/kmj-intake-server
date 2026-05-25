@@ -3800,6 +3800,158 @@ MARKETING_HTML = """<!DOCTYPE html>
   .footer-links a{color:var(--text-muted);transition:color 0.15s;}
   .footer-links a:hover{color:var(--text-primary);}
   .footer-bottom{max-width:1140px;margin:32px auto 0;padding:16px 28px 0;border-top:1px solid var(--border);font-size:11px;color:var(--text-dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+
+  /* ═════ Animation pass: motion that mirrors the app heroes ═════ */
+  /* Brand-dot heartbeat (persistent, sub-2s cycle) */
+  @keyframes brandPulse {
+    0%, 100% { box-shadow: 0 0 10px var(--glow); }
+    50%      { box-shadow: 0 0 16px var(--glow), 0 0 4px color-mix(in srgb, var(--accent) 80%, transparent); }
+  }
+  .brand .dot, .footer-brand .brand .dot { animation: brandPulse 2.6s ease-in-out infinite; }
+
+  /* Floating background orbs in the hero — drift slowly to give the
+     page a "living" feeling without distracting the eye. */
+  .orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(50px);
+    opacity: 0.55;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .orb-1 { top: 10%;  left: 8%;   width: 280px; height: 280px;
+           background: radial-gradient(circle, var(--glow), transparent 70%);
+           animation: orbDrift1 18s ease-in-out infinite; }
+  .orb-2 { top: 60%;  right: 6%;  width: 220px; height: 220px;
+           background: radial-gradient(circle, var(--glow-cyan), transparent 70%);
+           animation: orbDrift2 22s ease-in-out infinite; }
+  .orb-3 { bottom:-40px; left: 40%; width: 200px; height: 200px;
+           background: radial-gradient(circle, color-mix(in srgb, var(--accent-2) 35%, transparent), transparent 70%);
+           animation: orbDrift3 26s ease-in-out infinite; opacity: 0.4; }
+  @keyframes orbDrift1 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(40px, -30px); } }
+  @keyframes orbDrift2 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(-30px, 25px); } }
+  @keyframes orbDrift3 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(20px, -20px); } }
+
+  /* Scroll reveal — IntersectionObserver at the bottom of body adds
+     .visible when an element enters view; CSS handles the transition. */
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.6s ease, transform 0.6s ease; }
+  .reveal.visible { opacity: 1; transform: translateY(0); }
+  .reveal-delay-1 { transition-delay: 0.08s; }
+  .reveal-delay-2 { transition-delay: 0.16s; }
+  .reveal-delay-3 { transition-delay: 0.24s; }
+
+  /* Stat highlight in hero — count-up effect via animated stroke */
+  .stat-block { display: inline-flex; align-items: baseline; gap: 8px; margin-top: 6px; padding: 8px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 99px; font-size: 13px; color: var(--text-muted); }
+  .stat-block .big { font-family: var(--font-heading); font-size: 22px; font-weight: 700; color: transparent;
+                     background: linear-gradient(135deg, var(--accent), var(--info));
+                     -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; line-height: 1; }
+  .stat-block .big::after { content: ''; display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: var(--accent); margin-left: 6px; box-shadow: 0 0 6px var(--glow); animation: brandPulse 1.8s ease-in-out infinite; }
+
+  /* ═════ Signature mini-visuals inside feature cards ═════ */
+  .mini-visual { height: 64px; margin-bottom: 18px; position: relative;
+                 background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 60%, transparent), transparent);
+                 border-radius: 10px; overflow: hidden;
+                 display: flex; align-items: center; justify-content: center; }
+
+  /* Orbit (Command Center) */
+  .mv-orbit { position: relative; width: 56px; height: 56px; }
+  .mv-orbit::before, .mv-orbit::after { content: ''; position: absolute; border-radius: 50%; border: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent); }
+  .mv-orbit::before { inset: 0; }
+  .mv-orbit::after  { inset: 12px; border-color: color-mix(in srgb, var(--info) 35%, transparent); }
+  .mv-orbit .center { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--info)); transform: translate(-50%, -50%); box-shadow: 0 0 10px var(--glow); }
+  .mv-orbit .moon { position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin: -3px 0 0 -3px;
+                     animation: orbitSpin 6s linear infinite; transform-origin: 0 0; }
+  .mv-orbit .moon-2 { background: var(--info); animation-duration: 9s; animation-delay: -3s; }
+  @keyframes orbitSpin { from { transform: rotate(0deg) translateX(22px) rotate(0deg); }
+                          to   { transform: rotate(360deg) translateX(22px) rotate(-360deg); } }
+
+  /* Stacked cards (Build) */
+  .mv-stack { position: relative; width: 64px; height: 48px; }
+  .mv-stack span { position: absolute; width: 48px; height: 30px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); transition: transform 0.25s ease; }
+  .mv-stack span:nth-child(1) { top: 0;  left: 0;  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, transparent), transparent); }
+  .mv-stack span:nth-child(2) { top: 6px; left: 8px; background: linear-gradient(135deg, color-mix(in srgb, var(--info) 16%, transparent), transparent); animation: stackFloat 5s ease-in-out infinite; }
+  .mv-stack span:nth-child(3) { top: 14px; left: 16px; background: linear-gradient(135deg, color-mix(in srgb, var(--success) 15%, transparent), transparent); animation: stackFloat 5s ease-in-out infinite; animation-delay: -2.5s; }
+  @keyframes stackFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+
+  /* Calendar grid pulse (Operate) */
+  .mv-grid { display: grid; grid-template-columns: repeat(5, 8px); grid-template-rows: repeat(3, 8px); gap: 3px; }
+  .mv-grid span { width: 8px; height: 8px; border-radius: 2px; background: color-mix(in srgb, var(--accent) 14%, transparent); border: 1px solid var(--border); }
+  .mv-grid span.live { background: linear-gradient(135deg, var(--accent), var(--info)); border-color: transparent; box-shadow: 0 0 6px var(--glow); animation: gridPing 2.4s ease-in-out infinite; }
+  @keyframes gridPing { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(1.2); } }
+
+  /* Rising bars (Grow) */
+  .mv-bars { display: flex; align-items: flex-end; gap: 4px; height: 36px; }
+  .mv-bars span { width: 6px; border-radius: 2px 2px 0 0; background: linear-gradient(180deg, var(--accent), var(--info)); animation: barRise 3.2s ease-in-out infinite; }
+  .mv-bars span:nth-child(1) { height: 40%; animation-delay: -0.0s; }
+  .mv-bars span:nth-child(2) { height: 70%; animation-delay: -0.4s; }
+  .mv-bars span:nth-child(3) { height: 55%; animation-delay: -0.8s; }
+  .mv-bars span:nth-child(4) { height: 90%; animation-delay: -1.2s; }
+  .mv-bars span:nth-child(5) { height: 65%; animation-delay: -1.6s; }
+  @keyframes barRise { 0%,100% { transform: scaleY(0.85); opacity: 0.85; transform-origin: bottom; } 50% { transform: scaleY(1.05); opacity: 1; } }
+
+  /* Pulsing sparkle (Chief) */
+  .mv-spark { position: relative; width: 36px; height: 36px; }
+  .mv-spark::before, .mv-spark::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--accent); opacity: 0.5; animation: sparkExpand 2.6s ease-out infinite; }
+  .mv-spark::after { animation-delay: -1.3s; border-color: var(--info); }
+  .mv-spark .core { position: absolute; top: 50%; left: 50%; width: 12px; height: 12px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--info)); transform: translate(-50%, -50%); box-shadow: 0 0 14px var(--glow); }
+  @keyframes sparkExpand { 0% { transform: scale(0.4); opacity: 0.9; } 100% { transform: scale(1.6); opacity: 0; } }
+
+  /* FB ↔ IG flow (Publish) */
+  .mv-publish { display: flex; align-items: center; gap: 12px; }
+  .mv-publish .platform { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; color: #fff; }
+  .mv-publish .fb { background: #1877F2; }
+  .mv-publish .ig { background: linear-gradient(135deg, #833AB4, #FD1D1D, #FCB045); }
+  .mv-publish .flow { flex: 1; min-width: 16px; max-width: 24px; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), var(--info), transparent); background-size: 200% 100%; animation: flowSweep 2.4s linear infinite; border-radius: 2px; }
+  @keyframes flowSweep { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+  /* ═════ Comparison table ═════ */
+  .compare { width: 100%; border-collapse: separate; border-spacing: 0;
+             background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
+             font-family: var(--font-body); }
+  .compare th, .compare td { padding: 14px 18px; text-align: left; font-size: 14px; }
+  .compare thead { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .compare thead th { font-family: var(--font-heading); font-weight: 600; color: var(--text-primary); letter-spacing: -0.005em; font-size: 13px; border-bottom: 1px solid var(--border); }
+  .compare thead th.sol-col { color: var(--accent); }
+  .compare tbody td { border-top: 1px solid var(--border); color: var(--text-secondary); }
+  .compare tbody td:first-child { font-weight: 600; color: var(--text-primary); }
+  .compare td.sol { color: var(--success); }
+  .compare td.alt { color: var(--text-muted); font-style: italic; }
+  .compare-foot { margin-top: 12px; font-size: 12px; color: var(--text-dim); text-align: center; font-style: italic; }
+  @media (max-width: 720px) {
+    .compare th, .compare td { padding: 10px 12px; font-size: 12.5px; }
+  }
+
+  /* ═════ Everything-included list ═════ */
+  .included-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  @media (max-width: 760px) { .included-grid { grid-template-columns: 1fr; } }
+  .included-cat { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+  .included-cat h3 { font-family: var(--font-heading); font-size: 16px; color: var(--accent); margin-bottom: 12px; letter-spacing: -0.01em; }
+  .included-cat ul { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 10px; }
+  .included-cat li { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-secondary); padding: 4px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+  .included-cat li::before { content: ''; width: 4px; height: 4px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--info)); }
+
+  /* ═════ FAQ ═════ */
+  .faq-list { display: flex; flex-direction: column; gap: 10px; }
+  .faq-item { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; transition: border-color 0.18s; }
+  .faq-item[open] { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .faq-item summary { padding: 18px 22px; cursor: pointer; font-family: var(--font-heading); font-weight: 600; font-size: 15px; color: var(--text-primary); list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .faq-item summary::-webkit-details-marker { display: none; }
+  .faq-item summary::after { content: '+'; font-family: var(--font-body); font-weight: 400; font-size: 22px; color: var(--accent); transition: transform 0.18s; line-height: 1; }
+  .faq-item[open] summary::after { transform: rotate(45deg); }
+  .faq-body { padding: 0 22px 20px; font-size: 14.5px; color: var(--text-secondary); line-height: 1.65; }
+  .faq-body p { margin-bottom: 10px; }
+  .faq-body p:last-child { margin-bottom: 0; }
+
+  /* ═════ Founder note ═════ */
+  .founder { position: relative; padding: 36px; background: var(--surface); border: 1px solid var(--border); border-radius: 18px;
+             display: grid; grid-template-columns: 64px 1fr; gap: 22px; align-items: flex-start; }
+  @media (max-width: 640px) { .founder { grid-template-columns: 1fr; padding: 28px; } }
+  .founder-avatar { width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+                    background: linear-gradient(135deg, var(--accent), var(--info)); color: var(--text-primary); font-family: var(--font-heading); font-weight: 600; font-size: 24px; box-shadow: 0 4px 22px var(--glow); }
+  .founder-body p { font-size: 15.5px; line-height: 1.7; color: var(--text-secondary); margin-bottom: 14px; }
+  .founder-body p:last-of-type { margin-bottom: 0; }
+  .founder-sig { margin-top: 14px; font-family: var(--font-heading); font-weight: 600; color: var(--text-primary); font-size: 14px; }
+  .founder-sig .small { display: block; font-family: var(--font-body); font-weight: 400; font-size: 12px; color: var(--text-dim); margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -3810,8 +3962,8 @@ MARKETING_HTML = """<!DOCTYPE html>
     <a class="brand" href="/"><span class="dot"></span>The Solutionist System</a>
     <div class="nav-links">
       <a href="#features">Features</a>
-      <a href="#audience">Who it's for</a>
-      <a href="#how">How it works</a>
+      <a href="#compare">Compare</a>
+      <a href="#faq">FAQ</a>
       <a href="/help">Help</a>
       <a class="nav-cta" href="mailto:kmjcreativesolution@gmail.com?subject=Get%20Started%20with%20Solutionist">Get Started</a>
     </div>
@@ -3820,15 +3972,24 @@ MARKETING_HTML = """<!DOCTYPE html>
 
 <!-- ═══ HERO ═══ -->
 <section class="hero">
+  <span class="orb orb-1" aria-hidden></span>
+  <span class="orb orb-2" aria-hidden></span>
+  <span class="orb orb-3" aria-hidden></span>
   <div class="container">
-    <span class="eyebrow">For solo practitioners + small studios</span>
-    <h1>One workspace that runs your <span class="accent">whole practice.</span></h1>
-    <p class="lead">Contacts, invoices, sessions, content, goals, and an AI Chief of Staff that knows your business — replacing eight tools and the friction between them.</p>
-    <div class="hero-ctas">
+    <span class="eyebrow reveal">For solo practitioners + small studios</span>
+    <h1 class="reveal reveal-delay-1">One workspace that runs your <span class="accent">whole practice.</span></h1>
+    <p class="lead reveal reveal-delay-2">Contacts, invoices, sessions, content, goals, and an AI Chief of Staff that knows your business — replacing eight tools and the friction between them.</p>
+    <div class="hero-ctas reveal reveal-delay-3">
       <a class="btn-primary" href="mailto:kmjcreativesolution@gmail.com?subject=Get%20Started%20with%20Solutionist">Get Started →</a>
       <a class="btn-secondary" href="#features">See what it does</a>
     </div>
-    <div class="hero-note">Currently in private beta · Email us to request access</div>
+    <div class="reveal reveal-delay-3" style="margin-top:18px;">
+      <span class="stat-block">
+        <span class="big">8</span>
+        <span>tools replaced by one workspace</span>
+      </span>
+    </div>
+    <div class="hero-note reveal reveal-delay-3">Currently in private beta · Email us to request access</div>
   </div>
 </section>
 
@@ -3841,32 +4002,62 @@ MARKETING_HTML = """<!DOCTYPE html>
       <p>Each tab is its own command center. They share contacts, content, brand, and your Chief — so nothing falls between the cracks.</p>
     </div>
     <div class="features-grid">
-      <div class="card feature-card">
+      <div class="card feature-card reveal">
+        <div class="mini-visual" aria-hidden>
+          <div class="mv-orbit">
+            <span class="center"></span>
+            <span class="moon"></span>
+            <span class="moon moon-2"></span>
+          </div>
+        </div>
         <div class="card-icon">🏠</div>
         <h3>Command Center</h3>
         <p>Daily dashboard: today's schedule, what needs attention, recent activity. Voice-first option — wake your Chief by name.</p>
       </div>
-      <div class="card feature-card">
+      <div class="card feature-card reveal reveal-delay-1">
+        <div class="mini-visual" aria-hidden>
+          <div class="mv-stack"><span></span><span></span><span></span></div>
+        </div>
         <div class="card-icon">🧱</div>
         <h3>Build</h3>
         <p>Practitioner sites, brand kits, intake forms, integrations. Connect Stripe, Facebook Pages, and the tools you already use.</p>
       </div>
-      <div class="card feature-card">
+      <div class="card feature-card reveal reveal-delay-2">
+        <div class="mini-visual" aria-hidden>
+          <div class="mv-grid">
+            <span></span><span></span><span></span><span class="live"></span><span></span>
+            <span></span><span class="live"></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span class="live"></span>
+          </div>
+        </div>
         <div class="card-icon">⚙️</div>
         <h3>Operate</h3>
         <p>Contacts, invoices, calendar, tasks, email + SMS hubs. The day-to-day plumbing that keeps clients moving forward.</p>
       </div>
-      <div class="card feature-card">
+      <div class="card feature-card reveal">
+        <div class="mini-visual" aria-hidden>
+          <div class="mv-bars"><span></span><span></span><span></span><span></span><span></span></div>
+        </div>
         <div class="card-icon">📈</div>
         <h3>Grow</h3>
-        <p>Revenue analytics, goals across five lenses (Business / Team / Personal / Custom), sales funnel, and a content calendar with pillars.</p>
+        <p>Revenue analytics, goals across five lenses (Business / Team Building / Personal / Custom), sales funnel, and a content calendar with pillars.</p>
       </div>
-      <div class="card feature-card">
+      <div class="card feature-card reveal reveal-delay-1">
+        <div class="mini-visual" aria-hidden>
+          <div class="mv-spark"><span class="core"></span></div>
+        </div>
         <div class="card-icon">🤖</div>
         <h3>Chief of Staff</h3>
         <p>An AI that reads your real data every turn. Drafts emails, plans posts, sets goals, sends reports, and gives tactical input on what to push.</p>
       </div>
-      <div class="card feature-card">
+      <div class="card feature-card reveal reveal-delay-2">
+        <div class="mini-visual" aria-hidden>
+          <div class="mv-publish">
+            <span class="platform fb">f</span>
+            <span class="flow"></span>
+            <span class="platform ig">📷</span>
+          </div>
+        </div>
         <div class="card-icon">📣</div>
         <h3>Publish anywhere</h3>
         <p>Connect your Facebook Page and linked Instagram Business account, then publish from the Content tab in one click. Posts and engagement live next to your goals.</p>
@@ -3974,6 +4165,184 @@ MARKETING_HTML = """<!DOCTYPE html>
   </div>
 </section>
 
+<!-- ═══ COMPARISON ═══ -->
+<section id="compare">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">The alternative</span>
+      <h2>One workspace vs. cobbling 8 tools together.</h2>
+      <p>What you'd normally pay $200+/month for and lose to context-switching every day.</p>
+    </div>
+    <div class="reveal reveal-delay-1">
+      <table class="compare">
+        <thead>
+          <tr>
+            <th>What you need</th>
+            <th class="sol-col">Solutionist</th>
+            <th>The 8-tool stack</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>CRM &amp; contacts</td><td class="sol">✓ Built-in</td><td class="alt">HubSpot / Notion / spreadsheet</td></tr>
+          <tr><td>Invoicing &amp; payments</td><td class="sol">✓ Built-in</td><td class="alt">Stripe + QuickBooks</td></tr>
+          <tr><td>Calendar &amp; booking</td><td class="sol">✓ Built-in</td><td class="alt">Calendly + Google Calendar</td></tr>
+          <tr><td>Content planning &amp; publishing</td><td class="sol">✓ Built-in</td><td class="alt">Buffer / Hootsuite + Notion</td></tr>
+          <tr><td>Goals &amp; tracking</td><td class="sol">✓ Built-in</td><td class="alt">Spreadsheet + sticky notes</td></tr>
+          <tr><td>Funnel &amp; pipeline analytics</td><td class="sol">✓ Built-in</td><td class="alt">Mixpanel / Looker / DIY</td></tr>
+          <tr><td>Website &amp; brand</td><td class="sol">✓ Built-in</td><td class="alt">Squarespace / Webflow + Figma</td></tr>
+          <tr><td>AI assistant that knows your business</td><td class="sol">✓ Chief of Staff</td><td class="alt">ChatGPT + manual context every time</td></tr>
+        </tbody>
+      </table>
+      <div class="compare-foot">Every tool above also needs its own login, billing, sync setup, and prayers that it talks to the others.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ EVERYTHING INCLUDED ═══ -->
+<section id="included">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">Everything in the workspace</span>
+      <h2>Yes, all of this is built in.</h2>
+      <p>No add-ons, no premium tier hiding the basics, no upsells. The whole product is the whole product.</p>
+    </div>
+    <div class="included-grid">
+      <div class="included-cat reveal">
+        <h3>🏠 Command Center</h3>
+        <ul>
+          <li>Daily dashboard</li><li>Voice-first Chief</li><li>Command palette</li>
+          <li>Wake-word listening</li><li>Activity feed</li><li>Smart notifications</li>
+        </ul>
+      </div>
+      <div class="included-cat reveal reveal-delay-1">
+        <h3>🧱 Build</h3>
+        <ul>
+          <li>Practitioner sites</li><li>Brand kits</li><li>Intake forms</li><li>Custom modules</li>
+          <li>Print materials</li><li>Booking page</li><li>Link page</li><li>Email templates</li>
+          <li>Products &amp; services</li><li>Integrations hub</li>
+        </ul>
+      </div>
+      <div class="included-cat reveal">
+        <h3>⚙️ Operate</h3>
+        <ul>
+          <li>Contacts (CRM)</li><li>Invoices &amp; payments</li><li>Calendar</li><li>Tasks</li>
+          <li>Email hub</li><li>SMS hub</li><li>Projects</li><li>Documents</li><li>Autopilot agents</li>
+        </ul>
+      </div>
+      <div class="included-cat reveal reveal-delay-1">
+        <h3>📈 Grow</h3>
+        <ul>
+          <li>Revenue analytics</li><li>Revenue Allocator</li><li>Expense tracking</li>
+          <li>Goals (5 lenses)</li><li>Goal reminders</li><li>Funnel analytics</li>
+          <li>Drop-off insights</li><li>Lost-reason logging</li><li>Content calendar</li>
+          <li>Content pillars</li><li>Idea inbox</li><li>Engagement tracking</li>
+          <li>Weekly briefing</li><li>Insights feed</li>
+        </ul>
+      </div>
+      <div class="included-cat reveal">
+        <h3>🤖 Chief of Staff (AI)</h3>
+        <ul>
+          <li>Voice mode</li><li>Memory + standing instructions</li>
+          <li>Action delegation</li><li>Goal coaching</li><li>Content drafting</li>
+          <li>Direct publishing</li><li>Report generation</li><li>Insight + tactical input</li>
+        </ul>
+      </div>
+      <div class="included-cat reveal reveal-delay-1">
+        <h3>🔌 Connections</h3>
+        <ul>
+          <li>Stripe</li><li>Square</li><li>PayPal</li><li>Facebook Pages</li>
+          <li>Instagram Business</li><li>Resend (email)</li><li>Supabase Storage</li>
+          <li>More coming</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ FAQ ═══ -->
+<section id="faq">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">Common questions</span>
+      <h2>Answers to what people ask first.</h2>
+    </div>
+    <div class="faq-list reveal reveal-delay-1" style="max-width:780px;margin:0 auto;">
+      <details class="faq-item">
+        <summary>Who is this actually for?</summary>
+        <div class="faq-body">
+          <p>Solo practitioners and small studios. The people we built it for: pastors, coaches, consultants, creatives, agencies-of-one, and small service businesses. If you run your whole show — sales, delivery, marketing, finances — Solutionist is for you. If you have a 20-person team with a dedicated ops person, it's overkill.</p>
+        </div>
+      </details>
+      <details class="faq-item">
+        <summary>Do I need a team to use this?</summary>
+        <div class="faq-body">
+          <p>No. The whole product assumes one operator. No seat math, no "add a teammate" friction, no admin role management. If you grow to a team later, the data model supports it — but it's not the default.</p>
+        </div>
+      </details>
+      <details class="faq-item">
+        <summary>What about pricing?</summary>
+        <div class="faq-body">
+          <p>We're in private beta right now. Pricing is coming when we open public access. Email us — if you're a fit, we'll get you in early and grandfather you on whatever pricing launches.</p>
+        </div>
+      </details>
+      <details class="faq-item">
+        <summary>How is this different from Notion, HubSpot, or just using ChatGPT?</summary>
+        <div class="faq-body">
+          <p><strong>Notion</strong> is a blank canvas — you'd build all this yourself, and it doesn't have an AI that knows your actual business data.</p>
+          <p><strong>HubSpot</strong> is enterprise CRM with a steep learning curve, sales-team assumptions, and pricing that doesn't fit a solo practice.</p>
+          <p><strong>ChatGPT</strong> is generic — you have to re-explain your business every time. Chief reads your real contacts, invoices, goals, content, and brand on every turn.</p>
+          <p>Solutionist is purpose-built for solo operators with AI woven through every surface.</p>
+        </div>
+      </details>
+      <details class="faq-item">
+        <summary>Does the AI replace my judgment?</summary>
+        <div class="faq-body">
+          <p>No. Chief drafts, suggests, and assists — it never sends without you approving (except for explicit actions you ask it to take, like "send this email" or "publish this post"). It's an instrument, not a replacement.</p>
+        </div>
+      </details>
+      <details class="faq-item">
+        <summary>What about my existing tools — do I have to move everything?</summary>
+        <div class="faq-body">
+          <p>No. Connect what you want (Stripe for payments, Facebook for publishing, Resend for email). The rest stays. Solutionist is opinionated about workflow but not greedy — you can keep Calendly or your existing email tool and Solutionist will work around it.</p>
+        </div>
+      </details>
+      <details class="faq-item">
+        <summary>How secure is my data?</summary>
+        <div class="faq-body">
+          <p>Connected social account tokens and other credentials are stored server-side only — your browser never sees them. We use Supabase for data storage and Railway for hosting. You can disconnect any integration immediately from the app, which deletes the stored token. Full details in the <a href="/privacy">Privacy Policy</a>.</p>
+        </div>
+      </details>
+      <details class="faq-item">
+        <summary>When can I sign up?</summary>
+        <div class="faq-body">
+          <p>Now — email us at <a href="mailto:kmjcreativesolution@gmail.com">kmjcreativesolution@gmail.com</a> with a few sentences about your practice. If we're a fit, we'll onboard you within a few days.</p>
+        </div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ FOUNDER NOTE ═══ -->
+<section id="founder" style="padding:64px 0;">
+  <div class="container" style="max-width:820px;">
+    <div class="section-head reveal" style="margin-bottom:32px;">
+      <span class="eyebrow">From the founder</span>
+    </div>
+    <div class="founder reveal reveal-delay-1">
+      <div class="founder-avatar">KM</div>
+      <div class="founder-body">
+        <p>I built the Solutionist System because I was tired of running my own business across eight tools that didn't talk to each other.</p>
+        <p>Every solo operator I know lives in the same chaos: Notion for notes, Stripe for invoices, Calendly for booking, Buffer for content, a spreadsheet for goals, a CRM nobody actually uses. The friction between tools eats more time than the actual work.</p>
+        <p>So we built one workspace where everything lives together — with an AI Chief of Staff that actually knows your business, not generic prompts. We're growing it carefully in private beta. If you're a coach, pastor, consultant, or solo studio, I'd love to talk.</p>
+        <div class="founder-sig">
+          Kevin McCloud Jr.
+          <span class="small">Founder &middot; KMJ Creative Solutions LLC</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ═══ FINAL CTA ═══ -->
 <section class="final-cta">
   <div class="container">
@@ -4004,6 +4373,43 @@ MARKETING_HTML = """<!DOCTYPE html>
     <span>mysolutionist.app</span>
   </div>
 </footer>
+
+<script>
+  // Scroll-reveal: add .visible to .reveal elements as they enter view.
+  // Pure vanilla JS, no dependencies. Respects prefers-reduced-motion —
+  // when reduced motion is on, just reveal everything immediately.
+  (function() {
+    var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var els = document.querySelectorAll('.reveal');
+    if (reduced || !('IntersectionObserver' in window)) {
+      // Show everything without animation
+      for (var i = 0; i < els.length; i++) els[i].classList.add('visible');
+      return;
+    }
+    var io = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          io.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    for (var j = 0; j < els.length; j++) io.observe(els[j]);
+
+    // Smooth-scroll anchor links
+    document.querySelectorAll('a[href^="#"]').forEach(function(a) {
+      a.addEventListener('click', function(e) {
+        var id = a.getAttribute('href').slice(1);
+        if (!id) return;
+        var target = document.getElementById(id);
+        if (target) {
+          e.preventDefault();
+          target.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
+        }
+      });
+    });
+  })();
+</script>
 
 </body>
 </html>"""
