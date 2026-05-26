@@ -141,7 +141,7 @@ def provision_modules(
     Idempotent and per-module non-fatal. Returns a small report:
         {"created": [...slugs], "skipped": [...slugs], "failed": [...slugs]}
     """
-    report: Dict[str, Any] = {"created": [], "skipped": [], "failed": [], "skipped_restricted": []}
+    report: Dict[str, Any] = {"created": [], "skipped": [], "failed": []}
     if not business_id:
         return report
 
@@ -155,12 +155,9 @@ def provision_modules(
     for row in blueprint:
         if (row.get("tier") or "core") != "core":
             continue
-        # Fork 25: never auto-provision an access-restricted module (e.g. ministry Giving)
-        # into an unprotected state. It stays unprovisioned until the secure-access layer
-        # enforces isolation. Marking != enforcing.
-        if ((row.get("agent_config") or {}).get("access_level")) == "restricted":
-            report["skipped_restricted"].append(row.get("module_slug"))
-            continue
+        # Restricted modules (e.g. Giving) now provision normally: only their CONFIG
+        # row lives here; ENTRIES are routed to the locked restricted store by the
+        # frontend/backend (Access-Enforcement 25a). access_level travels via agent_config.
         if not _stage_le(row.get("maturity_stage"), max_stage):
             continue
         slug = row.get("module_slug")
@@ -194,8 +191,7 @@ def provision_modules(
 
     logger.info(
         f"provision biz={business_id} type={business_type}: "
-        f"created={report['created']} skipped={len(report['skipped'])} "
-        f"restricted={report['skipped_restricted']} failed={report['failed']}"
+        f"created={report['created']} skipped={len(report['skipped'])} failed={report['failed']}"
     )
     return report
 
@@ -214,7 +210,7 @@ def missing_modules(
     Returns {"core_missing": [...], "suggested_available": [...]} where each
     entry is {slug, name, reason}. max_stage caps how far ahead we look.
     """
-    out: Dict[str, List[Dict[str, str]]] = {"core_missing": [], "suggested_available": [], "access_pending": []}
+    out: Dict[str, List[Dict[str, str]]] = {"core_missing": [], "suggested_available": []}
     if not business_id:
         return out
 
@@ -234,10 +230,7 @@ def missing_modules(
             "name": row.get("module_name") or slug,
             "reason": (row.get("reason") or "").strip(),
         }
-        # Fork 25: restricted modules are not offered for creation until enforced.
-        if ((row.get("agent_config") or {}).get("access_level")) == "restricted":
-            out["access_pending"].append(entry)
-        elif (row.get("tier") or "core") == "core":
+        if (row.get("tier") or "core") == "core":
             out["core_missing"].append(entry)
         else:
             out["suggested_available"].append(entry)
@@ -258,8 +251,7 @@ def blueprint_gap_block(business_id: str, business_type: str) -> str:
 
     core = gap.get("core_missing") or []
     suggested = gap.get("suggested_available") or []
-    pending = gap.get("access_pending") or []
-    if not core and not suggested and not pending:
+    if not core and not suggested:
         return ""
 
     lines: List[str] = ["## Module Coverage"]
@@ -273,11 +265,5 @@ def blueprint_gap_block(business_id: str, business_type: str) -> str:
         names = ", ".join(e["name"] for e in suggested)
         lines.append(
             f"Suggested next modules (recommend when relevant, don't auto-create): {names}."
-        )
-    if pending:
-        names = ", ".join(e["name"] for e in pending)
-        lines.append(
-            f"Access-restricted modules NOT yet available: {names}. These require the secure-access "
-            f"layer before setup — do NOT offer to create them yet."
         )
     return "\n".join(lines)
