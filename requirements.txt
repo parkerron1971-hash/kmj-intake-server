@@ -14,7 +14,9 @@ beautifulsoup4==4.12.3
 # the upload. Pillow reads JPEG/PNG/WebP/AVIF headers without decoding
 # the full image (uses Image.size).
 Pillow>=10.4.0
-# Auth Phase 1 — decode + verify Supabase user JWTs in auth_supabase.py
-# (HS256 with SUPABASE_JWT_SECRET). Helper not wired into existing routes
-# yet; Phase 3 hardening will gate tenant endpoints with require_user.
-PyJWT>=2.8.0
+# Auth Phase 1 — decode + verify Supabase user JWTs in auth_supabase.py.
+# The [crypto] extra pulls in the `cryptography` package which PyJWT
+# requires for asymmetric algorithms (RS256 / ES256). Newer Supabase
+# projects sign tokens with RS256 by default, so HS256-only would 401
+# every request — see auth_supabase.py JWKS path.
+PyJWT[crypto]>=2.8.0
