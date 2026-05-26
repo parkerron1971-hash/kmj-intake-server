@@ -96,8 +96,9 @@ app.include_router(chief_executive_router)
 app.include_router(composer_router)
 # Phase 4 of AUTH_PLAN — marketing-lead → user invite workflow.
 # Owner-only triage panel (Settings → Leads) calls these endpoints.
-from lead_admin import router as lead_admin_router
+from lead_admin import router as lead_admin_router, diag_router as lead_admin_diag_router
 app.include_router(lead_admin_router)
+app.include_router(lead_admin_diag_router)
 # Mission Control / Platform Console — owner-only operator endpoints.
 # Lives at /platform/* and powers the Mission Control module in the
 # Tauri app.
