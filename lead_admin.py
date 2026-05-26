@@ -74,11 +74,12 @@ diag_router = APIRouter(prefix="/_diag", tags=["diag"])
 
 
 @diag_router.get("/env")
-def diag_env():
+def diag_env(_user: AuthedUser = Depends(require_user)):
     """Report presence of the env vars the auth + service-role paths
     depend on. Values are NEVER returned — only whether they're set
     and (for the URL) a redacted preview so you can confirm the
-    project."""
+    project. LOCKED (Fork #3): authenticated callers only — no longer
+    public. Tighten to require_owner if practitioner-level access is too broad."""
     su_url = os.environ.get("SUPABASE_URL", "")
     su_role = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
     su_jwt = os.environ.get("SUPABASE_JWT_SECRET", "")
