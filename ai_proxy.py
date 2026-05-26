@@ -73,11 +73,14 @@ On Anthropic error (4xx/5xx), returns the matching status with:
 
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
+from api_usage_logger import log_api_usage
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -197,6 +200,13 @@ async def ai_proxy(req: ProxyRequest):
         "content-type": "application/json",
     }
 
+    # Identifying context for cost tracking. Frontend passes these via
+    # the metadata field; missing values are fine (logged as NULL).
+    metadata = req.metadata or {}
+    business_id = metadata.get("business_id") or metadata.get("user_id")
+    user_id = metadata.get("auth_user_id")
+
+    started_ms = int(time.time() * 1000)
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             resp = await client.post(
@@ -206,9 +216,20 @@ async def ai_proxy(req: ProxyRequest):
             )
     except httpx.TimeoutException as e:
         logger.error(f"Anthropic request timed out: {e}")
+        # Log the failed call so we still see it in api_usage
+        await log_api_usage(
+            endpoint="/ai/proxy", model=model, input_tokens=0, output_tokens=0,
+            business_id=business_id, user_id=user_id, task_type=req.task_type,
+            duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=f"timeout: {e}",
+        )
         raise HTTPException(status_code=504, detail="Anthropic API timed out")
     except httpx.HTTPError as e:
         logger.error(f"Anthropic request failed: {e}")
+        await log_api_usage(
+            endpoint="/ai/proxy", model=model, input_tokens=0, output_tokens=0,
+            business_id=business_id, user_id=user_id, task_type=req.task_type,
+            duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=f"http: {e}",
+        )
         raise HTTPException(status_code=502, detail=f"Anthropic API request failed: {e}")
 
     # Pass through Anthropic errors with their status code
@@ -219,6 +240,12 @@ async def ai_proxy(req: ProxyRequest):
             err_body = {"error": resp.text}
         logger.warning(
             f"Anthropic returned {resp.status_code} for task_type={req.task_type} model={model}: {err_body}"
+        )
+        await log_api_usage(
+            endpoint="/ai/proxy", model=model, input_tokens=0, output_tokens=0,
+            business_id=business_id, user_id=user_id, task_type=req.task_type,
+            duration_ms=int(time.time() * 1000) - started_ms, ok=False,
+            error=f"{resp.status_code}: {str(err_body)[:200]}",
         )
         raise HTTPException(status_code=resp.status_code, detail=err_body)
 
@@ -231,6 +258,18 @@ async def ai_proxy(req: ProxyRequest):
     logger.info(
         f"ai_proxy ok task_type={req.task_type} model={model} "
         f"input_tokens={usage.get('input_tokens')} output_tokens={usage.get('output_tokens')}"
+    )
+
+    # Fire-and-forget cost log (won't raise even if Supabase is down).
+    await log_api_usage(
+        endpoint="/ai/proxy",
+        model=data.get("model", model),
+        input_tokens=int(usage.get("input_tokens") or 0),
+        output_tokens=int(usage.get("output_tokens") or 0),
+        business_id=business_id,
+        user_id=user_id,
+        task_type=req.task_type,
+        duration_ms=int(time.time() * 1000) - started_ms,
     )
 
     return {
