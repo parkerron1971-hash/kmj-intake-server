@@ -51,7 +51,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
 from auth_supabase import AuthedUser, require_user
 
@@ -109,7 +109,7 @@ def _service_headers() -> Dict[str, str]:
 class Lead(BaseModel):
     id: str
     name: str
-    email: EmailStr
+    email: str  # validated by Supabase + Auth Admin API; plain str avoids the email-validator pip dep
     role: Optional[str] = None
     what_you_do: Optional[str] = None
     source: Optional[str] = None
