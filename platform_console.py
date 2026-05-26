@@ -19,7 +19,7 @@ Reuses the same envs lead_admin.py needs:
   SUPABASE_URL
   SUPABASE_SERVICE_ROLE_KEY
   SUPABASE_JWT_SECRET
-  PLATFORM_OWNER_EMAIL (defaults to parkerron1971@gmail.com)
+  PLATFORM_OWNER_EMAIL (defaults to kmjcreativesolution@gmail.com)
 """
 
 from __future__ import annotations
