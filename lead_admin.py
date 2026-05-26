@@ -66,6 +66,41 @@ if not logger.handlers:
 
 router = APIRouter(prefix="/admin/leads", tags=["lead-admin"])
 
+# Diagnostic router — public, no auth. Reports WHICH env vars the
+# running process sees (presence only — never the values). Lets us
+# debug "I set the var on Railway, why isn't it working?" without
+# guessing.
+diag_router = APIRouter(prefix="/_diag", tags=["diag"])
+
+
+@diag_router.get("/env")
+def diag_env():
+    """Report presence of the env vars the auth + service-role paths
+    depend on. Values are NEVER returned — only whether they're set
+    and (for the URL) a redacted preview so you can confirm the
+    project."""
+    su_url = os.environ.get("SUPABASE_URL", "")
+    su_role = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    su_jwt = os.environ.get("SUPABASE_JWT_SECRET", "")
+    owner = os.environ.get("PLATFORM_OWNER_EMAIL", "(default)")
+    return {
+        "SUPABASE_URL": {
+            "set": bool(su_url),
+            "preview": (su_url[:32] + "…") if su_url else "",
+        },
+        "SUPABASE_SERVICE_ROLE_KEY": {
+            "set": bool(su_role),
+            "length": len(su_role) if su_role else 0,
+            "starts_with": (su_role[:8] + "…") if su_role else "",
+        },
+        "SUPABASE_JWT_SECRET": {
+            "set": bool(su_jwt),
+            "length": len(su_jwt) if su_jwt else 0,
+        },
+        "PLATFORM_OWNER_EMAIL": owner,
+        "STRIPE_SECRET_KEY_set": bool(os.environ.get("STRIPE_SECRET_KEY")),
+    }
+
 
 SUPABASE_URL = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
