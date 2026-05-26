@@ -38,6 +38,9 @@ from pydantic import BaseModel
 
 from lead_admin import require_owner, _service_headers, SUPABASE_URL
 from api_usage_logger import log_api_usage, _compute_cost_cents
+from platform_chief_actions import (
+    extract_actions, strip_action_tags, dispatch_actions,
+)
 
 
 logger = logging.getLogger("platform_console")
@@ -362,22 +365,74 @@ PLATFORM_CHIEF_MODEL = os.environ.get("PLATFORM_CHIEF_MODEL", "claude-sonnet-4-5
 
 PLATFORM_CHIEF_SYSTEM = (
     "You are the Platform Chief of Staff for the Solutionist System — Kevin's operator-side "
-    "advisor. You are NOT the practitioner Chief (warm, encouraging, growth-focused). "
-    "You are direct, data-first, and blunt about risk. Think hands-on COO who's read every dashboard.\n\n"
-    "Your job: answer Kevin's questions about how the SOLUTIONIST PLATFORM (not any single "
-    "practitioner) is doing. Health, growth, costs, risks. Be specific. Quote numbers from the "
-    "snapshot. If the snapshot does not have the data, SAY so explicitly — never invent numbers.\n\n"
+    "advisor and chief of operations. You are NOT the practitioner Chief (warm, encouraging, "
+    "growth-focused). You are direct, data-first, and blunt about risk. Think hands-on COO who "
+    "has read every dashboard AND can take action.\n\n"
+    "Your job is twofold:\n"
+    "  1. ANSWER Kevin's questions about how the SOLUTIONIST PLATFORM (not any single practitioner) "
+    "     is doing. Health, growth, costs, risks.\n"
+    "  2. TAKE ACTIONS on his behalf when he asks you to (or when it is clearly implied) — extend "
+    "     trials, resend invites, email practitioners, bump lead status.\n\n"
+    "Be specific. Quote numbers from the snapshot. If the snapshot does not have the data, SAY so "
+    "explicitly — never invent numbers.\n\n"
     "Format: 2-3 sentences for most answers. For 'how is the business' questions, lead with the "
     "single most important fact, then 2-3 supporting bullets. Never long. Always end with one "
     "actionable next step if there is an obvious one.\n\n"
-    "You have access to a current snapshot of the platform state. Use it. If Kevin asks about "
-    "something not in the snapshot, tell him what blind spot is preventing the answer and what "
-    "would close it."
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "ACTION VOCABULARY (use sparingly — only when clearly asked or when the next step is obvious)\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "To take an action, EMBED it in your reply text using this exact pattern:\n\n"
+    "    [ACTION:{\"type\":\"...\", ...}]\n\n"
+    "The system will execute the action and the operator sees the result as a card under your "
+    "message. You can take multiple actions in one reply.\n\n"
+    "Available actions:\n\n"
+    "  • [ACTION:{\"type\":\"extend_trial\",\"business_id\":\"<uuid>\",\"days\":14,\"reason\":\"...\"}]\n"
+    "      Pushes their trial_ends_at out by N days.\n\n"
+    "  • [ACTION:{\"type\":\"resend_invite\",\"lead_id\":\"<uuid>\",\"reason\":\"...\"}]\n"
+    "      Re-fires the Supabase invite email for a marketing_leads row.\n\n"
+    "  • [ACTION:{\"type\":\"send_practitioner_email\",\"business_id\":\"<uuid>\",\"subject\":\"...\",\"body\":\"...\",\"reason\":\"...\"}]\n"
+    "      Sends a direct email to a practitioner. Draft the body yourself — warm + concise.\n\n"
+    "  • [ACTION:{\"type\":\"mark_lead_status\",\"lead_id\":\"<uuid>\",\"status\":\"contacted\"|\"qualified\"|\"declined\"|\"archived\",\"note\":\"...\"}]\n"
+    "      Bumps a marketing_leads.status with an optional internal note.\n\n"
+    "RULES:\n"
+    "  • Only fire an action when the operator asks or the action is the obviously-correct response "
+    "    to what's in the snapshot.\n"
+    "  • Use the EXACT JSON shape above — ANY deviation will be skipped.\n"
+    "  • UUIDs MUST come from the snapshot. Never invent ids.\n"
+    "  • If the operator's request is destructive (suspend, refund, mass email) — these actions are "
+    "    NOT in your vocabulary yet. Tell the operator and suggest they handle it manually.\n"
+    "  • After firing an action, the rest of your reply should briefly say what you did and why — "
+    "    operator will see the result card anyway, so don't belabor it.\n\n"
+    "You have access to a current snapshot of the platform state. Use it for both answering AND "
+    "for sourcing UUIDs for actions."
 )
 
 
 class ChiefMessageBody(BaseModel):
     message: str
+
+
+@router.get("/chief/actions")
+async def list_chief_actions(limit: int = 50, _owner=Depends(require_owner)):
+    """Recent chief_actions rows for the Action History panel.
+    Newest first. Capped at 200 to keep payloads sane."""
+    headers = _service_headers()
+    limit = max(1, min(int(limit or 50), 200))
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.get(
+            f"{SUPABASE_URL}/rest/v1/chief_actions",
+            headers=headers,
+            params={
+                "select": "id,ts,action_type,business_id,lead_id,ok,error,payload,result,triggered_by_message",
+                "order":  "ts.desc",
+                "limit":  str(limit),
+            },
+        )
+    if r.status_code in (404, 406):
+        return []  # migration not run yet
+    if r.status_code >= 400:
+        raise HTTPException(r.status_code, f"Failed to fetch chief_actions: {r.text[:200]}")
+    return r.json()
 
 
 async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
@@ -475,6 +530,71 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
         except Exception as e:
             snap["costs_30d"] = {"error": str(e)}
 
+    # Activity in the last 24h + week-over-week deltas (cheap counts)
+    try:
+        from datetime import timedelta as _td
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            async def _count_since(table: str, since_iso: str) -> int:
+                try:
+                    r = await c.head(
+                        f"{SUPABASE_URL}/rest/v1/{table}",
+                        headers={**headers, "Prefer": "count=exact", "Range": "0-0"},
+                        params={"created_at": f"gte.{since_iso}"},
+                    )
+                    if r.status_code in (200, 206):
+                        cr = r.headers.get("content-range", "")
+                        last = cr.split("/")[-1] if "/" in cr else "0"
+                        return int(last) if last and last != "*" else 0
+                except Exception:
+                    pass
+                return 0
+
+            now = datetime.now(timezone.utc)
+            since_24h = (now - _td(hours=24)).isoformat()
+            since_7d  = (now - _td(days=7)).isoformat()
+            since_14d = (now - _td(days=14)).isoformat()
+
+            snap["last_24h"] = {
+                "new_leads":      await _count_since("marketing_leads", since_24h),
+                "new_businesses": await _count_since("businesses", since_24h),
+            }
+            leads_this_week = await _count_since("marketing_leads", since_7d)
+            biz_this_week   = await _count_since("businesses",      since_7d)
+            leads_prev_week = (await _count_since("marketing_leads", since_14d)) - leads_this_week
+            biz_prev_week   = (await _count_since("businesses",      since_14d)) - biz_this_week
+            snap["week_over_week"] = {
+                "leads_this_week":      leads_this_week,
+                "leads_prev_week":      max(0, leads_prev_week),
+                "leads_delta":          leads_this_week - max(0, leads_prev_week),
+                "businesses_this_week": biz_this_week,
+                "businesses_prev_week": max(0, biz_prev_week),
+                "businesses_delta":     biz_this_week - max(0, biz_prev_week),
+            }
+
+            # Recent chief actions (so Chief can reason about its own behavior)
+            try:
+                ar = await c.get(
+                    f"{SUPABASE_URL}/rest/v1/chief_actions",
+                    headers=headers,
+                    params={"select": "action_type,ok,ts", "order": "ts.desc", "limit": "20"},
+                )
+                if ar.status_code < 400:
+                    rows = ar.json()
+                    by_type: Dict[str, int] = {}
+                    failures = 0
+                    for row in rows:
+                        by_type[row["action_type"]] = by_type.get(row["action_type"], 0) + 1
+                        if not row.get("ok"):
+                            failures += 1
+                    snap["recent_chief_actions"] = {
+                        "last_20_by_type": by_type,
+                        "failures_in_last_20": failures,
+                    }
+            except Exception:
+                pass
+    except Exception as e:
+        snap["activity_error"] = str(e)
+
     snap["blind_spots"] = [
         "Backend errors / Railway log stream (no aggregator wired)",
         "Frontend client errors (no error reporter)",
@@ -536,7 +656,7 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
 
     data = r.json()
     content_blocks = data.get("content", [])
-    text = "".join(
+    raw_text = "".join(
         b.get("text", "")
         for b in content_blocks
         if isinstance(b, dict) and b.get("type") == "text"
@@ -551,8 +671,24 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
         duration_ms=int(time.time() * 1000) - started_ms,
     )
 
+    # Action dispatch — pull [ACTION:{...}] tags out, run them, log each.
+    actions_in_reply = extract_actions(raw_text)
+    actions_taken: List[Dict[str, Any]] = []
+    if actions_in_reply:
+        actions_taken = await dispatch_actions(
+            actions_in_reply,
+            triggered_by_message=body.message,
+            chief_reply_excerpt=raw_text[:500],
+        )
+
+    # The reply the operator SEES has the action JSON stripped — the
+    # action cards render the result instead.
+    display_text = strip_action_tags(raw_text)
+
     return {
-        "reply":         text,
+        "reply":         display_text,
+        "raw_reply":     raw_text,
+        "actions_taken": actions_taken,
         "model":         data.get("model"),
         "usage":         usage,
         "snapshot_keys": list(snapshot.keys()),
