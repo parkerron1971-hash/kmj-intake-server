@@ -661,11 +661,32 @@ def chief_context_block(business_id: str) -> str:
         "service_provider":
             "When advising, frame in terms of scope-of-work, cancellation policies, and "
             "general liability. Recurring service contracts are common.",
+        "personal_services":
+            "Frame around the calendar, repeat clients, and recorded formulas/preferences. Protect "
+            "chair time: deposits/no-show fees apply to longer services. The service menu has "
+            "fixed-price AND quote-required items (agree price/time before booking locks). Solo now; "
+            "the staff/commission layer grows in when chairs are added.",
+        "ministry":
+            "Be pastoral, never transactional. Frame around members, families, spiritual journey, "
+            "services, and pastoral care. CRITICAL: a member's giving is access-isolated — never "
+            "surface giving, and never let it factor into pastoral or leadership context.",
         "custom":
-            "Profile is custom — ask clarifying questions before assuming standard structures.",
+            "No preset fits this business. Run an interactive discovery conversation — ask what they "
+            "track and how they work, then PROPOSE modules conversationally from their profile and "
+            "offer to create them via ensure_module. The most unusual businesses get the most help.",
     }
     steer = type_steer.get(bt)
     if steer:
         lines.append(steer)
+
+    # Phase 1: module-coverage gap scan — blueprint vs actual modules. Lazy import
+    # avoids a circular dependency and keeps this resilient if the agent is absent.
+    try:
+        import module_blueprint_agent
+        gap = module_blueprint_agent.blueprint_gap_block(business_id, bt)
+        if gap:
+            lines.append(gap)
+    except Exception as e:
+        logger.warning(f"chief_context_block gap scan failed: {e}")
 
     return "\n".join(lines)
