@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import re
+import time
 import traceback
 from datetime import datetime, timedelta, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
@@ -45,6 +46,7 @@ from pydantic import BaseModel
 
 import foundation_agent
 import business_profile_agent
+from api_usage_logger import log_api_usage
 from business_profile_agent import chief_context_block as bp_chief_context_block
 import practitioner_profile_agent
 from practitioner_profile_agent import chief_context_block as pp_chief_context_block
@@ -228,7 +230,8 @@ WEB_SEARCH_TOOL = {
 
 async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Dict],
                        max_tokens: int = 1600,
-                       enable_web_search: bool = True) -> str:
+                       enable_web_search: bool = True,
+                       business_id: Optional[str] = None) -> str:
     key = _anthropic_key()
     if not key:
         return ""
@@ -238,17 +241,34 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     }
     if enable_web_search and CHIEF_WEB_SEARCH_ENABLED:
         payload["tools"] = [WEB_SEARCH_TOOL]
+    started_ms = int(time.time() * 1000)
     try:
         resp = await client.post(ANTHROPIC_API_URL, headers={
             "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json",
         }, json=payload, timeout=HTTP_TIMEOUT)
     except httpx.HTTPError as e:
         logger.warning(f"Claude request failed: {e}")
+        await log_api_usage(endpoint="/chief/backend", model=CHIEF_MODEL,
+            input_tokens=0, output_tokens=0, business_id=business_id,
+            duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=str(e))
         return ""
     if resp.status_code >= 400:
         logger.warning(f"Claude error: {resp.status_code} {resp.text[:300]}")
+        await log_api_usage(endpoint="/chief/backend", model=CHIEF_MODEL,
+            input_tokens=0, output_tokens=0, business_id=business_id,
+            duration_ms=int(time.time() * 1000) - started_ms, ok=False,
+            error=f"{resp.status_code}")
         return ""
     data = resp.json()
+    usage = data.get("usage", {}) if isinstance(data, dict) else {}
+    await log_api_usage(
+        endpoint="/chief/backend",
+        model=data.get("model") if isinstance(data, dict) else CHIEF_MODEL,
+        input_tokens=int(usage.get("input_tokens") or 0),
+        output_tokens=int(usage.get("output_tokens") or 0),
+        business_id=business_id,
+        duration_ms=int(time.time() * 1000) - started_ms,
+    )
     # Content includes text blocks + server-tool blocks (server_tool_use,
     # web_search_tool_result). We only stitch together the text blocks —
     # the model's narrative already weaves the search results into prose.
@@ -280,6 +300,8 @@ async def _draft_short(
     if not key:
         return ""
     full_system = (voice_payload + "\n" + system) if voice_payload else system
+    business_id = (biz or {}).get("id")
+    started_ms = int(time.time() * 1000)
     try:
         resp = await client.post(ANTHROPIC_API_URL, headers={
             "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json",
@@ -288,10 +310,26 @@ async def _draft_short(
             "messages": [{"role": "user", "content": user_msg}],
         }, timeout=HTTP_TIMEOUT)
     except httpx.HTTPError:
+        await log_api_usage(endpoint="/chief/draft", model=DRAFT_MODEL,
+            input_tokens=0, output_tokens=0, business_id=business_id,
+            duration_ms=int(time.time() * 1000) - started_ms, ok=False, error="http")
         return ""
     if resp.status_code >= 400:
+        await log_api_usage(endpoint="/chief/draft", model=DRAFT_MODEL,
+            input_tokens=0, output_tokens=0, business_id=business_id,
+            duration_ms=int(time.time() * 1000) - started_ms, ok=False,
+            error=f"{resp.status_code}")
         return ""
     data = resp.json()
+    usage = data.get("usage", {}) if isinstance(data, dict) else {}
+    await log_api_usage(
+        endpoint="/chief/draft",
+        model=data.get("model") if isinstance(data, dict) else DRAFT_MODEL,
+        input_tokens=int(usage.get("input_tokens") or 0),
+        output_tokens=int(usage.get("output_tokens") or 0),
+        business_id=business_id,
+        duration_ms=int(time.time() * 1000) - started_ms,
+    )
     return "".join(b.get("text", "") for b in data.get("content", []) if isinstance(b, dict)).strip()
 
 
@@ -5016,6 +5054,18 @@ async def handle_complete_strategy_track(client, biz, action) -> Dict:
     packages = track.get("service_packages") or []
     module_id = await _seed_products_module_from_packages(client, biz["id"], packages)
     await _seed_default_intake_form(client, biz["id"], biz.get("type", "general"))
+
+    # Phase 1: auto-assemble the business-type core module set (blueprint walk).
+    # Converges with the Purpose-track path (business_profile_router.seed_from_onboarding)
+    # so no practitioner onboards without module auto-assembly (Fork 5). Non-fatal —
+    # a provisioning hiccup must never block strategy-track completion.
+    try:
+        import module_blueprint_agent
+        await asyncio.to_thread(
+            module_blueprint_agent.provision_modules, biz["id"], biz.get("type", "custom")
+        )
+    except Exception as e:
+        logger.warning(f"[strategy_complete] blueprint provision failed (non-fatal): {e}")
 
     # Best-effort site generation
     try:
