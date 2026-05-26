@@ -764,6 +764,13 @@ def get_bundle(business_id: str) -> Dict[str, Any]:
     design_section["vibe_family"] = VIBE_FAMILY_MAP.get(voice_section["brand_voice"], "warm")
     design_section["tone_words"] = brand_kit.get("tone_words") or []
     design_section["visual_style"] = brand_kit.get("visual_style")
+    # Pass 4.0i Phase D — surface creative_expression + meta so the frontend
+    # Brand Kit panel can display the current selection (inferred by Composer
+    # OR pinned by the practitioner). Optional fields — null when no
+    # creative_expression has been stored yet (Cathedral-pipeline businesses
+    # or pre-first-build state).
+    design_section["creative_expression"] = brand_kit.get("creative_expression") or None
+    design_section["creative_expression_meta"] = brand_kit.get("creative_expression_meta") or None
     legal_section = _compose_legal(profile, archetype_row, foundation_complete)
     footer_section = _compose_footer(business, practitioner_section, legal_section, site_slug)
     signature_section = _compose_signature(practitioner_section, business, site_slug)
