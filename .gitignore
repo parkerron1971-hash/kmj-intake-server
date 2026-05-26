@@ -15,3 +15,9 @@ venv/
 # reference; gitignored so they stop polluting `git status` on every
 # branch checkout. Safe to delete from disk if no longer useful.
 layout_previews/
+
+# Orphan JS junk — this is a Python project. If Node files appear
+# they're from a stray `npm install` and should be cleaned, not tracked.
+node_modules/
+package.json
+package-lock.json

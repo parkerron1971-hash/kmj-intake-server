@@ -94,6 +94,20 @@ app.include_router(chief_executive_router)
 # this wiring as "forward compatibility with the Pass 4.0g production
 # wiring" — this is that wiring moment.
 app.include_router(composer_router)
+# Phase 4 of AUTH_PLAN — marketing-lead → user invite workflow.
+# Owner-only triage panel (Settings → Leads) calls these endpoints.
+from lead_admin import router as lead_admin_router
+app.include_router(lead_admin_router)
+# Mission Control / Platform Console — owner-only operator endpoints.
+# Lives at /platform/* and powers the Mission Control module in the
+# Tauri app.
+from platform_console import router as platform_console_router
+app.include_router(platform_console_router)
+# Phase 5b of BILLING_PLAN — Stripe subscription billing.
+# /billing/checkout (authed), /billing/portal (authed),
+# /billing/webhook (Stripe signature-verified), /billing/status (open).
+from stripe_billing import router as stripe_billing_router
+app.include_router(stripe_billing_router)
 # public_site_router MUST remain LAST — it defines `/` and `/{path:path}`
 # catch-alls that would otherwise shadow every specific API route.
 app.include_router(public_site_router)
