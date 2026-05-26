@@ -2259,6 +2259,18 @@ async def handle_create_module_entry(client, biz, action) -> Dict:
     if not isinstance(data, dict):
         return _fail("create_module_entry", "data must be an object")
 
+    # Fork 25: access-restricted modules (e.g. ministry Giving) NEVER go through
+    # module_entries — they live in the locked restricted store, managed only via
+    # the authenticated /restricted-modules endpoints. The Chief is not a write vector.
+    access = (module.get("agent_config") or {}).get("access_level")
+    if access is None:
+        _r = await _sb(client, "GET",
+                       f"/custom_modules?id=eq.{module['id']}&select=agent_config&limit=1") or []
+        access = ((_r[0].get("agent_config") if _r else None) or {}).get("access_level")
+    if access == "restricted":
+        return _fail("create_module_entry",
+                     f"{module.get('name')} is access-restricted — manage it in its secure view, not here.")
+
     inserted = await _sb(client, "POST", "/module_entries", {
         "module_id": module["id"], "business_id": biz["id"],
         "data": data, "status": "active",
