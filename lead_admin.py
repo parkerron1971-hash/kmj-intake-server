@@ -24,7 +24,7 @@ ENV VARS REQUIRED
                                   → Settings → API. Bypasses RLS, can mint
                                   auth users. NEVER exposed to the client.
     SUPABASE_JWT_SECRET         — already required by auth_supabase.py
-    PLATFORM_OWNER_EMAIL        — defaults to parkerron1971@gmail.com
+    PLATFORM_OWNER_EMAIL        — defaults to kmjcreativesolution@gmail.com
     APP_REDIRECT_URL            — where the invite email's "Accept Invite"
                                   link sends the user. Defaults to
                                   https://mysolutionist.app/welcome.
@@ -69,7 +69,7 @@ router = APIRouter(prefix="/admin/leads", tags=["lead-admin"])
 
 SUPABASE_URL = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-PLATFORM_OWNER_EMAIL = os.environ.get("PLATFORM_OWNER_EMAIL", "parkerron1971@gmail.com").lower()
+PLATFORM_OWNER_EMAIL = os.environ.get("PLATFORM_OWNER_EMAIL", "kmjcreativesolution@gmail.com").lower()
 APP_REDIRECT_URL = os.environ.get("APP_REDIRECT_URL", "https://mysolutionist.app/welcome")
 
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=15.0, pool=10.0)
