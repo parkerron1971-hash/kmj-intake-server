@@ -142,6 +142,73 @@ def reset_user_jwt(token: contextvars.Token) -> None:
     _user_jwt_ctx.reset(token)
 
 
+# ─── FastAPI combined dependency (user JWT verified + context bound) ─
+#
+# `authed_request` is the one-shot dep for routes that read RLS-protected
+# data through brand_engine, override_system, composer, etc. It does TWO
+# things in one Depends:
+#   1. Verifies the practitioner's Supabase JWT (delegates to
+#      auth_supabase.require_user_session — 401 if missing/invalid).
+#   2. Binds the verified token to the request-scoped contextvar so any
+#      subsequent _sb / *_current_context call inside the route handler
+#      (and helpers it invokes, sync or async) forwards the token to
+#      PostgREST. RLS policies then evaluate against the real auth.uid().
+#
+# Generator dep: FastAPI runs the prelude before the route body and the
+# `finally` block after the response renders, even on exception. The
+# contextvar is reset cleanly so a recycled worker task can't carry a
+# stale token into the next request.
+#
+# Lazy import inside the function so sb_clients itself stays importable
+# in environments without PyJWT (test fixtures that mock the auth layer
+# but want to test the helpers in isolation).
+
+def authed_request(authorization: Optional[str] = None):
+    """Generator-style FastAPI dep — verifies the Supabase JWT in the
+    Authorization header and binds it to the request contextvar.
+
+    Note on Header import: FastAPI introspects the parameter's default
+    to know it's a header. We do that via a lazy injection trick — the
+    Header annotation is applied by re-decorating below at module load
+    time, after auth_supabase is importable.
+    """
+    raise RuntimeError(
+        "authed_request should not be called directly — it gets its real "
+        "FastAPI Depends signature injected at import time. If you see "
+        "this error, your environment is missing the auth_supabase wiring."
+    )
+
+
+try:
+    from fastapi import Depends as _Depends
+    from auth_supabase import UserSession as _UserSession, require_user_session as _require_user_session
+
+    def authed_request(session: _UserSession = _Depends(_require_user_session)):  # type: ignore[no-redef]
+        """Generator-style FastAPI dep — require_user_session + bind JWT
+        to request contextvar. Yields the verified UserSession.
+
+        Usage:
+            from sb_clients import authed_request
+            from auth_supabase import UserSession
+
+            @router.get("/bundle/{business_id}")
+            def bundle(business_id: str, session: UserSession = Depends(authed_request)):
+                # Every sb_*_current_context call inside (and inside any
+                # helper this calls) forwards session.token to PostgREST.
+                ...
+        """
+        token = set_user_jwt(session.token)
+        try:
+            yield session
+        finally:
+            reset_user_jwt(token)
+except ImportError:
+    # FastAPI / auth_supabase not available — sb_clients still importable
+    # for test fixtures that mock the auth layer. authed_request stays as
+    # the placeholder that raises clearly if anyone calls it.
+    pass
+
+
 async def sb_as_current_context(
     client: httpx.AsyncClient,
     method: str,
@@ -391,3 +458,71 @@ def sb_get_as_anon(path: str) -> Optional[Any]:
 def sb_patch_as_anon(path: str, body: Dict[str, Any]) -> Optional[Any]:
     """LEGACY anon sync PATCH. Subject to RLS. Kept for back-compat only."""
     return _sync_request("PATCH", path, sb_headers_anon(), body)
+
+
+# ─── Sync context-aware dispatch (mirrors async sb_as_current_context) ─
+
+def sb_get_current_context(
+    path: str,
+    *,
+    allow_service_fallback: bool = False,
+) -> Optional[Any]:
+    """Sync GET that picks user-scoped vs service-role from the current
+    async context. Used by sync helpers (e.g. brand_engine._sb_get) that
+    are called from async FastAPI handlers — contextvars set by the
+    handler (via set_user_jwt) propagate into sync calls because the
+    sync code runs in the same async context."""
+    user_jwt = _user_jwt_ctx.get()
+    if user_jwt:
+        return sb_get_as_user(path, user_jwt)
+    if allow_service_fallback:
+        return sb_get_as_service(path)
+    logger.warning(
+        "sb_get_current_context: no user JWT in context for GET %s — "
+        "returning None. Wrap with set_user_jwt() in the handler, or "
+        "set allow_service_fallback=True for server-initiated paths.",
+        path,
+    )
+    return None
+
+
+def sb_patch_current_context(
+    path: str,
+    body: Dict[str, Any],
+    *,
+    allow_service_fallback: bool = False,
+) -> Optional[Any]:
+    """Sync PATCH — context-aware. See sb_get_current_context."""
+    user_jwt = _user_jwt_ctx.get()
+    if user_jwt:
+        return sb_patch_as_user(path, body, user_jwt)
+    if allow_service_fallback:
+        return sb_patch_as_service(path, body)
+    logger.warning(
+        "sb_patch_current_context: no user JWT in context for PATCH %s — "
+        "returning None. Wrap with set_user_jwt() in the handler, or "
+        "set allow_service_fallback=True for server-initiated paths.",
+        path,
+    )
+    return None
+
+
+def sb_post_current_context(
+    path: str,
+    body: Dict[str, Any],
+    *,
+    allow_service_fallback: bool = False,
+) -> Optional[Any]:
+    """Sync POST — context-aware. See sb_get_current_context."""
+    user_jwt = _user_jwt_ctx.get()
+    if user_jwt:
+        return sb_post_as_user(path, body, user_jwt)
+    if allow_service_fallback:
+        return sb_post_as_service(path, body)
+    logger.warning(
+        "sb_post_current_context: no user JWT in context for POST %s — "
+        "returning None. Wrap with set_user_jwt() in the handler, or "
+        "set allow_service_fallback=True for server-initiated paths.",
+        path,
+    )
+    return None

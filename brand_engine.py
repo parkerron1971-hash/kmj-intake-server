@@ -107,18 +107,47 @@ DISCLAIMER_PHRASES: Dict[str, str] = {
 
 
 # ─────────────────────────────────────────────────────────────
-# Supabase REST helpers (mirror business_profile_agent pattern)
+# Supabase REST helpers (RLS-readiness migration: now context-aware)
 # ─────────────────────────────────────────────────────────────
+#
+# Pre-migration these helpers sent SUPABASE_ANON as Bearer, which made
+# auth.uid() NULL on every PostgREST call and let RLS policies on
+# businesses (owner_id = auth.uid()) filter every row. The symptom was
+# /brand/bundle returning a "Unknown" empty default object — same root
+# cause as the Chief 404, just with a softer failure mode.
+#
+# Post-migration these helpers delegate to sb_clients.sb_*_current_context,
+# which reads a user JWT from the contextvar set by the FastAPI handler
+# (via sb_clients.set_user_jwt(user_session.token)). When set, the user's
+# token is forwarded to PostgREST and RLS evaluates honestly. When not
+# (server-initiated paths like the Pass 4.0d brand_kit_renderer running
+# in public_site rendering), the helper falls back to service-role —
+# safe because public_site has no user JWT to forward and the caller
+# is the trusted intermediary.
+#
+# Many other files import `from brand_engine import _sb_get as be_get`
+# — composer, director, slot system, override system, etc. They all
+# pick up the RLS-aware behavior for free via this central change.
+
+import sb_clients
+
 
 def _sb_url() -> str:
+    """Retained for backward compat with any direct caller; new code
+    should use sb_clients.sb_url()."""
     return os.environ.get("SUPABASE_URL", "").rstrip("/")
 
 
 def _sb_anon() -> str:
+    """Retained for backward compat. New code: do not introduce
+    sb-anon callers — they will not pass RLS once enabled."""
     return os.environ.get("SUPABASE_ANON", "")
 
 
 def _sb_headers() -> Dict[str, str]:
+    """Retained for backward compat. Returns ANON headers — calls using
+    these will be RLS-filtered. Use sb_clients.sb_headers_user(token)
+    or sb_clients.sb_headers_service() in new code."""
     return {
         "apikey": _sb_anon(),
         "Authorization": f"Bearer {_sb_anon()}",
@@ -128,33 +157,16 @@ def _sb_headers() -> Dict[str, str]:
 
 
 def _sb_get(path: str) -> Optional[Any]:
-    try:
-        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-            r = client.get(f"{_sb_url()}/rest/v1{path}", headers=_sb_headers())
-        if r.status_code >= 400:
-            logger.warning(f"sb GET {path}: {r.status_code} {r.text[:200]}")
-            return None
-        return r.json() if r.text else None
-    except httpx.HTTPError as e:
-        logger.warning(f"sb GET {path} failed: {e}")
-        return None
+    """RLS-readiness migration — delegates to sb_clients.sb_get_current_context.
+    User JWT bound by the handler (via sb_clients.set_user_jwt) is forwarded
+    automatically. Falls back to service-role when no JWT is bound
+    (server-initiated paths)."""
+    return sb_clients.sb_get_current_context(path, allow_service_fallback=True)
 
 
 def _sb_patch(path: str, body: Dict[str, Any]) -> Optional[Any]:
-    try:
-        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-            r = client.patch(
-                f"{_sb_url()}/rest/v1{path}",
-                headers=_sb_headers(),
-                content=json.dumps(body),
-            )
-        if r.status_code >= 400:
-            logger.warning(f"sb PATCH {path}: {r.status_code} {r.text[:200]}")
-            return None
-        return r.json() if r.text else None
-    except httpx.HTTPError as e:
-        logger.warning(f"sb PATCH {path} failed: {e}")
-        return None
+    """RLS-readiness migration — delegates to sb_clients.sb_patch_current_context."""
+    return sb_clients.sb_patch_current_context(path, body, allow_service_fallback=True)
 
 
 def _safe_get_one(table: str, eq_col: str, eq_val: str) -> Optional[Dict[str, Any]]:

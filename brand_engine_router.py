@@ -10,22 +10,46 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
 import brand_engine
+import sb_clients
+from auth_supabase import UserSession
 
 router = APIRouter(prefix="/brand", tags=["brand"])
 logger = logging.getLogger("brand_engine_router")
 
+
+# ─── Public health probe (no auth) ─────────────────────────────────
 
 @router.get("/health")
 def health() -> JSONResponse:
     return JSONResponse({"ok": True, "service": "brand-engine"})
 
 
+# ─── User-action routes — RLS-enforced via sb_clients.authed_request ─
+#
+# Pass RLS-readiness migration: every endpoint that reads or writes
+# the practitioner's brand_kit (businesses.settings.brand_kit JSONB)
+# now requires a verified Supabase JWT via Depends(authed_request).
+# The dep verifies the token, derives the AuthedUser, and binds the
+# token to the request contextvar so brand_engine._sb_get / _sb_patch
+# (which delegate to sb_clients.sb_*_current_context) forward the
+# user's JWT to PostgREST. RLS policies (owner_id = auth.uid()) then
+# evaluate honestly and the practitioner sees their own row.
+#
+# Pre-migration these routes ran with anon credentials; once RLS was
+# enabled on businesses the same code returned an empty default bundle
+# (business.name "Unknown") because every PostgREST query was filtered.
+# The misleading silent-failure mode is what made the Chief 404 hard
+# to diagnose initially.
+
 @router.get("/bundle/{business_id}")
-def bundle(business_id: str) -> JSONResponse:
+def bundle(
+    business_id: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> JSONResponse:
     try:
         b = brand_engine.get_bundle(business_id)
         return JSONResponse({"ok": True, "bundle": b})
@@ -35,7 +59,11 @@ def bundle(business_id: str) -> JSONResponse:
 
 
 @router.post("/save/{business_id}")
-def save(business_id: str, body: Dict[str, Any]) -> JSONResponse:
+def save(
+    business_id: str,
+    body: Dict[str, Any],
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> JSONResponse:
     """Body: {kit: {...}}"""
     kit = body.get("kit") if isinstance(body, dict) else None
     if not isinstance(kit, dict):
@@ -45,7 +73,11 @@ def save(business_id: str, body: Dict[str, Any]) -> JSONResponse:
 
 
 @router.post("/snapshot/restore/{business_id}")
-def restore(business_id: str, body: Dict[str, Any]) -> JSONResponse:
+def restore(
+    business_id: str,
+    body: Dict[str, Any],
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> JSONResponse:
     """Body: {snapshot_idx: 0|1}"""
     try:
         idx = int((body or {}).get("snapshot_idx", 0))
@@ -56,13 +88,20 @@ def restore(business_id: str, body: Dict[str, Any]) -> JSONResponse:
 
 
 @router.post("/generate-from-context/{business_id}")
-def generate(business_id: str) -> JSONResponse:
+def generate(
+    business_id: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> JSONResponse:
     result = brand_engine.generate_from_context(business_id)
     return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
 
 @router.post("/learn-from-url/{business_id}")
-def learn(business_id: str, body: Dict[str, Any]) -> JSONResponse:
+def learn(
+    business_id: str,
+    body: Dict[str, Any],
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> JSONResponse:
     """Body: {url: "https://..."}"""
     url = (body or {}).get("url") if isinstance(body, dict) else None
     if not url:
@@ -78,6 +117,7 @@ async def upload_brand_asset(
     business_id: str = Form(...),
     variant: str = Form(...),
     file: UploadFile = File(...),
+    _: UserSession = Depends(sb_clients.authed_request),
 ) -> JSONResponse:
     """Upload an asset variant. Multipart form: business_id, variant, file.
     Variants: primary, logo_light, logo_dark, square, favicon, social_card."""
@@ -95,7 +135,11 @@ async def upload_brand_asset(
 
 
 @router.post("/asset/remove/{business_id}")
-def remove_brand_asset(business_id: str, body: Dict[str, Any]) -> JSONResponse:
+def remove_brand_asset(
+    business_id: str,
+    body: Dict[str, Any],
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> JSONResponse:
     """Body: {variant: 'primary' | 'logo_dark' | ...}"""
     variant = (body or {}).get("variant") if isinstance(body, dict) else None
     if not variant:
@@ -107,18 +151,22 @@ def remove_brand_asset(business_id: str, body: Dict[str, Any]) -> JSONResponse:
 
 
 # ─── Pass 4.0d PART 3 — Brand kit inspection diagnostic ────────────
+# RLS-readiness bonus security fix: this endpoint was previously public
+# (anyone with the URL could list all businesses + their brand_kit
+# contents — a cross-tenant leak waiting to happen). Now requires an
+# authenticated session; with the user-JWT-aware brand_engine helpers,
+# RLS scopes the result to the caller's own businesses. Safer default
+# than the previous unauthenticated "list everything" behavior.
 
 @router.get("/_diag/recent")
-def diag_recent_brand_kits(limit: int = 20, name_filter: str = "") -> JSONResponse:
+def diag_recent_brand_kits(
+    limit: int = 20,
+    name_filter: str = "",
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> JSONResponse:
     """List recently-updated businesses + their brand_kit color shapes.
-    Read-only. Used by the Pass 4.0d PART 3 role-mapping verification
-    to inspect what shape the brand_kit field actually has in the wild
-    (and to find specific businesses like the Royal Palace test by name)
-    without needing the practitioner to remember every business_id.
-
-    Returns at most `limit` businesses. Optional `name_filter` is an
-    ilike pattern against businesses.name (the param is wrapped in % so
-    callers pass 'royal' not '%royal%').
+    Now RLS-scoped to the authenticated practitioner's own businesses
+    (Pass RLS-readiness migration security tightening — was public).
     """
     from brand_engine import _sb_get as be_get
     qs = "select=id,name,updated_at,settings"
