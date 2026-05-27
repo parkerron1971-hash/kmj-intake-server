@@ -228,3 +228,47 @@ def optional_user(authorization: Optional[str] = Header(default=None)) -> Option
         return _verify_token(token)
     except HTTPException:
         return None
+
+
+# RLS-migration addition: handlers that need to FORWARD the raw token
+# to Supabase PostgREST (so RLS policies evaluate honestly) need access
+# to both the verified user identity AND the raw bearer token. require_user
+# returns only AuthedUser; this returns both.
+
+@dataclass
+class UserSession:
+    """Verified user identity + the raw bearer token, packaged for
+    handlers that need to forward the token to PostgREST."""
+    user: AuthedUser
+    token: str
+
+
+def require_user_session(authorization: Optional[str] = Header(default=None)) -> UserSession:
+    """FastAPI dependency — same auth as require_user, but returns
+    UserSession with the raw token attached so handlers can forward
+    it to Supabase via sb_clients.with_user_jwt / sb_as_user.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Bearer token",
+        )
+    token = authorization.split(" ", 1)[1].strip()
+    user = _verify_token(token)
+    return UserSession(user=user, token=token)
+
+
+def optional_user_session(
+    authorization: Optional[str] = Header(default=None),
+) -> Optional[UserSession]:
+    """Same shape as optional_user but returns UserSession (with raw
+    token) when one is present. Use for endpoints that work both with
+    and without auth and need to forward the token when present."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        user = _verify_token(token)
+        return UserSession(user=user, token=token)
+    except HTTPException:
+        return None

@@ -78,12 +78,18 @@ def _sb_anon() -> str:
 
 
 def _sb_headers() -> Dict[str, str]:
-    return {
-        "apikey": _sb_anon(),
-        "Authorization": f"Bearer {_sb_anon()}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
+    """RLS-readiness migration: returns user-JWT headers when a request
+    context has bound one (via sb_clients.set_user_jwt), service-role
+    headers otherwise. The three async helpers in this module
+    (_sb_get / _sb_post / _sb_patch) all funnel through here so a single
+    swap point migrates the whole file. Foundation flows are usually
+    user-initiated (the 7-phase wizard), and the cron-driven legal-status
+    refresh path runs without a context — service-role fallback covers it."""
+    import sb_clients
+    user_jwt = sb_clients.get_current_user_jwt()
+    if user_jwt:
+        return sb_clients.sb_headers_user(user_jwt)
+    return sb_clients.sb_headers_service()
 
 
 async def _sb_get(client: httpx.AsyncClient, path: str) -> Optional[Any]:

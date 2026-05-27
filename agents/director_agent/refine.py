@@ -65,53 +65,26 @@ def _sb_headers(prefer_representation: bool = True) -> Dict[str, str]:
 
 
 def _sb_post(path: str, body: Any) -> Optional[Any]:
-    try:
-        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-            r = client.post(
-                f"{_sb_url()}/rest/v1{path}",
-                headers=_sb_headers(),
-                content=json.dumps(body),
-            )
-        if r.status_code >= 400:
-            logger.warning(f"sb POST {path}: {r.status_code} {r.text[:200]}")
-            return None
-        return r.json() if r.text else None
-    except httpx.HTTPError as e:
-        logger.warning(f"sb POST {path} failed: {e}")
-        return None
+    """RLS-readiness migration: delegates to sb_clients.sb_post_current_context.
+    User JWT (set by the handler) forwards through; service-role fallback for
+    server-initiated chat inserts triggered outside a request context."""
+    import sb_clients
+    return sb_clients.sb_post_current_context(path, body, allow_service_fallback=True)
 
 
-def _sb_patch(path: str, body: Dict[str, Any]) -> Optional[Any]:
-    try:
-        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-            r = client.patch(
-                f"{_sb_url()}/rest/v1{path}",
-                headers=_sb_headers(),
-                content=json.dumps(body),
-            )
-        if r.status_code >= 400:
-            logger.warning(f"sb PATCH {path}: {r.status_code} {r.text[:200]}")
-            return None
-        return r.json() if r.text else None
-    except httpx.HTTPError as e:
-        logger.warning(f"sb PATCH {path} failed: {e}")
-        return None
+def _sb_patch(path: str, body: Dict[str, Any]):
+    """RLS-readiness migration: delegates to sb_clients.sb_patch_current_context."""
+    import sb_clients
+    return sb_clients.sb_patch_current_context(path, body, allow_service_fallback=True)
+
+
 
 
 def _sb_delete(path: str) -> bool:
-    try:
-        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-            r = client.delete(
-                f"{_sb_url()}/rest/v1{path}",
-                headers=_sb_headers(prefer_representation=False),
-            )
-        if r.status_code >= 400:
-            logger.warning(f"sb DELETE {path}: {r.status_code} {r.text[:200]}")
-            return False
-        return True
-    except httpx.HTTPError as e:
-        logger.warning(f"sb DELETE {path} failed: {e}")
-        return False
+    """RLS-readiness migration: delegates to sb_clients.sb_delete_current_context.
+    RLS scopes deletes to the caller's own rows."""
+    import sb_clients
+    return sb_clients.sb_delete_current_context(path, allow_service_fallback=True)
 
 
 # ─── Chat history operations ────────────────────────────────────────
