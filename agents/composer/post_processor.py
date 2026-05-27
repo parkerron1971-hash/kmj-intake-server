@@ -74,34 +74,32 @@ def _supabase_anon() -> str:
 
 
 async def _read_use_composer(client: httpx.AsyncClient, business_id: str) -> bool:
-    """Return businesses.use_composer for a business. False on any
-    error (missing row, network failure, column not yet migrated)."""
-    base = _supabase_url()
-    key = _supabase_anon()
-    if not (base and key and business_id):
+    """Return businesses.use_composer for a business. False on any error
+    (missing row, network failure, column not yet migrated).
+
+    RLS-readiness migration: routes through sb_clients.sb_as_current_context
+    so the user's JWT (bound by the build-with-loop handler's authed_request
+    dep) forwards to PostgREST. Without this, the anon-keyed call would see
+    auth.uid()=NULL and the businesses row would be filtered out by RLS,
+    making every site silently fall back to the Builder-only path — exactly
+    the silent-failure mode that drove the original Chief 404 diagnosis.
+    """
+    if not business_id:
         return False
-    url = (
-        f"{base}/rest/v1/businesses"
-        f"?id=eq.{business_id}&select=use_composer&limit=1"
-    )
+    import sb_clients
     try:
-        resp = await client.get(
-            url,
-            headers={"apikey": key, "Authorization": f"Bearer {key}"},
-            timeout=_SUPABASE_TIMEOUT,
+        rows = await sb_clients.sb_as_current_context(
+            client,
+            "GET",
+            f"/businesses?id=eq.{business_id}&select=use_composer&limit=1",
+            allow_service_fallback=True,
         )
-    except httpx.HTTPError as e:
+    except Exception as e:
         logger.warning(f"[post_processor] use_composer fetch failed: {e}")
         return False
-    if resp.status_code >= 400:
-        logger.warning(
-            f"[post_processor] use_composer HTTP {resp.status_code}: {resp.text[:120]}"
-        )
-        return False
     try:
-        rows = resp.json()
         return bool(rows and rows[0].get("use_composer"))
-    except (ValueError, IndexError, KeyError, AttributeError):
+    except (IndexError, KeyError, AttributeError):
         return False
 
 

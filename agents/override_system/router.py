@@ -29,8 +29,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+import sb_clients
+from auth_supabase import UserSession
 
 from agents.override_system import override_storage
 from agents.override_system.override_resolver import find_override_targets
@@ -58,6 +61,7 @@ class UpsertOverrideRequest(BaseModel):
 def list_overrides_for_business(
     business_id: str,
     override_type: Optional[str] = None,
+    _: UserSession = Depends(sb_clients.authed_request),
 ) -> Dict[str, Any]:
     """Return every override for `business_id`, optionally filtered by
     type via ?override_type=text. Ordered by override_type, target_path.
@@ -79,6 +83,7 @@ def get_one_override(
     business_id: str,
     override_type: str,
     target_path: str,
+    _: UserSession = Depends(sb_clients.authed_request),
 ) -> Dict[str, Any]:
     """Return a single override by (business_id, type, path). 404 if
     no such row. `target_path` uses `:path` so dotted/slashed paths
@@ -100,7 +105,10 @@ def get_one_override(
 # ─── Create / update (upsert) ──────────────────────────────────────
 
 @router.post("/override")
-def upsert_override(req: UpsertOverrideRequest) -> Dict[str, Any]:
+def upsert_override(
+    req: UpsertOverrideRequest,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Insert or update an override on the (business_id, override_type,
     target_path) UNIQUE constraint.
 
@@ -157,7 +165,11 @@ def upsert_override(req: UpsertOverrideRequest) -> Dict[str, Any]:
 # ─── Delete (revert) ───────────────────────────────────────────────
 
 @router.delete("/override/{business_id}/{override_id}")
-def delete_one_override(business_id: str, override_id: str) -> Dict[str, Any]:
+def delete_one_override(
+    business_id: str,
+    override_id: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Revert by deleting an override row. business_id is scoped into
     the DELETE WHERE clause so callers can't accidentally delete an
     override that belongs to a different business by passing the wrong
@@ -176,6 +188,7 @@ def delete_override_by_path(
     business_id: str,
     override_type: str,
     target_path: str,
+    _: UserSession = Depends(sb_clients.authed_request),
 ) -> Dict[str, Any]:
     """Revert by (business_id, override_type, target_path). Canonical
     'revert this edit' path for the inline-edit UI — no need to look up
@@ -199,7 +212,10 @@ def delete_override_by_path(
 # ─── Diagnostic ────────────────────────────────────────────────────
 
 @router.get("/override/_diag/targets/{business_id}/preview")
-def diag_list_targets_in_preview(business_id: str) -> Dict[str, Any]:
+def diag_list_targets_in_preview(
+    business_id: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Enumerate every data-override-target element currently present
     in the persisted preview HTML for `business_id`. Returns the tag
     name, target_path, and the current inner content of each — handy

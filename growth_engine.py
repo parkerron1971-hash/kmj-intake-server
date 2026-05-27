@@ -83,22 +83,16 @@ def _anthropic_key(): return os.environ.get("ANTHROPIC_API_KEY", "")
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════
 
-async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
-    url = f"{_supabase_url()}/rest/v1{path}"
-    headers = {
-        "apikey": _supabase_anon(),
-        "Authorization": f"Bearer {_supabase_anon()}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
-    resp = await client.request(method, url, headers=headers,
-                                content=json.dumps(body) if body else None,
-                                timeout=HTTP_TIMEOUT)
-    if resp.status_code >= 400:
-        logger.error(f"Supabase {method} {path}: {resp.status_code} {resp.text}")
-        return None
-    text = resp.text
-    return json.loads(text) if text else None
+async def _sb(client, method: str, path: str, body=None):
+    """RLS-readiness migration: delegates to sb_clients.sb_as_current_context.
+    User JWT bound by the handler (via sb_clients.set_user_jwt) is forwarded.
+    Falls back to service-role for server-initiated paths."""
+    import sb_clients
+    return await sb_clients.sb_as_current_context(
+        client, method, path, body, allow_service_fallback=True,
+    )
+
+
 
 
 async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str,

@@ -20,8 +20,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+import sb_clients
+from auth_supabase import UserSession
 
 from agents.director_agent.critique import critique_site
 from agents.director_agent.build_with_loop import run_build_loop
@@ -83,7 +86,10 @@ def health():
 
 
 @router.post("/critique")
-def critique(req: CritiqueRequest):
+def critique(
+    req: CritiqueRequest,
+    _: UserSession = Depends(sb_clients.authed_request),
+):
     """Score generated HTML against a Design Intelligence Module rubric.
 
     Returns the punch-list shape from `critique_site`. The endpoint
@@ -105,7 +111,10 @@ def critique(req: CritiqueRequest):
 
 
 @router.post("/build-with-loop")
-def build_with_loop(req: BuildWithLoopRequest):
+def build_with_loop(
+    req: BuildWithLoopRequest,
+    _: UserSession = Depends(sb_clients.authed_request),
+):
     """Run the full Director build-with-loop pipeline (Pass 4.0b PART 4).
 
     Orchestrates: enrichment → designer → brief expander → builder v1 →
@@ -149,7 +158,10 @@ class EnrichFeedbackDiagRequest(BaseModel):
 
 
 @router.post("/_diag/enrich_feedback")
-def diag_enrich_feedback(req: EnrichFeedbackDiagRequest) -> Dict[str, Any]:
+def diag_enrich_feedback(
+    req: EnrichFeedbackDiagRequest,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Diagnostic: run feedback_enrichment.enrich_feedback against the
     given inputs. No persistence, no Builder call. Used by Pass 4.0c
     PART 2 verification curls so we can see the expanded_moves shape
@@ -172,7 +184,10 @@ class RefineRequest(BaseModel):
 
 
 @router.post("/refine")
-def refine(req: RefineRequest) -> Dict[str, Any]:
+def refine(
+    req: RefineRequest,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Run the Director refine flow.
 
     Insert user message → enrich feedback → insert system message →
@@ -212,7 +227,10 @@ def diagnose() -> Dict[str, Any]:
 
 
 @router.get("/chat-history/{business_id}")
-def chat_history(business_id: str) -> Dict[str, Any]:
+def chat_history(
+    business_id: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Return all chat messages for a business, ordered by created_at
     ascending. Used by the frontend dock for both initial hydration
     and polling-to-detect-completion."""
@@ -223,7 +241,10 @@ def chat_history(business_id: str) -> Dict[str, Any]:
 
 
 @router.delete("/chat-history/{business_id}")
-def chat_history_delete(business_id: str) -> Dict[str, Any]:
+def chat_history_delete(
+    business_id: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Wipe all chat history for a business. Used by the 'start fresh'
     UX path in the frontend dock."""
     ok = delete_chat_history(business_id)
@@ -231,7 +252,10 @@ def chat_history_delete(business_id: str) -> Dict[str, Any]:
 
 
 @router.get("/_diag/site_state/{business_id}")
-def diag_site_state(business_id: str) -> Dict[str, Any]:
+def diag_site_state(
+    business_id: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Diagnostic: report the presence of the four Pass 4.0c persistence
     keys on a business's site_config. Mirrors the pre-PART-4 seed
     verification SQL — equivalent of:

@@ -429,9 +429,42 @@ def sb_patch_as_user(path: str, body: Dict[str, Any], user_jwt: str) -> Optional
     return _sync_request("PATCH", path, sb_headers_user(user_jwt), body)
 
 
-def sb_post_as_user(path: str, body: Dict[str, Any], user_jwt: str) -> Optional[Any]:
-    """RLS-enforced sync POST. Forwards user_jwt as Bearer."""
-    return _sync_request("POST", path, sb_headers_user(user_jwt), body)
+def sb_post_as_user(
+    path: str,
+    body: Dict[str, Any],
+    user_jwt: str,
+    prefer: Optional[str] = "return=representation",
+) -> Optional[Any]:
+    """RLS-enforced sync POST. Forwards user_jwt as Bearer. `prefer` lets
+    upsert callers pass `resolution=merge-duplicates,return=representation`."""
+    return _sync_request("POST", path, sb_headers_user(user_jwt, prefer=prefer), body)
+
+
+def _sync_delete(path: str, headers: Dict[str, str]) -> bool:
+    """Internal: returns True on 2xx, False otherwise. DELETE replies are
+    often empty bodies which makes the _sync_request None-vs-200 contract
+    ambiguous, so DELETE uses this dedicated path."""
+    url = f"{sb_url()}/rest/v1{path}"
+    try:
+        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
+            resp = client.request("DELETE", url, headers=headers)
+    except httpx.HTTPError as e:
+        logger.warning(f"sb_clients sync DELETE {path} transport error: {e}")
+        return False
+    if resp.status_code >= 400:
+        logger.warning(
+            f"sb_clients sync DELETE {path}: {resp.status_code} {resp.text[:300]}"
+        )
+        return False
+    return True
+
+
+def sb_delete_as_user(path: str, user_jwt: str) -> bool:
+    """RLS-enforced sync DELETE. Returns True on 2xx. PostgREST honors RLS
+    on DELETE — a row the user can't see won't delete (operation succeeds
+    with 0 rows affected, which is the correct behavior for a tenant
+    isolation boundary)."""
+    return _sync_delete(path, sb_headers_user(user_jwt, prefer=None))
 
 
 def sb_get_as_service(path: str) -> Optional[Any]:
@@ -444,9 +477,18 @@ def sb_patch_as_service(path: str, body: Dict[str, Any]) -> Optional[Any]:
     return _sync_request("PATCH", path, sb_headers_service(), body)
 
 
-def sb_post_as_service(path: str, body: Dict[str, Any]) -> Optional[Any]:
+def sb_post_as_service(
+    path: str,
+    body: Dict[str, Any],
+    prefer: Optional[str] = "return=representation",
+) -> Optional[Any]:
     """RLS-bypassing sync POST. Server-initiated paths only."""
-    return _sync_request("POST", path, sb_headers_service(), body)
+    return _sync_request("POST", path, sb_headers_service(prefer=prefer), body)
+
+
+def sb_delete_as_service(path: str) -> bool:
+    """RLS-bypassing sync DELETE. Server-initiated paths only."""
+    return _sync_delete(path, sb_headers_service(prefer=None))
 
 
 def sb_get_as_anon(path: str) -> Optional[Any]:
@@ -511,14 +553,16 @@ def sb_post_current_context(
     path: str,
     body: Dict[str, Any],
     *,
+    prefer: Optional[str] = "return=representation",
     allow_service_fallback: bool = False,
 ) -> Optional[Any]:
-    """Sync POST — context-aware. See sb_get_current_context."""
+    """Sync POST — context-aware. See sb_get_current_context. `prefer`
+    lets upserts pass `resolution=merge-duplicates,return=representation`."""
     user_jwt = _user_jwt_ctx.get()
     if user_jwt:
-        return sb_post_as_user(path, body, user_jwt)
+        return sb_post_as_user(path, body, user_jwt, prefer=prefer)
     if allow_service_fallback:
-        return sb_post_as_service(path, body)
+        return sb_post_as_service(path, body, prefer=prefer)
     logger.warning(
         "sb_post_current_context: no user JWT in context for POST %s — "
         "returning None. Wrap with set_user_jwt() in the handler, or "
@@ -526,3 +570,24 @@ def sb_post_current_context(
         path,
     )
     return None
+
+
+def sb_delete_current_context(
+    path: str,
+    *,
+    allow_service_fallback: bool = False,
+) -> bool:
+    """Sync DELETE — context-aware. Returns True on 2xx, False otherwise.
+    RLS scopes the delete to the caller's own rows when running as user."""
+    user_jwt = _user_jwt_ctx.get()
+    if user_jwt:
+        return sb_delete_as_user(path, user_jwt)
+    if allow_service_fallback:
+        return sb_delete_as_service(path)
+    logger.warning(
+        "sb_delete_current_context: no user JWT in context for DELETE %s — "
+        "returning False. Wrap with set_user_jwt() in the handler, or "
+        "set allow_service_fallback=True for server-initiated paths.",
+        path,
+    )
+    return False

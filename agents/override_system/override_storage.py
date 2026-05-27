@@ -57,51 +57,25 @@ def _sb_headers(prefer: Optional[str] = None) -> Dict[str, str]:
 
 
 def _sb_post(path: str, body: Any, prefer: Optional[str] = None) -> Optional[Any]:
-    """POST to Supabase REST. `body` is JSON-serialized. Returns parsed
-    response JSON on success, None on any failure (logged at WARN)."""
-    try:
-        import httpx
-        from brand_engine import HTTP_TIMEOUT  # reuse the canonical timeout
-    except Exception as e:
-        logger.warning(f"[override_storage] dep import failed: {e}")
-        return None
-    try:
-        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-            r = client.post(
-                f"{_sb_url()}/rest/v1{path}",
-                headers=_sb_headers(prefer=prefer),
-                content=json.dumps(body),
-            )
-        if r.status_code >= 400:
-            logger.warning(f"sb POST {path}: {r.status_code} {r.text[:200]}")
-            return None
-        return r.json() if r.text else None
-    except httpx.HTTPError as e:
-        logger.warning(f"sb POST {path} failed: {e}")
-        return None
+    """RLS-readiness migration: delegates to sb_clients.sb_post_current_context.
+    User JWT bound by the override router's authed_request dep forwards through;
+    `prefer` carries upsert resolution hints (resolution=merge-duplicates,
+    return=representation)."""
+    import sb_clients
+    return sb_clients.sb_post_current_context(
+        path,
+        body,
+        prefer=prefer if prefer else "return=representation",
+        allow_service_fallback=True,
+    )
 
 
 def _sb_delete(path: str) -> bool:
-    """DELETE on Supabase REST. Returns True on 2xx, False otherwise."""
-    try:
-        import httpx
-        from brand_engine import HTTP_TIMEOUT
-    except Exception as e:
-        logger.warning(f"[override_storage] dep import failed: {e}")
-        return False
-    try:
-        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-            r = client.delete(
-                f"{_sb_url()}/rest/v1{path}",
-                headers=_sb_headers(),
-            )
-        if r.status_code >= 400:
-            logger.warning(f"sb DELETE {path}: {r.status_code} {r.text[:200]}")
-            return False
-        return True
-    except httpx.HTTPError as e:
-        logger.warning(f"sb DELETE {path} failed: {e}")
-        return False
+    """RLS-readiness migration: delegates to sb_clients.sb_delete_current_context.
+    RLS scopes deletes to the caller's own rows — practitioners can't revert
+    overrides on businesses they don't own."""
+    import sb_clients
+    return sb_clients.sb_delete_current_context(path, allow_service_fallback=True)
 
 
 # ─── Read ──────────────────────────────────────────────────────────

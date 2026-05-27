@@ -33,8 +33,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
+
+import sb_clients
+from auth_supabase import UserSession
 
 from agents.slot_system.unsplash_client import (
     build_unsplash_query,
@@ -156,7 +159,10 @@ class DiagDalleRequest(BaseModel):
 
 
 @router.post("/_diag/dalle")
-def diag_dalle_generate(req: DiagDalleRequest):
+def diag_dalle_generate(
+    req: DiagDalleRequest,
+    _: UserSession = Depends(sb_clients.authed_request),
+):
     """Diagnostic: generate one DALL-E image, rehost to Supabase, log
     spend, persist as the slot's default. Returns the Supabase URL +
     cost. Subject to PER_SITE_DAILY_CAP_USD ($0.50) — a request that
@@ -243,7 +249,10 @@ def diag_dalle_generate(req: DiagDalleRequest):
 
 
 @router.get("/_diag/dalle_spend")
-def diag_dalle_spend(business_id: str) -> Dict[str, Any]:
+def diag_dalle_spend(
+    business_id: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Diagnostic: report current DALL-E spend for a business, plus
     a sample-cost can-generate flag for HD 1024 ($0.08)."""
     current = get_site_dalle_spend_today(business_id)
@@ -266,7 +275,10 @@ class SimulateSpendRequest(BaseModel):
 
 
 @router.post("/_diag/storage_probe")
-def diag_storage_probe(business_id: str) -> Dict[str, Any]:
+def diag_storage_probe(
+    business_id: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Diagnostic: upload a 1KB synthetic PNG to the site_images bucket
     to isolate Supabase Storage failures from OpenAI download issues.
     Returns the structured status dict from _upload_site_image_debug
@@ -288,7 +300,10 @@ def diag_storage_probe(business_id: str) -> Dict[str, Any]:
 
 
 @router.post("/_diag/dalle_spend_simulate")
-def diag_simulate_spend(req: SimulateSpendRequest) -> Dict[str, Any]:
+def diag_simulate_spend(
+    req: SimulateSpendRequest,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Diagnostic: append a synthetic spend entry so the budget cap
     can be exercised without burning real DALL-E generations. The
     entry is tagged slot_name=_synthetic_test in the log so it's
@@ -314,7 +329,10 @@ def diag_simulate_spend(req: SimulateSpendRequest) -> Dict[str, Any]:
 
 
 @router.post("/_diag/dalle_spend_clear")
-def diag_dalle_spend_clear(business_id: str) -> Dict[str, Any]:
+def diag_dalle_spend_clear(
+    business_id: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Diagnostic: drop synthetic spend entries (slot_name=='_synthetic_test')
     so PART 5 verification can fire a real DALL-E reroll without the
     PART 3 budget-cap setup interfering. Real spend is preserved."""
@@ -422,7 +440,10 @@ def _slot_record_for_response(
 
 
 @router.get("/{business_id}")
-def get_slot_manifest(business_id: str) -> Dict[str, Any]:
+def get_slot_manifest(
+    business_id: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Full slot manifest for a business. Returns ALL 11 slots from
     SLOT_DEFINITIONS (not just slots that have been populated), so the
     UI can render every slot card including unpopulated ones."""
@@ -441,6 +462,7 @@ async def upload_slot(
     business_id: str,
     slot_name: str,
     file: UploadFile = File(...),
+    _: UserSession = Depends(sb_clients.authed_request),
 ) -> Dict[str, Any]:
     """Practitioner upload endpoint. Validates size + MIME + dimensions,
     stores in Supabase site_images bucket, sets slot custom_url. Custom
@@ -521,7 +543,11 @@ async def upload_slot(
 
 
 @router.post("/{business_id}/{slot_name}/clear")
-def clear_slot(business_id: str, slot_name: str) -> Dict[str, Any]:
+def clear_slot(
+    business_id: str,
+    slot_name: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
     """Revert a slot from custom upload back to default suggestion.
     Does NOT delete the uploaded file from Supabase Storage — kept for
     potential undo. Resolution falls through to default_url (or
@@ -555,6 +581,7 @@ def reroll_slot(
     business_id: str,
     slot_name: str,
     req: Optional[RerollRequest] = None,
+    _: UserSession = Depends(sb_clients.authed_request),
 ) -> Dict[str, Any]:
     """Re-fire the slot's default-resolution strategy with stored context.
 
