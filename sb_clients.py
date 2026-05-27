@@ -138,8 +138,31 @@ def set_user_jwt(jwt: str) -> contextvars.Token:
 
 
 def reset_user_jwt(token: contextvars.Token) -> None:
-    """Restore the prior user_jwt context. Paired with set_user_jwt."""
-    _user_jwt_ctx.reset(token)
+    """Restore the prior user_jwt context. Paired with set_user_jwt.
+
+    Robust to FastAPI's sync-dep / async-cleanup context split: when a
+    sync route depends on a sync generator dep (like `authed_request`),
+    FastAPI invokes the dep's body inside `anyio.to_thread.run_sync` —
+    the `set_user_jwt(...)` call binds the contextvar in the worker
+    thread's context copy. After the response renders, FastAPI runs
+    the dep's `finally` cleanup back on the asyncio context via
+    `contextmanager_in_threadpool`. That asyncio context never saw the
+    original `set`, so `_user_jwt_ctx.reset(token)` raises ValueError
+    ("Token was created in a different Context").
+
+    Falling back to `_user_jwt_ctx.set(None)` is safe by design:
+      * The worker thread's context (where the JWT was actually live)
+        dies with the request — nothing to leak.
+      * On the asyncio side, set(None) is idempotent: no prior token
+        was bound here so setting None has no effect on neighboring
+        Tasks. Per-Task contextvar isolation handles concurrent
+        requests for us (proven by the concurrency-isolation test in
+        test_chief_rls_wiring.py).
+    """
+    try:
+        _user_jwt_ctx.reset(token)
+    except ValueError:
+        _user_jwt_ctx.set(None)
 
 
 # ─── FastAPI combined dependency (user JWT verified + context bound) ─
@@ -183,9 +206,31 @@ try:
     from fastapi import Depends as _Depends
     from auth_supabase import UserSession as _UserSession, require_user_session as _require_user_session
 
-    def authed_request(session: _UserSession = _Depends(_require_user_session)):  # type: ignore[no-redef]
-        """Generator-style FastAPI dep — require_user_session + bind JWT
+    async def authed_request(session: _UserSession = _Depends(_require_user_session)):  # type: ignore[no-redef]
+        """Async-generator FastAPI dep — require_user_session + bind JWT
         to request contextvar. Yields the verified UserSession.
+
+        Critical: this MUST be `async def`, not `def`. With a sync
+        generator dep, FastAPI runs the dep body via
+        `anyio.to_thread.run_sync` (worker thread), and the sync route
+        handler runs via a SEPARATE `run_sync_in_worker_thread` call.
+        Each call captures the parent asyncio context — but mutations
+        made inside the worker (like `set_user_jwt(...)`) only affect
+        the worker's context copy, which dies when the worker returns.
+        Result: the handler's worker thread reads a *fresh* asyncio
+        context with the contextvar unset, so every
+        `sb_*_current_context` call silently falls through to the
+        service-role fallback path — bypassing RLS for every
+        authenticated sync route. Exactly the failure mode caught by
+        preview-rls smoke #5b on 2026-05-27.
+
+        With `async def`, the dep body runs ON the asyncio event loop.
+        `set_user_jwt(...)` mutates the asyncio Task's actual context.
+        When FastAPI later invokes the sync handler via
+        `run_sync_in_worker_thread`, the worker captures the Task's
+        context (with the contextvar set) and the handler's sync reads
+        of `_user_jwt_ctx.get()` return the bound JWT. Both directions
+        work.
 
         Usage:
             from sb_clients import authed_request
@@ -193,7 +238,7 @@ try:
 
             @router.get("/bundle/{business_id}")
             def bundle(business_id: str, session: UserSession = Depends(authed_request)):
-                # Every sb_*_current_context call inside (and inside any
+                # Every sb_*_current_context call inside (and in any
                 # helper this calls) forwards session.token to PostgREST.
                 ...
         """
