@@ -47,6 +47,7 @@ Env var contract:
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
@@ -57,6 +58,121 @@ import httpx
 logger = logging.getLogger(__name__)
 
 HTTP_TIMEOUT = 15.0
+
+
+# ─── Request-scoped user JWT propagation ──────────────────────────
+#
+# contextvars-based propagation lets a handler bind the practitioner's
+# token at the request entry point, and every nested helper that calls
+# _sb (across long files like chief_of_staff.py with ~30 helpers) picks
+# it up automatically without a thread-through signature change.
+#
+# async-safe: contextvars are per-async-task by design, so concurrent
+# requests don't bleed tokens into each other.
+#
+# Pattern:
+#   @router.post("/something")
+#   async def handler(req: Req, user_session = Depends(require_user_session)):
+#       with sb_clients.with_user_jwt(user_session.token):
+#           # any _sb / sb_as_current_context call inside here uses the user's
+#           # JWT; PostgREST sees auth.uid() = user.sub; RLS resolves honestly.
+#           ...
+
+_user_jwt_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "sb_clients.user_jwt", default=None,
+)
+
+
+class with_user_jwt:
+    """Context manager that binds a user JWT to the current async context.
+    Re-entrant safe via contextvars reset tokens.
+
+    Usage:
+        with sb_clients.with_user_jwt(token):
+            # all _sb calls in here see the token
+            ...
+    """
+
+    def __init__(self, jwt: str):
+        if not jwt:
+            raise ValueError(
+                "with_user_jwt requires a non-empty JWT. "
+                "Use with_no_context or explicit sb_as_service for "
+                "server-initiated paths."
+            )
+        self._jwt = jwt
+        self._reset_token: Optional[contextvars.Token] = None
+
+    def __enter__(self) -> str:
+        self._reset_token = _user_jwt_ctx.set(self._jwt)
+        return self._jwt
+
+    def __exit__(self, *exc_info) -> None:
+        if self._reset_token is not None:
+            _user_jwt_ctx.reset(self._reset_token)
+            self._reset_token = None
+
+
+def get_current_user_jwt() -> Optional[str]:
+    """Read the user JWT bound to the current async context, if any."""
+    return _user_jwt_ctx.get()
+
+
+def set_user_jwt(jwt: str) -> contextvars.Token:
+    """Lower-level setter — handler binds the practitioner's JWT at request
+    entry, captures the returned reset Token, and passes it to reset_user_jwt
+    in a finally block. Equivalent to the with_user_jwt() context manager
+    but lets handlers keep their existing try/except structure intact
+    without re-indenting the body.
+
+    Usage:
+        _jwt_tok = sb_clients.set_user_jwt(user_session.token)
+        try:
+            ...
+        finally:
+            sb_clients.reset_user_jwt(_jwt_tok)
+    """
+    if not jwt:
+        raise ValueError("set_user_jwt requires a non-empty JWT")
+    return _user_jwt_ctx.set(jwt)
+
+
+def reset_user_jwt(token: contextvars.Token) -> None:
+    """Restore the prior user_jwt context. Paired with set_user_jwt."""
+    _user_jwt_ctx.reset(token)
+
+
+async def sb_as_current_context(
+    client: httpx.AsyncClient,
+    method: str,
+    path: str,
+    body: Any = None,
+    *,
+    allow_service_fallback: bool = False,
+) -> Optional[Any]:
+    """Convenience: pick user-scoped vs service-role based on whether a
+    user JWT is currently in async context. Most legacy `_sb` helpers
+    can swap to this with no signature change at call sites.
+
+      • If user JWT IS in context: forwards it (RLS-enforced).
+      • If NOT and allow_service_fallback=True: uses service-role
+        (for paths that legitimately have no user — cron, webhooks).
+      • If NOT and allow_service_fallback=False: returns None and logs
+        a warning. Surfaces the "we lost the user context" bug at the
+        helper level rather than silently going anonymous.
+    """
+    user_jwt = _user_jwt_ctx.get()
+    if user_jwt:
+        return await sb_as_user(client, method, path, user_jwt, body)
+    if allow_service_fallback:
+        return await sb_as_service(client, method, path, body)
+    logger.warning(
+        "sb_as_current_context: no user JWT in context for %s %s — "
+        "returning None. Use with_user_jwt() at the handler entry, or "
+        "set allow_service_fallback=True for server-initiated paths.",
+        method, path,
+    )
+    return None
 
 
 # ─── Env readers ───────────────────────────────────────────────────

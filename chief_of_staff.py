@@ -40,9 +40,17 @@ from datetime import datetime, timedelta, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+# RLS-readiness migration (Pass RLS): chief_chat now requires a verified
+# Supabase JWT and forwards it to PostgREST so RLS policies on businesses
+# (owner_id = auth.uid()) resolve to the real practitioner. sb_clients
+# centralizes the PostgREST header logic; auth_supabase ships the JWT
+# verification + UserSession dependency.
+import sb_clients
+from auth_supabase import UserSession, require_user_session
 
 import foundation_agent
 import business_profile_agent
@@ -197,21 +205,31 @@ def _anthropic_key(): return os.environ.get("ANTHROPIC_API_KEY", "")
 # ═══════════════════════════════════════════════════════════════════════
 
 async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
-    url = f"{_supabase_url()}/rest/v1{path}"
-    headers = {
-        "apikey": _supabase_anon(),
-        "Authorization": f"Bearer {_supabase_anon()}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
-    resp = await client.request(method, url, headers=headers,
-                                content=json.dumps(body) if body else None,
-                                timeout=HTTP_TIMEOUT)
-    if resp.status_code >= 400:
-        logger.error(f"Supabase {method} {path}: {resp.status_code} {resp.text[:300]}")
-        return None
-    text = resp.text
-    return json.loads(text) if text else None
+    """RLS-readiness migration: delegates to sb_clients.sb_as_current_context,
+    which picks the right credentials per request.
+
+      - If a user JWT is bound to the current async context (handler entry
+        called sb_clients.set_user_jwt(user_session.token) — chief_chat
+        does this), the user's token is forwarded to PostgREST as the
+        Authorization Bearer. auth.uid() resolves to the practitioner's
+        sub claim and RLS policies (owner_id = auth.uid() on businesses)
+        evaluate honestly. This is the path that fixes the Chief 404.
+
+      - If no user JWT is in context (server-initiated paths — cron,
+        webhook handlers, notification engine sweeps that invoke chief
+        helpers directly without going through chief_chat), the helper
+        falls back to service-role (SUPABASE_SERVICE_ROLE_KEY) which
+        bypasses RLS by design. ONLY safe because the server is the
+        trusted intermediary; never reachable from user input.
+
+    Pre-migration this helper sent the project's anon key as both apikey
+    and Bearer, which made auth.uid() NULL on every PostgREST call and
+    let the `owner_id = auth.uid()` policy on businesses filter every
+    row out — visible as Chief returning 404 and brand_engine silently
+    returning empty default bundles."""
+    return await sb_clients.sb_as_current_context(
+        client, method, path, body, allow_service_fallback=True,
+    )
 
 
 # Web search is exposed as a server-side tool. The model decides per
@@ -10220,7 +10238,17 @@ def _parse_greeting_tod(msg: str) -> Optional[str]:
 
 
 @router.post("/agents/chief/chat")
-async def chief_chat(req: ChatRequest):
+async def chief_chat(
+    req: ChatRequest,
+    user_session: UserSession = Depends(require_user_session),
+):
+    # Pass RLS-readiness — bind the practitioner's JWT to the async context
+    # so every _sb call inside this handler (and the ~30 helpers it invokes)
+    # forwards the token automatically. PostgREST verifies the JWT, sets
+    # auth.uid() to user_session.user.id, and the businesses RLS policy
+    # (owner_id = auth.uid()) evaluates honestly. Anonymous callers get
+    # rejected upstream by require_user_session with 401.
+    _jwt_token = sb_clients.set_user_jwt(user_session.token)
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -10507,6 +10535,11 @@ async def chief_chat(req: ChatRequest):
             status_code=500,
             content={"error": str(e), "traceback": tb},
         )
+    finally:
+        # Pass RLS-readiness — restore prior user_jwt context. Safe to call
+        # even if set_user_jwt's prior call raised after binding (token
+        # captured before the try block).
+        sb_clients.reset_user_jwt(_jwt_token)
 
 
 @router.get("/agents/chief/health")
