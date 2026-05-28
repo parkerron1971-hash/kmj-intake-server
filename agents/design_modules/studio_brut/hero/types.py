@@ -125,6 +125,43 @@ class HeroContent(BaseModel):
     )
 
 
+# ─── Creative expression (Pass 4.0i) ───────────────────────────────
+
+FontId = Literal[
+    "brutalist_default",
+    "brutalist_geometric",
+    "brutalist_editorial",
+    "brutalist_mono",
+    "brutalist_sharp",
+]
+
+AccentId = Literal[
+    "no_accent",
+    "oversized_punctuation",
+    "geometric_stamp",
+    "type_initial",
+    "code_label",
+    "color_block_accent",
+]
+
+IntensityLevel = Literal["restrained", "confident", "bold"]
+
+
+class CreativeExpression(BaseModel):
+    """Pass 4.0i Phase B — three creative-expression dimensions.
+
+    Defaults match the conservative no-practitioner-choice state:
+    brutalist_default font, no decorative accent, restrained intensity.
+    Composer (Phase C) infers from archetype when brand_kit has no
+    practitioner choice; this default ensures existing compositions
+    without creative_expression still render coherently.
+    """
+
+    font_id: FontId = "brutalist_default"
+    accent_id: AccentId = "no_accent"
+    intensity: IntensityLevel = "restrained"
+
+
 # ─── Top-level composition ──────────────────────────────────────────
 
 class StudioBrutHeroComposition(BaseModel):
@@ -137,6 +174,14 @@ class StudioBrutHeroComposition(BaseModel):
     variant: VariantId
     treatments: Treatments
     content: HeroContent
+    creative_expression: CreativeExpression = Field(
+        default_factory=CreativeExpression,
+        description=(
+            "Pass 4.0i Phase B — font / accent / intensity creative "
+            "expression choices. Defaults applied when Composer or "
+            "practitioner has not specified."
+        ),
+    )
     reasoning: str = Field(
         description=(
             "1-2 sentences explaining variant + treatment selection for this "

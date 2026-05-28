@@ -40,10 +40,22 @@ from ._depth_helpers import (
     IMAGE_DEPTH_STYLE,
     render_satellite_ornaments,
 )
+from ..creative_expression import (
+    font_css_vars,
+    intensity_css_vars,
+    render_positioned_accent,
+)
 
 
 def _format_inline_vars(d: Dict[str, str]) -> str:
     return "; ".join(f"{k}: {v}" for k, v in d.items())
+
+
+# Pass 4.0i Phase B - creative expression: this variant's natural
+# display scale (card heading, moderate). Intensity translator clamps against
+# rubric floors (h1 >= 3rem, h2 >= 2rem) and sanity ceilings.
+_H1_BASE_REM = 4.0
+_H2_BASE_REM = 2.5
 
 
 def render_layered_card(
@@ -54,7 +66,13 @@ def render_layered_card(
     """Render variant 7 — three-layer card composition."""
     content = context.composition.content
     treatments = context.composition.treatments
-    merged_vars = {**brand_vars, **treatment_vars}
+    ce = context.composition.creative_expression
+    font_vars = font_css_vars(ce.font_id)
+    int_vars = intensity_css_vars(ce.intensity, _H1_BASE_REM, _H2_BASE_REM)
+    accent_html = render_positioned_accent(
+        ce.accent_id, brand_vars, ce.font_id, content
+    )
+    merged_vars = {**brand_vars, **treatment_vars, **font_vars, **int_vars}
     section_style = _format_inline_vars(merged_vars)
 
     eyebrow_html = render_eyebrow(content.eyebrow, treatments)
@@ -157,4 +175,5 @@ def render_layered_card(
     {cta_html}
   </div>
   {sats}
+  {accent_html}
 </section>"""

@@ -168,19 +168,37 @@ def render_heading(
         f"</span>"
     )
 
+    # Pass 4.0i Phase B (finalize): each style property reads the --hero-*
+    # creative-expression var FIRST, falling back to the existing --sb-*
+    # treatment var, falling back to a hardcoded default. Two distinct
+    # namespaces stay distinct:
+    #   --sb-*   = what the variant/treatment chose
+    #   --hero-* = what the practitioner (or Composer) chose
+    # When creative_expression is absent, --hero-* vars aren't set on the
+    # section and CSS falls through to --sb-* / hardcoded defaults — so
+    # legacy / non-Composer render paths behave exactly as before.
+    #
+    # Ownership rule (locked Phase B finalize):
+    #   Font owns:      font-family, text-transform (case), letter-spacing
+    #   Intensity owns: font-size, font-weight tier (800 vs 900)
+    #
+    # Special font-weight chain: --hero-font-fixed-weight (set ONLY by
+    # weight_locked fonts like DM Serif Display) wins over intensity's
+    # --hero-display-weight so a single-weight serif doesn't get faux-bold
+    # synthesized when a bold-intensity composition uses it.
     return (
         f'<h1 class="sb-hero-heading" '
         f'data-override-target="{escape(heading_target_path)}" '
         f'data-override-type="text" '
-        f'style="font-size: {size_clamp}; '
-        f'font-weight: var(--sb-heading-weight, 800); '
+        f'style="font-size: var(--hero-h1-font-size, {size_clamp}); '
+        f'font-weight: var(--hero-font-fixed-weight, var(--hero-display-weight, var(--sb-heading-weight, 800))); '
         f'font-style: var(--sb-heading-style, normal); '
         f'line-height: var(--sb-heading-line-height, 0.95); '
-        f'letter-spacing: var(--sb-heading-tracking, -0.02em); '
-        f'text-transform: var(--sb-heading-case, none); '
+        f'letter-spacing: var(--hero-letter-spacing, var(--sb-heading-tracking, -0.02em)); '
+        f'text-transform: var(--hero-text-transform, var(--sb-heading-case, none)); '
         f'color: var(--sb-heading-color, var(--brand-text-primary, #09090B)); '
-        f'font-family: var(--sb-display-stack, "Druk", "Bebas Neue", '
-        f'"Space Grotesk", "Archivo Black", "Inter", system-ui, sans-serif); '
+        f'font-family: var(--hero-font-display, var(--sb-display-stack, "Druk", "Bebas Neue", '
+        f'"Space Grotesk", "Archivo Black", "Inter", system-ui, sans-serif)); '
         f'margin: 0 0 {bottom_margin} 0;">'
         f"{safe_before}{emphasis_span}{safe_after}"
         f"</h1>"
