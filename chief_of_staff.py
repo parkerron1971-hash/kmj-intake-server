@@ -452,6 +452,24 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
     except Exception as _e:
         business_profile_block = ""
 
+    # LGS Phase 2/4: fold the maturity stage + active growth objectives into the
+    # business-profile block (single carrier — flows through the existing
+    # ctx['business_profile_block'] → _format → prompt). Both sync + soft-fail.
+    try:
+        import maturity_engine
+        _mat_block = await asyncio.to_thread(maturity_engine.maturity_context_block, biz_id)
+        if _mat_block:
+            business_profile_block = (business_profile_block + "\n\n" + _mat_block).strip()
+    except Exception as _e:
+        pass
+    try:
+        import growth_objective_agent
+        _growth_block = await asyncio.to_thread(growth_objective_agent.growth_context_block, biz_id)
+        if _growth_block:
+            business_profile_block = (business_profile_block + "\n\n" + _growth_block).strip()
+    except Exception as _e:
+        pass
+
     try:
         # Raw profile row — used by the JIT capture detector to read
         # proactive_capture_enabled and brand_voice. Sync httpx fetch
@@ -7553,7 +7571,49 @@ async def handle_send_report(client, biz, action) -> Dict:
     }
 
 
+async def handle_create_growth_objective(client, biz, action):
+    """LGS Phase 4 — the Growth Partner commits a Growth Objective and
+    materializes its structure (modules + workflows + milestones).
+    action: {title, decision_summary?, rationale?, target_date?, metrics?, spawns?}
+    spawns: {modules:[slug], workflows:[slug], milestones:[{title,due_date?}]}"""
+    import asyncio as _asyncio
+    title = action.get("title")
+    if not title:
+        return _fail("create_growth_objective", "title required")
+    try:
+        import growth_objective_agent
+    except Exception as e:
+        return _fail("create_growth_objective", f"growth engine unavailable: {e}")
+    payload = {
+        "title": title,
+        "decision_summary": action.get("decision_summary"),
+        "rationale": action.get("rationale"),
+        "target_date": action.get("target_date"),
+        "metrics": action.get("metrics") or {},
+        "spawns": action.get("spawns") or {},
+        "status": action.get("status", "active"),
+    }
+    res = await _asyncio.to_thread(
+        growth_objective_agent.create_growth_objective, biz["id"], payload
+    )
+    if not res.get("ok"):
+        return _fail("create_growth_objective", res.get("error", "create failed"))
+    rep = res.get("spawn_report", {})
+    return {
+        "type": "create_growth_objective",
+        "result": "growth objective created",
+        "label": (
+            f"🎯 {title} — spawned "
+            f"{len(rep.get('modules_created', []))} modules, "
+            f"{len(rep.get('workflows_created', []))} workflows, "
+            f"{rep.get('milestones_created', 0)} milestones"
+        ),
+        "nav": _nav("grow"),
+    }
+
+
 ACTION_HANDLERS = {
+    "create_growth_objective": handle_create_growth_objective,
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
     "draft_and_send":        handle_draft_and_send,

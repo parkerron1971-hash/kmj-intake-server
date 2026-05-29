@@ -43,6 +43,8 @@ from brand_engine_router import router as brand_engine_router
 from voice_depth_router import router as voice_depth_router
 # Access-Enforcement 25a (Fork 25) — locked restricted-module entries (e.g. Giving)
 from restricted_modules import router as restricted_router
+from workflow_router import router as workflow_router
+from growth_objective_router import router as growth_objective_router
 # Pass 4.0a — Director Agent foundations
 from agents.sparse_input_enrichment_router import router as sparse_enrichment_router
 # Pass 4.0b — Director Agent: Critique loop
@@ -76,6 +78,8 @@ app.include_router(sms_router)
 app.include_router(brand_engine_router)
 app.include_router(voice_depth_router)
 app.include_router(restricted_router)
+app.include_router(workflow_router)
+app.include_router(growth_objective_router)
 app.include_router(business_profile_router)
 app.include_router(practitioner_profile_router)
 app.include_router(foundation_router)
@@ -425,10 +429,18 @@ scheduler = AsyncIOScheduler()
 @app.on_event("startup")
 async def startup():
     scheduler.add_job(check_followup_sequences, "interval", hours=1, id="followup_check")
+    # LGS Phase 3: drain the workflow_runs queue (Fork 7 — in-process cron, not a
+    # frontend heartbeat). Internal workflows only for now; reactive/webhook paths
+    # stay gated behind Stripe signature verification (Fork 21) + the connector slice.
+    try:
+        import workflow_engine
+        scheduler.add_job(workflow_engine.drain_tick, "interval", minutes=5, id="workflow_drain")
+    except Exception as e:
+        print(f"   [warn] workflow drain job not scheduled: {e}")
     scheduler.start()
     print(f"🚀 KMJ Intake Automation running")
     print(f"   Owner: {OWNER_NAME} | {BUSINESS_NAME}")
-    print(f"   Scheduler: checking follow-ups every hour")
+    print(f"   Scheduler: follow-ups hourly + workflow drain every 5 min")
     print(f"   Webhook: POST /webhook/netlify-form")
 
 

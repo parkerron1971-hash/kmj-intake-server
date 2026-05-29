@@ -44,6 +44,14 @@ ANTHROPIC_VERSION = "2023-06-01"
 DRAFT_MODEL = "claude-sonnet-4-5-20250929"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
+# Phase 2 (LGS): one consistent voice directive across artifacts. Soft-fallback
+# to a no-op so a missing module never breaks payment drafting.
+try:
+    from practitioner_voice import compose_voice_directive as _voice_directive_for
+except Exception:  # pragma: no cover
+    def _voice_directive_for(_business):  # type: ignore
+        return ""
+
 OVERDUE_THRESHOLD_DAYS = 14
 TRENDS_WINDOW_DAYS = 90
 TRENDS_DECLINE_THRESHOLD = 0.15  # 15% drop
@@ -182,7 +190,8 @@ async def _scan_overdue(client: httpx.AsyncClient, business: Dict) -> List[Dict]
 
 {money_tone}
 
-Voice: tone is "{tone}". Keep it under 4 sentences. Don't be aggressive or guilt-inducing. Sign off as {practitioner}."""
+Voice: tone is "{tone}". {_voice_directive_for(business)}
+Keep it under 4 sentences. Don't be aggressive or guilt-inducing. Sign off as {practitioner}."""
 
         user_msg = f"""Contact: {name}
 {practitioner} agreed to work with this contact {days_overdue} days ago, but no payment has been recorded yet.
@@ -266,7 +275,8 @@ async def _scan_thank_yous(client: httpx.AsyncClient, business: Dict) -> List[Di
 
 {money_tone}
 
-Voice: tone is "{tone}". Keep it to 2-3 sentences. Sign off as {practitioner}."""
+Voice: tone is "{tone}". {_voice_directive_for(business)}
+Keep it to 2-3 sentences. Sign off as {practitioner}."""
 
         amount_str = f" of ${amount}" if amount else ""
         user_msg = f"{name} just made a {ev.get('event_type', 'payment').replace('_', ' ')}{amount_str}. Draft a short thank-you."
