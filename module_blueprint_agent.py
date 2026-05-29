@@ -132,11 +132,17 @@ def _stage_le(stage: Optional[str], ceiling: str) -> bool:
 def provision_modules(
     business_id: str,
     business_type: str,
-    max_stage: str = PROVISION_MAX_STAGE,
+    max_stage: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Walk the blueprint and create the CORE module set for this business type
     (tier='core' and maturity_stage <= max_stage) that doesn't already exist.
+
+    Phase 2: when max_stage is None (the normal call), the ceiling is the
+    business's COMPUTED maturity stage (maturity_engine) rather than a flat
+    'launching' — so a business that has grown into operating/scaling gets its
+    operating-stage core modules too, while a brand-new business stays
+    conservative. Callers may still pass an explicit max_stage to override.
 
     Idempotent and per-module non-fatal. Returns a small report:
         {"created": [...slugs], "skipped": [...slugs], "failed": [...slugs]}
@@ -144,6 +150,14 @@ def provision_modules(
     report: Dict[str, Any] = {"created": [], "skipped": [], "failed": [], "skipped_restricted": []}
     if not business_id:
         return report
+
+    if max_stage is None:
+        try:
+            import maturity_engine
+            max_stage = maturity_engine.get_maturity_stage(business_id)
+        except Exception as e:
+            logger.warning(f"maturity lookup failed, falling back to {PROVISION_MAX_STAGE}: {e}")
+            max_stage = PROVISION_MAX_STAGE
 
     blueprint = get_blueprint(business_type or "custom")
     if not blueprint:

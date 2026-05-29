@@ -121,6 +121,14 @@ async def _draft_proposal(
     personality = voice.get("personality", "helpful")
     audience = voice.get("audience", "clients")
     comm_style = voice.get("communication_style", [])
+    # Phase 2 (LGS): one consistent voice directive composed from voice_profile
+    # + brand_kit tone_words + creative_expression. Additive — augments the
+    # explicit voice line below so every artifact sounds like the same person.
+    try:
+        from practitioner_voice import compose_voice_directive
+        _voice_directive = compose_voice_directive(business)
+    except Exception:
+        _voice_directive = ""
 
     contact_id = contact["id"]
     name = contact.get("name", "there")
@@ -160,6 +168,7 @@ async def _draft_proposal(
     system_prompt = f"""You are the Contract Agent for {biz_name}. Draft {proposal_type} from {practitioner} to {name}.
 
 Voice profile: tone is "{tone}", personality is "{personality}", audience is "{audience}", style is "{', '.join(comm_style) if comm_style else tone}".
+{_voice_directive}
 
 This is a {biz_type} business. Adapt completely:
 - Church: partnership language, ministry impact, spiritual alignment
