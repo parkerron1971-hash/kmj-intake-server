@@ -97,6 +97,16 @@ def seed_from_onboarding(body: SeedFromOnboardingBody) -> JSONResponse:
     )
     if row is None:
         return JSONResponse({"ok": False, "error": "seed failed"}, status_code=500)
+
+    # Phase 1: auto-assemble the business-type core module set (blueprint walk).
+    # Purpose-track convergence point — mirrors the strategy-track hook in
+    # chief_of_staff.handle_complete_strategy_track (Fork 5). Non-fatal.
+    try:
+        import module_blueprint_agent
+        module_blueprint_agent.provision_modules(body.business_id, body.business_type)
+    except Exception as e:
+        logger.warning(f"seed-from-onboarding blueprint provision failed (non-fatal): {e}")
+
     return JSONResponse({"ok": True, "profile": row})
 
 
