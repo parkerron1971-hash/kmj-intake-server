@@ -44,6 +44,7 @@ from voice_depth_router import router as voice_depth_router
 # Access-Enforcement 25a (Fork 25) — locked restricted-module entries (e.g. Giving)
 from restricted_modules import router as restricted_router
 from workflow_router import router as workflow_router
+from growth_objective_router import router as growth_objective_router
 # Pass 4.0a — Director Agent foundations
 from agents.sparse_input_enrichment_router import router as sparse_enrichment_router
 # Pass 4.0b — Director Agent: Critique loop
@@ -78,6 +79,7 @@ app.include_router(brand_engine_router)
 app.include_router(voice_depth_router)
 app.include_router(restricted_router)
 app.include_router(workflow_router)
+app.include_router(growth_objective_router)
 app.include_router(business_profile_router)
 app.include_router(practitioner_profile_router)
 app.include_router(foundation_router)
