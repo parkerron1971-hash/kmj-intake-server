@@ -3515,6 +3515,9 @@ async def handle_ensure_module(client, biz, action) -> Dict:
         "label": f"Created module: {name}",
         "module_id": inserted[0]["id"],
         "nav": None,
+        # Tell the frontend to refetch useCustomModules so the Build sidebar
+        # picks up the new module without a page reload.
+        "frontend_event": {"name": "solutionist-modules-changed"},
     }
 
 
