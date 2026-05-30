@@ -9740,8 +9740,10 @@ REPLYING TO REPLIES (CRITICAL — see EMAIL REPLIES context block above):
   Never draft a generic "Thanks for reaching out!" reply when you have the reply text.
 
 ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MODULES section above lists what exists):
+  [ACTION:{{"type":"propose_module_from_intake","intake_excerpt":"<the practitioner's own words, verbatim or near-verbatim>"}}]
+    — Generates 1+ ModuleSpec proposals from a free-text description and renders an accept/reject/revise card stack in the dock with decomposition reasoning. PREFERRED for any ask that DESCRIBES what they want to track (vs. literally dictating a module name and field list). The Chief does NOT design the schema itself — the proposal generator does, and may split the request into multiple linked modules (e.g. Bookings + Rewards). After emitting this action, say one short sentence like "Drafting a proposal — review the card below." and STOP. Do NOT also emit ensure_module for the same request. Do NOT ask a follow-up question about other parts of the same intake until the practitioner accepts/rejects this card stack.
   [ACTION:{{"type":"ensure_module","module_name":"Client Progress","fields":[{{"name":"client","type":"contact_link","label":"Client"}},{{"name":"status","type":"select","label":"Status","options":["new","active","done"]}},{{"name":"notes","type":"textarea","label":"Notes"}}]}}]
-    — Creates a new module if it doesn't exist. After creating, tell the practitioner: "I created a [name] module — you'll find it in BUILD on your sidebar."
+    — DIRECT creation. Use ONLY when the practitioner literally dictates "create a module called X with fields A, B, C" (explicit name AND explicit fields). After creating, tell them: "I created a [name] module — you'll find it in BUILD on your sidebar."
   [ACTION:{{"type":"create_module_entry","module_id":"<uuid>","data":{{"title":"...","status":"active"}}}}]
     — Adds an entry to a module. Use the module id from the CUSTOM MODULES context block.
   [ACTION:{{"type":"list_module_entries","module_id":"<uuid>"}}]
@@ -9749,11 +9751,21 @@ ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MOD
   [ACTION:{{"type":"update_module_entry","entry_id":"<uuid>","data":{{"status":"done"}}}}]  — patches the entry's data; existing fields are preserved.
   [ACTION:{{"type":"delete_module_entry","entry_id":"<uuid>"}}]  — soft-deletes (sets status='deleted').
   [ACTION:{{"type":"navigate","tab":"build","page":"module:<uuid>"}}]  — opens a specific module in BUILD.
-    — When the practitioner says "create a tracker / module / custom section for X" → ensure_module.
-    — When they say "add to my [module name]" → create_module_entry.
-    — When they say "show / list / what's in my [module name]" → list_module_entries.
-    — When they say "go to / open [module name]" → navigate with page=module:<id>.
-    — When they say "what modules do I have?" → just list them from the CUSTOM MODULES context block (no action needed).
+    — ROUTING (read in order — first match wins):
+       1. INTAKE PHRASING — practitioner DESCRIBES what they want to track in their own words, often names 2+ things, may or may not give exact field names:
+          "I need a way to track X" / "I want to track Y" / "build me something for Z" /
+          "I need booking and a [rewards / loyalty / referral / membership] tracker" /
+          "track how many [X] each [person] has" / "on their Nth [X] they get a [reward]" /
+          "I want a [X] + [Y] + [Z]" / "set me up to manage X" / "help me keep track of Y" /
+          any answer to an intake / onboarding / "what do you want to track?" question
+          → propose_module_from_intake with intake_excerpt = their EXACT words (verbatim is best). One action. One card stack. Then stop talking until they accept/reject/revise.
+          IMPORTANT: even if the intake names 3 things (e.g. "booking + rewards + birthday discounts"), emit ONE propose_module_from_intake — the generator handles decomposition itself (G13). Do NOT loop ensure_module per item. Do NOT split the intake into a separate follow-up question for one of the items.
+       2. DIRECT COMMAND with explicit name + explicit field list — e.g. "create a module called Client Progress with fields client, status, notes" → ensure_module.
+       3. "add to my [module name]" → create_module_entry.
+       4. "show / list / what's in my [module name]" → list_module_entries.
+       5. "go to / open [module name]" → navigate with page=module:<id>.
+       6. "what modules do I have?" → just list them from the CUSTOM MODULES context block (no action needed).
+    — When in doubt between propose_module_from_intake and ensure_module: PREFER propose. The proposal flow is reversible (the practitioner sees a card and can reject/revise) and produces better schemas via the generator; ensure_module is a one-shot direct write that can't be previewed.
 
 ACTIONS — TASKS + NOTES + ACTIVITY:
   [ACTION:{{"type":"create_task","title":"Call Deacon Harris back","due_date":"2026-04-24","priority":"high","contact_id":"<uuid-optional>"}}]
