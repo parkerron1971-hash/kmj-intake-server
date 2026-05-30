@@ -417,9 +417,6 @@ def _materialize_workflows(business_id: str, module_slug: str,
             continue
         trigger = wf.get("trigger") or {}
         steps = wf.get("steps") or []
-        # source='manual' for now (workflow_definitions CHECK is
-        # ('blueprint','growth_objective','manual') — module_spec source
-        # would need a CHECK widening migration; tracked as follow-up).
         body = {
             "business_id": business_id,
             "name": wf.get("name") or wf_slug,
@@ -427,7 +424,7 @@ def _materialize_workflows(business_id: str, module_slug: str,
             "trigger": trigger,
             "steps": steps,
             "enabled": bool(wf.get("enabled", True)),
-            "source": "manual",
+            "source": "module_spec",
         }
         created = sb_clients.sb_post_as_service("/workflow_definitions", body)
         if isinstance(created, list) and created:
