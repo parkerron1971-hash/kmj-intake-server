@@ -7572,10 +7572,10 @@ async def handle_send_report(client, biz, action) -> Dict:
 
 
 async def handle_propose_module_from_intake(client, biz, action):
-    """Phase A Light spike — turn a free-text intake answer into a ModuleSpec
-    draft. Returns the spec inline in `result` so the frontend dock card can
-    render it for accept/revise/reject.
-    action: {intake_excerpt: str, revise_feedback?: str}"""
+    """Phase B / G13 — turn a free-text intake answer into ONE OR MORE
+    ModuleSpec drafts (multi-module decomposition when 2+ trackable objects).
+    Returns proposals[] + decomposition_reasoning inline so the dock card stack
+    can render. action: {intake_excerpt, revise_feedback?}"""
     intake = (action.get("intake_excerpt") or "").strip()
     if not intake:
         return _fail("propose_module_from_intake", "intake_excerpt required")
@@ -7590,17 +7590,26 @@ async def handle_propose_module_from_intake(client, biz, action):
     )
     if not res.get("ok"):
         return _fail("propose_module_from_intake", res.get("error", "generation failed"))
-    spec = res.get("spec") or {}
-    field_count = len((spec.get("schema") or {}).get("fields") or [])
+    proposals = res.get("proposals") or []
+    n = len(proposals)
+    if n == 1:
+        spec = proposals[0]["spec"]
+        wf_count = len(spec.get("workflows") or [])
+        wf_note = f", {wf_count} rule{'s' if wf_count != 1 else ''}" if wf_count else ""
+        label = (
+            f"📐 Proposed: {spec.get('name', spec.get('slug', 'module'))} "
+            f"({len((spec.get('schema') or {}).get('fields') or [])} fields"
+            f"{wf_note}, {spec.get('confidence', 'medium')} confidence)"
+        )
+    else:
+        names = ", ".join(p["spec"].get("name", "module") for p in proposals)
+        label = f"📐 Proposed {n} linked modules: {names}"
     return {
         "type": "propose_module_from_intake",
         "result": "module spec proposed",
-        "label": (
-            f"📐 Proposed: {spec.get('name', spec.get('slug', 'module'))} "
-            f"({field_count} fields, {spec.get('confidence', 'medium')} confidence)"
-        ),
-        "spec_id": res.get("spec_id"),
-        "spec": spec,
+        "label": label,
+        "decomposition_reasoning": res.get("decomposition_reasoning"),
+        "proposals": proposals,            # [{spec_id, spec}, ...]
         "nav": _nav("build"),
     }
 

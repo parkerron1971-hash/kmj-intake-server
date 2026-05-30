@@ -87,13 +87,44 @@ class ModuleAgentConfig(BaseModel):
     check_schedule: Optional[str] = None
 
 
-# Phase B / C slots — captured in the spec, NOT materialized this spike.
+# Phase B — workflow rules MATERIALIZED on accept (alongside custom_modules).
+# Phase C — public_display still a captured slot only.
 
-class WorkflowSpecSlot(BaseModel):
-    """Rule sketch (Phase B will materialize as workflow_definitions)."""
-    name: str
-    trigger: Dict[str, Any]
-    steps: List[Dict[str, Any]] = Field(default_factory=list)
+class WorkflowTrigger(BaseModel):
+    """Event type + shallow-equality conditions matched by workflow_engine
+    on_event. event_type values used so far:
+      module_entry.created     fires after a row is added
+      module_entry.updated     fires after a row is changed
+      schedule.daily           cron-fired daily (drained on tick)
+    conditions are matched shallowly against the event payload (same as
+    workflow_engine._conditions_match)."""
+    event_type: str
+    conditions: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowStep(BaseModel):
+    """One step in the workflow. action keys MUST be a workflow_engine
+    STEP_HANDLERS key (log / update_context / emit_event / create_module_entry
+    / create_milestone) OR a 'connector.<verb>' (Phase C). requires_confirmation
+    triggers the engine's Fork 17 confirmation gate."""
+    action: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+    requires_confirmation: bool = False
+
+
+class WorkflowSpec(BaseModel):
+    """A rule that ships with the module. Materialized to workflow_definitions
+    on accept; the existing workflow_engine drains + executes."""
+    name: Optional[str] = None                 # default from slug if omitted
+    slug: str                                  # kebab-case, unique per business
+    trigger: WorkflowTrigger
+    steps: List[WorkflowStep] = Field(default_factory=list)
+    enabled: bool = True
+
+    def humanized_name(self) -> str:
+        if self.name:
+            return self.name
+        return self.slug.replace("-", " ").replace("_", " ").title()
 
 
 class PublicDisplaySlot(BaseModel):
@@ -111,7 +142,7 @@ class ModuleSpec(BaseModel):
     schema_: ModuleSchema = Field(..., alias="schema")
     agent_config: ModuleAgentConfig = Field(default_factory=ModuleAgentConfig)
     public_display: Optional[PublicDisplaySlot] = None
-    workflows: List[WorkflowSpecSlot] = Field(default_factory=list)
+    workflows: List[WorkflowSpec] = Field(default_factory=list)
     voice_hints: List[str] = Field(default_factory=list)
     confidence: Literal["high", "medium", "low"] = "medium"
     reasoning: str
@@ -160,25 +191,51 @@ EXAMPLE OUTPUT (a coach 'clients' module — what 'good' looks like):
 
 
 _SYSTEM_PROMPT = """You design custom data modules for solo practitioners. Given a free-text \
-intake answer describing a tracking/workflow need, you output ONE ModuleSpec \
-as JSON that matches the schema below. The module will be rendered by a \
-generic schema-driven renderer (list + kanban views, field types: text, \
-textarea, select, date, number, checkbox, contact_link, url, email).
+intake answer describing a tracking/workflow need, you output a JSON envelope \
+containing one or more ModuleSpecs plus your decomposition reasoning. Modules \
+will be rendered by a generic schema-driven renderer (list + kanban views; \
+field types: text, textarea, select, date, number, checkbox, contact_link, \
+url, email) and rules in workflows[] will be materialized into a workflow engine.
 
-Design principles:
-- Fields should reflect REAL operational data the practitioner needs (not generic placeholders)
-- Pick `default_view: board` when one field is a clear status/progress column; otherwise `list`
-- `board_column` MUST be the name of a `select` field if you use board view
-- Use `contact_link` when an entry should reference a person already in the practitioner's contacts
-- Use `select` (with options) for any short enumerated value (status, type, category)
+DECOMPOSITION (G13 ruling): if the intake names 2+ DISTINCT TRACKABLE OBJECTS \
+(e.g. "bookings AND a rewards system" → two objects; "appointments with \
+recurring slots" → one), return MULTIPLE ModuleSpecs in the list, linked via \
+`contact_link` fields where the same person/customer appears in both. If the \
+intake describes one trackable object (with details), return ONE ModuleSpec. \
+ALWAYS explain `decomposition_reasoning` in plain language the practitioner can \
+read: why you split (or didn't), and how the modules link. The practitioner can \
+ask to consolidate.
+
+DESIGN PRINCIPLES per ModuleSpec:
+- Fields reflect REAL operational data the practitioner needs (not generic placeholders)
+- `default_view: board` when one field is a clear status/progress column; else `list`
+- `board_column` MUST be the name of a `select` field when using board view
+- `contact_link` when an entry should reference a person already in the practitioner's contacts (this is the FK between linked modules — use the same `contact_link` field name across modules so they link cleanly)
+- `select` (with options) for any short enumerated value (status, type, category)
 - Mark `required: true` ONLY on fields without which the row is meaningless
-- `slug` is kebab-case, `name` is human-readable Title Case
-- `agent_config.closed_statuses` lists the option values that mean "done" (so overdue checks skip them)
-- Capture intent in `description` (1 sentence) and reasoning (1-3 sentences explaining the design choices)
-- `workflows[]` and `public_display` MAY be filled if the intake clearly implies rules or a customer-facing surface, but they are NOT materialized this pass — be honest, not aspirational
-- Set `confidence` honestly: 'high' if the intake is specific, 'medium' if you inferred, 'low' if vague
+- `slug` is kebab-case, `name` is Title Case
+- `agent_config.closed_statuses` lists the option values meaning "done"
+- 1-sentence `description`, 1-3 sentence `reasoning` per module
 
-Output STRICT JSON only — no markdown, no commentary, no leading text.
+WORKFLOWS (Phase B — these DO materialize): when the intake implies an automatic \
+rule (e.g. "on 7th visit → free reward"), encode it in workflows[] with:
+- trigger.event_type = 'module_entry.updated' or 'module_entry.created'
+- trigger.conditions = {module_slug, field, value}  — shallow equality
+- steps = list of {action, params}; valid actions: 'log', 'emit_event', 'update_context'
+- Each workflow has a unique kebab-case slug per business
+Only declare workflows for rules the intake genuinely implies — don't invent.
+
+PUBLIC_DISPLAY: ignored this pass (Phase C). Set null unless the intake explicitly \
+mentions customer-facing.
+
+confidence: 'high' if intake is specific, 'medium' if inferred, 'low' if vague.
+
+Output STRICT JSON only matching this envelope:
+{
+  "decomposition_reasoning": "plain-language explanation",
+  "specs": [ <ModuleSpec>, ... ]
+}
+No markdown, no commentary, no leading text.
 """
 
 
@@ -191,7 +248,14 @@ Practitioner's intake answer:
 
 {reference}
 
-Output the ModuleSpec JSON now."""
+Output the JSON envelope now ({{"decomposition_reasoning": ..., "specs": [...]}})."""
+
+
+class ProposalEnvelope(BaseModel):
+    decomposition_reasoning: str
+    specs: List[ModuleSpec]
+
+    model_config = {"populate_by_name": True}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -213,13 +277,14 @@ def _strip_code_fence(text: str) -> str:
     return s.strip()
 
 
-def generate_module_spec(
+def generate_module_proposal(
     business: Dict[str, Any],
     intake_excerpt: str,
     extra_guidance: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Call Sonnet to produce a ModuleSpec, validate via Pydantic, return
-    {ok, spec | error, raw}. Soft-fails so the Chief turn never crashes."""
+    """Call Sonnet to produce a ProposalEnvelope (decomposition_reasoning +
+    list[ModuleSpec]), validate via Pydantic, return
+    {ok, decomposition_reasoning, specs, error?}. Soft-fails."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return {"ok": False, "error": "ANTHROPIC_API_KEY not set"}
@@ -230,7 +295,8 @@ def generate_module_spec(
         reference=_REFERENCE_EXAMPLE,
     )
     if extra_guidance:
-        user += "\n\nAdditional practitioner guidance (use to revise the design):\n" + extra_guidance.strip()
+        user += ("\n\nAdditional practitioner guidance (use to revise the design "
+                 "and update decomposition_reasoning):\n" + extra_guidance.strip())
     try:
         client = Anthropic(api_key=api_key)
         msg = client.messages.create(
@@ -249,18 +315,29 @@ def generate_module_spec(
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        logger.warning(f"non-JSON spec: {text[:200]}")
+        logger.warning(f"non-JSON envelope: {text[:200]}")
         return {"ok": False, "error": f"non_json: {e}", "raw": text}
     try:
-        spec = ModuleSpec.model_validate(data)
+        env = ProposalEnvelope.model_validate(data)
     except ValidationError as ve:
-        logger.warning(f"spec validation failed: {ve}")
+        logger.warning(f"envelope validation failed: {ve}")
         return {"ok": False, "error": f"validation_failed: {ve}", "raw": data}
 
-    # Anchor the intake excerpt so the LLM can't drift away from the source.
-    spec_dict = spec.model_dump(by_alias=True, exclude_none=False)
-    spec_dict["intake_excerpt"] = intake_excerpt.strip()
-    return {"ok": True, "spec": spec_dict}
+    # Anchor the intake excerpt on each spec.
+    specs = []
+    for s in env.specs:
+        sd = s.model_dump(by_alias=True, exclude_none=False)
+        sd["intake_excerpt"] = intake_excerpt.strip()
+        specs.append(sd)
+    return {"ok": True, "decomposition_reasoning": env.decomposition_reasoning, "specs": specs}
+
+
+# Back-compat: single-spec helper still callable for tests.
+def generate_module_spec(business, intake_excerpt, extra_guidance=None) -> Dict[str, Any]:
+    res = generate_module_proposal(business, intake_excerpt, extra_guidance)
+    if not res.get("ok"):
+        return res
+    return {"ok": True, "spec": res["specs"][0]}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -284,8 +361,10 @@ def store_draft(business_id: str, intake_excerpt: str, spec: Dict[str, Any]) -> 
 def propose_module_from_intake(
     business_id: str, intake_excerpt: str, extra_guidance: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Full propose flow: load biz → generate → store draft. Returns
-    {ok, spec_id, spec} on success."""
+    """Full propose flow: load biz → generate envelope (1+ specs) → store each
+    as a draft. Returns {ok, decomposition_reasoning, proposals: [{spec_id, spec}]}
+    so the frontend can render either a single card or a stack with the
+    decomposition reasoning at top (G13)."""
     if not intake_excerpt or len(intake_excerpt.strip()) < 5:
         return {"ok": False, "error": "intake_excerpt too short"}
     biz_rows = sb_clients.sb_get_as_service(
@@ -294,24 +373,75 @@ def propose_module_from_intake(
     if not biz_rows:
         return {"ok": False, "error": "business not found"}
     biz = biz_rows[0]
-    gen = generate_module_spec(biz, intake_excerpt, extra_guidance=extra_guidance)
+    gen = generate_module_proposal(biz, intake_excerpt, extra_guidance=extra_guidance)
     if not gen.get("ok"):
         return gen
-    draft = store_draft(business_id, intake_excerpt, gen["spec"])
-    if not draft:
-        return {"ok": False, "error": "draft persist failed", "spec": gen["spec"]}
-    return {"ok": True, "spec_id": draft["id"], "spec": gen["spec"]}
+    proposals = []
+    for spec in gen["specs"]:
+        draft = store_draft(business_id, intake_excerpt, spec)
+        if draft:
+            proposals.append({"spec_id": draft["id"], "spec": spec})
+    if not proposals:
+        return {"ok": False, "error": "no drafts persisted"}
+    return {
+        "ok": True,
+        "decomposition_reasoning": gen["decomposition_reasoning"],
+        "proposals": proposals,
+    }
 
 
 # ──────────────────────────────────────────────────────────────
 # Materialization — accept turns draft into custom_modules row
 # ──────────────────────────────────────────────────────────────
 
+def _materialize_workflows(business_id: str, module_slug: str,
+                           workflows: List[Dict[str, Any]]) -> List[str]:
+    """Phase B: insert each spec.workflows[] entry as a workflow_definitions
+    row. Idempotent on (business_id, slug) — uniq index. Workflow slug is
+    prefixed with module_slug to avoid cross-module collisions. Returns the
+    created workflow_definitions ids (existing slugs are skipped, not
+    duplicated)."""
+    if not workflows:
+        return []
+    existing = {
+        r.get("slug") for r in
+        (sb_clients.sb_get_as_service(
+            f"/workflow_definitions?business_id=eq.{business_id}&select=slug") or [])
+        if isinstance(r, dict)
+    }
+    created_ids: List[str] = []
+    for wf in workflows:
+        wf_slug_raw = wf.get("slug") or "rule"
+        wf_slug = f"{module_slug}-{wf_slug_raw}"
+        if wf_slug in existing:
+            continue
+        trigger = wf.get("trigger") or {}
+        steps = wf.get("steps") or []
+        # source='manual' for now (workflow_definitions CHECK is
+        # ('blueprint','growth_objective','manual') — module_spec source
+        # would need a CHECK widening migration; tracked as follow-up).
+        body = {
+            "business_id": business_id,
+            "name": wf.get("name") or wf_slug,
+            "slug": wf_slug,
+            "trigger": trigger,
+            "steps": steps,
+            "enabled": bool(wf.get("enabled", True)),
+            "source": "manual",
+        }
+        created = sb_clients.sb_post_as_service("/workflow_definitions", body)
+        if isinstance(created, list) and created:
+            created_ids.append(created[0].get("id"))
+            existing.add(wf_slug)
+    return [i for i in created_ids if i]
+
+
 def materialize_spec(spec_id: str) -> Dict[str, Any]:
-    """Idempotent on (business_id, slug): if a custom_modules row with that
-    slug already exists, reuse it (no double-create). Otherwise insert.
+    """Idempotent on (business_id, slug). Materializes:
+      1. custom_modules row (the runtime shape)
+      2. workflow_definitions rows for each spec.workflows[] (Phase B)
     Marks the spec accepted + links materialized_module_id.
-    Returns {ok, module, spec_id}."""
+    Returns {ok, module, workflow_ids, spec_id}."""
     spec_rows = sb_clients.sb_get_as_service(
         f"/module_specs?id=eq.{spec_id}&select=*&limit=1"
     ) or []
@@ -319,12 +449,11 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
         return {"ok": False, "error": "spec not found"}
     spec_row = spec_rows[0]
     if spec_row.get("status") == "accepted" and spec_row.get("materialized_module_id"):
-        # Already materialized — idempotent return.
         mod = sb_clients.sb_get_as_service(
             f"/custom_modules?id=eq.{spec_row['materialized_module_id']}&select=*&limit=1"
         ) or []
         return {"ok": True, "module": mod[0] if mod else None, "spec_id": spec_id,
-                "note": "already accepted"}
+                "workflow_ids": [], "note": "already accepted"}
 
     business_id = spec_row["business_id"]
     spec = spec_row["draft_json"] or {}
@@ -332,14 +461,13 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
     if not slug:
         return {"ok": False, "error": "spec missing slug"}
 
-    # Pre-check idempotency on (business_id, slug).
+    # 1. custom_modules — idempotent on (business_id, slug).
     existing = sb_clients.sb_get_as_service(
         f"/custom_modules?business_id=eq.{business_id}&slug=eq.{slug}&select=id&limit=1"
     ) or []
     if existing:
         module_id = existing[0]["id"]
     else:
-        # Materialize only what custom_modules supports today (Phase A scope).
         cm_payload = {
             "business_id": business_id,
             "name": spec.get("name") or slug,
@@ -356,6 +484,10 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
             return {"ok": False, "error": "materialize insert failed"}
         module_id = created[0]["id"]
 
+    # 2. workflow_definitions (Phase B) — Best-effort: failures don't block
+    # the module from materializing.
+    workflow_ids = _materialize_workflows(business_id, slug, spec.get("workflows") or [])
+
     # Mark accepted + link.
     import time
     sb_clients.sb_patch_as_service(
@@ -366,7 +498,8 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
     )
     mod = sb_clients.sb_get_as_service(
         f"/custom_modules?id=eq.{module_id}&select=*&limit=1") or []
-    return {"ok": True, "spec_id": spec_id, "module": mod[0] if mod else None}
+    return {"ok": True, "spec_id": spec_id, "module": mod[0] if mod else None,
+            "workflow_ids": workflow_ids}
 
 
 def reject_spec(spec_id: str, reason: Optional[str] = None) -> Dict[str, Any]:
