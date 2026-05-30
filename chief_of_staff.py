@@ -7571,6 +7571,88 @@ async def handle_send_report(client, biz, action) -> Dict:
     }
 
 
+async def handle_propose_module_from_intake(client, biz, action):
+    """Phase B / G13 — turn a free-text intake answer into ONE OR MORE
+    ModuleSpec drafts (multi-module decomposition when 2+ trackable objects).
+    Returns proposals[] + decomposition_reasoning inline so the dock card stack
+    can render. action: {intake_excerpt, revise_feedback?}"""
+    intake = (action.get("intake_excerpt") or "").strip()
+    if not intake:
+        return _fail("propose_module_from_intake", "intake_excerpt required")
+    try:
+        import asyncio as _aio
+        import module_spec_generator as msg
+    except Exception as e:
+        return _fail("propose_module_from_intake", f"generator unavailable: {e}")
+    res = await _aio.to_thread(
+        msg.propose_module_from_intake,
+        biz["id"], intake, action.get("revise_feedback"),
+    )
+    if not res.get("ok"):
+        return _fail("propose_module_from_intake", res.get("error", "generation failed"))
+    proposals = res.get("proposals") or []
+    n = len(proposals)
+    if n == 1:
+        spec = proposals[0]["spec"]
+        wf_count = len(spec.get("workflows") or [])
+        wf_note = f", {wf_count} rule{'s' if wf_count != 1 else ''}" if wf_count else ""
+        label = (
+            f"📐 Proposed: {spec.get('name', spec.get('slug', 'module'))} "
+            f"({len((spec.get('schema') or {}).get('fields') or [])} fields"
+            f"{wf_note}, {spec.get('confidence', 'medium')} confidence)"
+        )
+    else:
+        names = ", ".join(p["spec"].get("name", "module") for p in proposals)
+        label = f"📐 Proposed {n} linked modules: {names}"
+    return {
+        "type": "propose_module_from_intake",
+        "result": "module spec proposed",
+        "label": label,
+        "decomposition_reasoning": res.get("decomposition_reasoning"),
+        "proposals": proposals,            # [{spec_id, spec}, ...]
+        "nav": _nav("build"),
+    }
+
+
+async def handle_accept_module_spec(client, biz, action):
+    """Materialize a draft ModuleSpec into a custom_modules row. Idempotent.
+    action: {spec_id: str}"""
+    spec_id = action.get("spec_id")
+    if not spec_id:
+        return _fail("accept_module_spec", "spec_id required")
+    try:
+        import asyncio as _aio
+        import module_spec_generator as msg
+    except Exception as e:
+        return _fail("accept_module_spec", f"generator unavailable: {e}")
+    res = await _aio.to_thread(msg.materialize_spec, spec_id)
+    if not res.get("ok"):
+        return _fail("accept_module_spec", res.get("error", "materialize failed"))
+    mod = res.get("module") or {}
+    return {
+        "type": "accept_module_spec",
+        "result": "module accepted",
+        "label": f"✅ {mod.get('name', mod.get('slug', 'module'))} is live in Build",
+        "module_id": mod.get("id"),
+        "nav": _nav("build"),
+    }
+
+
+async def handle_reject_module_spec(client, biz, action):
+    """Reject a draft. action: {spec_id, reason?}"""
+    spec_id = action.get("spec_id")
+    if not spec_id:
+        return _fail("reject_module_spec", "spec_id required")
+    try:
+        import asyncio as _aio
+        import module_spec_generator as msg
+    except Exception as e:
+        return _fail("reject_module_spec", f"generator unavailable: {e}")
+    await _aio.to_thread(msg.reject_spec, spec_id, action.get("reason"))
+    return {"type": "reject_module_spec", "result": "spec rejected",
+            "label": "🗑️ Spec rejected"}
+
+
 async def handle_create_growth_objective(client, biz, action):
     """LGS Phase 4 — the Growth Partner commits a Growth Objective and
     materializes its structure (modules + workflows + milestones).
@@ -7614,6 +7696,9 @@ async def handle_create_growth_objective(client, biz, action):
 
 ACTION_HANDLERS = {
     "create_growth_objective": handle_create_growth_objective,
+    "propose_module_from_intake": handle_propose_module_from_intake,
+    "accept_module_spec":         handle_accept_module_spec,
+    "reject_module_spec":         handle_reject_module_spec,
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
     "draft_and_send":        handle_draft_and_send,
