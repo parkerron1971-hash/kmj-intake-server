@@ -46,6 +46,10 @@ from restricted_modules import router as restricted_router
 from workflow_router import router as workflow_router
 from growth_objective_router import router as growth_objective_router
 from module_spec_router import router as module_spec_router
+# Phase C.1 — Bookings archetype: customer-facing widget endpoints +
+# contact-related-entries surfacing for ContactDetail.
+from booking_widget_router import router as booking_widget_router
+from contacts_router import router as contacts_router
 # Pass 4.0a — Director Agent foundations
 from agents.sparse_input_enrichment_router import router as sparse_enrichment_router
 # Pass 4.0b — Director Agent: Critique loop
@@ -82,6 +86,9 @@ app.include_router(restricted_router)
 app.include_router(workflow_router)
 app.include_router(growth_objective_router)
 app.include_router(module_spec_router)
+# Phase C.1 — Bookings archetype
+app.include_router(booking_widget_router)
+app.include_router(contacts_router)
 app.include_router(business_profile_router)
 app.include_router(practitioner_profile_router)
 app.include_router(foundation_router)

@@ -28,7 +28,7 @@ import os
 from typing import Any, Dict, List, Literal, Optional
 
 from anthropic import Anthropic
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 import sb_clients
 
@@ -133,6 +133,48 @@ class PublicDisplaySlot(BaseModel):
     visibility: Literal["internal_only", "customer_visible"] = "internal_only"
 
 
+# ──────────────────────────────────────────────────────────────
+# Archetypes (Phase C.1) — closed library the LLM picks from
+# ──────────────────────────────────────────────────────────────
+# Single source of truth: this enum + the per-archetype Param submodels.
+# A TS twin lives at frontend src/core/types/archetypes.gen.ts (hand-mirrored
+# for the spike; codegen when the enum grows beyond ~5 entries — C1 ruling).
+#
+# Discipline: the LLM picks `archetype` (closed enum) and fills
+# `archetype_params` (per-archetype typed submodel). The materializer
+# renders the matching hand-written React archetype. When no archetype
+# fits, the LLM MUST emit `archetype: 'fallback_generic'` AND a
+# required `archetype_fallback_reason` (C4) — never improvises a surface.
+
+ArchetypeEnum = Literal[
+    "fallback_generic",   # render via DynamicModule + show "new archetype owed" banner
+    "booking_calendar",   # C.1 vertical slice — appointment / time-slot tracking
+]
+
+
+class BookingCalendarParams(BaseModel):
+    """Parameters for the BookingCalendar archetype.
+    primary_date_field MUST be the snake_case name of a date or datetime
+    field declared in schema.fields. The materializer + the BookingForm
+    widget both read entries by this field."""
+    primary_date_field: str
+    duration_minutes_field: Optional[str] = None     # defaults to 60 in the UI
+    color_field: Optional[str] = None                # drives slot color (e.g. 'service_type')
+
+
+class FallbackGenericParams(BaseModel):
+    """No params — the fallback uses DynamicModule's existing list/board
+    inference from the schema."""
+    pass
+
+
+# Validators dispatched by archetype value.
+_ARCHETYPE_PARAM_MODELS: Dict[str, type] = {
+    "booking_calendar": BookingCalendarParams,
+    "fallback_generic": FallbackGenericParams,
+}
+
+
 class ModuleSpec(BaseModel):
     slug: str = Field(..., description="kebab-case slug, e.g. 'bookings'")
     name: str
@@ -147,7 +189,60 @@ class ModuleSpec(BaseModel):
     confidence: Literal["high", "medium", "low"] = "medium"
     reasoning: str
 
+    # ─── Archetype layer (C.1) ──────────────────────────────────────
+    archetype: ArchetypeEnum = "fallback_generic"
+    archetype_params: Dict[str, Any] = Field(default_factory=dict)
+    # C4: required when archetype == 'fallback_generic'. Surfaced on the
+    # dock card AND on the materialized module so every fallback is
+    # visible as "a new archetype is owed for this shape".
+    archetype_fallback_reason: Optional[str] = None
+
     model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _validate_archetype(self):
+        # Dispatch archetype_params to its typed submodel.
+        model = _ARCHETYPE_PARAM_MODELS.get(self.archetype)
+        if model is None:
+            raise ValueError(f"unknown archetype '{self.archetype}'")
+        try:
+            typed = model(**(self.archetype_params or {}))
+        except ValidationError as e:
+            raise ValueError(
+                f"archetype_params invalid for archetype '{self.archetype}': {e}"
+            )
+        # Re-emit as a normalized dict so downstream code reads the
+        # post-validated shape.
+        object.__setattr__(self, "archetype_params", typed.model_dump(exclude_none=True))
+
+        # Fallback rule (C4): must explain WHY no archetype fit.
+        if self.archetype == "fallback_generic":
+            reason = (self.archetype_fallback_reason or "").strip()
+            if not reason:
+                raise ValueError(
+                    "archetype_fallback_reason is REQUIRED when archetype = "
+                    "'fallback_generic' — every fallback is a marker that a "
+                    "new archetype is owed"
+                )
+
+        # booking_calendar-specific: primary_date_field MUST exist in the schema.
+        if self.archetype == "booking_calendar":
+            field_names = {f.name for f in self.schema_.fields}
+            pdf = self.archetype_params.get("primary_date_field")
+            if pdf not in field_names:
+                raise ValueError(
+                    f"booking_calendar primary_date_field '{pdf}' is not "
+                    f"in schema.fields (have: {sorted(field_names)})"
+                )
+            # If duration/color fields referenced, they must exist too.
+            for k in ("duration_minutes_field", "color_field"):
+                v = self.archetype_params.get(k)
+                if v and v not in field_names:
+                    raise ValueError(
+                        f"booking_calendar {k} '{v}' is not in schema.fields"
+                    )
+
+        return self
 
 
 # ──────────────────────────────────────────────────────────────
@@ -185,7 +280,10 @@ EXAMPLE OUTPUT (a coach 'clients' module — what 'good' looks like):
   "workflows": [],
   "voice_hints": ["personal","considered"],
   "confidence": "high",
-  "reasoning": "Coaches centre client relationships; stage column for kanban is the standard view."
+  "reasoning": "Coaches centre client relationships; stage column for kanban is the standard view.",
+  "archetype": "fallback_generic",
+  "archetype_params": {},
+  "archetype_fallback_reason": "no ClientRoster archetype exists yet — this module would benefit from a kanban-by-engagement-stage with last-contact aging dots"
 }
 """.strip()
 
@@ -227,6 +325,51 @@ Only declare workflows for rules the intake genuinely implies — don't invent.
 
 PUBLIC_DISPLAY: ignored this pass (Phase C). Set null unless the intake explicitly \
 mentions customer-facing.
+
+ARCHETYPE (closed-enum surface treatment — C.1 vertical slice):
+Every ModuleSpec MUST carry an archetype + archetype_params. The archetype \
+is a closed enum — pick from the palette below. NEVER invent an archetype \
+name; if no archetype fits, you MUST emit "fallback_generic" with a \
+mandatory archetype_fallback_reason that explains in one sentence what \
+archetype would have fit. You do NOT generate or design React surfaces — \
+the archetype just routes the materialized module to a hand-written \
+component.
+
+Available archetypes:
+
+  booking_calendar
+    purpose: a tracker for appointments / time-slot reservations / sessions
+    when to pick: intake describes booking, scheduling, appointments,
+      reservations, sessions, slot-based time tracking
+    schema requirement: schema.fields MUST contain at least one date or
+      datetime field that holds the slot start time
+    archetype_params (required keys marked *):
+      * primary_date_field — snake_case name of the date field that holds
+                             the slot start; MUST match a field in schema.fields
+        duration_minutes_field — (optional) name of a number field with slot
+                                  length; defaults to 60 minutes in the UI
+        color_field — (optional) name of a select field that drives the
+                      slot color on the calendar (e.g. 'service_type')
+    example intake → archetype:
+      "I need a way to book customers into 30-min appointments with my barber chairs"
+      → archetype: booking_calendar
+        archetype_params: {"primary_date_field": "appointment_at",
+                           "duration_minutes_field": "duration_min",
+                           "color_field": "service"}
+
+  fallback_generic
+    purpose: explicit "no archetype fits yet" — renders through the generic
+      DynamicModule (list/board)
+    when to pick: ANY module whose shape doesn't fit booking_calendar
+    schema requirement: none
+    archetype_params: {}  (empty)
+    archetype_fallback_reason REQUIRED: one sentence describing what \
+      archetype would have fit (e.g. "needs a RewardProgress archetype for \
+      counting visits toward a free service")
+
+Picking discipline: read the intake, decide if booking_calendar fits. If \
+yes, pick it and fill archetype_params from the schema fields you already \
+designed. If no, pick fallback_generic and write the archetype_fallback_reason.
 
 confidence: 'high' if intake is specific, 'medium' if inferred, 'low' if vague.
 
@@ -475,6 +618,11 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
             "agent_config": spec.get("agent_config") or {"enabled": True, "triggers": []},
             "is_active": True,
             "sort_order": 0,
+            # Archetype layer (Phase C.1). Existing rows keep defaults
+            # ('fallback_generic' + empty params) via the migration default.
+            "archetype": spec.get("archetype") or "fallback_generic",
+            "archetype_params": spec.get("archetype_params") or {},
+            "archetype_fallback_reason": spec.get("archetype_fallback_reason"),
         }
         created = sb_clients.sb_post_as_service("/custom_modules", cm_payload)
         if not (isinstance(created, list) and created):
