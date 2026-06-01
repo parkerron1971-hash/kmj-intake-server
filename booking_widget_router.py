@@ -43,7 +43,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field, field_validator
 
 import sb_clients
 from customer_token import (
@@ -221,10 +221,27 @@ async def booking_config(
 
 # ─── ANON: walk-in book (rate-limited, creates customer + token) ──────
 
+def _validate_email_shape(v: str) -> str:
+    """Lightweight email shape check. We don't depend on the email_validator
+    package (not in the prod requirements set) — the SQL CHECK on
+    business_customers.email also enforces the @ shape server-side."""
+    if not isinstance(v, str):
+        raise ValueError("email must be a string")
+    v = v.strip()
+    if "@" not in v or len(v) < 3 or v.startswith("@") or v.endswith("@"):
+        raise ValueError("invalid email shape")
+    return v
+
+
 class BookAnonBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    email: EmailStr
+    email: str = Field(..., min_length=3, max_length=320)
     data: Dict[str, Any]  # field values for the appointment (date, service, etc.)
+
+    @field_validator("email")
+    @classmethod
+    def _email_shape(cls, v: str) -> str:
+        return _validate_email_shape(v)
 
 
 @router.post("/widgets/booking/{business_id}/book-anon")
@@ -310,7 +327,12 @@ async def book(
 
 class FreshLinkBody(BaseModel):
     business_id: str
-    email: EmailStr
+    email: str = Field(..., min_length=3, max_length=320)
+
+    @field_validator("email")
+    @classmethod
+    def _email_shape(cls, v: str) -> str:
+        return _validate_email_shape(v)
 
 
 @router.post("/widgets/request-fresh-link")
