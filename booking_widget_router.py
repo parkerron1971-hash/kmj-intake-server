@@ -368,22 +368,51 @@ async def request_fresh_link(body: FreshLinkBody, request: Request) -> Dict[str,
 def _find_or_create_contact(business_id: str, name: str, email_lower: str) -> str:
     """Per ruling: walk-in flow MUST check for existing contact on the
     business with the same email and link instead of creating a duplicate.
-    Returns contact_id."""
+    Returns contact_id.
+
+    TODO(contacts-hardening): the (business_id, lower(email)) dedupe here
+    is application-level — the contacts table has no UNIQUE index covering
+    it (only business_customers does, via the Phase C.1 migration). Two
+    concurrent walk-ins with the same email could race and create two
+    rows. The existing public_site booking flow has the same gap. Address
+    in a future contacts-hardening sweep.
+
+    TODO(contacts-hardening): the contact insert + business_customer
+    insert + module_entry insert downstream are not transactional — a
+    failure after this step leaves an orphan contact. PostgREST doesn't
+    natively cover multi-statement transactions; needs a Postgres RPC.
+    Same hardening sweep.
+    """
     existing = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{business_id}&email=eq.{email_lower}"
         f"&limit=1&select=id"
     ) or []
     if existing:
         return existing[0]["id"]
-    created = sb_clients.sb_post_as_service("/contacts", {
+    # status='lead' matches the in-tree convention (chief_of_staff.handle_create_contact,
+    # public_site booking flow). 'lifecycle_stage' is NOT a real column on contacts —
+    # the prior typo caused PGRST204 and a 500 on the widget submission.
+    payload = {
         "business_id": business_id,
         "name": name,
         "email": email_lower,
-        "lifecycle_stage": "lead",
+        "status": "lead",
         "source": "booking_widget",
-    })
+    }
+    created = sb_clients.sb_post_as_service("/contacts", payload)
     if not isinstance(created, list) or not created:
-        raise HTTPException(status_code=500, detail="contact create failed")
+        # The underlying PostgREST error is already logged by sb_clients
+        # ("sb_clients sync POST /contacts: <code> <body>"). This warning
+        # adds business / email / code-path context so future drift is
+        # one log search away instead of ten minutes of tracing.
+        logger.warning(
+            f"booking_widget contact create failed for biz={business_id} "
+            f"email={email_lower!r} — see preceding sb_clients log line for detail"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong on our end — please try again.",
+        )
     return created[0]["id"]
 
 
