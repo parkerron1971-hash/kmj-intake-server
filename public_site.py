@@ -4631,6 +4631,46 @@ async def asset_favicon_ico():
     return _brand_file("favicon.png", "image/png")
 
 
+# ─── Customer-facing widget bundle (Phase C.1) ─────────────────────────
+# Stable public URL for the BookingForm + future customer-facing widgets.
+# The bundle itself is built from solutionist-studio/src/embed/bootstrap.tsx
+# via `npm run build:embed`, then committed here at static/embed.js.
+#
+# Refresh procedure (until we wire CI build-and-upload):
+#   1. In solutionist-studio repo: `npm run build:embed`
+#   2. Copy dist-embed/embed.js → kmj-intake-server/static/embed.js
+#   3. Commit + push → Railway redeploys
+#
+# Practitioner-facing usage:
+#   <script src="https://kmj-intake-server-production.up.railway.app/static/embed.js"
+#           data-business="<biz uuid>"
+#           data-archetype="booking_form"></script>
+#
+# Cache: 5 minutes. Short because the bundle revs during Phase C builds.
+# Tighten to immutable+versioned URL (e.g. /static/embed.v2.js) when the
+# bundle stops revving so customer browsers can cache aggressively.
+#
+# CORS: the global `*` allow_origins middleware on the app covers this
+# route too. Script-src loads don't strictly need CORS, but the widget's
+# subsequent fetch() calls back to /widgets/* DO — those are covered.
+#
+# TODO(phase-c-x): replace the committed binary with a CI step that
+# builds and uploads on every frontend change. 198KB in git is fine for
+# the spike but accumulates if we don't.
+_STATIC_EMBED = _pathlib.Path(__file__).resolve().parent / "static" / "embed.js"
+_EMBED_CACHE_HEADERS = {"Cache-Control": "public, max-age=300"}
+
+@router.get("/static/embed.js", include_in_schema=False)
+async def static_widget_embed():
+    if not _STATIC_EMBED.exists():
+        raise HTTPException(404, "embed.js bundle is not present — run `npm run build:embed` and copy from dist-embed/")
+    return _FileResponse(
+        str(_STATIC_EMBED),
+        media_type="application/javascript",
+        headers=_EMBED_CACHE_HEADERS,
+    )
+
+
 # Marketing routes
 @router.get("/features", include_in_schema=False)
 async def public_features():
