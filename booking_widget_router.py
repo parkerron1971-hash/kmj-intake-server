@@ -103,11 +103,16 @@ def _rate_limit(bucket_key: str, request: Request) -> None:
 
 
 def _business_basics(business_id: str) -> Optional[Dict[str, Any]]:
-    """Loads minimal business info — name, theme tokens, brand kit. Used
-    by both anon and authed config endpoints. Returns None if not found."""
+    """Loads minimal business info — name, settings (which carries
+    brand_kit + theme nested), voice_profile. Used by both anon and
+    authed config endpoints. Returns None if not found.
+
+    Note: brand_kit is NOT a top-level column on businesses — it lives
+    at settings.brand_kit. See agents/composer/creative_expression.py
+    line 336 for the canonical read pattern."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}&limit=1"
-        f"&select=id,name,settings,brand_kit,voice_profile"
+        f"&select=id,name,settings,voice_profile"
     ) or []
     return rows[0] if rows else None
 
@@ -135,12 +140,14 @@ def _bookings_module(business_id: str) -> Optional[Dict[str, Any]]:
 
 def _theme_tokens(business: Dict[str, Any]) -> Dict[str, str]:
     """Extract the brand-kit CSS variables the widget shadow-root needs.
-    Order: explicit brand_kit > settings.theme > defaults.
+    Read order matches existing app convention: settings.brand_kit (the
+    canonical home of practitioner-customized colors / fonts — see
+    agents/composer/creative_expression.py) > settings.theme > defaults.
 
     Keep the surface small — the widget renders one form, not the whole
     app. Five tokens cover the kill criterion ('brand kit visible')."""
-    brand = business.get("brand_kit") or {}
     settings = business.get("settings") or {}
+    brand = settings.get("brand_kit") or {}
     theme = settings.get("theme") or {}
     return {
         "--accent":         brand.get("accent")          or theme.get("accent")         or "#a78bfa",
