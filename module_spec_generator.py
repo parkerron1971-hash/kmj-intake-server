@@ -59,6 +59,19 @@ class ModuleField(BaseModel):
     required: bool = False
     options: Optional[List[str]] = None       # select-only
     placeholder: Optional[str] = None
+    # Phase C.1.1 — surface-visibility flags. Both default to closed (false)
+    # so that any field the LLM does NOT explicitly mark is practitioner-only.
+    # Fail-closed is load-bearing for the customer-side safety guarantee.
+    #
+    # customer_facing — does the paired customer widget render this field
+    #   as a form input?  (DynamicModule, the practitioner-side fallback,
+    #   ignores this flag entirely and renders every field.)
+    # system_set      — is the field value DERIVED (e.g. duration computed
+    #   from the picked service) or DEFAULTED (e.g. status='scheduled')
+    #   rather than typed by the customer? system_set fields travel in
+    #   config-anon so the widget knows to hide-but-compute.
+    customer_facing: bool = False
+    system_set: bool = False
 
 
 class ModuleSchema(BaseModel):
@@ -80,11 +93,27 @@ class ModuleTrigger(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ServiceCatalogEntry(BaseModel):
+    """C16 ruling — inline service catalog on agent_config.services.
+    Bookings (and future service-based archetypes) read this for the
+    service dropdown options + auto-duration. Reversible to a separate
+    ServiceCatalog archetype when more than one archetype consumes
+    services."""
+    name: str
+    duration_min: int = Field(..., gt=0, le=24 * 60)
+    price: Optional[float] = None             # currency-agnostic; widget renders raw
+
+
 class ModuleAgentConfig(BaseModel):
     enabled: bool = True
     triggers: List[ModuleTrigger] = Field(default_factory=list)
     closed_statuses: List[str] = Field(default_factory=list)
     check_schedule: Optional[str] = None
+    # Phase C.1.1 — service catalog for service-based archetypes (booking_calendar
+    # today, future massage/consult/lesson archetypes tomorrow). Optional so
+    # non-service archetypes ignore it. When present, the widget reads this
+    # list for the service dropdown + duration lookup.
+    services: Optional[List[ServiceCatalogEntry]] = None
 
 
 # Phase B — workflow rules MATERIALIZED on accept (alongside custom_modules).
@@ -197,6 +226,14 @@ class ModuleSpec(BaseModel):
     # visible as "a new archetype is owed for this shape".
     archetype_fallback_reason: Optional[str] = None
 
+    # ─── Upgrade target (C.1.1) ─────────────────────────────────────
+    # Set ONLY when this spec is the result of `upgrade_module_archetype`
+    # against an existing materialized module. Accept handler reads this
+    # to UPDATE the existing custom_modules row in place rather than
+    # INSERT a new one — practitioner re-accepts; module_id is preserved;
+    # existing module_entries continue to render under the refined schema.
+    upgrade_target_module_id: Optional[str] = None
+
     model_config = {"populate_by_name": True}
 
     @model_validator(mode="after")
@@ -228,6 +265,7 @@ class ModuleSpec(BaseModel):
         # booking_calendar-specific: primary_date_field MUST exist in the schema.
         if self.archetype == "booking_calendar":
             field_names = {f.name for f in self.schema_.fields}
+            field_by_name = {f.name: f for f in self.schema_.fields}
             pdf = self.archetype_params.get("primary_date_field")
             if pdf not in field_names:
                 raise ValueError(
@@ -242,6 +280,49 @@ class ModuleSpec(BaseModel):
                         f"booking_calendar {k} '{v}' is not in schema.fields"
                     )
 
+            # ─── Phase C.1.1 invariants ──────────────────────────────
+            # 1. The primary_date_field MUST be customer_facing — the
+            #    customer can't book without picking a slot.
+            if not field_by_name[pdf].customer_facing:
+                raise ValueError(
+                    f"booking_calendar primary_date_field '{pdf}' must be "
+                    f"customer_facing=true (customer needs to pick a slot)"
+                )
+            # 2. The duration_minutes_field (if specified) MUST be system_set
+            #    — duration comes from the service catalog, never typed
+            #    by the customer. (audit Thread 4 ruling)
+            dmf = self.archetype_params.get("duration_minutes_field")
+            if dmf:
+                f = field_by_name[dmf]
+                if not f.system_set:
+                    raise ValueError(
+                        f"booking_calendar duration_minutes_field '{dmf}' "
+                        f"must be system_set=true (duration is derived from "
+                        f"the picked service; customer never types it)"
+                    )
+                if f.customer_facing:
+                    raise ValueError(
+                        f"booking_calendar duration_minutes_field '{dmf}' "
+                        f"must NOT be customer_facing (system-derived)"
+                    )
+            # 3. agent_config.services MUST be present + non-empty —
+            #    the widget needs a catalog to render the service picker.
+            services = self.agent_config.services or []
+            if not services:
+                raise ValueError(
+                    "booking_calendar requires agent_config.services to be "
+                    "a non-empty list of {name, duration_min, price?} entries"
+                )
+            # 4. At least ONE field must be customer_facing — otherwise the
+            #    widget renders nothing. (primary_date_field already enforced;
+            #    this is a defensive check in case archetype_params changes shape.)
+            customer_visible = [f for f in self.schema_.fields if f.customer_facing]
+            if not customer_visible:
+                raise ValueError(
+                    "booking_calendar must declare at least one customer_facing "
+                    "field for the widget to render"
+                )
+
         return self
 
 
@@ -253,7 +334,8 @@ class ModuleSpec(BaseModel):
 # practitioner-curated quality). The model sees ONE high-quality example so
 # its output is anchored to existing standards rather than drifting.
 _REFERENCE_EXAMPLE = """
-EXAMPLE OUTPUT (a coach 'clients' module — what 'good' looks like):
+EXAMPLE OUTPUT (a coach 'clients' module — what 'good' looks like for a
+PRACTITIONER-ONLY archetype where every field defaults to customer_facing=false):
 {
   "slug": "clients",
   "name": "Clients",
@@ -284,6 +366,54 @@ EXAMPLE OUTPUT (a coach 'clients' module — what 'good' looks like):
   "archetype": "fallback_generic",
   "archetype_params": {},
   "archetype_fallback_reason": "no ClientRoster archetype exists yet — this module would benefit from a kanban-by-engagement-stage with last-contact aging dots"
+}
+
+EXAMPLE OUTPUT (a barber 'bookings' module — booking_calendar archetype
+with the Phase C.1.1 customer_facing + service catalog discipline applied):
+{
+  "slug": "bookings",
+  "name": "Bookings",
+  "icon": "📅",
+  "description": "Customer appointments",
+  "intake_excerpt": "(practitioner's intake here)",
+  "schema": {
+    "fields": [
+      {"name":"appointment_at","type":"date","label":"Appointment date & time",
+       "required":true,"customer_facing":true},
+      {"name":"service","type":"select","label":"Service",
+       "options":["Haircut","Beard Trim"],"customer_facing":true},
+      {"name":"duration_min","type":"number","label":"Duration (min)",
+       "customer_facing":false,"system_set":true},
+      {"name":"status","type":"select","label":"Status",
+       "options":["scheduled","completed","cancelled","no_show"],
+       "customer_facing":false,"system_set":true},
+      {"name":"customer_notes","type":"textarea","label":"Anything we should know?",
+       "customer_facing":true},
+      {"name":"contact_id","type":"contact_link","label":"Customer"}
+    ],
+    "default_view": "list",
+    "views": ["list"]
+  },
+  "agent_config": {
+    "enabled": true,
+    "triggers": [],
+    "closed_statuses": ["completed","cancelled","no_show"],
+    "services": [
+      {"name":"Haircut","duration_min":30,"price":30},
+      {"name":"Beard Trim","duration_min":15,"price":15}
+    ]
+  },
+  "public_display": null,
+  "workflows": [],
+  "voice_hints": ["friendly","brief"],
+  "confidence": "high",
+  "reasoning": "Customer picks service + slot; duration auto-fills from the catalog; status defaults to 'scheduled' on book.",
+  "archetype": "booking_calendar",
+  "archetype_params": {
+    "primary_date_field": "appointment_at",
+    "duration_minutes_field": "duration_min",
+    "color_field": "service"
+  }
 }
 """.strip()
 
@@ -350,12 +480,58 @@ Available archetypes:
                                   length; defaults to 60 minutes in the UI
         color_field — (optional) name of a select field that drives the
                       slot color on the calendar (e.g. 'service_type')
+
+    CUSTOMER-FACING FIELD DISCIPLINE (Phase C.1.1):
+      The booking_calendar archetype has a paired customer widget (BookingForm).
+      Each ModuleField declares:
+        customer_facing — true if the customer sees + fills this field
+                          in the booking widget. Default false.
+        system_set      — true if the value is DERIVED (e.g. duration from
+                          the picked service) or DEFAULTED (e.g. status=
+                          'scheduled' on book). Default false.
+      For booking_calendar, set these per the table below. Any field NOT
+      in this table defaults to false / false (practitioner-only, typed).
+
+        field role                          customer_facing  system_set
+        primary_date_field (slot start)     true             false
+        the service field (catalog lookup)  true             false
+        a customer_notes field if present   true             false
+        duration_minutes_field              false            true
+        status                              false            true
+        anything else (internal_notes,
+          no_show, payment_status, etc.)    false            false
+
+    SERVICE CATALOG (REQUIRED for booking_calendar):
+      Populate agent_config.services with the services the practitioner
+      mentions in their intake. Extract names + reasonable durations from
+      the intake text; never invent services they didn't mention. If the
+      intake mentions prices, include them; otherwise omit price entirely.
+      Shape: List[{name: str, duration_min: int (1-1440), price?: number}]
+      Example: [{"name":"Haircut","duration_min":30,"price":30},
+                {"name":"Beard Trim","duration_min":15,"price":15}]
+      The 'service' field's options[] is automatically replaced at runtime
+      from this catalog — so the options[] you write in schema.fields can
+      be redundant with services[].name. The catalog is the source of truth.
+
     example intake → archetype:
-      "I need a way to book customers into 30-min appointments with my barber chairs"
+      "I need a way to book customers into 30-min haircuts and 15-min beard
+       trims with my barber chairs"
       → archetype: booking_calendar
         archetype_params: {"primary_date_field": "appointment_at",
                            "duration_minutes_field": "duration_min",
                            "color_field": "service"}
+        agent_config.services: [{"name":"Haircut","duration_min":30},
+                                 {"name":"Beard Trim","duration_min":15}]
+        schema fields (with C.1.1 flags):
+          - appointment_at  (date, customer_facing=true)
+          - service         (select, customer_facing=true; options from catalog)
+          - duration_min    (number, customer_facing=false, system_set=true)
+          - status          (select, customer_facing=false, system_set=true)
+          - customer_notes  (textarea, customer_facing=true) — ONLY add this
+            field if the intake explicitly mentions wanting notes from
+            the customer. Do not auto-add.
+          - internal_notes  (textarea, customer_facing=false) — for
+            practitioner-only notes
 
   fallback_generic
     purpose: explicit "no archetype fits yet" — renders through the generic
@@ -534,6 +710,107 @@ def propose_module_from_intake(
 
 
 # ──────────────────────────────────────────────────────────────
+# Upgrade flow (C.1.1) — refine an existing materialized module
+# ──────────────────────────────────────────────────────────────
+
+_UPGRADE_GUIDANCE = """UPGRADE MODE — this is NOT a fresh proposal.
+
+The practitioner already has this module materialized and working. Your job
+is to REFINE the existing spec to apply the Phase C.1.1 discipline:
+  - Set customer_facing flags per the archetype palette table
+  - Set system_set flags per the archetype palette table
+  - Add the service catalog to agent_config.services if the archetype is
+    booking_calendar (extract from the existing intake + schema field
+    options if explicit services aren't named)
+  - Keep slug, name, icon, schema field shapes, and archetype unchanged
+    unless the existing spec is structurally broken
+  - You MUST return exactly ONE ModuleSpec (no decomposition).
+
+CURRENT MODULE STATE (refine this, don't replace):
+{current_state}
+"""
+
+
+def regenerate_for_upgrade(business_id: str, module_id: str) -> Dict[str, Any]:
+    """Read an existing custom_modules row + its source intake; ask the LLM
+    to produce a refined ModuleSpec applying the latest discipline (currently
+    Phase C.1.1: customer_facing + service catalog). The refined spec is
+    stored as a draft with upgrade_target_module_id set, so the materialize
+    accept path UPDATEs the existing row in place.
+
+    Returns the same envelope shape as propose_module_from_intake so the
+    dock can render it through the existing ModuleSpecProposalCard."""
+    biz_rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=id,name,type&limit=1"
+    ) or []
+    if not biz_rows:
+        return {"ok": False, "error": "business not found"}
+    biz = biz_rows[0]
+
+    mod_rows = sb_clients.sb_get_as_service(
+        f"/custom_modules?id=eq.{module_id}"
+        f"&business_id=eq.{business_id}&select=*&limit=1"
+    ) or []
+    if not mod_rows:
+        return {"ok": False, "error": "module not found"}
+    module = mod_rows[0]
+
+    # Source intake — find the most recent accepted module_specs row that
+    # materialized to this module_id. Falls back to the module's description
+    # if no source spec exists (pre-Phase A modules don't have a backing spec).
+    spec_rows = sb_clients.sb_get_as_service(
+        f"/module_specs?materialized_module_id=eq.{module_id}"
+        f"&status=eq.accepted&order=accepted_at.desc&limit=1&select=intake_excerpt"
+    ) or []
+    intake = (
+        spec_rows[0].get("intake_excerpt") if spec_rows
+        else (module.get("description") or f"existing {module.get('name', 'module')}")
+    )
+
+    # Build the upgrade prompt context. We pass the current state INSIDE the
+    # extra_guidance so the LLM refines vs. replaces.
+    import json as _json
+    current_state = _json.dumps({
+        "slug": module.get("slug"),
+        "name": module.get("name"),
+        "icon": module.get("icon"),
+        "description": module.get("description"),
+        "schema": module.get("schema") or {"fields": []},
+        "agent_config": module.get("agent_config") or {},
+        "archetype": module.get("archetype"),
+        "archetype_params": module.get("archetype_params") or {},
+    }, indent=2)
+    guidance = _UPGRADE_GUIDANCE.format(current_state=current_state)
+
+    gen = generate_module_proposal(biz, intake, extra_guidance=guidance)
+    if not gen.get("ok"):
+        return gen
+    specs = gen.get("specs") or []
+    if len(specs) != 1:
+        # Upgrade is meant to refine ONE module — if the LLM tries to
+        # decompose, that's a generator drift; surface as error.
+        return {"ok": False, "error": f"upgrade expects 1 spec, got {len(specs)}"}
+
+    spec = specs[0]
+    # Stamp the upgrade target on the draft so materialize_spec UPDATEs
+    # rather than INSERTs.
+    spec["upgrade_target_module_id"] = module_id
+
+    draft = store_draft(business_id, intake, spec)
+    if not draft:
+        return {"ok": False, "error": "draft persist failed"}
+
+    return {
+        "ok": True,
+        "decomposition_reasoning": gen.get("decomposition_reasoning")
+            or f"Refining your existing {module.get('name')} module to apply the latest customer-facing discipline.",
+        "proposals": [{"spec_id": draft["id"], "spec": spec}],
+        "is_upgrade": True,
+        "upgrade_target_module_id": module_id,
+    }
+
+
+# ──────────────────────────────────────────────────────────────
 # Materialization — accept turns draft into custom_modules row
 # ──────────────────────────────────────────────────────────────
 
@@ -601,33 +878,55 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
     if not slug:
         return {"ok": False, "error": "spec missing slug"}
 
-    # 1. custom_modules — idempotent on (business_id, slug).
-    existing = sb_clients.sb_get_as_service(
-        f"/custom_modules?business_id=eq.{business_id}&slug=eq.{slug}&select=id&limit=1"
-    ) or []
-    if existing:
-        module_id = existing[0]["id"]
+    # Common shape used for both fresh-insert AND upgrade UPDATE.
+    write_payload = {
+        "name": spec.get("name") or slug,
+        "slug": slug,
+        "description": spec.get("description"),
+        "icon": spec.get("icon") or "📋",
+        "schema": spec.get("schema") or {"fields": []},
+        "agent_config": spec.get("agent_config") or {"enabled": True, "triggers": []},
+        "is_active": True,
+        # Archetype layer (Phase C.1). Existing rows keep defaults
+        # ('fallback_generic' + empty params) via the migration default.
+        "archetype": spec.get("archetype") or "fallback_generic",
+        "archetype_params": spec.get("archetype_params") or {},
+        "archetype_fallback_reason": spec.get("archetype_fallback_reason"),
+    }
+
+    # ─── Upgrade path (C.1.1) ────────────────────────────────────────
+    # If this spec carries upgrade_target_module_id, UPDATE the existing
+    # custom_modules row instead of inserting a new one. Preserves the
+    # module_id so existing module_entries continue to render under the
+    # refined schema. Slug + name + description can all change in an
+    # upgrade — the practitioner saw the new shape on the proposal card
+    # before accepting.
+    upgrade_target = spec.get("upgrade_target_module_id")
+    if upgrade_target:
+        current = sb_clients.sb_get_as_service(
+            f"/custom_modules?id=eq.{upgrade_target}"
+            f"&business_id=eq.{business_id}&select=id&limit=1"
+        ) or []
+        if not current:
+            return {"ok": False, "error": f"upgrade target module not found: {upgrade_target}"}
+        sb_clients.sb_patch_as_service(
+            f"/custom_modules?id=eq.{upgrade_target}", write_payload
+        )
+        module_id = upgrade_target
     else:
-        cm_payload = {
-            "business_id": business_id,
-            "name": spec.get("name") or slug,
-            "slug": slug,
-            "description": spec.get("description"),
-            "icon": spec.get("icon") or "📋",
-            "schema": spec.get("schema") or {"fields": []},
-            "agent_config": spec.get("agent_config") or {"enabled": True, "triggers": []},
-            "is_active": True,
-            "sort_order": 0,
-            # Archetype layer (Phase C.1). Existing rows keep defaults
-            # ('fallback_generic' + empty params) via the migration default.
-            "archetype": spec.get("archetype") or "fallback_generic",
-            "archetype_params": spec.get("archetype_params") or {},
-            "archetype_fallback_reason": spec.get("archetype_fallback_reason"),
-        }
-        created = sb_clients.sb_post_as_service("/custom_modules", cm_payload)
-        if not (isinstance(created, list) and created):
-            return {"ok": False, "error": "materialize insert failed"}
-        module_id = created[0]["id"]
+        # 1. custom_modules — idempotent on (business_id, slug) for the
+        # fresh-propose path.
+        existing = sb_clients.sb_get_as_service(
+            f"/custom_modules?business_id=eq.{business_id}&slug=eq.{slug}&select=id&limit=1"
+        ) or []
+        if existing:
+            module_id = existing[0]["id"]
+        else:
+            cm_payload = {**write_payload, "business_id": business_id, "sort_order": 0}
+            created = sb_clients.sb_post_as_service("/custom_modules", cm_payload)
+            if not (isinstance(created, list) and created):
+                return {"ok": False, "error": "materialize insert failed"}
+            module_id = created[0]["id"]
 
     # 2. workflow_definitions (Phase B) — Best-effort: failures don't block
     # the module from materializing.

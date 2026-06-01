@@ -7656,6 +7656,92 @@ async def handle_reject_module_spec(client, biz, action):
             "label": "🗑️ Spec rejected"}
 
 
+async def handle_upgrade_module_archetype(client, biz, action):
+    """Phase C.1.1 — refine an existing materialized module to apply the
+    current discipline (today: customer_facing flags + service catalog).
+    Returns the same envelope shape as propose_module_from_intake so the
+    dock renders it through the existing ModuleSpecProposalCard, but with
+    is_upgrade=true so the card UI can show "Upgrade [Bookings]" instead
+    of "Bookings" as a fresh proposal.
+
+    On accept, materialize_spec UPDATEs the existing custom_modules row
+    in place (preserving module_id + existing module_entries) because
+    the draft carries upgrade_target_module_id.
+
+    action: {module_id: str | None, module_slug: str | None, module_name: str | None}
+    Caller can identify the target module by id, slug, or name (the LLM
+    typically gets a name from the practitioner; we resolve to id).
+    """
+    target_id = action.get("module_id")
+    slug = action.get("module_slug")
+    name = action.get("module_name")
+
+    if not target_id:
+        # Resolve from slug or name (case-insensitive) within this business.
+        biz_id = biz["id"]
+        if slug:
+            rows = await _sb(
+                client, "GET",
+                f"/custom_modules?business_id=eq.{biz_id}&slug=eq.{slug}"
+                f"&is_active=eq.true&select=id&limit=1",
+            ) or []
+            if rows:
+                target_id = rows[0]["id"]
+        if not target_id and name:
+            import urllib.parse as _up
+            safe = _up.quote(name, safe="")
+            rows = await _sb(
+                client, "GET",
+                f"/custom_modules?business_id=eq.{biz_id}&name=ilike.*{safe}*"
+                f"&is_active=eq.true&select=id,name&limit=5",
+            ) or []
+            if len(rows) == 1:
+                target_id = rows[0]["id"]
+            elif len(rows) > 1:
+                opts = ", ".join(r["name"] for r in rows)
+                return _fail(
+                    "upgrade_module_archetype",
+                    f"multiple modules match '{name}': {opts} — be specific",
+                )
+
+    if not target_id:
+        return _fail(
+            "upgrade_module_archetype",
+            "module_id, module_slug, or module_name required",
+        )
+
+    try:
+        import asyncio as _aio
+        import module_spec_generator as msg
+    except Exception as e:
+        return _fail("upgrade_module_archetype", f"generator unavailable: {e}")
+
+    res = await _aio.to_thread(msg.regenerate_for_upgrade, biz["id"], target_id)
+    if not res.get("ok"):
+        return _fail("upgrade_module_archetype", res.get("error", "upgrade failed"))
+
+    proposals = res.get("proposals") or []
+    if not proposals:
+        return _fail("upgrade_module_archetype", "no upgrade proposal returned")
+
+    spec = proposals[0]["spec"]
+    label = (
+        f"🔧 Upgrade proposed: {spec.get('name', spec.get('slug', 'module'))} "
+        f"({len((spec.get('schema') or {}).get('fields') or [])} fields, "
+        f"{spec.get('confidence', 'medium')} confidence)"
+    )
+    return {
+        "type": "propose_module_from_intake",  # Reuse the dock's existing card
+        "result": "upgrade proposed",
+        "label": label,
+        "decomposition_reasoning": res.get("decomposition_reasoning"),
+        "proposals": proposals,
+        "is_upgrade": True,                    # frontend shows "Upgrade" UI hint
+        "upgrade_target_module_id": target_id,
+        "nav": _nav("build"),
+    }
+
+
 async def handle_create_growth_objective(client, biz, action):
     """LGS Phase 4 — the Growth Partner commits a Growth Objective and
     materializes its structure (modules + workflows + milestones).
@@ -7702,6 +7788,7 @@ ACTION_HANDLERS = {
     "propose_module_from_intake": handle_propose_module_from_intake,
     "accept_module_spec":         handle_accept_module_spec,
     "reject_module_spec":         handle_reject_module_spec,
+    "upgrade_module_archetype":   handle_upgrade_module_archetype,
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
     "draft_and_send":        handle_draft_and_send,
@@ -9754,6 +9841,8 @@ ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MOD
   [ACTION:{{"type":"update_module_entry","entry_id":"<uuid>","data":{{"status":"done"}}}}]  — patches the entry's data; existing fields are preserved.
   [ACTION:{{"type":"delete_module_entry","entry_id":"<uuid>"}}]  — soft-deletes (sets status='deleted').
   [ACTION:{{"type":"navigate","tab":"build","page":"module:<uuid>"}}]  — opens a specific module in BUILD.
+  [ACTION:{{"type":"upgrade_module_archetype","module_name":"Bookings"}}]
+    — Phase C.1.1 — refine an existing module to apply the latest discipline (currently: customer-facing field flags + service catalog for booking_calendar). Renders as an "Upgrade" proposal card in the dock with the same accept/reject/revise loop. The practitioner sees BOTH views (their internal calendar AND the customer form) before accepting. On accept, the existing module is UPDATED in place — entries preserved, schema refined. Use module_id when known; module_slug or module_name as fallbacks.
     — ROUTING (read in order — first match wins):
        1. INTAKE PHRASING — practitioner DESCRIBES what they want to track in their own words, often names 2+ things, may or may not give exact field names:
           "I need a way to track X" / "I want to track Y" / "build me something for Z" /
@@ -9763,11 +9852,15 @@ ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MOD
           any answer to an intake / onboarding / "what do you want to track?" question
           → propose_module_from_intake with intake_excerpt = their EXACT words (verbatim is best). One action. One card stack. Then stop talking until they accept/reject/revise.
           IMPORTANT: even if the intake names 3 things (e.g. "booking + rewards + birthday discounts"), emit ONE propose_module_from_intake — the generator handles decomposition itself (G13). Do NOT loop ensure_module per item. Do NOT split the intake into a separate follow-up question for one of the items.
-       2. DIRECT COMMAND with explicit name + explicit field list — e.g. "create a module called Client Progress with fields client, status, notes" → ensure_module.
-       3. "add to my [module name]" → create_module_entry.
-       4. "show / list / what's in my [module name]" → list_module_entries.
-       5. "go to / open [module name]" → navigate with page=module:<id>.
-       6. "what modules do I have?" → just list them from the CUSTOM MODULES context block (no action needed).
+       2. UPGRADE PHRASING — practitioner asks to refresh an existing module to the latest architecture:
+          "upgrade my [module name]" / "refine my [module name]" / "apply the latest stuff to my [module name]" /
+          "make my [module name] customer-facing" / "add the customer form to [module name]"
+          → upgrade_module_archetype with module_name (or module_slug / module_id if known). One action, one upgrade card.
+       3. DIRECT COMMAND with explicit name + explicit field list — e.g. "create a module called Client Progress with fields client, status, notes" → ensure_module.
+       4. "add to my [module name]" → create_module_entry.
+       5. "show / list / what's in my [module name]" → list_module_entries.
+       6. "go to / open [module name]" → navigate with page=module:<id>.
+       7. "what modules do I have?" → just list them from the CUSTOM MODULES context block (no action needed).
     — When in doubt between propose_module_from_intake and ensure_module: PREFER propose. The proposal flow is reversible (the practitioner sees a card and can reject/revise) and produces better schemas via the generator; ensure_module is a one-shot direct write that can't be previewed.
 
 ACTIONS — TASKS + NOTES + ACTIVITY:
