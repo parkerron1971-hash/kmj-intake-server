@@ -39,7 +39,7 @@ import os
 import threading
 import time
 from collections import defaultdict, deque
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -119,21 +119,17 @@ def _business_basics(business_id: str) -> Optional[Dict[str, Any]]:
 
 def _bookings_module(business_id: str) -> Optional[Dict[str, Any]]:
     """Finds the booking_calendar archetype module for this business.
-    Phase C.1: there's at most one per business (the LLM's proposal flow
-    is the only path to one)."""
-    # Prefer the archetype filter; fall back to slug='bookings' for
-    # business that materialized before the archetype column existed
-    # (which is exactly what we want to detect for the wire-through).
+    There is at most one per business (the LLM's proposal flow is the
+    only path to one).
+
+    Phase C.1.1 removed the slug='bookings' spike-compat fallback —
+    a fallback_generic module is NOT a working customer surface and
+    must NOT be reachable to the widget. Practitioners with legacy
+    bookings modules upgrade via the Chief `upgrade_module_archetype`
+    action."""
     rows = sb_clients.sb_get_as_service(
         f"/custom_modules?business_id=eq.{business_id}"
         f"&archetype=eq.booking_calendar&is_active=eq.true&limit=1&select=*"
-    ) or []
-    if rows:
-        return rows[0]
-    # Spike-compat: a legacy fallback_generic module slugged 'bookings'.
-    rows = sb_clients.sb_get_as_service(
-        f"/custom_modules?business_id=eq.{business_id}"
-        f"&slug=eq.bookings&is_active=eq.true&limit=1&select=*"
     ) or []
     return rows[0] if rows else None
 
@@ -161,11 +157,34 @@ def _theme_tokens(business: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def _customer_visible_fields(fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Phase C.1.1 — return only the fields the widget should know about:
+    customer_facing (user-typed in the form) OR system_set (widget-computed
+    + included in the submission payload but hidden from the form). All
+    other fields are practitioner-only and MUST NOT travel to the widget.
+
+    Fail-closed: a field with neither flag is treated as practitioner-only."""
+    out = []
+    for f in fields or []:
+        if not isinstance(f, dict):
+            continue
+        if f.get("customer_facing") is True or f.get("system_set") is True:
+            out.append(f)
+    return out
+
+
 def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[str, Any]:
     """Shared shape for config-anon + config endpoints. Customer-identifying
-    data lives ONLY in the authed response; this shape is safe for anon."""
+    data lives ONLY in the authed response; this shape is safe for anon.
+
+    Phase C.1.1: schema.fields is filtered to customer-visible only
+    (customer_facing OR system_set). agent_config.services travels through
+    when the archetype declares a service catalog."""
     archetype_params = module.get("archetype_params") or {}
     schema = module.get("schema") or {}
+    agent_config = module.get("agent_config") or {}
+    visible_fields = _customer_visible_fields(schema.get("fields") or [])
+    services = agent_config.get("services") or []
     return {
         "business": {
             "id": business["id"],
@@ -177,8 +196,9 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
             "icon": module.get("icon"),
             "archetype": module.get("archetype") or "fallback_generic",
         },
-        "schema": {"fields": schema.get("fields") or []},
+        "schema": {"fields": visible_fields},
         "archetype_params": archetype_params,
+        "services": services,
         "theme_tokens": _theme_tokens(business),
     }
 
@@ -285,7 +305,7 @@ async def book_anon(
 
     entry = _create_appointment(business_id, module["id"], entry_data)
     if not entry:
-        raise HTTPException(status_code=500, detail="appointment create failed")
+        raise HTTPException(status_code=500, detail="Something went wrong on our end — please try again.")
 
     # 4. Mint a token so the customer can return to view/manage.
     token = issue_customer_token(business_id, customer_id)
@@ -325,7 +345,7 @@ async def book(
 
     entry = _create_appointment(business_id, module["id"], entry_data)
     if not entry:
-        raise HTTPException(status_code=500, detail="appointment create failed")
+        raise HTTPException(status_code=500, detail="Something went wrong on our end — please try again.")
 
     return {"ok": True, "appointment_id": entry["id"]}
 
@@ -443,7 +463,18 @@ def _find_or_create_customer(
         "name": name,
     })
     if not isinstance(created, list) or not created:
-        raise HTTPException(status_code=500, detail="customer create failed")
+        # C22 polish — match the contact-create pattern: log context, raise
+        # a user-friendly message. The underlying PostgREST error is in the
+        # preceding sb_clients log line.
+        logger.warning(
+            f"booking_widget customer create failed for biz={business_id} "
+            f"email={email_lower!r} contact={contact_id} — see preceding "
+            f"sb_clients log line for detail"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong on our end — please try again.",
+        )
     return created[0]["id"]
 
 
@@ -461,6 +492,16 @@ def _create_appointment(
     })
     if isinstance(created, list) and created:
         return created[0]
+    # C22 polish — same friendly-error treatment as contact + customer
+    # create. The caller's existing `if not entry: raise HTTPException(500,
+    # "appointment create failed")` covered the unhappy path with a
+    # backend-y string; this widens the log + sanitizes the user-visible
+    # message. NOTE the caller still does the raise; we just log here so
+    # the diagnostic context is preserved even if a future caller forgets.
+    logger.warning(
+        f"booking_widget appointment create failed for biz={business_id} "
+        f"module={module_id} — see preceding sb_clients log line for detail"
+    )
     return None
 
 
