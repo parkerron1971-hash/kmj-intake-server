@@ -101,7 +101,9 @@ class OfferingCreateBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     slug: str
     category: str
-    description: Optional[str] = None
+    # 500 chars cap — a generous one-paragraph description; longer copy
+    # belongs in a separate marketing surface, not the offerings catalog.
+    description: Optional[str] = Field(default=None, max_length=500)
     current_price: Optional[float] = Field(default=None, ge=0)
     currency: str = "usd"
     duration_min: Optional[int] = Field(default=None, gt=0)
@@ -122,7 +124,8 @@ class OfferingCreateBody(BaseModel):
 class OfferingPatchBody(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     slug: Optional[str] = None
-    description: Optional[str] = None
+    # 500 chars cap — see OfferingCreateBody.description.
+    description: Optional[str] = Field(default=None, max_length=500)
     category: Optional[str] = None
     current_price: Optional[float] = Field(default=None, ge=0)
     currency: Optional[str] = None
