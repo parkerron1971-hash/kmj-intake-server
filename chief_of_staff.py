@@ -6446,6 +6446,253 @@ async def handle_list_products(client, biz, action) -> Dict:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Offerings (Phase C.1.2) — canonical pricing layer
+# ─────────────────────────────────────────────────────────────────────
+# Siblings of handle_create_product / handle_update_product / etc.
+# Targets the offerings table (not products). Used by Chief when the
+# practitioner says "change my haircut price" / "add a 60-min massage at
+# $90" / "list my services" — anything service-pricing-shaped.
+#
+# 'donation' is intentionally NOT a valid category — Fork 25 Giving guard.
+
+_VALID_OFFERING_CATEGORIES = {
+    "service", "session", "event", "course", "product", "package", "custom",
+}
+
+def _slugify_offering(s: str) -> str:
+    import re
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s or "offering"
+
+
+async def _find_offering_by_name(client, biz_id: str, name: str) -> Optional[Dict[str, Any]]:
+    """Resolve an offering by its name (case-insensitive ilike). Exact
+    match wins; otherwise the first ilike hit. Returns None if zero
+    matches OR multiple ambiguous matches with no exact tie-break."""
+    if not name:
+        return None
+    safe = name.replace("%", "")
+    rows = await _sb(client, "GET",
+        f"/offerings?business_id=eq.{biz_id}&is_active=eq.true"
+        f"&name=ilike.*{safe}*&select=*&limit=5")
+    if not rows:
+        return None
+    for r in rows:
+        if (r.get("name") or "").strip().lower() == name.strip().lower():
+            return r
+    return rows[0]
+
+
+async def handle_create_offering(client, biz, action) -> Dict:
+    """Create a new offering. action: {name, category, current_price?,
+    duration_min?, currency?, description?, show_price_to_customer?, slug?}
+    """
+    name = (action.get("name") or "").strip()
+    if not name:
+        return _fail("create_offering", "name required")
+    category = (action.get("category") or "service").strip().lower()
+    if category not in _VALID_OFFERING_CATEGORIES:
+        return _fail(
+            "create_offering",
+            f"category must be one of {sorted(_VALID_OFFERING_CATEGORIES)} "
+            f"(donations stay in the restricted-modules domain)"
+        )
+    slug = (action.get("slug") or _slugify_offering(name)).lower()
+
+    # Idempotency — refuse if a same-slug offering already exists for this biz.
+    existing = await _sb(client, "GET",
+        f"/offerings?business_id=eq.{biz['id']}&slug=eq.{slug}&select=id,name&limit=1")
+    if existing:
+        return _fail(
+            "create_offering",
+            f"an offering with slug '{slug}' already exists "
+            f"(currently named '{existing[0].get('name')}'). "
+            f"Try update_offering instead, or pick a different name."
+        )
+
+    payload: Dict[str, Any] = {
+        "business_id": biz["id"],
+        "name": name,
+        "slug": slug,
+        "category": category,
+        "is_active": True,
+    }
+    if action.get("description") is not None:
+        payload["description"] = action["description"]
+    if action.get("currency"):
+        payload["currency"] = action["currency"]
+    if action.get("show_price_to_customer") is not None:
+        payload["show_price_to_customer"] = bool(action["show_price_to_customer"])
+    # Numeric coercions
+    if "current_price" in action or "price" in action:
+        raw = action.get("current_price", action.get("price"))
+        try:
+            payload["current_price"] = float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return _fail("create_offering", f"invalid price: {raw!r}")
+    if "duration_min" in action or "duration_minutes" in action or "duration" in action:
+        raw = action.get("duration_min", action.get("duration_minutes", action.get("duration")))
+        try:
+            payload["duration_min"] = int(raw) if raw is not None else None
+            if payload["duration_min"] is not None and payload["duration_min"] <= 0:
+                return _fail("create_offering", "duration_min must be > 0")
+        except (TypeError, ValueError):
+            return _fail("create_offering", f"invalid duration_min: {raw!r}")
+
+    rows = await _sb(client, "POST", "/offerings", payload)
+    if not rows:
+        return _fail("create_offering", "create failed")
+    off = rows[0]
+    price_str = f" at ${off.get('current_price')}" if off.get("current_price") is not None else ""
+    dur_str = f" ({off['duration_min']} min)" if off.get("duration_min") else ""
+    return {
+        "type": "create_offering",
+        "result": "created",
+        "label": f"💲 Created offering: {off.get('name')}{price_str}{dur_str}",
+        "offering_id": off.get("id"),
+        "nav": _nav("build"),
+    }
+
+
+async def handle_update_offering(client, biz, action) -> Dict:
+    """Update an offering's price / duration / etc. action: {offering_id |
+    name, current_price?, price?, duration_min?, name?, description?,
+    show_price_to_customer?, currency?, category?}.
+
+    Price updates do NOT propagate to historical module_entries — the P5
+    discipline preserves price_at_booking on past bookings. Only future
+    bookings + the customer widget read the new current_price."""
+    offering_id = action.get("offering_id")
+    if not offering_id and action.get("name"):
+        match = await _find_offering_by_name(client, biz["id"], action["name"])
+        if match:
+            offering_id = match["id"]
+    if not offering_id:
+        return _fail("update_offering",
+                     f"no offering found for name={action.get('name')!r}. "
+                     f"Try list_offerings to see what's on file.")
+
+    patch: Dict[str, Any] = {}
+    for k in ("name", "description", "currency"):
+        if k in action and action[k] is not None:
+            patch[k] = action[k]
+    if action.get("category"):
+        cat = action["category"].strip().lower()
+        if cat not in _VALID_OFFERING_CATEGORIES:
+            return _fail("update_offering",
+                         f"category must be one of {sorted(_VALID_OFFERING_CATEGORIES)}")
+        patch["category"] = cat
+    if "current_price" in action or "price" in action:
+        raw = action.get("current_price", action.get("price"))
+        try:
+            patch["current_price"] = float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return _fail("update_offering", f"invalid price: {raw!r}")
+    if "duration_min" in action or "duration_minutes" in action or "duration" in action:
+        raw = action.get("duration_min", action.get("duration_minutes", action.get("duration")))
+        try:
+            patch["duration_min"] = int(raw) if raw is not None else None
+            if patch["duration_min"] is not None and patch["duration_min"] <= 0:
+                return _fail("update_offering", "duration_min must be > 0")
+        except (TypeError, ValueError):
+            return _fail("update_offering", f"invalid duration_min: {raw!r}")
+    if action.get("show_price_to_customer") is not None:
+        patch["show_price_to_customer"] = bool(action["show_price_to_customer"])
+
+    if not patch:
+        return _fail("update_offering", "no fields to update")
+
+    import time as _t
+    patch["updated_at"] = _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime())
+    rows = await _sb(client, "PATCH", f"/offerings?id=eq.{offering_id}", patch)
+    if not rows:
+        return _fail("update_offering", "update failed")
+    off = rows[0]
+    bits = []
+    if "current_price" in patch:
+        bits.append(f"price → ${patch['current_price']}")
+    if "duration_min" in patch:
+        bits.append(f"duration → {patch['duration_min']} min")
+    if "name" in patch:
+        bits.append(f"name → {patch['name']!r}")
+    if "category" in patch:
+        bits.append(f"category → {patch['category']}")
+    if "show_price_to_customer" in patch:
+        bits.append(f"price-visible → {patch['show_price_to_customer']}")
+    detail = "; ".join(bits) if bits else "updated"
+    return {
+        "type": "update_offering",
+        "result": "updated",
+        "label": f"💲 {off.get('name')}: {detail}",
+        "offering_id": offering_id,
+        "offering": off,
+        "nav": _nav("build"),
+    }
+
+
+async def handle_archive_offering(client, biz, action) -> Dict:
+    """Soft-delete an offering (is_active=false, archived_at=now). Existing
+    references to this offering remain valid for historical display
+    (denormalized fields preserve service_name + price + duration)."""
+    offering_id = action.get("offering_id")
+    if not offering_id and action.get("name"):
+        match = await _find_offering_by_name(client, biz["id"], action["name"])
+        if match:
+            offering_id = match["id"]
+    if not offering_id:
+        return _fail("archive_offering",
+                     f"no offering found for name={action.get('name')!r}.")
+    import time as _t
+    now_iso = _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime())
+    rows = await _sb(client, "PATCH", f"/offerings?id=eq.{offering_id}", {
+        "is_active": False, "archived_at": now_iso, "updated_at": now_iso,
+    })
+    if not rows:
+        return _fail("archive_offering", "archive failed")
+    return {
+        "type": "archive_offering",
+        "result": "archived",
+        "label": f"📦 Archived {rows[0].get('name')}",
+        "offering_id": offering_id,
+        "nav": _nav("build"),
+    }
+
+
+async def handle_list_offerings(client, biz, action) -> Dict:
+    """List offerings for this business. action: {category?, include_archived?}"""
+    cat = (action.get("category") or "").strip().lower()
+    include_archived = bool(action.get("include_archived"))
+    qs = (f"business_id=eq.{biz['id']}&order=category.asc,name.asc"
+          f"&select=id,name,slug,category,current_price,currency,duration_min,"
+          f"show_price_to_customer,is_active&limit=200")
+    if cat and cat in _VALID_OFFERING_CATEGORIES:
+        qs += f"&category=eq.{cat}"
+    if not include_archived:
+        qs += "&is_active=eq.true"
+    rows = await _sb(client, "GET", f"/offerings?{qs}") or []
+    summary_lines = []
+    for r in rows[:25]:
+        price = r.get("current_price")
+        price_s = f"${price}" if price is not None else "—"
+        dur = f" · {r['duration_min']}m" if r.get("duration_min") else ""
+        cat_s = f"[{r.get('category')}]"
+        flag = "" if r.get("is_active") else " (archived)"
+        summary_lines.append(f"  {cat_s:<11} {r.get('name')}: {price_s}{dur}{flag}")
+    label = f"💲 {len(rows)} offering(s)" + (f" in {cat}" if cat else "")
+    if len(rows) > 25:
+        label += " (showing first 25)"
+    return {
+        "type": "list_offerings",
+        "result": "ok",
+        "label": label,
+        "summary": "\n".join(summary_lines),
+        "offerings": rows,
+        "nav": _nav("build"),
+    }
+
+
 async def handle_generate_payment_link(client, biz, action) -> Dict:
     """Generate (or rotate) the Stripe payment link for a product.
 
@@ -7896,6 +8143,11 @@ ACTION_HANDLERS = {
     "create_product":             handle_create_product,
     "update_product":             handle_update_product,
     "list_products":              handle_list_products,
+    # Phase C.1.2 — canonical Offerings CRUD (sibling of products actions)
+    "create_offering":            handle_create_offering,
+    "update_offering":            handle_update_offering,
+    "archive_offering":           handle_archive_offering,
+    "list_offerings":             handle_list_offerings,
     "generate_payment_link":      handle_generate_payment_link,
     # Conversation recall
     "recall_conversation":        handle_recall_conversation,
@@ -8003,6 +8255,134 @@ def _resolve_action_references(action: Dict[str, Any], prior_results: List[Dict[
                 break
 
     return resolved
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase C.1.2 — Option D two-pass reply composition (the trust fix)
+# ─────────────────────────────────────────────────────────────────────
+# When the first-pass LLM emits ≥1 [ACTION:] tags, those actions execute
+# AFTER the chat-bubble text was already written. The first-pass text is
+# therefore based on INTENT, not OUTCOME — the LLM has no idea whether
+# its actions will succeed at execution time.
+#
+# Single-pass behavior (no actions emitted) is unchanged. The cost only
+# doubles on action turns.
+#
+# Failure detection: action handlers return {"result": "Failed: <reason>"}
+# via _fail(). Success returns {"result": "<verb>"} or similar non-prefix.
+
+def _action_failed(taken_item: Dict[str, Any]) -> bool:
+    r = (taken_item or {}).get("result") or ""
+    return isinstance(r, str) and r.startswith("Failed:")
+
+
+def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
+    """Build a human-readable summary of what just happened, for the
+    second-pass LLM to reason about. NOT a raw JSON dump — we want the
+    LLM to focus on the WHAT and WHY, not the wire format."""
+    succeeded, failed = [], []
+    for t in taken or []:
+        atype = t.get("type") or "unknown_action"
+        result = t.get("result") or ""
+        label = t.get("label") or ""
+        if _action_failed(t):
+            # Extract the reason after "Failed: "
+            reason = result.replace("Failed:", "", 1).strip()
+            failed.append((atype, label, reason, t))
+        else:
+            succeeded.append((atype, label, result, t))
+
+    parts: List[str] = []
+    if failed:
+        parts.append("✗ FAILED ACTIONS (you must NOT claim these succeeded):")
+        for atype, label, reason, _ in failed:
+            parts.append(f"  • {atype}")
+            parts.append(f"      reason: {reason or '(no detail returned)'}")
+            if label:
+                parts.append(f"      (label that would have shown if it had succeeded: {label})")
+    if succeeded:
+        parts.append("")
+        parts.append("✓ SUCCEEDED ACTIONS (these actually happened):")
+        for atype, label, result, _ in succeeded:
+            parts.append(f"  • {atype}: {label or result}")
+    return "\n".join(parts) if parts else "(no actions ran)"
+
+
+_POST_ACTION_REPLY_SYSTEM = """\
+You are the Chief, replying to the practitioner AFTER actions you tagged \
+in your previous turn have already run. Some may have succeeded; some may \
+have failed. Your job in this single message is to give the practitioner \
+an HONEST account of what actually happened.
+
+RULES (load-bearing — failing these breaks practitioner trust):
+1. Do NOT claim success for any action that failed. Use plain language: \
+"the haircut price update didn't go through because..." — never "Done."
+2. If actions succeeded, briefly confirm what happened with the same \
+warmth + specificity you'd use normally. Don't be over-formal.
+3. For failures, explain the reason in plain words (translate technical \
+errors). If you can identify what should have been done instead — \
+especially when a sibling action exists that would have worked — say so \
+and offer to retry. Examples of common alternatives:
+   - update_product failed for a service-shaped name → update_offering \
+     (the canonical service catalog)
+   - update_offering failed because the name wasn't found → suggest \
+     list_offerings to see what's on file
+4. Keep it short. 1–3 sentences typically. Match the practitioner's tone.
+5. Do NOT emit any [ACTION:...] tags in this reply — actions already ran. \
+If a retry is appropriate, describe it in prose and the practitioner will \
+confirm or re-ask.
+6. Don't ramble about HOW the system works internally. Speak from the \
+practitioner's frame: their goal, the outcome, the next step.
+"""
+
+
+async def _compose_post_action_reply(
+    client: httpx.AsyncClient,
+    original_message: str,
+    first_pass_clean: str,
+    taken: List[Dict[str, Any]],
+    business_id: Optional[str] = None,
+) -> str:
+    """Second-pass LLM call. Returns honest reply text. Falls back to the
+    first-pass text (with an audit-trail footer) if the LLM call fails."""
+    if not taken:
+        return first_pass_clean
+
+    results_block = _format_action_results_for_reply(taken)
+    any_failed = any(_action_failed(t) for t in taken)
+
+    user_payload = (
+        f"THE PRACTITIONER ORIGINALLY WROTE:\n\"{original_message.strip()}\"\n\n"
+        f"YOUR DRAFT REPLY (written BEFORE actions ran — may over-claim if "
+        f"anything failed, revise based on what actually happened):\n"
+        f"\"{(first_pass_clean or '').strip()}\"\n\n"
+        f"WHAT ACTUALLY HAPPENED WHEN THE ACTIONS RAN:\n{results_block}\n\n"
+        f"Write a single honest reply now."
+    )
+
+    raw = await _call_claude(
+        client,
+        _POST_ACTION_REPLY_SYSTEM,
+        [{"role": "user", "content": user_payload}],
+        max_tokens=600,
+        enable_web_search=False,        # no need; we're just composing prose
+        business_id=business_id,
+    )
+
+    if not raw or not raw.strip():
+        # Fallback — preserve the first-pass text but staple a footer when
+        # we know something failed, so we never tell a clean lie.
+        if any_failed:
+            return (first_pass_clean or "").rstrip() + (
+                "\n\n⚠️ Not everything I tried went through — check the "
+                "actions panel below for details."
+            )
+        return first_pass_clean
+
+    # Strip any stray action tags the second pass might have emitted
+    # despite the system prompt (belt-and-suspenders).
+    cleaned_again, _stray = _extract_actions_and_clean(raw)
+    return cleaned_again.strip() or first_pass_clean
 
 
 async def _execute_actions(client, biz, actions: List[Dict]) -> List[Dict]:
@@ -9947,6 +10327,30 @@ ACTIONS — PRODUCTS & SERVICES:
     — When the practitioner says "set up payments for X", "create a buy link for X", or "make X purchasable" → generate_payment_link. Confirm first if the product has no price yet.
     — When they ask "can people buy X on my site?" → check the catalog: if display_on_website is true AND a payment link exists, say yes; otherwise offer to fix the gap.
 
+ACTIONS — OFFERINGS (Phase C.1.2 — canonical pricing for service-based archetypes):
+  [ACTION:{{"type":"create_offering","name":"Haircut","category":"service","current_price":30,"duration_min":30}}]
+  [ACTION:{{"type":"create_offering","name":"Consultation","category":"session","duration_min":60,"show_price_to_customer":false}}]
+  [ACTION:{{"type":"update_offering","name":"Haircut","current_price":35}}]
+  [ACTION:{{"type":"update_offering","name":"Haircut","duration_min":45}}]
+  [ACTION:{{"type":"update_offering","offering_id":"<uuid>","show_price_to_customer":false}}]
+  [ACTION:{{"type":"archive_offering","name":"Beard Trim"}}]
+  [ACTION:{{"type":"list_offerings"}}]
+  [ACTION:{{"type":"list_offerings","category":"service"}}]
+    — `category` is a closed enum: service | session | event | course | product | package | custom. 'donation' is NOT a valid category — donations live in the restricted-modules surface.
+    — ROUTING — OFFERINGS vs PRODUCTS (read carefully — they are SEPARATE catalogs):
+       • OFFERINGS are the canonical pricing for archetype-referenced things — services a barber books, sessions a coach takes, courses a creator sells (when consumed by an archetype like booking_calendar). When the practitioner says "haircut", "session", "lesson", "massage", "appointment", "service" — DEFAULT to offerings.
+       • PRODUCTS are the legacy catalog. Use products ONLY for non-archetype-referenced things: physical goods, digital downloads, packaged bundles with Stripe payment links the practitioner sells off-archetype.
+       • Phrase tells:
+            "change the price of Haircut" / "raise my haircut to $35"   → update_offering
+            "add a service called Massage at $90"                       → create_offering
+            "list my services" / "what do I offer?"                     → list_offerings (default — if also relevant, you may follow with list_products)
+            "stop offering X" / "archive my Y service"                  → archive_offering
+            "add a digital download" / "I sell an e-book"               → create_product (digital goods, off-archetype)
+            "set up payments for [a digital good]"                      → generate_payment_link (products only)
+       • When in doubt for a service-shaped name, prefer OFFERINGS. Products is the older surface; offerings is where the BookingCalendar widget + future archetype-priced surfaces read from.
+    — Price updates on offerings do NOT propagate to historical bookings — past appointments preserve their captured price_at_booking (P5 ruling). Tell the practitioner this if they ask about retroactive changes.
+    — show_price_to_customer=false hides the price in the customer-facing widget. Use for consultative-pricing services where the practitioner doesn't want to publish a number.
+
 ACTIONS — TIMERS & ALARMS:
   Countdown (duration-based, in SECONDS):
   [ACTION:{{"type":"set_timer","timer_type":"countdown","label":"Focus session","duration":1800,"voice":true}}]
@@ -10082,9 +10486,12 @@ When the practitioner says...                       You should emit...
   "Set a timer / alarm / give me X minutes"     →   set_timer
   "Pomodoro / focus session / break timer"      →   set_timer (countdown)
   "What did we talk about / Remember when..."   →   recall_conversation
-  "Add a service/product" / "I sell..."         →   create_product
-  "What products/services do I have?"           →   list_products
-  "Change the price of [X]..."                  →   update_product
+  "Add a service/session/class at $X"           →   create_offering   (DEFAULT for service-pricing; products is the legacy off-archetype catalog)
+  "Add a digital download / I sell an e-book"   →   create_product    (non-archetype goods only)
+  "What services do I offer?" / "List services" →   list_offerings
+  "What products do I have for sale?"           →   list_products
+  "Change the price of [haircut/session/X]"     →   update_offering   (DEFAULT for service-shaped names; see OFFERINGS section for the offerings-vs-products routing tells)
+  "Stop offering / archive [X service]"         →   archive_offering
   "Set a goal to..." / "Track [X] by [date]"    →   create_goal (already specified — emit directly)
   "Help me set a goal" / "Build a goal with me" →   COACH the goal first (ask outcome/when/target/lens), THEN create_goal after confirmation
   "Remind me about [goal] on [date]"             →   add_reminder (fuzzy-match goal_title)
@@ -10798,6 +11205,32 @@ async def chief_chat(
                     print("[Chief] RETRY model call returned empty", flush=True)
 
             taken = await _execute_actions(client, biz, actions) if actions else []
+
+            # Phase C.1.2 — Option D two-pass reply. Only fires when actions
+            # actually executed. Re-asks the LLM with structured success/
+            # failure context to compose an honest reply. Single-pass turns
+            # (no actions) skip this entirely — no cost change for chitchat.
+            if taken:
+                try:
+                    composed = await _compose_post_action_reply(
+                        client,
+                        original_message=effective_message or req.message,
+                        first_pass_clean=clean or "",
+                        taken=taken,
+                        business_id=biz.get("id"),
+                    )
+                    if composed and composed.strip():
+                        clean = composed
+                except Exception as e:  # pragma: no cover
+                    # Never break the response on second-pass failure; fall
+                    # back to the first-pass text (with footer if any
+                    # action failed) so we don't lie about success.
+                    logger.warning(f"post-action reply compose failed: {e}")
+                    if any(_action_failed(t) for t in taken):
+                        clean = (clean or "").rstrip() + (
+                            "\n\n⚠️ Not everything I tried went through — "
+                            "check the actions panel below for details."
+                        )
 
             # Best-effort: mark memories referenced in the response
             await _mark_referenced_memories(client, biz["id"], ctx.get("memories") or [], clean or raw)
