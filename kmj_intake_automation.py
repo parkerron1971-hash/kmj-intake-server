@@ -52,6 +52,8 @@ from booking_widget_router import router as booking_widget_router
 from contacts_router import router as contacts_router
 # Phase C.1.2 — canonical pricing layer
 from offerings_router import router as offerings_router
+# Phase C.1.3 — Chief proactive-suggestion lifecycle
+from chief_suggestions_router import router as chief_suggestions_router
 # Pass 4.0a — Director Agent foundations
 from agents.sparse_input_enrichment_router import router as sparse_enrichment_router
 # Pass 4.0b — Director Agent: Critique loop
@@ -92,6 +94,7 @@ app.include_router(module_spec_router)
 app.include_router(booking_widget_router)
 app.include_router(contacts_router)
 app.include_router(offerings_router)
+app.include_router(chief_suggestions_router)
 app.include_router(business_profile_router)
 app.include_router(practitioner_profile_router)
 app.include_router(foundation_router)

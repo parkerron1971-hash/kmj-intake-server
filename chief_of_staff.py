@@ -11000,6 +11000,16 @@ async def chief_chat(
                 raise HTTPException(404, "Business not found")
             biz = ctx["business"]
 
+            # NT8b — best-effort proactive suggestion emission on state
+            # change. Runs ONCE per chat turn; idempotent (the emitter
+            # checks for active dupes + has a cap). Failures never block
+            # the conversation.
+            try:
+                import chief_proactive_suggestions as _cps
+                await asyncio.to_thread(_cps.maybe_emit_proactive_suggestions, biz)
+            except Exception as _e:
+                logger.warning(f"proactive emit failed (non-blocking): {_e}")
+
             is_greeting = _is_greeting(req.message)
             tod = _parse_greeting_tod(req.message) if is_greeting else None
             is_coach_pause = _is_coach_pause(req.message)
