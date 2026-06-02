@@ -577,10 +577,27 @@ Available archetypes:
       ('service' | 'session' | 'event' | 'course' | 'product' | 'package' |
       'custom'), current_price (number or null for "contact for quote"),
       currency (default "usd"), duration_min (for service/session;
-      null for product/event), show_price_to_customer (default true), and a
+      null for product/event), show_price_to_customer (default true),
+      description (a brief customer-facing line — see below), and a
       brief reasoning. Extract names + durations + prices ONLY from the
       intake — never invent. If the intake doesn't mention a price, leave
       current_price null (the practitioner can fill it in later).
+
+      DESCRIPTION (customer-facing — practitioner can edit later):
+        One short sentence the customer sees in the booking widget
+        beneath the service name. 1 line, ≤120 chars ideally, hard cap
+        500. Write it from the customer's frame ("what they'll get"),
+        not the practitioner's ("how I deliver it").
+        Examples:
+          Haircut          → "Standard adult haircut with finish styling"
+          Beard Trim       → "Beard cleanup and edge shaping"
+          Haircut + Beard  → "Full reset — haircut plus beard trim"
+          Consultation     → "30-min intro call to see if we're a fit"
+        If the practitioner's intake gives obvious detail ("hot towel
+        included", "ages 6-12", "60-min therapeutic"), reflect it. If
+        not, write a sensible default — leaving description null is OK
+        but populated is preferred (the customer surface looks bare
+        without it).
 
       DO NOT populate agent_config.services for new specs — that field
       is a C.1.1 read-back-only shape kept for pre-C.1.2 modules until
@@ -615,10 +632,12 @@ Available archetypes:
           "offerings": [
             {"name":"Haircut","slug":"haircut","category":"service",
              "current_price":30,"duration_min":30,
+             "description":"Standard adult haircut with finish styling",
              "show_price_to_customer":true,
              "reasoning":"Mentioned by name and price in intake"},
             {"name":"Beard Trim","slug":"beard-trim","category":"service",
              "current_price":15,"duration_min":15,
+             "description":"Beard cleanup and edge shaping",
              "show_price_to_customer":true,
              "reasoning":"Mentioned by name and price in intake"}
           ]
