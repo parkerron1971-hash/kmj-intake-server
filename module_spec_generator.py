@@ -224,6 +224,66 @@ ArchetypeEnum = Literal[
 ]
 
 
+# ──────────────────────────────────────────────────────────────
+# Archetype metadata (Phase C.1.3 — Navigation Taxonomy)
+# ──────────────────────────────────────────────────────────────
+# Per NT2/NT2b: each archetype declares which navigation surfaces it lives
+# in. The sidebar enumerates modules into surfaces based on these
+# declarations.
+#
+# Per NT8e: chief_can_suggest gates which archetypes Chief is allowed to
+# proactively recommend. fallback_generic is NEVER suggestable (it's an
+# outcome of failure, not a target); booking_calendar is the only
+# currently-suggestable archetype.
+#
+# Mirrored to TS in src/core/types/archetypes.gen.ts (hand-mirror for now;
+# codegen when the enum grows beyond ~5 entries — C1 ruling).
+#
+# config_surface     — where the practitioner CONFIGURES this archetype
+#                       (schema editor / settings / archetype_params)
+# daily_use_surface  — where the practitioner OPERATES this archetype
+#                       (the hand-written hero, e.g. BookingCalendar week
+#                       grid). None when the archetype has no daily-use
+#                       hero (fallback_generic uses DynamicModule).
+# chief_can_suggest  — may Chief proactively suggest this archetype?
+#                       NT8e: load-bearing closed-enum lock.
+
+NavSurface = Literal["build", "operate", "grow", "settings", "home"]
+
+ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
+    "fallback_generic": {
+        # NT2b — fallback_generic renders in BUILD only; no daily-use hero.
+        # The whole point of fallback_generic is "no daily-use hero exists
+        # yet for this shape" — its surface is DynamicModule, which IS
+        # configuration-flavored.
+        "config_surface": "build",
+        "daily_use_surface": None,
+        "chief_can_suggest": False,    # NEVER suggest the fallback
+        "label": "Generic Module",
+        "operate_group": None,
+    },
+    "booking_calendar": {
+        "config_surface": "build",       # services + schema config
+        "daily_use_surface": "operate",  # the BookingCalendar week-grid hero
+        "chief_can_suggest": True,
+        "label": "Bookings",
+        "operate_group": "customer_lifecycle",   # NT6 subject grouping
+    },
+}
+
+
+def archetype_metadata(archetype: Optional[str]) -> Dict[str, Any]:
+    """Safe lookup — returns the fallback_generic metadata for any unknown
+    or null archetype. Never raises."""
+    return ARCHETYPE_METADATA.get(archetype or "fallback_generic", ARCHETYPE_METADATA["fallback_generic"])
+
+
+def suggestable_archetypes() -> List[str]:
+    """NT8e — returns the closed set of archetypes Chief may proactively
+    suggest. Single source of truth for the proactive-suggestion gate."""
+    return [name for name, meta in ARCHETYPE_METADATA.items() if meta.get("chief_can_suggest") is True]
+
+
 class BookingCalendarParams(BaseModel):
     """Parameters for the BookingCalendar archetype.
     primary_date_field MUST be the snake_case name of a date or datetime
@@ -480,6 +540,49 @@ containing one or more ModuleSpecs plus your decomposition reasoning. Modules \
 will be rendered by a generic schema-driven renderer (list + kanban views; \
 field types: text, textarea, select, date, number, checkbox, contact_link, \
 url, email) and rules in workflows[] will be materialized into a workflow engine.
+
+═══════════════════════════════════════════════════════════════════════
+VERTICAL AWARENESS — open knowledge inside a closed archetype (NT8f)
+═══════════════════════════════════════════════════════════════════════
+
+The practitioner's business type is provided to you each turn (barber, \
+lawyer, coach, ministry, course_creator, financial_educator, ecommerce, \
+agency, personal_services, nonprofit, custom, etc). USE YOUR KNOWLEDGE \
+OF THAT VERTICAL when shaping the proposal — inside the closed archetype \
+palette. Specifically, your broader training-data knowledge of how that \
+profession works is allowed to inform:
+
+  - WHICH FIELDS belong on the schema (a lawyer's booking_calendar \
+    typically needs consultation_type, retainer_status, conflict_check; \
+    a barber's needs service + duration; a coach's needs session_type \
+    + cadence; a ministry's event_registration needs RSVP + dietary + \
+    childcare. These are not invented — they're the vertical norms.)
+  - SENSIBLE DEFAULTS for select options and field values (a lawyer's \
+    consultation_type options ["initial_consult","follow_up","deposition_prep","mediation"] vs a barber's ["Haircut","Beard Trim","Combo"])
+  - DESCRIPTIONS written in vertical-appropriate language (a coach's \
+    Sessions module description reads differently from a barber's Bookings)
+  - ARCHETYPE_PARAMS tuned to the practice (which field is the color-key, \
+    sensible duration_minutes defaults, etc)
+  - OFFERINGS extracted from intake using vertical-appropriate categories \
+    + reasonable durations (a lawyer's hour-long consult; a barber's 30-min \
+    haircut; a coach's 60-min session)
+
+WHAT YOUR VERTICAL KNOWLEDGE MUST NOT DO:
+
+  - NEVER invent an archetype outside the closed enum. The closed-archetype \
+    discipline is hard. If no archetype fits even with vertical-aware \
+    tuning, you MUST pick fallback_generic with an explicit \
+    archetype_fallback_reason — the library_gap_log captures these so the \
+    team knows what archetypes are owed next.
+  - NEVER assume a vertical needs a feature that the archetype doesn't \
+    support. E.g. don't fabricate a "conflict_check_workflow" on \
+    booking_calendar; if conflict-check is genuinely architectural, \
+    that's a fallback_generic + reason ("this vertical needs an extension \
+    to booking_calendar that doesn't ship yet").
+  - NEVER claim the proposal will do something it won't. The practitioner \
+    sees the proposal in the dock with full field list. Honesty.
+
+The boundary: archetype shape is closed; vertical-aware tuning inside it is open.
 
 DECOMPOSITION (G13 ruling): if the intake names 2+ DISTINCT TRACKABLE OBJECTS \
 (e.g. "bookings AND a rewards system" → two objects; "appointments with \
@@ -1194,10 +1297,41 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
          "materialized_module_id": module_id,
          "accepted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
     )
+    # NT8g — when fallback_generic materializes, the audit + library_gap_log
+    # discipline says we capture the gap. The practitioner sees their
+    # module render through DynamicModule + FallbackBanner; the team sees
+    # a library_gap_log row that says "this shape didn't fit anything in
+    # the palette — here's what the LLM reasoned." Best-effort; failures
+    # never block the materialization.
+    if (spec.get("archetype") or "fallback_generic") == "fallback_generic":
+        try:
+            _log_library_gap_from_spec(business_id, spec_row, spec)
+        except Exception as _gap_err:
+            logger.warning(f"library_gap_log insert failed (non-blocking): {_gap_err}")
+
     mod = sb_clients.sb_get_as_service(
         f"/custom_modules?id=eq.{module_id}&select=*&limit=1") or []
     return {"ok": True, "spec_id": spec_id, "module": mod[0] if mod else None,
             "workflow_ids": workflow_ids}
+
+
+def _log_library_gap_from_spec(business_id: str, spec_row: Dict[str, Any],
+                                spec: Dict[str, Any]) -> None:
+    """Best-effort: insert a library_gap_log row capturing a fallback_generic
+    acceptance. Includes the practitioner's intake_excerpt + the LLM's
+    fallback_reason as the rationale. Snapshots the business_type at gap
+    time so historical analysis survives later type changes."""
+    biz_rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=type&limit=1") or []
+    biz_type = biz_rows[0].get("type") if biz_rows else None
+    sb_clients.sb_post_as_service("/library_gap_log", {
+        "business_id": business_id,
+        "business_type": biz_type,
+        "intake_excerpt": spec_row.get("intake_excerpt") or spec.get("intake_excerpt") or "",
+        "rationale": spec.get("archetype_fallback_reason") or "",
+        "nearest_archetype": "fallback_generic",
+        "outcome": "accepted_nearest",
+    })
 
 
 def reject_spec(spec_id: str, reason: Optional[str] = None) -> Dict[str, Any]:
