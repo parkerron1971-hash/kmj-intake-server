@@ -47,9 +47,21 @@ if not logger.handlers:
 # DynamicModule rejects the schema.
 
 FieldType = Literal["text", "textarea", "select", "date", "number",
-                    "checkbox", "contact_link", "url", "email"]
+                    "checkbox", "contact_link", "url", "email",
+                    # Phase C.1.2 — references an offerings row by id.
+                    # Widget resolves the dropdown from offerings filtered
+                    # by the field's offering_categories constraint.
+                    "offering_ref"]
 ViewKind = Literal["list", "board"]
 TriggerKind = Literal["new_entry", "overdue", "field_change"]
+
+# Phase C.1.2 — closed enum mirroring the offerings.category CHECK constraint.
+# Mirrored to TS in src/core/types/archetypes.gen.ts. 'donation' is
+# intentionally NOT a category — donations live in the restricted-modules
+# surface (Fork 25 Giving guard).
+OfferingCategory = Literal[
+    "service", "session", "event", "course", "product", "package", "custom"
+]
 
 
 class ModuleField(BaseModel):
@@ -72,6 +84,11 @@ class ModuleField(BaseModel):
     #   config-anon so the widget knows to hide-but-compute.
     customer_facing: bool = False
     system_set: bool = False
+    # Phase C.1.2 — for type='offering_ref' fields, constrains which
+    # offering categories the dropdown sources from. e.g. Bookings'
+    # service field has ['service','session']; future Invoicing line
+    # items would accept all categories. Required when type='offering_ref'.
+    offering_categories: Optional[List[OfferingCategory]] = None
 
 
 class ModuleSchema(BaseModel):
@@ -95,13 +112,39 @@ class ModuleTrigger(BaseModel):
 
 class ServiceCatalogEntry(BaseModel):
     """C16 ruling — inline service catalog on agent_config.services.
-    Bookings (and future service-based archetypes) read this for the
-    service dropdown options + auto-duration. Reversible to a separate
-    ServiceCatalog archetype when more than one archetype consumes
-    services."""
+
+    DEPRECATED in Phase C.1.2 — pricing is now canonical via the offerings
+    table; the service dropdown sources from offerings filtered by category,
+    and duration is read from the picked offering. This class is preserved
+    for read-back compatibility of pre-C.1.2 modules until they're upgraded
+    via the Chief upgrade_module_archetype action (which migrates
+    inline services into offerings rows).
+
+    Generator system prompt no longer asks the LLM to populate this field
+    for new specs; upgrade-mode reads it to seed the proposed Offerings."""
     name: str
     duration_min: int = Field(..., gt=0, le=24 * 60)
     price: Optional[float] = None             # currency-agnostic; widget renders raw
+
+
+class ProposedOffering(BaseModel):
+    """Phase C.1.2 — an offering proposal in the dock's multi-card stack.
+    Materializes into the offerings table on accept. Sits alongside
+    ModuleSpec items in ProposalEnvelope.proposals so the practitioner
+    sees Offerings + Bookings together and accepts in one pass.
+
+    Schema mirrors the offerings table columns the LLM is allowed to set
+    on creation. is_active defaults true on the table; archived_at is a
+    runtime concern."""
+    name: str
+    slug: str                                  # kebab-case; UNIQUE per business
+    description: Optional[str] = None
+    category: OfferingCategory
+    current_price: Optional[float] = None      # nullable for "contact for quote"
+    currency: str = "usd"
+    duration_min: Optional[int] = None         # None for product/event categories
+    show_price_to_customer: bool = True
+    reasoning: Optional[str] = None            # 1-2 sentences for the proposal card
 
 
 class ModuleAgentConfig(BaseModel):
@@ -280,7 +323,7 @@ class ModuleSpec(BaseModel):
                         f"booking_calendar {k} '{v}' is not in schema.fields"
                     )
 
-            # ─── Phase C.1.1 invariants ──────────────────────────────
+            # ─── Phase C.1.1 invariants (preserved) ──────────────────
             # 1. The primary_date_field MUST be customer_facing — the
             #    customer can't book without picking a slot.
             if not field_by_name[pdf].customer_facing:
@@ -289,8 +332,8 @@ class ModuleSpec(BaseModel):
                     f"customer_facing=true (customer needs to pick a slot)"
                 )
             # 2. The duration_minutes_field (if specified) MUST be system_set
-            #    — duration comes from the service catalog, never typed
-            #    by the customer. (audit Thread 4 ruling)
+            #    — duration comes from the picked offering, never typed by
+            #    the customer.
             dmf = self.archetype_params.get("duration_minutes_field")
             if dmf:
                 f = field_by_name[dmf]
@@ -298,30 +341,45 @@ class ModuleSpec(BaseModel):
                     raise ValueError(
                         f"booking_calendar duration_minutes_field '{dmf}' "
                         f"must be system_set=true (duration is derived from "
-                        f"the picked service; customer never types it)"
+                        f"the picked offering; customer never types it)"
                     )
                 if f.customer_facing:
                     raise ValueError(
                         f"booking_calendar duration_minutes_field '{dmf}' "
                         f"must NOT be customer_facing (system-derived)"
                     )
-            # 3. agent_config.services MUST be present + non-empty —
-            #    the widget needs a catalog to render the service picker.
-            services = self.agent_config.services or []
-            if not services:
-                raise ValueError(
-                    "booking_calendar requires agent_config.services to be "
-                    "a non-empty list of {name, duration_min, price?} entries"
-                )
-            # 4. At least ONE field must be customer_facing — otherwise the
-            #    widget renders nothing. (primary_date_field already enforced;
-            #    this is a defensive check in case archetype_params changes shape.)
+            # 3. At least ONE field must be customer_facing — otherwise the
+            #    widget renders nothing.
             customer_visible = [f for f in self.schema_.fields if f.customer_facing]
             if not customer_visible:
                 raise ValueError(
                     "booking_calendar must declare at least one customer_facing "
                     "field for the widget to render"
                 )
+
+            # ─── Phase C.1.2 invariants ──────────────────────────────
+            # 4. The color_field (if specified) MUST be type='offering_ref'
+            #    for new specs — that's the canonical pointer to the service
+            #    offering. Pre-upgrade modules with type='select' are
+            #    handled by the upgrade flow, not by the validator (the
+            #    validator only runs on freshly-generated specs).
+            cf = self.archetype_params.get("color_field")
+            if cf and field_by_name[cf].type not in ("offering_ref", "select"):
+                raise ValueError(
+                    f"booking_calendar color_field '{cf}' must be type "
+                    f"'offering_ref' (got '{field_by_name[cf].type}'); "
+                    f"'select' is permitted only for pre-C.1.2 upgrade compat"
+                )
+            # 5. Any offering_ref field MUST declare offering_categories.
+            #    Without it the widget can't filter the dropdown.
+            for f in self.schema_.fields:
+                if f.type == "offering_ref":
+                    if not f.offering_categories:
+                        raise ValueError(
+                            f"field '{f.name}' has type='offering_ref' "
+                            f"but no offering_categories — required so the "
+                            f"widget knows which offerings to source"
+                        )
 
         return self
 
@@ -368,8 +426,9 @@ PRACTITIONER-ONLY archetype where every field defaults to customer_facing=false)
   "archetype_fallback_reason": "no ClientRoster archetype exists yet — this module would benefit from a kanban-by-engagement-stage with last-contact aging dots"
 }
 
-EXAMPLE OUTPUT (a barber 'bookings' module — booking_calendar archetype
-with the Phase C.1.1 customer_facing + service catalog discipline applied):
+EXAMPLE OUTPUT — a barber Bookings spec under Phase C.1.2 discipline
+(offering_ref + canonical Offerings; agent_config.services NOT set
+for new specs — that's pre-C.1.2 read-back compat only):
 {
   "slug": "bookings",
   "name": "Bookings",
@@ -380,8 +439,9 @@ with the Phase C.1.1 customer_facing + service catalog discipline applied):
     "fields": [
       {"name":"appointment_at","type":"date","label":"Appointment date & time",
        "required":true,"customer_facing":true},
-      {"name":"service","type":"select","label":"Service",
-       "options":["Haircut","Beard Trim"],"customer_facing":true},
+      {"name":"service","type":"offering_ref","label":"Service",
+       "customer_facing":true,
+       "offering_categories":["service","session"]},
       {"name":"duration_min","type":"number","label":"Duration (min)",
        "customer_facing":false,"system_set":true},
       {"name":"status","type":"select","label":"Status",
@@ -397,17 +457,13 @@ with the Phase C.1.1 customer_facing + service catalog discipline applied):
   "agent_config": {
     "enabled": true,
     "triggers": [],
-    "closed_statuses": ["completed","cancelled","no_show"],
-    "services": [
-      {"name":"Haircut","duration_min":30,"price":30},
-      {"name":"Beard Trim","duration_min":15,"price":15}
-    ]
+    "closed_statuses": ["completed","cancelled","no_show"]
   },
   "public_display": null,
   "workflows": [],
   "voice_hints": ["friendly","brief"],
   "confidence": "high",
-  "reasoning": "Customer picks service + slot; duration auto-fills from the catalog; status defaults to 'scheduled' on book.",
+  "reasoning": "Customer picks a service offering + slot; duration auto-fills from the picked offering; status defaults to 'scheduled' on book.",
   "archetype": "booking_calendar",
   "archetype_params": {
     "primary_date_field": "appointment_at",
@@ -487,51 +543,86 @@ Available archetypes:
         customer_facing — true if the customer sees + fills this field
                           in the booking widget. Default false.
         system_set      — true if the value is DERIVED (e.g. duration from
-                          the picked service) or DEFAULTED (e.g. status=
+                          the picked offering) or DEFAULTED (e.g. status=
                           'scheduled' on book). Default false.
       For booking_calendar, set these per the table below. Any field NOT
       in this table defaults to false / false (practitioner-only, typed).
 
         field role                          customer_facing  system_set
         primary_date_field (slot start)     true             false
-        the service field (catalog lookup)  true             false
+        the service field (offering_ref)    true             false
         a customer_notes field if present   true             false
         duration_minutes_field              false            true
         status                              false            true
         anything else (internal_notes,
           no_show, payment_status, etc.)    false            false
 
-    SERVICE CATALOG (REQUIRED for booking_calendar):
-      Populate agent_config.services with the services the practitioner
-      mentions in their intake. Extract names + reasonable durations from
-      the intake text; never invent services they didn't mention. If the
-      intake mentions prices, include them; otherwise omit price entirely.
-      Shape: List[{name: str, duration_min: int (1-1440), price?: number}]
-      Example: [{"name":"Haircut","duration_min":30,"price":30},
-                {"name":"Beard Trim","duration_min":15,"price":15}]
-      The 'service' field's options[] is automatically replaced at runtime
-      from this catalog — so the options[] you write in schema.fields can
-      be redundant with services[].name. The catalog is the source of truth.
+    OFFERING_REF + OFFERINGS (Phase C.1.2 — REPLACES inline service catalog):
+      The 'service' field MUST be type='offering_ref' (NOT 'select') with
+      offering_categories=['service','session']. The widget resolves the
+      dropdown at runtime from the practitioner's offerings table filtered
+      by those categories. DO NOT populate the field's options[].
 
-    example intake → archetype:
-      "I need a way to book customers into 30-min haircuts and 15-min beard
-       trims with my barber chairs"
-      → archetype: booking_calendar
-        archetype_params: {"primary_date_field": "appointment_at",
-                           "duration_minutes_field": "duration_min",
-                           "color_field": "service"}
-        agent_config.services: [{"name":"Haircut","duration_min":30},
-                                 {"name":"Beard Trim","duration_min":15}]
-        schema fields (with C.1.1 flags):
-          - appointment_at  (date, customer_facing=true)
-          - service         (select, customer_facing=true; options from catalog)
-          - duration_min    (number, customer_facing=false, system_set=true)
-          - status          (select, customer_facing=false, system_set=true)
-          - customer_notes  (textarea, customer_facing=true) — ONLY add this
-            field if the intake explicitly mentions wanting notes from
-            the customer. Do not auto-add.
-          - internal_notes  (textarea, customer_facing=false) — for
-            practitioner-only notes
+      Alongside the booking_calendar ModuleSpec, you also emit one
+      ProposedOffering envelope item per service the practitioner mentions
+      in their intake. The envelope shape is:
+
+        {
+          "decomposition_reasoning": "...",
+          "specs": [<ModuleSpec for Bookings>],
+          "offerings": [<ProposedOffering>, ...]
+        }
+
+      Each ProposedOffering: name, slug (kebab-case), category
+      ('service' | 'session' | 'event' | 'course' | 'product' | 'package' |
+      'custom'), current_price (number or null for "contact for quote"),
+      currency (default "usd"), duration_min (for service/session;
+      null for product/event), show_price_to_customer (default true), and a
+      brief reasoning. Extract names + durations + prices ONLY from the
+      intake — never invent. If the intake doesn't mention a price, leave
+      current_price null (the practitioner can fill it in later).
+
+      DO NOT populate agent_config.services for new specs — that field
+      is a C.1.1 read-back-only shape kept for pre-C.1.2 modules until
+      they're upgraded via the Chief upgrade_module_archetype action.
+
+    example intake → envelope:
+      "I do 30-min haircuts at $30 and 15-min beard trims at $15"
+      → envelope: {
+          "decomposition_reasoning": "Bookings module references the two
+            services as a canonical Offerings catalog.",
+          "specs": [{
+            "archetype": "booking_calendar",
+            "archetype_params": {"primary_date_field": "appointment_at",
+                                 "duration_minutes_field": "duration_min",
+                                 "color_field": "service"},
+            "schema": {"fields": [
+              {"name":"appointment_at","type":"date",
+               "label":"Appointment date & time","customer_facing":true,
+               "required":true},
+              {"name":"service","type":"offering_ref","label":"Service",
+               "customer_facing":true,
+               "offering_categories":["service","session"]},
+              {"name":"duration_min","type":"number","label":"Duration (min)",
+               "customer_facing":false,"system_set":true},
+              {"name":"status","type":"select","label":"Status",
+               "options":["scheduled","completed","cancelled","no_show"],
+               "customer_facing":false,"system_set":true},
+              {"name":"contact_id","type":"contact_link","label":"Customer"}
+            ]},
+            ...
+          }],
+          "offerings": [
+            {"name":"Haircut","slug":"haircut","category":"service",
+             "current_price":30,"duration_min":30,
+             "show_price_to_customer":true,
+             "reasoning":"Mentioned by name and price in intake"},
+            {"name":"Beard Trim","slug":"beard-trim","category":"service",
+             "current_price":15,"duration_min":15,
+             "show_price_to_customer":true,
+             "reasoning":"Mentioned by name and price in intake"}
+          ]
+        }
 
   fallback_generic
     purpose: explicit "no archetype fits yet" — renders through the generic
@@ -572,7 +663,13 @@ Output the JSON envelope now ({{"decomposition_reasoning": ..., "specs": [...]}}
 
 class ProposalEnvelope(BaseModel):
     decomposition_reasoning: str
-    specs: List[ModuleSpec]
+    specs: List[ModuleSpec] = Field(default_factory=list)
+    # Phase C.1.2 — Offerings proposed alongside the module specs. Each
+    # materializes to an offerings row when the practitioner accepts the
+    # corresponding proposal card. Bookings (and future archetypes that
+    # use offering_ref fields) typically come paired with offerings the
+    # LLM extracts from the intake (e.g. "haircut at $30").
+    offerings: List[ProposedOffering] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
 
@@ -648,7 +745,13 @@ def generate_module_proposal(
         sd = s.model_dump(by_alias=True, exclude_none=False)
         sd["intake_excerpt"] = intake_excerpt.strip()
         specs.append(sd)
-    return {"ok": True, "decomposition_reasoning": env.decomposition_reasoning, "specs": specs}
+    offerings = [o.model_dump(exclude_none=False) for o in env.offerings]
+    return {
+        "ok": True,
+        "decomposition_reasoning": env.decomposition_reasoning,
+        "specs": specs,
+        "offerings": offerings,
+    }
 
 
 # Back-compat: single-spec helper still callable for tests.
@@ -663,12 +766,26 @@ def generate_module_spec(business, intake_excerpt, extra_guidance=None) -> Dict[
 # Persistence — module_specs (draft + accept lifecycle)
 # ──────────────────────────────────────────────────────────────
 
-def store_draft(business_id: str, intake_excerpt: str, spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Insert a draft row, return the persisted row (with id)."""
+def store_draft(
+    business_id: str,
+    intake_excerpt: str,
+    payload: Dict[str, Any],
+    *,
+    kind: str = "module",
+) -> Optional[Dict[str, Any]]:
+    """Insert a draft row, return the persisted row (with id).
+
+    Phase C.1.2 — `kind` discriminator stamped INTO draft_json so the
+    accept handler can route to materialize_spec (kind='module') vs
+    materialize_offering (kind='offering'). Stored on the draft itself
+    rather than as a column so we don't need a schema migration for the
+    new kind."""
+    stamped = dict(payload)
+    stamped["__kind"] = kind
     row = sb_clients.sb_post_as_service("/module_specs", {
         "business_id": business_id,
-        "slug": spec.get("slug"),
-        "draft_json": spec,
+        "slug": payload.get("slug"),
+        "draft_json": stamped,
         "intake_excerpt": intake_excerpt,
         "status": "draft",
     })
@@ -680,10 +797,16 @@ def store_draft(business_id: str, intake_excerpt: str, spec: Dict[str, Any]) -> 
 def propose_module_from_intake(
     business_id: str, intake_excerpt: str, extra_guidance: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Full propose flow: load biz → generate envelope (1+ specs) → store each
-    as a draft. Returns {ok, decomposition_reasoning, proposals: [{spec_id, spec}]}
-    so the frontend can render either a single card or a stack with the
-    decomposition reasoning at top (G13)."""
+    """Full propose flow: load biz → generate envelope → store each spec
+    AND each offering as a draft → return a unified proposals[] stack that
+    the dock renders as a card per item. Each proposal carries a `kind`
+    discriminator ('module' | 'offering') so the frontend dispatches to
+    the right card shape (spec card with tabs vs offering card single-tab).
+
+    Phase C.1.2: envelope now carries both specs[] and offerings[]. For
+    booking_calendar specs the LLM is told to emit one ProposedOffering
+    per service mentioned in the intake (the Offerings the Bookings spec
+    references via offering_ref)."""
     if not intake_excerpt or len(intake_excerpt.strip()) < 5:
         return {"ok": False, "error": "intake_excerpt too short"}
     biz_rows = sb_clients.sb_get_as_service(
@@ -695,11 +818,19 @@ def propose_module_from_intake(
     gen = generate_module_proposal(biz, intake_excerpt, extra_guidance=extra_guidance)
     if not gen.get("ok"):
         return gen
-    proposals = []
-    for spec in gen["specs"]:
-        draft = store_draft(business_id, intake_excerpt, spec)
+
+    proposals: List[Dict[str, Any]] = []
+    # Offerings FIRST in the stack so the practitioner sees the Offerings
+    # that the Bookings module is about to reference. Matches the
+    # "build from leaf to root" mental order.
+    for off in gen.get("offerings") or []:
+        draft = store_draft(business_id, intake_excerpt, off, kind="offering")
         if draft:
-            proposals.append({"spec_id": draft["id"], "spec": spec})
+            proposals.append({"spec_id": draft["id"], "kind": "offering", "offering": off})
+    for spec in gen.get("specs") or []:
+        draft = store_draft(business_id, intake_excerpt, spec, kind="module")
+        if draft:
+            proposals.append({"spec_id": draft["id"], "kind": "module", "spec": spec})
     if not proposals:
         return {"ok": False, "error": "no drafts persisted"}
     return {
@@ -716,15 +847,30 @@ def propose_module_from_intake(
 _UPGRADE_GUIDANCE = """UPGRADE MODE — this is NOT a fresh proposal.
 
 The practitioner already has this module materialized and working. Your job
-is to REFINE the existing spec to apply the Phase C.1.1 discipline:
-  - Set customer_facing flags per the archetype palette table
-  - Set system_set flags per the archetype palette table
-  - Add the service catalog to agent_config.services if the archetype is
-    booking_calendar (extract from the existing intake + schema field
-    options if explicit services aren't named)
-  - Keep slug, name, icon, schema field shapes, and archetype unchanged
-    unless the existing spec is structurally broken
-  - You MUST return exactly ONE ModuleSpec (no decomposition).
+is to REFINE the existing spec to apply the latest discipline.
+
+Discipline to apply (all current passes, cumulative):
+  - C.1.1: customer_facing + system_set flags per the archetype palette
+  - C.1.2: pricing migrates from inline agent_config.services to canonical
+    Offerings. For booking_calendar:
+      * The 'service' field becomes type='offering_ref' with
+        offering_categories=['service','session']; DROP its options[].
+      * agent_config.services is REMOVED from the refined spec —
+        materialize_spec stamps it as deprecated for read-back.
+      * For each entry in the CURRENT agent_config.services array, emit
+        ONE ProposedOffering in the envelope (category='service',
+        name + duration_min + price from the inline entry; slug =
+        kebab-case of name). The Bookings spec references them by ID
+        at booking-time, but the spec itself only declares offering_ref —
+        no need to list specific offering ids in the spec.
+
+  - Keep slug, name, icon, the OTHER schema fields, and archetype
+    unchanged unless the existing spec is structurally broken.
+  - The envelope MUST contain exactly ONE ModuleSpec.
+  - The envelope MUST contain ONE ProposedOffering per inline service
+    in the current module (if any).
+  - Use the CURRENT inline services as the source of truth for offering
+    names + durations + prices; do not re-extract from the intake text.
 
 CURRENT MODULE STATE (refine this, don't replace):
 {current_state}
@@ -796,15 +942,25 @@ def regenerate_for_upgrade(business_id: str, module_id: str) -> Dict[str, Any]:
     # rather than INSERTs.
     spec["upgrade_target_module_id"] = module_id
 
-    draft = store_draft(business_id, intake, spec)
-    if not draft:
+    proposals: List[Dict[str, Any]] = []
+    # C.1.2 — Offerings FIRST (LLM extracts them from the inline
+    # agent_config.services per the upgrade guidance). Each becomes its
+    # own draft + proposal card in the dock.
+    for off in gen.get("offerings") or []:
+        odraft = store_draft(business_id, intake, off, kind="offering")
+        if odraft:
+            proposals.append({"spec_id": odraft["id"], "kind": "offering", "offering": off})
+
+    mdraft = store_draft(business_id, intake, spec, kind="module")
+    if not mdraft:
         return {"ok": False, "error": "draft persist failed"}
+    proposals.append({"spec_id": mdraft["id"], "kind": "module", "spec": spec})
 
     return {
         "ok": True,
         "decomposition_reasoning": gen.get("decomposition_reasoning")
-            or f"Refining your existing {module.get('name')} module to apply the latest customer-facing discipline.",
-        "proposals": [{"spec_id": draft["id"], "spec": spec}],
+            or f"Refining your existing {module.get('name')} module to apply the latest customer-facing + canonical-pricing discipline.",
+        "proposals": proposals,
         "is_upgrade": True,
         "upgrade_target_module_id": module_id,
     }
@@ -853,18 +1009,87 @@ def _materialize_workflows(business_id: str, module_slug: str,
     return [i for i in created_ids if i]
 
 
+def materialize_offering(spec_id: str) -> Dict[str, Any]:
+    """Phase C.1.2 — materializes a draft Offering proposal into an
+    offerings table row. Idempotent on (business_id, lower(slug)) via
+    the unique index — re-accepting the same offering draft is a no-op."""
+    spec_rows = sb_clients.sb_get_as_service(
+        f"/module_specs?id=eq.{spec_id}&select=*&limit=1"
+    ) or []
+    if not spec_rows:
+        return {"ok": False, "error": "spec not found"}
+    row = spec_rows[0]
+    if row.get("status") == "accepted":
+        return {"ok": True, "spec_id": spec_id, "note": "already accepted"}
+
+    business_id = row["business_id"]
+    payload = row["draft_json"] or {}
+    if (payload.get("__kind") or "module") != "offering":
+        return {"ok": False, "error": "not an offering draft"}
+
+    slug = (payload.get("slug") or "").strip()
+    if not slug:
+        return {"ok": False, "error": "offering missing slug"}
+
+    # Idempotent on (business_id, lower(slug)) — unique index in migration.
+    existing = sb_clients.sb_get_as_service(
+        f"/offerings?business_id=eq.{business_id}&slug=eq.{slug}&select=id&limit=1"
+    ) or []
+    if existing:
+        offering_id = existing[0]["id"]
+    else:
+        insert_payload = {
+            "business_id": business_id,
+            "name": payload.get("name"),
+            "slug": slug,
+            "description": payload.get("description"),
+            "category": payload.get("category"),
+            "current_price": payload.get("current_price"),
+            "currency": payload.get("currency") or "usd",
+            "duration_min": payload.get("duration_min"),
+            "show_price_to_customer": bool(payload.get("show_price_to_customer", True)),
+            "is_active": True,
+        }
+        created = sb_clients.sb_post_as_service("/offerings", insert_payload)
+        if not (isinstance(created, list) and created):
+            return {"ok": False, "error": "offering insert failed"}
+        offering_id = created[0]["id"]
+
+    import time
+    sb_clients.sb_patch_as_service(
+        f"/module_specs?id=eq.{spec_id}",
+        {"status": "accepted",
+         "materialized_module_id": None,  # offerings aren't custom_modules
+         "accepted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+    )
+    off = sb_clients.sb_get_as_service(
+        f"/offerings?id=eq.{offering_id}&select=*&limit=1") or []
+    return {"ok": True, "spec_id": spec_id, "offering": off[0] if off else None,
+            "offering_id": offering_id}
+
+
 def materialize_spec(spec_id: str) -> Dict[str, Any]:
     """Idempotent on (business_id, slug). Materializes:
       1. custom_modules row (the runtime shape)
       2. workflow_definitions rows for each spec.workflows[] (Phase B)
     Marks the spec accepted + links materialized_module_id.
-    Returns {ok, module, workflow_ids, spec_id}."""
+    Returns {ok, module, workflow_ids, spec_id}.
+
+    Phase C.1.2 — dispatches on draft_json.__kind: 'offering' drafts
+    route to materialize_offering. The dock accept-button calls this
+    single entry point regardless of card type."""
     spec_rows = sb_clients.sb_get_as_service(
         f"/module_specs?id=eq.{spec_id}&select=*&limit=1"
     ) or []
     if not spec_rows:
         return {"ok": False, "error": "spec not found"}
     spec_row = spec_rows[0]
+
+    # Phase C.1.2 dispatch.
+    draft = spec_row.get("draft_json") or {}
+    if (draft.get("__kind") or "module") == "offering":
+        return materialize_offering(spec_id)
+
     if spec_row.get("status") == "accepted" and spec_row.get("materialized_module_id"):
         mod = sb_clients.sb_get_as_service(
             f"/custom_modules?id=eq.{spec_row['materialized_module_id']}&select=*&limit=1"
@@ -903,12 +1128,22 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
     # before accepting.
     upgrade_target = spec.get("upgrade_target_module_id")
     if upgrade_target:
-        current = sb_clients.sb_get_as_service(
+        current_rows = sb_clients.sb_get_as_service(
             f"/custom_modules?id=eq.{upgrade_target}"
-            f"&business_id=eq.{business_id}&select=id&limit=1"
+            f"&business_id=eq.{business_id}&select=*&limit=1"
         ) or []
-        if not current:
+        if not current_rows:
             return {"ok": False, "error": f"upgrade target module not found: {upgrade_target}"}
+        # ─── Phase C.1.2 — preserve legacy agent_config.services as
+        # deprecated read-back on upgrade. The refined spec drops services
+        # entirely (pricing now lives in the offerings table). Stamping
+        # __deprecated_pre_c12=true keeps the history readable + obvious.
+        legacy_services = (current_rows[0].get("agent_config") or {}).get("services")
+        if legacy_services:
+            merged_ac = dict(write_payload.get("agent_config") or {})
+            merged_ac["__deprecated_services"] = legacy_services
+            merged_ac["__deprecated_pre_c12"] = True
+            write_payload = {**write_payload, "agent_config": merged_ac}
         sb_clients.sb_patch_as_service(
             f"/custom_modules?id=eq.{upgrade_target}", write_payload
         )

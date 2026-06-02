@@ -173,18 +173,140 @@ def _customer_visible_fields(fields: List[Dict[str, Any]]) -> List[Dict[str, Any
     return out
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Phase C.1.2 — canonical offerings resolution + price denormalization
+# ─────────────────────────────────────────────────────────────────────
+
+# P5a — drift tolerance gate for the cart-in-progress price-change race.
+# Customer was quoted a price at config-anon time; submits with that price.
+# If practitioner edited mid-session, we accept up to TOLERANCE_PCT drift
+# OR up to TOLERANCE_WINDOW_SEC since the customer-visible quote ages.
+PRICE_TOLERANCE_PCT = 0.10           # 10 %
+PRICE_TOLERANCE_WINDOW_SEC = 300      # 5 minutes
+
+
+def _offerings_for_categories(business_id: str, categories: List[str]) -> List[Dict[str, Any]]:
+    """Fetch active offerings for a business, filtered to the requested
+    categories. Returns the customer-safe shape (no internal flags)."""
+    if not categories:
+        return []
+    cats = ",".join(c.strip() for c in categories if c)
+    if not cats:
+        return []
+    rows = sb_clients.sb_get_as_service(
+        f"/offerings?business_id=eq.{business_id}"
+        f"&category=in.({cats})&is_active=eq.true"
+        f"&order=name.asc&select=id,name,slug,description,category,"
+        f"current_price,currency,duration_min,show_price_to_customer"
+    ) or []
+    return rows
+
+
+def _offerings_for_widget_fields(business_id: str, fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """For every offering_ref field on the spec, union the categories
+    it wants; fetch once. Customer side gets a flat de-duplicated list
+    of offerings the widget can resolve any offering_ref field against."""
+    wanted_cats: List[str] = []
+    seen = set()
+    for f in fields or []:
+        if (f or {}).get("type") == "offering_ref":
+            for c in (f.get("offering_categories") or []):
+                if c not in seen:
+                    seen.add(c)
+                    wanted_cats.append(c)
+    return _offerings_for_categories(business_id, wanted_cats)
+
+
+def _resolve_offering_for_book(
+    business_id: str,
+    offering_id: str,
+    quoted_price: Optional[float],
+) -> Dict[str, Any]:
+    """At book time, look up the offering and return the canonical
+    denormalization payload (price_at_booking + service_name_at_booking +
+    duration_min_at_booking) under P5 ruling. Applies P5a tolerance gate
+    on quoted_price drift + emits telemetry on any drift inside or outside
+    the tolerance window."""
+    rows = sb_clients.sb_get_as_service(
+        f"/offerings?id=eq.{offering_id}&business_id=eq.{business_id}"
+        f"&select=id,name,current_price,currency,duration_min,show_price_to_customer,is_active&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="offering not found")
+    off = rows[0]
+    if not off.get("is_active"):
+        raise HTTPException(status_code=410, detail="offering no longer available")
+
+    current_price = off.get("current_price")
+    captured_price = current_price
+
+    # P5a — quoted-price tolerance gate. If the customer's widget reported
+    # a price different from the current live price, decide whether to
+    # accept the quoted price (within tolerance) or reject the book.
+    if quoted_price is not None and current_price is not None:
+        delta_pct = abs(quoted_price - current_price) / max(current_price, 0.01)
+        if delta_pct > 0:
+            # P5a telemetry — log EVERY drift, in-tolerance or not, so we
+            # learn real-world patterns over time.
+            within = delta_pct <= PRICE_TOLERANCE_PCT
+            logger.warning(
+                f"booking_widget price drift detected: "
+                f"biz={business_id} offering={offering_id} "
+                f"quoted={quoted_price} current={current_price} "
+                f"delta_pct={delta_pct:.3f} within_tolerance={within}"
+            )
+            if within:
+                # Honor the price the customer saw.
+                captured_price = quoted_price
+            else:
+                # Outside the band — reject with a recoverable error so
+                # the widget can re-fetch the config and re-quote.
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "The price changed since this form loaded. "
+                        "Please refresh and try again."
+                    ),
+                )
+
+    return {
+        "price_at_booking": captured_price,
+        "service_name_at_booking": off.get("name"),
+        "duration_min_at_booking": off.get("duration_min"),
+        # The live identifier survives an archive — historical denormalized
+        # fields still display, but the link is preserved for traceability.
+        "offering_id": offering_id,
+    }
+
+
 def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[str, Any]:
     """Shared shape for config-anon + config endpoints. Customer-identifying
     data lives ONLY in the authed response; this shape is safe for anon.
 
-    Phase C.1.1: schema.fields is filtered to customer-visible only
-    (customer_facing OR system_set). agent_config.services travels through
-    when the archetype declares a service catalog."""
+    Phase C.1.1: schema.fields filtered to customer-visible only.
+    Phase C.1.2: offerings resolved from the canonical offerings table for
+    each offering_ref field. Legacy agent_config.services included as
+    fallback ONLY for pre-C.1.2 modules (detected via the absence of any
+    offering_ref field). The new C.1.2 widget prefers offerings + ignores
+    services when offerings is present; pre-upgrade widgets see services
+    as before."""
     archetype_params = module.get("archetype_params") or {}
     schema = module.get("schema") or {}
     agent_config = module.get("agent_config") or {}
     visible_fields = _customer_visible_fields(schema.get("fields") or [])
-    services = agent_config.get("services") or []
+
+    # Canonical offerings (C.1.2). If any visible field is offering_ref,
+    # resolve the dropdown from the offerings table.
+    offerings = _offerings_for_widget_fields(business["id"], visible_fields)
+
+    # Pre-C.1.2 fallback: a module with NO offering_ref field still ships
+    # legacy services for the older widget bundle. Once the widget code
+    # is C.1.2 it ignores services when offerings is non-empty.
+    has_offering_ref = any(
+        (f or {}).get("type") == "offering_ref" for f in visible_fields
+    )
+    legacy_services = [] if has_offering_ref else (agent_config.get("services") or [])
+
     return {
         "business": {
             "id": business["id"],
@@ -198,8 +320,12 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
         },
         "schema": {"fields": visible_fields},
         "archetype_params": archetype_params,
-        "services": services,
+        "offerings": offerings,
+        "services": legacy_services,
         "theme_tokens": _theme_tokens(business),
+        # Quote anchor — the widget echoes this on submit; we use it for
+        # the P5a freshness window check.
+        "quoted_at": int(time.time()),
     }
 
 
@@ -264,11 +390,66 @@ class BookAnonBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     email: str = Field(..., min_length=3, max_length=320)
     data: Dict[str, Any]  # field values for the appointment (date, service, etc.)
+    # Phase C.1.2 — optional canonical-pricing fields.
+    # When the schema's service field is type='offering_ref', the widget
+    # sends the offering_id directly + the price the customer was quoted.
+    # Server denormalizes price_at_booking + service_name_at_booking +
+    # duration_min_at_booking from the offerings table at create-time
+    # (P5 ruling), with P5a tolerance gate on quoted_price.
+    offering_id: Optional[str] = None
+    quoted_price: Optional[float] = None
 
     @field_validator("email")
     @classmethod
     def _email_shape(cls, v: str) -> str:
         return _validate_email_shape(v)
+
+
+def _maybe_denormalize_offering(
+    business_id: str,
+    module: Dict[str, Any],
+    offering_id: Optional[str],
+    quoted_price: Optional[float],
+    entry_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """If the bookings module has an offering_ref field AND the request
+    carries an offering_id, resolve + denormalize per P5/P5a. Returns the
+    (possibly augmented) entry_data dict. Mutates a copy, not the input."""
+    schema = module.get("schema") or {}
+    fields = schema.get("fields") or []
+    ref_field = next(
+        (f for f in fields if (f or {}).get("type") == "offering_ref"),
+        None,
+    )
+    if not ref_field:
+        return entry_data  # pre-C.1.2 module; nothing to denormalize
+
+    if not offering_id:
+        # The widget didn't send an offering_id but the spec requires one.
+        # The form's required-validation should have caught this; surface
+        # as a friendly 400 if it didn't.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Please choose a {ref_field.get('label') or 'service'}.",
+        )
+
+    canon = _resolve_offering_for_book(business_id, offering_id, quoted_price)
+    out = dict(entry_data)
+    # Store the offering_id on the field name the spec declared (so the
+    # BookingCalendar internal can resolve it consistently with how the
+    # widget reads it back).
+    out[ref_field["name"]] = offering_id
+    out["offering_id"] = canon["offering_id"]
+    out["price_at_booking"] = canon["price_at_booking"]
+    out["service_name_at_booking"] = canon["service_name_at_booking"]
+    # If the module has a duration_minutes_field, populate it from the
+    # canon — overrides whatever the widget might have sent (it shouldn't
+    # send one for an offering_ref module, but be defensive).
+    duration_field = (module.get("archetype_params") or {}).get("duration_minutes_field")
+    if duration_field and canon["duration_min_at_booking"] is not None:
+        out[duration_field] = canon["duration_min_at_booking"]
+        out["duration_min_at_booking"] = canon["duration_min_at_booking"]
+    return out
 
 
 @router.post("/widgets/booking/{business_id}/book-anon")
@@ -303,6 +484,12 @@ async def book_anon(
     entry_data.setdefault("customer_name", body.name)
     entry_data.setdefault("customer_email", email_norm)
 
+    # Phase C.1.2 — denormalize offering price + name + duration at this
+    # moment (P5). Raises 409 on out-of-tolerance drift (P5a).
+    entry_data = _maybe_denormalize_offering(
+        business_id, module, body.offering_id, body.quoted_price, entry_data,
+    )
+
     entry = _create_appointment(business_id, module["id"], entry_data)
     if not entry:
         raise HTTPException(status_code=500, detail="Something went wrong on our end — please try again.")
@@ -324,6 +511,9 @@ async def book_anon(
 
 class BookBody(BaseModel):
     data: Dict[str, Any]
+    # Phase C.1.2 — same canonical-pricing fields as BookAnonBody.
+    offering_id: Optional[str] = None
+    quoted_price: Optional[float] = None
 
 
 @router.post("/widgets/booking/{business_id}/book")
@@ -342,6 +532,10 @@ async def book(
         entry_data["contact_id"] = contact_id
     entry_data.setdefault("customer_name", ctx.customer_row.get("name"))
     entry_data.setdefault("customer_email", ctx.customer_row.get("email"))
+
+    entry_data = _maybe_denormalize_offering(
+        business_id, module, body.offering_id, body.quoted_price, entry_data,
+    )
 
     entry = _create_appointment(business_id, module["id"], entry_data)
     if not entry:
