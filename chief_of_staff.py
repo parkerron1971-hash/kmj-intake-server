@@ -7595,24 +7595,49 @@ async def handle_propose_module_from_intake(client, biz, action):
         return _fail("propose_module_from_intake", res.get("error", "generation failed"))
     proposals = res.get("proposals") or []
     n = len(proposals)
+    # C.1.2 — proposals are now heterogeneous: each item carries a `kind`
+    # discriminator ('module' | 'offering') and a payload key (`spec` or
+    # `offering`). The label-builder must read by kind, not assume `.spec`.
+    def _name_of(p):
+        if (p.get("kind") or "module") == "offering":
+            return (p.get("offering") or {}).get("name") or "offering"
+        return (p.get("spec") or {}).get("name") or (p.get("spec") or {}).get("slug") or "module"
+
     if n == 1:
-        spec = proposals[0]["spec"]
-        wf_count = len(spec.get("workflows") or [])
-        wf_note = f", {wf_count} rule{'s' if wf_count != 1 else ''}" if wf_count else ""
-        label = (
-            f"📐 Proposed: {spec.get('name', spec.get('slug', 'module'))} "
-            f"({len((spec.get('schema') or {}).get('fields') or [])} fields"
-            f"{wf_note}, {spec.get('confidence', 'medium')} confidence)"
-        )
+        p0 = proposals[0]
+        if (p0.get("kind") or "module") == "offering":
+            off = p0.get("offering") or {}
+            price = off.get("current_price")
+            price_str = f" (${price})" if price is not None else ""
+            label = f"📐 Proposed offering: {off.get('name', 'offering')}{price_str}"
+        else:
+            spec = p0.get("spec") or {}
+            wf_count = len(spec.get("workflows") or [])
+            wf_note = f", {wf_count} rule{'s' if wf_count != 1 else ''}" if wf_count else ""
+            label = (
+                f"📐 Proposed: {spec.get('name', spec.get('slug', 'module'))} "
+                f"({len((spec.get('schema') or {}).get('fields') or [])} fields"
+                f"{wf_note}, {spec.get('confidence', 'medium')} confidence)"
+            )
     else:
-        names = ", ".join(p["spec"].get("name", "module") for p in proposals)
-        label = f"📐 Proposed {n} linked modules: {names}"
+        n_modules = sum(1 for p in proposals if (p.get("kind") or "module") == "module")
+        n_offerings = sum(1 for p in proposals if p.get("kind") == "offering")
+        names = ", ".join(_name_of(p) for p in proposals)
+        if n_offerings and n_modules:
+            label = (
+                f"📐 Proposed {n_modules} module{'s' if n_modules != 1 else ''} "
+                f"+ {n_offerings} offering{'s' if n_offerings != 1 else ''}: {names}"
+            )
+        elif n_offerings:
+            label = f"📐 Proposed {n_offerings} offering{'s' if n_offerings != 1 else ''}: {names}"
+        else:
+            label = f"📐 Proposed {n} linked modules: {names}"
     return {
         "type": "propose_module_from_intake",
         "result": "module spec proposed",
         "label": label,
         "decomposition_reasoning": res.get("decomposition_reasoning"),
-        "proposals": proposals,            # [{spec_id, spec}, ...]
+        "proposals": proposals,            # [{spec_id, kind, spec | offering}, ...]
         "nav": _nav("build"),
     }
 
@@ -7724,11 +7749,26 @@ async def handle_upgrade_module_archetype(client, biz, action):
     if not proposals:
         return _fail("upgrade_module_archetype", "no upgrade proposal returned")
 
-    spec = proposals[0]["spec"]
+    # C.1.2 — the upgrade flow emits Offerings BEFORE the module spec in
+    # the proposals list (so the practitioner sees the offerings the
+    # refined module is about to reference). Find the module spec by kind
+    # rather than blindly indexing [0].
+    module_proposal = next(
+        (p for p in proposals if (p.get("kind") or "module") == "module"),
+        None,
+    )
+    if not module_proposal:
+        return _fail("upgrade_module_archetype", "upgrade envelope missing module spec")
+    spec = module_proposal.get("spec") or {}
+    n_offerings = sum(1 for p in proposals if p.get("kind") == "offering")
+    offering_note = (
+        f" + {n_offerings} offering{'s' if n_offerings != 1 else ''}"
+        if n_offerings else ""
+    )
     label = (
         f"🔧 Upgrade proposed: {spec.get('name', spec.get('slug', 'module'))} "
         f"({len((spec.get('schema') or {}).get('fields') or [])} fields, "
-        f"{spec.get('confidence', 'medium')} confidence)"
+        f"{spec.get('confidence', 'medium')} confidence{offering_note})"
     )
     return {
         "type": "propose_module_from_intake",  # Reuse the dock's existing card
