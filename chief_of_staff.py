@@ -7987,9 +7987,58 @@ async def handle_propose_module_from_intake(client, biz, action):
             f"Say 'add another one anyway' to include.)"
         )
 
+    # ─── C.1.5.1 L1 — M9-C deflection breadcrumb ────────────────────────
+    # When the business has single-instance modules, the LLM produced
+    # zero module-kind proposals, AND the practitioner didn't override,
+    # we infer the LLM was deflected by M9-C's existing-modules guidance
+    # (it proposed offerings instead of a duplicate module). Surface the
+    # breadcrumb so the practitioner sees the substitution AND the
+    # second-pass LLM has signal to write an honest reply (rule #7 in
+    # _POST_ACTION_REPLY_SYSTEM reads this label as the substitution
+    # signal). Without this, M9-C is silent end-to-end and Chief's
+    # first-pass narration ("Drafting a booking system proposal...")
+    # contradicts what actually shipped.
+    n_modules_in_proposals = sum(
+        1 for p in proposals if (p.get("kind") or "module") == "module"
+    )
+    m9c_deflected: List[str] = []
+    if existing_archs and n_modules_in_proposals == 0 and not override and not filtered_dup_names:
+        # Offering-only envelope on a business with single-instance
+        # modules + no override + nothing already filtered by M9-B →
+        # almost certainly an M9-C-driven LLM deflection.
+        m9c_deflected = sorted(existing_archs)
+
+    if m9c_deflected:
+        arch_phrase = " and ".join(repr(a) for a in m9c_deflected)
+        label = (
+            f"{label}  (You already have a {arch_phrase} module on this "
+            f"business — I added the offering(s) instead. Say "
+            f"'add another one anyway' if you want a duplicate module.)"
+        )
+
+    # C.1.5.1 adjacent — dynamic result token. The legacy hardcoded
+    # "module spec proposed" lied when the envelope was offering-only.
+    # Recompute from the actual envelope shape so the action panel +
+    # second-pass LLM see honest summary text.
+    n_offerings_in = sum(1 for p in proposals if p.get("kind") == "offering")
+    if not proposals:
+        result_token = "awaiting override"  # already covered above; defensive
+    elif n_modules_in_proposals and n_offerings_in:
+        result_token = "module + offering(s) proposed"
+    elif n_modules_in_proposals:
+        result_token = (
+            "module spec proposed" if n_modules_in_proposals == 1
+            else f"{n_modules_in_proposals} module specs proposed"
+        )
+    else:
+        result_token = (
+            "offering proposed" if n_offerings_in == 1
+            else f"{n_offerings_in} offerings proposed"
+        )
+
     return {
         "type": "propose_module_from_intake",
-        "result": "module spec proposed",
+        "result": result_token,
         "label": label,
         "decomposition_reasoning": res.get("decomposition_reasoning"),
         "proposals": proposals,            # [{spec_id, kind, spec | offering}, ...]
@@ -8521,6 +8570,17 @@ If a retry is appropriate, describe it in prose and the practitioner will \
 confirm or re-ask.
 6. Don't ramble about HOW the system works internally. Speak from the \
 practitioner's frame: their goal, the outcome, the next step.
+7. SUBSTITUTION CHECK: if the practitioner asked for X (a module, a \
+change, a setup) but the actions delivered Y (an offering, a different \
+shape, fewer items) — even when no action "failed" — honestly \
+acknowledge the substitution. Don't keep the optimistic draft's framing \
+if it implies X was delivered when only Y was. Example: practitioner \
+asked for a "booking system"; actions delivered only a Haircut offering. \
+Honest reply: "I added a Haircut offering — you already have a Bookings \
+module on this business so I didn't create a duplicate. Want to edit the \
+existing Bookings setup instead?" Use the actions' labels (which often \
+include breadcrumbs like "Skipped X — already on file") as your signal \
+for what was actually delivered vs. what the draft claimed.
 """
 
 
