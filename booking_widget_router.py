@@ -119,8 +119,15 @@ def _business_basics(business_id: str) -> Optional[Dict[str, Any]]:
 
 def _bookings_module(business_id: str) -> Optional[Dict[str, Any]]:
     """Finds the booking_calendar archetype module for this business.
-    There is at most one per business (the LLM's proposal flow is the
-    only path to one).
+
+    C.1.5 Plan A — single-instance is an ENFORCED constraint (was
+    aspirational pre-C.1.5). materialize_spec at
+    `module_spec_generator._SINGLE_INSTANCE_ARCHETYPES` refuses to
+    create a second active booking_calendar row on any business. The
+    `limit=1` below is therefore correct AND no longer needs a
+    docstring-only warning about silent drops — the second row cannot
+    exist. If a real multi-module practitioner need surfaces, re-open
+    the C.1.5 audit (see CLAUDE memory `project_c15_deferred.md`).
 
     Phase C.1.1 removed the slug='bookings' spike-compat fallback —
     a fallback_generic module is NOT a working customer surface and
