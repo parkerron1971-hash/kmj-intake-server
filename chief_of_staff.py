@@ -6553,6 +6553,11 @@ async def handle_create_offering(client, biz, action) -> Dict:
         "label": f"💲 Created offering: {off.get('name')}{price_str}{dur_str}",
         "offering_id": off.get("id"),
         "nav": _nav("build"),
+        # C.1.3.1b — refresh OfferingsManager + any other listener when
+        # Chief mediates an offering write. Manual create dispatches this
+        # event directly; Chief gets parity via the generic frontend_event
+        # dispatch in ChiefOfStaff.tsx.
+        "frontend_event": {"name": "solutionist-offerings-changed"},
     }
 
 
@@ -6629,6 +6634,8 @@ async def handle_update_offering(client, biz, action) -> Dict:
         "offering_id": offering_id,
         "offering": off,
         "nav": _nav("build"),
+        # C.1.3.1b — see handle_create_offering note.
+        "frontend_event": {"name": "solutionist-offerings-changed"},
     }
 
 
@@ -6657,6 +6664,8 @@ async def handle_archive_offering(client, biz, action) -> Dict:
         "label": f"📦 Archived {rows[0].get('name')}",
         "offering_id": offering_id,
         "nav": _nav("build"),
+        # C.1.3.1b — see handle_create_offering note.
+        "frontend_event": {"name": "solutionist-offerings-changed"},
     }
 
 
