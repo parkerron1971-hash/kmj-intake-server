@@ -300,6 +300,19 @@ def suggestable_archetypes() -> List[str]:
     return [name for name, meta in ARCHETYPE_METADATA.items() if meta.get("chief_can_suggest") is True]
 
 
+# C.1.5 Plan A (M3-δ) — archetypes that are single-instance per business
+# under the current product. The materialize_spec guard refuses to
+# create a second active row of these archetypes on a business; the
+# Chief intake-side M9-B guard filters them out of propose envelopes
+# without explicit override; the M9-C system prompt addition instructs
+# the LLM to propose offering additions instead of duplicate modules.
+#
+# Re-audit triggers documented in CLAUDE memory `project_c15_deferred.md`.
+# When a real practitioner with multi-module needs arrives, re-open the
+# C.1.5 audit (M3 will need a real-context ruling) and adjust this set.
+_SINGLE_INSTANCE_ARCHETYPES: frozenset = frozenset({"booking_calendar"})
+
+
 class BookingCalendarParams(BaseModel):
     """Parameters for the BookingCalendar archetype.
     primary_date_field MUST be the snake_case name of a date or datetime
@@ -932,6 +945,60 @@ def store_draft(
     return None
 
 
+def _existing_single_instance_modules(business_id: str) -> List[Dict[str, Any]]:
+    """C.1.5 Plan A (M9-C) — return the business's active modules whose
+    archetype is in _SINGLE_INSTANCE_ARCHETYPES. The LLM uses this list
+    to avoid proposing duplicate modules; the M9-B intake-side filter
+    uses the same data to gate the proposal envelope."""
+    if not _SINGLE_INSTANCE_ARCHETYPES:
+        return []
+    csv = ",".join(_SINGLE_INSTANCE_ARCHETYPES)
+    rows = sb_clients.sb_get_as_service(
+        f"/custom_modules?business_id=eq.{business_id}&is_active=eq.true"
+        f"&archetype=in.({csv})&select=id,name,slug,archetype"
+    ) or []
+    return rows if isinstance(rows, list) else []
+
+
+def _single_instance_guidance(existing: List[Dict[str, Any]]) -> Optional[str]:
+    """C.1.5 Plan A (M9-C) — render the LLM-facing instruction block
+    that lists the business's existing single-instance modules and
+    tells the generator to propose OFFERING additions, not duplicate
+    modules, for those archetypes. Returns None when nothing applies
+    so callers can skip the extra_guidance concat cleanly."""
+    if not existing:
+        return None
+    lines = ["EXISTING SINGLE-INSTANCE MODULES (this business already has these):"]
+    for r in existing:
+        lines.append(
+            f"  - archetype={r.get('archetype')!r} "
+            f"name={r.get('name')!r} slug={r.get('slug')!r}"
+        )
+    lines.append("")
+    lines.append(
+        "Constraint: this product currently supports only ONE module per "
+        "single-instance archetype per business (C.1.5 Plan A). If the "
+        "practitioner's intake mentions a need that would normally produce "
+        "any of the archetypes listed above, DO NOT propose a duplicate "
+        "module. Instead:"
+    )
+    lines.append(
+        "  - Propose ONLY ProposedOffering items for what the intake describes "
+        "    (these flow into the existing module via offering_ref)."
+    )
+    lines.append(
+        "  - In decomposition_reasoning, briefly note that you skipped a "
+        "    new module of the existing archetype because the business "
+        "    already has one."
+    )
+    lines.append(
+        "  - If the intake genuinely needs a structurally-different module "
+        "    that ISN'T the existing archetype, propose it normally. The "
+        "    constraint applies only to duplicates of single-instance archetypes."
+    )
+    return "\n".join(lines)
+
+
 def propose_module_from_intake(
     business_id: str, intake_excerpt: str, extra_guidance: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -944,7 +1011,16 @@ def propose_module_from_intake(
     Phase C.1.2: envelope now carries both specs[] and offerings[]. For
     booking_calendar specs the LLM is told to emit one ProposedOffering
     per service mentioned in the intake (the Offerings the Bookings spec
-    references via offering_ref)."""
+    references via offering_ref).
+
+    Phase C.1.5 Plan A (M9-C): when the business already has active
+    modules of single-instance archetypes (per
+    `_SINGLE_INSTANCE_ARCHETYPES`), an extra_guidance block is appended
+    instructing the LLM to skip duplicate module proposals and emit
+    only offering additions for those archetypes. The M9-B filter in
+    chief_of_staff additionally drops any leaked duplicates from the
+    envelope before the dock renders it; the materialize_spec guard
+    catches anything that slips both layers (defense-in-depth)."""
     if not intake_excerpt or len(intake_excerpt.strip()) < 5:
         return {"ok": False, "error": "intake_excerpt too short"}
     biz_rows = sb_clients.sb_get_as_service(
@@ -953,6 +1029,15 @@ def propose_module_from_intake(
     if not biz_rows:
         return {"ok": False, "error": "business not found"}
     biz = biz_rows[0]
+    # C.1.5 Plan A M9-C — inject existing-single-instance context.
+    si_existing = _existing_single_instance_modules(business_id)
+    si_guidance = _single_instance_guidance(si_existing)
+    if si_guidance:
+        extra_guidance = (
+            (extra_guidance or "").rstrip()
+            + ("\n\n" if extra_guidance else "")
+            + si_guidance
+        )
     gen = generate_module_proposal(biz, intake_excerpt, extra_guidance=extra_guidance)
     if not gen.get("ok"):
         return gen
@@ -1287,6 +1372,38 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
         )
         module_id = upgrade_target
     else:
+        # ─── C.1.5 Plan A — single-instance archetype guard (M3-δ) ─────
+        # Block fresh-propose of a second instance for archetypes that are
+        # single-per-business under Plan A. Multi-module mechanism deferred
+        # per the C.1.5 audit; re-audit triggers documented in CLAUDE
+        # memory `project_c15_deferred.md`. This is the load-bearing
+        # backend enforcement — the Chief intake guard (M9-B) is the
+        # outer politeness layer; this guard is the inner correctness
+        # one (defense-in-depth).
+        spec_archetype = (write_payload.get("archetype") or "fallback_generic")
+        if spec_archetype in _SINGLE_INSTANCE_ARCHETYPES:
+            already = sb_clients.sb_get_as_service(
+                f"/custom_modules?business_id=eq.{business_id}"
+                f"&archetype=eq.{spec_archetype}&is_active=eq.true"
+                f"&select=id,name,slug&limit=1"
+            ) or []
+            if already:
+                prior = already[0]
+                prior_label = prior.get("name") or prior.get("slug") or "the existing one"
+                return {
+                    "ok": False,
+                    "error": "multi_module_not_supported",
+                    "detail": (
+                        f"This business already has a {spec_archetype} module "
+                        f"({prior_label!r}). Multiple {spec_archetype} modules "
+                        f"per business aren't supported yet — the limit is one. "
+                        f"Edit the existing module, or archive it first if you "
+                        f"want a fresh setup."
+                    ),
+                    "archetype": spec_archetype,
+                    "existing_module_id": prior.get("id"),
+                }
+
         # 1. custom_modules — idempotent on (business_id, slug) for the
         # fresh-propose path.
         existing = sb_clients.sb_get_as_service(

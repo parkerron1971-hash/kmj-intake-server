@@ -7830,11 +7830,42 @@ async def handle_send_report(client, biz, action) -> Dict:
     }
 
 
+def _has_dup_override(text: str) -> bool:
+    """C.1.5 Plan A (M9-B) — conservative phrase match for 'I really want
+    a second one of this archetype' override intent. False negatives are
+    recoverable (Chief surfaces the override hint in its reply); false
+    positives are also caught by the materialize_spec server guard. The
+    point is to make the OUTER politeness layer correct most of the
+    time; the INNER correctness layer is materialize_spec's guard."""
+    s = (text or "").lower()
+    overrides = (
+        "anyway",
+        "add another",
+        "another booking",
+        "second booking",
+        "second one",
+        "force it",
+        "i still want",
+        "i want another",
+        "make a second",
+    )
+    return any(p in s for p in overrides)
+
+
 async def handle_propose_module_from_intake(client, biz, action):
     """Phase B / G13 — turn a free-text intake answer into ONE OR MORE
     ModuleSpec drafts (multi-module decomposition when 2+ trackable objects).
     Returns proposals[] + decomposition_reasoning inline so the dock card stack
-    can render. action: {intake_excerpt, revise_feedback?}"""
+    can render. action: {intake_excerpt, revise_feedback?}
+
+    Phase C.1.5 Plan A (M9-B): filter out module-kind proposals whose
+    archetype is in _SINGLE_INSTANCE_ARCHETYPES if the business already
+    has an active module of that archetype AND the practitioner did NOT
+    include an explicit override phrase in the intake. When everything
+    is filtered, surface a result that prompts the practitioner for an
+    override. With override, the proposals pass through to the dock
+    (the materialize_spec guard catches them at accept-time as the
+    inner correctness layer — defense-in-depth)."""
     intake = (action.get("intake_excerpt") or "").strip()
     if not intake:
         return _fail("propose_module_from_intake", "intake_excerpt required")
@@ -7850,7 +7881,64 @@ async def handle_propose_module_from_intake(client, biz, action):
     if not res.get("ok"):
         return _fail("propose_module_from_intake", res.get("error", "generation failed"))
     proposals = res.get("proposals") or []
+
+    # ─── C.1.5 Plan A (M9-B) duplicate-archetype filter ────────────────
+    # If any module-kind proposal duplicates an existing single-instance
+    # archetype for this business AND the practitioner didn't explicitly
+    # override, drop the duplicates and ask for an override.
+    override = _has_dup_override(intake) or _has_dup_override(
+        action.get("revise_feedback") or ""
+    )
+    existing_si = await _aio.to_thread(
+        msg._existing_single_instance_modules, biz["id"]
+    )
+    existing_archs = {(r.get("archetype") or "") for r in existing_si}
+    filtered_dup_names: List[str] = []
+    if existing_archs and not override:
+        survivors: List[Dict[str, Any]] = []
+        for p in proposals:
+            if (p.get("kind") or "module") != "module":
+                survivors.append(p)
+                continue
+            spec = p.get("spec") or {}
+            spec_arch = (spec.get("archetype") or "").strip()
+            if spec_arch and spec_arch in existing_archs:
+                filtered_dup_names.append(
+                    spec.get("name") or spec.get("slug") or spec_arch
+                )
+                continue
+            survivors.append(p)
+        proposals = survivors
+
     n = len(proposals)
+
+    # If everything got filtered by the M9-B guard, surface an
+    # override-request result. Kept as result="awaiting override" (not
+    # "Failed:") so the second-pass LLM treats this as informational —
+    # the proposal flow succeeded; it just hit a product constraint.
+    if not proposals and filtered_dup_names:
+        plural = "modules" if len(filtered_dup_names) > 1 else "module"
+        names_str = " and ".join(repr(n) for n in filtered_dup_names)
+        return {
+            "type": "propose_module_from_intake",
+            "result": "awaiting override",
+            "label": (
+                f"⚠️ You already have the {plural} you described "
+                f"({names_str}). Multiple of those per business aren't "
+                f"supported yet — say 'add another one anyway' if you "
+                f"truly want a second copy. Otherwise tell me what you "
+                f"want to change in the existing one and I'll help."
+            ),
+            "decomposition_reasoning": (
+                f"Generator proposed {filtered_dup_names} but the business "
+                f"already has matching active single-instance modules. C.1.5 "
+                f"Plan A blocks duplicates without explicit practitioner "
+                f"override."
+            ),
+            "proposals": [],
+            "filtered_duplicates": filtered_dup_names,
+            "nav": _nav("build"),
+        }
     # C.1.2 — proposals are now heterogeneous: each item carries a `kind`
     # discriminator ('module' | 'offering') and a payload key (`spec` or
     # `offering`). The label-builder must read by kind, not assume `.spec`.
@@ -7888,6 +7976,17 @@ async def handle_propose_module_from_intake(client, biz, action):
             label = f"📐 Proposed {n_offerings} offering{'s' if n_offerings != 1 else ''}: {names}"
         else:
             label = f"📐 Proposed {n} linked modules: {names}"
+
+    # Mixed M9-B outcome: some proposals survived, some duplicate-archetype
+    # ones were filtered. Append a note so the practitioner sees what was
+    # skipped + the override phrase if they want it back.
+    if filtered_dup_names:
+        skipped = " and ".join(repr(n) for n in filtered_dup_names)
+        label = (
+            f"{label}  (Skipped {skipped} — already on file. "
+            f"Say 'add another one anyway' to include.)"
+        )
+
     return {
         "type": "propose_module_from_intake",
         "result": "module spec proposed",
