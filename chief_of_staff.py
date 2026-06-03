@@ -8285,6 +8285,83 @@ def _action_failed(taken_item: Dict[str, Any]) -> bool:
     return isinstance(r, str) and r.startswith("Failed:")
 
 
+def _humanize_action_type(atype: str) -> str:
+    """snake_case action type → brief readable phrase. E.g.
+    'update_offering' → 'update offering'. Used in the deterministic
+    fallback reply so the practitioner sees the verb of what failed
+    instead of a raw enum value."""
+    return (atype or "action").replace("_", " ")
+
+
+def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
+    """C.1.3.1c F1a — context-aware honest reply built from action
+    results. Used ONLY when the second-pass LLM call returned empty
+    (the path that previously stapled a generic footer to first-pass
+    optimistic text, producing contradictory bubbles like
+    'Done. X is now Y. ⚠️ Not everything I tried went through').
+
+    Reads `taken` to surface the specific action(s) that failed plus
+    each failure reason. The reason often already includes a
+    suggested-next-step from the handler (e.g. 'Try list_offerings
+    to see what's on file') — we propagate it verbatim so the
+    practitioner gets the same guidance the LLM would have produced
+    if the second-pass call had worked.
+
+    Never preserves first-pass narration. This is the architectural
+    safety layer that makes the optimistic-claim-plus-honesty-footer
+    contradiction impossible — independent of any LLM behavior."""
+    succeeded: List[tuple] = []
+    failed: List[tuple] = []
+    for t in taken or []:
+        atype = t.get("type") or "action"
+        result = t.get("result") or ""
+        label = t.get("label") or ""
+        if _action_failed(t):
+            reason = result.replace("Failed:", "", 1).strip()
+            failed.append((atype, label, reason))
+        else:
+            succeeded.append((atype, label, result))
+
+    if not failed:
+        # Defensive — _deterministic_fallback_reply is only called when
+        # any_failed is true. If somehow we land here without failures,
+        # acknowledge the success terse so the bubble isn't blank.
+        if len(succeeded) == 1:
+            _, lbl, res = succeeded[0]
+            return (lbl or res or "Done.").strip()
+        return f"{len(succeeded)} action(s) completed."
+
+    chunks: List[str] = []
+
+    # Brief success acknowledgment first (if any) — keeps the message
+    # accurate when a turn had mixed outcomes.
+    if succeeded:
+        if len(succeeded) == 1:
+            _, lbl, res = succeeded[0]
+            chunks.append(f"{(lbl or res).strip()}.")
+        else:
+            total = len(succeeded) + len(failed)
+            chunks.append(f"{len(succeeded)} of {total} actions went through.")
+
+    # Failures — name + reason for each.
+    if len(failed) == 1:
+        atype, _, reason = failed[0]
+        phrase = _humanize_action_type(atype)
+        if reason:
+            chunks.append(f"The {phrase} didn't go through — {reason}")
+        else:
+            chunks.append(f"The {phrase} didn't go through.")
+    else:
+        per = "; ".join(
+            f"{_humanize_action_type(a)} ({r or 'no reason returned'})"
+            for a, _, r in failed
+        )
+        chunks.append(f"{len(failed)} actions didn't go through: {per}.")
+
+    chunks.append("Check the actions panel below for full details.")
+    return " ".join(chunks)
+
+
 def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
     """Build a human-readable summary of what just happened, for the
     second-pass LLM to reason about. NOT a raw JSON dump — we want the
@@ -8324,8 +8401,11 @@ have failed. Your job in this single message is to give the practitioner \
 an HONEST account of what actually happened.
 
 RULES (load-bearing — failing these breaks practitioner trust):
-1. Do NOT claim success for any action that failed. Use plain language: \
-"the haircut price update didn't go through because..." — never "Done."
+1. REWRITE — do not append to or amend the draft. If any action failed, \
+do NOT begin your reply with claims of success for that action. The \
+actions panel shows the user the raw results; your reply must match \
+them, not contradict them. Use plain language: "the haircut price \
+update didn't go through because..." — never "Done."
 2. If actions succeeded, briefly confirm what happened with the same \
 warmth + specificity you'd use normally. Don't be over-formal.
 3. For failures, explain the reason in plain words (translate technical \
@@ -8362,11 +8442,14 @@ async def _compose_post_action_reply(
 
     user_payload = (
         f"THE PRACTITIONER ORIGINALLY WROTE:\n\"{original_message.strip()}\"\n\n"
-        f"YOUR DRAFT REPLY (written BEFORE actions ran — may over-claim if "
-        f"anything failed, revise based on what actually happened):\n"
+        f"YOUR DRAFT REPLY (written BEFORE actions ran — may over-claim "
+        f"if anything failed; REWRITE based on what actually happened — "
+        f"do NOT append to it):\n"
         f"\"{(first_pass_clean or '').strip()}\"\n\n"
         f"WHAT ACTUALLY HAPPENED WHEN THE ACTIONS RAN:\n{results_block}\n\n"
-        f"Write a single honest reply now."
+        f"Write a single honest reply now — REWRITE the draft above to "
+        f"match what actually happened. Do NOT append a contradiction to "
+        f"optimistic text; replace the optimism."
     )
 
     raw = await _call_claude(
@@ -8379,13 +8462,24 @@ async def _compose_post_action_reply(
     )
 
     if not raw or not raw.strip():
-        # Fallback — preserve the first-pass text but staple a footer when
-        # we know something failed, so we never tell a clean lie.
+        # C.1.3.1c F1b — observability. The second-pass LLM call
+        # returned nothing (errored, timed out, or emitted only stripped
+        # content). Log it so we can measure the fallback rate in
+        # production; previously this path was silently invisible.
+        logger.warning(
+            f"_compose_post_action_reply second-pass returned empty "
+            f"(biz={business_id} any_failed={any_failed} "
+            f"taken_count={len(taken)}); falling back"
+        )
+        # C.1.3.1c F1a — deterministic rewrite, not staple. When any
+        # action failed, replace the first-pass entirely with a
+        # context-aware honest reply built from the action results.
+        # Previously this path stapled a footer to the optimistic
+        # first-pass, producing contradictory bubbles like
+        # "Done. X is now Y. ⚠️ Not everything I tried went through".
         if any_failed:
-            return (first_pass_clean or "").rstrip() + (
-                "\n\n⚠️ Not everything I tried went through — check the "
-                "actions panel below for details."
-            )
+            return _deterministic_fallback_reply(taken)
+        # All actions succeeded — first-pass is safe to keep verbatim.
         return first_pass_clean
 
     # Strip any stray action tags the second pass might have emitted
