@@ -247,6 +247,19 @@ ArchetypeEnum = Literal[
 #                       hero (fallback_generic uses DynamicModule).
 # chief_can_suggest  — may Chief proactively suggest this archetype?
 #                       NT8e: load-bearing closed-enum lock.
+# operate_group      — NT6 subject grouping under OPERATE. When the value
+#                       matches an existing OPERATE_TREE group's id-suffix
+#                       (e.g. "schedule" → existing operate:schedule group),
+#                       the sidebar APPENDS the module into that group.
+#                       Otherwise a new group is created using the
+#                       OPERATE_GROUP_META lookup in SolutionistSidebar.tsx.
+#                       Going-forward bucket key for customer-record /
+#                       loyalty / lifecycle archetypes (RewardProgress,
+#                       CustomerRoster, etc.) is "customers" — NOT the
+#                       earlier "customer_lifecycle" which was retired in
+#                       C.1.3.1b. "Customers" label is a placeholder until
+#                       Phase C.1.4 vertical-aware terminology ships
+#                       (lawyer→"Clients", ministry→"Members", etc.).
 
 NavSurface = Literal["build", "operate", "grow", "settings", "home"]
 
@@ -267,7 +280,10 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": "operate",  # the BookingCalendar week-grid hero
         "chief_can_suggest": True,
         "label": "Bookings",
-        "operate_group": "customer_lifecycle",   # NT6 subject grouping
+        # C.1.3.1b — Bookings lives inside the existing OPERATE → Schedule
+        # group alongside Calendar + Tasks (sidebar's append-into-existing
+        # merge step picks this up).
+        "operate_group": "schedule",
     },
 }
 
