@@ -8510,6 +8510,65 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
     return " ".join(chunks)
 
 
+def _as_str(v: Any) -> str:
+    """C.1.5.2 — defensive coercion for fields that downstream calls
+    .strip() on. Upstream sometimes passes content-block lists or other
+    non-string values into where a string was expected; coerce instead
+    of letting the second-pass blow up the entire reply path."""
+    if isinstance(v, str):
+        return v
+    if v is None:
+        return ""
+    if isinstance(v, list):
+        return "".join(_as_str(x) for x in v)
+    return str(v)
+
+
+def _has_breadcrumb(taken: List[Dict[str, Any]]) -> bool:
+    """C.1.5.2 — a breadcrumb is a parenthesized addendum appended to an
+    action's label after a double-space separator. The convention used by
+    handlers to surface filtering / deflection / substitution context the
+    LLM should reflect in its reply (M9-B 'Skipped X' filter notes, M9-C
+    'You already have a... I added the offering(s) instead' deflection
+    notes, etc.). When present + no action failed, it's the load-bearing
+    signal that a substitution-aware reply is owed — used by the
+    deterministic fallback when the LLM path returns empty or throws.
+
+    Generalizes by convention: any future handler that follows
+    `'<label>  (<breadcrumb>)'` shape is covered without code edits."""
+    for t in taken or []:
+        label = t.get("label")
+        if not isinstance(label, str):
+            continue
+        if "  (" in label and label.rstrip().endswith(")"):
+            return True
+    return False
+
+
+def _deterministic_substitution_reply(taken: List[Dict[str, Any]]) -> str:
+    """C.1.5.2 — context-aware honest reply when the LLM-driven second
+    pass can't deliver (returned empty OR threw) AND the actions carry
+    substitution breadcrumbs. Pulls the breadcrumb out of each action's
+    label and surfaces it. Used by the empty-return + exception-catch
+    paths in the chat handler so we never return optimistic first-pass
+    narration verbatim when the reality was a substitution."""
+    bits: List[str] = []
+    for t in taken or []:
+        label = t.get("label")
+        if not isinstance(label, str) or "  (" not in label:
+            continue
+        head, _, tail = label.partition("  (")
+        head = head.strip().rstrip(".")
+        breadcrumb = "(" + tail.rstrip()
+        if head and breadcrumb:
+            bits.append(f"{head}. {breadcrumb}")
+        elif breadcrumb:
+            bits.append(breadcrumb)
+    if not bits:
+        return "Check the actions panel below for what actually happened."
+    return " ".join(bits)
+
+
 def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
     """Build a human-readable summary of what just happened, for the
     second-pass LLM to reason about. NOT a raw JSON dump — we want the
@@ -8592,9 +8651,17 @@ async def _compose_post_action_reply(
     business_id: Optional[str] = None,
 ) -> str:
     """Second-pass LLM call. Returns honest reply text. Falls back to the
-    first-pass text (with an audit-trail footer) if the LLM call fails."""
+    first-pass text (with an audit-trail footer) if the LLM call fails.
+
+    C.1.5.2 — defensive coercion at entry. Upstream callers occasionally
+    pass non-string values into original_message or first_pass_clean
+    (Anthropic content-block array, etc.); coerce instead of letting the
+    .strip() calls below blow up the second pass."""
     if not taken:
-        return first_pass_clean
+        return _as_str(first_pass_clean)
+
+    original_message = _as_str(original_message)
+    first_pass_clean = _as_str(first_pass_clean)
 
     results_block = _format_action_results_for_reply(taken)
     any_failed = any(_action_failed(t) for t in taken)
@@ -8638,7 +8705,15 @@ async def _compose_post_action_reply(
         # "Done. X is now Y. ⚠️ Not everything I tried went through".
         if any_failed:
             return _deterministic_fallback_reply(taken)
-        # All actions succeeded — first-pass is safe to keep verbatim.
+        # C.1.5.2 — substitution-aware fallback. When no action failed
+        # but the labels carry breadcrumbs (M9-B filter notes, M9-C
+        # deflection notes, etc.), the first-pass narration is likely
+        # to be a lie (it described what was asked, not what was
+        # delivered). Replace with a deterministic substitution reply.
+        if _has_breadcrumb(taken):
+            return _deterministic_substitution_reply(taken)
+        # No failures + no substitution breadcrumbs — first-pass is
+        # safe to keep verbatim.
         return first_pass_clean
 
     # Strip any stray action tags the second pass might have emitted
@@ -11495,14 +11570,25 @@ async def chief_chat(
                         clean = composed
                 except Exception as e:  # pragma: no cover
                     # Never break the response on second-pass failure; fall
-                    # back to the first-pass text (with footer if any
-                    # action failed) so we don't lie about success.
+                    # back to a substitution-aware deterministic reply
+                    # when possible (C.1.5.2) so we don't return the
+                    # optimistic first-pass narration verbatim. The prior
+                    # behavior was to staple a "not everything went through"
+                    # footer only when any action failed; that left the
+                    # substitution case (no failures, just M9-B/M9-C
+                    # filtering) returning first-pass narration as a lie.
                     logger.warning(f"post-action reply compose failed: {e}")
                     if any(_action_failed(t) for t in taken):
                         clean = (clean or "").rstrip() + (
                             "\n\n⚠️ Not everything I tried went through — "
                             "check the actions panel below for details."
                         )
+                    elif _has_breadcrumb(taken):
+                        # No failures but breadcrumbs are present →
+                        # deterministic substitution reply REPLACES the
+                        # first-pass narration so it doesn't survive as
+                        # a substitution-blind lie.
+                        clean = _deterministic_substitution_reply(taken)
 
             # Best-effort: mark memories referenced in the response
             await _mark_referenced_memories(client, biz["id"], ctx.get("memories") or [], clean or raw)
