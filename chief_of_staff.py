@@ -7879,9 +7879,18 @@ async def handle_propose_module_from_intake(client, biz, action):
     # the LLM "don't propose duplicate module" exactly when the
     # practitioner is asking for an override → contradictory signals →
     # the LLM honors M9-C → empty envelope → "no drafts persisted".
-    override = _has_dup_override(intake) or _has_dup_override(
-        action.get("revise_feedback") or ""
-    )
+    #
+    # C.1.5.4 A-fix-2 — read the pre-injected override flag from the
+    # action dict first. The chat handler computes this from the
+    # practitioner's actual message (effective_message), so it sees the
+    # authoritative override signal regardless of how the first-pass LLM
+    # paraphrased the intake. Falls back to LLM-paraphrase detection
+    # for back-compat with anything that bypasses the chat handler.
+    override = bool(action.get("override"))
+    if not override:
+        override = _has_dup_override(intake) or _has_dup_override(
+            action.get("revise_feedback") or ""
+        )
     res = await _aio.to_thread(
         msg.propose_module_from_intake,
         biz["id"], intake, action.get("revise_feedback"),
@@ -8668,6 +8677,18 @@ async def _compose_post_action_reply(
 
     original_message = _as_str(original_message)
     first_pass_clean = _as_str(first_pass_clean)
+
+    # C.1.5.4 B-fix-2 — when an action label carries a substitution
+    # breadcrumb (the '<headline>  (<note>)' convention used by M9-B
+    # filters, M9-C deflections, future analogous handlers), the LLM
+    # second-pass is unreliable — Test 3 verified rule #7 doesn't get
+    # enforced consistently (iteration #7 in this session). The
+    # breadcrumb IS the authoritative substitution signal; trust it
+    # directly and skip the LLM call. Rule #7 stays in
+    # _POST_ACTION_REPLY_SYSTEM for non-breadcrumb edge cases as
+    # belt-and-suspenders, but breadcrumb cases bypass it entirely.
+    if _has_breadcrumb(taken):
+        return _deterministic_substitution_reply(taken)
 
     results_block = _format_action_results_for_reply(taken)
     any_failed = any(_action_failed(t) for t in taken)
@@ -11563,6 +11584,22 @@ async def chief_chat(
                         )
                 else:
                     print("[Chief] RETRY model call returned empty", flush=True)
+
+            # C.1.5.4 A-fix-2 — detect override from the practitioner's
+            # actual message (not the LLM-paraphrased intake_excerpt) and
+            # pre-inject into propose_module_from_intake action dicts so
+            # the handler has authoritative override signal. The prior
+            # C.1.5.3 detection on action.get("intake_excerpt") failed
+            # because the first-pass LLM paraphrased "Add another booking
+            # system anyway" into a generic "I need a booking system…"
+            # phrasing that stripped the override phrase. Practitioner's
+            # actual words drive override now.
+            if actions and effective_message:
+                practitioner_override = _has_dup_override(effective_message)
+                if practitioner_override:
+                    for a in actions:
+                        if isinstance(a, dict) and a.get("type") == "propose_module_from_intake":
+                            a["override"] = True
 
             taken = await _execute_actions(client, biz, actions) if actions else []
 
