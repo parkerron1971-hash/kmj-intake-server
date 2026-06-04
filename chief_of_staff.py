@@ -7874,9 +7874,18 @@ async def handle_propose_module_from_intake(client, biz, action):
         import module_spec_generator as msg
     except Exception as e:
         return _fail("propose_module_from_intake", f"generator unavailable: {e}")
+    # C.1.5.3 — compute override BEFORE the spec call so we can suppress
+    # M9-C guidance injection on the generator side. Otherwise M9-C tells
+    # the LLM "don't propose duplicate module" exactly when the
+    # practitioner is asking for an override → contradictory signals →
+    # the LLM honors M9-C → empty envelope → "no drafts persisted".
+    override = _has_dup_override(intake) or _has_dup_override(
+        action.get("revise_feedback") or ""
+    )
     res = await _aio.to_thread(
         msg.propose_module_from_intake,
         biz["id"], intake, action.get("revise_feedback"),
+        override,
     )
     if not res.get("ok"):
         return _fail("propose_module_from_intake", res.get("error", "generation failed"))
@@ -7886,9 +7895,6 @@ async def handle_propose_module_from_intake(client, biz, action):
     # If any module-kind proposal duplicates an existing single-instance
     # archetype for this business AND the practitioner didn't explicitly
     # override, drop the duplicates and ask for an override.
-    override = _has_dup_override(intake) or _has_dup_override(
-        action.get("revise_feedback") or ""
-    )
     existing_si = await _aio.to_thread(
         msg._existing_single_instance_modules, biz["id"]
     )
@@ -8686,6 +8692,11 @@ async def _compose_post_action_reply(
         enable_web_search=False,        # no need; we're just composing prose
         business_id=business_id,
     )
+    # C.1.5.3 F2b — defensive coercion. _call_claude returns str per its
+    # code, but any future API-shape evolution (or already-shipped path
+    # we haven't located) that yields a non-string survives without
+    # blowing up the .strip() below.
+    raw = _as_str(raw)
 
     if not raw or not raw.strip():
         # C.1.3.1c F1b — observability. The second-pass LLM call
@@ -8719,6 +8730,8 @@ async def _compose_post_action_reply(
     # Strip any stray action tags the second pass might have emitted
     # despite the system prompt (belt-and-suspenders).
     cleaned_again, _stray = _extract_actions_and_clean(raw)
+    # C.1.5.3 F2b — defensive coercion on the cleaned text too.
+    cleaned_again = _as_str(cleaned_again)
     return cleaned_again.strip() or first_pass_clean
 
 
@@ -11566,23 +11579,33 @@ async def chief_chat(
                         taken=taken,
                         business_id=biz.get("id"),
                     )
+                    # C.1.5.3 F2b — defensive coercion on the return value
+                    # so .strip() below can't blow up the chat handler.
+                    composed = _as_str(composed)
                     if composed and composed.strip():
                         clean = composed
                 except Exception as e:  # pragma: no cover
                     # Never break the response on second-pass failure; fall
-                    # back to a substitution-aware deterministic reply
-                    # when possible (C.1.5.2) so we don't return the
-                    # optimistic first-pass narration verbatim. The prior
-                    # behavior was to staple a "not everything went through"
-                    # footer only when any action failed; that left the
-                    # substitution case (no failures, just M9-B/M9-C
-                    # filtering) returning first-pass narration as a lie.
-                    logger.warning(f"post-action reply compose failed: {e}")
+                    # back to a deterministic reply that matches the
+                    # outcome so we don't return the optimistic first-pass
+                    # narration verbatim. C.1.5.3: both the failure case
+                    # AND the substitution case now REPLACE first-pass
+                    # rather than stapling a footer — mirrors the
+                    # empty-second-pass branch inside _compose_post_action_reply
+                    # (lines 8706-8714). Traceback logged so future
+                    # .strip()-on-list mysteries pin in one cycle.
+                    import traceback as _tb
+                    logger.warning(
+                        f"post-action reply compose failed: {e}\n"
+                        f"{_tb.format_exc()}"
+                    )
                     if any(_action_failed(t) for t in taken):
-                        clean = (clean or "").rstrip() + (
-                            "\n\n⚠️ Not everything I tried went through — "
-                            "check the actions panel below for details."
-                        )
+                        # C.1.5.3 F2a — deterministic REPLACE, not staple.
+                        # Previously stapled "⚠️ Not everything I tried
+                        # went through" onto first-pass, producing the
+                        # "Drafting...⚠️" contradiction Kevin saw on
+                        # Test 3.
+                        clean = _deterministic_fallback_reply(taken)
                     elif _has_breadcrumb(taken):
                         # No failures but breadcrumbs are present →
                         # deterministic substitution reply REPLACES the
