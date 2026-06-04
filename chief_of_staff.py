@@ -6702,6 +6702,316 @@ async def handle_list_offerings(client, biz, action) -> Dict:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Phase D.1.2 — Chief CRUD for availability
+# ─────────────────────────────────────────────────────────────────────
+
+
+_VALID_DAY_KEYS = frozenset({"mon", "tue", "wed", "thu", "fri", "sat", "sun"})
+
+
+def _load_availability_settings(business_id: str) -> Dict[str, Any]:
+    """Load business settings; return the availability sub-dict (empty
+    dict when missing). Read via service role."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=settings&limit=1"
+    ) or []
+    if not rows:
+        return {}
+    settings = rows[0].get("settings") or {}
+    return dict(settings.get("availability") or {})
+
+
+def _save_availability_settings(business_id: str, availability: Dict[str, Any]) -> None:
+    """Merge availability back into settings JSON. Service-role write."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=settings&limit=1"
+    ) or []
+    settings = dict((rows[0].get("settings") or {}) if rows else {})
+    settings["availability"] = availability
+    sb_clients.sb_patch_as_service(
+        f"/businesses?id=eq.{business_id}", {"settings": settings},
+    )
+
+
+_AVAILABILITY_FRONTEND_EVENT = {"name": "solutionist-availability-changed"}
+
+
+async def handle_set_availability_day(client, biz, action) -> Dict:
+    """Set the weekly schedule for one day. action: {day, hours}
+    where day is 'mon'..'sun' and hours is a list of {start, end}
+    HH:MM ranges. Empty list = closed."""
+    day = (action.get("day") or "").strip().lower()[:3]
+    if day not in _VALID_DAY_KEYS:
+        return _fail("set_availability_day",
+                     f"day must be one of {sorted(_VALID_DAY_KEYS)}")
+    hours = action.get("hours") or []
+    if not isinstance(hours, list):
+        return _fail("set_availability_day", "hours must be a list")
+    # Coerce to canonical shape via the Pydantic model in availability.py
+    try:
+        from availability import TimeRange
+        norm_hours = [TimeRange.model_validate(h).model_dump() for h in hours]
+    except Exception as e:
+        return _fail("set_availability_day", f"invalid hours: {e}")
+
+    av = _load_availability_settings(biz["id"])
+    weekly = dict(av.get("weekly") or {})
+    weekly[day] = norm_hours
+    av["weekly"] = weekly
+    _save_availability_settings(biz["id"], av)
+
+    if not norm_hours:
+        label = f"📅 {day.title()} → closed"
+    else:
+        ranges = ", ".join(f"{h['start']}–{h['end']}" for h in norm_hours)
+        label = f"📅 {day.title()} → {ranges}"
+    return {
+        "type": "set_availability_day",
+        "result": "updated",
+        "label": label,
+        "day": day,
+        "hours": norm_hours,
+        "nav": _nav("build"),
+        "frontend_event": _AVAILABILITY_FRONTEND_EVENT,
+    }
+
+
+async def handle_set_availability_override(client, biz, action) -> Dict:
+    """Set a date-specific override that replaces the weekly schedule
+    for that date. action: {date, hours}. hours=[] means closed."""
+    date_s = (action.get("date") or "").strip()
+    if not date_s or len(date_s) != 10:
+        return _fail("set_availability_override",
+                     "date is required, YYYY-MM-DD")
+    hours = action.get("hours") or []
+    try:
+        from availability import DateOverride
+        norm = DateOverride.model_validate({"date": date_s, "hours": hours}).model_dump()
+    except Exception as e:
+        return _fail("set_availability_override", f"invalid override: {e}")
+
+    av = _load_availability_settings(biz["id"])
+    overrides = [o for o in (av.get("overrides") or [])
+                 if (o or {}).get("date") != date_s]  # remove existing for this date
+    overrides.append(norm)
+    overrides.sort(key=lambda o: o.get("date", ""))
+    av["overrides"] = overrides
+    _save_availability_settings(biz["id"], av)
+
+    if not norm["hours"]:
+        label = f"📅 {date_s} → closed (override)"
+    else:
+        ranges = ", ".join(f"{h['start']}–{h['end']}" for h in norm["hours"])
+        label = f"📅 {date_s} → {ranges} (override)"
+    return {
+        "type": "set_availability_override",
+        "result": "updated",
+        "label": label,
+        "date": date_s,
+        "hours": norm["hours"],
+        "nav": _nav("build"),
+        "frontend_event": _AVAILABILITY_FRONTEND_EVENT,
+    }
+
+
+async def handle_add_block_range(client, biz, action) -> Dict:
+    """Block a range of dates (vacation, holiday week). action:
+    {start, end, reason?}. Inclusive both ends."""
+    start = (action.get("start") or "").strip()
+    end = (action.get("end") or start).strip()
+    reason = action.get("reason")
+    try:
+        from availability import BlockedRange
+        norm = BlockedRange.model_validate({
+            "start": start, "end": end, "reason": reason,
+        }).model_dump()
+    except Exception as e:
+        return _fail("add_block_range", f"invalid block: {e}")
+
+    av = _load_availability_settings(biz["id"])
+    blocks = list(av.get("blocks") or [])
+    # De-dupe by (start, end) — replace prior with same range.
+    blocks = [b for b in blocks
+              if not ((b or {}).get("start") == norm["start"]
+                      and (b or {}).get("end") == norm["end"])]
+    blocks.append(norm)
+    blocks.sort(key=lambda b: b.get("start", ""))
+    av["blocks"] = blocks
+    _save_availability_settings(biz["id"], av)
+
+    if norm["start"] == norm["end"]:
+        rng = norm["start"]
+    else:
+        rng = f"{norm['start']} → {norm['end']}"
+    suffix = f" ({reason})" if reason else ""
+    return {
+        "type": "add_block_range",
+        "result": "added",
+        "label": f"🚫 Blocked {rng}{suffix}",
+        "start": norm["start"], "end": norm["end"], "reason": reason,
+        "nav": _nav("build"),
+        "frontend_event": _AVAILABILITY_FRONTEND_EVENT,
+    }
+
+
+async def handle_remove_block_range(client, biz, action) -> Dict:
+    """Remove a previously-added block. action: {start} (start date
+    identifies the block)."""
+    start = (action.get("start") or "").strip()
+    if not start:
+        return _fail("remove_block_range", "start date required")
+    av = _load_availability_settings(biz["id"])
+    before = list(av.get("blocks") or [])
+    after = [b for b in before if (b or {}).get("start") != start]
+    if len(after) == len(before):
+        return _fail("remove_block_range",
+                     f"no block found with start={start!r}")
+    av["blocks"] = after
+    _save_availability_settings(biz["id"], av)
+    return {
+        "type": "remove_block_range",
+        "result": "removed",
+        "label": f"🗓️ Removed block starting {start}",
+        "start": start,
+        "nav": _nav("build"),
+        "frontend_event": _AVAILABILITY_FRONTEND_EVENT,
+    }
+
+
+async def handle_set_slot_granularity(client, biz, action) -> Dict:
+    """Set slot grid spacing in minutes. action: {minutes}."""
+    try:
+        minutes = int(action.get("minutes"))
+    except (TypeError, ValueError):
+        return _fail("set_slot_granularity", "minutes must be an integer")
+    if not (5 <= minutes <= 240):
+        return _fail("set_slot_granularity",
+                     "minutes must be between 5 and 240")
+    av = _load_availability_settings(biz["id"])
+    av["slot_granularity_min"] = minutes
+    _save_availability_settings(biz["id"], av)
+    return {
+        "type": "set_slot_granularity",
+        "result": "updated",
+        "label": f"⏱️ Slot grid set to every {minutes} minutes",
+        "minutes": minutes,
+        "nav": _nav("build"),
+        "frontend_event": _AVAILABILITY_FRONTEND_EVENT,
+    }
+
+
+async def handle_set_lead_time(client, biz, action) -> Dict:
+    """Set required lead-time in minutes (customers can't book within
+    this window of now). action: {minutes}."""
+    try:
+        minutes = int(action.get("minutes"))
+    except (TypeError, ValueError):
+        return _fail("set_lead_time", "minutes must be an integer")
+    if minutes < 0:
+        return _fail("set_lead_time", "minutes must be >= 0")
+    av = _load_availability_settings(biz["id"])
+    av["lead_time_min"] = minutes
+    _save_availability_settings(biz["id"], av)
+    if minutes == 0:
+        label = "⏱️ Lead-time cleared (instant bookings allowed)"
+    else:
+        h, m = divmod(minutes, 60)
+        if h and m:
+            human = f"{h}h {m}m"
+        elif h:
+            human = f"{h}h"
+        else:
+            human = f"{m} min"
+        label = f"⏱️ Lead-time set to {human}"
+    return {
+        "type": "set_lead_time",
+        "result": "updated",
+        "label": label,
+        "minutes": minutes,
+        "nav": _nav("build"),
+        "frontend_event": _AVAILABILITY_FRONTEND_EVENT,
+    }
+
+
+async def handle_set_business_timezone(client, biz, action) -> Dict:
+    """Set the canonical timezone for the business. action: {timezone}."""
+    tz = (action.get("timezone") or "").strip()
+    if not tz:
+        return _fail("set_business_timezone", "timezone is required")
+    # Quick sanity — must be parseable by zoneinfo
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(tz)
+    except Exception:
+        return _fail("set_business_timezone",
+                     f"unknown timezone {tz!r}; use an IANA name like "
+                     f"'America/New_York'")
+    av = _load_availability_settings(biz["id"])
+    av["timezone"] = tz
+    _save_availability_settings(biz["id"], av)
+    return {
+        "type": "set_business_timezone",
+        "result": "updated",
+        "label": f"🌎 Business timezone set to {tz}",
+        "timezone": tz,
+        "nav": _nav("build"),
+        "frontend_event": _AVAILABILITY_FRONTEND_EVENT,
+    }
+
+
+async def handle_list_availability(client, biz, action) -> Dict:
+    """Return the current availability config in human-readable form."""
+    av = _load_availability_settings(biz["id"])
+    if not av:
+        return {
+            "type": "list_availability",
+            "result": "ok",
+            "label": "📅 No availability set — open by default (24/7).",
+            "availability": {},
+            "nav": _nav("build"),
+        }
+    lines = []
+    tz = av.get("timezone")
+    if tz:
+        lines.append(f"  timezone: {tz}")
+    weekly = av.get("weekly") or {}
+    for day in ("mon", "tue", "wed", "thu", "fri", "sat", "sun"):
+        h = weekly.get(day) or []
+        if h:
+            ranges = ", ".join(f"{r.get('start')}–{r.get('end')}" for r in h)
+            lines.append(f"  {day}: {ranges}")
+        else:
+            lines.append(f"  {day}: closed")
+    overrides = av.get("overrides") or []
+    if overrides:
+        lines.append("  overrides:")
+        for o in overrides[:10]:
+            d = o.get("date"); h = o.get("hours") or []
+            if not h:
+                lines.append(f"    {d}: closed")
+            else:
+                rs = ", ".join(f"{r.get('start')}–{r.get('end')}" for r in h)
+                lines.append(f"    {d}: {rs}")
+    blocks = av.get("blocks") or []
+    if blocks:
+        lines.append("  blocks:")
+        for b in blocks[:10]:
+            s = b.get("start"); e = b.get("end"); r = b.get("reason")
+            lines.append(f"    {s} → {e}" + (f" ({r})" if r else ""))
+    grain = av.get("slot_granularity_min", 30)
+    lead = av.get("lead_time_min", 0)
+    lines.append(f"  slot grid: every {grain} min · lead-time: {lead} min")
+    return {
+        "type": "list_availability",
+        "result": "ok",
+        "label": f"📅 Availability config ({len(lines)} settings)",
+        "summary": "\n".join(lines),
+        "availability": av,
+        "nav": _nav("build"),
+    }
+
+
 async def handle_generate_payment_link(client, biz, action) -> Dict:
     """Generate (or rotate) the Stripe payment link for a product.
 
@@ -8320,6 +8630,15 @@ ACTION_HANDLERS = {
     "update_offering":            handle_update_offering,
     "archive_offering":           handle_archive_offering,
     "list_offerings":             handle_list_offerings,
+    # Phase D.1.2 — availability CRUD
+    "set_availability_day":       handle_set_availability_day,
+    "set_availability_override":  handle_set_availability_override,
+    "add_block_range":            handle_add_block_range,
+    "remove_block_range":         handle_remove_block_range,
+    "set_slot_granularity":       handle_set_slot_granularity,
+    "set_lead_time":              handle_set_lead_time,
+    "set_business_timezone":      handle_set_business_timezone,
+    "list_availability":          handle_list_availability,
     "generate_payment_link":      handle_generate_payment_link,
     # Conversation recall
     "recall_conversation":        handle_recall_conversation,

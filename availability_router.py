@@ -21,9 +21,10 @@ import logging
 from datetime import date, datetime
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import sb_clients
+from auth_supabase import AuthedUser, require_user
 from availability import BusinessAvailability
 from availability_engine import (
     DEFAULT_LOOKAHEAD_DAYS,
@@ -218,3 +219,77 @@ def _is_open_default_dict(raw: Optional[dict]) -> bool:
     av = BusinessAvailability.from_settings_dict(raw)
     from availability import is_open_default
     return is_open_default(av)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase D.1.2 — practitioner-facing availability config (authed)
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _require_owner(business_id: str, user: AuthedUser) -> None:
+    """Same shape as offerings_router's owner gate."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1"
+    ) or []
+    if not rows or str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(status_code=403, detail="not authorized")
+
+
+@router.get("/{business_id}")
+def get_availability(
+    business_id: str,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Return the current availability config (or the open-default shape
+    when none is set). Practitioner-facing — owner-gated."""
+    _require_owner(business_id, user)
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=settings&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    settings = (rows[0].get("settings") or {})
+    av = BusinessAvailability.from_settings_dict(settings.get("availability"))
+    return {
+        "ok": True,
+        "business_id": business_id,
+        "availability": av.model_dump(),
+        "open_default": _is_open_default_dict(settings.get("availability")),
+    }
+
+
+@router.patch("/{business_id}")
+def patch_availability(
+    business_id: str,
+    body: Dict[str, Any],
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Replace the business's availability config with the posted shape.
+
+    Body MUST validate against BusinessAvailability. Practitioner-facing —
+    owner-gated. Writes to businesses.settings.availability (preserves
+    other settings keys via merge)."""
+    _require_owner(business_id, user)
+    try:
+        av = BusinessAvailability.model_validate(body or {})
+    except Exception as e:
+        raise HTTPException(400, f"invalid availability config: {e}")
+
+    # Merge into existing settings to preserve brand_kit, theme, etc.
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=settings&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    settings = dict(rows[0].get("settings") or {})
+    settings["availability"] = av.model_dump()
+
+    sb_clients.sb_patch_as_service(
+        f"/businesses?id=eq.{business_id}", {"settings": settings},
+    )
+    return {
+        "ok": True,
+        "business_id": business_id,
+        "availability": av.model_dump(),
+    }
+
