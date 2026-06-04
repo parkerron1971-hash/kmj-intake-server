@@ -11278,6 +11278,58 @@ _DESCRIBED_ACTION_PHRASES = (
 )
 
 
+# C.1.5.6 — propose-framing rewrites. Applied to first-pass narration
+# when the LLM emits propose_module_from_intake. Deterministic
+# enforcement of the system-prompt PROPOSE-FRAMING rule (C.1.5.5
+# Finding C) which the LLM ignores in practice — verified iteration #8
+# in this session. Matches B-fix-2's architectural pattern: when prompt
+# compliance has been empirically unreliable, replace LLM dependence
+# with deterministic logic in the load-bearing path.
+#
+# The forbidden phrases are completion-implied framing that mislead the
+# practitioner — they read "I'll create X" as "the system is doing X
+# now", but nothing happens until they click Accept on the proposal
+# card (and even Accept can fail at materialize_spec, e.g. M3-δ blocking
+# a duplicate). The replacements preserve the LLM's natural sentence
+# flow while removing the misleading framing.
+#
+# Patterns are applied case-insensitive with word-boundary anchors so we
+# don't over-match. When the LLM happens to comply with the prompt rule,
+# none of these patterns match and the rewrite is a no-op.
+_PROPOSE_FRAMING_REWRITES: tuple = (
+    # "I'll create/add/build/set up/make X" → "Here's a proposal for X"
+    (re.compile(r"\bI'll\s+(?:create|add|build|set\s+up|make)\b", re.IGNORECASE),
+     "Here's a proposal for"),
+    (re.compile(r"\bI\s+will\s+(?:create|add|build|set\s+up|make)\b", re.IGNORECASE),
+     "Here's a proposal for"),
+    # "I'm creating/adding/building/setting up/making X" → "I've drafted a proposal for X"
+    (re.compile(r"\bI'm\s+(?:creating|adding|building|setting\s+up|making)\b", re.IGNORECASE),
+     "I've drafted a proposal for"),
+    (re.compile(r"\bI\s+am\s+(?:creating|adding|building|setting\s+up|making)\b", re.IGNORECASE),
+     "I've drafted a proposal for"),
+    # "Let me create/add/build/set up/make X" → "Here's a proposal for X"
+    (re.compile(r"\bLet\s+me\s+(?:create|add|build|set\s+up|make)\b", re.IGNORECASE),
+     "Here's a proposal for"),
+)
+
+
+def _rewrite_propose_framing(text: str) -> str:
+    """C.1.5.6 — deterministic propose-framing enforcement. Replace
+    completion-framing phrases with proposal-framing equivalents when
+    the LLM emitted propose_module_from_intake. The system-prompt rule
+    is empirically ignored by the LLM (iteration #8 verification); this
+    is the deterministic enforcement layer matching B-fix-2's pattern.
+
+    No-op when text is empty or no patterns match — keeps the LLM's
+    natural prose intact when it happens to comply with the rule."""
+    if not text:
+        return text
+    out = text
+    for pat, repl in _PROPOSE_FRAMING_REWRITES:
+        out = pat.sub(repl, out)
+    return out
+
+
 def _looks_like_completed_action(text: str) -> bool:
     """Stronger version of _looks_like_action_description used by the
     retry path — only fires when the AI's prose is actively claiming an
@@ -11526,6 +11578,23 @@ async def chief_chat(
                 }
 
             actions, clean = _extract_actions_and_clean(raw)
+
+            # C.1.5.6 — deterministic propose-framing enforcement. When
+            # the LLM emits propose_module_from_intake, scan the prose
+            # for completion-framing phrases ("I'll create X", "I'm
+            # setting up Y", etc.) and rewrite them to proposal-framing
+            # ("Here's a proposal for X", "I've drafted a proposal for
+            # Y"). The system-prompt PROPOSE-FRAMING rule (C.1.5.5) is
+            # empirically ignored by the LLM — verified iteration #8.
+            # Matches B-fix-2's pattern: deterministic enforcement when
+            # prompt compliance is unreliable. No-op when the LLM
+            # happens to comply (no patterns match → original text
+            # survives).
+            if any(
+                isinstance(a, dict) and a.get("type") == "propose_module_from_intake"
+                for a in actions
+            ):
+                clean = _rewrite_propose_framing(clean)
 
             # ── Server-side enforcement retry ────────────────────────
             # If the AI's prose claimed it performed an operation but no
