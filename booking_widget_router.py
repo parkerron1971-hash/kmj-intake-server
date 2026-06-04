@@ -110,9 +110,11 @@ def _business_basics(business_id: str) -> Optional[Dict[str, Any]]:
     Note: brand_kit is NOT a top-level column on businesses — it lives
     at settings.brand_kit. See agents/composer/creative_expression.py
     line 336 for the canonical read pattern."""
+    # Phase D.1.1 added owner_id to the select so the slot engine can
+    # fall back to practitioner_profiles.timezone via the owner key.
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}&limit=1"
-        f"&select=id,name,settings,voice_profile"
+        f"&select=id,name,settings,voice_profile,owner_id"
     ) or []
     return rows[0] if rows else None
 
@@ -314,6 +316,14 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
     )
     legacy_services = [] if has_offering_ref else (agent_config.get("services") or [])
 
+    # Phase D.1.1 — per-offering available slots for the next
+    # DEFAULT_LOOKAHEAD_DAYS in business tz. Keyed by offering id so the
+    # widget can render the calendar/slot picker (PR 3) based on the
+    # service the customer picks. Open-default (no availability config
+    # yet) treats every day as bookable 24/7 — practitioner can tighten
+    # via the BUILD-side editor (PR 2).
+    available_slots = _slots_per_offering(business, offerings)
+
     return {
         "business": {
             "id": business["id"],
@@ -330,10 +340,91 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
         "offerings": offerings,
         "services": legacy_services,
         "theme_tokens": _theme_tokens(business),
+        # Phase D.1.1 — keyed by offering_id; empty dict when no
+        # offerings are available (e.g. legacy modules with no
+        # offering_ref field).
+        "available_slots": available_slots,
         # Quote anchor — the widget echoes this on submit; we use it for
         # the P5a freshness window check.
         "quoted_at": int(time.time()),
     }
+
+
+def _slots_per_offering(
+    business: Dict[str, Any],
+    offerings: List[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Phase D.1.1 — compute available slots per offering for the
+    config-anon payload. Real-time compute per D2-α.
+
+    Reads business.settings.availability + practitioner_profiles.timezone
+    + existing module_entries; runs the engine for each offering's
+    duration. Returns dict keyed by offering id."""
+    try:
+        from datetime import date as _date, timedelta as _td
+        from availability import BusinessAvailability
+        from availability_engine import (
+            DEFAULT_LOOKAHEAD_DAYS,
+            compute_slots,
+        )
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"availability engine unavailable: {e}")
+        return {}
+
+    settings = business.get("settings") or {}
+    av = BusinessAvailability.from_settings_dict(settings.get("availability"))
+
+    # Practitioner timezone fallback
+    owner_id = business.get("owner_id")
+    practitioner_tz: Optional[str] = None
+    if owner_id:
+        rows = sb_clients.sb_get_as_service(
+            f"/practitioner_profiles?owner_id=eq.{owner_id}"
+            f"&select=timezone&limit=1"
+        ) or []
+        if rows:
+            tz_v = (rows[0].get("timezone") or "").strip()
+            practitioner_tz = tz_v or None
+
+    today = _date.today()
+    horizon = today + _td(days=DEFAULT_LOOKAHEAD_DAYS)
+
+    # Load existing bookings once for the window — engine subtracts overlaps
+    # per offering. Pad ±1 day for edge bookings.
+    lo = (today - _td(days=1)).isoformat()
+    hi = (horizon + _td(days=1)).isoformat()
+    bookings = sb_clients.sb_get_as_service(
+        f"/module_entries?business_id=eq.{business['id']}"
+        f"&appointment_at=gte.{lo}&appointment_at=lte.{hi}"
+        f"&select=appointment_at,duration_min_at_booking,duration_min"
+        f"&limit=2000"
+    ) or []
+    if not isinstance(bookings, list):
+        bookings = []
+
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for off in offerings or []:
+        oid = off.get("id")
+        dur = off.get("duration_min")
+        if not oid or not dur:
+            continue
+        try:
+            slots = compute_slots(
+                availability=av,
+                practitioner_tz=practitioner_tz,
+                existing_bookings=bookings,
+                offering_duration_min=int(dur),
+                from_date=today,
+                to_date=horizon,
+            )
+            out[oid] = slots
+        except Exception as e:  # pragma: no cover — never break widget
+            logger.warning(
+                f"slot compute failed for biz={business['id']} "
+                f"offering={oid}: {e}"
+            )
+            out[oid] = []
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────
