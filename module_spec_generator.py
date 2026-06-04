@@ -1001,6 +1001,7 @@ def _single_instance_guidance(existing: List[Dict[str, Any]]) -> Optional[str]:
 
 def propose_module_from_intake(
     business_id: str, intake_excerpt: str, extra_guidance: Optional[str] = None,
+    override: bool = False,
 ) -> Dict[str, Any]:
     """Full propose flow: load biz → generate envelope → store each spec
     AND each offering as a draft → return a unified proposals[] stack that
@@ -1030,14 +1031,22 @@ def propose_module_from_intake(
         return {"ok": False, "error": "business not found"}
     biz = biz_rows[0]
     # C.1.5 Plan A M9-C — inject existing-single-instance context.
-    si_existing = _existing_single_instance_modules(business_id)
-    si_guidance = _single_instance_guidance(si_existing)
-    if si_guidance:
-        extra_guidance = (
-            (extra_guidance or "").rstrip()
-            + ("\n\n" if extra_guidance else "")
-            + si_guidance
-        )
+    # C.1.5.3 — when the practitioner explicitly overrode the duplicate
+    # guard via an override phrase ("add another one anyway", etc.), the
+    # M9-B filter is bypassed by the handler; M9-C guidance must also be
+    # suppressed so the LLM doesn't get contradictory signals (practitioner
+    # asking for a duplicate vs. system telling it not to). Without this
+    # suppression the LLM honors M9-C and produces an empty envelope →
+    # "no drafts persisted".
+    if not override:
+        si_existing = _existing_single_instance_modules(business_id)
+        si_guidance = _single_instance_guidance(si_existing)
+        if si_guidance:
+            extra_guidance = (
+                (extra_guidance or "").rstrip()
+                + ("\n\n" if extra_guidance else "")
+                + si_guidance
+            )
     gen = generate_module_proposal(biz, intake_excerpt, extra_guidance=extra_guidance)
     if not gen.get("ok"):
         return gen
