@@ -323,6 +323,11 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
     # yet) treats every day as bookable 24/7 — practitioner can tighten
     # via the BUILD-side editor (PR 2).
     available_slots = _slots_per_offering(business, offerings)
+    # Phase D.1.3 — business timezone for the widget's "Business hours: X"
+    # label. Reads availability.timezone if set, else falls back to the
+    # practitioner profile timezone, else UTC. Same resolution as the
+    # engine's _resolve_tz.
+    business_tz = _business_timezone(business)
 
     return {
         "business": {
@@ -344,10 +349,35 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
         # offerings are available (e.g. legacy modules with no
         # offering_ref field).
         "available_slots": available_slots,
+        # Phase D.1.3 — business timezone for the widget label.
+        "timezone": business_tz,
         # Quote anchor — the widget echoes this on submit; we use it for
         # the P5a freshness window check.
         "quoted_at": int(time.time()),
     }
+
+
+def _business_timezone(business: Dict[str, Any]) -> Optional[str]:
+    """Phase D.1.3 — resolve the business's canonical timezone for the
+    widget's "Business hours: X" label. Same priority as the engine:
+    availability.timezone > practitioner_profiles.timezone > None
+    (widget treats None as UTC for display)."""
+    settings = business.get("settings") or {}
+    av = settings.get("availability") or {}
+    tz = (av.get("timezone") or "").strip()
+    if tz:
+        return tz
+    owner_id = business.get("owner_id")
+    if not owner_id:
+        return None
+    rows = sb_clients.sb_get_as_service(
+        f"/practitioner_profiles?owner_id=eq.{owner_id}"
+        f"&select=timezone&limit=1"
+    ) or []
+    if not rows:
+        return None
+    tz = (rows[0].get("timezone") or "").strip()
+    return tz or None
 
 
 def _slots_per_offering(
