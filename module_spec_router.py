@@ -87,7 +87,15 @@ async def accept(spec_id: str, user: AuthedUser = Depends(require_user)) -> Dict
     import asyncio
     res = await asyncio.to_thread(msg.materialize_spec, spec_id)
     if not res.get("ok"):
-        raise HTTPException(status_code=400, detail=res.get("error", "materialize failed"))
+        # C.1.5.5 Finding D backend — forward the rich `detail` field
+        # from materialize_spec (e.g. M3-δ's multi_module_not_supported
+        # full prose) so the frontend can show practitioner-readable
+        # text instead of just the machine token. Fall back to the
+        # `error` token if no detail is set (matches pre-fix behavior).
+        raise HTTPException(
+            status_code=400,
+            detail=res.get("detail") or res.get("error") or "materialize failed",
+        )
     return res
 
 
