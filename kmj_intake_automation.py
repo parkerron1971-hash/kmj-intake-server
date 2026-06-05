@@ -56,6 +56,8 @@ from offerings_router import router as offerings_router
 from availability_router import router as availability_router
 # Phase D.2.1 — hosted booking page (practitioner-side config + URL resolver)
 from booking_page_router import router as booking_page_router
+# Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver
+from stripe_connect_router import router as stripe_connect_router
 # Phase C.1.3 — Chief proactive-suggestion lifecycle
 from chief_suggestions_router import router as chief_suggestions_router
 # Pass 4.0a — Director Agent foundations
@@ -104,6 +106,10 @@ app.include_router(availability_router)
 # Registered BEFORE public_site_router so its /booking-page/... routes
 # match before the public_site `/{path:path}` catch-all.
 app.include_router(booking_page_router)
+# Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
+# discipline: BEFORE public_site_router so /payments/* doesn't fall
+# into the subdomain catch-all.
+app.include_router(stripe_connect_router)
 app.include_router(chief_suggestions_router)
 app.include_router(business_profile_router)
 app.include_router(practitioner_profile_router)
