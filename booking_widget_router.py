@@ -426,6 +426,7 @@ def _slots_per_offering(
     bookings = sb_clients.sb_get_as_service(
         f"/module_entries?business_id=eq.{business['id']}"
         f"&appointment_at=gte.{lo}&appointment_at=lte.{hi}"
+        f"&status=eq.active"
         f"&select=appointment_at,duration_min_at_booking,duration_min"
         f"&limit=2000"
     ) or []
@@ -618,12 +619,40 @@ async def book_anon(
         business_id, module, body.offering_id, body.quoted_price, entry_data,
     )
 
+    # Phase D.4 — submit-side double-book guard. The customer's UI
+    # showed slots that were free at config-anon time, but two
+    # customers can race the same slot. Re-verify before insert.
+    pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
+    appt_iso = entry_data.get(pdf) or entry_data.get("appointment_at")
+    dur_min = entry_data.get("duration_min_at_booking") or entry_data.get("duration_min") or 0
+    if not _check_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0)):
+        raise HTTPException(
+            status_code=409,
+            detail="Sorry — that time was just booked. Please pick another.",
+        )
+
     entry = _create_appointment(business_id, module["id"], entry_data)
     if not entry:
         raise HTTPException(status_code=500, detail="Something went wrong on our end — please try again.")
 
     # 4. Mint a token so the customer can return to view/manage.
     token = issue_customer_token(business_id, customer_id)
+
+    # Phase D.4 — fire confirmation email + .ics attachment (best-effort).
+    # Errors do NOT roll back the booking; booking is the load-bearing
+    # entity. Logged for triage.
+    try:
+        from booking_confirmation_emails import send_confirmation_email
+        import asyncio
+        asyncio.create_task(send_confirmation_email(
+            booking=entry,
+            business=biz,
+            customer_email=email_norm,
+            customer_name=body.name,
+            offering_id=body.offering_id,
+        ))
+    except Exception as e:
+        logger.warning(f"confirmation email scheduling failed: {e}")
 
     return {
         "ok": True,
@@ -665,9 +694,35 @@ async def book(
         business_id, module, body.offering_id, body.quoted_price, entry_data,
     )
 
+    # Phase D.4 — same submit-side double-book guard as the anon path.
+    pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
+    appt_iso = entry_data.get(pdf) or entry_data.get("appointment_at")
+    dur_min = entry_data.get("duration_min_at_booking") or entry_data.get("duration_min") or 0
+    if not _check_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0)):
+        raise HTTPException(
+            status_code=409,
+            detail="Sorry — that time was just booked. Please pick another.",
+        )
+
     entry = _create_appointment(business_id, module["id"], entry_data)
     if not entry:
         raise HTTPException(status_code=500, detail="Something went wrong on our end — please try again.")
+
+    # Phase D.4 — confirmation email + .ics for the authed path too.
+    try:
+        from booking_confirmation_emails import send_confirmation_email
+        import asyncio
+        biz = _business_basics(business_id)
+        if biz:
+            asyncio.create_task(send_confirmation_email(
+                booking=entry,
+                business=biz,
+                customer_email=ctx.customer_row.get("email") or "",
+                customer_name=ctx.customer_row.get("name") or "",
+                offering_id=body.offering_id,
+            ))
+    except Exception as e:
+        logger.warning(f"confirmation email scheduling failed: {e}")
 
     return {"ok": True, "appointment_id": entry["id"]}
 
@@ -798,6 +853,69 @@ def _find_or_create_customer(
             detail="Something went wrong on our end — please try again.",
         )
     return created[0]["id"]
+
+
+def _check_slot_available(
+    business_id: str,
+    appointment_at_iso: str,
+    duration_min: int,
+) -> bool:
+    """Phase D.4 — submit-side double-book guard.
+
+    The customer's UI shows slots that were free at config-anon snapshot
+    time, but two customers can race the same slot. This re-verifies at
+    submit-time by querying module_entries for any active booking that
+    overlaps [appointment_at, appointment_at + duration_min).
+
+    Returns True when the slot is still free. False on any overlap.
+    Tolerant of malformed timestamps — treats unknown as a conflict (fail
+    closed) only when the input itself is malformed.
+
+    The engine's _booking_intervals + _overlaps helpers are the canonical
+    overlap math; we reuse them here so the submit path and the
+    config-anon snapshot can never disagree on the overlap rule."""
+    if not appointment_at_iso or duration_min <= 0:
+        # Without a usable interval we can't reason about overlap; let
+        # the create proceed (no false 409s on malformed inputs — they'll
+        # surface elsewhere).
+        return True
+
+    # Pad ±duration so any booking whose start is within the requested
+    # interval is caught regardless of how the timestamp comparison
+    # rounds at the boundary.
+    try:
+        from datetime import datetime, timedelta
+        from availability_engine import _overlaps, _booking_intervals
+        s = appointment_at_iso
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        slot_start = datetime.fromisoformat(s)
+        slot_end = slot_start + timedelta(minutes=int(duration_min))
+        # Pad the query window by 4h either side so we don't miss a
+        # long booking whose appointment_at lands outside the immediate
+        # window but whose end-time spills in.
+        lo = (slot_start - timedelta(hours=4)).isoformat()
+        hi = (slot_start + timedelta(hours=4)).isoformat()
+    except Exception:
+        # If we can't parse the slot, don't block the booking; the
+        # check is opportunistic.
+        return True
+
+    rows = sb_clients.sb_get_as_service(
+        f"/module_entries?business_id=eq.{business_id}"
+        f"&appointment_at=gte.{lo}&appointment_at=lte.{hi}"
+        f"&status=eq.active"
+        f"&select=appointment_at,duration_min_at_booking,duration_min"
+        f"&limit=200"
+    ) or []
+    if not isinstance(rows, list) or not rows:
+        return True
+
+    intervals = _booking_intervals(rows)
+    for b_start, b_end in intervals:
+        if _overlaps(slot_start, slot_end, b_start, b_end):
+            return False
+    return True
 
 
 def _create_appointment(
