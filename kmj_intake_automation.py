@@ -58,6 +58,8 @@ from availability_router import router as availability_router
 from booking_page_router import router as booking_page_router
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver
 from stripe_connect_router import router as stripe_connect_router
+# Phase D.4 PR 2 — Charges / Payouts / Customers read proxy
+from stripe_data_proxy import router as stripe_data_proxy_router
 # Phase C.1.3 — Chief proactive-suggestion lifecycle
 from chief_suggestions_router import router as chief_suggestions_router
 # Pass 4.0a — Director Agent foundations
@@ -110,6 +112,10 @@ app.include_router(booking_page_router)
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
 app.include_router(stripe_connect_router)
+# Phase D.4 PR 2 — Charges / Payouts / Customers data tabs proxy.
+# Shares the /payments prefix with stripe_connect_router; FastAPI
+# merges them cleanly because the routes don't collide.
+app.include_router(stripe_data_proxy_router)
 app.include_router(chief_suggestions_router)
 app.include_router(business_profile_router)
 app.include_router(practitioner_profile_router)
