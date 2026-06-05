@@ -651,6 +651,7 @@ if not logger.handlers:
 
 def _supabase_url(): return os.environ.get("SUPABASE_URL", "")
 def _supabase_anon(): return os.environ.get("SUPABASE_ANON", "")
+def _supabase_service(): return os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 # In-memory rate limiter
 _rate_buckets: Dict[str, Dict[str, Any]] = {}
@@ -675,6 +676,30 @@ async def _sb(client: httpx.AsyncClient, path: str):
     headers = {
         "apikey": _supabase_anon(),
         "Authorization": f"Bearer {_supabase_anon()}",
+        "Content-Type": "application/json",
+    }
+    resp = await client.get(url, headers=headers, timeout=HTTP_TIMEOUT)
+    if resp.status_code >= 400:
+        return None
+    text = resp.text
+    return json.loads(text) if text else None
+
+
+async def _sb_service(client: httpx.AsyncClient, path: str):
+    """Phase D.2.1 — service-role GET for the hosted booking page render.
+
+    Public booking-page serving needs to read businesses.name +
+    settings.brand_kit + settings.booking_page to render the page, and
+    these are restricted from anon by RLS. Service-role read here is
+    bounded: callers MUST filter by the specific biz_id already resolved
+    from the public slug, and the rendered output only exposes fields
+    that are inherently public-by-intent (the practitioner is asking
+    customers to visit this URL)."""
+    key = _supabase_service()
+    url = f"{_supabase_url()}/rest/v1{path}"
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
     resp = await client.get(url, headers=headers, timeout=HTTP_TIMEOUT)
@@ -4483,7 +4508,11 @@ async def _serve_booking_page(client, biz_id: Optional[str], slug: str) -> HTMLR
     function tight + makes the HTML easy to unit-test."""
     if not biz_id:
         raise HTTPException(404, "business not found")
-    biz_rows = await _sb(
+    # Service-role read: anon RLS on businesses blocks public reads,
+    # but the booking-page render is an inherently public surface (the
+    # practitioner is sharing this URL with customers). Scoped to one
+    # id, returning only render-needed columns.
+    biz_rows = await _sb_service(
         client,
         f"/businesses?id=eq.{biz_id}&select=id,name,settings&limit=1",
     )
