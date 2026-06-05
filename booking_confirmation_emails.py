@@ -194,6 +194,7 @@ def _build_html_body(
     tz_label: Optional[str],
     hosted_page_url: Optional[str],
     cancellation_policy: str,
+    pay_now_url: Optional[str] = None,
 ) -> str:
     name = html.escape(customer_name or "there")
     biz = html.escape(business_name)
@@ -219,6 +220,20 @@ def _build_html_body(
             f'<a href="{safe_url}" style="color:#4f46e5">{safe_url}</a></p>'
         )
 
+    pay_now_block = ""
+    if pay_now_url:
+        safe_pay = html.escape(pay_now_url)
+        pay_now_block = (
+            f'<p style="margin:16px 0 8px;text-align:center">'
+            f'<a href="{safe_pay}" '
+            f'style="display:inline-block;background:#4f46e5;color:white;'
+            f'padding:12px 24px;border-radius:8px;font-weight:600;'
+            f'text-decoration:none">Pay now (optional)</a>'
+            f'</p>'
+            f'<p style="margin:0 0 16px;font-size:11.5px;color:#94a3b8;'
+            f'text-align:center">Or pay at your appointment — either works.</p>'
+        )
+
     policy = html.escape(cancellation_policy or "")
 
     return f"""<!doctype html>
@@ -240,6 +255,8 @@ background:#f8fafc;margin:0;padding:24px;">
       <p style="margin:6px 0;color:#475569;font-size:14px">{when}</p>
       {price_line}
     </div>
+
+    {pay_now_block}
 
     <p style="margin:18px 0 6px;font-size:13px;color:#475569">
       The attached .ics file will add this to your calendar.
@@ -390,6 +407,32 @@ async def send_confirmation_email(
         )
         ics_b64 = base64.b64encode(ics_bytes).decode("ascii")
 
+        # Phase D.4 PR 3 — opportunistically generate a Stripe Checkout
+        # Session at email-send time so the customer's confirmation email
+        # carries a Pay Now link. Skipped if the business isn't connected
+        # or has no price. Failures swallowed — email still ships.
+        pay_now_url: Optional[str] = None
+        try:
+            stripe_acct = business.get("stripe_account_id")
+            booking_id = booking.get("id")
+            if stripe_acct and price and booking_id and not booking.get("paid_at"):
+                from stripe_checkout_helpers import create_booking_checkout
+                price_cents = int(round(float(price) * 100))
+                if price_cents > 0:
+                    public_url = hosted_url or "https://mysolutionist.app/"
+                    session = await create_booking_checkout(
+                        stripe_account_id=stripe_acct,
+                        booking_id=str(booking_id),
+                        service_name=service_name or "Booking",
+                        amount_cents=price_cents,
+                        customer_email=customer_email,
+                        success_url=f"{public_url}?paid=1",
+                        cancel_url=f"{public_url}?paid=0",
+                    )
+                    pay_now_url = session.get("url")
+        except Exception as e:
+            logger.warning(f"pay-now session create failed (non-fatal): {e!s}")
+
         # Compose body
         html_body = _build_html_body(
             business_name=biz_name,
@@ -401,6 +444,7 @@ async def send_confirmation_email(
             tz_label=tz_label,
             hosted_page_url=hosted_url,
             cancellation_policy=DEFAULT_CANCELLATION_POLICY,
+            pay_now_url=pay_now_url,
         )
 
         # Slug-style filename: easier to identify in mail clients.

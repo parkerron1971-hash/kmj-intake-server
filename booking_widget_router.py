@@ -114,7 +114,7 @@ def _business_basics(business_id: str) -> Optional[Dict[str, Any]]:
     # fall back to practitioner_profiles.timezone via the owner key.
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}&limit=1"
-        f"&select=id,name,settings,voice_profile,owner_id"
+        f"&select=id,name,settings,voice_profile,owner_id,stripe_account_id"
     ) or []
     return rows[0] if rows else None
 
@@ -351,6 +351,10 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
         "available_slots": available_slots,
         # Phase D.1.3 — business timezone for the widget label.
         "timezone": business_tz,
+        # Phase D.4 PR 3 — whether the customer-side wizard should
+        # show the "Pay now" toggle in the checkout step. Boolean
+        # only; the stripe_account_id itself stays server-side.
+        "payments_enabled": bool(business.get("stripe_account_id")),
         # Quote anchor — the widget echoes this on submit; we use it for
         # the P5a freshness window check.
         "quoted_at": int(time.time()),

@@ -321,23 +321,27 @@ async def stripe_connect_status(
 
 @router.post("/stripe/webhook")
 async def stripe_webhook(request: Request) -> JSONResponse:
-    """Stripe webhook receiver. Verifies signature first; only then
-    parses + dispatches.
+    """Stripe webhook receiver. Verifies signature, deduplicates via
+    stripe_webhook_events, dispatches to the right handler.
 
-    PR 1 ships: signature verification, account.updated,
-    account.application.deauthorized.
+    PR 3 events handled (in addition to PR 1's account.* pair):
+      checkout.session.completed     — booking + invoice payment success
+      payment_intent.succeeded       — second-channel success signal
+      payment_intent.payment_failed  — surface failed payment
+      invoice.paid                   — mirror Stripe invoice -> local
+      invoice.payment_failed         — mirror Stripe invoice -> local
+      charge.refunded                — record refund + flip flag
+      charge.dispute.created         — populate stripe_disputes_cache
 
-    PR 2/3 add the payment_intent.*, checkout.session.*, invoice.*,
-    charge.* handlers (gated by the pre-pay flow and the
-    Invoices/Refunds surfaces)."""
+    Idempotency: each event lands as one row in stripe_webhook_events
+    keyed by event.id. If the row already exists with processed_ok=true,
+    we return 200 immediately without re-dispatching. Stripe retries
+    are therefore cheap + safe."""
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature") or ""
 
     if not verify_webhook_signature(payload, sig_header):
         logger.warning("webhook signature verification failed")
-        # Stripe expects 400 on signature failure so it'll retry with
-        # backoff. A 4xx response prevents duplicate delivery via the
-        # success-path retry queue.
         return JSONResponse({"error": "bad_signature"}, status_code=400)
 
     try:
@@ -350,24 +354,80 @@ async def stripe_webhook(request: Request) -> JSONResponse:
     evt_id = event.get("id") or ""
     obj = (event.get("data") or {}).get("object") or {}
     account_id = event.get("account") or obj.get("account") or None
+    livemode = bool(event.get("livemode"))
     logger.info(
-        f"webhook {evt_type} id={evt_id} account={account_id} "
-        f"livemode={event.get('livemode')}"
+        f"webhook {evt_type} id={evt_id} account={account_id} livemode={livemode}"
     )
 
+    # ─── Idempotency check ─────────────────────────────────────────
+    if evt_id:
+        existing = sb_clients.sb_get_as_service(
+            f"/stripe_webhook_events?id=eq.{evt_id}&select=id,processed_ok&limit=1"
+        ) or []
+        if existing and existing[0].get("processed_ok") is True:
+            logger.info(f"webhook {evt_type} id={evt_id} already processed, skipping")
+            return JSONResponse({"ok": True, "deduplicated": True})
+
+        # Record receipt. Upsert-style: insert; if it already exists
+        # (unprocessed retry) PostgREST returns 409 we tolerate.
+        try:
+            sb_clients.sb_post_as_service("/stripe_webhook_events", {
+                "id": evt_id,
+                "type": evt_type,
+                "livemode": livemode,
+                "account_id": account_id,
+                "raw": event,
+            })
+        except Exception as e:
+            # If unique-violation on retry, that's fine; we still dispatch.
+            logger.info(f"webhook {evt_id} pre-insert {e!s}")
+
+    # ─── Dispatch ──────────────────────────────────────────────────
+    processed_ok = False
+    processed_error: Optional[str] = None
     try:
         if evt_type == "account.updated":
             _handle_account_updated(obj)
         elif evt_type == "account.application.deauthorized":
-            # Stripe-side disconnect (practitioner revoked from Stripe
-            # dashboard rather than our UI).
             _handle_account_deauthorized(obj, account_id)
-        # All other event types are recorded in logs only at PR 1; the
-        # specific handlers land alongside the surfaces in PR 2/3.
+        elif evt_type == "checkout.session.completed":
+            _handle_checkout_session_completed(obj)
+        elif evt_type == "payment_intent.succeeded":
+            _handle_payment_intent_succeeded(obj)
+        elif evt_type == "payment_intent.payment_failed":
+            _handle_payment_intent_failed(obj)
+        elif evt_type == "invoice.paid":
+            _handle_invoice_paid(obj)
+        elif evt_type == "invoice.payment_failed":
+            _handle_invoice_failed(obj)
+        elif evt_type == "charge.refunded":
+            _handle_charge_refunded(obj)
+        elif evt_type == "charge.dispute.created":
+            _handle_dispute_created(obj, account_id)
+        else:
+            # Unknown event types are still recorded in the
+            # stripe_webhook_events table for replay; just no handler.
+            pass
+        processed_ok = True
     except Exception as e:
+        processed_error = str(e)
         logger.warning(f"webhook handler error for {evt_type} id={evt_id}: {e}")
-        # Still return 200 — Stripe will not retry a successful POST.
-        # The event landed in our logs, so we can replay manually.
+
+    # Record outcome.
+    if evt_id:
+        try:
+            from datetime import datetime, timezone
+            sb_clients.sb_patch_as_service(
+                f"/stripe_webhook_events?id=eq.{evt_id}",
+                {
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                    "processed_ok": processed_ok,
+                    "processed_error": processed_error,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"webhook outcome patch failed for {evt_id}: {e}")
+
     return JSONResponse({"ok": True, "received": evt_type})
 
 
@@ -415,7 +475,185 @@ def _handle_account_deauthorized(_obj: Dict[str, Any], account_id: Optional[str]
     )
 
 
+# ─── PR 3 event handlers (unified payment-source pattern) ──────────
+
+
+def _metadata_source(obj: Dict[str, Any]) -> tuple:
+    """Extract {source_type, source_id} from a Stripe object's metadata.
+    Stripe propagates Checkout-Session metadata to payment_intent +
+    charge when payment_intent_data.metadata is set at create-time."""
+    md = obj.get("metadata") or {}
+    return md.get("source_type"), md.get("source_id")
+
+
+def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
+    """A checkout session paid. Look up the source and mark it paid.
+    For source_type='booking' → set module_entries.paid_at + ids.
+    For source_type='invoice' → handled by invoice.paid (PR 3b)."""
+    if session.get("payment_status") != "paid":
+        return
+    source_type, source_id = _metadata_source(session)
+    if not source_id:
+        return
+    pi_id = session.get("payment_intent")
+    if source_type == "booking":
+        _mark_booking_paid(source_id, payment_intent_id=pi_id, charge_id=None)
+    # invoice handled via invoice.paid event (more authoritative)
+
+
+def _handle_payment_intent_succeeded(pi: Dict[str, Any]) -> None:
+    """Second-channel success signal. Stripe sometimes delivers this
+    before checkout.session.completed; mark idempotently so whichever
+    arrives first wins."""
+    source_type, source_id = _metadata_source(pi)
+    if not source_id or source_type != "booking":
+        return
+    charges = ((pi.get("charges") or {}).get("data") or [])
+    charge_id = charges[0].get("id") if charges else None
+    _mark_booking_paid(source_id, payment_intent_id=pi.get("id"), charge_id=charge_id)
+
+
+def _handle_payment_intent_failed(pi: Dict[str, Any]) -> None:
+    """For now: log only. Failed-payment UX comes in a later pass."""
+    source_type, source_id = _metadata_source(pi)
+    logger.info(
+        f"payment_intent.payment_failed source={source_type}/{source_id}: "
+        f"{((pi.get('last_payment_error') or {}).get('message')) or '(no error)'}"
+    )
+
+
+def _handle_invoice_paid(inv: Dict[str, Any]) -> None:
+    """A Stripe invoice was paid. Mirror local invoices row."""
+    stripe_inv_id = inv.get("id")
+    if not stripe_inv_id:
+        return
+    # First try metadata-direct linkage (created via Solutionist).
+    _, source_id = _metadata_source(inv)
+    patch: Dict[str, Any] = {
+        "status": "paid",
+        "paid_at": _now_iso(),
+        "amount_paid_cents": inv.get("amount_paid"),
+        "amount_due_cents": inv.get("amount_due"),
+        "hosted_invoice_url": inv.get("hosted_invoice_url"),
+        "pdf_url": inv.get("invoice_pdf"),
+    }
+    if source_id:
+        sb_clients.sb_patch_as_service(
+            f"/invoices?id=eq.{source_id}", patch,
+        )
+    else:
+        sb_clients.sb_patch_as_service(
+            f"/invoices?stripe_invoice_id=eq.{stripe_inv_id}", patch,
+        )
+
+
+def _handle_invoice_failed(inv: Dict[str, Any]) -> None:
+    """Log + mirror — Stripe will keep the invoice in 'open' state on
+    a failed attempt; we don't roll the status back."""
+    logger.info(f"invoice.payment_failed id={inv.get('id')}")
+
+
+def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
+    """Charge was (partially or fully) refunded. Locate the linked
+    booking via metadata or the stored stripe_charge_id and update
+    module_entries with refund state."""
+    source_type, source_id = _metadata_source(charge)
+    if source_type == "booking" and source_id:
+        # Mirror refunded total onto the booking row. We keep it in
+        # data.refunded_amount_cents so we don't need another column.
+        rows = sb_clients.sb_get_as_service(
+            f"/module_entries?id=eq.{source_id}&select=data&limit=1"
+        ) or []
+        if not rows:
+            return
+        data = dict(rows[0].get("data") or {})
+        data["refunded_amount_cents"] = charge.get("amount_refunded") or 0
+        data["fully_refunded"] = bool(charge.get("refunded"))
+        sb_clients.sb_patch_as_service(
+            f"/module_entries?id=eq.{source_id}", {"data": data},
+        )
+
+
+def _handle_dispute_created(dispute: Dict[str, Any], account_id: Optional[str]) -> None:
+    """A dispute was opened. Cache the essentials so the Charges tab
+    can render a 'Dispute open' badge without a per-row Stripe call.
+    Evidence upload UI is PR 3 deferred — practitioners use the
+    Stripe Dashboard for evidence in v1."""
+    dispute_id = dispute.get("id")
+    charge_id = dispute.get("charge")
+    if not (dispute_id and charge_id):
+        return
+
+    # Resolve business_id from the account_id (the deauthorize handler's
+    # lookup pattern).
+    biz_id: Optional[str] = None
+    if account_id:
+        biz_rows = sb_clients.sb_get_as_service(
+            f"/businesses?stripe_account_id=eq.{account_id}&select=id&limit=1"
+        ) or []
+        if biz_rows:
+            biz_id = biz_rows[0]["id"]
+    if not biz_id:
+        # Without a known business we can't tie the dispute to a row.
+        # Log and bail; Stripe still has the canonical record.
+        logger.warning(f"dispute {dispute_id} has no resolvable business")
+        return
+
+    sb_clients.sb_post_as_service("/stripe_disputes_cache", {
+        "id": dispute_id,
+        "business_id": biz_id,
+        "stripe_charge_id": charge_id,
+        "stripe_payment_intent_id": dispute.get("payment_intent"),
+        "reason": dispute.get("reason"),
+        "status": dispute.get("status"),
+        "amount_cents": dispute.get("amount"),
+        "currency": dispute.get("currency"),
+        "evidence_due_by": _from_unix(
+            (dispute.get("evidence_details") or {}).get("due_by")
+        ),
+        "raw": dispute,
+    })
+
+
+def _mark_booking_paid(
+    booking_id: str,
+    *,
+    payment_intent_id: Optional[str],
+    charge_id: Optional[str],
+) -> None:
+    """Idempotent: only sets paid_at if it's currently NULL."""
+    rows = sb_clients.sb_get_as_service(
+        f"/module_entries?id=eq.{booking_id}&select=id,paid_at&limit=1"
+    ) or []
+    if not rows or rows[0].get("paid_at"):
+        return
+    patch: Dict[str, Any] = {"paid_at": _now_iso()}
+    if charge_id:
+        patch["stripe_charge_id"] = charge_id
+    if payment_intent_id:
+        patch["stripe_payment_intent_id"] = payment_intent_id
+    sb_clients.sb_patch_as_service(
+        f"/module_entries?id=eq.{booking_id}", patch,
+    )
+    logger.info(f"booking {booking_id[:8]} marked paid via webhook")
+
+
 # ─── Tiny helpers ────────────────────────────────────────────────────
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _from_unix(ts: Optional[int]) -> Optional[str]:
+    if ts is None:
+        return None
+    from datetime import datetime, timezone
+    try:
+        return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
+    except Exception:
+        return None
 
 
 def _url_escape(s: str) -> str:
