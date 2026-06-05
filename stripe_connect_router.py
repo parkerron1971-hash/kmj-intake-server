@@ -55,13 +55,33 @@ logger = logging.getLogger("stripe_connect_router")
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
-# Where to redirect the practitioner after OAuth. Defaults to the
-# studio app's payments tab; env-var overridable for dev / staging.
-DEFAULT_RETURN_URL = os.environ.get(
-    "STRIPE_CONNECT_RETURN_URL",
+# ─── Two distinct URLs in the OAuth flow (don't conflate) ────────────
+#
+# STRIPE_CALLBACK_URL is the redirect_uri Stripe sees during the OAuth
+#   handshake. It MUST exactly match a URI registered in the Stripe
+#   Connect platform settings — Stripe validates this server-side and
+#   rejects the request with "Invalid redirect URI" if it doesn't.
+#   This is OUR backend's /payments/stripe-connect/callback endpoint
+#   (where Stripe sends ?code=...&state=... after the practitioner
+#   approves the connection).
+#
+# FRONTEND_SUCCESS_URL / FRONTEND_ERROR_URL are where OUR callback
+#   handler bounces the practitioner AFTER it has exchanged the code +
+#   persisted stripe_account_id. Stripe never sees these URLs — they
+#   live entirely in the post-exchange redirect step.
+#
+# This separation was the PR 1 v1 bug: redirect_uri was set to the
+# frontend URL, which Stripe rejected because that URL isn't (and
+# shouldn't be) registered as a Connect OAuth callback.
+STRIPE_CALLBACK_URL = os.environ.get(
+    "STRIPE_CONNECT_CALLBACK_URL",
+    "https://kmj-intake-server-production.up.railway.app/payments/stripe-connect/callback",
+)
+FRONTEND_SUCCESS_URL = os.environ.get(
+    "STRIPE_CONNECT_RETURN_URL",  # env-var name kept for back-compat
     "https://app.solutionist.studio/?payments=connected",
 )
-DEFAULT_RETURN_URL_ERROR = os.environ.get(
+FRONTEND_ERROR_URL = os.environ.get(
     "STRIPE_CONNECT_RETURN_URL_ERROR",
     "https://app.solutionist.studio/?payments=error",
 )
@@ -139,7 +159,10 @@ def stripe_connect_start(
 
     state = _issue_state(str(business_id))
     try:
-        url = oauth_url(state=state, return_url=DEFAULT_RETURN_URL)
+        # The redirect_uri Stripe sees is OUR backend callback. After
+        # Stripe redirects there, the callback handler bounces the
+        # practitioner to FRONTEND_SUCCESS_URL.
+        url = oauth_url(state=state, return_url=STRIPE_CALLBACK_URL)
     except RuntimeError as e:
         logger.warning(f"stripe-connect/start misconfig: {e}")
         raise HTTPException(503, "payments not configured")
@@ -167,7 +190,7 @@ async def stripe_connect_callback(request: Request) -> RedirectResponse:
         # Practitioner cancelled or Stripe declined — bounce back with msg.
         err = params.get("error_description") or params.get("error") or "stripe error"
         return RedirectResponse(
-            url=f"{DEFAULT_RETURN_URL_ERROR}&msg={_url_escape(err)}",
+            url=f"{FRONTEND_ERROR_URL}&msg={_url_escape(err)}",
             status_code=302,
         )
 
@@ -175,14 +198,14 @@ async def stripe_connect_callback(request: Request) -> RedirectResponse:
     state = params.get("state") or ""
     if not code or not state:
         return RedirectResponse(
-            url=f"{DEFAULT_RETURN_URL_ERROR}&msg=missing_code_or_state",
+            url=f"{FRONTEND_ERROR_URL}&msg=missing_code_or_state",
             status_code=302,
         )
 
     business_id = _consume_state(state)
     if not business_id:
         return RedirectResponse(
-            url=f"{DEFAULT_RETURN_URL_ERROR}&msg=invalid_or_expired_state",
+            url=f"{FRONTEND_ERROR_URL}&msg=invalid_or_expired_state",
             status_code=302,
         )
 
@@ -191,7 +214,7 @@ async def stripe_connect_callback(request: Request) -> RedirectResponse:
     except Exception as e:
         logger.warning(f"oauth exchange failed for biz={business_id}: {e}")
         return RedirectResponse(
-            url=f"{DEFAULT_RETURN_URL_ERROR}&msg=oauth_exchange_failed",
+            url=f"{FRONTEND_ERROR_URL}&msg=oauth_exchange_failed",
             status_code=302,
         )
 
@@ -199,7 +222,7 @@ async def stripe_connect_callback(request: Request) -> RedirectResponse:
     if not stripe_account_id:
         logger.warning(f"oauth resp missing stripe_user_id for biz={business_id}")
         return RedirectResponse(
-            url=f"{DEFAULT_RETURN_URL_ERROR}&msg=no_account_id",
+            url=f"{FRONTEND_ERROR_URL}&msg=no_account_id",
             status_code=302,
         )
 
@@ -213,7 +236,7 @@ async def stripe_connect_callback(request: Request) -> RedirectResponse:
         f"livemode={oauth_resp.get('livemode')}"
     )
     return RedirectResponse(
-        url=f"{DEFAULT_RETURN_URL}&biz={business_id}",
+        url=f"{FRONTEND_SUCCESS_URL}&biz={business_id}",
         status_code=302,
     )
 
