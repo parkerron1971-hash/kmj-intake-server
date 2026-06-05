@@ -5470,10 +5470,16 @@ async def handle_create_invoice(client, biz, action) -> Dict:
     if is_owner and stripe_key and total > 0 and invoice_id:
         try:
             from stripe_proxy import _create_stripe_payment_link
+            # PR 3a — pass unified-source metadata so the resulting
+            # charge in the Charges tab resolves back to "from
+            # Invoice #INV-...". Webhook checkout.session.completed
+            # also uses this to mark the invoice paid via metadata.
             data = await _create_stripe_payment_link(
                 amount=float(total),
                 currency=(currency or "usd").lower(),
                 description=f"Invoice {invoice_number}",
+                source_type="invoice",
+                source_id=str(invoice_id),
             )
             if data.get("url"):
                 stripe_url = data["url"]

@@ -156,27 +156,6 @@ async def create_booking_checkout(
     )
 
 
-async def create_invoice_checkout(
-    *,
-    stripe_account_id: str,
-    invoice_id: str,
-    line_items: List[Dict[str, Any]],
-    customer_email: Optional[str],
-    success_url: str,
-    cancel_url: str,
-) -> Dict[str, Any]:
-    """Wrapper for invoice pay-link (PR 3b)."""
-    return await create_checkout_session(
-        stripe_account_id=stripe_account_id,
-        line_items=line_items,
-        success_url=success_url,
-        cancel_url=cancel_url,
-        source_type="invoice",
-        source_id=invoice_id,
-        customer_email=customer_email,
-    )
-
-
 async def create_refund(
     *,
     stripe_account_id: str,

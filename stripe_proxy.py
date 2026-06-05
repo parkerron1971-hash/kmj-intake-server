@@ -70,10 +70,21 @@ async def _create_stripe_payment_link(
     amount: float,
     currency: str,
     description: str,
+    *,
+    source_type: Optional[str] = None,
+    source_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create a one-off price + payment link. Returns {id, url}. Raises
     HTTPException on any Stripe error, propagating Stripe's actual status
-    code + message so callers can surface it."""
+    code + message so callers can surface it.
+
+    Phase D.4 PR 3a — when source_type + source_id are passed, the
+    Payment Link records them as metadata AND propagates them to the
+    underlying PaymentIntent (via payment_intent_data[metadata]) so the
+    resulting charge carries the unified-source pattern. The Charges
+    tab uses this to render "from Invoice #INV-2026-001" lineage and
+    webhook handlers use it to mark the originating row paid.
+    """
     key = os.environ.get("STRIPE_SECRET_KEY")
     if not key:
         raise HTTPException(500, "Stripe not configured on server — set STRIPE_SECRET_KEY")
@@ -106,14 +117,24 @@ async def _create_stripe_payment_link(
         if not price_id:
             raise HTTPException(502, "Stripe returned no price id")
 
-        # Step 2 — wrap it in a Payment Link
+        # Step 2 — wrap it in a Payment Link.
+        link_form: Dict[str, str] = {
+            "line_items[0][price]": price_id,
+            "line_items[0][quantity]": "1",
+        }
+        # PR 3a unified-source metadata. Propagated to PaymentIntent so
+        # charges + webhooks (which only see PI metadata) can resolve
+        # back to the originating Solutionist row.
+        if source_type and source_id:
+            link_form["metadata[source_type]"] = source_type
+            link_form["metadata[source_id]"] = source_id
+            link_form["payment_intent_data[metadata][source_type]"] = source_type
+            link_form["payment_intent_data[metadata][source_id]"] = source_id
+
         link_resp = await client.post(
             f"{STRIPE_API_BASE}/payment_links",
             auth=(key, ""),
-            data={
-                "line_items[0][price]": price_id,
-                "line_items[0][quantity]": "1",
-            },
+            data=link_form,
         )
         if link_resp.status_code >= 400:
             body = link_resp.text[:500]

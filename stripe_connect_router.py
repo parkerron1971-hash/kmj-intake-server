@@ -489,7 +489,7 @@ def _metadata_source(obj: Dict[str, Any]) -> tuple:
 def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
     """A checkout session paid. Look up the source and mark it paid.
     For source_type='booking' → set module_entries.paid_at + ids.
-    For source_type='invoice' → handled by invoice.paid (PR 3b)."""
+    For source_type='invoice' → mark the existing-system invoices row paid."""
     if session.get("payment_status") != "paid":
         return
     source_type, source_id = _metadata_source(session)
@@ -498,7 +498,8 @@ def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
     pi_id = session.get("payment_intent")
     if source_type == "booking":
         _mark_booking_paid(source_id, payment_intent_id=pi_id, charge_id=None)
-    # invoice handled via invoice.paid event (more authoritative)
+    elif source_type == "invoice":
+        _mark_invoice_paid(source_id)
 
 
 def _handle_payment_intent_succeeded(pi: Dict[str, Any]) -> None:
@@ -523,41 +524,51 @@ def _handle_payment_intent_failed(pi: Dict[str, Any]) -> None:
 
 
 def _handle_invoice_paid(inv: Dict[str, Any]) -> None:
-    """A Stripe invoice was paid. Mirror local invoices row."""
-    stripe_inv_id = inv.get("id")
-    if not stripe_inv_id:
-        return
-    # First try metadata-direct linkage (created via Solutionist).
+    """invoice.paid event from Stripe. PR 3a ruling: Solutionist's
+    canonical invoicing path uses Payment Links via stripe_proxy,
+    not Stripe-API Invoices. We don't expect this event in the
+    current architecture; logged for visibility in case a future
+    flow starts using it."""
     _, source_id = _metadata_source(inv)
-    patch: Dict[str, Any] = {
-        "status": "paid",
-        "paid_at": _now_iso(),
-        "amount_paid_cents": inv.get("amount_paid"),
-        "amount_due_cents": inv.get("amount_due"),
-        "hosted_invoice_url": inv.get("hosted_invoice_url"),
-        "pdf_url": inv.get("invoice_pdf"),
-    }
-    if source_id:
-        sb_clients.sb_patch_as_service(
-            f"/invoices?id=eq.{source_id}", patch,
-        )
-    else:
-        sb_clients.sb_patch_as_service(
-            f"/invoices?stripe_invoice_id=eq.{stripe_inv_id}", patch,
-        )
+    logger.info(
+        f"invoice.paid id={inv.get('id')} source_id={source_id} "
+        f"(not handled by PR 3a — Payment Link flow handles invoice "
+        f"payment via checkout.session.completed metadata)"
+    )
 
 
 def _handle_invoice_failed(inv: Dict[str, Any]) -> None:
-    """Log + mirror — Stripe will keep the invoice in 'open' state on
-    a failed attempt; we don't roll the status back."""
-    logger.info(f"invoice.payment_failed id={inv.get('id')}")
+    """Log only — see _handle_invoice_paid for context."""
+    logger.info(f"invoice.payment_failed id={inv.get('id')} (logged-only)")
+
+
+def _mark_invoice_paid(invoice_id: str) -> None:
+    """Mark an existing-system invoices row paid. Idempotent — only
+    flips status when not already 'paid'."""
+    rows = sb_clients.sb_get_as_service(
+        f"/invoices?id=eq.{invoice_id}&select=id,status&limit=1"
+    ) or []
+    if not rows or rows[0].get("status") == "paid":
+        return
+    sb_clients.sb_patch_as_service(
+        f"/invoices?id=eq.{invoice_id}",
+        {"status": "paid", "paid_at": _now_iso()},
+    )
+    logger.info(f"invoice {invoice_id[:8]} marked paid via webhook")
 
 
 def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
     """Charge was (partially or fully) refunded. Locate the linked
-    booking via metadata or the stored stripe_charge_id and update
-    module_entries with refund state."""
+    source via metadata and record refund state.
+
+    PR 3a ruling on invoice refund semantics: existing invoice keeps
+    status='paid' (preserves the canonical lifecycle); refund details
+    land in additive refund_amount_cents + refunded_at columns. Full
+    refund vs partial is observable via amount_refunded == amount.
+    """
     source_type, source_id = _metadata_source(charge)
+    refunded_cents = int(charge.get("amount_refunded") or 0)
+
     if source_type == "booking" and source_id:
         # Mirror refunded total onto the booking row. We keep it in
         # data.refunded_amount_cents so we don't need another column.
@@ -567,52 +578,33 @@ def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
         if not rows:
             return
         data = dict(rows[0].get("data") or {})
-        data["refunded_amount_cents"] = charge.get("amount_refunded") or 0
+        data["refunded_amount_cents"] = refunded_cents
         data["fully_refunded"] = bool(charge.get("refunded"))
         sb_clients.sb_patch_as_service(
             f"/module_entries?id=eq.{source_id}", {"data": data},
         )
+    elif source_type == "invoice" and source_id:
+        # PR 3a additive columns on existing invoices: status stays
+        # 'paid'; refund_amount_cents + refunded_at carry the truth.
+        sb_clients.sb_patch_as_service(
+            f"/invoices?id=eq.{source_id}",
+            {
+                "refund_amount_cents": refunded_cents,
+                "refunded_at": _now_iso(),
+            },
+        )
 
 
 def _handle_dispute_created(dispute: Dict[str, Any], account_id: Optional[str]) -> None:
-    """A dispute was opened. Cache the essentials so the Charges tab
-    can render a 'Dispute open' badge without a per-row Stripe call.
-    Evidence upload UI is PR 3 deferred — practitioners use the
-    Stripe Dashboard for evidence in v1."""
-    dispute_id = dispute.get("id")
-    charge_id = dispute.get("charge")
-    if not (dispute_id and charge_id):
-        return
-
-    # Resolve business_id from the account_id (the deauthorize handler's
-    # lookup pattern).
-    biz_id: Optional[str] = None
-    if account_id:
-        biz_rows = sb_clients.sb_get_as_service(
-            f"/businesses?stripe_account_id=eq.{account_id}&select=id&limit=1"
-        ) or []
-        if biz_rows:
-            biz_id = biz_rows[0]["id"]
-    if not biz_id:
-        # Without a known business we can't tie the dispute to a row.
-        # Log and bail; Stripe still has the canonical record.
-        logger.warning(f"dispute {dispute_id} has no resolvable business")
-        return
-
-    sb_clients.sb_post_as_service("/stripe_disputes_cache", {
-        "id": dispute_id,
-        "business_id": biz_id,
-        "stripe_charge_id": charge_id,
-        "stripe_payment_intent_id": dispute.get("payment_intent"),
-        "reason": dispute.get("reason"),
-        "status": dispute.get("status"),
-        "amount_cents": dispute.get("amount"),
-        "currency": dispute.get("currency"),
-        "evidence_due_by": _from_unix(
-            (dispute.get("evidence_details") or {}).get("due_by")
-        ),
-        "raw": dispute,
-    })
+    """PR 3a: stripe_disputes_cache table dropped — disputes UI is
+    deferred to PR 3b. Log only so the event still lands in
+    stripe_webhook_events (the raw column preserves the full Stripe
+    payload for replay when the disputes surface lands)."""
+    logger.info(
+        f"charge.dispute.created id={dispute.get('id')} "
+        f"charge={dispute.get('charge')} reason={dispute.get('reason')} "
+        f"account={account_id} (logged-only; UI in PR 3b)"
+    )
 
 
 def _mark_booking_paid(

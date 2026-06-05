@@ -60,9 +60,10 @@ from booking_page_router import router as booking_page_router
 from stripe_connect_router import router as stripe_connect_router
 # Phase D.4 PR 2 — Charges / Payouts / Customers read proxy
 from stripe_data_proxy import router as stripe_data_proxy_router
-# Phase D.4 PR 3 — Booking pre-pay + refund endpoints + invoices CRUD
+# Phase D.4 PR 3 — Booking pre-pay + refund endpoints (PR 3a removed
+# the PR 3 invoices CRUD; the pre-existing OPERATE → Invoices surface
+# is the canonical invoicing system).
 from stripe_payments_router import router as stripe_payments_router
-from invoices_router import router as invoices_router
 # Phase C.1.3 — Chief proactive-suggestion lifecycle
 from chief_suggestions_router import router as chief_suggestions_router
 # Pass 4.0a — Director Agent foundations
@@ -123,7 +124,6 @@ app.include_router(stripe_data_proxy_router)
 # All under /payments/* prefix; FastAPI merges with the other
 # /payments routers cleanly.
 app.include_router(stripe_payments_router)
-app.include_router(invoices_router)
 app.include_router(chief_suggestions_router)
 app.include_router(business_profile_router)
 app.include_router(practitioner_profile_router)
