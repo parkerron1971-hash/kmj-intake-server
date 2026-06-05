@@ -123,7 +123,7 @@ def _brand_head_meta_tags(business_id: str) -> str:
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4461,12 +4461,69 @@ async def _try_render_smart_site(business_id: str, page_type: str, **opts) -> Op
         return None
 
 
+# Phase D.2.1 — embed origin used by the SSR booking page. Defaults to
+# the production Railway URL; an env override lets local/dev environments
+# point the rendered <script> at a different host.
+_EMBED_ORIGIN = os.environ.get(
+    "EMBED_ORIGIN",
+    "https://kmj-intake-server-production.up.railway.app",
+)
+
+
+async def _serve_booking_page(client, biz_id: Optional[str], slug: str) -> HTMLResponse:
+    """Phase D.2.1 — render the hosted booking page at
+    https://<slug>.mysolutionist.app/book.
+
+    Reads business + settings.booking_page; if published=True renders
+    the full SSR page (logo + name + tagline + widget + footer), if
+    not returns a 404-status "not published yet" page (still
+    brand-applied).
+
+    The renderer is in booking_page_renderer.py — keeps this routing
+    function tight + makes the HTML easy to unit-test."""
+    if not biz_id:
+        raise HTTPException(404, "business not found")
+    biz_rows = await _sb(
+        client,
+        f"/businesses?id=eq.{biz_id}&select=id,name,settings&limit=1",
+    )
+    if not biz_rows:
+        raise HTTPException(404, "business not found")
+    business = biz_rows[0]
+    settings = business.get("settings") or {}
+    page = settings.get("booking_page") or {}
+
+    canonical = f"https://{slug}.mysolutionist.app/book"
+
+    # Late import — avoid circular at module load
+    from booking_page_renderer import (
+        render_booking_page,
+        render_not_published_page,
+    )
+
+    if not page.get("published"):
+        html = render_not_published_page(business, canonical)
+        return HTMLResponse(
+            content=html, status_code=404, media_type="text/html",
+            headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
+        )
+
+    html = render_booking_page(business, canonical, embed_origin=_EMBED_ORIGIN)
+    return HTMLResponse(
+        content=html, media_type="text/html",
+        headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
+    )
+
+
 async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
     """Shared logic: look up site by slug and return HTML.
     Pass 3: when site_config.use_smart_sites is true, attempt Smart Sites
     render first. ANY failure falls through to legacy.
     Pass 3.8g: `path` is forwarded to render_smart_site_page so multi-page
-    sites can route /about, /services, /contact correctly."""
+    sites can route /about, /services, /contact correctly.
+    Phase D.2.1: `/book` always serves the hosted booking page
+    (regardless of MySite presence); `/` falls back to /book when the
+    site has no html_content (booking_only row)."""
     async with httpx.AsyncClient() as client:
         sites = await _sb(client,
             f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
@@ -4475,6 +4532,16 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
             raise HTTPException(404, "Site not found")
         site = sites[0]
         biz_id = site.get("business_id")
+
+        # ─── Phase D.2.1 — hosted booking page routing ─────────────
+        # /book always serves the booking page (overrides MySite for
+        # the booking sub-path). / redirects to /book when the site
+        # has no MySite html_content (booking_only row).
+        normalized_path = path.rstrip("/") or "/"
+        if normalized_path == "/book":
+            return await _serve_booking_page(client, biz_id, slug)
+        if path == "/" and not site.get("html_content"):
+            return RedirectResponse(url="/book", status_code=307)
 
         if _use_smart_sites(site) and biz_id:
             # Fetch products to pass into the home page renderer.
