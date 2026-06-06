@@ -296,8 +296,45 @@ def upsert_profile(business_id: str, data: Dict[str, Any]) -> Optional[Dict[str,
         result = _sb_post("/business_profiles", merged)
 
     if isinstance(result, list) and result:
-        return result[0]
-    return result if isinstance(result, dict) else get_profile(business_id)
+        row = result[0]
+    elif isinstance(result, dict):
+        row = result
+    else:
+        row = get_profile(business_id)
+
+    # ─── Path C Phase 1d — sync mirror ──────────────────────────────
+    # When business_profiles.business_type lands, mirror to
+    # businesses.type so the two stay aligned. CTS / VABI v1 read
+    # businesses.type first; without the mirror, profile-side updates
+    # silently drift from the surface the dictionary lookup uses.
+    # Idempotent (same value writes are no-ops); failure is non-fatal.
+    bt_after = (data or {}).get("business_type")
+    if bt_after and business_id:
+        try:
+            biz_rows = _sb_get(f"/businesses?id=eq.{business_id}&select=type&limit=1") or []
+            biz_type_now = biz_rows[0].get("type") if biz_rows else None
+            if biz_type_now != bt_after:
+                _sb_patch(
+                    f"/businesses?id=eq.{business_id}",
+                    {"type": bt_after},
+                )
+                logger.info(
+                    "[Path C 1d] mirrored business_profiles.business_type=%r "
+                    "to businesses.type (was %r)",
+                    bt_after, biz_type_now,
+                )
+        except Exception as e:
+            # Most common cause until FK migration lands: CHECK constraint
+            # rejects the value (bt_after not in constraint list). Log it
+            # so the drift is visible, then continue — profile write
+            # succeeded.
+            logger.warning(
+                "[Path C 1d] failed to mirror business_type=%r to businesses.type "
+                "for business_id=%s (non-fatal): %s",
+                bt_after, business_id, e,
+            )
+
+    return row
 
 
 TONE_TO_BRAND_VOICE = {

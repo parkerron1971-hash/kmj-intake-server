@@ -49,19 +49,38 @@ def get_vertical(
     overrides_terms: Dict[str, Any] = {}
     overrides_vi: Dict[str, Any] = {}
     if business_id:
-        # Read both business.type AND the override jsonb in one round.
+        # Path C Phase 1e — fallback chain:
+        #   businesses.type           (primary; the CHECK/FK-bound column)
+        #   business_profiles.business_type  (fallback; profile-side answer)
+        #   passed-in business_type   (last; only honored if both empty)
+        #
+        # Reason: the CTS arc surfaced businesses where businesses.type
+        # was clamped to 'custom' by the old constraint while
+        # business_profiles.business_type held the real vertical answer
+        # ('lawyer'). Reading businesses.type alone produced generic
+        # output; reading profile-side alone could miss recent edits
+        # via BusinessSettings. Chain picks the more specific signal.
         biz_rows = sb_clients.sb_get_as_service(
             f"/businesses?id=eq.{business_id}&select=id,type&limit=1"
         ) or []
-        if biz_rows and not business_type:
-            business_type = biz_rows[0].get("type")
+        biz_type = biz_rows[0].get("type") if biz_rows else None
         prof_rows = sb_clients.sb_get_as_service(
             f"/business_profiles?business_id=eq.{business_id}"
-            f"&select=terminology_overrides,vertical_intelligence_overrides&limit=1"
+            f"&select=business_type,terminology_overrides,vertical_intelligence_overrides&limit=1"
         ) or []
+        profile_type = prof_rows[0].get("business_type") if prof_rows else None
         if prof_rows:
             overrides_terms = prof_rows[0].get("terminology_overrides") or {}
             overrides_vi = prof_rows[0].get("vertical_intelligence_overrides") or {}
+        # Fallback selection. Treat null / empty / 'custom' on
+        # businesses.type as "not specific enough" — fall through.
+        biz_type_norm = (biz_type or "").strip().lower()
+        if biz_type_norm and biz_type_norm != "custom":
+            business_type = biz_type
+        elif profile_type and (profile_type or "").strip().lower() != "custom":
+            business_type = profile_type
+        elif not business_type:
+            business_type = biz_type or profile_type
 
     profile = get_profile(business_type)
     bt = (business_type or "").lower().strip()
@@ -99,6 +118,11 @@ def get_vertical(
     return {
         "ok": True,
         "business_type": bt or "(unset)",
+        # Path C Phase 1e — surface which value won the fallback chain
+        # so the frontend can render diagnostic data attributes / log
+        # the resolution. Equals 'business_type' but explicit + safer
+        # for callers that want the unresolved input separately.
+        "resolved_business_type": bt or None,
         "business_id": business_id,
         "is_known": bt in set(list_known_verticals()),
         "voice": profile.get("voice"),
