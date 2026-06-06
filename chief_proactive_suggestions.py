@@ -87,6 +87,26 @@ def _emit(business: Dict[str, Any]) -> int:
         f"&tier=eq.core&order=sort_order.asc&select=module_slug,module_name,reason,description"
     ) or []
 
+    # VABI v1 — when the blueprint table has nothing for this vertical,
+    # fall back to vertical_intelligence's module_suggestions list so
+    # newly-mapped verticals (lawyer, ministry, etc.) still get curated
+    # first-modules even before someone seeds business_type_module_blueprint.
+    if not blueprint_rows:
+        try:
+            from vertical_intelligence import get_module_suggestions
+            vi_suggestions = get_module_suggestions(biz_type)
+            blueprint_rows = [
+                {
+                    "module_slug": s.get("slug"),
+                    "module_name": (s.get("slug") or "").replace("-", " ").title(),
+                    "reason": s.get("headline"),
+                    "description": s.get("headline"),
+                }
+                for s in vi_suggestions if s.get("slug")
+            ]
+        except Exception as e:
+            logger.warning(f"VABI fallback for module suggestions failed: {e}")
+
     # What modules does the business ALREADY have? Don't suggest those.
     existing_rows = sb_clients.sb_get_as_service(
         f"/custom_modules?business_id=eq.{biz_id}&is_active=eq.true"

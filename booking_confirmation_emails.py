@@ -195,10 +195,15 @@ def _build_html_body(
     hosted_page_url: Optional[str],
     cancellation_policy: str,
     pay_now_url: Optional[str] = None,
+    business_type: Optional[str] = None,
 ) -> str:
     name = html.escape(customer_name or "there")
     biz = html.escape(business_name)
     svc = html.escape(service_name or "your appointment")
+
+    # VABI v1 — vertical-aware intro line. Lawyers get a confidentiality
+    # nudge; coaches an outcome-focused nudge; barbers stay plain.
+    intro_extra = _vertical_intro_for_email(business_type)
     when = html.escape(_fmt_local(appointment_at_iso, tz_label))
     price_line = ""
     if price is not None:
@@ -247,6 +252,7 @@ background:#f8fafc;margin:0;padding:24px;">
     </h1>
     <p style="margin:0 0 16px;font-size:15px;line-height:1.5">
       Hi {name}, your appointment with <strong>{biz}</strong> is confirmed.
+      {intro_extra}
     </p>
 
     <div style="background:#f1f5f9;border-radius:8px;padding:14px 16px;
@@ -292,6 +298,48 @@ def _vertical_subject(business_type: Optional[str], business_name: str) -> str:
     from vertical_terminology import get_term
     term = get_term(business_type, "appointment").lower()
     return f"Your {term} with {business_name} is confirmed"
+
+
+def _vertical_intro_for_email(business_type: Optional[str]) -> str:
+    """VABI v1 — short vertical-aware nudge that follows the main
+    confirmation sentence. Lean on the booking_confirmation tone note
+    from vertical_intelligence; render one sentence max so subjects
+    + tone shifts don't bloat email length."""
+    try:
+        from vertical_intelligence import get_email_voice
+        v = get_email_voice(business_type, "booking_confirmation") or {}
+        note = (v.get("tone_note") or "").strip()
+    except Exception:
+        note = ""
+    bt = (business_type or "").lower().strip()
+    # Curated per-vertical sentence — terse, factual, no boilerplate.
+    if bt == "lawyer":
+        return (
+            "Please bring any documents relevant to the matter; "
+            "our conversation is privileged and confidential."
+        )
+    if bt == "coach":
+        return "Come ready with a goal or intention you want to work on today."
+    if bt == "consultant":
+        return "If we shared a brief or pre-read, take a moment to review before we meet."
+    if bt == "creative":
+        return "If you have references, examples, or a brief to share, bring those along."
+    if bt == "course_creator":
+        return "Looking forward to seeing you — bring your questions."
+    if bt == "fitness_wellness":
+        return "Wear comfortable clothing and bring water; we'll meet you where you are."
+    if bt == "ministry":
+        return "We're glad you're coming. Childcare and dietary options are available — reply if you need anything."
+    if bt == "financial_educator":
+        return (
+            "This is education, not personalized financial advice. "
+            "Bring questions about concepts and frameworks."
+        )
+    if bt == "personal_services":
+        return "Plan to arrive a few minutes early; cancellations are appreciated 24 hours in advance."
+    # Generic / unmapped — use the GENERIC tone_note if it surfaces;
+    # otherwise stay silent (don't bloat the email).
+    return ""
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -454,6 +502,7 @@ async def send_confirmation_email(
             hosted_page_url=hosted_url,
             cancellation_policy=DEFAULT_CANCELLATION_POLICY,
             pay_now_url=pay_now_url,
+            business_type=business.get("type"),
         )
 
         # Slug-style filename: easier to identify in mail clients.

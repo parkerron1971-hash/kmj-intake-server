@@ -10739,6 +10739,13 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     context_block = _format_context_for_prompt(ctx)
     view_block = _format_view_block(view, view_detail or {})
     strategy_block = _format_strategy_block(biz, ctx.get("strategy_track"), mode=mode)
+    # VABI v1 — inject the vertical context block so every Chief reply
+    # carries the practitioner's vertical voice + vocabulary + hallmarks.
+    try:
+        from vertical_context import build_vertical_context_block
+        vertical_block = build_vertical_context_block(biz)
+    except Exception:
+        vertical_block = ""
 
     # Intelligence blocks — supplied by chief_chat. Each is empty string
     # when there's nothing useful to inject so the prompt stays clean.
@@ -10822,6 +10829,8 @@ REAL-TIME BUSINESS DATA (fresh every message):
 {context_block}
 {view_block}
 {strategy_block}
+
+{vertical_block}
 
 {priorities_block}
 
