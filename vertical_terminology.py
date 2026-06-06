@@ -22,6 +22,12 @@ BASE_TERMS: Dict[str, str] = {
     "customers":    "Customers",
     "client":       "Client",
     "clients":      "Clients",
+    # VABI v1.5 — 'contact' is the load-bearing CTS noun (ContactsList
+    # navigation, ContactDetail columns, "Add contact" CTA, etc.).
+    # Defaults to 'Contact' generic; verticals can override (lawyer →
+    # 'Client', ministry → 'Member', personal_services keeps 'Contact').
+    "contact":      "Contact",
+    "contacts":     "Contacts",
     "service":      "Service",
     "services":     "Services",
     "appointment":  "Appointment",
@@ -39,6 +45,11 @@ BASE_TERMS: Dict[str, str] = {
     "refund":       "Refund",
     "bill":         "Invoice",   # 'bill' alias resolves to Invoice by default
     "member":       "Member",
+    # VABI v1.5 — used by GROW dashboards + Chief.
+    "lead":         "Lead",
+    "leads":        "Leads",
+    "prospect":     "Prospect",
+    "prospects":    "Prospects",
 }
 
 
@@ -49,6 +60,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
     "lawyer": {
         "customer":     "Client",
         "customers":    "Clients",
+        "contact":      "Client",
+        "contacts":     "Clients",
         "service":      "Matter",
         "services":     "Matters",
         "appointment":  "Consultation",
@@ -60,6 +73,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
     "coach": {
         "customer":     "Client",
         "customers":    "Clients",
+        "contact":      "Client",
+        "contacts":     "Clients",
         "service":      "Session",
         "services":     "Sessions",
         "appointment":  "Session",
@@ -72,6 +87,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
     "consultant": {
         "customer":     "Client",
         "customers":    "Clients",
+        "contact":      "Client",
+        "contacts":     "Clients",
         "service":      "Engagement",
         "services":     "Engagements",
         "appointment":  "Meeting",
@@ -82,6 +99,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
     "course_creator": {
         "customer":     "Student",
         "customers":    "Students",
+        "contact":      "Student",
+        "contacts":     "Students",
         "service":      "Course",
         "services":     "Courses",
         "appointment":  "Class",
@@ -94,6 +113,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
     "creative": {
         "customer":     "Client",
         "customers":    "Clients",
+        "contact":      "Client",
+        "contacts":     "Clients",
         "service":      "Project",
         "services":     "Projects",
         "appointment":  "Meeting",
@@ -104,6 +125,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
     "financial_educator": {
         "customer":     "Client",
         "customers":    "Clients",
+        "contact":      "Client",
+        "contacts":     "Clients",
         "service":      "Program",
         "services":     "Programs",
         "appointment":  "Consultation",
@@ -113,6 +136,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         # F3 ruling — customer → Client for v1 (defer Patient distinction to v1.5)
         "customer":     "Client",
         "customers":    "Clients",
+        "contact":      "Client",
+        "contacts":     "Clients",
         "service":      "Session",
         "services":     "Sessions",
         "appointment":  "Session",
@@ -123,6 +148,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
     "ministry": {
         "customer":     "Member",
         "customers":    "Members",
+        "contact":      "Member",
+        "contacts":     "Members",
         # F3 ruling — service → "Ministry" to disambiguate from worship service
         "service":      "Ministry",
         "services":     "Ministries",
