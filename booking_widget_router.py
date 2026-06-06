@@ -333,6 +333,10 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
         "business": {
             "id": business["id"],
             "name": business.get("name"),
+            # Phase C.1.4 — customer-facing wizard reads this for the
+            # vertical-aware terminology lookup (F11 ruling). Generic
+            # fallback in the dictionary handles unmapped types.
+            "type": business.get("type"),
         },
         "module": {
             "id": module["id"],

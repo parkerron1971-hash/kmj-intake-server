@@ -285,6 +285,15 @@ DEFAULT_CANCELLATION_POLICY = (
 )
 
 
+def _vertical_subject(business_type: Optional[str], business_name: str) -> str:
+    """Phase C.1.4 — vertical-aware email subject. Lawyer customers
+    see 'Your consultation with… is confirmed'; coach customers see
+    'Your session with…'; generic businesses see 'Your appointment…'."""
+    from vertical_terminology import get_term
+    term = get_term(business_type, "appointment").lower()
+    return f"Your {term} with {business_name} is confirmed"
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Email send (best-effort async)
 # ─────────────────────────────────────────────────────────────────────
@@ -451,12 +460,15 @@ async def send_confirmation_email(
         fname_root = re.sub(r"[^a-z0-9-]+", "-", (biz_name or "appointment").lower()).strip("-") or "appointment"
         filename = f"{fname_root}-appointment.ics"
 
+        # Phase C.1.4 — vertical-aware subject + body header.
+        subject = _vertical_subject(business.get("type"), biz_name)
+
         await send_via_resend(
             to_email=customer_email,
             to_name=customer_name or None,
             from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
             from_name=biz_name,
-            subject=f"Your appointment with {biz_name} is confirmed",
+            subject=subject,
             body=html_body,
             reply_to=None,
             attachments=[{
