@@ -73,6 +73,8 @@ async def _create_stripe_payment_link(
     *,
     source_type: Optional[str] = None,
     source_id: Optional[str] = None,
+    business_id: Optional[str] = None,
+    connected_account_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create a one-off price + payment link. Returns {id, url}. Raises
     HTTPException on any Stripe error, propagating Stripe's actual status
@@ -84,6 +86,16 @@ async def _create_stripe_payment_link(
     resulting charge carries the unified-source pattern. The Charges
     tab uses this to render "from Invoice #INV-2026-001" lineage and
     webhook handlers use it to mark the originating row paid.
+
+    Phase D.4 PR 3c — Universal Connect routing. When
+    connected_account_id is supplied, the Price + Payment Link are
+    BOTH created on the connected account (via Stripe's Stripe-Account
+    header), so the resulting charge flows to the practitioner's
+    connected balance — not the platform. This is the load-bearing
+    change that makes the practitioner's OPERATE → Payments → Charges
+    tab show the resulting paid invoices. business_id rides along in
+    metadata so webhook handlers can resolve back to the originating
+    Solutionist row even when querying cross-account.
     """
     key = os.environ.get("STRIPE_SECRET_KEY")
     if not key:
@@ -96,11 +108,20 @@ async def _create_stripe_payment_link(
     currency_norm = (currency or "usd").lower()
     product_name = (description or "Invoice Payment").strip() or "Invoice Payment"
 
+    # PR 3c — when connected_account_id is set, every Stripe API call
+    # below is scoped to the connected account via the Stripe-Account
+    # header. Equivalent to the Stripe Python SDK's
+    # stripe.<Resource>.create(..., stripe_account=acct_...).
+    headers: Dict[str, str] = {}
+    if connected_account_id:
+        headers["Stripe-Account"] = connected_account_id
+
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         # Step 1 — create a one-off Price
         price_resp = await client.post(
             f"{STRIPE_API_BASE}/prices",
             auth=(key, ""),
+            headers=headers,
             data={
                 "unit_amount": str(unit_amount),
                 "currency": currency_norm,
@@ -109,7 +130,10 @@ async def _create_stripe_payment_link(
         )
         if price_resp.status_code >= 400:
             body = price_resp.text[:500]
-            logger.warning(f"Stripe price create failed: {price_resp.status_code} {body}")
+            logger.warning(
+                f"Stripe price create failed: {price_resp.status_code} {body} "
+                f"(connected_account={connected_account_id or 'PLATFORM'})"
+            )
             raise HTTPException(price_resp.status_code, f"Stripe price error: {body}")
 
         price_json = price_resp.json()
@@ -130,15 +154,28 @@ async def _create_stripe_payment_link(
             link_form["metadata[source_id]"] = source_id
             link_form["payment_intent_data[metadata][source_type]"] = source_type
             link_form["payment_intent_data[metadata][source_id]"] = source_id
+        # PR 3c — business_id metadata for cross-account observability.
+        # Webhook handlers that arrive on the platform's webhook
+        # endpoint (Stripe routes ALL events to ONE configured URL,
+        # platform OR connected) use this to resolve the Solutionist
+        # business when the connected account's id matches multiple
+        # rows or when we need to authorize cross-tenant access.
+        if business_id:
+            link_form["metadata[business_id]"] = business_id
+            link_form["payment_intent_data[metadata][business_id]"] = business_id
 
         link_resp = await client.post(
             f"{STRIPE_API_BASE}/payment_links",
             auth=(key, ""),
+            headers=headers,
             data=link_form,
         )
         if link_resp.status_code >= 400:
             body = link_resp.text[:500]
-            logger.warning(f"Stripe payment-link create failed: {link_resp.status_code} {body}")
+            logger.warning(
+                f"Stripe payment-link create failed: {link_resp.status_code} {body} "
+                f"(connected_account={connected_account_id or 'PLATFORM'})"
+            )
             raise HTTPException(link_resp.status_code, f"Stripe link error: {body}")
 
         link_json = link_resp.json()
@@ -147,14 +184,39 @@ async def _create_stripe_payment_link(
 
 @router.post("/stripe/create-payment-link", response_model=PaymentLinkResponse)
 async def create_payment_link(req: PaymentLinkRequest):
+    """Public endpoint for ad-hoc Payment Link creation.
+
+    Phase D.4 PR 3c — when business_id is supplied AND that business has
+    a connected Stripe account, the Payment Link is created on the
+    connected account so funds + the resulting charge land on the
+    practitioner's books. Without business_id or without a Connect
+    account, the link is created on the platform account (legacy path
+    — kept for backward compatibility; do NOT use for new flows).
+    """
+    connected_account_id: Optional[str] = None
+    if req.business_id:
+        try:
+            import sb_clients
+            rows = sb_clients.sb_get_as_service(
+                f"/businesses?id=eq.{req.business_id}&select=stripe_account_id&limit=1"
+            ) or []
+            if rows:
+                acct = (rows[0].get("stripe_account_id") or "").strip()
+                connected_account_id = acct or None
+        except Exception as e:
+            logger.warning(f"stripe link: business lookup failed: {e}")
+
     data = await _create_stripe_payment_link(
         amount=req.amount,
         currency=req.currency,
         description=req.description,
+        business_id=req.business_id or None,
+        connected_account_id=connected_account_id,
     )
     logger.info(
         f"stripe link ok business={req.business_id or '-'} "
-        f"amount={req.amount} {req.currency} id={data.get('id')}"
+        f"amount={req.amount} {req.currency} id={data.get('id')} "
+        f"account={connected_account_id or 'PLATFORM'}"
     )
     return PaymentLinkResponse(url=data["url"], id=data["id"])
 

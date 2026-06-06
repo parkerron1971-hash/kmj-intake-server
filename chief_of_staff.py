@@ -5459,41 +5459,78 @@ async def handle_create_invoice(client, biz, action) -> Dict:
     row = inserted[0] if isinstance(inserted, list) else inserted
     invoice_id = row.get("id") if isinstance(row, dict) else None
 
-    # ── Auto-generate a per-invoice Stripe Payment Link for the platform owner ──
-    # Other practitioners keep using their own manually-pasted link. The
-    # server-side STRIPE_SECRET_KEY is only used for owner businesses —
-    # this limits blast radius if the key ever leaks.
+    # ── Auto-generate a per-invoice Stripe Payment Link ──
+    # PR 3c — Universal Connect routing. EVERY practitioner with a
+    # connected Stripe account gets an auto-generated Payment Link
+    # that routes through their connected balance, so the resulting
+    # charge surfaces in their OPERATE → Payments → Charges tab. No
+    # more PLATFORM_OWNER_ID gate; no more platform-account routing
+    # for new invoices.
+    #
+    # Backward compat: KMJ's 7 legacy invoices (created before PR 3c
+    # with platform-account Payment Links) keep their existing links
+    # and continue to function. Only new invoices route through
+    # Connect.
+    #
+    # Practitioners without stripe_account_id (Stripe not yet
+    # connected) fall back to the manual link they pasted in
+    # Integrations. If they have neither, the invoice is drafted
+    # without a Payment Link and the practitioner can pay-link it
+    # later after onboarding.
     stripe_url = manual_stripe_link
-    is_owner = biz.get("owner_id") == PLATFORM_OWNER_ID
+    connected_account_id = (biz.get("stripe_account_id") or "").strip() or None
     stripe_key = os.environ.get("STRIPE_SECRET_KEY")
 
-    if is_owner and stripe_key and total > 0 and invoice_id:
+    if connected_account_id and stripe_key and total > 0 and invoice_id:
         try:
             from stripe_proxy import _create_stripe_payment_link
-            # PR 3a — pass unified-source metadata so the resulting
-            # charge in the Charges tab resolves back to "from
-            # Invoice #INV-...". Webhook checkout.session.completed
-            # also uses this to mark the invoice paid via metadata.
+            # PR 3a — unified-source metadata so the resulting charge
+            # in the Charges tab resolves back to "from Invoice #INV-".
+            # PR 3c — business_id metadata + connected_account_id so
+            # the Payment Link is created on the practitioner's
+            # connected account (Stripe-Account header), funds flow
+            # there, and the Charges tab (which queries the connected
+            # account) actually sees the resulting charge.
             data = await _create_stripe_payment_link(
                 amount=float(total),
                 currency=(currency or "usd").lower(),
                 description=f"Invoice {invoice_number}",
                 source_type="invoice",
                 source_id=str(invoice_id),
+                business_id=str(biz.get("id") or ""),
+                connected_account_id=connected_account_id,
             )
             if data.get("url"):
                 stripe_url = data["url"]
                 await _sb(client, "PATCH", f"/invoices?id=eq.{invoice_id}", {
                     "stripe_payment_url": stripe_url,
                 })
-                print(f"[Chief] Auto-generated Stripe link for {invoice_number}: {stripe_url}", flush=True)
-                logger.info(f"stripe auto-link ok invoice={invoice_number} id={data.get('id')}")
+                print(
+                    f"[Chief] Auto-generated Stripe link for {invoice_number} "
+                    f"on {connected_account_id}: {stripe_url}",
+                    flush=True,
+                )
+                logger.info(
+                    f"stripe auto-link ok invoice={invoice_number} id={data.get('id')} "
+                    f"account={connected_account_id}"
+                )
         except HTTPException as e:
             print(f"[Chief] Stripe auto-generate failed for {invoice_number}: {e.detail}", flush=True)
             logger.warning(f"stripe auto-link failed: {e.detail}")
         except Exception as e:  # pragma: no cover
             print(f"[Chief] Stripe auto-generate unexpected error: {e}", flush=True)
             logger.warning(f"stripe auto-link unexpected error: {e}")
+    elif not connected_account_id and stripe_key and total > 0 and invoice_id:
+        # Practitioner hasn't connected Stripe yet. We don't auto-link
+        # against the platform — that would put funds in the wrong
+        # account and hide the resulting charge from the Charges tab.
+        # The invoice is still drafted; the email sender + InvoicesPanel
+        # surface a "Connect Stripe to enable invoice payments" nudge.
+        logger.info(
+            f"stripe auto-link skipped invoice={invoice_number}: "
+            f"business {biz.get('id')} has no stripe_account_id "
+            f"(no Connect onboarding yet)"
+        )
 
     label_suffix = ""
     if payload.get("is_recurring"):
@@ -6326,13 +6363,17 @@ async def handle_create_product(client, biz, action) -> Dict:
     product = rows[0]
     product_id = product.get("id")
 
-    # Auto-generate a Stripe Payment Link for digital products with a price,
-    # but only for the platform owner (matches invoice behavior above).
-    is_owner = biz.get("owner_id") == PLATFORM_OWNER_ID
+    # Auto-generate a Stripe Payment Link for digital products with a
+    # price. PR 3c — universalized: route through the practitioner's
+    # connected Stripe account when they have one, so the resulting
+    # charge surfaces in the Charges tab. No connected account → skip
+    # (the digital product is created without a Payment Link; the
+    # practitioner can manually paste one in BUILD → Integrations).
+    connected_account_id = (biz.get("stripe_account_id") or "").strip() or None
     if (
         product_type == "digital"
         and price > 0
-        and is_owner
+        and connected_account_id
         and os.environ.get("STRIPE_SECRET_KEY")
         and product_id
     ):
@@ -6342,6 +6383,10 @@ async def handle_create_product(client, biz, action) -> Dict:
                 amount=price,
                 currency=currency.lower(),
                 description=name,
+                source_type="product",
+                source_id=str(product_id),
+                business_id=str(biz.get("id") or ""),
+                connected_account_id=connected_account_id,
             )
             if data.get("url"):
                 await _sb(client, "PATCH", f"/products?id=eq.{product_id}",
