@@ -231,6 +231,56 @@ async def list_customers(
     }
 
 
+# ─── Refunds (PR 3d) ─────────────────────────────────────────────────
+
+
+@router.get("/refunds")
+async def list_refunds(
+    biz: str,
+    limit: Optional[int] = None,
+    starting_after: Optional[str] = None,
+    created_gte: Optional[int] = None,  # unix seconds
+    created_lte: Optional[int] = None,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """List refunds on the connected account.
+
+    Phase D.4 PR 3d — populates the RefundsTab in PaymentsPanel.
+    Expands the linked `charge` so the frontend renders source
+    metadata (Invoice #X / Booking #X) + customer info inline
+    without a second round-trip per row.
+
+    Filter shape mirrors /charges: created[gte] / created[lte] +
+    cursor pagination. Stripe caps limit at 100; we clamp to
+    DEFAULT_LIMIT=25 to match the other tabs.
+    """
+    biz_row = _require_owner_with_acct(biz, user)
+
+    params: Dict[str, Any] = {
+        "limit": _clamp_limit(limit),
+        # Expand the underlying charge so we get billing_details +
+        # metadata in one round trip. Stripe accepts repeated keys
+        # via "expand[]" syntax which httpx serializes from a list.
+        "expand[]": "data.charge",
+    }
+    if starting_after:
+        params["starting_after"] = starting_after
+    if created_gte is not None:
+        params["created[gte]"] = created_gte
+    if created_lte is not None:
+        params["created[lte]"] = created_lte
+
+    stripe_resp = await _stripe_get(
+        "/refunds",
+        stripe_account_id=biz_row["stripe_account_id"],
+        params=params,
+    )
+    return {
+        "ok": True,
+        **_built_in_pagination(stripe_resp),
+    }
+
+
 @router.get("/customers/{customer_id}/charges")
 async def list_customer_charges(
     customer_id: str,
