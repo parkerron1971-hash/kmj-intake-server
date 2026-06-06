@@ -168,6 +168,24 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
     "custom": {
         # Explicit generic fallback for self-described custom businesses.
     },
+    # Path C Phase 2 — coaching is the legacy alias of coach. Same
+    # overrides as the coach key so a business stamped 'coaching'
+    # resolves to identical vocabulary. Keep in lockstep with the
+    # 'coach' block above.
+    "coaching": {
+        "customer":     "Client",
+        "customers":    "Clients",
+        "contact":      "Client",
+        "contacts":     "Clients",
+        "service":      "Session",
+        "services":     "Sessions",
+        "appointment":  "Session",
+        "appointments": "Sessions",
+        "booking":      "Session",
+        "bookings":     "Sessions",
+        "offering":     "Package",
+        "offerings":    "Packages",
+    },
 }
 
 
