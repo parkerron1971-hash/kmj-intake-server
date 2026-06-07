@@ -312,6 +312,106 @@ def test_reconcile_skips_when_no_included_accounts(monkeypatch):
     assert plaid_reconciliation.reconcile_business("biz1") == (0, 0)
 
 
+def test_bucket_clause_handles_uncategorized():
+    """5-bucket multi-select with the synthetic 'uncategorized' must build a
+    PostgREST predicate spanning NULL + named buckets."""
+    from plaid_router import _bucket_clause
+
+    assert _bucket_clause(["operating", "tax"]) == "business_category=in.(operating,tax)"
+    assert _bucket_clause(["uncategorized"]) == "business_category=is.null"
+    assert _bucket_clause(["uncategorized", "tax"]) == \
+        "or=(business_category.is.null,business_category.in.(tax))"
+    # Unknown bucket names are dropped.
+    assert _bucket_clause(["bogus"]) is None
+
+
+def test_sanitize_search_strips_grammar_chars():
+    from plaid_router import _sanitize_search
+    # Parens/commas/stars/dots that would break or=()/ilike are removed.
+    assert _sanitize_search("Stripe") == "Stripe"
+    assert _sanitize_search("coffee shop") == "coffee%20shop"
+    assert _sanitize_search("a,b)(c*.") == "abc"
+
+
+def test_bulk_categorize_validates_bucket(monkeypatch):
+    """Invalid bucket → 400 before any write."""
+    from fastapi import HTTPException
+    import sb_clients
+    from plaid_router import bulk_categorize, BulkCategorizeBody
+
+    monkeypatch.setattr(
+        sb_clients, "sb_get_as_service",
+        lambda path: [{"id": "biz1", "name": "Foo", "owner_id": "owner"}],
+    )
+    monkeypatch.setattr(
+        sb_clients, "sb_patch_as_service",
+        lambda path, body: pytest.fail("must not patch on invalid bucket"),
+    )
+
+    class _U:
+        id = "owner"
+
+    body = BulkCategorizeBody(business_id="biz1", transaction_ids=["t1"], business_category="bogus")
+    with pytest.raises(HTTPException) as exc:
+        bulk_categorize(body, user=_U())
+    assert exc.value.status_code == 400
+
+
+def test_bulk_categorize_counts_updated_rows(monkeypatch):
+    """Updated count reflects the representation returned by the single
+    atomic PATCH."""
+    import sb_clients
+    from plaid_router import bulk_categorize, BulkCategorizeBody
+
+    captured = {}
+
+    def _fake_patch(path, body):
+        captured["path"] = path
+        return [{"transaction_id": "t1"}, {"transaction_id": "t2"}]
+
+    monkeypatch.setattr(
+        sb_clients, "sb_get_as_service",
+        lambda path: [{"id": "biz1", "name": "Foo", "owner_id": "owner"}],
+    )
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", _fake_patch)
+
+    class _U:
+        id = "owner"
+
+    body = BulkCategorizeBody(business_id="biz1", transaction_ids=["t1", "t2"], business_category="operating")
+    out = bulk_categorize(body, user=_U())
+    assert out == {"ok": True, "updated": 2}
+    # Single request scoped to business + the id set (atomic).
+    assert "transaction_id=in.(t1,t2)" in captured["path"]
+    assert "business_id=eq.biz1" in captured["path"]
+
+
+def test_update_transaction_requires_owner(monkeypatch):
+    from fastapi import HTTPException
+    import sb_clients
+    from plaid_router import update_transaction, TxPatchBody
+
+    monkeypatch.setattr(
+        sb_clients, "sb_get_as_service",
+        lambda path: (
+            [{"transaction_id": "t1", "business_id": "biz1"}]
+            if path.startswith("/plaid_transactions")
+            else [{"id": "biz1", "name": "Foo", "owner_id": "other"}]
+        ),
+    )
+    monkeypatch.setattr(
+        sb_clients, "sb_patch_as_service",
+        lambda path, body: pytest.fail("must not write on non-owner"),
+    )
+
+    class _U:
+        id = "not-owner"
+
+    with pytest.raises(HTTPException) as exc:
+        update_transaction("t1", TxPatchBody(excluded_from_books=True), user=_U())
+    assert exc.value.status_code == 403
+
+
 def test_upsert_rule_validates_bucket_name(monkeypatch):
     """Invalid 5-bucket name → 400 before DB write."""
     from fastapi import HTTPException

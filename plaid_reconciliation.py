@@ -200,7 +200,7 @@ def reconcile_business(business_id: str, *, limit: int = 200) -> Tuple[int, int]
     rows = sb_clients.sb_get_as_service(
         f"/plaid_transactions?business_id=eq.{business_id}"
         f"&reconciliation_status=eq.unmatched"
-        f"&pending=eq.false&{acct_clause}"
+        f"&pending=eq.false&excluded_from_books=eq.false&{acct_clause}"
         f"&order=date.desc&limit={int(limit)}"
         f"&select=transaction_id,amount,date,pending,business_id"
     ) or []

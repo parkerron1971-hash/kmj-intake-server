@@ -80,6 +80,17 @@ def _require_owner_for_account(account_id: str, user: AuthedUser) -> Dict[str, A
     return rows[0]
 
 
+def _require_owner_for_tx(transaction_id: str, user: AuthedUser) -> Dict[str, Any]:
+    rows = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?transaction_id=eq.{transaction_id}"
+        f"&select=transaction_id,business_id&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(404, "transaction not found")
+    _require_owner(str(rows[0].get("business_id")), user)
+    return rows[0]
+
+
 def _included_account_ids(business_id: str) -> List[str]:
     """Account ids that count toward bookkeeping: included + not removed.
     Used to scope the Cash Flow summary, Needs-Review list, and the
@@ -467,38 +478,236 @@ def remove_account(
     return {"ok": True, "removed": account_id}
 
 
+_TX_SELECT = (
+    "select=transaction_id,account_id,amount,iso_currency_code,date,"
+    "authorized_date,datetime,name,merchant_name,"
+    "plaid_category_primary,plaid_category_detail,"
+    "business_category,business_subcategory,pending,excluded_from_books,"
+    "reconciled_to_payout_id,reconciled_to_charge_id,reconciled_to_transfer_id,"
+    "reconciliation_status,practitioner_notes,notes"
+)
+
+_SORT_COLUMNS = {
+    "date": "date",
+    "amount": "amount",
+    "merchant": "merchant_name",
+    "bucket": "business_category",
+}
+
+
+def _sanitize_search(q: str) -> str:
+    """Strip characters that would break the PostgREST or=() / ilike
+    grammar, and encode spaces. Keeps single + multi-word merchant search
+    working without admitting clause injection."""
+    cleaned = "".join(c for c in q if c not in "(),*.")
+    return cleaned.strip().replace(" ", "%20")
+
+
+def _bucket_clause(buckets: List[str]) -> Optional[str]:
+    """Build a PostgREST predicate for a 5-bucket multi-select that may
+    include the synthetic 'uncategorized' (business_category IS NULL)."""
+    wants_null = "uncategorized" in buckets
+    named = [b for b in buckets if b in plaid_categorization.ALL_BUCKETS]
+    if wants_null and named:
+        return f"or=(business_category.is.null,business_category.in.({','.join(named)}))"
+    if wants_null:
+        return "business_category=is.null"
+    if named:
+        return f"business_category=in.({','.join(named)})"
+    return None
+
+
 @router.get("/transactions")
 def list_transactions(
     biz: str,
-    limit: int = 100,
+    limit: int = 50,
     offset: int = 0,
-    status: Optional[str] = None,   # unmatched / auto_matched / manual_matched / ignored / null=all
-    account_id: Optional[str] = None,
+    status: Optional[str] = None,        # back-compat single recon status (Needs Review)
+    account_id: Optional[str] = None,    # back-compat single-account drilldown
+    accounts: Optional[str] = None,      # csv account_ids (multi-select)
+    buckets: Optional[str] = None,       # csv 5-bucket incl. 'uncategorized'
+    plaid_primaries: Optional[str] = None,  # csv Plaid PFC primaries
+    recon: Optional[str] = None,         # csv reconciliation_status
+    search: Optional[str] = None,        # merchant/name free text
+    date_from: Optional[str] = None,     # yyyy-mm-dd
+    date_to: Optional[str] = None,       # yyyy-mm-dd
+    include_excluded: bool = False,      # show excluded_from_books rows
+    sort: str = "date",
+    direction: str = "desc",
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
+    """Paginated, filterable transactions list. Powers both the Needs
+    Review modal (status=unmatched) and the dedicated Transactions panel.
+
+    Excluded-from-books rows are hidden unless include_excluded=true, so
+    existing callers (Needs Review) keep their pre-v1.5 behavior."""
     _require_owner(biz, user)
-    parts = [f"business_id=eq.{biz}"]
+
+    # Account scope: explicit selection wins; otherwise all included
+    # accounts. Removed accounts never appear.
+    if account_id:
+        acct_ids = [account_id]
+    elif accounts:
+        acct_ids = [a for a in accounts.split(",") if a]
+    else:
+        acct_ids = _included_account_ids(biz)
+    if not acct_ids:
+        return {"ok": True, "transactions": [], "has_more": False}
+
+    parts = [f"business_id=eq.{biz}", _account_in_clause(acct_ids)]
+
+    if not include_excluded:
+        parts.append("excluded_from_books=eq.false")
     if status:
         parts.append(f"reconciliation_status=eq.{status}")
-    if account_id:
-        parts.append(f"account_id=eq.{account_id}")
-    else:
-        # Scope to accounts that count toward bookkeeping. No included
-        # accounts → nothing to show.
-        included = _included_account_ids(biz)
-        if not included:
-            return {"ok": True, "transactions": []}
-        parts.append(_account_in_clause(included))
-    parts.append(
-        "select=transaction_id,account_id,amount,iso_currency_code,date,"
-        "name,merchant_name,plaid_category_primary,plaid_category_detail,"
-        "business_category,business_subcategory,pending,"
-        "reconciled_to_payout_id,reconciled_to_charge_id,reconciliation_status,"
-        "practitioner_notes"
-    )
-    parts.append(f"order=date.desc&limit={int(limit)}&offset={int(offset)}")
+    if recon:
+        rec = [r for r in recon.split(",") if r]
+        if rec:
+            parts.append(f"reconciliation_status=in.({','.join(rec)})")
+    if buckets:
+        bc = _bucket_clause([b for b in buckets.split(",") if b])
+        if bc:
+            parts.append(bc)
+    if plaid_primaries:
+        pp = [p for p in plaid_primaries.split(",") if p]
+        if pp:
+            parts.append(f"plaid_category_primary=in.({','.join(pp)})")
+    if date_from:
+        parts.append(f"date=gte.{date_from}")
+    if date_to:
+        parts.append(f"date=lte.{date_to}")
+    if search and search.strip():
+        q = _sanitize_search(search)
+        if q:
+            parts.append(f"or=(merchant_name.ilike.*{q}*,name.ilike.*{q}*)")
+
+    col = _SORT_COLUMNS.get(sort, "date")
+    dir_ = "asc" if direction == "asc" else "desc"
+    # Secondary date key keeps ordering stable when the primary ties.
+    order = f"{col}.{dir_}" if col == "date" else f"{col}.{dir_},date.desc"
+
+    capped = max(1, min(int(limit), 200))
+    parts.append(_TX_SELECT)
+    # Fetch one extra row to cheaply decide has_more without a count query.
+    parts.append(f"order={order}&limit={capped + 1}&offset={int(offset)}")
+
     rows = sb_clients.sb_get_as_service(f"/plaid_transactions?{'&'.join(parts)}") or []
-    return {"ok": True, "transactions": rows}
+    has_more = len(rows) > capped
+    return {"ok": True, "transactions": rows[:capped], "has_more": has_more}
+
+
+@router.get("/transactions/{transaction_id}")
+def get_transaction(
+    transaction_id: str,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Single-transaction detail for the drawer, with the owning account's
+    name/mask/subtype joined in."""
+    _require_owner_for_tx(transaction_id, user)
+    rows = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?transaction_id=eq.{transaction_id}&{_TX_SELECT}&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(404, "transaction not found")
+    tx = rows[0]
+    acct = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?account_id=eq.{tx.get('account_id')}"
+        f"&select=name,official_name,mask,subtype,type&limit=1"
+    ) or []
+    tx["account"] = acct[0] if acct else None
+    return {"ok": True, "transaction": tx}
+
+
+class TxPatchBody(BaseModel):
+    business_category: Optional[str] = None
+    business_subcategory: Optional[str] = None
+    excluded_from_books: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+@router.patch("/transactions/{transaction_id}")
+def update_transaction(
+    transaction_id: str,
+    body: TxPatchBody,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Per-transaction edit from the detail drawer: bucket, subcategory,
+    exclude-from-books, notes. Only provided fields are written."""
+    _require_owner_for_tx(transaction_id, user)
+    patch: Dict[str, Any] = {"updated_at": _now_iso()}
+    if body.business_category is not None:
+        if body.business_category not in plaid_categorization.ALL_BUCKETS:
+            raise HTTPException(400, f"business_category must be one of {plaid_categorization.ALL_BUCKETS}")
+        patch["business_category"] = body.business_category
+    if body.business_subcategory is not None:
+        patch["business_subcategory"] = body.business_subcategory or None
+    if body.excluded_from_books is not None:
+        patch["excluded_from_books"] = bool(body.excluded_from_books)
+    if body.notes is not None:
+        patch["notes"] = body.notes or None
+    sb_clients.sb_patch_as_service(
+        f"/plaid_transactions?transaction_id=eq.{transaction_id}", patch,
+    )
+    return {"ok": True}
+
+
+class BulkCategorizeBody(BaseModel):
+    business_id: str
+    transaction_ids: List[str]
+    business_category: str
+    business_subcategory: Optional[str] = None
+
+
+@router.post("/transactions/bulk-categorize")
+def bulk_categorize(
+    body: BulkCategorizeBody,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Categorize many transactions in one atomic UPDATE (single PostgREST
+    request → single SQL statement → all-or-none)."""
+    _require_owner(body.business_id, user)
+    if body.business_category not in plaid_categorization.ALL_BUCKETS:
+        raise HTTPException(400, f"business_category must be one of {plaid_categorization.ALL_BUCKETS}")
+    ids = [t for t in body.transaction_ids if t]
+    if not ids:
+        return {"ok": True, "updated": 0}
+    res = sb_clients.sb_patch_as_service(
+        f"/plaid_transactions?business_id=eq.{body.business_id}"
+        f"&transaction_id=in.({','.join(ids)})",
+        {
+            "business_category": body.business_category,
+            "business_subcategory": body.business_subcategory or None,
+            "updated_at": _now_iso(),
+        },
+    )
+    return {"ok": True, "updated": len(res or [])}
+
+
+class BulkExcludeBody(BaseModel):
+    business_id: str
+    transaction_ids: List[str]
+    excluded_from_books: bool
+
+
+@router.post("/transactions/bulk-exclude")
+def bulk_exclude(
+    body: BulkExcludeBody,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Exclude/include many transactions in one atomic UPDATE."""
+    _require_owner(body.business_id, user)
+    ids = [t for t in body.transaction_ids if t]
+    if not ids:
+        return {"ok": True, "updated": 0}
+    res = sb_clients.sb_patch_as_service(
+        f"/plaid_transactions?business_id=eq.{body.business_id}"
+        f"&transaction_id=in.({','.join(ids)})",
+        {
+            "excluded_from_books": bool(body.excluded_from_books),
+            "updated_at": _now_iso(),
+        },
+    )
+    return {"ok": True, "updated": len(res or [])}
 
 
 @router.get("/summary")
@@ -541,7 +750,7 @@ def cash_flow_summary(biz: str, user: AuthedUser = Depends(require_user)) -> Dic
     def _txs(date_gte: str) -> List[Dict[str, Any]]:
         return sb_clients.sb_get_as_service(
             f"/plaid_transactions?business_id=eq.{biz}"
-            f"&date=gte.{date_gte}&pending=eq.false&{acct_clause}"
+            f"&date=gte.{date_gte}&pending=eq.false&excluded_from_books=eq.false&{acct_clause}"
             f"&select=amount,business_category,plaid_category_primary,plaid_category_detail&limit=2000"
         ) or []
 
@@ -569,7 +778,7 @@ def cash_flow_summary(biz: str, user: AuthedUser = Depends(require_user)) -> Dic
 
     unmatched = sb_clients.sb_get_as_service(
         f"/plaid_transactions?business_id=eq.{biz}"
-        f"&reconciliation_status=eq.unmatched&pending=eq.false&{acct_clause}"
+        f"&reconciliation_status=eq.unmatched&pending=eq.false&excluded_from_books=eq.false&{acct_clause}"
         f"&select=amount&limit=500"
     ) or []
     inflow = round(sum(abs(float(u.get("amount") or 0)) for u in unmatched if float(u.get("amount") or 0) < 0), 2)
