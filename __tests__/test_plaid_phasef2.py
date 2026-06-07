@@ -233,6 +233,19 @@ def test_create_link_token_requires_owner(monkeypatch):
     assert exc.value.status_code == 403
 
 
+def test_client_name_brands_as_business():
+    """Plaid Link's client_name must reflect the active business so the
+    onboarding reads "connect to Royal Barbers", not the platform."""
+    from plaid_router import _client_name_for, _PLATFORM_CLIENT_NAME
+
+    assert _client_name_for({"name": "Royal Barbers"}) == "Royal Barbers"
+    assert _client_name_for({"name": "KMJ Creative Solutions"}) == "KMJ Creative Solutions"
+    # Whitespace-only / missing / None fall back to the platform name.
+    assert _client_name_for({"name": "   "}) == _PLATFORM_CLIENT_NAME
+    assert _client_name_for({}) == _PLATFORM_CLIENT_NAME
+    assert _client_name_for(None) == _PLATFORM_CLIENT_NAME
+
+
 def test_upsert_rule_validates_bucket_name(monkeypatch):
     """Invalid 5-bucket name → 400 before DB write."""
     from fastapi import HTTPException

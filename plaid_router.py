@@ -73,6 +73,21 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Plaid Link shows client_name to the user as the entity they're connecting
+# their bank to. Brand it as the active practitioner's business ("Royal
+# Barbers", "KMJ Creative Solutions") so the onboarding reads as the
+# practitioner linking THEIR business — not the platform. The Plaid
+# relationship under the hood stays on the Solutionist developer account;
+# this only affects the display name. Falls back to the platform name when a
+# business has no name on file.
+_PLATFORM_CLIENT_NAME = "The Solutionist System"
+
+
+def _client_name_for(biz: Optional[Dict[str, Any]]) -> str:
+    name = ((biz or {}).get("name") or "").strip()
+    return name or _PLATFORM_CLIENT_NAME
+
+
 def _ensure_plaid_configured() -> None:
     if not plaid_helpers.plaid_configured():
         raise HTTPException(
@@ -96,7 +111,7 @@ def create_link_token(
 ) -> Dict[str, Any]:
     """Create a Plaid Link token tied to the practitioner + business.
     The frontend uses this token to open Plaid's hosted Link UI."""
-    _require_owner(body.business_id, user)
+    biz = _require_owner(body.business_id, user)
     _ensure_plaid_configured()
 
     from plaid.model.link_token_create_request import LinkTokenCreateRequest
@@ -109,7 +124,7 @@ def create_link_token(
         # Plaid recommends a stable per-end-user identifier so the
         # same human can re-Link without showing up as a new client.
         user=LinkTokenCreateRequestUser(client_user_id=str(user.id)),
-        client_name="The Solutionist System",
+        client_name=_client_name_for(biz),
         products=[Products("transactions")],
         country_codes=[CountryCode("US")],
         language="en",
@@ -535,6 +550,7 @@ def relink(item_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, 
     Link in update mode → completes MFA → status flips back to 'active'.
     """
     row = _require_owner_for_item(item_id, user)
+    biz = _require_owner(str(row.get("business_id")), user)
     _ensure_plaid_configured()
 
     # Decrypt the stored access_token so Plaid can issue an update-mode
@@ -555,7 +571,7 @@ def relink(item_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, 
     client = plaid_helpers.get_plaid_client()
     req = LinkTokenCreateRequest(
         user=LinkTokenCreateRequestUser(client_user_id=str(user.id)),
-        client_name="The Solutionist System",
+        client_name=_client_name_for(biz),
         country_codes=[CountryCode("US")],
         language="en",
         access_token=token,   # update-mode signal
