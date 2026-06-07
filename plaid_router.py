@@ -69,6 +69,35 @@ def _require_owner_for_item(item_id: str, user: AuthedUser) -> Dict[str, Any]:
     return rows[0]
 
 
+def _require_owner_for_account(account_id: str, user: AuthedUser) -> Dict[str, Any]:
+    rows = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?account_id=eq.{account_id}"
+        f"&select=account_id,business_id,item_id,deleted_at&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(404, "account not found")
+    _require_owner(str(rows[0].get("business_id")), user)
+    return rows[0]
+
+
+def _included_account_ids(business_id: str) -> List[str]:
+    """Account ids that count toward bookkeeping: included + not removed.
+    Used to scope the Cash Flow summary, Needs-Review list, and the
+    reconciliation pass so excluded/removed accounts drop out everywhere."""
+    rows = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?business_id=eq.{business_id}"
+        f"&included_in_bookkeeping=eq.true&deleted_at=is.null"
+        f"&select=account_id"
+    ) or []
+    return [r["account_id"] for r in rows if r.get("account_id")]
+
+
+def _account_in_clause(account_ids: List[str]) -> str:
+    """PostgREST `in.(...)` clause for a set of account ids. Caller must
+    handle the empty case (no included accounts → no rows) before calling."""
+    return "account_id=in.(" + ",".join(account_ids) + ")"
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -118,6 +147,10 @@ def create_link_token(
     from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
     from plaid.model.country_code import CountryCode
     from plaid.model.products import Products
+    from plaid.model.link_token_account_filters import LinkTokenAccountFilters
+    from plaid.model.depository_filter import DepositoryFilter
+    from plaid.model.depository_account_subtypes import DepositoryAccountSubtypes
+    from plaid.model.depository_account_subtype import DepositoryAccountSubtype
 
     client = plaid_helpers.get_plaid_client()
     req = LinkTokenCreateRequest(
@@ -128,6 +161,20 @@ def create_link_token(
         products=[Products("transactions")],
         country_codes=[CountryCode("US")],
         language="en",
+        # Constrain Link's Account Select pane to bank accounts suitable
+        # for bookkeeping. Credit cards / loans / investments are excluded
+        # so a practitioner can't accidentally pull a personal credit card
+        # into the business ledger. (Interactive multi-account selection
+        # itself is a Plaid Dashboard "Account Select" setting; the app-side
+        # per-account include/exclude control is the durable backstop.)
+        account_filters=LinkTokenAccountFilters(
+            depository=DepositoryFilter(
+                account_subtypes=DepositoryAccountSubtypes([
+                    DepositoryAccountSubtype("checking"),
+                    DepositoryAccountSubtype("savings"),
+                ]),
+            ),
+        ),
         # business_id rides in metadata so the webhook can resolve
         # the right business when SYNC_UPDATES_AVAILABLE fires.
         webhook=_webhook_url_for_request(),
@@ -371,11 +418,53 @@ def list_accounts(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[st
     _require_owner(biz, user)
     rows = sb_clients.sb_get_as_service(
         f"/plaid_accounts?business_id=eq.{biz}"
+        f"&deleted_at=is.null"
         f"&select=account_id,item_id,name,official_name,type,subtype,"
-        f"mask,last_balance,last_balance_at,iso_currency"
+        f"mask,last_balance,last_balance_at,iso_currency,included_in_bookkeeping"
         f"&order=name.asc"
     ) or []
     return {"ok": True, "accounts": rows}
+
+
+class AccountPatchBody(BaseModel):
+    included_in_bookkeeping: bool
+
+
+@router.patch("/accounts/{account_id}")
+def update_account(
+    account_id: str,
+    body: AccountPatchBody,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Toggle an account in/out of bookkeeping. Excluded accounts stay
+    linked + synced but drop out of the Cash Flow KPIs, bucket bars,
+    Needs-Review list, and reconciliation. Reversible."""
+    _require_owner_for_account(account_id, user)
+    sb_clients.sb_patch_as_service(
+        f"/plaid_accounts?account_id=eq.{account_id}",
+        {
+            "included_in_bookkeeping": bool(body.included_in_bookkeeping),
+            "updated_at": _now_iso(),
+        },
+    )
+    return {"ok": True, "included_in_bookkeeping": bool(body.included_in_bookkeeping)}
+
+
+@router.delete("/accounts/{account_id}")
+def remove_account(
+    account_id: str,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Soft-remove a single account from a linked item without unlinking
+    the whole institution. Historical transactions are retained for audit;
+    the account is hidden from the UI, excluded from all bookkeeping math,
+    and the sync stops inserting new transactions for it."""
+    _require_owner_for_account(account_id, user)
+    sb_clients.sb_patch_as_service(
+        f"/plaid_accounts?account_id=eq.{account_id}",
+        {"deleted_at": _now_iso(), "updated_at": _now_iso()},
+    )
+    return {"ok": True, "removed": account_id}
 
 
 @router.get("/transactions")
@@ -393,6 +482,13 @@ def list_transactions(
         parts.append(f"reconciliation_status=eq.{status}")
     if account_id:
         parts.append(f"account_id=eq.{account_id}")
+    else:
+        # Scope to accounts that count toward bookkeeping. No included
+        # accounts → nothing to show.
+        included = _included_account_ids(biz)
+        if not included:
+            return {"ok": True, "transactions": []}
+        parts.append(_account_in_clause(included))
     parts.append(
         "select=transaction_id,account_id,amount,iso_currency_code,date,"
         "name,merchant_name,plaid_category_primary,plaid_category_detail,"
@@ -419,16 +515,33 @@ def cash_flow_summary(biz: str, user: AuthedUser = Depends(require_user)) -> Dic
     month_start = now.replace(day=1).date().isoformat()
     year_start = now.replace(month=1, day=1).date().isoformat()
 
+    # Only accounts the practitioner has kept in bookkeeping count toward
+    # cash-on-hand, expenses, buckets, and Needs-Review. Excluded/removed
+    # accounts drop out everywhere.
+    included = _included_account_ids(biz)
+    if not included:
+        return {
+            "ok": True,
+            "cash_on_hand": 0.0,
+            "expenses_mtd": 0.0,
+            "expenses_ytd": 0.0,
+            "by_bucket_mtd": {"tax": 0.0, "owner_pay": 0.0, "operating": 0.0, "savings": 0.0, "other": 0.0},
+            "by_bucket_ytd": {"tax": 0.0, "owner_pay": 0.0, "operating": 0.0, "savings": 0.0, "other": 0.0},
+            "unreconciled": {"count": 0, "total_inflow": 0.0, "total_outflow": 0.0},
+        }
+    acct_clause = _account_in_clause(included)
+
     accounts = sb_clients.sb_get_as_service(
         f"/plaid_accounts?business_id=eq.{biz}"
-        f"&type=eq.depository&select=last_balance"
+        f"&type=eq.depository&included_in_bookkeeping=eq.true&deleted_at=is.null"
+        f"&select=last_balance"
     ) or []
     cash_on_hand = sum(float(a.get("last_balance") or 0) for a in accounts)
 
     def _txs(date_gte: str) -> List[Dict[str, Any]]:
         return sb_clients.sb_get_as_service(
             f"/plaid_transactions?business_id=eq.{biz}"
-            f"&date=gte.{date_gte}&pending=eq.false"
+            f"&date=gte.{date_gte}&pending=eq.false&{acct_clause}"
             f"&select=amount,business_category,plaid_category_primary,plaid_category_detail&limit=2000"
         ) or []
 
@@ -456,7 +569,7 @@ def cash_flow_summary(biz: str, user: AuthedUser = Depends(require_user)) -> Dic
 
     unmatched = sb_clients.sb_get_as_service(
         f"/plaid_transactions?business_id=eq.{biz}"
-        f"&reconciliation_status=eq.unmatched&pending=eq.false"
+        f"&reconciliation_status=eq.unmatched&pending=eq.false&{acct_clause}"
         f"&select=amount&limit=500"
     ) or []
     inflow = round(sum(abs(float(u.get("amount") or 0)) for u in unmatched if float(u.get("amount") or 0) < 0), 2)
@@ -682,6 +795,14 @@ def _sync_transactions_for_item(
                 "sub": r.get("business_subcategory"),
             }
 
+    # Accounts the practitioner removed from this item: keep their history
+    # but stop ingesting new transactions for them.
+    removed = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?business_id=eq.{business_id}"
+        f"&deleted_at=not.is.null&select=account_id"
+    ) or []
+    skip_account_ids = {r["account_id"] for r in removed if r.get("account_id")}
+
     total_new = 0
     has_more = True
     safety_cap = 50  # paranoia — 50 pages × 500/page = 25k transactions
@@ -698,6 +819,8 @@ def _sync_transactions_for_item(
             break
 
         for tx in resp.added:
+            if getattr(tx, "account_id", None) in skip_account_ids:
+                continue  # account was removed from bookkeeping
             payload = _tx_payload(tx, business_id, rule_map)
             try:
                 sb_clients.sb_post_as_service(
@@ -708,6 +831,8 @@ def _sync_transactions_for_item(
                 logger.warning(f"[plaid] tx upsert (added) failed: {e}")
 
         for tx in resp.modified:
+            if getattr(tx, "account_id", None) in skip_account_ids:
+                continue
             payload = _tx_payload(tx, business_id, rule_map)
             try:
                 sb_clients.sb_patch_as_service(

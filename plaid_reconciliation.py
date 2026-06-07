@@ -184,10 +184,23 @@ def reconcile_business(business_id: str, *, limit: int = 200) -> Tuple[int, int]
     Called from /plaid/sync after each cursor advance, and via a
     POST /plaid/reconcile manual trigger from the dashboard's
     Needs Review CTA."""
+    # Only reconcile transactions on accounts the practitioner kept in
+    # bookkeeping (included + not removed). Excluded/removed accounts'
+    # deposits shouldn't auto-match to Stripe payouts.
+    included_rows = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?business_id=eq.{business_id}"
+        f"&included_in_bookkeeping=eq.true&deleted_at=is.null"
+        f"&select=account_id"
+    ) or []
+    included = [r["account_id"] for r in included_rows if r.get("account_id")]
+    if not included:
+        return (0, 0)
+    acct_clause = "account_id=in.(" + ",".join(included) + ")"
+
     rows = sb_clients.sb_get_as_service(
         f"/plaid_transactions?business_id=eq.{business_id}"
         f"&reconciliation_status=eq.unmatched"
-        f"&pending=eq.false"
+        f"&pending=eq.false&{acct_clause}"
         f"&order=date.desc&limit={int(limit)}"
         f"&select=transaction_id,amount,date,pending,business_id"
     ) or []

@@ -246,6 +246,72 @@ def test_client_name_brands_as_business():
     assert _client_name_for(None) == _PLATFORM_CLIENT_NAME
 
 
+def test_included_account_ids_filters(monkeypatch):
+    """_included_account_ids returns only the account ids PostgREST hands
+    back for the included+not-removed query, dropping empty ids."""
+    import sb_clients
+    from plaid_router import _included_account_ids
+
+    captured = {}
+
+    def _fake_get(path):
+        captured["path"] = path
+        return [{"account_id": "acc_a"}, {"account_id": "acc_b"}, {"account_id": None}]
+
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", _fake_get)
+    ids = _included_account_ids("biz1")
+    assert ids == ["acc_a", "acc_b"]
+    # Must constrain on both the include flag and the soft-delete marker.
+    assert "included_in_bookkeeping=eq.true" in captured["path"]
+    assert "deleted_at=is.null" in captured["path"]
+
+
+def test_account_in_clause_shape():
+    from plaid_router import _account_in_clause
+    assert _account_in_clause(["a", "b", "c"]) == "account_id=in.(a,b,c)"
+
+
+def test_remove_account_requires_owner(monkeypatch):
+    """Non-owner cannot soft-remove someone else's account."""
+    from fastapi import HTTPException
+    import sb_clients
+    from plaid_router import remove_account
+
+    # account lookup returns a row owned by 'other'; owner check then 403s.
+    monkeypatch.setattr(
+        sb_clients, "sb_get_as_service",
+        lambda path: (
+            [{"account_id": "acc1", "business_id": "biz1", "item_id": "it1", "deleted_at": None}]
+            if path.startswith("/plaid_accounts")
+            else [{"id": "biz1", "name": "Foo", "owner_id": "other"}]
+        ),
+    )
+    monkeypatch.setattr(
+        sb_clients, "sb_patch_as_service",
+        lambda path, body: pytest.fail("must not write on non-owner"),
+    )
+
+    class _U:
+        id = "not-owner"
+
+    with pytest.raises(HTTPException) as exc:
+        remove_account("acc1", user=_U())
+    assert exc.value.status_code == 403
+
+
+def test_reconcile_skips_when_no_included_accounts(monkeypatch):
+    """With every account excluded/removed, reconciliation is a no-op."""
+    import sb_clients
+    import plaid_reconciliation
+
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [])
+    monkeypatch.setattr(
+        sb_clients, "sb_patch_as_service",
+        lambda path, body: pytest.fail("must not patch when nothing included"),
+    )
+    assert plaid_reconciliation.reconcile_business("biz1") == (0, 0)
+
+
 def test_upsert_rule_validates_bucket_name(monkeypatch):
     """Invalid 5-bucket name → 400 before DB write."""
     from fastapi import HTTPException
