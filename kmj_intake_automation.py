@@ -68,6 +68,8 @@ from stripe_data_proxy import router as stripe_data_proxy_router
 # the PR 3 invoices CRUD; the pre-existing OPERATE → Invoices surface
 # is the canonical invoicing system).
 from stripe_payments_router import router as stripe_payments_router
+# Phase F.2 v1 — Plaid bookkeeping + reconciliation
+from plaid_router import router as plaid_router
 # Phase C.1.3 — Chief proactive-suggestion lifecycle
 from chief_suggestions_router import router as chief_suggestions_router
 # Pass 4.0a — Director Agent foundations
@@ -128,6 +130,8 @@ app.include_router(stripe_data_proxy_router)
 # All under /payments/* prefix; FastAPI merges with the other
 # /payments routers cleanly.
 app.include_router(stripe_payments_router)
+# Phase F.2 v1 — Plaid Link, sync, webhook, summary, categorize rules
+app.include_router(plaid_router)
 # Phase VABI v1 — public read endpoint for vertical intelligence
 app.include_router(vertical_intelligence_router)
 # Phase VABI v1.5 — per-business overrides CRUD + Chief-driven generation

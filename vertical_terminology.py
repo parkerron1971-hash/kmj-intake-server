@@ -50,6 +50,12 @@ BASE_TERMS: Dict[str, str] = {
     "leads":        "Leads",
     "prospect":     "Prospect",
     "prospects":    "Prospects",
+    # F.2 v1 — bookkeeping noun layer. Generic across verticals today.
+    "transaction":  "Transaction",
+    "transactions": "Transactions",
+    "expense":      "Expense",
+    "expenses":     "Expenses",
+    "bank":         "Bank",
 }
 
 

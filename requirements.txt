@@ -20,3 +20,7 @@ Pillow>=10.4.0
 # projects sign tokens with RS256 by default, so HS256-only would 401
 # every request — see auth_supabase.py JWKS path.
 PyJWT[crypto]>=2.8.0
+# Phase F.2 v1 — Plaid bookkeeping + reconciliation. plaid-python
+# tracks Plaid API versions via SDK release rather than a runtime
+# parameter; pin to the latest stable as of 2026-06.
+plaid-python>=24.0.0
