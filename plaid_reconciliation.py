@@ -102,6 +102,61 @@ def _fetch_stripe_payouts_around(
         return []
 
 
+def _payout_arrival_iso(payout: Dict[str, Any]) -> Optional[str]:
+    """Stripe arrival_date is a unix timestamp; render as yyyy-mm-dd."""
+    ts = payout.get("arrival_date")
+    if not ts:
+        return None
+    try:
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(int(ts), tz=timezone.utc).date().isoformat()
+    except Exception:
+        return None
+
+
+def fetch_stripe_payouts_range(
+    stripe_account_id: str,
+    start_date: date,
+    end_date: date,
+    *,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """List Stripe payouts on the connected account whose arrival_date is
+    within [start_date, end_date]. Powers the unmatched-Stripe-side table +
+    manual-match suggestions. Returns [] on error (caller degrades)."""
+    import httpx
+    from datetime import datetime, timezone
+    api_key = os.environ.get("STRIPE_SECRET_KEY") or ""
+    if not api_key:
+        return []
+    start = int(datetime(start_date.year, start_date.month, start_date.day,
+                         tzinfo=timezone.utc).timestamp())
+    end = int(datetime(end_date.year, end_date.month, end_date.day,
+                       tzinfo=timezone.utc).timestamp()) + 86400
+    try:
+        r = httpx.get(
+            "https://api.stripe.com/v1/payouts",
+            auth=(api_key, ""),
+            headers={"Stripe-Account": stripe_account_id},
+            params={"limit": min(int(limit), 100),
+                    "arrival_date[gte]": start, "arrival_date[lte]": end},
+            timeout=15.0,
+        )
+        if r.status_code >= 400:
+            logger.warning(f"[reconcile] payouts range fetch failed: {r.status_code}")
+            return []
+        return (r.json() or {}).get("data") or []
+    except Exception as e:
+        logger.warning(f"[reconcile] payouts range fetch errored: {e}")
+        return []
+
+
+def stripe_account_for_business(business_id: str) -> Optional[str]:
+    """Public wrapper for the connected-account lookup (used by the
+    reconciliation router)."""
+    return _stripe_account_for_business(business_id)
+
+
 def _amounts_match(plaid_amount_dollars, payout_amount_cents: int) -> bool:
     """Plaid amounts are signed dollar decimals (positive = outflow).
     Payout amounts are unsigned integer cents."""
@@ -155,6 +210,10 @@ def try_match_transaction(tx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 return {
                     "reconciled_to_payout_id": po.get("id"),
                     "reconciliation_status": "auto_matched",
+                    # Snapshot so the matched table renders without a live
+                    # Stripe fetch per row (F.2 v1.6).
+                    "reconciled_payout_amount": round((po.get("amount") or 0) / 100.0, 2),
+                    "reconciled_payout_date": _payout_arrival_iso(po),
                 }
 
     # ─── Transfer side (F.1 placeholder) ───────────────────────────

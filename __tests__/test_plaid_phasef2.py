@@ -412,6 +412,82 @@ def test_update_transaction_requires_owner(monkeypatch):
     assert exc.value.status_code == 403
 
 
+def test_recon_date_floor_mapping():
+    from plaid_router import _recon_date_floor
+    assert _recon_date_floor(None) is None
+    assert _recon_date_floor("all") is None
+    # mtd → first of month; ytd → Jan 1; rolling windows → a date string.
+    assert _recon_date_floor("mtd").endswith("-01")
+    assert _recon_date_floor("ytd").endswith("-01-01")
+    assert len(_recon_date_floor("30d")) == 10
+    assert _recon_date_floor("bogus") is None
+
+
+def test_match_rejects_payout_bound_to_other_tx(monkeypatch):
+    """Idempotency / corruption guard: matching a payout already linked to a
+    DIFFERENT transaction returns 409 and writes nothing."""
+    from fastapi import HTTPException
+    import sb_clients
+    from plaid_router import reconciliation_match, MatchBody
+
+    def _fake_get(path):
+        if path.startswith("/businesses"):
+            return [{"id": "biz1", "name": "Foo", "owner_id": "owner"}]
+        if "reconciled_to_payout_id=eq." in path:
+            # payout already matched to a different deposit
+            return [{"transaction_id": "OTHER_TX"}]
+        if path.startswith("/plaid_transactions"):
+            return [{"transaction_id": "t1", "business_id": "biz1"}]
+        return []
+
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", _fake_get)
+    monkeypatch.setattr(
+        sb_clients, "sb_patch_as_service",
+        lambda path, body: pytest.fail("must not write when payout is taken"),
+    )
+
+    class _U:
+        id = "owner"
+
+    body = MatchBody(business_id="biz1", plaid_transaction_id="t1", stripe_payout_id="po_1")
+    with pytest.raises(HTTPException) as exc:
+        reconciliation_match(body, user=_U())
+    assert exc.value.status_code == 409
+
+
+def test_match_idempotent_for_same_pair(monkeypatch):
+    """Re-matching the SAME pair is allowed (idempotent) and writes the link."""
+    import sb_clients
+    from plaid_router import reconciliation_match, MatchBody
+
+    captured = {}
+
+    def _fake_get(path):
+        if path.startswith("/businesses"):
+            return [{"id": "biz1", "name": "Foo", "owner_id": "owner"}]
+        if "reconciled_to_payout_id=eq." in path:
+            return [{"transaction_id": "t1"}]  # same tx → no conflict
+        if path.startswith("/plaid_transactions"):
+            return [{"transaction_id": "t1", "business_id": "biz1"}]
+        return []
+
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", _fake_get)
+    monkeypatch.setattr(
+        sb_clients, "sb_patch_as_service",
+        lambda path, body: captured.update({"path": path, "body": body}),
+    )
+
+    class _U:
+        id = "owner"
+
+    body = MatchBody(business_id="biz1", plaid_transaction_id="t1", stripe_payout_id="po_1",
+                     payout_amount=42.0, payout_date="2026-06-01")
+    out = reconciliation_match(body, user=_U())
+    assert out == {"ok": True}
+    assert captured["body"]["reconciliation_status"] == "manual_matched"
+    assert captured["body"]["reconciled_payout_amount"] == 42.0
+
+
 def test_upsert_rule_validates_bucket_name(monkeypatch):
     """Invalid 5-bucket name → 400 before DB write."""
     from fastapi import HTTPException

@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 import sb_clients
@@ -1155,3 +1155,518 @@ def _handle_item_event(item_id: Optional[str], webhook_code: str) -> None:
         )
     except Exception as e:
         logger.warning(f"[plaid] item status patch failed: {e}")
+
+
+# ═════════════════════════════════════════════════════════════════════
+# Reconciliation UI — Phase F.2 v1.6
+# ═════════════════════════════════════════════════════════════════════
+# Visibility + manual-match surface over the auto-match worker. Stripe
+# payouts (left) ↔ Plaid deposits (right). All reads scope to included
+# accounts + not-excluded transactions.
+
+_MATCHED_STATUSES = ("auto_matched", "manual_matched")
+# Manual-match suggestion tolerance (F.2 v1.6 ruling).
+_SUGGEST_DAYS = 5
+_SUGGEST_AMOUNT_PCT = 0.05
+
+
+def _recon_date_floor(date_range: Optional[str]) -> Optional[str]:
+    """Map a date_range token to a yyyy-mm-dd floor, or None for all-time."""
+    if not date_range or date_range == "all":
+        return None
+    now = datetime.now(timezone.utc)
+    if date_range == "mtd":
+        return now.replace(day=1).date().isoformat()
+    if date_range == "ytd":
+        return now.replace(month=1, day=1).date().isoformat()
+    from datetime import timedelta
+    days = {"7d": 7, "30d": 30, "90d": 90}.get(date_range)
+    if days:
+        return (now - timedelta(days=days)).date().isoformat()
+    return None
+
+
+def _recon_scope(biz: str, account_id: Optional[str] = None) -> Optional[str]:
+    """Account-scope clause for reconciliation reads, or None if there are
+    no included accounts (caller returns empty)."""
+    if account_id:
+        return _account_in_clause([account_id])
+    included = _included_account_ids(biz)
+    if not included:
+        return None
+    return _account_in_clause(included)
+
+
+def _recon_matched_rows(
+    biz: str, scope: str, *, floor: Optional[str] = None,
+    match_type: Optional[str] = None, limit: int = 1000, offset: int = 0,
+) -> List[Dict[str, Any]]:
+    parts = [
+        f"business_id=eq.{biz}", scope, "excluded_from_books=eq.false",
+        "reconciled_to_payout_id=not.is.null",
+    ]
+    if match_type == "auto":
+        parts.append("reconciliation_status=eq.auto_matched")
+    elif match_type == "manual":
+        parts.append("reconciliation_status=eq.manual_matched")
+    else:
+        parts.append(f"reconciliation_status=in.({','.join(_MATCHED_STATUSES)})")
+    if floor:
+        parts.append(f"date=gte.{floor}")
+    parts.append(
+        "select=transaction_id,account_id,amount,iso_currency_code,date,name,"
+        "merchant_name,reconciliation_status,reconciled_to_payout_id,"
+        "reconciled_payout_amount,reconciled_payout_date,manual_match_reason"
+    )
+    parts.append(f"order=date.desc&limit={int(limit)}&offset={int(offset)}")
+    return sb_clients.sb_get_as_service(f"/plaid_transactions?{'&'.join(parts)}") or []
+
+
+def _recon_unmatched_plaid(
+    biz: str, scope: str, *, floor: Optional[str] = None,
+    limit: int = 1000, offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """Plaid deposits (inflow → negative amount) with no Stripe match."""
+    parts = [
+        f"business_id=eq.{biz}", scope, "excluded_from_books=eq.false",
+        "pending=eq.false", "reconciliation_status=eq.unmatched", "amount=lt.0",
+    ]
+    if floor:
+        parts.append(f"date=gte.{floor}")
+    parts.append(
+        "select=transaction_id,account_id,amount,iso_currency_code,date,name,"
+        "merchant_name,reconciliation_status"
+    )
+    parts.append(f"order=date.desc&limit={int(limit)}&offset={int(offset)}")
+    return sb_clients.sb_get_as_service(f"/plaid_transactions?{'&'.join(parts)}") or []
+
+
+def _matched_payout_ids(biz: str) -> set:
+    rows = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?business_id=eq.{biz}"
+        f"&reconciled_to_payout_id=not.is.null&select=reconciled_to_payout_id"
+    ) or []
+    return {r["reconciled_to_payout_id"] for r in rows if r.get("reconciled_to_payout_id")}
+
+
+def _recon_unmatched_stripe(biz: str, floor: Optional[str]) -> List[Dict[str, Any]]:
+    """Stripe payouts with no Plaid match, within the date window."""
+    stripe_acct = plaid_reconciliation.stripe_account_for_business(biz)
+    if not stripe_acct:
+        return []
+    from datetime import date as _date, timedelta
+    today = datetime.now(timezone.utc).date()
+    if floor:
+        try:
+            y, m, d = (int(p) for p in floor.split("-"))
+            start = _date(y, m, d)
+        except Exception:
+            start = today - timedelta(days=90)
+    else:
+        start = today - timedelta(days=90)
+    payouts = plaid_reconciliation.fetch_stripe_payouts_range(stripe_acct, start, today)
+    matched = _matched_payout_ids(biz)
+    out = []
+    for po in payouts:
+        if po.get("id") in matched:
+            continue
+        out.append({
+            "stripe_payout_id": po.get("id"),
+            "amount": round((po.get("amount") or 0) / 100.0, 2),
+            "currency": (po.get("currency") or "usd").upper(),
+            "arrival_date": plaid_reconciliation._payout_arrival_iso(po),
+            "status": po.get("status"),
+        })
+    return out
+
+
+@router.get("/reconciliation/summary")
+def reconciliation_summary(
+    biz: str, user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    _require_owner(biz, user)
+    empty = {"count": 0, "total": 0.0, "mtd_count": 0, "mtd_total": 0.0}
+    scope = _recon_scope(biz)
+    if scope is None:
+        return {"ok": True, "matched": empty, "unmatched": empty, "rate": 0.0, "last_run": None}
+
+    month_start = datetime.now(timezone.utc).replace(day=1).date().isoformat()
+
+    def _agg(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        total = mtd_total = 0.0
+        mtd_count = 0
+        for r in rows:
+            amt = abs(float(r.get("amount") or 0))
+            total += amt
+            if (r.get("date") or "") >= month_start:
+                mtd_total += amt
+                mtd_count += 1
+        return {"count": len(rows), "total": round(total, 2),
+                "mtd_count": mtd_count, "mtd_total": round(mtd_total, 2)}
+
+    matched = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?business_id=eq.{biz}&{scope}"
+        f"&excluded_from_books=eq.false"
+        f"&reconciliation_status=in.({','.join(_MATCHED_STATUSES)})"
+        f"&select=amount,date&limit=5000"
+    ) or []
+    unmatched = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?business_id=eq.{biz}&{scope}"
+        f"&excluded_from_books=eq.false&pending=eq.false"
+        f"&reconciliation_status=eq.unmatched&amount=lt.0"
+        f"&select=amount,date&limit=5000"
+    ) or []
+
+    m_agg, u_agg = _agg(matched), _agg(unmatched)
+    denom = m_agg["count"] + u_agg["count"]
+    rate = round(100.0 * m_agg["count"] / denom, 1) if denom else 0.0
+
+    items = sb_clients.sb_get_as_service(
+        f"/plaid_items?business_id=eq.{biz}&select=last_sync_at"
+    ) or []
+    stamps = sorted([i["last_sync_at"] for i in items if i.get("last_sync_at")])
+    last_run = stamps[-1] if stamps else None
+
+    return {"ok": True, "matched": m_agg, "unmatched": u_agg, "rate": rate, "last_run": last_run}
+
+
+@router.get("/reconciliation/matches")
+def reconciliation_matches(
+    biz: str, limit: int = 50, offset: int = 0,
+    date_range: Optional[str] = None, account_id: Optional[str] = None,
+    match_type: Optional[str] = None,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    _require_owner(biz, user)
+    scope = _recon_scope(biz, account_id)
+    if scope is None:
+        return {"ok": True, "matches": [], "has_more": False}
+    capped = max(1, min(int(limit), 200))
+    rows = _recon_matched_rows(
+        biz, scope, floor=_recon_date_floor(date_range),
+        match_type=match_type, limit=capped + 1, offset=offset,
+    )
+    return {"ok": True, "matches": rows[:capped], "has_more": len(rows) > capped}
+
+
+@router.get("/reconciliation/unmatched")
+def reconciliation_unmatched(
+    biz: str, side: str = "plaid", limit: int = 50, offset: int = 0,
+    date_range: Optional[str] = None,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    _require_owner(biz, user)
+    floor = _recon_date_floor(date_range)
+    if side == "stripe":
+        return {"ok": True, "side": "stripe", "unmatched": _recon_unmatched_stripe(biz, floor), "has_more": False}
+    scope = _recon_scope(biz)
+    if scope is None:
+        return {"ok": True, "side": "plaid", "unmatched": [], "has_more": False}
+    capped = max(1, min(int(limit), 200))
+    rows = _recon_unmatched_plaid(biz, scope, floor=floor, limit=capped + 1, offset=offset)
+    return {"ok": True, "side": "plaid", "unmatched": rows[:capped], "has_more": len(rows) > capped}
+
+
+@router.get("/reconciliation/suggestions")
+def reconciliation_suggestions(
+    biz: str, side: str, id: str,
+    amount: Optional[float] = None, date: Optional[str] = None,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Suggest counterpart matches within ±5 days and ±5% amount.
+
+    side='stripe': `id` is a payout; pass its amount (dollars) + date so we
+      can find Plaid deposits without a live Stripe retrieve.
+    side='plaid': `id` is a deposit; we read its amount/date from the row
+      and search Stripe payouts in range."""
+    _require_owner(biz, user)
+    from datetime import date as _date, timedelta
+
+    def _parse(d: str) -> Optional[_date]:
+        try:
+            y, m, dd = (int(p) for p in d.split("-"))
+            return _date(y, m, dd)
+        except Exception:
+            return None
+
+    if side == "stripe":
+        if amount is None or not date:
+            raise HTTPException(400, "stripe suggestions need amount + date")
+        anchor = _parse(date)
+        if not anchor:
+            raise HTTPException(400, "bad date")
+        lo = (anchor - timedelta(days=_SUGGEST_DAYS)).isoformat()
+        hi = (anchor + timedelta(days=_SUGGEST_DAYS)).isoformat()
+        scope = _recon_scope(biz)
+        if scope is None:
+            return {"ok": True, "suggestions": []}
+        rows = sb_clients.sb_get_as_service(
+            f"/plaid_transactions?business_id=eq.{biz}&{scope}"
+            f"&excluded_from_books=eq.false&reconciliation_status=eq.unmatched&amount=lt.0"
+            f"&date=gte.{lo}&date=lte.{hi}"
+            f"&select=transaction_id,account_id,amount,date,name,merchant_name&limit=50"
+        ) or []
+        tol = abs(float(amount)) * _SUGGEST_AMOUNT_PCT
+        sugg = [r for r in rows if abs(abs(float(r.get("amount") or 0)) - abs(float(amount))) <= tol]
+        return {"ok": True, "suggestions": sugg}
+
+    # side == 'plaid'
+    dep = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?transaction_id=eq.{id}&business_id=eq.{biz}"
+        f"&select=amount,date&limit=1"
+    ) or []
+    if not dep:
+        raise HTTPException(404, "transaction not found")
+    dep_amt = abs(float(dep[0].get("amount") or 0))
+    anchor = _parse(dep[0].get("date") or "")
+    if not anchor:
+        return {"ok": True, "suggestions": []}
+    stripe_acct = plaid_reconciliation.stripe_account_for_business(biz)
+    if not stripe_acct:
+        return {"ok": True, "suggestions": []}
+    payouts = plaid_reconciliation.fetch_stripe_payouts_range(
+        stripe_acct, anchor - timedelta(days=_SUGGEST_DAYS), anchor + timedelta(days=_SUGGEST_DAYS),
+    )
+    matched = _matched_payout_ids(biz)
+    tol = dep_amt * _SUGGEST_AMOUNT_PCT
+    sugg = []
+    for po in payouts:
+        if po.get("id") in matched:
+            continue
+        po_amt = (po.get("amount") or 0) / 100.0
+        if abs(po_amt - dep_amt) <= tol:
+            sugg.append({
+                "stripe_payout_id": po.get("id"),
+                "amount": round(po_amt, 2),
+                "arrival_date": plaid_reconciliation._payout_arrival_iso(po),
+            })
+    return {"ok": True, "suggestions": sugg}
+
+
+class MatchBody(BaseModel):
+    business_id: str
+    plaid_transaction_id: str
+    stripe_payout_id: str
+    payout_amount: Optional[float] = None   # dollars
+    payout_date: Optional[str] = None       # yyyy-mm-dd
+    reason: Optional[str] = "manual_match"
+
+
+@router.post("/reconciliation/match")
+def reconciliation_match(
+    body: MatchBody, user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Create a manual match. Idempotent: re-matching the same pair is a
+    no-op; matching a payout already bound to a *different* deposit → 409."""
+    _require_owner(body.business_id, user)
+    _require_owner_for_tx(body.plaid_transaction_id, user)
+
+    existing = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?business_id=eq.{body.business_id}"
+        f"&reconciled_to_payout_id=eq.{body.stripe_payout_id}"
+        f"&select=transaction_id"
+    ) or []
+    for r in existing:
+        if r.get("transaction_id") != body.plaid_transaction_id:
+            raise HTTPException(409, "that payout is already matched to another transaction")
+
+    patch: Dict[str, Any] = {
+        "reconciled_to_payout_id": body.stripe_payout_id,
+        "reconciliation_status": "manual_matched",
+        "manual_match_reason": body.reason or "manual_match",
+        "ignored_at": None,
+        "updated_at": _now_iso(),
+    }
+    if body.payout_amount is not None:
+        patch["reconciled_payout_amount"] = round(float(body.payout_amount), 2)
+    if body.payout_date:
+        patch["reconciled_payout_date"] = body.payout_date
+    sb_clients.sb_patch_as_service(
+        f"/plaid_transactions?transaction_id=eq.{body.plaid_transaction_id}"
+        f"&business_id=eq.{body.business_id}", patch,
+    )
+    return {"ok": True}
+
+
+class UnmatchBody(BaseModel):
+    business_id: str
+    plaid_transaction_id: str
+
+
+@router.post("/reconciliation/unmatch")
+def reconciliation_unmatch(
+    body: UnmatchBody, user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Reverse a match (auto or manual) back to unmatched."""
+    _require_owner(body.business_id, user)
+    _require_owner_for_tx(body.plaid_transaction_id, user)
+    sb_clients.sb_patch_as_service(
+        f"/plaid_transactions?transaction_id=eq.{body.plaid_transaction_id}"
+        f"&business_id=eq.{body.business_id}",
+        {
+            "reconciled_to_payout_id": None,
+            "reconciled_payout_amount": None,
+            "reconciled_payout_date": None,
+            "manual_match_reason": None,
+            "reconciliation_status": "unmatched",
+            "updated_at": _now_iso(),
+        },
+    )
+    return {"ok": True}
+
+
+class IgnoreBody(BaseModel):
+    business_id: str
+    plaid_transaction_id: str
+    reason: Optional[str] = None
+
+
+@router.post("/reconciliation/ignore")
+def reconciliation_ignore(
+    body: IgnoreBody, user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Mark a Plaid deposit as deliberately not-reconcilable."""
+    _require_owner(body.business_id, user)
+    _require_owner_for_tx(body.plaid_transaction_id, user)
+    sb_clients.sb_patch_as_service(
+        f"/plaid_transactions?transaction_id=eq.{body.plaid_transaction_id}"
+        f"&business_id=eq.{body.business_id}",
+        {
+            "reconciliation_status": "ignored",
+            "ignored_at": _now_iso(),
+            "manual_match_reason": body.reason or None,
+            "updated_at": _now_iso(),
+        },
+    )
+    return {"ok": True}
+
+
+@router.post("/reconciliation/run")
+def reconciliation_run(
+    body: SyncBody, user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Trigger the auto-match worker over the business's unmatched deposits."""
+    _require_owner(body.business_id, user)
+    attempted, matched = plaid_reconciliation.reconcile_business(body.business_id)
+    return {"ok": True, "attempted": attempted, "matched": matched}
+
+
+@router.get("/reconciliation/export")
+def reconciliation_export(
+    biz: str, format: str = "csv", date_range: Optional[str] = None,
+    user: AuthedUser = Depends(require_user),
+) -> Response:
+    """Generate a reconciliation report as a direct download (no server-side
+    storage). CSV always available; PDF when reportlab is present."""
+    biz_row = _require_owner(biz, user)
+    biz_name = (biz_row.get("name") or "Business")
+    floor = _recon_date_floor(date_range)
+    scope = _recon_scope(biz)
+    matched = _recon_matched_rows(biz, scope, floor=floor, limit=5000) if scope else []
+    un_plaid = _recon_unmatched_plaid(biz, scope, floor=floor, limit=5000) if scope else []
+    un_stripe = _recon_unmatched_stripe(biz, floor)
+
+    if format == "pdf":
+        try:
+            pdf = _render_recon_pdf(biz_name, date_range, matched, un_plaid, un_stripe)
+        except ImportError:
+            raise HTTPException(503, "PDF export unavailable on this server (reportlab missing). Use format=csv.")
+        return Response(
+            content=pdf, media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="reconciliation.pdf"'},
+        )
+
+    import csv
+    import io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["section", "date", "stripe_payout_id", "payout_amount",
+                "plaid_transaction_id", "plaid_amount", "plaid_name", "match_type"])
+    for r in matched:
+        w.writerow([
+            "matched", r.get("date"), r.get("reconciled_to_payout_id"),
+            r.get("reconciled_payout_amount"), r.get("transaction_id"),
+            r.get("amount"), r.get("merchant_name") or r.get("name"),
+            r.get("reconciliation_status"),
+        ])
+    for r in un_plaid:
+        w.writerow(["unmatched_plaid", r.get("date"), "", "",
+                    r.get("transaction_id"), r.get("amount"),
+                    r.get("merchant_name") or r.get("name"), ""])
+    for r in un_stripe:
+        w.writerow(["unmatched_stripe", r.get("arrival_date"), r.get("stripe_payout_id"),
+                    r.get("amount"), "", "", "", ""])
+    return Response(
+        content=buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="reconciliation.csv"'},
+    )
+
+
+def _render_recon_pdf(biz_name, date_range, matched, un_plaid, un_stripe) -> bytes:
+    """ReportLab summary + tables. Raises ImportError when reportlab is
+    absent so the endpoint can fall back to a clear 503."""
+    import io
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.lib.units import inch
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    )
+    from reportlab.lib.styles import getSampleStyleSheet
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, title="Reconciliation Report")
+    styles = getSampleStyleSheet()
+    story = []
+    story.append(Paragraph("Reconciliation Report", styles["Title"]))
+    story.append(Paragraph(biz_name, styles["Heading2"]))
+    story.append(Paragraph(f"Window: {date_range or 'all time'}", styles["Normal"]))
+    story.append(Spacer(1, 0.2 * inch))
+
+    m_total = sum(abs(float(r.get("amount") or 0)) for r in matched)
+    up_total = sum(abs(float(r.get("amount") or 0)) for r in un_plaid)
+    us_total = sum(abs(float(r.get("amount") or 0)) for r in un_stripe)
+    story.append(Paragraph(
+        f"Matched: {len(matched)} (${m_total:,.2f}) · "
+        f"Unmatched deposits: {len(un_plaid)} (${up_total:,.2f}) · "
+        f"Unmatched payouts: {len(un_stripe)} (${us_total:,.2f})",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 0.2 * inch))
+
+    def _table(title, header, rows):
+        story.append(Paragraph(title, styles["Heading3"]))
+        data = [header] + rows if rows else [header, ["—"] * len(header)]
+        t = Table(data, repeatRows=1)
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#222")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f4f4f4")]),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 0.2 * inch))
+
+    _table(
+        "Matched", ["Date", "Stripe Payout", "Payout $", "Plaid Deposit", "Type"],
+        [[r.get("date"), (r.get("reconciled_to_payout_id") or "")[:18],
+          f"${float(r.get('reconciled_payout_amount') or 0):,.2f}",
+          f"${abs(float(r.get('amount') or 0)):,.2f}", r.get("reconciliation_status")]
+         for r in matched[:200]],
+    )
+    _table(
+        "Unmatched bank deposits", ["Date", "Name", "Amount"],
+        [[r.get("date"), (r.get("merchant_name") or r.get("name") or "")[:40],
+          f"${abs(float(r.get('amount') or 0)):,.2f}"] for r in un_plaid[:200]],
+    )
+    _table(
+        "Unmatched Stripe payouts", ["Arrival", "Payout", "Amount"],
+        [[r.get("arrival_date"), (r.get("stripe_payout_id") or "")[:18],
+          f"${float(r.get('amount') or 0):,.2f}"] for r in un_stripe[:200]],
+    )
+    story.append(Spacer(1, 0.4 * inch))
+    story.append(Paragraph("_______________________________", styles["Normal"]))
+    story.append(Paragraph("Reviewed by / date", styles["Normal"]))
+    doc.build(story)
+    return buf.getvalue()
