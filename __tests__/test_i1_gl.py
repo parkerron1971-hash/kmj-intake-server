@@ -33,6 +33,10 @@ INVOICES = [
     {"id": "inv_ref", "total": 400, "status": "paid", "paid_at": "2026-06-03T00:00:00Z",
      "sent_at": "2026-05-25T00:00:00Z", "created_at": "2026-05-25T00:00:00Z", "due_date": "2026-06-03",
      "payment_method": "Stripe", "stripe_payment_url": "https://x", "refund_amount_cents": 4000, "refunded_at": "2026-06-05T00:00:00Z"},
+    # GAAP (I.1b): a draft is NOT AR — excluded from both GL and H.3a.
+    {"id": "inv_draft", "total": 500, "status": "draft", "paid_at": None,
+     "sent_at": None, "created_at": "2026-06-08T00:00:00Z", "due_date": "2026-06-25",
+     "payment_method": None, "stripe_payment_url": None, "refund_amount_cents": None, "refunded_at": None},
 ]
 EXPENSES = [{"id": "exp1", "amount": 150, "category": "operating", "subcategory": "software",
              "vendor": "SaaS", "date": "2026-06-04"}]
@@ -43,6 +47,10 @@ BILLS = [
     {"id": "bill_paid", "vendor_name": "Utility", "amount": 200, "category": "operating",
      "status": "paid", "due_date": "2026-06-05", "created_at": "2026-06-01T00:00:00Z",
      "paid_at": "2026-06-06T00:00:00Z", "paid_amount": 200},
+    # GAAP (I.1b): a draft bill is NOT AP — excluded from both GL and H.3a.
+    {"id": "bill_draft", "vendor_name": "Maybe Co", "amount": 999, "category": "operating",
+     "status": "draft", "due_date": "2026-07-01", "created_at": "2026-06-08T00:00:00Z",
+     "paid_at": None, "paid_amount": None},
 ]
 PLAID = [
     {"transaction_id": "px_payout", "amount": -1000, "date": "2026-06-02", "business_category": None,
@@ -167,8 +175,10 @@ def test_gl_matches_h3a_reports(mocked):
     assert gl_pl["expenses"] == h_pl["expenses"]["total"]
     assert gl_pl["net_income"] == h_pl["net_income"]
 
-    assert gl.gl_ar(lines) == re_.ar_aging("biz1")["total_outstanding"]
-    assert gl.gl_ap(lines) == re_.ap_aging("biz1")["total_outstanding"]
+    # Drafts excluded from BOTH sides (inv_draft $500, bill_draft $999):
+    # AR = inv_open 600 only; AP = bill_open 2500 only.
+    assert gl.gl_ar(lines) == re_.ar_aging("biz1")["total_outstanding"] == 600
+    assert gl.gl_ap(lines) == re_.ap_aging("biz1")["total_outstanding"] == 2500
     assert gl.gl_cash(lines) == re_.balance_sheet("biz1")["assets"]["cash"]
 
 

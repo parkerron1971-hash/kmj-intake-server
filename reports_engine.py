@@ -34,7 +34,11 @@ BUCKET_LABELS = {
 }
 
 # AR Aging outstanding rule (ruled): not paid + not cancelled/paid + not fully refunded.
-_OUTSTANDING_EXCLUDED_STATUSES = ("cancelled", "paid")
+# GAAP accrual standard (Phase I.1b ruling): a DRAFT invoice is not yet
+# issued, so it is not Accounts Receivable. Drafts must be sent before they
+# count as outstanding. (Matches the GL, which only books Dr AR / Cr Revenue
+# on status 'sent' or later.)
+_OUTSTANDING_EXCLUDED_STATUSES = ("cancelled", "paid", "draft")
 
 
 def _today() -> _date:
@@ -169,7 +173,8 @@ def _outstanding_invoices(biz: str) -> List[Dict[str, Any]]:
 
 
 # AP — outstanding bills (Phase H.1): not paid, not cancelled.
-_BILL_OUTSTANDING_EXCLUDED = ("paid", "cancelled")
+# Same GAAP rule for AP: a DRAFT bill is not yet entered as a payable.
+_BILL_OUTSTANDING_EXCLUDED = ("paid", "cancelled", "draft")
 
 
 def _outstanding_bills(biz: str) -> List[Dict[str, Any]]:

@@ -217,8 +217,10 @@ def generate_entries(sources: Dict[str, Any]) -> List[Dict[str, Any]]:
         cash_delta(lines)
 
     # ── Bills: accrual (Dr Expense / Cr AP) + payment (Dr AP / Cr Cash) ──
+    # GAAP: a DRAFT bill is not yet entered as a payable (mirrors the draft-
+    # invoice / AR treatment), so it generates no journal entry until issued.
     for b in sources["bills"]:
-        if (b.get("status") or "").lower() == "cancelled":
+        if (b.get("status") or "").lower() in ("cancelled", "draft"):
             continue
         amt = float(b.get("amount") or 0)
         if amt <= 0:
