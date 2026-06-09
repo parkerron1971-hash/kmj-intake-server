@@ -87,6 +87,11 @@ from agents.composer.router import router as composer_router
 
 app = FastAPI(title="KMJ Intake Automation")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Guarantee CORS headers on ALL error responses (500/404/422/unhandled) — an
+# unhandled exception escapes CORSMiddleware otherwise, masking every error as
+# a browser CORS block. See cors_error_handlers.py.
+import cors_error_handlers
+cors_error_handlers.install(app)
 app.include_router(ai_proxy_router)
 app.include_router(intake_router)
 app.include_router(nurture_router)
