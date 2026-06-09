@@ -24,12 +24,26 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id&limit=1") or []
+        f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
     if str(rows[0].get("owner_id")) != str(user.id):
         raise HTTPException(403, "not authorized")
     return rows[0]
+
+
+def _period_label(report: str, data: Dict[str, Any]) -> str:
+    if data.get("as_of"):
+        return f"As of {data['as_of']}"
+    rng = data.get("range") or {}
+    if rng.get("from") and rng.get("to"):
+        return f"Period: {rng['from']} – {rng['to']}"
+    return ""
+
+
+def _generated_by(biz_row: Dict[str, Any], user: AuthedUser) -> str:
+    settings = biz_row.get("settings") or {}
+    return (settings.get("practitioner_name") or getattr(user, "email", None) or "")
 
 
 @router.get("/pl")
@@ -92,15 +106,22 @@ def export(biz: str, report: str, format: str = "csv",
         raise HTTPException(400, str(e))
 
     biz_name = biz_row.get("name") or "Business"
-    rows = _csv_rows(report, data)
 
     if format == "pdf":
+        import pdf_reports
+        meta = pdf_reports.build_meta(
+            business_name=biz_name, settings=biz_row.get("settings"),
+            report_title=_REPORT_TITLES[report], period_label=_period_label(report, data),
+            basis_label="Cash Basis", currency="USD",
+            generated_by=_generated_by(biz_row, user))
         try:
-            pdf = _render_pdf(biz_name, _REPORT_TITLES[report], data, rows)
+            pdf = pdf_reports.render(report, data, meta)
         except ImportError:
             raise HTTPException(503, "PDF export unavailable (reportlab missing). Use format=csv.")
         return Response(content=pdf, media_type="application/pdf",
                         headers={"Content-Disposition": f'attachment; filename="{report}.pdf"'})
+
+    rows = _csv_rows(report, data)
 
     import csv
     import io

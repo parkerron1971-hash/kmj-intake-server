@@ -1567,8 +1567,20 @@ def reconciliation_export(
     un_stripe = _recon_unmatched_stripe(biz, floor)
 
     if format == "pdf":
+        import pdf_reports
+        settings_rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{biz}&select=settings&limit=1") or []
+        settings = (settings_rows[0].get("settings") if settings_rows else None)
+        meta = pdf_reports.build_meta(
+            business_name=biz_name, settings=settings,
+            report_title="Reconciliation Report",
+            period_label=(f"Window: {date_range}" if date_range else "All time"),
+            basis_label="Cash Basis", currency="USD",
+            generated_by=(getattr(user, "email", None) or ""))
         try:
-            pdf = _render_recon_pdf(biz_name, date_range, matched, un_plaid, un_stripe)
+            pdf = pdf_reports.render("reconciliation", {
+                "matched": matched, "unmatched_plaid": un_plaid, "unmatched_stripe": un_stripe,
+            }, meta)
         except ImportError:
             raise HTTPException(503, "PDF export unavailable on this server (reportlab missing). Use format=csv.")
         return Response(
