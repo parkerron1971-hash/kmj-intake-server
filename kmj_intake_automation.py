@@ -135,6 +135,9 @@ app.include_router(plaid_router)
 # Phase G — Chief Bookkeeping Intelligence (proposals + learning signals)
 from chief_bookkeeping_router import router as chief_bookkeeping_router
 app.include_router(chief_bookkeeping_router)
+# Phase H.3a — Reports suite (P&L, AR Aging, Cash Flow, Balance Sheet)
+from reports_router import router as reports_router
+app.include_router(reports_router)
 # Phase VABI v1 — public read endpoint for vertical intelligence
 app.include_router(vertical_intelligence_router)
 # Phase VABI v1.5 — per-business overrides CRUD + Chief-driven generation
