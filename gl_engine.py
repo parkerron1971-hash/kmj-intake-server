@@ -571,24 +571,28 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
 
     processed = 0
     for biz, biz_rows in by_biz.items():
-        coa = ensure_chart_of_accounts(biz, _biz_type(biz))
-        included = set(_included_account_ids(biz))
-        seen = set()
-        for r in biz_rows:
-            key = (r["source_table"], r["source_id"])
-            if key not in seen:
-                seen.add(key)
-                try:
-                    process_source_row(biz, r["source_table"], r["source_id"], coa, included)
-                except Exception as e:
-                    logger.warning(f"[gl] process row failed {key}: {e}")
-            sb_clients.sb_patch_as_service(
-                f"/gl_sync_queue?id=eq.{r['id']}", {"processed_at": _now_iso()})
-            processed += 1
+        # One business's failure must not abort the rest of the drain.
         try:
-            reconcile_opening_balance(biz, coa)
+            coa = ensure_chart_of_accounts(biz, _biz_type(biz))
+            included = set(_included_account_ids(biz))
+            seen = set()
+            for r in biz_rows:
+                key = (r["source_table"], r["source_id"])
+                if key not in seen:
+                    seen.add(key)
+                    try:
+                        process_source_row(biz, r["source_table"], r["source_id"], coa, included)
+                    except Exception as e:
+                        logger.warning(f"[gl] process row failed {key}: {e}")
+                sb_clients.sb_patch_as_service(
+                    f"/gl_sync_queue?id=eq.{r['id']}", {"processed_at": _now_iso()})
+                processed += 1
+            try:
+                reconcile_opening_balance(biz, coa)
+            except Exception as e:
+                logger.warning(f"[gl] opening reconcile failed {biz}: {e}")
         except Exception as e:
-            logger.warning(f"[gl] opening reconcile failed {biz}: {e}")
+            logger.warning(f"[gl] process_queue business {biz} failed: {e}")
 
     try:
         cutoff = (datetime.now(timezone.utc) - _timedelta(days=7)).isoformat()

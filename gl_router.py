@@ -100,13 +100,26 @@ def trial_balance(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[st
     return tb
 
 
+# These two endpoints depend on the Phase I.2 migration (journal_entries.status
+# + gl_divergence_alarms). Convert any internal failure into a clean
+# HTTPException — an UNHANDLED exception escapes Starlette's CORSMiddleware and
+# the browser then reports it as a CORS error rather than the real 500.
+_I2_MIGRATION_HINT = ("GL live-sync failed. If this just started, apply the "
+                      "Phase I.2 migration (2026_06_09_phasei2_gl_triggers.sql) — "
+                      "it adds journal_entries.status + gl_divergence_alarms.")
+
+
 @router.post("/process-queue")
 def process_queue(biz: Optional[str] = None,
                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """Manual / cron drain (Admin 'Force re-sync'). Owner-gated when biz given."""
     if biz:
         _owner(biz, user)
-    out = gl_engine.process_queue(biz)
+    try:
+        out = gl_engine.process_queue(biz)
+    except Exception as e:
+        logger.warning(f"[gl] process-queue failed: {e}")
+        raise HTTPException(500, f"{_I2_MIGRATION_HINT} ({e})")
     if biz:
         _log_admin(biz, "process_queue", out, user)
     return out
@@ -114,11 +127,16 @@ def process_queue(biz: Optional[str] = None,
 
 @router.get("/alarms")
 def alarms(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    """Active divergence alarms for a business."""
+    """Active divergence alarms for a business. Returns [] gracefully if the
+    alarms table isn't present yet (migration not applied)."""
     _owner(biz, user)
-    rows = sb_clients.sb_get_as_service(
-        f"/gl_divergence_alarms?business_id=eq.{biz}&status=eq.active"
-        f"&order=detected_at.desc&limit=20&select=id,summary,detected_at") or []
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/gl_divergence_alarms?business_id=eq.{biz}&status=eq.active"
+            f"&order=detected_at.desc&limit=20&select=id,summary,detected_at") or []
+    except Exception as e:
+        logger.warning(f"[gl] alarms read failed (treating as none): {e}")
+        rows = []
     return {"ok": True, "alarms": rows}
 
 
