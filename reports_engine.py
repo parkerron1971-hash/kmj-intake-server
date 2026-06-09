@@ -168,6 +168,18 @@ def _outstanding_invoices(biz: str) -> List[Dict[str, Any]]:
     return out
 
 
+# AP — outstanding bills (Phase H.1): not paid, not cancelled.
+_BILL_OUTSTANDING_EXCLUDED = ("paid", "cancelled")
+
+
+def _outstanding_bills(biz: str) -> List[Dict[str, Any]]:
+    return sb_clients.sb_get_as_service(
+        f"/bills?business_id=eq.{biz}"
+        f"&status=not.in.({','.join(_BILL_OUTSTANDING_EXCLUDED)})"
+        f"&select=id,vendor_name,amount,due_date,status&limit=5000"
+    ) or []
+
+
 # ═══════════════════════════════════════════════════════════════════
 # P&L
 # ═══════════════════════════════════════════════════════════════════
@@ -329,6 +341,55 @@ def ar_aging(biz: str, as_of: Optional[str] = None) -> Dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# AP Aging (Phase H.1 — mirrors AR Aging, grouped by vendor)
+# ═══════════════════════════════════════════════════════════════════
+
+def ap_aging(biz: str, as_of: Optional[str] = None) -> Dict[str, Any]:
+    asof = _d(as_of or "") or _today()
+    rows = _outstanding_bills(biz)
+    buckets = {"current": 0.0, "d1_30": 0.0, "d31_60": 0.0, "d61_90": 0.0, "d90_plus": 0.0}
+    by_vendor: Dict[str, Dict[str, Any]] = {}
+
+    def _bucket_for(due: Optional[_date]) -> str:
+        if not due or due >= asof:
+            return "current"
+        days = (asof - due).days
+        if days <= 30:
+            return "d1_30"
+        if days <= 60:
+            return "d31_60"
+        if days <= 90:
+            return "d61_90"
+        return "d90_plus"
+
+    bills_out = []
+    for r in rows:
+        amount = float(r.get("amount") or 0)
+        due = _d(r.get("due_date") or "")
+        b = _bucket_for(due)
+        buckets[b] += amount
+        vendor = r.get("vendor_name") or "—"
+        vg = by_vendor.setdefault(vendor, {"vendor": vendor, "total": 0.0, "count": 0})
+        vg["total"] += amount
+        vg["count"] += 1
+        bills_out.append({
+            "id": r.get("id"), "vendor": vendor, "amount": round(amount, 2),
+            "due_date": r.get("due_date"), "status": r.get("status"), "bucket": b,
+            "days_overdue": (asof - due).days if (due and due < asof) else 0,
+        })
+
+    total_outstanding = round(sum(buckets.values()), 2)
+    at_risk = round(buckets["d61_90"] + buckets["d90_plus"], 2)
+    return {
+        "ok": True, "report": "ap_aging", "as_of": _iso(asof),
+        "buckets": {k: round(v, 2) for k, v in buckets.items()},
+        "total_outstanding": total_outstanding, "at_risk": at_risk,
+        "by_vendor": sorted(by_vendor.values(), key=lambda x: -x["total"]),
+        "bills": sorted(bills_out, key=lambda x: -x["days_overdue"]),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Cash Flow (operating only)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -360,7 +421,7 @@ def balance_sheet(biz: str, as_of: Optional[str] = None) -> Dict[str, Any]:
     asof = _d(as_of or "") or _today()
     cash = _cash_on_hand(biz)  # current balance snapshot (historical balance is v1.5)
     ar = round(sum(float(r.get("total") or 0) for r in _outstanding_invoices(biz)), 2)
-    ap = 0.0  # placeholder until H.1
+    ap = round(sum(float(r.get("amount") or 0) for r in _outstanding_bills(biz)), 2)  # H.1
     total_assets = round(cash + ar, 2)
     total_liabilities = round(ap, 2)
     equity = round(total_assets - total_liabilities, 2)
@@ -369,7 +430,7 @@ def balance_sheet(biz: str, as_of: Optional[str] = None) -> Dict[str, Any]:
         "assets": {"cash": cash, "accounts_receivable": ar, "total": total_assets},
         "liabilities": {"accounts_payable": ap, "total": total_liabilities},
         "equity": {"retained_earnings": equity, "total": equity},
-        "note": "Lite: Cash + AR − AP. AP arrives with H.1; fixed assets / loans / "
+        "note": "Lite: Cash + AR − AP. Fixed assets / loans / credit cards / proper "
                 "equity tracking in v1.5. Cash is the latest balance snapshot.",
     }
 
@@ -383,6 +444,8 @@ def run_report(biz: str, report: str, *, period: str = "this_month",
         return profit_and_loss(biz, period, comparison, custom_from, custom_to)
     if report == "ar_aging":
         return ar_aging(biz, as_of)
+    if report == "ap_aging":
+        return ap_aging(biz, as_of)
     if report == "cash_flow":
         return cash_flow(biz, period, custom_from, custom_to)
     if report == "balance_sheet":

@@ -47,6 +47,13 @@ def ar_aging(biz: str, as_of: Optional[str] = None,
     return reports_engine.ar_aging(biz, as_of)
 
 
+@router.get("/ap-aging")
+def ap_aging(biz: str, as_of: Optional[str] = None,
+             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    return reports_engine.ap_aging(biz, as_of)
+
+
 @router.get("/cash-flow")
 def cash_flow(biz: str, period: str = "this_month",
               from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
@@ -63,7 +70,7 @@ def balance_sheet(biz: str, as_of: Optional[str] = None,
 
 
 _REPORT_TITLES = {
-    "pl": "Profit & Loss", "ar_aging": "AR Aging",
+    "pl": "Profit & Loss", "ar_aging": "AR Aging", "ap_aging": "AP Aging",
     "cash_flow": "Cash Flow (Operating)", "balance_sheet": "Balance Sheet",
 }
 
@@ -129,6 +136,13 @@ def _csv_rows(report: str, data: Dict[str, Any]) -> list:
                          i.get("due_date"), i.get("bucket"), i.get("days_overdue")])
         rows.append(["", "TOTAL OUTSTANDING", data.get("total_outstanding", 0), "", "", ""])
         rows.append(["", "AT RISK (60+)", data.get("at_risk", 0), "", "", ""])
+    elif report == "ap_aging":
+        rows.append(["Vendor", "Amount", "Due", "Bucket", "Days Overdue"])
+        for b in data.get("bills", []):
+            rows.append([b.get("vendor"), b.get("amount"), b.get("due_date"),
+                         b.get("bucket"), b.get("days_overdue")])
+        rows.append(["TOTAL OUTSTANDING", data.get("total_outstanding", 0), "", "", ""])
+        rows.append(["AT RISK (60+)", data.get("at_risk", 0), "", "", ""])
     elif report == "cash_flow":
         op = data.get("operating") or {}
         rows.append(["Operating Activity", "Amount"])

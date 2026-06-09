@@ -138,6 +138,9 @@ app.include_router(chief_bookkeeping_router)
 # Phase H.3a — Reports suite (P&L, AR Aging, Cash Flow, Balance Sheet)
 from reports_router import router as reports_router
 app.include_router(reports_router)
+# Phase H.1 — Accounts Payable (bills + recurring bills)
+from bills_router import router as bills_router
+app.include_router(bills_router)
 # Phase VABI v1 — public read endpoint for vertical intelligence
 app.include_router(vertical_intelligence_router)
 # Phase VABI v1.5 — per-business overrides CRUD + Chief-driven generation
