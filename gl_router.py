@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date as _date
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
