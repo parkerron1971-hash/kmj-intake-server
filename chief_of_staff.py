@@ -10771,7 +10771,8 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          relationships_block: str = "",
                          time_block: str = "",
                          sentiment: str = "relaxed",
-                         habit_block: str = "") -> str:
+                         habit_block: str = "",
+                         bookkeeping_block: str = "") -> str:
     # Strategy Coach mode is a different persona entirely.
     if mode == "strategy_coach":
         return _build_coach_prompt(ctx, is_greeting, resume_note=resume_note)
@@ -10882,6 +10883,8 @@ REAL-TIME BUSINESS DATA (fresh every message):
 {time_block}
 
 {forecast_block}
+
+{bookkeeping_block}
 
 {relationships_block}
 
@@ -11856,6 +11859,19 @@ async def chief_chat(
 
             sentiment = _detect_sentiment(req.conversation_history or [], req.message or "")
 
+            # Phase G — conditional bookkeeping context (live bank data) so
+            # Chief can answer money questions. Sync module run off-thread;
+            # returns "" when no bank is linked. Never breaks the prompt.
+            bookkeeping_block = ""
+            try:
+                import chief_bookkeeping
+                bookkeeping_block = await asyncio.to_thread(
+                    chief_bookkeeping.gather_and_format,
+                    req.business_id, (biz.get("type") if isinstance(biz, dict) else None),
+                )
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"bookkeeping context failed: {e}")
+
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,
@@ -11870,6 +11886,7 @@ async def chief_chat(
                 time_block=time_block,
                 sentiment=sentiment,
                 habit_block=habit_block,
+                bookkeeping_block=bookkeeping_block,
             )
 
             # JIT capture: prepend a directive at the very top of the prompt

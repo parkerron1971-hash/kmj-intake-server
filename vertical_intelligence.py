@@ -592,6 +592,48 @@ def get_module_suggestions(business_type: Optional[str]) -> List[Dict[str, Any]]
     return list(get_profile(business_type).get("module_suggestions") or [])
 
 
+# ─── Phase G — Chief bookkeeping intelligence (per-archetype) ─────────
+# Kept as a side map (not woven into each VerticalProfile) so existing
+# profile consumers are untouched. Generic baseline + a few self-employed
+# verticals that have distinct bookkeeping framing.
+_BOOKKEEPING_GENERIC: Dict[str, Any] = {
+    "category_note": "",
+    "nudges": ["Set aside for taxes as money comes in."],
+}
+BOOKKEEPING_BY_VERTICAL: Dict[str, Dict[str, Any]] = {
+    "lawyer": {
+        "category_note": "Keep client trust/IOLTA funds separate from operating money — "
+                         "trust deposits are not income.",
+        "nudges": ["Quarterly estimated taxes are due if self-employed.",
+                   "Don't categorize trust-account movement as revenue."],
+    },
+    "consultant": {
+        "category_note": "Most deposits are project revenue; reimbursed expenses pass through.",
+        "nudges": ["Quarterly estimated taxes apply to self-employment income.",
+                   "Tax-payment season is approaching — keep the Tax bucket funded."],
+    },
+    "creative": {
+        "category_note": "Separate client funds (e.g. ad spend, licensing pass-through) from your fees.",
+        "nudges": ["Quarterly estimated taxes apply to self-employment income."],
+    },
+    "coach": {
+        "category_note": "Package and session deposits are revenue; refunds reduce it.",
+        "nudges": ["Quarterly estimated taxes apply to self-employment income."],
+    },
+    "financial_educator": {
+        "category_note": "Course and coaching revenue vs. affiliate/sponsorship income may be taxed differently.",
+        "nudges": ["Quarterly estimated taxes apply to self-employment income."],
+    },
+}
+
+
+def get_bookkeeping(business_type: Optional[str]) -> Dict[str, Any]:
+    """Per-archetype bookkeeping framing for Chief's context. Always returns
+    a valid dict (generic baseline)."""
+    bt = (business_type or "").lower().strip()
+    return BOOKKEEPING_BY_VERTICAL.get(bt) or _BOOKKEEPING_GENERIC
+
+
 def list_known_verticals() -> List[str]:
     """Stable order — for tests + admin probes."""
     return sorted(VERTICAL_INTELLIGENCE.keys())

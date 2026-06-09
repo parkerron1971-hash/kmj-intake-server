@@ -132,6 +132,9 @@ app.include_router(stripe_data_proxy_router)
 app.include_router(stripe_payments_router)
 # Phase F.2 v1 — Plaid Link, sync, webhook, summary, categorize rules
 app.include_router(plaid_router)
+# Phase G — Chief Bookkeeping Intelligence (proposals + learning signals)
+from chief_bookkeeping_router import router as chief_bookkeeping_router
+app.include_router(chief_bookkeeping_router)
 # Phase VABI v1 — public read endpoint for vertical intelligence
 app.include_router(vertical_intelligence_router)
 # Phase VABI v1.5 — per-business overrides CRUD + Chief-driven generation
