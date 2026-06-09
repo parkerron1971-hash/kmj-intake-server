@@ -35,6 +35,21 @@ def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
     return rows[0]
 
 
+def _log_admin(biz: str, action_type: str, result: Dict[str, Any], user: AuthedUser) -> None:
+    """Best-effort admin audit — never block the action on a log failure."""
+    try:
+        # Keep the summary small (counts/flags only, not full payloads).
+        summary = {k: result.get(k) for k in (
+            "journal_entries_created", "skipped_existing", "ledger_lines_created",
+            "deleted_journal_entries", "all_match", "balanced", "difference") if k in result}
+        sb_clients.sb_post_as_service("/gl_admin_actions", {
+            "business_id": biz, "action_type": action_type,
+            "result_summary": summary, "performed_by": str(user.id),
+        }, prefer=None)
+    except Exception as e:
+        logger.warning(f"[gl] admin log failed: {e}")
+
+
 def _scan_non_usd(biz: str) -> Dict[str, Any]:
     """GL-8: surface any non-USD money rows before guessing FX."""
     inv = sb_clients.sb_get_as_service(
@@ -61,13 +76,17 @@ def backfill(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, An
                        "Resolve or exclude these before backfill.",
             **nonusd,
         })
-    return gl_engine.backfill(biz, b.get("type"))
+    out = gl_engine.backfill(biz, b.get("type"))
+    _log_admin(biz, "backfill", out, user)
+    return out
 
 
 @router.post("/backfill/reverse")
 def reverse(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
-    return gl_engine.reverse_backfill(biz)
+    out = gl_engine.reverse_backfill(biz)
+    _log_admin(biz, "reverse", out, user)
+    return out
 
 
 @router.get("/trial-balance")
@@ -126,7 +145,7 @@ def verify(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]
     all_match = checks["trial_balance"]["balanced"] and all(
         v.get("match") for k, v in checks.items() if k != "trial_balance")
 
-    return {
+    out = {
         "ok": True, "business_id": biz, "all_match": all_match,
         "ledger_lines": len(lines), "checks": checks,
         "stripe_clearing_balance": gl_clearing_v,
@@ -134,3 +153,40 @@ def verify(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]
                           "deposit (e.g. legacy platform-Stripe invoices). Expected; not an error."),
         "non_usd": _scan_non_usd(biz),
     }
+    _log_admin(biz, "verify", out, user)
+    return out
+
+
+@router.get("/status")
+def status(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Lightweight backfill state for the Admin dashboard (no full verify)."""
+    _owner(biz, user)
+    je = sb_clients.sb_get_as_service(
+        f"/journal_entries?business_id=eq.{biz}&select=id,created_at"
+        f"&order=created_at.desc&limit=20000") or []
+    lines = gl_engine.read_ledger(biz)
+    tb = gl_engine.trial_balance(lines)
+    balanced = abs(tb["difference"]) < _EPS
+    if not je:
+        state = "not_backfilled"
+    elif not balanced:
+        state = "unbalanced"
+    else:
+        state = "backfilled"
+    return {
+        "ok": True, "business_id": biz, "state": state,
+        "journal_entries": len(je), "ledger_lines": len(lines),
+        "trial_balance": tb, "balanced": balanced,
+        "stripe_clearing_balance": gl_engine.gl_clearing(lines),
+        "last_backfill_at": (je[0].get("created_at") if je else None),
+    }
+
+
+@router.get("/admin-log")
+def admin_log(user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Current user's last 50 GL admin actions (cross-user audit is future)."""
+    rows = sb_clients.sb_get_as_service(
+        f"/gl_admin_actions?performed_by=eq.{user.id}"
+        f"&order=performed_at.desc&limit=50"
+        f"&select=business_id,action_type,result_summary,performed_at") or []
+    return {"ok": True, "actions": rows}
