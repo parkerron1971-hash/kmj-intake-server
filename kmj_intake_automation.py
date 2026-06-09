@@ -506,6 +506,17 @@ async def startup():
         scheduler.add_job(workflow_engine.drain_tick, "interval", minutes=5, id="workflow_drain")
     except Exception as e:
         print(f"   [warn] workflow drain job not scheduled: {e}")
+    # Phase I.2 — GL live sync: drain the gl_sync_queue (no LISTEN/NOTIFY —
+    # PostgREST only) + periodic divergence reconciliation. Env kill-switch:
+    # GL_SYNC_POLLER=off disables both jobs without a code change.
+    try:
+        import os as _os
+        if (_os.environ.get("GL_SYNC_POLLER") or "on").lower() != "off":
+            import gl_engine as _gl
+            scheduler.add_job(_gl.drain_tick, "interval", minutes=1, id="gl_drain")
+            scheduler.add_job(_gl.divergence_tick, "interval", minutes=15, id="gl_divergence")
+    except Exception as e:
+        print(f"   [warn] GL sync jobs not scheduled: {e}")
     scheduler.start()
     print(f"🚀 KMJ Intake Automation running")
     print(f"   Owner: {OWNER_NAME} | {BUSINESS_NAME}")

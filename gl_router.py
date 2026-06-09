@@ -100,11 +100,38 @@ def trial_balance(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[st
     return tb
 
 
+@router.post("/process-queue")
+def process_queue(biz: Optional[str] = None,
+                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Manual / cron drain (Admin 'Force re-sync'). Owner-gated when biz given."""
+    if biz:
+        _owner(biz, user)
+    out = gl_engine.process_queue(biz)
+    if biz:
+        _log_admin(biz, "process_queue", out, user)
+    return out
+
+
+@router.get("/alarms")
+def alarms(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Active divergence alarms for a business."""
+    _owner(biz, user)
+    rows = sb_clients.sb_get_as_service(
+        f"/gl_divergence_alarms?business_id=eq.{biz}&status=eq.active"
+        f"&order=detected_at.desc&limit=20&select=id,summary,detected_at") or []
+    return {"ok": True, "alarms": rows}
+
+
 @router.get("/verify")
 def verify(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """The I.1b reconciliation gate: GL (from persisted ledger) vs the current
-    H.3a/H.1 engine, over all-time. All deltas must be ~0."""
+    H.3a/H.1 engine, over all-time. All deltas must be ~0. Drains this
+    business's queue first so the result reflects the latest source state."""
     _owner(biz, user)
+    try:
+        gl_engine.process_queue(biz)
+    except Exception as e:
+        logger.warning(f"[gl] pre-verify drain failed: {e}")
     lines = gl_engine.read_ledger(biz)
     tb = gl_engine.trial_balance(lines)
 

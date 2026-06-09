@@ -169,112 +169,138 @@ def _is_non_stripe_payment(inv: Dict[str, Any]) -> bool:
     return not inv.get("stripe_payment_url") and not pm
 
 
-def generate_entries(sources: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Map all source rows → balanced journal-entry specs. Pure."""
-    entries: List[Dict[str, Any]] = []
-    net_cash = 0.0  # Σ(Dr − Cr) on Cash (1000) across generated entries
+# Per-source desired-entry generators — the SINGLE source of truth for both
+# backfill (generate_entries) and live sync (converge). Each returns the
+# balanced journal-entry specs a source row should produce right now.
 
-    def cash_delta(lines):
-        nonlocal net_cash
-        for ln in lines:
+def desired_for_invoice(inv: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    total = float(inv.get("total") or 0)
+    status = (inv.get("status") or "").lower()
+    if total <= 0:
+        return out
+    if status in _INVOICE_ISSUE_STATUSES:
+        ed = _d(inv.get("sent_at")) or _d(inv.get("created_at")) or _d(inv.get("due_date"))
+        out.append(_entry(ed, "invoice_issue", inv["id"], "Invoice issued",
+                          [_line("1100", debit=total), _line("4000", credit=total)]))
+    if status == "paid" and inv.get("paid_at"):
+        cc = "1000" if _is_non_stripe_payment(inv) else "1150"
+        out.append(_entry(_d(inv.get("paid_at")), "invoice_payment", inv["id"], "Invoice paid",
+                          [_line(cc, debit=total), _line("1100", credit=total)]))
+    rc = inv.get("refund_amount_cents")
+    if rc and float(rc) > 0:
+        amt = round(float(rc) / 100.0, 2)
+        cc = "1000" if _is_non_stripe_payment(inv) else "1150"
+        out.append(_entry(_d(inv.get("refunded_at")) or _d(inv.get("paid_at")),
+                          "invoice_refund", inv["id"], "Invoice refunded",
+                          [_line("4000", debit=amt), _line(cc, credit=amt)]))
+    return out
+
+
+def desired_for_expense(e: Dict[str, Any]) -> List[Dict[str, Any]]:
+    amt = float(e.get("amount") or 0)
+    if amt <= 0:
+        return []
+    code = _BUCKET_TO_EXPENSE.get(e.get("category") or "other", "5900")
+    memo = " · ".join([x for x in [e.get("vendor"), e.get("subcategory")] if x]) or ""
+    return [_entry(_d(e.get("date")), "expense", e["id"], "Manual expense",
+                   [_line(code, debit=amt, memo=memo), _line("1000", credit=amt)])]
+
+
+def desired_for_bill(b: Dict[str, Any]) -> List[Dict[str, Any]]:
+    # GAAP: a DRAFT bill is not yet a payable (mirrors draft-invoice / AR).
+    if (b.get("status") or "").lower() in ("cancelled", "draft"):
+        return []
+    amt = float(b.get("amount") or 0)
+    if amt <= 0:
+        return []
+    out = []
+    code = _BUCKET_TO_EXPENSE.get(b.get("category") or "operating", "5000")
+    ed = _d(b.get("created_at")) or _d(b.get("due_date"))
+    out.append(_entry(ed, "bill_issue", b["id"], f"Bill from {b.get('vendor_name')}",
+               [_line(code, debit=amt, memo=b.get("vendor_name") or ""), _line("2000", credit=amt)]))
+    if (b.get("status") or "").lower() == "paid":
+        pamt = float(b.get("paid_amount") if b.get("paid_amount") is not None else amt)
+        out.append(_entry(_d(b.get("paid_at")), "bill_payment", b["id"], "Bill paid",
+                   [_line("2000", debit=pamt), _line("1000", credit=pamt)]))
+    return out
+
+
+def desired_for_plaid(t: Dict[str, Any]) -> List[Dict[str, Any]]:
+    # Pending / excluded-from-books transactions are not in the books — a live
+    # toggle of either reverses the entry (matches H.3a scope).
+    if t.get("pending") or t.get("excluded_from_books"):
+        return []
+    amt = float(t.get("amount") or 0)
+    sid = t.get("transaction_id")
+    if amt < 0:
+        inflow = -amt
+        if t.get("reconciled_to_payout_id"):
+            return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Payout deposit",
+                           [_line("1000", debit=inflow), _line("1150", credit=inflow)])]
+        if plaid_categorization.is_income_category(
+                t.get("plaid_category_primary"), t.get("plaid_category_detail")):
+            return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Other income",
+                           [_line("1000", debit=inflow), _line("4900", credit=inflow)])]
+        return []  # transfer-in / uncategorized → absorbed by opening equity
+    if amt > 0 and not plaid_categorization.is_income_category(
+            t.get("plaid_category_primary"), t.get("plaid_category_detail")):
+        bucket = t.get("business_category") or plaid_categorization.map_plaid_to_bucket(
+            t.get("plaid_category_primary"), t.get("plaid_category_detail"))
+        code = _BUCKET_TO_EXPENSE.get(bucket, "5900")
+        return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Bank expense",
+                       [_line(code, debit=amt, memo=t.get("business_subcategory") or ""),
+                        _line("1000", credit=amt)])]
+    return []
+
+
+# Source table → its GL source_types (for live reconciliation of one row).
+_TABLE_SOURCE_TYPES = {
+    "invoices": ("invoice_issue", "invoice_payment", "invoice_refund"),
+    "business_expenses": ("expense",),
+    "bills": ("bill_issue", "bill_payment"),
+    "plaid_transactions": ("plaid_transaction",),
+}
+_TABLE_DESIRED = {
+    "invoices": desired_for_invoice, "business_expenses": desired_for_expense,
+    "bills": desired_for_bill, "plaid_transactions": desired_for_plaid,
+}
+
+
+def _cash_net(specs: List[Dict[str, Any]]) -> float:
+    n = 0.0
+    for s in specs:
+        for ln in s["lines"]:
             if ln["code"] == "1000":
-                net_cash += ln["debit"] - ln["credit"]
+                n += ln["debit"] - ln["credit"]
+    return round(n, 2)
 
-    # ── Invoices: issue / payment / refund ──
+
+def _opening_spec(cash_on_hand: float, net_cash: float) -> Optional[Dict[str, Any]]:
+    plug = round(cash_on_hand - net_cash, 2)
+    if abs(plug) < 0.005:
+        return None
+    lines = ([_line("1000", debit=plug), _line("3000", credit=plug)] if plug > 0
+             else [_line("3000", debit=-plug), _line("1000", credit=-plug)])
+    return _entry(_today(), "opening_balance", "opening",
+                  "Opening balance (Cash to bank snapshot)", lines)
+
+
+def generate_entries(sources: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """All source rows → balanced journal-entry specs (backfill path). Pure."""
+    specs: List[Dict[str, Any]] = []
     for inv in sources["invoices"]:
-        total = float(inv.get("total") or 0)
-        status = (inv.get("status") or "").lower()
-        if total <= 0:
-            continue
-        if status in _INVOICE_ISSUE_STATUSES:
-            ed = _d(inv.get("sent_at")) or _d(inv.get("created_at")) or _d(inv.get("due_date"))
-            entries.append(_entry(ed, "invoice_issue", inv["id"],
-                f"Invoice issued", [_line("1100", debit=total), _line("4000", credit=total)]))
-        if status == "paid" and inv.get("paid_at"):
-            ed = _d(inv.get("paid_at"))
-            cash_code = "1000" if _is_non_stripe_payment(inv) else "1150"
-            lines = [_line(cash_code, debit=total), _line("1100", credit=total)]
-            entries.append(_entry(ed, "invoice_payment", inv["id"], "Invoice paid", lines))
-            cash_delta(lines)
-        rc = inv.get("refund_amount_cents")
-        if rc and float(rc) > 0:
-            ed = _d(inv.get("refunded_at")) or _d(inv.get("paid_at"))
-            amt = round(float(rc) / 100.0, 2)
-            cash_code = "1000" if _is_non_stripe_payment(inv) else "1150"
-            lines = [_line("4000", debit=amt), _line(cash_code, credit=amt)]
-            entries.append(_entry(ed, "invoice_refund", inv["id"], "Invoice refunded", lines))
-            cash_delta(lines)
-
-    # ── Manual expenses (cash paid) ──
+        specs += desired_for_invoice(inv)
     for e in sources["expenses"]:
-        amt = float(e.get("amount") or 0)
-        if amt <= 0:
-            continue
-        code = _BUCKET_TO_EXPENSE.get(e.get("category") or "other", "5900")
-        memo = " · ".join([x for x in [e.get("vendor"), e.get("subcategory")] if x]) or ""
-        lines = [_line(code, debit=amt, memo=memo), _line("1000", credit=amt)]
-        entries.append(_entry(_d(e.get("date")), "expense", e["id"], "Manual expense", lines))
-        cash_delta(lines)
-
-    # ── Bills: accrual (Dr Expense / Cr AP) + payment (Dr AP / Cr Cash) ──
-    # GAAP: a DRAFT bill is not yet entered as a payable (mirrors the draft-
-    # invoice / AR treatment), so it generates no journal entry until issued.
+        specs += desired_for_expense(e)
     for b in sources["bills"]:
-        if (b.get("status") or "").lower() in ("cancelled", "draft"):
-            continue
-        amt = float(b.get("amount") or 0)
-        if amt <= 0:
-            continue
-        code = _BUCKET_TO_EXPENSE.get(b.get("category") or "operating", "5000")
-        ed = _d(b.get("created_at")) or _d(b.get("due_date"))
-        entries.append(_entry(ed, "bill_issue", b["id"], f"Bill from {b.get('vendor_name')}",
-            [_line(code, debit=amt, memo=b.get("vendor_name") or ""), _line("2000", credit=amt)]))
-        if (b.get("status") or "").lower() == "paid":
-            pamt = float(b.get("paid_amount") if b.get("paid_amount") is not None else amt)
-            lines = [_line("2000", debit=pamt), _line("1000", credit=pamt)]
-            entries.append(_entry(_d(b.get("paid_at")), "bill_payment", b["id"], "Bill paid", lines))
-            cash_delta(lines)
-
-    # ── Plaid transactions (bank-level cash effects) ──
+        specs += desired_for_bill(b)
     for t in sources["plaid"]:
-        amt = float(t.get("amount") or 0)
-        sid = t.get("transaction_id")
-        if amt < 0:  # inflow / deposit
-            inflow = -amt
-            if t.get("reconciled_to_payout_id"):
-                # Stripe payout deposit settles the clearing account.
-                lines = [_line("1000", debit=inflow), _line("1150", credit=inflow)]
-                entries.append(_entry(_d(t.get("date")), "plaid_transaction", sid, "Payout deposit", lines))
-                cash_delta(lines)
-            elif plaid_categorization.is_income_category(
-                    t.get("plaid_category_primary"), t.get("plaid_category_detail")):
-                lines = [_line("1000", debit=inflow), _line("4900", credit=inflow)]
-                entries.append(_entry(_d(t.get("date")), "plaid_transaction", sid, "Other income", lines))
-                cash_delta(lines)
-            # else: transfer-in / uncategorized inflow → absorbed by opening equity.
-        elif amt > 0:  # outflow / debit
-            if not plaid_categorization.is_income_category(
-                    t.get("plaid_category_primary"), t.get("plaid_category_detail")):
-                bucket = t.get("business_category") or plaid_categorization.map_plaid_to_bucket(
-                    t.get("plaid_category_primary"), t.get("plaid_category_detail"))
-                code = _BUCKET_TO_EXPENSE.get(bucket, "5900")
-                lines = [_line(code, debit=amt, memo=t.get("business_subcategory") or ""),
-                         _line("1000", credit=amt)]
-                entries.append(_entry(_d(t.get("date")), "plaid_transaction", sid, "Bank expense", lines))
-                cash_delta(lines)
-            # else: income-categorized outflow → absorbed by opening equity.
-
-    # ── Opening balance: plug Cash to the current bank snapshot ──
-    plug = round(sources["cash_on_hand"] - net_cash, 2)
-    if abs(plug) >= 0.005:
-        if plug > 0:
-            lines = [_line("1000", debit=plug), _line("3000", credit=plug)]
-        else:
-            lines = [_line("3000", debit=-plug), _line("1000", credit=-plug)]
-        entries.append(_entry(_today(), "opening_balance", "opening",
-                              "Opening balance (Cash to bank snapshot)", lines))
-
-    return entries
+        specs += desired_for_plaid(t)
+    opening = _opening_spec(sources["cash_on_hand"], _cash_net(specs))
+    if opening:
+        specs.append(opening)
+    return specs
 
 
 # ─── Compute reports from ledger lines (or generated specs) ──────────
@@ -396,3 +422,243 @@ def read_ledger(business_id: str) -> List[Dict[str, Any]]:
         f"/ledger_entries?business_id=eq.{business_id}"
         f"&select=account_code,account_type,profit_first_bucket,source_type,debit,credit,entry_date"
         f"&limit=100000") or []
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase I.2 — live sync (converge-to-desired, append-only)
+# ═══════════════════════════════════════════════════════════════════
+
+import asyncio  # noqa: E402
+from datetime import timedelta as _timedelta  # noqa: E402
+
+_SOURCE_FETCH = {
+    "invoices": ("/invoices?id=eq.{id}&select=id,total,status,paid_at,sent_at,created_at,"
+                 "due_date,payment_method,stripe_payment_url,refund_amount_cents,refunded_at&limit=1"),
+    "business_expenses": "/business_expenses?id=eq.{id}&select=id,amount,category,subcategory,vendor,date&limit=1",
+    "bills": ("/bills?id=eq.{id}&select=id,vendor_name,amount,category,status,due_date,"
+              "created_at,paid_at,paid_amount&limit=1"),
+    "plaid_transactions": ("/plaid_transactions?transaction_id=eq.{id}&select=transaction_id,amount,date,"
+                           "business_category,business_subcategory,plaid_category_primary,"
+                           "plaid_category_detail,reconciled_to_payout_id,pending,excluded_from_books,account_id&limit=1"),
+}
+
+
+def _spec_sig(spec: Dict[str, Any]):
+    return tuple(sorted((l["code"], round(float(l["debit"]), 2), round(float(l["credit"]), 2))
+                        for l in spec["lines"]))
+
+
+def _persisted_sig(lines: List[Dict[str, Any]]):
+    return tuple(sorted((l["account_code"], round(float(l["debit"]), 2), round(float(l["credit"]), 2))
+                        for l in lines))
+
+
+def _je_lines(je_id: str) -> List[Dict[str, Any]]:
+    return sb_clients.sb_get_as_service(
+        f"/ledger_entries?journal_entry_id=eq.{je_id}&select=account_code,debit,credit&limit=500") or []
+
+
+def _active_jes(biz: str, source_id: str, source_types) -> List[Dict[str, Any]]:
+    return sb_clients.sb_get_as_service(
+        f"/journal_entries?business_id=eq.{biz}&source_id=eq.{source_id}"
+        f"&status=eq.active&source_type=in.({','.join(source_types)})"
+        f"&select=id,source_type&limit=50") or []
+
+
+def _post_entry(biz: str, spec: Dict[str, Any], coa: Dict[str, str], *,
+                is_reversal: bool = False, reverses: Optional[str] = None) -> Optional[str]:
+    res = sb_clients.sb_post_as_service("/journal_entries", {
+        "business_id": biz, "entry_date": spec["entry_date"], "description": spec["description"],
+        "source_type": spec["source_type"], "source_id": spec["source_id"],
+        "status": "active", "is_reversal": is_reversal, "reverses_entry_id": reverses,
+    })
+    je = (res or [None])[0] if isinstance(res, list) else res
+    if not je:
+        return None
+    for ln in spec["lines"]:
+        sb_clients.sb_post_as_service("/ledger_entries", {
+            "business_id": biz, "journal_entry_id": je["id"], "account_id": coa.get(ln["code"]),
+            "account_code": ln["code"], "account_type": ln["type"], "profit_first_bucket": ln["bucket"],
+            "source_type": spec["source_type"], "debit": ln["debit"], "credit": ln["credit"],
+            "entry_date": spec["entry_date"], "memo": ln["memo"],
+        }, prefer=None)
+    return je["id"]
+
+
+def _reverse_je(biz: str, je: Dict[str, Any], coa: Dict[str, str]) -> None:
+    """Append-only reversal: mark the entry reversed + post a mirror entry."""
+    lines = _je_lines(je["id"])
+    rev_lines = [_line(l["account_code"], debit=float(l["credit"]), credit=float(l["debit"]),
+                       memo="reversal") for l in lines]
+    rev_spec = _entry(_today(), je["source_type"] + "_reversal", je["id"], "Reversal", rev_lines)
+    _post_entry(biz, rev_spec, coa, is_reversal=True, reverses=je["id"])
+    sb_clients.sb_patch_as_service(f"/journal_entries?id=eq.{je['id']}", {"status": "reversed"})
+
+
+def process_source_row(biz: str, table: str, source_id: str, coa: Dict[str, str],
+                       included_accounts: Optional[set] = None) -> None:
+    """Converge the GL for ONE source row to its desired state (idempotent)."""
+    types = _TABLE_SOURCE_TYPES.get(table)
+    if not types:
+        return
+    rows = sb_clients.sb_get_as_service(_SOURCE_FETCH[table].format(id=source_id)) or []
+    row = rows[0] if rows else None
+    desired: List[Dict[str, Any]] = []
+    if row is not None:
+        if table == "plaid_transactions" and included_accounts is not None \
+                and row.get("account_id") not in included_accounts:
+            desired = []  # tx on an excluded/removed account → not in books
+        else:
+            desired = _TABLE_DESIRED[table](row)
+    desired_by_type = {s["source_type"]: s for s in desired}
+
+    actives = {je["source_type"]: je for je in _active_jes(biz, source_id, types)}
+    for st, je in actives.items():
+        spec = desired_by_type.get(st)
+        if spec is None:
+            _reverse_je(biz, je, coa)                       # event no longer applies
+        elif _persisted_sig(_je_lines(je["id"])) != _spec_sig(spec):
+            _reverse_je(biz, je, coa)
+            _post_entry(biz, spec, coa)                     # changed → reverse + repost
+    for st, spec in desired_by_type.items():
+        if st not in actives:
+            _post_entry(biz, spec, coa)                     # new event
+
+
+def reconcile_opening_balance(biz: str, coa: Dict[str, str]) -> None:
+    """Keep GL Cash == current bank snapshot after any cash-affecting change."""
+    lines = read_ledger(biz)
+    net_nonopening = round(sum(
+        float(l["debit"]) - float(l["credit"]) for l in lines
+        if l["account_code"] == "1000" and not str(l["source_type"]).startswith("opening_balance")), 2)
+    accts = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?business_id=eq.{biz}&type=eq.depository"
+        f"&included_in_bookkeeping=eq.true&deleted_at=is.null&select=last_balance") or []
+    cash_on_hand = round(sum(float(a.get("last_balance") or 0) for a in accts), 2)
+    desired = _opening_spec(cash_on_hand, net_nonopening)
+
+    actives = _active_jes(biz, "opening", ("opening_balance",))
+    cur = actives[0] if actives else None
+    if desired is None:
+        if cur:
+            _reverse_je(biz, cur, coa)
+        return
+    if cur and _persisted_sig(_je_lines(cur["id"])) == _spec_sig(desired):
+        return                                              # unchanged
+    if cur:
+        _reverse_je(biz, cur, coa)
+    _post_entry(biz, desired, coa)
+
+
+def _biz_type(biz: str) -> Optional[str]:
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{biz}&select=type&limit=1") or []
+    return rows[0].get("type") if rows else None
+
+
+def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dict[str, Any]:
+    """Drain unprocessed gl_sync_queue rows → converge each source → mark
+    processed. Idempotent. Prunes processed rows older than 7 days."""
+    filt = f"&business_id=eq.{business_id}" if business_id else ""
+    rows = sb_clients.sb_get_as_service(
+        f"/gl_sync_queue?processed_at=is.null{filt}"
+        f"&order=enqueued_at.asc&limit={int(limit)}&select=id,business_id,source_table,source_id") or []
+    if not rows:
+        return {"ok": True, "processed": 0, "businesses": 0}
+
+    by_biz: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        by_biz.setdefault(r["business_id"], []).append(r)
+
+    processed = 0
+    for biz, biz_rows in by_biz.items():
+        coa = ensure_chart_of_accounts(biz, _biz_type(biz))
+        included = set(_included_account_ids(biz))
+        seen = set()
+        for r in biz_rows:
+            key = (r["source_table"], r["source_id"])
+            if key not in seen:
+                seen.add(key)
+                try:
+                    process_source_row(biz, r["source_table"], r["source_id"], coa, included)
+                except Exception as e:
+                    logger.warning(f"[gl] process row failed {key}: {e}")
+            sb_clients.sb_patch_as_service(
+                f"/gl_sync_queue?id=eq.{r['id']}", {"processed_at": _now_iso()})
+            processed += 1
+        try:
+            reconcile_opening_balance(biz, coa)
+        except Exception as e:
+            logger.warning(f"[gl] opening reconcile failed {biz}: {e}")
+
+    try:
+        cutoff = (datetime.now(timezone.utc) - _timedelta(days=7)).isoformat()
+        sb_clients.sb_delete_as_service(
+            f"/gl_sync_queue?processed_at=not.is.null&processed_at=lt.{cutoff}")
+    except Exception as e:
+        logger.warning(f"[gl] queue prune failed: {e}")
+
+    return {"ok": True, "processed": processed, "businesses": len(by_biz)}
+
+
+# ─── Divergence reconciliation ───────────────────────────────────────
+
+def run_divergence_check(biz: str) -> Dict[str, Any]:
+    """Compute verify deltas; raise/clear an alarm. Returns the summary."""
+    import reports_engine
+    lines = read_ledger(biz)
+    if not lines:
+        return {"all_match": True, "empty": True}
+    tb = trial_balance(lines)
+    today = reports_engine._today()
+    start = _date(2000, 1, 1)
+    gl_pl = gl_pl_cash_basis(lines, start, today)
+    h_pl = reports_engine.profit_and_loss(biz, "custom", None, start.isoformat(), today.isoformat())["current"]
+    deltas = {
+        "trial_balance": abs(tb["difference"]),
+        "pl_revenue": abs(gl_pl["revenue"] - h_pl["revenue"]["gross_revenue"]),
+        "pl_expenses": abs(gl_pl["expenses"] - h_pl["expenses"]["total"]),
+        "ar": abs(gl_ar(lines) - reports_engine.ar_aging(biz).get("total_outstanding", 0)),
+        "ap": abs(gl_ap(lines) - reports_engine.ap_aging(biz).get("total_outstanding", 0)),
+        "cash": abs(gl_cash(lines) - reports_engine.balance_sheet(biz)["assets"]["cash"]),
+    }
+    all_match = all(v < 0.01 for v in deltas.values())
+    summary = {"all_match": all_match, "deltas": {k: round(v, 2) for k, v in deltas.items()}}
+
+    active = sb_clients.sb_get_as_service(
+        f"/gl_divergence_alarms?business_id=eq.{biz}&status=eq.active&select=id&limit=1") or []
+    if not all_match and not active:
+        sb_clients.sb_post_as_service("/gl_divergence_alarms",
+            {"business_id": biz, "status": "active", "summary": summary}, prefer=None)
+    elif all_match and active:
+        sb_clients.sb_patch_as_service(
+            f"/gl_divergence_alarms?business_id=eq.{biz}&status=eq.active",
+            {"status": "resolved", "resolved_at": _now_iso()})
+    return summary
+
+
+def _backfilled_businesses() -> List[str]:
+    rows = sb_clients.sb_get_as_service(
+        "/journal_entries?status=eq.active&select=business_id&limit=50000") or []
+    return list({r["business_id"] for r in rows if r.get("business_id")})
+
+
+# ─── Scheduler ticks (driven by the existing AsyncIOScheduler) ───────
+
+async def drain_tick() -> None:
+    try:
+        await asyncio.to_thread(process_queue)
+    except Exception as e:
+        logger.warning(f"[gl] drain_tick failed: {e}")
+
+
+async def divergence_tick() -> None:
+    def _run():
+        for biz in _backfilled_businesses():
+            try:
+                run_divergence_check(biz)
+            except Exception as e:
+                logger.warning(f"[gl] divergence check failed {biz}: {e}")
+    try:
+        await asyncio.to_thread(_run)
+    except Exception as e:
+        logger.warning(f"[gl] divergence_tick failed: {e}")
