@@ -141,6 +141,9 @@ app.include_router(reports_router)
 # Phase H.1 — Accounts Payable (bills + recurring bills)
 from bills_router import router as bills_router
 app.include_router(bills_router)
+# Phase I.1 — Double-entry General Ledger (backfill + verify)
+from gl_router import router as gl_router
+app.include_router(gl_router)
 # Phase VABI v1 — public read endpoint for vertical intelligence
 app.include_router(vertical_intelligence_router)
 # Phase VABI v1.5 — per-business overrides CRUD + Chief-driven generation
