@@ -624,6 +624,99 @@ def _generic_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
             Paragraph(str(d)[:4000], s["row"])]
 
 
+def _breakdown_table(title, head_label, rows_data, key, s, money_cell, stripe, rule,
+                     colors, Table, TableStyle, Paragraph, Spacer, inch):
+    """Two-column breakdown table (label, amount) used by the I.8 reports."""
+    out = [Paragraph(title, s["section"])]
+    head = [Paragraph(head_label, s["th"]), Paragraph("Amount", s["thr"])]
+    rows = [head]
+    for r in rows_data:
+        rows.append([Paragraph(str(r.get(key)), s["row"]), money_cell(r.get("amount"))])
+    if not rows_data:
+        rows.append([Paragraph("(none)", s["rowind"]), money_cell(0)])
+    tbl = Table(rows, colWidths=[None, 1.2 * inch], repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("ALIGN", (1, 0), (1, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe]),
+    ]))
+    out.append(tbl)
+    out.append(Spacer(1, 0.12 * inch))
+    return out
+
+
+def _revenue_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
+                  Paragraph, Spacer, inch, meta):
+    out = [Paragraph("TOTAL REVENUE", s["section"]),
+           Paragraph(fmt_money(d.get("total_revenue")), s["kpi"] if "kpi" in s else s["section"]),
+           Spacer(1, 0.12 * inch)]
+    args = (s, money_cell, stripe, rule, colors, Table, TableStyle, Paragraph, Spacer, inch)
+    out += _breakdown_table("BY ACCOUNT", "Account",
+                            [{"label": str(a.get("code")) + "  " + str(a.get("name")),
+                              "amount": a.get("amount")} for a in d.get("by_account") or []],
+                            "label", *args)
+    out += _breakdown_table("BY SOURCE", "Source", d.get("by_source") or [], "source", *args)
+    out += _breakdown_table("BY CUSTOMER", "Customer", d.get("by_customer") or [], "customer", *args)
+    out += _breakdown_table("BY OFFERING", "Offering / Category", d.get("by_offering") or [],
+                            "offering", *args)
+    out += _breakdown_table("BY MONTH", "Month", d.get("monthly") or [], "month", *args)
+    return out
+
+
+def _expenses_detail_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
+                          TableStyle, Paragraph, Spacer, inch, meta):
+    out = [Paragraph("TOTAL EXPENSES", s["section"]),
+           Paragraph(fmt_money(d.get("total_expenses")), s["kpi"] if "kpi" in s else s["section"]),
+           Spacer(1, 0.12 * inch)]
+    args = (s, money_cell, stripe, rule, colors, Table, TableStyle, Paragraph, Spacer, inch)
+    out += _breakdown_table("BY ACCOUNT", "Account",
+                            [{"label": str(a.get("code")) + "  " + str(a.get("name")),
+                              "amount": a.get("amount")} for a in d.get("by_account") or []],
+                            "label", *args)
+    out += _breakdown_table("BY VENDOR", "Vendor", d.get("by_vendor") or [], "vendor", *args)
+    out += _breakdown_table("BY SUBCATEGORY", "Subcategory", d.get("by_subcategory") or [],
+                            "subcategory", *args)
+    out += _breakdown_table("BY MONTH", "Month", d.get("monthly") or [], "month", *args)
+    return out
+
+
+def _customer_statement_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
+                             TableStyle, Paragraph, Spacer, inch, meta):
+    contact = d.get("contact") or {}
+    t = d.get("totals") or {}
+    out = [Paragraph("STATEMENT FOR", s["section"]),
+           Paragraph(str(contact.get("name") or "—"), s["row"]),
+           Spacer(1, 0.10 * inch)]
+    head = [Paragraph(h, s["th"]) for h in ("Date", "Ref", "Description")] +            [Paragraph(h, s["thr"]) for h in ("Amount", "Balance")]
+    rows = [head]
+    for l in d.get("lines") or []:
+        rows.append([Paragraph(str(l.get("date")), s["rowind"]),
+                     Paragraph(str(l.get("ref")), s["rowind"]),
+                     Paragraph(str(l.get("description")), s["row"]),
+                     money_cell(l.get("amount")), money_cell(l.get("balance"))])
+    rows.append([Paragraph("", s["row"]), Paragraph("", s["row"]),
+                 Paragraph("BALANCE DUE", s["totlbl"]),
+                 Paragraph("", s["row"]), money_cell(t.get("balance"), bold=True)])
+    tbl = Table(rows, colWidths=[0.9 * inch, 0.9 * inch, None, 1.0 * inch, 1.0 * inch],
+                repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("ALIGN", (3, 0), (4, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, stripe]),
+        ("LINEABOVE", (0, -1), (-1, -1), 1.2, colors.HexColor(_INK)),
+    ]))
+    out.append(tbl)
+    out.append(Spacer(1, 0.12 * inch))
+    aging = d.get("aging") or {}
+    out += [Paragraph("AGING (OUTSTANDING)", s["section"])]
+    ahead = [Paragraph(h, s["thr"]) for h in ("Current", "1-30", "31-60", "61-90", "90+")]
+    atbl = Table([ahead, [money_cell(aging.get(k)) for k in
+                          ("current", "d1_30", "d31_60", "d61_90", "d90_plus")]],
+                 colWidths=[1.1 * inch] * 5)
+    atbl.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+                              ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule)]))
+    out.append(atbl)
+    return out
+
+
 _BUILDERS = {
     "balance_sheet": _balance_sheet_body,
     "pl": _pl_body,
@@ -634,4 +727,7 @@ _BUILDERS = {
     "trial_balance": _trial_balance_body,
     "general_ledger": _general_ledger_body,
     "summary_1099": _summary_1099_body,
+    "revenue": _revenue_body,
+    "expenses_detail": _expenses_detail_body,
+    "customer_statement": _customer_statement_body,
 }

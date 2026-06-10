@@ -17,6 +17,7 @@ import sb_clients
 from auth_supabase import AuthedUser, require_user
 import reports_engine
 import gl_reports
+import gl_reports_t2
 
 logger = logging.getLogger("reports_router")
 
@@ -310,13 +311,106 @@ _REPORT_TITLES = {
     "cash_flow": "Cash Flow (Operating)", "balance_sheet": "Balance Sheet",
     "trial_balance": "Trial Balance", "general_ledger": "General Ledger",
     "summary_1099": "1099 Summary",
+    # Phase I.8 — Tier-2 reports.
+    "revenue": "Revenue Report", "expenses_detail": "Expense Report",
+    "customer_statement": "Customer Statement",
 }
+
+
+# ─── Phase I.8 — Tier-2 reports ──────────────────────────────────────
+
+def _needs_gl(report: str, **extra) -> Dict[str, Any]:
+    return {"ok": True, "report": report, "needs_gl": True,
+            "hint": "This report reads the General Ledger. Run the GL backfill "
+                    "in Bookkeeping → Admin to unlock it.", **extra}
+
+
+@router.get("/revenue")
+def revenue(biz: str, period: str = "this_month",
+            from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
+            user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    if not gl_reports.gl_active(biz):
+        return _needs_gl("revenue", total_revenue=0, by_account=[], by_source=[],
+                         by_customer=[], by_offering=[], monthly=[])
+    try:
+        return gl_reports_t2.revenue_report(biz, period, from_, to)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/expenses-detail")
+def expenses_detail(biz: str, period: str = "this_month",
+                    from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
+                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    if not gl_reports.gl_active(biz):
+        return _needs_gl("expenses_detail", total_expenses=0, by_account=[],
+                         by_vendor=[], by_subcategory=[], monthly=[])
+    try:
+        return gl_reports_t2.expense_report(biz, period, from_, to)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/statement-customers")
+def statement_customers(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    return {"ok": True, "customers": gl_reports_t2.list_statement_customers(biz)}
+
+
+@router.get("/customer-statement")
+def customer_statement(biz: str, contact_id: str, as_of: Optional[str] = None,
+                       user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    return gl_reports_t2.customer_statement(biz, contact_id, as_of)
+
+
+@router.post("/customer-statement/send")
+async def customer_statement_send(biz: str, contact_id: str,
+                                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Email the statement (PDF attached) to the contact's email on file."""
+    biz_row = _owner(biz, user)
+    data = gl_reports_t2.customer_statement(biz, contact_id, None)
+    contact = data.get("contact") or {}
+    to_email = contact.get("email")
+    biz_name = biz_row.get("name") or "Business"
+    subject, body = gl_reports_t2.statement_email(biz_name, contact.get("name"), data)
+    if not to_email:
+        return {"ok": True, "email_sent": False, "recipient": None,
+                "subject": subject, "body": body,
+                "note": "This contact has no email on file — add one in Contacts, "
+                        "or download the PDF and send it yourself."}
+    email_sent = False
+    try:
+        import pdf_reports
+        import base64
+        meta = pdf_reports.build_meta(
+            business_name=biz_name, settings=biz_row.get("settings"),
+            report_title="Customer Statement",
+            period_label=f"As of {data.get('as_of')}",
+            basis_label="Cash Basis", currency="USD",
+            generated_by=_generated_by(biz_row, user))
+        pdf = pdf_reports.render("customer_statement", data, meta)
+        from email_sender import send_via_resend
+        await send_via_resend(
+            to_email=to_email, to_name=contact.get("name"),
+            from_email="reports@solutionist.studio", from_name=biz_name,
+            reply_to=None, subject=subject, body=body,
+            attachments=[{"filename": "statement.pdf",
+                          "content": base64.b64encode(pdf).decode("ascii"),
+                          "content_type": "application/pdf"}])
+        email_sent = True
+    except Exception as e:
+        logger.warning(f"[i8] statement email failed: {e}")
+    return {"ok": True, "email_sent": email_sent, "recipient": to_email,
+            "subject": subject, "body": body}
 
 
 @router.get("/export")
 def export(biz: str, report: str, format: str = "csv",
            period: str = "this_month", as_of: Optional[str] = None,
-           comparison: Optional[str] = None,
+           comparison: Optional[str] = None, contact_id: Optional[str] = None,
            from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
            user: AuthedUser = Depends(require_user)) -> Response:
     biz_row = _owner(biz, user)
@@ -336,6 +430,21 @@ def export(biz: str, report: str, format: str = "csv",
             data = gl_reports.general_ledger_report(biz, None, from_, to) \
                 if gl_reports.gl_active(biz) else {"ok": True, "report": "general_ledger",
                                                    "accounts": [], "range": {"from": from_, "to": to}}
+        elif report == "revenue":
+            data = gl_reports_t2.revenue_report(biz, period, from_, to) \
+                if gl_reports.gl_active(biz) else {"report": "revenue", "by_account": [],
+                                                   "by_source": [], "by_customer": [],
+                                                   "by_offering": [], "monthly": [],
+                                                   "total_revenue": 0}
+        elif report == "expenses_detail":
+            data = gl_reports_t2.expense_report(biz, period, from_, to) \
+                if gl_reports.gl_active(biz) else {"report": "expenses_detail", "by_account": [],
+                                                   "by_vendor": [], "by_subcategory": [],
+                                                   "monthly": [], "total_expenses": 0}
+        elif report == "customer_statement":
+            if not contact_id:
+                raise HTTPException(400, "contact_id required for customer_statement")
+            data = gl_reports_t2.customer_statement(biz, contact_id, as_of)
         elif report == "pl":
             data = _gl_or_fallback(
                 biz, lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to),
@@ -411,6 +520,37 @@ def _csv_rows(report: str, data: Dict[str, Any]) -> list:
                 rows.append(["Expense", f"  {b['label']} · {ln['subcategory']}", ln["amount"]])
         rows.append(["Expense", "Total Expenses", (cur.get("expenses") or {}).get("total", 0)])
         rows.append(["Net", "Net Income", cur.get("net_income", 0)])
+    elif report == "revenue":
+        rows.append(["Breakdown", "Item", "Amount"])
+        for a in data.get("by_account", []):
+            rows.append(["Account", str(a.get("code")) + " " + str(a.get("name")), a.get("amount")])
+        for x in data.get("by_source", []):
+            rows.append(["Source", x.get("source"), x.get("amount")])
+        for c in data.get("by_customer", []):
+            rows.append(["Customer", c.get("customer"), c.get("amount")])
+        for o in data.get("by_offering", []):
+            rows.append(["Offering", o.get("offering"), o.get("amount")])
+        for m in data.get("monthly", []):
+            rows.append(["Month", m.get("month"), m.get("amount")])
+        rows.append(["", "TOTAL REVENUE", data.get("total_revenue", 0)])
+    elif report == "expenses_detail":
+        rows.append(["Breakdown", "Item", "Amount"])
+        for a in data.get("by_account", []):
+            rows.append(["Account", str(a.get("code")) + " " + str(a.get("name")), a.get("amount")])
+        for v in data.get("by_vendor", []):
+            rows.append(["Vendor", v.get("vendor"), v.get("amount")])
+        for x in data.get("by_subcategory", []):
+            rows.append(["Subcategory", x.get("subcategory"), x.get("amount")])
+        for m in data.get("monthly", []):
+            rows.append(["Month", m.get("month"), m.get("amount")])
+        rows.append(["", "TOTAL EXPENSES", data.get("total_expenses", 0)])
+    elif report == "customer_statement":
+        rows.append(["Date", "Type", "Ref", "Description", "Amount", "Balance"])
+        for l in data.get("lines", []):
+            rows.append([l.get("date"), l.get("type"), l.get("ref"),
+                         l.get("description"), l.get("amount"), l.get("balance")])
+        t = data.get("totals") or {}
+        rows.append(["", "", "", "BALANCE DUE", "", t.get("balance", 0)])
     elif report == "ar_aging":
         rows.append(["Invoice", "Contact", "Total", "Due", "Bucket", "Days Overdue"])
         for i in data.get("invoices", []):
