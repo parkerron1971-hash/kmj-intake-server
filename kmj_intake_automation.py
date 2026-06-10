@@ -155,6 +155,9 @@ app.include_router(accounting_periods_router)
 # Phase I.3 PR2 — soft-lock audit trail
 from period_overrides_router import router as period_overrides_router
 app.include_router(period_overrides_router)
+# Phase I.3 PR3 — accountant collaborators
+from business_collaborators_router import router as business_collaborators_router
+app.include_router(business_collaborators_router)
 # Phase VABI v1 — public read endpoint for vertical intelligence
 app.include_router(vertical_intelligence_router)
 # Phase VABI v1.5 — per-business overrides CRUD + Chief-driven generation
