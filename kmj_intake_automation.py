@@ -162,6 +162,8 @@ from business_users_router import router as business_users_router
 app.include_router(business_users_router)
 from entity_groups_router import router as entity_groups_router
 app.include_router(entity_groups_router)
+from launch_access import router as launch_access_router
+app.include_router(launch_access_router)
 # Phase F.1 — Stripe outbound contractor payments
 from contractors_router import router as contractors_router
 app.include_router(contractors_router)
@@ -535,6 +537,11 @@ async def startup():
         if (_os.environ.get("GL_SYNC_POLLER") or "on").lower() != "off":
             import gl_engine as _gl
             scheduler.add_job(_gl.drain_tick, "interval", minutes=1, id="gl_drain")
+            # Arc 19 — daily metered-usage report to Stripe (no-ops unless
+            # BILLING_ENFORCE=on + Stripe configured).
+            import usage_metering as _um
+            scheduler.add_job(_um.stripe_report_tick, "interval", hours=24,
+                              id="stripe_usage_report")
             scheduler.add_job(_gl.divergence_tick, "interval", minutes=15, id="gl_divergence")
     except Exception as e:
         print(f"   [warn] GL sync jobs not scheduled: {e}")

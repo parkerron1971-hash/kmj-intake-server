@@ -987,6 +987,17 @@ def compose_hero(
             system=spec.system_prompt,
             messages=[{"role": "user", "content": user_prompt + extra_user}],
         )
+        # Arc 19 — meter the hero build (endpoint keys the unit weight).
+        try:
+            from api_usage_logger import log_api_usage_sync
+            u = getattr(msg, "usage", None)
+            log_api_usage_sync(
+                endpoint="/composer/hero", model=COMPOSER_MODEL,
+                input_tokens=getattr(u, "input_tokens", 0) or 0,
+                output_tokens=getattr(u, "output_tokens", 0) or 0,
+                business_id=business_id, task_type="composer")
+        except Exception:
+            pass
         return "".join(
             b.text for b in msg.content if getattr(b, "type", None) == "text"
         )

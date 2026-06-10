@@ -235,6 +235,18 @@ def exchange_public_token(
     _require_owner(body.business_id, user)
     _ensure_plaid_configured()
 
+    # Arc 19 F-A2 — per-tier connected-account limit (gate-ready;
+    # enforced only with BILLING_ENFORCE=on; grandfathered bypass).
+    import billing_limits as _bl
+    _cap = _bl.can_connect_account(body.business_id)
+    if _cap.get("enforce") and not _cap.get("allowed"):
+        raise HTTPException(402, {
+            "error": "plaid_connection_cap",
+            "message": f"Your plan includes {_cap.get('limit')} connected bank "
+                       f"account(s) — this business has {_cap.get('count')}. "
+                       "Upgrade in Settings → Billing to connect more.",
+        })
+
     from plaid.model.item_public_token_exchange_request import \
         ItemPublicTokenExchangeRequest
 

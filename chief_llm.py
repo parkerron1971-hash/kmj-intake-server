@@ -179,6 +179,11 @@ async def _call_claude(business_id: str, system: str, user_content: str,
             error=None if resp.status_code == 200 else f"http_{resp.status_code}")
     except Exception as e:
         logger.warning(f"[chief_llm] usage log failed: {e}")
+    try:
+        import usage_metering
+        usage_metering.check_thresholds(business_id)
+    except Exception as e:
+        logger.warning(f"[chief_llm] threshold check failed: {e}")
     return text
 
 

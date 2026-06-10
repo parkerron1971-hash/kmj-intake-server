@@ -99,6 +99,44 @@ def _compute_cost_cents(model: str, input_tokens: int, output_tokens: int) -> fl
     return round(cost, 4)
 
 
+def log_api_usage_sync(
+    *,
+    endpoint: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    business_id: Optional[str] = None,
+    task_type: Optional[str] = None,
+    ok: bool = True,
+) -> None:
+    """Synchronous variant for sync call sites (composer/director). Same
+    row shape; never raises. Arc 19 — site builds must meter (weight 5/25)."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return
+    body: Dict[str, Any] = {
+        "endpoint": endpoint, "model": model,
+        "input_tokens": int(input_tokens or 0),
+        "output_tokens": int(output_tokens or 0),
+        "cost_cents": _compute_cost_cents(model, input_tokens or 0, output_tokens or 0),
+        "ok": ok,
+    }
+    if business_id: body["business_id"] = business_id
+    if task_type:   body["task_type"] = task_type
+    try:
+        httpx.post(
+            f"{SUPABASE_URL}/rest/v1/api_usage",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+            },
+            json=body, timeout=10.0,
+        )
+    except Exception as e:
+        logger.warning(f"api_usage sync insert failed: {e}")
+
+
 async def log_api_usage(
     *,
     endpoint: str,

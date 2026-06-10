@@ -103,8 +103,8 @@ def test_plan_limits_unenforced_then_enforced(monkeypatch):
     assert fg.limit_for(biz, "chief_messages_monthly") is None   # unenforced = unlimited
     monkeypatch.setenv("BILLING_ENFORCE", "on")
     monkeypatch.setenv("STRIPE_PRICE_ID_STARTER", "price_starter")
-    assert fg.limit_for(biz, "chief_messages_monthly") == 50
+    assert fg.limit_for(biz, "chief_messages_monthly") == 75   # Arc 19 locked
     assert fg.limit_for(biz, "max_businesses") == 1
     pro = {"subscription_status": "active", "subscription_plan": "price_pro"}
     monkeypatch.setenv("STRIPE_PRICE_ID_PROFESSIONAL", "price_pro")
-    assert fg.limit_for(pro, "chief_messages_monthly") is None   # unlimited
+    assert fg.limit_for(pro, "chief_messages_monthly") == 350   # Arc 19 locked

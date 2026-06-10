@@ -46,10 +46,17 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
 # else). chief_messages_monthly metering can build on the existing api_usage
 # table; max_businesses needs an onboarding check. Both are Phase E v1.1
 # enforcement work — registered here so the hypothesis lives in code.
+# Arc 19 LOCKED pricing (docs/pricing_model.md, approved 2026-06-10):
+# chief_messages_monthly = included WEIGHTED Chief interactions
+# (chat=1, hero regen=5, full site build=25 — usage_metering.UNIT_WEIGHTS).
+# plaid_connections = connected bank account limit per tier (F-A2).
 PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
-    "starter":      {"max_businesses": 1, "chief_messages_monthly": 50, "max_seats": 1},
-    "professional": {"max_businesses": 1, "chief_messages_monthly": None, "max_seats": 1},
-    "practice":     {"max_businesses": 3, "chief_messages_monthly": None, "max_seats": 5},
+    "starter":      {"max_businesses": 1, "chief_messages_monthly": 75,
+                     "max_seats": 1, "plaid_connections": 2},
+    "professional": {"max_businesses": 1, "chief_messages_monthly": 350,
+                     "max_seats": 1, "plaid_connections": 5},
+    "practice":     {"max_businesses": 3, "chief_messages_monthly": 1000,
+                     "max_seats": 5, "plaid_connections": None},
 }
 
 

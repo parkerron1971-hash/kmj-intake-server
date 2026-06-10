@@ -495,12 +495,12 @@ async def _handle_invoice_payment_failed(inv: Dict[str, Any], business_id: Optio
 @router.get("/chief-usage")
 async def chief_usage_endpoint(biz: str,
                                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    """Chief message metering for the month — the BillingPanel + Chief
-    drawer read this. Limit is null (unlimited) until enforcement."""
+    """Arc 19 — WEIGHTED usage summary (allotment, overage estimate,
+    2x-cap state, grandfather). BillingPanel + Chief drawer read this."""
     biz_row = await _load_business(biz)
     _require_owner_of(user, biz_row)
-    import billing_limits
-    return billing_limits.chief_usage(biz, biz_row)
+    import usage_metering
+    return usage_metering.usage_summary(biz, biz_row)
 
 
 @router.get("/can-create-business")

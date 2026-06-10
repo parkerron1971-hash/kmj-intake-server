@@ -51,8 +51,13 @@ def business_count(owner_id: str) -> int:
 
 def can_create_business(owner_id: str) -> Dict[str, Any]:
     """Cap check for creating ANOTHER business. Unenforced → always allowed.
-    Note: creation itself is a direct PostgREST insert today, so this check
-    is advisory until creation moves behind the backend (surfaced)."""
+    Phase B: creation is now backend-mediated (/access/businesses/create)
+    so this check is REAL; grandfathered owners bypass entirely."""
+    import usage_metering
+    if usage_metering.is_grandfathered_user(owner_id):
+        return {"ok": True, "allowed": True, "count": business_count(owner_id),
+                "limit": None, "plan": None, "grandfathered": True,
+                "enforce": feature_gates.enforcement_on()}
     count = business_count(owner_id)
     best = owner_best_plan_row(owner_id)
     plan = feature_gates.plan_of(best) if best else None
@@ -92,11 +97,32 @@ def chief_usage(business_id: str, biz_row: Optional[Dict[str, Any]] = None) -> D
 
 
 def chief_can_send(business_id: str) -> bool:
-    """True unless enforcement is on AND the tier's monthly cap is spent."""
-    if not feature_gates.enforcement_on():
-        return True
-    u = chief_usage(business_id)
-    return u["limit"] is None or u["used"] < u["limit"]
+    """Phase B: delegates to the WEIGHTED metering gate (allotment + the
+    2x-bill cap + practitioner hard cap + grandfather bypass)."""
+    import usage_metering
+    return usage_metering.can_interact(business_id)
+
+
+def can_connect_account(business_id: str,
+                        biz_row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """F-A2 — Plaid connected-account limit per tier (2 / 5 / unlimited).
+    Gate-ready: unenforced + grandfathered → always allowed."""
+    import usage_metering
+    if biz_row is None:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}"
+            f"&select=id,owner_id,subscription_status,subscription_plan&limit=1") or []
+        biz_row = rows[0] if rows else None
+    if usage_metering.is_grandfathered_business(business_id, biz_row):
+        return {"ok": True, "allowed": True, "count": None, "limit": None,
+                "grandfathered": True}
+    accts = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?business_id=eq.{business_id}&deleted_at=is.null"
+        f"&select=account_id&limit=200") or []
+    limit = feature_gates.limit_for(biz_row, "plaid_connections")
+    allowed = (limit is None) or (len(accts) < limit)
+    return {"ok": True, "allowed": allowed, "count": len(accts), "limit": limit,
+            "enforce": feature_gates.enforcement_on()}
 
 
 # ─── Seats ───────────────────────────────────────────────────────────

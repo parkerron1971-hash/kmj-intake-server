@@ -60,40 +60,67 @@ def test_business_cap_dormant_then_enforced(fake, monkeypatch):
 
 
 def test_chief_metering_month_window_and_cap(fake, monkeypatch):
+    """Arc 19 LOCKED semantics: allotment 75; blocking happens only at the
+    2x-bill cap (75 + $79/$0.40 = 272 units) or a practitioner hard cap —
+    overage between allotment and cap is ALLOWED (it bills)."""
+    import usage_metering as um
     fb = fake
     _biz(fb, "b1", plan="price_starter")
     now = datetime.now(timezone.utc)
     this_month = now.replace(day=2).isoformat()
-    for i in range(50):
+    for i in range(80):                                          # over allotment
         fb.rows("api_usage").append({"id": f"u{i}", "business_id": "b1",
-                                     "created_at": this_month})
+                                     "created_at": this_month, "endpoint": "/ai/proxy"})
     # Last month's usage doesn't count (auto-reset = computed window).
     fb.rows("api_usage").append({"id": "old", "business_id": "b1",
-                                 "created_at": "2020-01-15T00:00:00Z"})
-    u = bl.chief_usage("b1")
-    assert u["used"] == 50 and u["limit"] is None               # dormant
-    assert bl.chief_can_send("b1") is True
+                                 "created_at": "2020-01-15T00:00:00Z",
+                                 "endpoint": "/ai/proxy"})
+    s0 = um.usage_summary("b1")
+    assert s0["weighted_used"] == 80
+    assert bl.chief_can_send("b1") is True                       # dormant
     monkeypatch.setenv("BILLING_ENFORCE", "on")
     monkeypatch.setenv("STRIPE_PRICE_ID_STARTER", "price_starter")
-    u = bl.chief_usage("b1")
-    assert u["limit"] == 50 and u["remaining"] == 0
-    assert bl.chief_can_send("b1") is False                     # cap reached
+    s1 = um.usage_summary("b1")
+    assert s1["allotment"] == 75 and s1["overage_units"] == 5
+    assert s1["overage_cents"] == 5 * 40
+    assert s1["cap_units"] == 75 + 7900 // 40                    # 272
+    assert bl.chief_can_send("b1") is True                       # overage allowed
+    # Weighted: a full site build = 25 units.
+    for i in range(8):
+        fb.rows("api_usage").append({"id": f"b{i}", "business_id": "b1",
+                                     "created_at": this_month,
+                                     "endpoint": "/director/build"})
+    s2 = um.usage_summary("b1")
+    assert s2["weighted_used"] == 80 + 8 * 25                    # 280 ≥ cap 272
+    assert s2["blocked"] and s2["blocked_reason"] == "bill_cap"
+    assert bl.chief_can_send("b1") is False                      # 2x promise holds
+    # Overage billing stops AT the cap (bill can never exceed 2x plan).
+    assert s2["overage_cents"] == (272 - 75) * 40
 
 
 def test_chief_llm_respects_cap_gracefully(fake, monkeypatch):
+    """Practitioner hard cap: at/over allotment with usage_hard_cap set,
+    AI interactions soft-block (Arc 19)."""
     fb = fake
-    _biz(fb, "b1", plan="price_starter")
+    fb.rows("businesses").append({
+        "id": "b1", "owner_id": "owner1", "is_active": True, "name": "b1",
+        "subscription_status": "active", "subscription_plan": "price_starter",
+        "settings": {"usage_hard_cap": True}})
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("BILLING_ENFORCE", "on")
     monkeypatch.setenv("STRIPE_PRICE_ID_STARTER", "price_starter")
     now_iso = datetime.now(timezone.utc).replace(day=2).isoformat()
-    for i in range(50):
+    for i in range(75):                                          # at allotment
         fb.rows("api_usage").append({"id": f"u{i}", "business_id": "b1",
-                                     "created_at": now_iso})
+                                     "created_at": now_iso, "endpoint": "/ai/proxy"})
     out = asyncio.run(chief_llm.ask_transaction("b1", "lawyer", "t1", None))
     assert out["llm"] == "capped" and "Upgrade" in out["answer"]
     out2 = asyncio.run(chief_llm.analyze_hard("b1", "lawyer"))
     assert out2["llm"] == "capped" and out2["created"] == []
+    # Grandfathered owner: unlimited regardless.
+    fb.rows("user_profiles").append({"user_id": "owner1", "is_grandfathered": True})
+    import usage_metering as um
+    assert um.can_interact("b1") is True
 
 
 def test_seat_cap_and_invite_flow(fake, monkeypatch):

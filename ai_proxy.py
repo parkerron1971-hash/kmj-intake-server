@@ -289,6 +289,16 @@ async def ai_proxy(req: ProxyRequest):
         duration_ms=int(time.time() * 1000) - started_ms,
     )
 
+    # Arc 19 — usage-threshold check (50/80/100/cap). Fire-and-forget;
+    # email is unavailable here (metadata carries ids only) so this writes
+    # the notification rows that power the UI banner + dedupe emails.
+    if business_id:
+        try:
+            import usage_metering
+            usage_metering.check_thresholds(str(business_id))
+        except Exception as _th_err:
+            logger.warning(f"ai_proxy threshold check failed: {_th_err}")
+
     return {
         "content": content_text,
         "model": data.get("model", model),
