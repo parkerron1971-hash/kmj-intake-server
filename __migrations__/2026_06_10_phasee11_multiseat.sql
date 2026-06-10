@@ -37,14 +37,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_business_users_token
 
 ALTER TABLE public.business_users ENABLE ROW LEVEL SECURITY;
 
+-- (Policies below use the SECURITY DEFINER helpers from
+-- 2026_06_10_hotfix_rls_recursion.sql — inline cross-table EXISTS in a
+-- businesses policy recurses: 42P17. Helpers bypass RLS during evaluation.)
+CREATE OR REPLACE FUNCTION public.is_business_owner(b_id uuid)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (SELECT 1 FROM public.businesses b
+                 WHERE b.id = b_id AND b.owner_id = auth.uid());
+$$;
+CREATE OR REPLACE FUNCTION public.is_business_member(b_id uuid)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (SELECT 1 FROM public.business_users bu
+                 WHERE bu.business_id = b_id AND bu.user_id = auth.uid()
+                   AND bu.status = 'active');
+$$;
+CREATE OR REPLACE FUNCTION public.is_business_admin(b_id uuid)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (SELECT 1 FROM public.business_users bu
+                 WHERE bu.business_id = b_id AND bu.user_id = auth.uid()
+                   AND bu.status = 'active' AND bu.role = 'admin');
+$$;
+
 -- Owner manages the team for their businesses.
 DROP POLICY IF EXISTS business_users_owner_all ON public.business_users;
 CREATE POLICY business_users_owner_all ON public.business_users
   FOR ALL
-  USING (EXISTS (SELECT 1 FROM public.businesses b
-                 WHERE b.id = business_users.business_id AND b.owner_id = auth.uid()))
-  WITH CHECK (EXISTS (SELECT 1 FROM public.businesses b
-                      WHERE b.id = business_users.business_id AND b.owner_id = auth.uid()));
+  USING (public.is_business_owner(business_users.business_id))
+  WITH CHECK (public.is_business_owner(business_users.business_id));
 
 -- A member can read their own membership rows.
 DROP POLICY IF EXISTS business_users_self_read ON public.business_users;
@@ -55,22 +77,14 @@ CREATE POLICY business_users_self_read ON public.business_users
 -- Active members see the business → it appears in their switcher.
 DROP POLICY IF EXISTS businesses_member_read ON public.businesses;
 CREATE POLICY businesses_member_read ON public.businesses
-  FOR SELECT USING (EXISTS (
-    SELECT 1 FROM public.business_users bu
-    WHERE bu.business_id = businesses.id
-      AND bu.user_id = auth.uid() AND bu.status = 'active'));
+  FOR SELECT USING (public.is_business_member(businesses.id));
 
 -- Admin members can update the business row (settings etc.).
 DROP POLICY IF EXISTS businesses_admin_update ON public.businesses;
 CREATE POLICY businesses_admin_update ON public.businesses
-  FOR UPDATE USING (EXISTS (
-    SELECT 1 FROM public.business_users bu
-    WHERE bu.business_id = businesses.id
-      AND bu.user_id = auth.uid() AND bu.status = 'active' AND bu.role = 'admin'))
-  WITH CHECK (EXISTS (
-    SELECT 1 FROM public.business_users bu
-    WHERE bu.business_id = businesses.id
-      AND bu.user_id = auth.uid() AND bu.status = 'active' AND bu.role = 'admin'));
+  FOR UPDATE
+  USING (public.is_business_admin(businesses.id))
+  WITH CHECK (public.is_business_admin(businesses.id));
 
 -- ─── Rollback ────────────────────────────────────────────────────────
 --   DROP POLICY IF EXISTS businesses_member_read ON public.businesses;

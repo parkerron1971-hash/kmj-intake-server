@@ -46,12 +46,19 @@ GRANT EXECUTE ON FUNCTION public.business_role(uuid) TO authenticated;
 --     USING (public.business_role(<table>.business_id) IS NOT NULL);
 
 -- 3. Accountant collaborators see their businesses (switcher visibility).
+-- (SECURITY DEFINER helper — an inline EXISTS on business_collaborators
+-- recurses with collaborators_owner_read: 42P17. See the hotfix migration.)
+CREATE OR REPLACE FUNCTION public.is_business_collaborator(b_id uuid)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (SELECT 1 FROM public.business_collaborators bc
+                 WHERE bc.business_id = b_id AND bc.user_id = auth.uid()
+                   AND bc.status = 'active');
+$$;
+
 DROP POLICY IF EXISTS businesses_accountant_read ON public.businesses;
 CREATE POLICY businesses_accountant_read ON public.businesses
-  FOR SELECT USING (EXISTS (
-    SELECT 1 FROM public.business_collaborators bc
-    WHERE bc.business_id = businesses.id
-      AND bc.user_id = auth.uid() AND bc.status = 'active'));
+  FOR SELECT USING (public.is_business_collaborator(businesses.id));
 
 -- ─── Rollback ────────────────────────────────────────────────────────
 --   DROP POLICY IF EXISTS businesses_accountant_read ON public.businesses;
