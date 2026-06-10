@@ -158,6 +158,9 @@ app.include_router(period_overrides_router)
 # Phase I.3 PR3 — accountant collaborators
 from business_collaborators_router import router as business_collaborators_router
 app.include_router(business_collaborators_router)
+# Phase F.1 — Stripe outbound contractor payments
+from contractors_router import router as contractors_router
+app.include_router(contractors_router)
 # Phase VABI v1 — public read endpoint for vertical intelligence
 app.include_router(vertical_intelligence_router)
 # Phase VABI v1.5 — per-business overrides CRUD + Chief-driven generation

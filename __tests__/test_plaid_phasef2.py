@@ -171,21 +171,29 @@ def test_try_match_skips_missing_business():
     assert try_match_transaction(tx) is None
 
 
-def test_try_match_skips_positive_amount_for_income_path():
-    """Positive amount = outflow in Plaid sign. Income reconciliation
-    path only fires for negative amounts (deposits); positive amounts
-    are reserved for the F.1 outbound match (placeholder; off in v1)."""
+def test_try_match_outflow_matches_outbound_transfer(monkeypatch):
+    """Positive amount = outflow in Plaid sign. Since F.1, outflows match
+    against PAID outbound contractor transfers (±2d/±1c) and set
+    reconciled_to_transfer_id; with no candidate transfers, no match."""
+    import sb_clients
     tx = {
         "transaction_id": "tx1",
         "business_id": "biz1",
-        "amount": 100.0,  # outflow (in Plaid sign) — F.1 path is off in v1
+        "amount": 100.0,  # outflow (in Plaid sign)
         "date": "2026-06-01",
         "pending": False,
         "reconciliation_status": "unmatched",
     }
-    # F.1 placeholder is commented out, so positive amounts go nowhere
-    # in v1.
+    # No candidate transfers → no match.
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [])
     assert try_match_transaction(tx) is None
+    # A paid transfer with matching amount in the window → auto-match.
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: (
+        [{"stripe_transfer_id": "tr_1", "amount": 100.0}]
+        if "outbound_transfers" in path else []))
+    patch = try_match_transaction(tx)
+    assert patch == {"reconciled_to_transfer_id": "tr_1",
+                     "reconciliation_status": "auto_matched"}
 
 
 # ─── Router shape (registration + auth gating) ──────────────────────

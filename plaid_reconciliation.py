@@ -216,22 +216,34 @@ def try_match_transaction(tx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     "reconciled_payout_date": _payout_arrival_iso(po),
                 }
 
-    # ─── Transfer side (F.1 placeholder) ───────────────────────────
-    # Outflow side: Plaid debit corresponds to a Stripe Transfer we
-    # initiated to a contractor. F.1 will populate outbound_transfers.
-    # Until then this path is a no-op — column exists for future use.
-    # if amt > 0:
-    #     transfer_row = sb_clients.sb_get_as_service(
-    #         f"/outbound_transfers?business_id=eq.{business_id}"
-    #         f"&amount=eq.{amount}&status=eq.paid"
-    #         f"&date[gte]={tx_date - timedelta(days=2)}"
-    #         f"&date[lte]={tx_date + timedelta(days=2)}&limit=1"
-    #     ) or []
-    #     if transfer_row:
-    #         return {
-    #             "reconciled_to_transfer_id": transfer_row[0].get("stripe_transfer_id"),
-    #             "reconciliation_status": "auto_matched",
-    #         }
+    # ─── Transfer side (F.1 — ACTIVE) ──────────────────────────────
+    # Outflow side: a Plaid debit matching a paid Stripe Transfer we sent
+    # to a contractor (±2 days, ±1 cent — same tolerance as payouts).
+    if amt > 0:
+        tx_date_str = tx.get("date")
+        if not tx_date_str:
+            return None
+        try:
+            from datetime import date as _date2
+            y, m, d = (int(p) for p in tx_date_str.split("-"))
+            tx_date = _date2(y, m, d)
+        except Exception:
+            return None
+        lo = (tx_date - timedelta(days=DATE_TOLERANCE_DAYS)).isoformat()
+        hi = (tx_date + timedelta(days=DATE_TOLERANCE_DAYS)).isoformat()
+        candidates = sb_clients.sb_get_as_service(
+            f"/outbound_transfers?business_id=eq.{business_id}&status=eq.paid"
+            f"&paid_at=gte.{lo}&paid_at=lte.{hi}T23:59:59"
+            f"&select=stripe_transfer_id,amount&limit=25"
+        ) or []
+        for ot in candidates:
+            ot_cents = int(round(float(ot.get("amount") or 0) * 100))
+            plaid_cents = int(round(abs(float(amt)) * 100))
+            if abs(plaid_cents - ot_cents) <= AMOUNT_TOLERANCE_CENTS and ot.get("stripe_transfer_id"):
+                return {
+                    "reconciled_to_transfer_id": ot["stripe_transfer_id"],
+                    "reconciliation_status": "auto_matched",
+                }
 
     return None
 

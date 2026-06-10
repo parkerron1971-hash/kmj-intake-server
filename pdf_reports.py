@@ -587,6 +587,37 @@ def _general_ledger_body(d, s, money_cell, accent, stripe, rule, danger, colors,
     return out
 
 
+def _summary_1099_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
+                       Paragraph, Spacer, inch, meta):
+    rows_data = d.get("rows") or []
+    out = [Paragraph(f"1099 SUMMARY — {d.get('year')}", s["section"])]
+    head = [Paragraph(h, s["th"]) for h in ("Contractor / Vendor", "Payments", "1099 handling")] + \
+           [Paragraph("Total Paid", s["thr"])]
+    rows = [head]
+    for r in rows_data:
+        handling = "Stripe Tax Reporting" if r.get("stripe_managed") else \
+            ("Manual 1099 needed" if r.get("reaches_threshold") else "Below $600 threshold")
+        style = s["drl"] if (r.get("reaches_threshold") and not r.get("stripe_managed")) else s["row"]
+        rows.append([
+            Paragraph(str(r.get("name")), s["row"]),
+            Paragraph(str(r.get("payments")), s["rowind"]),
+            Paragraph(handling, style),
+            money_cell(r.get("total_paid")),
+        ])
+    rows.append([Paragraph("TOTAL", s["totlbl"]), Paragraph("", s["row"]),
+                 Paragraph("", s["row"]), money_cell(d.get("total_paid"), bold=True)])
+    t = Table(rows, colWidths=[None, 0.8 * inch, 1.7 * inch, 1.1 * inch], repeatRows=1)
+    t.setStyle(TableStyle([
+        ("ALIGN", (3, 0), (3, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, stripe]),
+        ("LINEABOVE", (0, -1), (-1, -1), 1.2, colors.HexColor(_INK)),
+    ]))
+    out.append(t)
+    out.append(Spacer(1, 0.1 * inch))
+    out.append(Paragraph(d.get("note") or "", s["note"]))
+    return out
+
+
 def _generic_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
                   Paragraph, Spacer, inch, meta):
     return [Paragraph("Report data:", s["section"]),
@@ -602,4 +633,5 @@ _BUILDERS = {
     "reconciliation": _reconciliation_body,
     "trial_balance": _trial_balance_body,
     "general_ledger": _general_ledger_body,
+    "summary_1099": _summary_1099_body,
 }

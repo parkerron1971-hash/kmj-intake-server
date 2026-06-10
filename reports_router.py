@@ -158,6 +158,58 @@ def general_ledger(biz: str, account: Optional[str] = None,
     return gl_reports.general_ledger_report(biz, account, from_, to)
 
 
+# ─── Phase F.1 — 1099 Summary (Tier 1 completion) ────────────────────
+
+def _summary_1099(biz: str, year: int) -> Dict[str, Any]:
+    """Calendar-year contractor payment totals from PAID 1099-eligible bills
+    (the single source of truth — Stripe-transfer payments auto-create these;
+    manual 1099 bills count too). $600 = the IRS 1099-NEC threshold."""
+    start, end = f"{year}-01-01", f"{year}-12-31"
+    bills = sb_clients.sb_get_as_service(
+        f"/bills?business_id=eq.{biz}&status=eq.paid&is_1099_eligible=eq.true"
+        f"&paid_at=gte.{start}&paid_at=lte.{end}T23:59:59"
+        f"&select=vendor_name,paid_amount,amount,contractor_id&limit=10000") or []
+    contractors = sb_clients.sb_get_as_service(
+        f"/contractors?business_id=eq.{biz}"
+        f"&select=id,name,email,onboarding_status,stripe_account_id&limit=500") or []
+    cmap = {c["id"]: c for c in contractors}
+
+    agg: Dict[str, Dict[str, Any]] = {}
+    for b in bills:
+        cid = b.get("contractor_id")
+        key = cid or f"vendor:{(b.get('vendor_name') or '—').strip().lower()}"
+        amt = float(b.get("paid_amount") if b.get("paid_amount") is not None else b.get("amount") or 0)
+        e = agg.setdefault(key, {
+            "contractor_id": cid, "name": (cmap.get(cid) or {}).get("name") or b.get("vendor_name") or "—",
+            "total_paid": 0.0, "payments": 0,
+            "stripe_managed": bool((cmap.get(cid) or {}).get("stripe_account_id")),
+            "onboarding_status": (cmap.get(cid) or {}).get("onboarding_status"),
+        })
+        e["total_paid"] += amt
+        e["payments"] += 1
+    rows = sorted(
+        [{**e, "total_paid": round(e["total_paid"], 2),
+          "reaches_threshold": e["total_paid"] >= 600.0} for e in agg.values()],
+        key=lambda x: -x["total_paid"])
+    return {
+        "ok": True, "report": "summary_1099", "year": year, "rows": rows,
+        "total_paid": round(sum(r["total_paid"] for r in rows), 2),
+        "threshold_count": sum(1 for r in rows if r["reaches_threshold"]),
+        "note": ("Stripe-managed contractors (Express) get their W-9 + 1099-NEC handled by "
+                 "Stripe Tax Reporting. Rows without Stripe management need a manual 1099 "
+                 "if they reach the $600 threshold — confirm with your accountant."),
+    }
+
+
+@router.get("/1099-summary")
+def summary_1099(biz: str, year: Optional[int] = None,
+                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    from datetime import datetime as _dt, timezone as _tz
+    y = year or _dt.now(_tz.utc).year
+    return _summary_1099(biz, y)
+
+
 @router.get("/journal")
 def journal(biz: str, limit: int = 50, offset: int = 0,
             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
@@ -172,6 +224,7 @@ _REPORT_TITLES = {
     "pl": "Profit & Loss", "ar_aging": "AR Aging", "ap_aging": "AP Aging",
     "cash_flow": "Cash Flow (Operating)", "balance_sheet": "Balance Sheet",
     "trial_balance": "Trial Balance", "general_ledger": "General Ledger",
+    "summary_1099": "1099 Summary",
 }
 
 
@@ -186,7 +239,11 @@ def export(biz: str, report: str, format: str = "csv",
         raise HTTPException(400, "unknown report")
     try:
         # Phase I.4 — exports use the same authoritative source as the screen.
-        if report == "trial_balance":
+        if report == "summary_1099":
+            from datetime import datetime as _dt, timezone as _tz
+            y = int((as_of or "")[:4]) if (as_of or "")[:4].isdigit() else _dt.now(_tz.utc).year
+            data = _summary_1099(biz, y)
+        elif report == "trial_balance":
             data = gl_reports.trial_balance_report(biz, as_of) if gl_reports.gl_active(biz) \
                 else {"ok": True, "report": "trial_balance", "as_of": as_of, "accounts": [],
                       "totals": {"debits": 0, "credits": 0, "difference": 0, "balanced": True}}
@@ -307,6 +364,13 @@ def _csv_rows(report: str, data: Dict[str, Any]) -> list:
                          a.get("debits"), a.get("credits"), a.get("balance")])
         t = data.get("totals") or {}
         rows.append(["", "TOTALS", "", t.get("debits", 0), t.get("credits", 0), t.get("difference", 0)])
+    elif report == "summary_1099":
+        rows.append(["Contractor / Vendor", "Payments", "Total Paid", "Reaches $600", "Stripe-managed 1099"])
+        for r in data.get("rows", []):
+            rows.append([r.get("name"), r.get("payments"), r.get("total_paid"),
+                         "yes" if r.get("reaches_threshold") else "no",
+                         "yes" if r.get("stripe_managed") else "no"])
+        rows.append(["TOTAL", "", data.get("total_paid", 0), "", ""])
     elif report == "general_ledger":
         rows.append(["Account", "Date", "Source", "Memo", "Debit", "Credit", "Running Balance"])
         for acct in data.get("accounts", []):
