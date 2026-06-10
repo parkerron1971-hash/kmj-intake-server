@@ -18,23 +18,50 @@ from typing import Any, Dict, Optional
 PLANS = ("starter", "professional", "practice")
 _PLAN_RANK = {"starter": 1, "professional": 2, "practice": 3}
 
-# Gate-ready map: feature → minimum tier. PROVISIONAL until pricing locks.
+# Gate-ready map: feature → minimum tier. Working pricing hypothesis
+# (2026-06-09 review): Starter $79 / Professional $199 / Practice $399.
 FEATURE_MIN_PLAN: Dict[str, str] = {
-    # Starter — operational core
+    # Starter — operational core (incl. reconciliation: it's the upgrade wedge)
     "bookkeeping_basic": "starter",        # transactions + cash flow + reconciliation
     "reports_basic": "starter",            # P&L, AR aging, balance sheet lite
     "invoicing": "starter",
-    # Professional — the real accounting system
+    # Professional — the real accounting system (the hero tier)
     "general_ledger": "professional",      # GL, trial balance, journal
     "period_close": "professional",
     "contractor_payments": "professional", # F.1 pay + 1099
     "reports_full": "professional",        # GL-authoritative + comparison
     "chief_bookkeeping": "professional",
-    # Practice — collaboration + year-end
+    "chief_unlimited": "professional",     # Starter gets the capped Chief
+    "accountant_package": "professional",  # year-end ZIP + IIF — every solo files taxes
+    "vertical_ledgers": "professional",    # IOLTA trust / restricted-fund MECHANICS —
+                                           # compliance is table stakes for a solo lawyer
+    # Practice — collaboration + compliance deliverables + scale
     "accountant_collaborator": "practice",
-    "accountant_package": "practice",      # ZIP + IIF + email
     "audit_trail": "practice",
+    "vertical_reports": "practice",        # Trust Reconciliation, 990 prep (I.10)
+    "multi_seat": "practice",              # NOT BUILT YET — do not market until shipped
 }
+
+# Numeric limits per tier (gate-ready scaffold; UNENFORCED like everything
+# else). chief_messages_monthly metering can build on the existing api_usage
+# table; max_businesses needs an onboarding check. Both are Phase E v1.1
+# enforcement work — registered here so the hypothesis lives in code.
+PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
+    "starter":      {"max_businesses": 1, "chief_messages_monthly": 50},
+    "professional": {"max_businesses": 1, "chief_messages_monthly": None},
+    "practice":     {"max_businesses": 3, "chief_messages_monthly": None},
+}
+
+
+def limit_for(business_row: Optional[Dict[str, Any]], limit: str) -> Optional[int]:
+    """The numeric limit for a business's tier; None = unlimited. Unenforced
+    (and unlimited) until BILLING_ENFORCE=on AND a plan exists."""
+    if not enforcement_on():
+        return None
+    plan = plan_of(business_row)
+    if not plan:
+        return PLAN_LIMITS["starter"].get(limit)
+    return PLAN_LIMITS.get(plan, {}).get(limit)
 
 
 def price_to_plan() -> Dict[str, str]:

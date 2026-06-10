@@ -43,8 +43,9 @@ def test_enforced_rank_logic(monkeypatch):
     assert fg.has_feature(starter, "bookkeeping_basic") is True
     assert fg.has_feature(starter, "general_ledger") is False
     assert fg.has_feature(pro, "general_ledger") is True
-    assert fg.has_feature(pro, "accountant_package") is False
-    assert fg.has_feature(practice, "accountant_package") is True
+    assert fg.has_feature(pro, "accountant_package") is True    # pricing review: pro
+    assert fg.has_feature(pro, "multi_seat") is False
+    assert fg.has_feature(practice, "multi_seat") is True
     # Trialing counts as good standing; past_due does not.
     assert fg.plan_of(practice) == "practice"
     assert fg.plan_of(lapsed) is None
@@ -92,6 +93,18 @@ def test_entitlements_shape(monkeypatch):
     gl = ent["features"]["general_ledger"]
     assert gl["allowed"] is True                # unenforced
     assert gl["included_in_plan"] is True       # and would be included anyway
-    ap = ent["features"]["accountant_package"]
-    assert ap["allowed"] is True                # unenforced
-    assert ap["included_in_plan"] is False      # but practice-tier once enforced
+    ms = ent["features"]["multi_seat"]
+    assert ms["allowed"] is True                # unenforced
+    assert ms["included_in_plan"] is False      # but practice-tier once enforced
+
+
+def test_plan_limits_unenforced_then_enforced(monkeypatch):
+    biz = {"subscription_status": "active", "subscription_plan": "price_starter"}
+    assert fg.limit_for(biz, "chief_messages_monthly") is None   # unenforced = unlimited
+    monkeypatch.setenv("BILLING_ENFORCE", "on")
+    monkeypatch.setenv("STRIPE_PRICE_ID_STARTER", "price_starter")
+    assert fg.limit_for(biz, "chief_messages_monthly") == 50
+    assert fg.limit_for(biz, "max_businesses") == 1
+    pro = {"subscription_status": "active", "subscription_plan": "price_pro"}
+    monkeypatch.setenv("STRIPE_PRICE_ID_PROFESSIONAL", "price_pro")
+    assert fg.limit_for(pro, "chief_messages_monthly") is None   # unlimited
