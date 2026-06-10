@@ -13,6 +13,7 @@ Architecture decisions baked in (per F.2 v1 ruling):
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Optional
@@ -160,32 +161,96 @@ def decrypt_token(cipher) -> Optional[str]:
 # ─── Webhook signature verification ──────────────────────────────────
 
 
-def verify_webhook_signature(payload: bytes, signed_jwt: str) -> bool:
-    """Plaid webhooks sign the body with a JWT in the Plaid-Verification
-    header. We retrieve the verification key from Plaid's
-    /webhook_verification_key/get endpoint (per documented procedure)
-    and verify the JWT. The Plaid SDK exposes a helper, but we keep
-    this thin so unit tests can mock it.
+# ─── Webhook signature verification (hardened) ──────────────────────
+# Plaid signs every webhook with an ES256 JWT in the Plaid-Verification
+# header. Full documented procedure:
+#   1. Read the unverified header; require alg == ES256; extract `kid`.
+#   2. Fetch the verification key for that kid from Plaid's
+#      /webhook_verification_key/get (cached — keys are long-lived; a
+#      cached key is refetched only if Plaid marked it expired).
+#   3. Verify the JWT signature against the JWK.
+#   4. Reject tokens older than 5 minutes (iat replay window).
+#   5. SHA-256 the raw request body and constant-time-compare it with the
+#      JWT's request_body_sha256 claim.
+# The unsigned-allowed path exists ONLY when Plaid isn't configured at all
+# (credential-less local tests) — any configured deploy verifies fully.
 
-    Returns True when the signature checks out OR when webhook
-    secret is unset (sandbox/dev convenience — never in prod)."""
+_WEBHOOK_IAT_MAX_AGE_SECS = 5 * 60
+# kid → JWK dict cache. Plaid rate-limits the key endpoint; keys rotate
+# rarely and old keys get `expired_at` set rather than vanishing.
+_webhook_key_cache: dict = {}
+
+
+def _fetch_webhook_key(kid: str) -> Optional[dict]:
+    """Fetch (with cache) the JWK for a key id. Returns None when the key
+    can't be retrieved or Plaid marked it expired."""
+    cached = _webhook_key_cache.get(kid)
+    if cached is not None and not cached.get("expired_at"):
+        return cached
+    try:
+        from plaid.model.webhook_verification_key_get_request import (
+            WebhookVerificationKeyGetRequest,
+        )
+        client = get_plaid_client()
+        resp = client.webhook_verification_key_get(
+            WebhookVerificationKeyGetRequest(key_id=kid)
+        )
+        key = resp.key.to_dict() if hasattr(resp.key, "to_dict") else dict(resp.key)
+        _webhook_key_cache[kid] = key
+        if key.get("expired_at"):
+            return None
+        return key
+    except Exception as e:
+        logger.warning(f"[plaid] webhook verification key fetch failed for kid={kid}: {e}")
+        return None
+
+
+def verify_webhook_signature(payload: bytes, signed_jwt: str) -> bool:
+    """Verify a Plaid webhook's Plaid-Verification JWT against the raw body.
+    Strict in any configured environment (sandbox AND production); permissive
+    only when Plaid is not configured at all (credential-less local tests)."""
     if not signed_jwt:
         return False
     if not plaid_configured():
-        # Sandbox / dev — allow unsigned for local testing. Production
-        # MUST have PLAID_ENCRYPTION_KEY set, which forces full
-        # validation below.
+        # No Plaid credentials in this process (unit tests / bare local dev).
         return True
     try:
+        import hashlib
+        import hmac as _hmac
+        import time
         import jwt
-        # Plaid documents verifying via JWT key fetched from their
-        # /webhook_verification_key/get endpoint. We do not fetch on
-        # every call — that endpoint has aggressive rate limits. For
-        # v1 we accept any well-formed JWT and rely on TLS + the
-        # webhook URL being a secret (not posted publicly). Production
-        # hardening lands as a follow-up.
-        jwt.get_unverified_header(signed_jwt)
+        from jwt import algorithms as jwt_algorithms
+
+        header = jwt.get_unverified_header(signed_jwt)
+        if header.get("alg") != "ES256":
+            logger.warning(f"[plaid] webhook JWT rejected: alg={header.get('alg')}")
+            return False
+        kid = header.get("kid")
+        if not kid:
+            logger.warning("[plaid] webhook JWT rejected: missing kid")
+            return False
+
+        key_dict = _fetch_webhook_key(kid)
+        if not key_dict:
+            return False
+        public_key = jwt_algorithms.ECAlgorithm.from_jwk(json.dumps(key_dict))
+
+        claims = jwt.decode(
+            signed_jwt, key=public_key, algorithms=["ES256"],
+            options={"require": ["iat", "request_body_sha256"]},
+        )
+
+        iat = int(claims.get("iat") or 0)
+        if abs(time.time() - iat) > _WEBHOOK_IAT_MAX_AGE_SECS:
+            logger.warning("[plaid] webhook JWT rejected: iat outside replay window")
+            return False
+
+        body_hash = hashlib.sha256(payload).hexdigest()
+        claimed = str(claims.get("request_body_sha256") or "")
+        if not _hmac.compare_digest(body_hash, claimed):
+            logger.warning("[plaid] webhook JWT rejected: body hash mismatch")
+            return False
         return True
     except Exception as e:
-        logger.warning(f"[plaid] webhook signature parse failed: {e}")
+        logger.warning(f"[plaid] webhook signature verification failed: {e}")
         return False
