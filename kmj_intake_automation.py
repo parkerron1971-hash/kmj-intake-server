@@ -158,6 +158,8 @@ app.include_router(period_overrides_router)
 # Phase I.3 PR3 — accountant collaborators
 from business_collaborators_router import router as business_collaborators_router
 app.include_router(business_collaborators_router)
+from business_users_router import router as business_users_router
+app.include_router(business_users_router)
 # Phase F.1 — Stripe outbound contractor payments
 from contractors_router import router as contractors_router
 app.include_router(contractors_router)

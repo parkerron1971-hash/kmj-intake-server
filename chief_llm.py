@@ -42,6 +42,16 @@ _HARD_BATCH_LIMIT = 15
 _LLM_CONFIDENCE_CAP = 0.75
 
 
+def llm_capped(business_id: str) -> bool:
+    """Phase E v1.1 — Starter's monthly Chief cap (dormant until
+    BILLING_ENFORCE=on)."""
+    try:
+        import billing_limits
+        return not billing_limits.chief_can_send(business_id)
+    except Exception:
+        return False  # metering failure must never block Chief
+
+
 def llm_enabled() -> bool:
     if (os.environ.get("CHIEF_LLM") or "on").lower() == "off":
         return False
@@ -233,6 +243,11 @@ async def ask_transaction(business_id: str, business_type: Optional[str],
     if not llm_enabled():
         return {"ok": True, "llm": "disabled",
                 "answer": "Chief's AI assist isn't enabled on this server yet."}
+    if llm_capped(business_id):
+        return {"ok": True, "llm": "capped",
+                "answer": "You've used this month's included Chief messages on "
+                          "your plan. Upgrade for unlimited Chief — or I'll see "
+                          "you on the 1st."}
     rows = sb_clients.sb_get_as_service(
         f"/plaid_transactions?business_id=eq.{business_id}"
         f"&transaction_id=eq.{transaction_id}"
@@ -320,6 +335,8 @@ async def analyze_hard(business_id: str, business_type: Optional[str]) -> Dict[s
     propose_categorize proposals (same trust pipeline, confidence ≤ 0.75)."""
     if not llm_enabled():
         return {"ok": True, "llm": "disabled", "created": []}
+    if llm_capped(business_id):
+        return {"ok": True, "llm": "capped", "created": []}
     candidates = _hard_candidates(business_id)
     if not candidates:
         return {"ok": True, "llm": "ok", "created": [], "note": "no hard cases"}

@@ -490,6 +490,37 @@ async def _handle_invoice_payment_failed(inv: Dict[str, Any], business_id: Optio
     logger.info(f"invoice.payment_failed: business {business_id} → past_due")
 
 
+# ─── Phase E v1.1 — numeric-limit surfaces (gate-ready, dormant) ─────
+
+@router.get("/chief-usage")
+async def chief_usage_endpoint(biz: str,
+                               user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Chief message metering for the month — the BillingPanel + Chief
+    drawer read this. Limit is null (unlimited) until enforcement."""
+    biz_row = await _load_business(biz)
+    _require_owner_of(user, biz_row)
+    import billing_limits
+    return billing_limits.chief_usage(biz, biz_row)
+
+
+@router.get("/can-create-business")
+def can_create_business_endpoint(user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Business-cap check for onboarding another business. Advisory until
+    creation moves behind the backend (creation is a direct PostgREST
+    insert today — surfaced in the E v1.1 ship report)."""
+    import billing_limits
+    return billing_limits.can_create_business(str(user.id))
+
+
+@router.get("/seats")
+async def seats_endpoint(biz: str,
+                         user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    biz_row = await _load_business(biz)
+    _require_owner_of(user, biz_row)
+    import billing_limits
+    return billing_limits.can_add_seat(biz, biz_row)
+
+
 @router.post("/webhook")
 async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Header(None, alias="Stripe-Signature")):
     secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()

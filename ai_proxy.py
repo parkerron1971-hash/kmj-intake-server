@@ -172,6 +172,23 @@ def _join_text_blocks(content: Any) -> str:
 async def ai_proxy(req: ProxyRequest):
     """Proxy a Claude Messages API call. The API key never leaves Railway."""
 
+    # Phase E v1.1 — Chief message cap (dormant until BILLING_ENFORCE=on).
+    _cap_biz = (req.metadata or {}).get("business_id") if hasattr(req, "metadata") else None
+    if _cap_biz:
+        try:
+            import billing_limits
+            if not billing_limits.chief_can_send(str(_cap_biz)):
+                raise HTTPException(
+                    status_code=429,
+                    detail={"error": "chief_message_cap",
+                            "message": "This month's included Chief messages are "
+                                       "used up on your plan. Upgrade for "
+                                       "unlimited Chief."})
+        except HTTPException:
+            raise
+        except Exception as _cap_err:
+            logger.warning(f"[ai_proxy] cap check failed (fail-open): {_cap_err}")
+
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         logger.error("ANTHROPIC_API_KEY env var is not set on Railway")

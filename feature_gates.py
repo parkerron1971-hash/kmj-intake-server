@@ -47,9 +47,9 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
 # table; max_businesses needs an onboarding check. Both are Phase E v1.1
 # enforcement work — registered here so the hypothesis lives in code.
 PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
-    "starter":      {"max_businesses": 1, "chief_messages_monthly": 50},
-    "professional": {"max_businesses": 1, "chief_messages_monthly": None},
-    "practice":     {"max_businesses": 3, "chief_messages_monthly": None},
+    "starter":      {"max_businesses": 1, "chief_messages_monthly": 50, "max_seats": 1},
+    "professional": {"max_businesses": 1, "chief_messages_monthly": None, "max_seats": 1},
+    "practice":     {"max_businesses": 3, "chief_messages_monthly": None, "max_seats": 5},
 }
 
 

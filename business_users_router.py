@@ -1,0 +1,151 @@
+"""
+business_users_router.py — Phase E v1.1 — multi-seat team membership
+(Practice tier). Mirrors the I.3 PR3 accountant-collaborator pattern:
+owner invites by email → token link (best-effort email) → invitee accepts
+while signed in. business_users is SEPARATE from business_collaborators
+(accountants are a bookkeeping role; team members are operators).
+
+Roles: owner (implicit — the businesses.owner_id), admin, member.
+v1 access: active members SEE the business (businesses SELECT RLS) and
+admins can update business settings (businesses UPDATE RLS). Role-scoped
+write access across every operational table is the held "multi-role
+permission system beyond v1" (Category D) — surfaced, not snuck in.
+
+Seat caps (1/1/5 via PLAN_LIMITS.max_seats) are gate-ready: enforced only
+when BILLING_ENFORCE=on.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+import sb_clients
+import billing_limits
+from auth_supabase import AuthedUser, require_user
+
+logger = logging.getLogger("business_users")
+
+router = APIRouter(prefix="/team", tags=["team"])
+
+_APP_BASE = "https://app.solutionist.studio"
+_ROLES = ("admin", "member")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz}&select=id,name,owner_id,subscription_status,"
+        f"subscription_plan&limit=1") or []
+    if not rows or str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(403, "not your business")
+    return rows[0]
+
+
+class InviteBody(BaseModel):
+    email: str
+    role: str = "member"
+
+
+@router.post("/invite")
+async def invite(biz: str, body: InviteBody,
+                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    biz_row = _owner(biz, user)
+    if body.role not in _ROLES:
+        raise HTTPException(400, f"role must be one of {_ROLES}")
+    email = (body.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(400, "valid email required")
+
+    # Seat cap (gate-ready; enforced only with BILLING_ENFORCE=on).
+    cap = billing_limits.can_add_seat(biz, biz_row)
+    if cap["enforce"] and not cap["allowed"]:
+        raise HTTPException(402, {
+            "error": "seat_cap_reached",
+            "message": f"Your plan includes {cap['limit']} seat(s) — this business "
+                       f"is using {cap['count']}. Upgrade to add more teammates.",
+            **{k: cap[k] for k in ("count", "limit")}})
+
+    existing = sb_clients.sb_get_as_service(
+        f"/business_users?business_id=eq.{biz}&invited_email=eq.{email}"
+        f"&status=in.(invited,active)&select=id&limit=1") or []
+    if existing:
+        raise HTTPException(409, "this person is already invited or active")
+
+    res = sb_clients.sb_post_as_service("/business_users", {
+        "business_id": biz, "invited_email": email, "role": body.role,
+        "status": "invited", "invited_by": str(user.id),
+        "invited_at": _now_iso(),
+    })
+    row = (res or [None])[0] if isinstance(res, list) else res
+    if not row:
+        raise HTTPException(500, "invite insert failed")
+    accept_url = f"{_APP_BASE}/?team_invite={row.get('token')}"
+
+    email_sent = False
+    try:
+        from email_sender import send_via_resend
+        biz_name = biz_row.get("name") or "a business"
+        await send_via_resend(
+            to_email=email, to_name=None,
+            from_email="invites@solutionist.studio", from_name="Solutionist System",
+            reply_to=None,
+            subject=f"{biz_name} invited you to their team",
+            body=(f"You've been invited to join {biz_name} on Solutionist as a "
+                  f"{body.role}.\n\nAccept your invitation (sign in or create your "
+                  f"account first):\n{accept_url}\n\n— The Solutionist System"))
+        email_sent = True
+    except Exception as e:
+        logger.warning(f"[team] invite email not sent: {e}")
+
+    return {"ok": True, "member": row, "email_sent": email_sent,
+            "accept_url": accept_url, "seats": cap}
+
+
+@router.get("")
+def list_team(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    biz_row = _owner(biz, user)
+    rows = sb_clients.sb_get_as_service(
+        f"/business_users?business_id=eq.{biz}&status=in.(invited,active)"
+        f"&order=invited_at.desc&limit=200"
+        f"&select=id,invited_email,role,status,invited_at,joined_at") or []
+    return {"ok": True, "members": rows,
+            "seats": billing_limits.can_add_seat(biz, biz_row)}
+
+
+class AcceptBody(BaseModel):
+    token: str
+
+
+@router.post("/accept")
+def accept(body: AcceptBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Invitee accepts via the token link (must be signed in)."""
+    rows = sb_clients.sb_get_as_service(
+        f"/business_users?token=eq.{body.token}&select=*&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "invitation not found")
+    inv = rows[0]
+    if inv.get("status") == "revoked":
+        raise HTTPException(409, "this invitation was revoked")
+    if inv.get("status") == "active":
+        return {"ok": True, "already": True, "business_id": inv.get("business_id")}
+    sb_clients.sb_patch_as_service(
+        f"/business_users?id=eq.{inv['id']}",
+        {"status": "active", "user_id": str(user.id), "joined_at": _now_iso()})
+    return {"ok": True, "business_id": inv.get("business_id"), "role": inv.get("role")}
+
+
+@router.post("/{member_id}/revoke")
+def revoke(member_id: str, biz: str,
+           user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    sb_clients.sb_patch_as_service(
+        f"/business_users?id=eq.{member_id}&business_id=eq.{biz}",
+        {"status": "revoked", "revoked_at": _now_iso()})
+    return {"ok": True}
