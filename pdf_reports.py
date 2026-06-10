@@ -717,6 +717,74 @@ def _customer_statement_body(d, s, money_cell, accent, stripe, rule, danger, col
     return out
 
 
+def _budget_vs_actual_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
+                           TableStyle, Paragraph, Spacer, inch, meta):
+    out = [Paragraph("BUDGET VS ACTUAL", s["section"])]
+    head = [Paragraph("Category", s["th"]), Paragraph("Source", s["th"])] + \
+           [Paragraph(h, s["thr"]) for h in ("Actual", "Budget", "Variance")]
+    rows = [head]
+    for r in d.get("rows") or []:
+        src = {"set": "set", "profit_first": "Profit-First %"}.get(r.get("budget_source") or "", "—")
+        rows.append([Paragraph(str(r.get("label")), s["row"]),
+                     Paragraph(src, s["rowind"]),
+                     money_cell(r.get("actual")), money_cell(r.get("budget")),
+                     money_cell(r.get("variance"))])
+    tbl = Table(rows, colWidths=[None, 1.1 * inch, 1.0 * inch, 1.0 * inch, 1.0 * inch],
+                repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("ALIGN", (2, 0), (4, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe]),
+    ]))
+    out.append(tbl)
+    return out
+
+
+def _profitability_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
+                        TableStyle, Paragraph, Spacer, inch, meta):
+    out = [Paragraph("PROFITABILITY (CONTRIBUTION)", s["section"])]
+    for title, key, rows_data in (("BY CUSTOMER", "customer", d.get("by_customer") or []),
+                                  ("BY OFFERING", "offering", d.get("by_offering") or [])):
+        out.append(Paragraph(title, s["section"]))
+        head = [Paragraph("Name", s["th"])] + \
+               [Paragraph(h, s["thr"]) for h in ("Revenue", "Share %", "Overhead", "Contribution")]
+        rows = [head]
+        for r in rows_data:
+            rows.append([Paragraph(str(r.get(key)), s["row"]),
+                         money_cell(r.get("revenue")),
+                         Paragraph(f"{r.get('revenue_share_pct', 0)}%", s["rowind"]),
+                         money_cell(r.get("allocated_overhead")),
+                         money_cell(r.get("contribution"))])
+        tbl = Table(rows, colWidths=[None, 1.0 * inch, 0.7 * inch, 1.0 * inch, 1.0 * inch],
+                    repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("ALIGN", (1, 0), (4, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe]),
+        ]))
+        out.append(tbl)
+        out.append(Spacer(1, 0.10 * inch))
+    out.append(Paragraph(str(d.get("method") or ""), s["row"]))
+    return out
+
+
+def _trends_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
+                 TableStyle, Paragraph, Spacer, inch, meta):
+    out = [Paragraph("TRAILING 12 MONTHS", s["section"])]
+    head = [Paragraph("Month", s["th"])] + \
+           [Paragraph(h, s["thr"]) for h in ("Revenue", "Expenses", "Net")]
+    rows = [head]
+    for m in d.get("monthly") or []:
+        rows.append([Paragraph(str(m.get("month")), s["rowind"]),
+                     money_cell(m.get("revenue")), money_cell(m.get("expenses")),
+                     money_cell(m.get("net"))])
+    tbl = Table(rows, colWidths=[None, 1.1 * inch, 1.1 * inch, 1.1 * inch], repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("ALIGN", (1, 0), (3, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe]),
+    ]))
+    out.append(tbl)
+    return out
+
+
 _BUILDERS = {
     "balance_sheet": _balance_sheet_body,
     "pl": _pl_body,
@@ -730,4 +798,7 @@ _BUILDERS = {
     "revenue": _revenue_body,
     "expenses_detail": _expenses_detail_body,
     "customer_statement": _customer_statement_body,
+    "budget_vs_actual": _budget_vs_actual_body,
+    "profitability": _profitability_body,
+    "trends": _trends_body,
 }

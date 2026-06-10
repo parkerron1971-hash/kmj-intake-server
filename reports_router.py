@@ -8,16 +8,18 @@ storage), CSV always + PDF via reportlab (F.2 v1.6 pattern).
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 import reports_engine
 import gl_reports
 import gl_reports_t2
+import gl_reports_t3
 
 logger = logging.getLogger("reports_router")
 
@@ -314,6 +316,9 @@ _REPORT_TITLES = {
     # Phase I.8 — Tier-2 reports.
     "revenue": "Revenue Report", "expenses_detail": "Expense Report",
     "customer_statement": "Customer Statement",
+    # Phase I.9 — Tier-3 analytical reports.
+    "budget_vs_actual": "Budget vs Actual", "profitability": "Profitability",
+    "trends": "Trends",
 }
 
 
@@ -351,6 +356,80 @@ def expenses_detail(biz: str, period: str = "this_month",
         return gl_reports_t2.expense_report(biz, period, from_, to)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ─── Phase I.9 — Tier-3 analytical reports ───────────────────────────
+
+class BudgetEntry(BaseModel):
+    category: str
+    amount: float
+
+
+class BudgetsBody(BaseModel):
+    year: int
+    month: int
+    entries: List[BudgetEntry]
+
+
+@router.get("/budgets")
+def get_budgets(biz: str, year: int, month: int,
+                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    return {"ok": True, "budgets": gl_reports_t3.list_budgets(biz, year, month),
+            "categories": list(gl_reports_t3.BUDGET_CATEGORIES)}
+
+
+@router.put("/budgets")
+def put_budgets(biz: str, body: BudgetsBody,
+                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    if not (1 <= body.month <= 12):
+        raise HTTPException(400, "month must be 1-12")
+    return gl_reports_t3.upsert_budgets(
+        biz, body.year, body.month,
+        [{"category": e.category, "amount": e.amount} for e in body.entries])
+
+
+@router.get("/budget-vs-actual")
+def budget_vs_actual(biz: str, period: str = "this_month",
+                     from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
+                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    biz_row = _owner(biz, user)
+    if not gl_reports.gl_active(biz):
+        return _needs_gl("budget_vs_actual", rows=[], has_any_budget=False)
+    try:
+        return gl_reports_t3.budget_vs_actual(biz, biz_row, period, from_, to)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/cash-forecast")
+def cash_forecast(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    if not gl_reports.gl_active(biz):
+        return _needs_gl("cash_forecast", horizons=[], monthly_history=[])
+    return gl_reports_t3.cash_flow_forecast(biz)
+
+
+@router.get("/profitability")
+def profitability(biz: str, period: str = "this_year",
+                  from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
+                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    if not gl_reports.gl_active(biz):
+        return _needs_gl("profitability", by_customer=[], by_offering=[])
+    try:
+        return gl_reports_t3.profitability(biz, period, from_, to)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/trends")
+def trends_report(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    if not gl_reports.gl_active(biz):
+        return _needs_gl("trends", monthly=[], seasonality=[], momentum={})
+    return gl_reports_t3.trends(biz)
 
 
 @router.get("/statement-customers")
@@ -445,6 +524,16 @@ def export(biz: str, report: str, format: str = "csv",
             if not contact_id:
                 raise HTTPException(400, "contact_id required for customer_statement")
             data = gl_reports_t2.customer_statement(biz, contact_id, as_of)
+        elif report == "budget_vs_actual":
+            data = gl_reports_t3.budget_vs_actual(biz, biz_row, period, from_, to) \
+                if gl_reports.gl_active(biz) else {"report": "budget_vs_actual", "rows": []}
+        elif report == "profitability":
+            data = gl_reports_t3.profitability(biz, period, from_, to) \
+                if gl_reports.gl_active(biz) else {"report": "profitability",
+                                                   "by_customer": [], "by_offering": []}
+        elif report == "trends":
+            data = gl_reports_t3.trends(biz) if gl_reports.gl_active(biz) \
+                else {"report": "trends", "monthly": [], "seasonality": [], "momentum": {}}
         elif report == "pl":
             data = _gl_or_fallback(
                 biz, lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to),
@@ -551,6 +640,26 @@ def _csv_rows(report: str, data: Dict[str, Any]) -> list:
                          l.get("description"), l.get("amount"), l.get("balance")])
         t = data.get("totals") or {}
         rows.append(["", "", "", "BALANCE DUE", "", t.get("balance", 0)])
+    elif report == "budget_vs_actual":
+        rows.append(["Category", "Actual", "Budget", "Budget Source", "Variance"])
+        for r in data.get("rows", []):
+            rows.append([r.get("label"), r.get("actual"), r.get("budget"),
+                         r.get("budget_source"), r.get("variance")])
+    elif report == "profitability":
+        rows.append(["Group", "Name", "Revenue", "Share %", "Allocated Overhead", "Contribution"])
+        for c in data.get("by_customer", []):
+            rows.append(["Customer", c.get("customer"), c.get("revenue"),
+                         c.get("revenue_share_pct"), c.get("allocated_overhead"),
+                         c.get("contribution")])
+        for o in data.get("by_offering", []):
+            rows.append(["Offering", o.get("offering"), o.get("revenue"),
+                         o.get("revenue_share_pct"), o.get("allocated_overhead"),
+                         o.get("contribution")])
+        rows.append(["", "METHOD", data.get("method", ""), "", "", ""])
+    elif report == "trends":
+        rows.append(["Month", "Revenue", "Expenses", "Net"])
+        for m in data.get("monthly", []):
+            rows.append([m.get("month"), m.get("revenue"), m.get("expenses"), m.get("net")])
     elif report == "ar_aging":
         rows.append(["Invoice", "Contact", "Total", "Due", "Bucket", "Days Overdue"])
         for i in data.get("invoices", []):
