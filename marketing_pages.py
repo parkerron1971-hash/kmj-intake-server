@@ -31,6 +31,9 @@ CONTACT_EMAIL = "kmjcreativesolution@gmail.com"
 BUSINESS_NAME = "KMJ Creative Solutions LLC"
 SITE_NAME = "The Solutionist System"
 SITE_DOMAIN = "mysolutionist.app"
+# Arc 18 — the web app's home (Vite app on Vercel; marketing stays here).
+APP_URL = "https://system.mysolutionist.app"
+DESKTOP_RELEASES_URL = ""  # set to the GitHub Releases URL once installers publish
 
 logger = logging.getLogger("marketing_pages")
 if not logger.handlers:
@@ -101,7 +104,9 @@ SHARED_CSS = """
   .nav-cta{padding:8px 16px;background:linear-gradient(135deg, var(--accent), var(--info));color:var(--text-primary) !important;border-radius:8px;font-weight:600;font-size:13px;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 28%, transparent);transition:transform 0.15s, box-shadow 0.15s;}
   .nav-cta:hover{transform:translateY(-1px);box-shadow:0 4px 18px color-mix(in srgb, var(--accent) 42%, transparent);}
   .nav-cta.is-active::after{display:none;}
-  @media (max-width: 760px){.nav-links{gap:12px;font-size:12px;} .nav-links a:not(.nav-cta){display:none;}}
+  .nav-login{padding:7px 15px;border:1px solid var(--border-strong);border-radius:8px;color:var(--text-primary) !important;font-weight:600;font-size:13px;transition:border-color 0.15s, background 0.15s;}
+  .nav-login:hover{border-color:var(--accent);background:var(--surface);}
+  @media (max-width: 760px){.nav-links{gap:12px;font-size:12px;} .nav-links a:not(.nav-cta):not(.nav-login){display:none;}}
 
   /* ─── buttons ─── */
   .btn-primary{display:inline-flex;align-items:center;gap:8px;padding:13px 26px;background:linear-gradient(135deg, var(--accent), var(--info));color:var(--text-primary);font-weight:600;font-size:14px;border-radius:10px;border:none;cursor:pointer;box-shadow:0 4px 22px color-mix(in srgb, var(--accent) 35%, transparent);transition:transform 0.15s, box-shadow 0.15s;font-family:inherit;}
@@ -243,6 +248,8 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       <a href="/faq" class="{ax_faq}">FAQ</a>
       <a href="/about" class="{ax_about}">About</a>
       <a href="/help" class="{ax_help}">Help</a>
+      <a href="/download" class="{ax_download}" title="Desktop app for Windows &amp; macOS">Desktop</a>
+      <a class="nav-login" href="{app_url}">Log in</a>
       <a class="nav-cta {ax_get_started}" href="/get-started">Get Started</a>
     </div>
   </div>
@@ -265,6 +272,8 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       <a href="/faq">FAQ</a>
       <a href="/about">About</a>
       <a href="/get-started">Get Started</a>
+      <a href="{app_url}">Log in</a>
+      <a href="/download">Desktop app</a>
       <a href="/help">Help</a>
       <a href="/privacy">Privacy</a>
       <a href="/data-deletion">Data Deletion</a>
@@ -324,6 +333,7 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
         "ax_faq":         "is-active" if active == "faq"         else "",
         "ax_about":       "is-active" if active == "about"       else "",
         "ax_help":        "is-active" if active == "help"        else "",
+        "ax_download":    "is-active" if active == "download"    else "",
         "ax_get_started": "is-active" if active == "get_started" else "",
     }
     return SHELL_TEMPLATE.format(
@@ -338,6 +348,7 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
         year=datetime.date.today().year,
         content=content_html,
         extra_scripts=extra_scripts,
+        app_url=APP_URL,
         **active_map,
     )
 
@@ -1036,6 +1047,51 @@ def render_about() -> str:
 # ══════════════════════════════════════════════════════════════════════
 # GET STARTED — intake form (form POSTs to /api/leads via fetch)
 # ══════════════════════════════════════════════════════════════════════
+
+def render_download() -> str:
+    """Arc 18 — Desktop download page. Coming-soon copy until Tauri
+    installers publish to GitHub Releases (then set DESKTOP_RELEASES_URL
+    and this page links straight to it)."""
+    if DESKTOP_RELEASES_URL:
+        dl_block = f"""
+        <div class="dl-actions reveal">
+          <a class="nav-cta" style="font-size:15px;padding:12px 24px;" href="{_html.escape(DESKTOP_RELEASES_URL)}">Download for Windows &amp; macOS</a>
+          <p class="small" style="margin-top:10px;">Installers are published on our releases page.</p>
+        </div>"""
+    else:
+        dl_block = f"""
+        <div class="dl-actions reveal">
+          <span class="dl-soon">Coming soon</span>
+          <p style="color:var(--text-secondary);max-width:520px;margin:14px auto 0;">
+            The desktop app for Windows and macOS is in final packaging.
+            Everything it does, the web app does today &mdash; same account,
+            same data, same Chief.
+          </p>
+          <a class="nav-cta" style="display:inline-block;margin-top:22px;font-size:15px;padding:12px 24px;" href="{APP_URL}">Use the web app now</a>
+        </div>"""
+    content = f"""
+<section class="hero" style="padding-top:96px;padding-bottom:64px;text-align:center;">
+  <div class="container">
+    <h1 class="reveal">The Solutionist System,<br>on your desktop.</h1>
+    <p class="reveal" style="color:var(--text-muted);max-width:560px;margin:18px auto 0;">
+      A native desktop app for practitioners who live in their system all day
+      &mdash; faster, focused, always one click away.
+    </p>
+    {dl_block}
+  </div>
+</section>"""
+    return _render_shell(
+        title="Desktop App",
+        description="Download The Solutionist System desktop app for Windows and macOS.",
+        content_html=content,
+        path="/download",
+        active="download",
+        extra_css="""
+  .dl-soon{display:inline-block;margin-top:26px;padding:6px 16px;border:1px solid var(--border-strong);border-radius:99px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text-muted);}
+  .dl-actions{margin-top:8px;}
+""",
+    )
+
 
 def render_get_started() -> str:
     extra_css = """

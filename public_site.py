@@ -4686,6 +4686,7 @@ from legal_content import (
 )
 from marketing_pages import (
     render_features, render_compare, render_faq, render_about, render_get_started,
+    render_download, APP_URL as MARKETING_APP_URL,
     handle_lead_intake, LeadIntakeRequest,
 )
 
@@ -4787,6 +4788,16 @@ async def public_about():
 @router.get("/get-started", include_in_schema=False)
 async def public_get_started():
     return HTMLResponse(content=render_get_started(), media_type="text/html")
+
+# Arc 18 — desktop download page + login convenience redirect.
+@router.get("/download", include_in_schema=False)
+async def public_download():
+    return HTMLResponse(content=render_download(), media_type="text/html")
+
+@router.get("/login", include_in_schema=False)
+async def public_login_redirect():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=MARKETING_APP_URL, status_code=302)
 
 # Intake form submission — POSTed via fetch() from /get-started.
 @router.post("/api/leads", include_in_schema=False)
