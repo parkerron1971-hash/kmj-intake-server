@@ -387,7 +387,88 @@ def analyze_uncategorized(business_id: str, *, limit: int = 25) -> List[Dict[str
 # Resolve proposals — approve / reject / send-to-inbox
 # ═══════════════════════════════════════════════════════════════════
 
-def approve_proposal(business_id: str, proposal_id: str) -> Dict[str, Any]:
+_MONTHS = ["", "January", "February", "March", "April", "May", "June", "July",
+           "August", "September", "October", "November", "December"]
+
+
+def _period_label(p: Dict[str, Any]) -> str:
+    try:
+        y, m, _ = (int(x) for x in (p.get("period_start") or "").split("-"))
+    except Exception:
+        return p.get("period_type", "period")
+    if p.get("period_type") == "month":
+        return f"{_MONTHS[m]} {y}"
+    if p.get("period_type") == "quarter":
+        return f"Q{(m - 1) // 3 + 1} {y}"
+    return f"{y}"
+
+
+def _to_date(s: Optional[str]):
+    try:
+        return _date(*(int(x) for x in (s or "")[:10].split("-")))
+    except Exception:
+        return None
+
+
+def period_close_candidate(business_id: str) -> Optional[Dict[str, Any]]:
+    """The OPEN, fully-reconciled period at/near its end and ready to close.
+    Prefers year > quarter > month when several end together."""
+    import gl_engine
+    today = datetime.now(timezone.utc).date()
+    for ptype in ("year", "quarter", "month"):
+        p = gl_engine.period_covering(business_id, today.isoformat(), ptype)
+        if not p or p.get("status") != "open":
+            continue
+        end = _to_date(p.get("period_end"))
+        if not end or (end - today).days > 2 or (end - today).days < 0:
+            continue                              # only within the last ~3 days
+        counts = gl_engine.period_counts(business_id, p["period_start"], p["period_end"])
+        if counts.get("transactions", 0) > 0 and counts.get("unmatched", 0) == 0:
+            p["_counts"] = counts
+            return p
+    return None
+
+
+def analyze_period_close(business_id: str) -> List[Dict[str, Any]]:
+    """propose_period_close — at a reconciled period end, Chief offers to close.
+
+    Trust-layer 4 questions:
+      1. Narration: "All N transactions in {period} are reconciled — close it?"
+      2. Action returns: a pending proposal; nothing closes until approved.
+      3. Second pass: on approve, the period locks (+ year-end closing entry).
+      4. Deflection: only proposes within the last ~3 days of a period AND
+         only when fully reconciled; respects a rejection for 7 days.
+    """
+    cand = period_close_candidate(business_id)
+    if not cand:
+        return []
+    period_id = cand["id"]
+    recent = sb_clients.sb_get_as_service(
+        f"/chief_bookkeeping_proposals?business_id=eq.{business_id}"
+        f"&proposal_type=eq.propose_period_close"
+        f"&select=status,proposed,resolved_at&limit=50") or []
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    for r in recent:
+        if (r.get("proposed") or {}).get("period_id") != period_id:
+            continue
+        if r.get("status") == "pending":
+            return []                              # already proposed
+        if r.get("status") == "rejected" and (r.get("resolved_at") or "") >= since:
+            return []                              # respect the practitioner's pace (7d)
+    label = _period_label(cand)
+    c = cand.get("_counts") or {}
+    reasoning = (f"All {c.get('transactions', 0)} transactions in {label} are reconciled. "
+                 f"Closing locks the period so nothing gets edited by accident. "
+                 f"Want me to close {label}?")
+    row = _insert_proposal(
+        business_id, "propose_period_close",
+        proposed={"period_id": period_id, "period_label": label,
+                  "period_type": cand.get("period_type"), "summary": c},
+        confidence=0.9, reasoning=reasoning)
+    return [row] if row else []
+
+
+def approve_proposal(business_id: str, proposal_id: str, approved_by: str = "") -> Dict[str, Any]:
     """Execute a pending proposal, then mark it approved."""
     from fastapi import HTTPException
     p = _get_proposal(business_id, proposal_id)
@@ -425,6 +506,13 @@ def approve_proposal(business_id: str, proposal_id: str) -> Dict[str, Any]:
         sb_clients.sb_patch_as_service(
             f"/plaid_transactions?transaction_id=eq.{tx_id}&business_id=eq.{business_id}",
             {"excluded_from_books": True, "updated_at": _now_iso()})
+    elif ptype == "propose_period_close":
+        import gl_engine
+        period_id = proposed.get("period_id")
+        if not period_id:
+            raise HTTPException(400, "proposal missing period_id")
+        gl_engine.close_period(business_id, period_id,
+                               closed_by=(approved_by or "chief"), closed_via="chief_auto_close")
     else:
         raise HTTPException(400, f"unknown proposal_type {ptype}")
 
