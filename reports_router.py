@@ -109,9 +109,20 @@ def export(biz: str, report: str, format: str = "csv",
 
     if format == "pdf":
         import pdf_reports
+        period_label = _period_label(report, data)
+        # Phase I.3 — mark the header when the report covers a CLOSED period.
+        try:
+            import gl_engine
+            day = data.get("as_of") or (data.get("range") or {}).get("to")
+            if day:
+                per = gl_engine.period_covering(biz, day, "month")
+                if per and per.get("status") == "closed":
+                    period_label = f"{period_label}  (CLOSED)"
+        except Exception:
+            pass
         meta = pdf_reports.build_meta(
             business_name=biz_name, settings=biz_row.get("settings"),
-            report_title=_REPORT_TITLES[report], period_label=_period_label(report, data),
+            report_title=_REPORT_TITLES[report], period_label=period_label,
             basis_label="Cash Basis", currency="USD",
             generated_by=_generated_by(biz_row, user))
         try:

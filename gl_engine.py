@@ -666,3 +666,167 @@ async def divergence_tick() -> None:
         await asyncio.to_thread(_run)
     except Exception as e:
         logger.warning(f"[gl] divergence_tick failed: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase I.3 — Period closing
+# ═══════════════════════════════════════════════════════════════════
+
+import calendar as _calendar  # noqa: E402
+
+
+def _month_end(y: int, m: int) -> _date:
+    return _date(y, m, _calendar.monthrange(y, m)[1])
+
+
+def _period_specs(year: int):
+    """All calendar period rows for a year: 12 months + 4 quarters + 1 year."""
+    out = []
+    for m in range(1, 13):
+        out.append(("month", _date(year, m, 1), _month_end(year, m)))
+    for q in range(4):
+        sm = q * 3 + 1
+        out.append(("quarter", _date(year, sm, 1), _month_end(year, sm + 2)))
+    out.append(("year", _date(year, 1, 1), _date(year, 12, 31)))
+    return out
+
+
+def generate_periods(business_id: str, year: int) -> Dict[str, Any]:
+    """Idempotently create the calendar period rows for a year."""
+    existing = sb_clients.sb_get_as_service(
+        f"/accounting_periods?business_id=eq.{business_id}"
+        f"&select=period_type,period_start,period_end") or []
+    have = {(r["period_type"], r["period_start"], r["period_end"]) for r in existing}
+    created = 0
+    for ptype, start, end in _period_specs(year):
+        if (ptype, start.isoformat(), end.isoformat()) in have:
+            continue
+        sb_clients.sb_post_as_service("/accounting_periods", {
+            "business_id": business_id, "period_type": ptype,
+            "period_start": start.isoformat(), "period_end": end.isoformat(),
+            "status": "open",
+        }, prefer=None)
+        created += 1
+    return {"ok": True, "created": created, "year": year}
+
+
+def _ledger_in_range(biz: str, start: str, end: str, codes) -> List[Dict[str, Any]]:
+    return sb_clients.sb_get_as_service(
+        f"/ledger_entries?business_id=eq.{biz}"
+        f"&entry_date=gte.{start}&entry_date=lte.{end}"
+        f"&account_code=in.({','.join(codes)})"
+        f"&select=account_code,debit,credit&limit=100000") or []
+
+
+def _closing_entry_spec(biz: str, period: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Year-end closing entry: zero Revenue + Expense for the period into
+    Retained Earnings. Balanced by construction; None when there's no P&L
+    activity to close."""
+    start, end = period["period_start"], period["period_end"]
+    inc = _ledger_in_range(biz, start, end, _INCOME_CODES)
+    exp = _ledger_in_range(biz, start, end, _EXPENSE_CODES)
+    inc_bal: Dict[str, float] = {}
+    for l in inc:
+        inc_bal[l["account_code"]] = inc_bal.get(l["account_code"], 0.0) \
+            + float(l["credit"]) - float(l["debit"])      # income normal credit
+    exp_bal: Dict[str, float] = {}
+    for l in exp:
+        exp_bal[l["account_code"]] = exp_bal.get(l["account_code"], 0.0) \
+            + float(l["debit"]) - float(l["credit"])      # expense normal debit
+
+    lines = []
+    for code, bal in inc_bal.items():
+        if abs(round(bal, 2)) >= 0.005:
+            lines.append(_line(code, debit=round(bal, 2)))   # Dr to zero a credit-balance
+    for code, bal in exp_bal.items():
+        if abs(round(bal, 2)) >= 0.005:
+            lines.append(_line(code, credit=round(bal, 2)))  # Cr to zero a debit-balance
+    if not lines:
+        return None
+    net = round(sum(inc_bal.values()) - sum(exp_bal.values()), 2)
+    if net > 0:                                              # profit → Cr Retained Earnings
+        lines.append(_line("3900", credit=net))
+    elif net < 0:                                            # loss → Dr Retained Earnings
+        lines.append(_line("3900", debit=-net))
+    return _entry(_d(end), "closing", period["id"],
+                  f"Year-end close {end[:4]} — Revenue/Expense to Retained Earnings", lines)
+
+
+def close_period(business_id: str, period_id: str, *, closed_by: str,
+                 closed_via: str = "owner") -> Dict[str, Any]:
+    """Close a period. Monthly/quarterly = status flip + audit. Annual also
+    posts the closing journal entry. Idempotent."""
+    from fastapi import HTTPException
+    rows = sb_clients.sb_get_as_service(
+        f"/accounting_periods?id=eq.{period_id}&business_id=eq.{business_id}&select=*&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "period not found")
+    period = rows[0]
+    if period.get("status") == "closed":
+        return {"ok": True, "already": "closed"}
+
+    closing_je_id = None
+    if period.get("period_type") == "year":
+        coa = ensure_chart_of_accounts(business_id, _biz_type(business_id))
+        spec = _closing_entry_spec(business_id, period)
+        if spec:
+            closing_je_id = _post_entry(business_id, spec, coa)
+
+    patch = {"status": "closed", "closed_at": _now_iso(), "closed_by": closed_by,
+             "closed_via": closed_via, "updated_at": _now_iso()}
+    if closing_je_id:
+        patch["closing_journal_entry_id"] = closing_je_id
+    sb_clients.sb_patch_as_service(
+        f"/accounting_periods?id=eq.{period_id}&business_id=eq.{business_id}", patch)
+    return {"ok": True, "closed": True, "closing_journal_entry_id": closing_je_id}
+
+
+def reopen_period(business_id: str, period_id: str, *, reopened_by: str,
+                  reason: str) -> Dict[str, Any]:
+    """Reopen a closed period: reverse the closing entry (annual) + flip status
+    to 'reopened' with a reason (audit trail)."""
+    from fastapi import HTTPException
+    rows = sb_clients.sb_get_as_service(
+        f"/accounting_periods?id=eq.{period_id}&business_id=eq.{business_id}&select=*&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "period not found")
+    period = rows[0]
+    if period.get("status") != "closed":
+        return {"ok": True, "already": period.get("status")}
+
+    je_id = period.get("closing_journal_entry_id")
+    if je_id:
+        je = sb_clients.sb_get_as_service(
+            f"/journal_entries?id=eq.{je_id}&select=id,source_type,status&limit=1") or []
+        if je and je[0].get("status") == "active":
+            coa = ensure_chart_of_accounts(business_id, _biz_type(business_id))
+            _reverse_je(business_id, je[0], coa)
+
+    sb_clients.sb_patch_as_service(
+        f"/accounting_periods?id=eq.{period_id}&business_id=eq.{business_id}",
+        {"status": "reopened", "reopened_at": _now_iso(), "reopened_by": reopened_by,
+         "reopened_reason": reason, "closing_journal_entry_id": None, "updated_at": _now_iso()})
+    return {"ok": True, "reopened": True}
+
+
+def period_counts(business_id: str, start: str, end: str) -> Dict[str, int]:
+    """Transaction + reconciliation counts for a period (for the Periods UI)."""
+    included = _included_account_ids(business_id)
+    if not included:
+        return {"transactions": 0, "reconciled": 0, "unmatched": 0}
+    acct = "account_id=in.(" + ",".join(included) + ")"
+    txs = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?business_id=eq.{business_id}&{acct}"
+        f"&excluded_from_books=eq.false&pending=eq.false"
+        f"&date=gte.{start}&date=lte.{end}&select=reconciliation_status&limit=20000") or []
+    reconciled = sum(1 for t in txs if t.get("reconciliation_status") in ("auto_matched", "manual_matched"))
+    unmatched = sum(1 for t in txs if t.get("reconciliation_status") == "unmatched")
+    return {"transactions": len(txs), "reconciled": reconciled, "unmatched": unmatched}
+
+
+def period_covering(business_id: str, day: str, period_type: str = "month") -> Optional[Dict[str, Any]]:
+    """The period of a given type whose range contains `day` (yyyy-mm-dd)."""
+    rows = sb_clients.sb_get_as_service(
+        f"/accounting_periods?business_id=eq.{business_id}&period_type=eq.{period_type}"
+        f"&period_start=lte.{day}&period_end=gte.{day}&select=*&limit=1") or []
+    return rows[0] if rows else None
