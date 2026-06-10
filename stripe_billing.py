@@ -192,27 +192,87 @@ def _require_owner_of(user: AuthedUser, business: Dict[str, Any]) -> None:
 async def billing_status_endpoint():
     """Lets the frontend gate the Start Subscription button without
     needing to call /checkout speculatively."""
+    import feature_gates
     return {
         "configured":         bool(os.environ.get("STRIPE_SECRET_KEY")),
         "has_price_id":       bool(os.environ.get("STRIPE_PRICE_ID_DEFAULT")),
         "has_webhook_secret": bool(os.environ.get("STRIPE_WEBHOOK_SECRET")),
+        "tiers_configured":   {p: bool((os.environ.get(f"STRIPE_PRICE_ID_{p.upper()}") or "").strip())
+                               for p in feature_gates.PLANS},
+        "enforce":            feature_gates.enforcement_on(),
     }
+
+
+@router.get("/plans")
+async def billing_plans():
+    """The configured tiers with live price display data from Stripe.
+    Unconfigured tiers are listed with configured=false (pricing TBD)."""
+    import feature_gates as fg
+    out = []
+    for plan in fg.PLANS:
+        pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}") or "").strip()
+        entry = {"plan": plan, "configured": bool(pid), "price_id": pid or None}
+        if pid and os.environ.get("STRIPE_SECRET_KEY"):
+            try:
+                async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+                    r = await c.get(f"{STRIPE_API_BASE}/prices/{pid}",
+                                    auth=(_stripe_key(), ""))
+                if r.status_code < 400:
+                    pr = r.json()
+                    entry["unit_amount"] = pr.get("unit_amount")
+                    entry["currency"] = pr.get("currency")
+                    entry["interval"] = ((pr.get("recurring") or {}).get("interval"))
+            except Exception as e:
+                logger.warning(f"price fetch {pid} failed: {e}")
+        out.append(entry)
+    features_by_plan = {p: [f for f, mp in fg.FEATURE_MIN_PLAN.items()
+                            if fg._PLAN_RANK[p] >= fg._PLAN_RANK[mp]]
+                        for p in fg.PLANS}
+    return {"ok": True, "plans": out, "features_by_plan": features_by_plan,
+            "enforce": fg.enforcement_on(),
+            "note": "All features are free for every practitioner until pricing is locked."}
+
+
+@router.get("/entitlements")
+async def billing_entitlements(biz: str, user: AuthedUser = Depends(require_user)):
+    """Phase E gate-ready entitlements for a business (unenforced today)."""
+    import feature_gates
+    business = await _load_business(biz)
+    _require_owner_of(user, business)
+    out = feature_gates.entitlements(business)
+    out["ok"] = True
+    out["trial_ends_at"] = business.get("trial_ends_at")
+    out["current_period_end"] = business.get("current_period_end")
+    out["cancel_at_period_end"] = business.get("cancel_at_period_end")
+    return out
 
 
 # ─── Checkout (authed) ─────────────────────────────────────────────────
 
 class CheckoutBody(BaseModel):
     business_id: str
-    price_id: Optional[str] = None  # override the default plan if needed
+    price_id: Optional[str] = None  # explicit price override
+    plan: Optional[str] = None      # 'starter' | 'professional' | 'practice'
+
+
+def _price_for_plan(plan):
+    """Resolve a tier name -> Stripe price id from env. Falls back to the
+    legacy single-plan default."""
+    if plan:
+        pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}") or "").strip()
+        if pid:
+            return pid
+    return (os.environ.get("STRIPE_PRICE_ID_DEFAULT") or "").strip()
 
 
 @router.post("/checkout")
 async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require_user)):
     """Mint a Stripe Customer (if needed) + Checkout Session for a
     subscription. Returns the Checkout URL the frontend opens."""
-    price_id = (body.price_id or os.environ.get("STRIPE_PRICE_ID_DEFAULT", "")).strip()
+    price_id = (body.price_id or _price_for_plan(body.plan)).strip()
     if not price_id:
-        raise HTTPException(500, "No price configured (STRIPE_PRICE_ID_DEFAULT missing)")
+        raise HTTPException(409, "Pricing is not configured yet (no Stripe price ids set). "
+                                 "Everything stays free until pricing is locked.")
 
     biz = await _load_business(body.business_id)
     _require_owner_of(user, biz)
@@ -242,18 +302,28 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
         "cancel_url":  _cancel_url(),
         # Echo business_id in metadata so the webhook can resolve back
         # even if the customer object's metadata is missing it.
-        "subscription_data": {
-            "metadata": {
-                "business_id":  biz["id"],
-                "auth_user_id": user.id,
-            },
-        },
+        "subscription_data": _subscription_data(biz, user),
         "metadata": {
             "business_id":  biz["id"],
             "auth_user_id": user.id,
         },
     })
     return {"url": session.get("url"), "id": session.get("id")}
+
+
+def _subscription_data(biz, user):
+    """Checkout subscription_data: metadata + a free trial for FIRST
+    subscriptions only (re-subscribers do not get a second trial)."""
+    data = {
+        "metadata": {"business_id": biz["id"], "auth_user_id": user.id},
+    }
+    try:
+        trial_days = int(os.environ.get("BILLING_TRIAL_DAYS") or "14")
+    except ValueError:
+        trial_days = 14
+    if trial_days > 0 and not biz.get("stripe_subscription_id"):
+        data["trial_period_days"] = trial_days
+    return data
 
 
 # ─── Portal (authed) ───────────────────────────────────────────────────
@@ -315,13 +385,18 @@ async def _record_webhook(event: Dict[str, Any], business_id: Optional[str], err
     swallow it (we already processed)."""
     from datetime import datetime, timezone
     headers = _service_headers()
+    # PRODUCTION stripe_webhook_events shape (PR3): id = Stripe event.id is
+    # the PK (dedupes via 409), payload lives in `raw`, errors in
+    # `processed_error`. (The old drafted billing-migration.sql shape is
+    # superseded — see 2026_06_09_phasee_billing.sql.)
     body = {
-        "stripe_id":   event.get("id"),
-        "type":        event.get("type"),
-        "business_id": business_id,
-        "payload":     event,
-        "processed_at": None if error else datetime.now(timezone.utc).isoformat(),
-        "error":       error,
+        "id":            event.get("id"),
+        "type":          event.get("type"),
+        "livemode":      bool(event.get("livemode")),
+        "business_id":   business_id,
+        "raw":           event,
+        "processed_at":  None if error else datetime.now(timezone.utc).isoformat(),
+        "processed_error": error,
     }
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         r = await c.post(
@@ -346,11 +421,28 @@ def _resolve_business_id(event: Dict[str, Any]) -> Optional[str]:
     bid = meta.get("business_id")
     if bid:
         return bid
-    # invoice.payment_failed → object is the invoice; subscription_metadata
-    # isn't included but customer.metadata is on the customer object,
-    # which we don't get here. We could look it up via Stripe API; for
-    # now return None and let the webhook still log.
     return None
+
+
+async def _resolve_business_id_async(event):
+    """Metadata first; else look the business up by Stripe customer id
+    (covers invoice.* events, which carry no subscription metadata)."""
+    bid = _resolve_business_id(event)
+    if bid:
+        return bid
+    obj = (event.get("data") or {}).get("object") or {}
+    customer = obj.get("customer")
+    if not customer:
+        return None
+    headers = _service_headers()
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.get(
+            f"{SUPABASE_URL}/rest/v1/businesses",
+            headers=headers,
+            params={"stripe_customer_id": f"eq.{customer}", "select": "id", "limit": "1"},
+        )
+    rows = r.json() if r.status_code < 400 else []
+    return rows[0]["id"] if rows else None
 
 
 def _ts_to_iso(ts: Optional[int]) -> Optional[str]:
@@ -414,7 +506,7 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
 
     event_type = event.get("type") or ""
     obj = (event.get("data") or {}).get("object") or {}
-    business_id = _resolve_business_id(event)
+    business_id = await _resolve_business_id_async(event)
     error_msg: Optional[str] = None
 
     try:
@@ -424,6 +516,11 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
             await _apply_subscription_state(event_type, obj, business_id)
         elif event_type == "invoice.payment_failed":
             await _handle_invoice_payment_failed(obj, business_id)
+        elif event_type in ("invoice.payment_succeeded", "invoice.paid"):
+            # Recovery: a successful payment clears past_due. (The
+            # subscription.updated event also lands; this is defensive.)
+            if business_id:
+                await _patch_business(business_id, {"subscription_status": "active"})
         elif event_type == "checkout.session.completed":
             # The subsequent customer.subscription.created carries the
             # real state — we just log this one for audit.
