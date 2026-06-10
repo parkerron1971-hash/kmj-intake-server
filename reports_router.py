@@ -210,6 +210,91 @@ def summary_1099(biz: str, year: Optional[int] = None,
     return _summary_1099(biz, y)
 
 
+# ─── Phase I.6 — accountant exports ──────────────────────────────────
+
+def _package_year(year: Optional[int]) -> int:
+    from datetime import datetime as _dt, timezone as _tz
+    return year or _dt.now(_tz.utc).year
+
+
+def _accountant_email(biz: str, biz_row: Dict[str, Any]) -> Optional[str]:
+    """Active accountant collaborator first; Financial Settings fallback."""
+    rows = sb_clients.sb_get_as_service(
+        f"/business_collaborators?business_id=eq.{biz}&role=eq.accountant"
+        f"&status=eq.active&select=invited_email&limit=1") or []
+    if rows and rows[0].get("invited_email"):
+        return rows[0]["invited_email"]
+    fin = ((biz_row.get("settings") or {}).get("financial") or {})
+    return (fin.get("accountant_email") or "").strip() or None
+
+
+@router.get("/accountant/iif")
+def accountant_iif(biz: str, year: Optional[int] = None,
+                   user: AuthedUser = Depends(require_user)) -> Response:
+    """QuickBooks-importable IIF of the General Ledger."""
+    _owner(biz, user)
+    import accountant_export
+    if not gl_reports.gl_active(biz):
+        raise HTTPException(409, "No General Ledger yet — run Backfill in Admin first.")
+    y = _package_year(year)
+    iif = accountant_export.build_iif(biz, y)
+    return Response(content=iif, media_type="text/plain",
+                    headers={"Content-Disposition": f'attachment; filename="ledger_{y}.iif"'})
+
+
+@router.get("/accountant/package")
+def accountant_package(biz: str, year: Optional[int] = None,
+                       user: AuthedUser = Depends(require_user)) -> Response:
+    """Year-end ZIP: branded PDFs + CSVs + IIF + cover note."""
+    biz_row = _owner(biz, user)
+    import accountant_export
+    y = _package_year(year)
+    blob, _ = accountant_export.build_package_zip(
+        biz, biz_row.get("name") or "Business", biz_row.get("settings"), y,
+        generated_by=_generated_by(biz_row, user))
+    return Response(content=blob, media_type="application/zip",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{y}_financial_package.zip"'})
+
+
+@router.post("/accountant/send")
+async def accountant_send(biz: str, year: Optional[int] = None,
+                          user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Email the year-end package to the accountant (active collaborator, or
+    Financial Settings accountant_email). Returns the draft + send result."""
+    biz_row = _owner(biz, user)
+    import accountant_export
+    import base64
+    y = _package_year(year)
+    to_email = _accountant_email(biz, biz_row)
+    biz_name = biz_row.get("name") or "Business"
+    blob, reports = accountant_export.build_package_zip(
+        biz, biz_name, biz_row.get("settings"), y,
+        generated_by=_generated_by(biz_row, user))
+    subject, body = accountant_export.summary_email(biz_name, y, reports)
+    if not to_email:
+        return {"ok": True, "email_sent": False, "recipient": None,
+                "subject": subject, "body": body,
+                "note": "No accountant on file — invite one in Bookkeeping → Admin → "
+                        "Collaborators, or set accountant_email in Financial Settings. "
+                        "Download the package and send it yourself meanwhile."}
+    email_sent = False
+    try:
+        from email_sender import send_via_resend
+        await send_via_resend(
+            to_email=to_email, to_name=None,
+            from_email="reports@solutionist.studio", from_name=biz_name,
+            reply_to=None, subject=subject, body=body,
+            attachments=[{"filename": f"{y}_financial_package.zip",
+                          "content": base64.b64encode(blob).decode("ascii"),
+                          "content_type": "application/zip"}])
+        email_sent = True
+    except Exception as e:
+        logger.warning(f"[i6] accountant package email failed: {e}")
+    return {"ok": True, "email_sent": email_sent, "recipient": to_email,
+            "subject": subject, "body": body}
+
+
 @router.get("/journal")
 def journal(biz: str, limit: int = 50, offset: int = 0,
             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
