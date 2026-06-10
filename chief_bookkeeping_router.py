@@ -42,6 +42,15 @@ def analyze_period_close(business_id: str, user: AuthedUser = Depends(require_us
     return {"ok": True, "proposals": created, "count": len(created)}
 
 
+@router.post("/bookkeeping/analyze-gl/{business_id}")
+def analyze_gl(business_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Phase I.5 — GL analyzers: bank↔ledger reconciliation drift + the
+    post-close Opening Balance Equity reclass."""
+    chief_bookkeeping.owner_business(business_id, user.id)
+    created = chief_bookkeeping.analyze_gl(business_id)
+    return {"ok": True, "proposals": created, "count": len(created)}
+
+
 @router.get("/bookkeeping/counts/{business_id}")
 def counts(business_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """Drives the HOME nudge (linked + unmatched/uncategorized counts)."""

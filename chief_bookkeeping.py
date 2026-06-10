@@ -161,12 +161,47 @@ def gather_and_format(business_id: str, business_type: Optional[str] = None) -> 
             lines.append(f"  Vertical note: {vbk['category_note']}")
         if vbk.get("nudges"):
             lines.append(f"  Seasonal nudges to weave in when relevant: {'; '.join(vbk['nudges'])}")
+        lines += _gl_context_lines(business_id)
         lines.append("  Voice: warm, precise, practical. Cite real numbers. Offer to walk through "
                      "unreconciled or uncategorized items; never auto-change books without approval.")
         return "\n".join(lines)
     except Exception as e:  # never break the prompt
         logger.warning(f"[chief_bk] gather_and_format failed: {e}")
         return ""
+
+
+def _gl_context_lines(business_id: str) -> List[str]:
+    """Phase I.5 — a tight GL block (~5 lines, well within the prompt budget)
+    so Chief can answer ledger questions (account balances, trial balance,
+    recent activity). Empty when the business has no GL."""
+    try:
+        import gl_reports
+        if not gl_reports.gl_active(business_id):
+            return []
+        lines_ = gl_reports.effective_lines(business_id)
+        import gl_engine
+        cash = gl_engine.gl_cash(lines_)
+        ar = gl_engine.gl_ar(lines_)
+        ap = gl_engine.gl_ap(lines_)
+        clearing = gl_engine.gl_clearing(lines_)
+        tb = gl_engine.trial_balance(lines_)
+        recent = sb_clients.sb_get_as_service(
+            f"/journal_entries?business_id=eq.{business_id}&status=eq.active"
+            f"&order=created_at.desc&limit=3&select=entry_date,description") or []
+        diff = tb["difference"]
+        tb_status = "balanced" if abs(diff) < 0.01 else f"OFF by ${abs(diff):,.2f} — flag this"
+        out = [
+            "  GENERAL LEDGER (double-entry; the authoritative books):",
+            f"    Cash ${cash:,.2f} · AR ${ar:,.2f} · AP ${ap:,.2f} · Stripe Clearing ${clearing:,.2f}",
+            f"    Trial balance: {tb_status}",
+        ]
+        if recent:
+            out.append("    Recent entries: " + "; ".join(
+                f"{r.get('entry_date')} {(r.get('description') or '')[:40]}" for r in recent))
+        return out
+    except Exception as e:
+        logger.warning(f"[chief_bk] GL context failed: {e}")
+        return []
 
 
 def _vertical_bookkeeping(business_type: Optional[str]) -> Dict[str, Any]:
@@ -468,6 +503,83 @@ def analyze_period_close(business_id: str) -> List[Dict[str, Any]]:
     return [row] if row else []
 
 
+def _pending_of_type(business_id: str, ptype: str) -> List[Dict[str, Any]]:
+    return sb_clients.sb_get_as_service(
+        f"/chief_bookkeeping_proposals?business_id=eq.{business_id}"
+        f"&proposal_type=eq.{ptype}&status=eq.pending&select=id,proposed&limit=10") or []
+
+
+def analyze_gl(business_id: str) -> List[Dict[str, Any]]:
+    """Phase I.5 — deterministic GL analyzers (LLM-in-loop richness is Phase
+    G v1.5, sequenced later). Two cases:
+
+    propose_account_reconciliation — GL Cash has drifted from the live bank
+      snapshot (stale queue / missed sync). Approve = drain the sync queue +
+      re-plug the opening balance, then the books match the bank again.
+      Trust-layer: narration cites both numbers; nothing changes until
+      approved; deflects when GL ≡ bank.
+
+    propose_journal_entry — after a year-end close, Opening Balance Equity
+      still carries a balance. The standard accountant cleanup is a reclass
+      to Owner's Equity. Approve = post that balanced manual journal entry.
+      Trust-layer: only fires post-close; the exact Dr/Cr is shown in the
+      reasoning; deflects when 3000 is already zero or no year is closed.
+    """
+    import gl_reports
+    import gl_engine
+    created: List[Dict[str, Any]] = []
+    if not gl_reports.gl_active(business_id):
+        return created
+    lines_ = gl_reports.effective_lines(business_id)
+
+    # ── account reconciliation: GL Cash vs live bank snapshot ──
+    gl_cash = gl_engine.gl_cash(lines_)
+    accts = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?business_id=eq.{business_id}&type=eq.depository"
+        f"&included_in_bookkeeping=eq.true&deleted_at=is.null&select=last_balance") or []
+    bank_cash = round(sum(float(a.get("last_balance") or 0) for a in accts), 2)
+    drift = round(bank_cash - gl_cash, 2)
+    if abs(drift) >= 0.01 and not _pending_of_type(business_id, "propose_account_reconciliation"):
+        row = _insert_proposal(
+            business_id, "propose_account_reconciliation",
+            proposed={"gl_cash": gl_cash, "bank_cash": bank_cash, "drift": drift},
+            confidence=0.95,
+            reasoning=(f"Your ledger shows ${gl_cash:,.2f} in Cash but the bank reports "
+                       f"${bank_cash:,.2f} (off by ${abs(drift):,.2f}). Want me to reconcile "
+                       f"the books against the bank? I'll process any pending changes and "
+                       f"true-up the opening balance."))
+        if row:
+            created.append(row)
+
+    # ── journal entry: post-close Opening Balance Equity reclass ──
+    closed_years = sb_clients.sb_get_as_service(
+        f"/accounting_periods?business_id=eq.{business_id}&period_type=eq.year"
+        f"&status=eq.closed&select=id&limit=1") or []
+    if closed_years:
+        import gl_reports as _glr
+        obe = _glr._net(lines_, "3000", normal="credit")   # Opening Balance Equity
+        if abs(obe) >= 0.01 and not _pending_of_type(business_id, "propose_journal_entry"):
+            if obe > 0:
+                je_lines = [{"code": "3000", "debit": round(obe, 2), "credit": 0.0},
+                            {"code": "3100", "debit": 0.0, "credit": round(obe, 2)}]
+                verb = f"move ${obe:,.2f} from Opening Balance Equity into Owner's Equity"
+            else:
+                je_lines = [{"code": "3100", "debit": round(-obe, 2), "credit": 0.0},
+                            {"code": "3000", "debit": 0.0, "credit": round(-obe, 2)}]
+                verb = f"clear a ${-obe:,.2f} debit in Opening Balance Equity against Owner's Equity"
+            row = _insert_proposal(
+                business_id, "propose_journal_entry",
+                proposed={"description": "Reclass Opening Balance Equity to Owner's Equity",
+                          "lines": je_lines},
+                confidence=0.85,
+                reasoning=(f"Your year is closed but Opening Balance Equity still carries a "
+                           f"balance — the standard cleanup is to {verb}. This is the same "
+                           f"reclass an accountant would post at year-end. Approve to post it."))
+            if row:
+                created.append(row)
+    return created
+
+
 def approve_proposal(business_id: str, proposal_id: str, approved_by: str = "") -> Dict[str, Any]:
     """Execute a pending proposal, then mark it approved."""
     from fastapi import HTTPException
@@ -513,6 +625,29 @@ def approve_proposal(business_id: str, proposal_id: str, approved_by: str = "") 
             raise HTTPException(400, "proposal missing period_id")
         gl_engine.close_period(business_id, period_id,
                                closed_by=(approved_by or "chief"), closed_via="chief_auto_close")
+    elif ptype == "propose_account_reconciliation":
+        import gl_engine
+        # Drain pending sync work + true-up the opening balance plug.
+        gl_engine.process_queue(business_id)
+        coa = gl_engine.ensure_chart_of_accounts(business_id, gl_engine._biz_type(business_id))
+        gl_engine.reconcile_opening_balance(business_id, coa)
+    elif ptype == "propose_journal_entry":
+        import gl_engine
+        je_lines = proposed.get("lines") or []
+        if not je_lines:
+            raise HTTPException(400, "proposal missing journal lines")
+        deb = round(sum(float(l.get("debit") or 0) for l in je_lines), 2)
+        cred = round(sum(float(l.get("credit") or 0) for l in je_lines), 2)
+        if abs(deb - cred) >= 0.01:
+            raise HTTPException(400, "proposed journal entry is not balanced")
+        coa = gl_engine.ensure_chart_of_accounts(business_id, gl_engine._biz_type(business_id))
+        spec = gl_engine._entry(
+            None, "manual", f"chief_{proposal_id}",
+            proposed.get("description") or "Chief-proposed journal entry",
+            [gl_engine._line(l["code"], debit=float(l.get("debit") or 0),
+                             credit=float(l.get("credit") or 0),
+                             memo="chief proposal") for l in je_lines])
+        gl_engine._post_entry(business_id, spec, coa)
     else:
         raise HTTPException(400, f"unknown proposal_type {ptype}")
 
