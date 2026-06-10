@@ -52,6 +52,63 @@ class InviteBody(BaseModel):
     role: str = "accountant"
 
 
+@router.get("/overview")
+def accountant_overview(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Category D — the accountant-side dashboard feed: a curated CPA view
+    (period statuses, pending close signatures, reconciliation queue,
+    journal recency) without the practitioner's operational noise.
+    Accessible to the owner AND active accountant collaborators."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz}&select=id,name,owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    if str(rows[0].get("owner_id")) != str(user.id) \
+            and not is_active_accountant(biz, str(user.id)):
+        raise HTTPException(403, "not authorized")
+
+    periods = sb_clients.sb_get_as_service(
+        f"/accounting_periods?business_id=eq.{biz}"
+        f"&order=period_start.desc&limit=24"
+        f"&select=id,period_type,period_start,period_end,status,closed_at,closed_via") or []
+
+    pending_closes = []
+    try:
+        import chief_bookkeeping
+        pending_closes = [p for p in chief_bookkeeping.list_proposals(biz, "pending")
+                          if p.get("proposal_type") == "propose_period_close"]
+    except Exception as e:
+        logger.warning(f"[collab] overview proposals failed: {e}")
+
+    unmatched = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?business_id=eq.{biz}&pending=eq.false"
+        f"&excluded_from_books=eq.false&reconciliation_status=eq.unmatched"
+        f"&amount=lt.0&select=transaction_id&limit=500") or []
+    uncategorized = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?business_id=eq.{biz}&pending=eq.false"
+        f"&excluded_from_books=eq.false"
+        f"&or=(business_category.is.null,business_category.eq.other)"
+        f"&select=transaction_id&limit=500") or []
+    recent_jes = sb_clients.sb_get_as_service(
+        f"/journal_entries?business_id=eq.{biz}&status=eq.active"
+        f"&order=created_at.desc&limit=8"
+        f"&select=entry_date,description,source_type,is_reversal") or []
+    overrides = sb_clients.sb_get_as_service(
+        f"/period_edit_overrides?business_id=eq.{biz}"
+        f"&order=override_at.desc&limit=5"
+        f"&select=override_at,source_type,override_reason") or []
+
+    return {
+        "ok": True, "business": {"id": rows[0]["id"], "name": rows[0].get("name")},
+        "is_owner": str(rows[0].get("owner_id")) == str(user.id),
+        "periods": periods,
+        "pending_close_proposals": pending_closes,
+        "reconciliation_queue": len(unmatched),
+        "uncategorized": len(uncategorized),
+        "recent_journal_entries": recent_jes,
+        "recent_overrides": overrides,
+    }
+
+
 @router.post("/invite")
 async def invite(biz: str, body: InviteBody,
                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:

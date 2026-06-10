@@ -43,6 +43,22 @@ def _gl_or_fallback(biz: str, gl_fn, h3a_fn) -> Dict[str, Any]:
     return data
 
 
+def _owner_or_accountant(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    """Category D — the year-end deliverables (IIF + package) are exactly
+    what the accountant collaborator exists for; allow active accountants
+    read access alongside the owner."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    if str(rows[0].get("owner_id")) == str(user.id):
+        return rows[0]
+    from business_collaborators_router import is_active_accountant
+    if is_active_accountant(biz, str(user.id)):
+        return rows[0]
+    raise HTTPException(403, "not authorized")
+
+
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings&limit=1") or []
@@ -265,7 +281,7 @@ def _accountant_email(biz: str, biz_row: Dict[str, Any]) -> Optional[str]:
 def accountant_iif(biz: str, year: Optional[int] = None,
                    user: AuthedUser = Depends(require_user)) -> Response:
     """QuickBooks-importable IIF of the General Ledger."""
-    _owner(biz, user)
+    _owner_or_accountant(biz, user)
     import accountant_export
     if not gl_reports.gl_active(biz):
         raise HTTPException(409, "No General Ledger yet — run Backfill in Admin first.")
@@ -279,7 +295,7 @@ def accountant_iif(biz: str, year: Optional[int] = None,
 def accountant_package(biz: str, year: Optional[int] = None,
                        user: AuthedUser = Depends(require_user)) -> Response:
     """Year-end ZIP: branded PDFs + CSVs + IIF + cover note."""
-    biz_row = _owner(biz, user)
+    biz_row = _owner_or_accountant(biz, user)
     import accountant_export
     y = _package_year(year)
     blob, _ = accountant_export.build_package_zip(
