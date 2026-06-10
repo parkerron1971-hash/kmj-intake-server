@@ -20,6 +20,7 @@ import reports_engine
 import gl_reports
 import gl_reports_t2
 import gl_reports_t3
+import gl_reports_t4
 
 logger = logging.getLogger("reports_router")
 
@@ -319,6 +320,11 @@ _REPORT_TITLES = {
     # Phase I.9 — Tier-3 analytical reports.
     "budget_vs_actual": "Budget vs Actual", "profitability": "Profitability",
     "trends": "Trends",
+    # Phase I.10 — Tier-4 vertical compliance reports.
+    "trust_reconciliation": "Trust Account Reconciliation",
+    "donors": "Donor Report", "prep_990": "Form 990 Prep",
+    "bank_reconciliation": "Bank Reconciliation",
+    "audit_trail": "Closed-Period Edit Audit Trail",
 }
 
 
@@ -432,6 +438,55 @@ def trends_report(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[st
     return gl_reports_t3.trends(biz)
 
 
+# ─── Phase I.10 — Tier-4 vertical compliance reports ─────────────────
+
+@router.get("/trust-reconciliation")
+def trust_reconciliation(biz: str, as_of: Optional[str] = None,
+                         user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    if not gl_reports.gl_active(biz):
+        return _needs_gl("trust_reconciliation", three_way={}, by_client=[], activity=[])
+    return gl_reports_t4.trust_reconciliation(biz, as_of)
+
+
+@router.get("/donors")
+def donors(biz: str, period: str = "this_year",
+           from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
+           user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    try:
+        return gl_reports_t4.donor_report(biz, period, from_, to)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/990-prep")
+def prep_990(biz: str, year: Optional[int] = None,
+             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    if not gl_reports.gl_active(biz):
+        return _needs_gl("prep_990", contributions=[], functional_expenses=[],
+                         net_assets=[], sme_flags=[])
+    return gl_reports_t4.prep_990(biz, year)
+
+
+@router.get("/bank-reconciliation")
+def bank_reconciliation(biz: str, period: str = "this_month",
+                        from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
+                        user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    try:
+        return gl_reports_t4.bank_reconciliation(biz, period, from_, to)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/audit-trail-report")
+def audit_trail_report(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    return gl_reports_t4.audit_trail(biz)
+
+
 @router.get("/statement-customers")
 def statement_customers(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
@@ -534,6 +589,23 @@ def export(biz: str, report: str, format: str = "csv",
         elif report == "trends":
             data = gl_reports_t3.trends(biz) if gl_reports.gl_active(biz) \
                 else {"report": "trends", "monthly": [], "seasonality": [], "momentum": {}}
+        elif report == "trust_reconciliation":
+            data = gl_reports_t4.trust_reconciliation(biz, as_of) \
+                if gl_reports.gl_active(biz) else {"report": "trust_reconciliation",
+                                                   "three_way": {}, "by_client": [],
+                                                   "activity": [], "accounts": []}
+        elif report == "donors":
+            data = gl_reports_t4.donor_report(biz, period, from_, to)
+        elif report == "prep_990":
+            from datetime import datetime as _dt2, timezone as _tz2
+            y2 = int((as_of or "")[:4]) if (as_of or "")[:4].isdigit() else _dt2.now(_tz2.utc).year
+            data = gl_reports_t4.prep_990(biz, y2) if gl_reports.gl_active(biz) \
+                else {"report": "prep_990", "contributions": [],
+                      "functional_expenses": [], "net_assets": [], "sme_flags": []}
+        elif report == "bank_reconciliation":
+            data = gl_reports_t4.bank_reconciliation(biz, period, from_, to)
+        elif report == "audit_trail":
+            data = gl_reports_t4.audit_trail(biz)
         elif report == "pl":
             data = _gl_or_fallback(
                 biz, lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to),
@@ -660,6 +732,51 @@ def _csv_rows(report: str, data: Dict[str, Any]) -> list:
         rows.append(["Month", "Revenue", "Expenses", "Net"])
         for m in data.get("monthly", []):
             rows.append([m.get("month"), m.get("revenue"), m.get("expenses"), m.get("net")])
+    elif report == "trust_reconciliation":
+        tw = data.get("three_way") or {}
+        rows.append(["Three-Way Check", "Amount"])
+        rows.append(["GL Trust Cash (1200)", tw.get("gl_trust_cash")])
+        rows.append(["Client Funds Liability (2200)", tw.get("client_funds_liability")])
+        rows.append(["Bank Trust Balance", tw.get("bank_trust_balance")])
+        rows.append([])
+        rows.append(["Client", "Deposits", "Disbursements", "Balance"])
+        for c in data.get("by_client", []):
+            rows.append([c.get("client"), c.get("deposits"), c.get("disbursements"),
+                         c.get("balance")])
+        rows.append([])
+        rows.append(["Date", "Description", "Type", "Amount", "Client"])
+        for a in data.get("activity", []):
+            rows.append([a.get("date"), a.get("description"), a.get("type"),
+                         a.get("amount"), a.get("client")])
+    elif report == "donors":
+        rows.append(["Donor", "Gifts", "Total", "Restricted"])
+        for d2 in data.get("donors", []):
+            rows.append([d2.get("donor"), d2.get("gifts"), d2.get("total"),
+                         d2.get("restricted")])
+        rows.append(["", "TOTAL", data.get("total_gifts", 0),
+                     data.get("restricted_gifts", 0)])
+    elif report == "prep_990":
+        rows.append(["Section", "Line", "Amount"])
+        for c in data.get("contributions", []):
+            rows.append(["Income", f"{c.get('code')} {c.get('name')}", c.get("amount")])
+        for f in data.get("functional_expenses", []):
+            rows.append(["Expense (bucket)", f.get("bucket"), f.get("amount")])
+        for n in data.get("net_assets", []):
+            rows.append(["Net Assets", f"{n.get('code')} {n.get('name')}", n.get("balance")])
+        rows.append(["", "CHANGE IN NET ASSETS", data.get("change_in_net_assets", 0)])
+    elif report == "bank_reconciliation":
+        rows.append(["Account", "Beginning", "Deposits", "Withdrawals", "Ending",
+                     "Pending", "Excluded"])
+        for a in data.get("accounts", []):
+            ri = a.get("reconciling_items") or {}
+            rows.append([f"{a.get('name')} ••{a.get('mask')}", a.get("beginning_balance"),
+                         a.get("deposits"), a.get("withdrawals"), a.get("ending_balance"),
+                         ri.get("pending_count"), ri.get("excluded_count")])
+    elif report == "audit_trail":
+        rows.append(["When", "Source", "Source ID", "By", "Reason"])
+        for e in data.get("entries", []):
+            rows.append([e.get("at"), e.get("source_type"), e.get("source_id"),
+                         e.get("by_role"), e.get("reason")])
     elif report == "ar_aging":
         rows.append(["Invoice", "Contact", "Total", "Due", "Bucket", "Days Overdue"])
         for i in data.get("invoices", []):

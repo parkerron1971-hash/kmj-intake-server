@@ -785,6 +785,169 @@ def _trends_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
     return out
 
 
+def _kv_table(pairs, s, money_cell, stripe, rule, colors, Table, TableStyle, Paragraph, inch):
+    rows = [[Paragraph(str(k), s["row"]), money_cell(v)] for k, v in pairs]
+    tbl = Table(rows, colWidths=[None, 1.3 * inch])
+    tbl.setStyle(TableStyle([("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                             ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, stripe])]))
+    return tbl
+
+
+def _trust_reconciliation_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
+                               TableStyle, Paragraph, Spacer, inch, meta):
+    tw = d.get("three_way") or {}
+    ok = bool(tw.get("ledger_in_balance")) and bool(tw.get("matches_bank"))
+    out = [Paragraph("THREE-WAY RECONCILIATION", s["section"]),
+           _kv_table([("GL Trust Cash (1200)", tw.get("gl_trust_cash")),
+                      ("Client Trust Funds Liability (2200)", tw.get("client_funds_liability")),
+                      ("Bank Trust Balance", tw.get("bank_trust_balance"))],
+                     s, money_cell, stripe, rule, colors, Table, TableStyle, Paragraph, inch),
+           Spacer(1, 0.06 * inch),
+           Paragraph("✓ All three balances agree." if ok
+                     else "✗ BALANCES DO NOT AGREE — investigate before filing.",
+                     s["row"] if ok else s["danger"]),
+           Spacer(1, 0.12 * inch),
+           Paragraph("PER-CLIENT SUB-BALANCES", s["section"])]
+    head = [Paragraph("Client", s["th"])] + \
+           [Paragraph(h, s["thr"]) for h in ("Deposits", "Disbursements", "Balance")]
+    rows = [head]
+    for c in d.get("by_client") or []:
+        rows.append([Paragraph(str(c.get("client")), s["row"]),
+                     money_cell(c.get("deposits")), money_cell(c.get("disbursements")),
+                     money_cell(c.get("balance"))])
+    if d.get("opening_plug"):
+        rows.append([Paragraph("(pre-history client funds)", s["rowind"]),
+                     Paragraph("", s["row"]), Paragraph("", s["row"]),
+                     money_cell(d.get("opening_plug"))])
+    tbl = Table(rows, colWidths=[None, 1.1 * inch, 1.1 * inch, 1.1 * inch], repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("ALIGN", (1, 0), (3, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe]),
+    ]))
+    out.append(tbl)
+    out.append(Spacer(1, 0.12 * inch))
+    out.append(Paragraph("TRUST ACTIVITY", s["section"]))
+    head2 = [Paragraph(h, s["th"]) for h in ("Date", "Description", "Type", "Client")] + \
+            [Paragraph("Amount", s["thr"])]
+    rows2 = [head2]
+    for a in (d.get("activity") or [])[:120]:
+        rows2.append([Paragraph(str(a.get("date")), s["rowind"]),
+                      Paragraph(str(a.get("description"))[:48], s["row"]),
+                      Paragraph(str(a.get("type")), s["rowind"]),
+                      Paragraph(str(a.get("client") or "—"), s["rowind"]),
+                      money_cell(a.get("amount"))])
+    tbl2 = Table(rows2, colWidths=[0.8 * inch, None, 0.95 * inch, 1.2 * inch, 0.9 * inch],
+                 repeatRows=1)
+    tbl2.setStyle(TableStyle([
+        ("ALIGN", (4, 0), (4, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe]),
+    ]))
+    out.append(tbl2)
+    out.append(Spacer(1, 0.08 * inch))
+    out.append(Paragraph(str(d.get("note") or ""), s["row"]))
+    return out
+
+
+def _donors_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
+                 Paragraph, Spacer, inch, meta):
+    out = [Paragraph("GIFTS", s["section"]),
+           _kv_table([("Total gifts", d.get("total_gifts")),
+                      ("Restricted", d.get("restricted_gifts")),
+                      ("Unrestricted", d.get("unrestricted_gifts"))],
+                     s, money_cell, stripe, rule, colors, Table, TableStyle, Paragraph, inch),
+           Spacer(1, 0.12 * inch), Paragraph("BY DONOR", s["section"])]
+    head = [Paragraph("Donor", s["th"])] + \
+           [Paragraph(h, s["thr"]) for h in ("Gifts", "Total", "Restricted")]
+    rows = [head]
+    for dn in d.get("donors") or []:
+        rows.append([Paragraph(str(dn.get("donor")), s["row"]),
+                     Paragraph(str(dn.get("gifts")), s["rowind"]),
+                     money_cell(dn.get("total")), money_cell(dn.get("restricted"))])
+    tbl = Table(rows, colWidths=[None, 0.7 * inch, 1.1 * inch, 1.1 * inch], repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("ALIGN", (1, 0), (3, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe]),
+    ]))
+    out.append(tbl)
+    out.append(Spacer(1, 0.08 * inch))
+    out.append(Paragraph(str(d.get("note") or ""), s["row"]))
+    return out
+
+
+def _prep_990_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
+                   Paragraph, Spacer, inch, meta):
+    out = [Paragraph(f"990 PREP — {d.get('year')}", s["section"])]
+    for title, key, lk, vk in (("CONTRIBUTIONS / INCOME", "contributions", "name", "amount"),
+                               ("FUNCTIONAL EXPENSE PREP (PROFIT-FIRST BUCKETS)",
+                                "functional_expenses", "bucket", "amount"),
+                               ("NET ASSETS", "net_assets", "name", "balance")):
+        out.append(Paragraph(title, s["section"]))
+        out.append(_kv_table([(r.get(lk), r.get(vk)) for r in d.get(key) or []],
+                             s, money_cell, stripe, rule, colors, Table, TableStyle,
+                             Paragraph, inch))
+        out.append(Spacer(1, 0.08 * inch))
+    out.append(_kv_table([("CHANGE IN NET ASSETS", d.get("change_in_net_assets"))],
+                         s, money_cell, stripe, rule, colors, Table, TableStyle,
+                         Paragraph, inch))
+    out.append(Spacer(1, 0.08 * inch))
+    for f in d.get("sme_flags") or []:
+        out.append(Paragraph("⚑ " + str(f), s["row"]))
+    return out
+
+
+def _bank_reconciliation_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
+                              TableStyle, Paragraph, Spacer, inch, meta):
+    out = [Paragraph("BANK RECONCILIATION", s["section"])]
+    head = [Paragraph("Account", s["th"])] + \
+           [Paragraph(h, s["thr"]) for h in ("Beginning", "Deposits", "Withdrawals", "Ending")]
+    rows = [head]
+    for a in d.get("accounts") or []:
+        label = f"{a.get('name')} ••{a.get('mask')}" + (" (TRUST)" if a.get("is_trust_account") else "")
+        rows.append([Paragraph(label, s["row"]), money_cell(a.get("beginning_balance")),
+                     money_cell(a.get("deposits")), money_cell(a.get("withdrawals")),
+                     money_cell(a.get("ending_balance"))])
+    tbl = Table(rows, colWidths=[None, 1.0 * inch, 1.0 * inch, 1.0 * inch, 1.0 * inch],
+                repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("ALIGN", (1, 0), (4, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe]),
+    ]))
+    out.append(tbl)
+    out.append(Spacer(1, 0.08 * inch))
+    gl = d.get("gl_cash") or {}
+    if gl:
+        out.append(_kv_table([("GL Operating Cash (1000)", gl.get("operating_1000")),
+                              ("GL Trust Cash (1200)", gl.get("trust_1200")),
+                              ("Bank operating ending total", d.get("operating_ending_total"))],
+                             s, money_cell, stripe, rule, colors, Table, TableStyle,
+                             Paragraph, inch))
+        out.append(Spacer(1, 0.06 * inch))
+    out.append(Paragraph(str(d.get("note") or ""), s["row"]))
+    return out
+
+
+def _audit_trail_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
+                      Paragraph, Spacer, inch, meta):
+    out = [Paragraph("CLOSED-PERIOD EDIT AUDIT TRAIL", s["section"])]
+    head = [Paragraph(h, s["th"]) for h in ("When", "Source", "By", "Reason")]
+    rows = [head]
+    for e in d.get("entries") or []:
+        rows.append([Paragraph(str(e.get("at"))[:19].replace("T", " "), s["rowind"]),
+                     Paragraph(f"{e.get('source_type')} {str(e.get('source_id'))[:12]}", s["rowind"]),
+                     Paragraph(str(e.get("by_role")), s["rowind"]),
+                     Paragraph(str(e.get("reason"))[:90], s["row"])])
+    if not (d.get("entries") or []):
+        rows.append([Paragraph("(no closed-period edits on record)", s["rowind"]),
+                     Paragraph("", s["row"]), Paragraph("", s["row"]), Paragraph("", s["row"])])
+    tbl = Table(rows, colWidths=[1.3 * inch, 1.7 * inch, 0.9 * inch, None], repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe]),
+    ]))
+    out.append(tbl)
+    return out
+
+
 _BUILDERS = {
     "balance_sheet": _balance_sheet_body,
     "pl": _pl_body,
@@ -801,4 +964,9 @@ _BUILDERS = {
     "budget_vs_actual": _budget_vs_actual_body,
     "profitability": _profitability_body,
     "trends": _trends_body,
+    "trust_reconciliation": _trust_reconciliation_body,
+    "donors": _donors_body,
+    "prep_990": _prep_990_body,
+    "bank_reconciliation": _bank_reconciliation_body,
+    "audit_trail": _audit_trail_body,
 }

@@ -74,7 +74,7 @@ _BUCKET_TO_EXPENSE = {
 _ACCOUNT_TYPE = {c[0]: c[2] for c in (COA_SEED + COA_LAWYER_EXTRA + COA_NONPROFIT_EXTRA)}
 _ACCOUNT_BUCKET = {c[0]: c[4] for c in (COA_SEED + COA_LAWYER_EXTRA + COA_NONPROFIT_EXTRA)}
 
-_INCOME_CODES = {"4000", "4100", "4900"}
+_INCOME_CODES = {"4000", "4100", "4200", "4900"}
 _EXPENSE_CODES = set(_BUCKET_TO_EXPENSE.values())
 _INVOICE_ISSUE_STATUSES = ("sent", "viewed", "paid", "overdue")
 _NON_STRIPE_PAYMENT_HINTS = ("cash", "check", "bank", "manual", "ach", "venmo", "zelle")
@@ -145,7 +145,7 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
     invoices = sb_clients.sb_get_as_service(
         f"/invoices?business_id=eq.{biz}"
         f"&select=id,total,status,paid_at,sent_at,created_at,due_date,payment_method,"
-        f"stripe_payment_url,refund_amount_cents,refunded_at&limit=10000") or []
+        f"stripe_payment_url,refund_amount_cents,refunded_at,category&limit=10000") or []
     expenses = sb_clients.sb_get_as_service(
         f"/business_expenses?business_id=eq.{biz}"
         f"&select=id,amount,category,subcategory,vendor,date&limit=10000") or []
@@ -205,16 +205,32 @@ def _is_non_stripe_payment(inv: Dict[str, Any]) -> bool:
 # backfill (generate_entries) and live sync (converge). Each returns the
 # balanced journal-entry specs a source row should produce right now.
 
-def desired_for_invoice(inv: Dict[str, Any]) -> List[Dict[str, Any]]:
+_RESTRICTED_HINTS = ("restricted", "restricted_gift", "restricted_donation")
+
+
+def _income_code_for_invoice(inv: Dict[str, Any], business_type: Optional[str]) -> str:
+    """I.10 — nonprofit restricted gifts → 4200 Restricted Contributions.
+    Routing requires BOTH the nonprofit business type and an explicitly
+    restricted invoice category, so other verticals can never trip it."""
+    bt = (business_type or "").lower().strip().replace("-", "_").replace(" ", "_")
+    if bt in ("nonprofit", "non_profit", "not_for_profit") \
+            and (inv.get("category") or "").lower().strip() in _RESTRICTED_HINTS:
+        return "4200"
+    return "4000"
+
+
+def desired_for_invoice(inv: Dict[str, Any],
+                        business_type: Optional[str] = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     total = float(inv.get("total") or 0)
     status = (inv.get("status") or "").lower()
     if total <= 0:
         return out
+    income_code = _income_code_for_invoice(inv, business_type)
     if status in _INVOICE_ISSUE_STATUSES:
         ed = _d(inv.get("sent_at")) or _d(inv.get("created_at")) or _d(inv.get("due_date"))
         out.append(_entry(ed, "invoice_issue", inv["id"], "Invoice issued",
-                          [_line("1100", debit=total), _line("4000", credit=total)]))
+                          [_line("1100", debit=total), _line(income_code, credit=total)]))
     if status == "paid" and inv.get("paid_at"):
         cc = "1000" if _is_non_stripe_payment(inv) else "1150"
         out.append(_entry(_d(inv.get("paid_at")), "invoice_payment", inv["id"], "Invoice paid",
@@ -225,7 +241,7 @@ def desired_for_invoice(inv: Dict[str, Any]) -> List[Dict[str, Any]]:
         cc = "1000" if _is_non_stripe_payment(inv) else "1150"
         out.append(_entry(_d(inv.get("refunded_at")) or _d(inv.get("paid_at")),
                           "invoice_refund", inv["id"], "Invoice refunded",
-                          [_line("4000", debit=amt), _line(cc, credit=amt)]))
+                          [_line(income_code, debit=amt), _line(cc, credit=amt)]))
     return out
 
 
@@ -363,8 +379,9 @@ def _trust_opening_spec(trust_cash: float, net_trust: float) -> Optional[Dict[st
 def generate_entries(sources: Dict[str, Any]) -> List[Dict[str, Any]]:
     """All source rows → balanced journal-entry specs (backfill path). Pure."""
     specs: List[Dict[str, Any]] = []
+    btype = sources.get("business_type")
     for inv in sources["invoices"]:
-        specs += desired_for_invoice(inv)
+        specs += desired_for_invoice(inv, btype)
     for e in sources["expenses"]:
         specs += desired_for_expense(e)
     for b in sources["bills"]:
@@ -471,6 +488,7 @@ def backfill(business_id: str, business_type: Optional[str]) -> Dict[str, Any]:
     """Idempotent backfill. Returns counts. Re-running creates nothing new."""
     coa = ensure_chart_of_accounts(business_id, business_type)
     sources = _fetch_sources(business_id)
+    sources["business_type"] = business_type
     specs = generate_entries(sources)
     existing = _existing_entry_keys(business_id)
     created = skipped = lines_created = 0
@@ -529,7 +547,7 @@ from datetime import timedelta as _timedelta  # noqa: E402
 
 _SOURCE_FETCH = {
     "invoices": ("/invoices?id=eq.{id}&select=id,total,status,paid_at,sent_at,created_at,"
-                 "due_date,payment_method,stripe_payment_url,refund_amount_cents,refunded_at&limit=1"),
+                 "due_date,payment_method,stripe_payment_url,refund_amount_cents,refunded_at,category&limit=1"),
     "business_expenses": "/business_expenses?id=eq.{id}&select=id,amount,category,subcategory,vendor,date&limit=1",
     "bills": ("/bills?id=eq.{id}&select=id,vendor_name,amount,category,subcategory,status,due_date,"
               "created_at,paid_at,paid_amount&limit=1"),
@@ -603,7 +621,8 @@ def _reverse_je(biz: str, je: Dict[str, Any], coa: Dict[str, str]) -> None:
 
 def process_source_row(biz: str, table: str, source_id: str, coa: Dict[str, str],
                        included_accounts: Optional[set] = None,
-                       trust_accounts: Optional[set] = None) -> None:
+                       trust_accounts: Optional[set] = None,
+                       business_type: Optional[str] = None) -> None:
     """Converge the GL for ONE source row to its desired state (idempotent)."""
     types = _TABLE_SOURCE_TYPES.get(table)
     if not types:
@@ -617,6 +636,8 @@ def process_source_row(biz: str, table: str, source_id: str, coa: Dict[str, str]
             desired = []  # tx on an excluded/removed account → not in books
         elif table == "plaid_transactions":
             desired = desired_for_plaid(row, trust_accounts)
+        elif table == "invoices":
+            desired = desired_for_invoice(row, business_type)
         else:
             desired = _TABLE_DESIRED[table](row)
     desired_by_type = {s["source_type"]: s for s in desired}
@@ -705,7 +726,8 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
     for biz, biz_rows in by_biz.items():
         # One business's failure must not abort the rest of the drain.
         try:
-            coa = ensure_chart_of_accounts(biz, _biz_type(biz))
+            btype = _biz_type(biz)
+            coa = ensure_chart_of_accounts(biz, btype)
             included = set(_included_account_ids(biz))
             trust = set(_trust_account_ids(biz))
             seen = set()
@@ -715,7 +737,7 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
                     seen.add(key)
                     try:
                         process_source_row(biz, r["source_table"], r["source_id"], coa,
-                                           included, trust)
+                                           included, trust, btype)
                     except Exception as e:
                         logger.warning(f"[gl] process row failed {key}: {e}")
                 sb_clients.sb_patch_as_service(

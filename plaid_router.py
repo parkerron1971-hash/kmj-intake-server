@@ -504,7 +504,7 @@ _TX_SELECT = (
     "select=transaction_id,account_id,amount,iso_currency_code,date,"
     "authorized_date,datetime,name,merchant_name,"
     "plaid_category_primary,plaid_category_detail,"
-    "business_category,business_subcategory,pending,excluded_from_books,"
+    "business_category,business_subcategory,pending,excluded_from_books,trust_contact_id,"
     "reconciled_to_payout_id,reconciled_to_charge_id,reconciled_to_transfer_id,"
     "reconciliation_status,practitioner_notes,notes"
 )
@@ -634,7 +634,7 @@ def get_transaction(
     tx = rows[0]
     acct = sb_clients.sb_get_as_service(
         f"/plaid_accounts?account_id=eq.{tx.get('account_id')}"
-        f"&select=name,official_name,mask,subtype,type&limit=1"
+        f"&select=name,official_name,mask,subtype,type,is_trust_account&limit=1"
     ) or []
     tx["account"] = acct[0] if acct else None
     return {"ok": True, "transaction": tx}
@@ -645,6 +645,7 @@ class TxPatchBody(BaseModel):
     business_subcategory: Optional[str] = None
     excluded_from_books: Optional[bool] = None
     notes: Optional[str] = None
+    trust_contact_id: Optional[str] = None    # I.10 — per-client trust tagging ("" clears)
     override_reason: Optional[str] = None     # required to edit a closed-period txn
 
 
@@ -676,6 +677,8 @@ def update_transaction(
         patch["excluded_from_books"] = bool(body.excluded_from_books)
     if body.notes is not None:
         patch["notes"] = body.notes or None
+    if body.trust_contact_id is not None:
+        patch["trust_contact_id"] = body.trust_contact_id or None
     sb_clients.sb_patch_as_service(
         f"/plaid_transactions?transaction_id=eq.{transaction_id}", patch,
     )
