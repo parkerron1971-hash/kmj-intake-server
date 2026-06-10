@@ -202,6 +202,40 @@ def verify(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]
     return out
 
 
+@router.get("/trust-status")
+def trust_status(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """I.7 — IOLTA three-point check: GL trust cash (1200) vs the client-funds
+    liability (2200) vs the bank's trust-account balance. All three equal =
+    in-balance books. Ledger MECHANICS only — the formal per-client three-way
+    reconciliation REPORT is I.10 + SME ruling."""
+    _owner(biz, user)
+    import gl_reports
+    taccts = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?business_id=eq.{biz}&is_trust_account=is.true"
+        f"&deleted_at=is.null"
+        f"&select=account_id,name,mask,last_balance,included_in_bookkeeping") or []
+    lines = gl_reports.effective_lines(biz)
+    has_trust_lines = any(l["account_code"] in ("1200", "2200") for l in lines)
+    if not taccts and not has_trust_lines:
+        return {"ok": True, "has_trust_accounts": False}
+    trust_cash_gl = gl_reports._net(lines, "1200", normal="debit")
+    client_funds = gl_reports._net(lines, "2200", normal="credit")
+    bank = round(sum(float(a.get("last_balance") or 0)
+                     for a in taccts if a.get("included_in_bookkeeping")), 2)
+    return {
+        "ok": True, "has_trust_accounts": True,
+        "accounts": [{"account_id": a.get("account_id"), "name": a.get("name"),
+                      "mask": a.get("mask"), "last_balance": a.get("last_balance"),
+                      "included_in_bookkeeping": a.get("included_in_bookkeeping")}
+                     for a in taccts],
+        "trust_cash_gl": trust_cash_gl,
+        "client_funds_liability": client_funds,
+        "bank_trust_balance": bank,
+        "ledger_in_balance": abs(round(trust_cash_gl - client_funds, 2)) < _EPS,
+        "matches_bank": abs(round(trust_cash_gl - bank, 2)) < _EPS,
+    }
+
+
 @router.get("/status")
 def status(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """Lightweight backfill state for the Admin dashboard (no full verify)."""

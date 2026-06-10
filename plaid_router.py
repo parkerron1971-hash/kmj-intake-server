@@ -431,14 +431,16 @@ def list_accounts(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[st
         f"/plaid_accounts?business_id=eq.{biz}"
         f"&deleted_at=is.null"
         f"&select=account_id,item_id,name,official_name,type,subtype,"
-        f"mask,last_balance,last_balance_at,iso_currency,included_in_bookkeeping"
+        f"mask,last_balance,last_balance_at,iso_currency,included_in_bookkeeping,"
+        f"is_trust_account"
         f"&order=name.asc"
     ) or []
     return {"ok": True, "accounts": rows}
 
 
 class AccountPatchBody(BaseModel):
-    included_in_bookkeeping: bool
+    included_in_bookkeeping: Optional[bool] = None
+    is_trust_account: Optional[bool] = None    # I.7 — lawyer IOLTA routing
 
 
 @router.patch("/accounts/{account_id}")
@@ -447,18 +449,38 @@ def update_account(
     body: AccountPatchBody,
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
-    """Toggle an account in/out of bookkeeping. Excluded accounts stay
-    linked + synced but drop out of the Cash Flow KPIs, bucket bars,
-    Needs-Review list, and reconciliation. Reversible."""
-    _require_owner_for_account(account_id, user)
+    """Toggle an account in/out of bookkeeping, or mark it a TRUST account
+    (I.7 — its activity then books to the trust ledger 1200 ↔ 2200, never
+    income/expense). Both toggles re-route what the GL wants for every
+    transaction on the account, so we enqueue them all for the live sync —
+    no manual Reverse + Backfill needed. Reversible."""
+    acct_row = _require_owner_for_account(account_id, user)
+    fields: Dict[str, Any] = {}
+    if body.included_in_bookkeeping is not None:
+        fields["included_in_bookkeeping"] = bool(body.included_in_bookkeeping)
+    if body.is_trust_account is not None:
+        fields["is_trust_account"] = bool(body.is_trust_account)
+    if not fields:
+        raise HTTPException(422, "No account fields to update.")
     sb_clients.sb_patch_as_service(
         f"/plaid_accounts?account_id=eq.{account_id}",
-        {
-            "included_in_bookkeeping": bool(body.included_in_bookkeeping),
-            "updated_at": _now_iso(),
-        },
+        {**fields, "updated_at": _now_iso()},
     )
-    return {"ok": True, "included_in_bookkeeping": bool(body.included_in_bookkeeping)}
+    # Converge the GL: every settled transaction on this account may now want
+    # a different entry shape. Best-effort — the divergence tick is backstop.
+    try:
+        biz = str(acct_row.get("business_id") or "")
+        if biz:
+            txs = sb_clients.sb_get_as_service(
+                f"/plaid_transactions?account_id=eq.{account_id}&business_id=eq.{biz}"
+                f"&pending=eq.false&select=transaction_id&limit=20000") or []
+            if txs:
+                sb_clients.sb_post_as_service("/gl_sync_queue", [
+                    {"business_id": biz, "source_table": "plaid_transactions",
+                     "source_id": t["transaction_id"]} for t in txs], prefer=None)
+    except Exception as e:
+        logger.warning(f"[plaid] account-toggle GL enqueue failed: {e}")
+    return {"ok": True, **fields}
 
 
 @router.delete("/accounts/{account_id}")

@@ -114,9 +114,13 @@ def _pct_change(cur: float, prev: float) -> Optional[float]:
 # ─── Shared data access ──────────────────────────────────────────────
 
 def _included_account_ids(biz: str) -> List[str]:
+    # I.7 — trust accounts (IOLTA) are a separate ledger: client money never
+    # appears in operating P&L / cash flow / cash-on-hand (GL parity: trust
+    # activity books 1200 ↔ 2200 there, also outside these reports).
     rows = sb_clients.sb_get_as_service(
         f"/plaid_accounts?business_id=eq.{biz}"
-        f"&included_in_bookkeeping=eq.true&deleted_at=is.null&select=account_id"
+        f"&included_in_bookkeeping=eq.true&deleted_at=is.null"
+        f"&is_trust_account=not.is.true&select=account_id"
     ) or []
     return [r["account_id"] for r in rows if r.get("account_id")]
 
@@ -124,7 +128,8 @@ def _included_account_ids(biz: str) -> List[str]:
 def _cash_on_hand(biz: str) -> float:
     rows = sb_clients.sb_get_as_service(
         f"/plaid_accounts?business_id=eq.{biz}&type=eq.depository"
-        f"&included_in_bookkeeping=eq.true&deleted_at=is.null&select=last_balance"
+        f"&included_in_bookkeeping=eq.true&deleted_at=is.null"
+        f"&is_trust_account=not.is.true&select=last_balance"
     ) or []
     return round(sum(float(r.get("last_balance") or 0) for r in rows), 2)
 

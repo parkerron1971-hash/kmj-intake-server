@@ -52,15 +52,27 @@ COA_SEED: List[Tuple[str, str, str, str, Optional[str], bool]] = [
     ("5300", "Savings Allocation",    "expense",   "debit",  "savings",   False),
     ("5900", "Other Expenses",        "expense",   "debit",  "other",     False),
 ]
-# Lawyer (IOLTA prep, I.7): provision a Trust Account.
-COA_LAWYER_EXTRA = [("1200", "Trust Account", "asset", "debit", None, True)]
+# ─── Vertical COA extras (I.7) ───────────────────────────────────────
+# Lawyer (IOLTA): trust cash + the matching client-funds liability. Money in
+# 1200 is NEVER the firm's — every trust movement pairs 1200 ↔ 2200, and the
+# two must net equal at all times (see /gl/trust-status).
+COA_LAWYER_EXTRA = [
+    ("1200", "Trust Account",      "asset",     "debit",  None, True),
+    ("2200", "Client Trust Funds", "liability", "credit", None, True),
+]
+# Nonprofit: restricted-fund scaffold. I.7 provisions the accounts only —
+# restricted-gift booking workflows + 990 semantics are I.10 + SME ruling.
+COA_NONPROFIT_EXTRA = [
+    ("3300", "Net Assets — With Donor Restrictions", "equity", "credit", None, False),
+    ("4200", "Restricted Contributions",             "income", "credit", None, False),
+]
 
 _BUCKET_TO_EXPENSE = {
     "operating": "5000", "owner_pay": "5100", "tax": "5200",
     "savings": "5300", "other": "5900",
 }
-_ACCOUNT_TYPE = {c[0]: c[2] for c in (COA_SEED + COA_LAWYER_EXTRA)}
-_ACCOUNT_BUCKET = {c[0]: c[4] for c in (COA_SEED + COA_LAWYER_EXTRA)}
+_ACCOUNT_TYPE = {c[0]: c[2] for c in (COA_SEED + COA_LAWYER_EXTRA + COA_NONPROFIT_EXTRA)}
+_ACCOUNT_BUCKET = {c[0]: c[4] for c in (COA_SEED + COA_LAWYER_EXTRA + COA_NONPROFIT_EXTRA)}
 
 _INCOME_CODES = {"4000", "4100", "4900"}
 _EXPENSE_CODES = set(_BUCKET_TO_EXPENSE.values())
@@ -85,8 +97,11 @@ def _d(s: Optional[str]) -> Optional[_date]:
 
 def _coa_for(business_type: Optional[str]) -> List[Tuple]:
     seed = list(COA_SEED)
-    if (business_type or "").lower().strip() == "lawyer":
+    bt = (business_type or "").lower().strip().replace("-", "_").replace(" ", "_")
+    if bt == "lawyer":
         seed += COA_LAWYER_EXTRA
+    if bt in ("nonprofit", "non_profit", "not_for_profit"):
+        seed += COA_NONPROFIT_EXTRA
     return seed
 
 
@@ -119,6 +134,13 @@ def _included_account_ids(biz: str) -> List[str]:
     return [r["account_id"] for r in rows if r.get("account_id")]
 
 
+def _trust_account_ids(biz: str) -> List[str]:
+    rows = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?business_id=eq.{biz}"
+        f"&is_trust_account=is.true&deleted_at=is.null&select=account_id") or []
+    return [r["account_id"] for r in rows if r.get("account_id")]
+
+
 def _fetch_sources(biz: str) -> Dict[str, Any]:
     invoices = sb_clients.sb_get_as_service(
         f"/invoices?business_id=eq.{biz}"
@@ -137,14 +159,22 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
         plaid = sb_clients.sb_get_as_service(
             f"/plaid_transactions?business_id=eq.{biz}&{acct}"
             f"&pending=eq.false&excluded_from_books=eq.false"
-            f"&select=transaction_id,amount,date,business_category,business_subcategory,"
+            f"&select=transaction_id,account_id,amount,date,business_category,business_subcategory,"
             f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id&limit=20000") or []
+    # I.7 — trust accounts are a separate ledger: their balances back the
+    # 1200/2200 pair, never the operating-cash (1000) opening plug.
     cash_accts = sb_clients.sb_get_as_service(
         f"/plaid_accounts?business_id=eq.{biz}&type=eq.depository"
-        f"&included_in_bookkeeping=eq.true&deleted_at=is.null&select=last_balance") or []
+        f"&included_in_bookkeeping=eq.true&deleted_at=is.null"
+        f"&is_trust_account=not.is.true&select=last_balance") or []
     cash_on_hand = round(sum(float(a.get("last_balance") or 0) for a in cash_accts), 2)
+    trust_accts = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?business_id=eq.{biz}&is_trust_account=is.true"
+        f"&included_in_bookkeeping=eq.true&deleted_at=is.null&select=last_balance") or []
+    trust_cash = round(sum(float(a.get("last_balance") or 0) for a in trust_accts), 2)
     return {"invoices": invoices, "expenses": expenses, "bills": bills,
-            "plaid": plaid, "cash_on_hand": cash_on_hand}
+            "plaid": plaid, "cash_on_hand": cash_on_hand,
+            "trust_ids": set(_trust_account_ids(biz)), "trust_cash": trust_cash}
 
 
 # ─── Entry generation (pure given fetched sources) ───────────────────
@@ -232,13 +262,26 @@ def desired_for_bill(b: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-def desired_for_plaid(t: Dict[str, Any]) -> List[Dict[str, Any]]:
+def desired_for_plaid(t: Dict[str, Any],
+                      trust_ids: Optional[set] = None) -> List[Dict[str, Any]]:
     # Pending / excluded-from-books transactions are not in the books — a live
     # toggle of either reverses the entry (matches H.3a scope).
     if t.get("pending") or t.get("excluded_from_books"):
         return []
     amt = float(t.get("amount") or 0)
     sid = t.get("transaction_id")
+    # I.7 — trust-account activity (IOLTA). Client money is never the firm's:
+    # every movement books Trust cash ↔ Client Trust Funds, NEVER income,
+    # expense, or operating cash. Categorization, payout reconciliation, and
+    # Profit First all ignore trust transactions.
+    if trust_ids and t.get("account_id") in trust_ids:
+        if amt < 0:
+            return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Client trust deposit",
+                           [_line("1200", debit=-amt), _line("2200", credit=-amt)])]
+        if amt > 0:
+            return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Client trust disbursement",
+                           [_line("2200", debit=amt), _line("1200", credit=amt)])]
+        return []
     if amt < 0:
         inflow = -amt
         if t.get("reconciled_to_payout_id"):
@@ -285,11 +328,11 @@ _TABLE_DESIRED = {
 }
 
 
-def _cash_net(specs: List[Dict[str, Any]]) -> float:
+def _cash_net(specs: List[Dict[str, Any]], code: str = "1000") -> float:
     n = 0.0
     for s in specs:
         for ln in s["lines"]:
-            if ln["code"] == "1000":
+            if ln["code"] == code:
                 n += ln["debit"] - ln["credit"]
     return round(n, 2)
 
@@ -304,6 +347,19 @@ def _opening_spec(cash_on_hand: float, net_cash: float) -> Optional[Dict[str, An
                   "Opening balance (Cash to bank snapshot)", lines)
 
 
+def _trust_opening_spec(trust_cash: float, net_trust: float) -> Optional[Dict[str, Any]]:
+    """Pre-history client funds: plug Trust cash (1200) to the bank snapshot
+    against the Client Trust Funds LIABILITY (2200) — never equity, because
+    trust money is not the firm's. Keeps 1200 == 2200 by construction."""
+    plug = round(trust_cash - net_trust, 2)
+    if abs(plug) < 0.005:
+        return None
+    lines = ([_line("1200", debit=plug), _line("2200", credit=plug)] if plug > 0
+             else [_line("2200", debit=-plug), _line("1200", credit=-plug)])
+    return _entry(_today(), "trust_opening_balance", "trust_opening",
+                  "Trust opening balance (client funds pre-history)", lines)
+
+
 def generate_entries(sources: Dict[str, Any]) -> List[Dict[str, Any]]:
     """All source rows → balanced journal-entry specs (backfill path). Pure."""
     specs: List[Dict[str, Any]] = []
@@ -313,11 +369,16 @@ def generate_entries(sources: Dict[str, Any]) -> List[Dict[str, Any]]:
         specs += desired_for_expense(e)
     for b in sources["bills"]:
         specs += desired_for_bill(b)
+    trust_ids = sources.get("trust_ids") or set()
     for t in sources["plaid"]:
-        specs += desired_for_plaid(t)
+        specs += desired_for_plaid(t, trust_ids)
     opening = _opening_spec(sources["cash_on_hand"], _cash_net(specs))
     if opening:
         specs.append(opening)
+    trust_opening = _trust_opening_spec(float(sources.get("trust_cash") or 0.0),
+                                        _cash_net(specs, "1200"))
+    if trust_opening:
+        specs.append(trust_opening)
     return specs
 
 
@@ -541,7 +602,8 @@ def _reverse_je(biz: str, je: Dict[str, Any], coa: Dict[str, str]) -> None:
 
 
 def process_source_row(biz: str, table: str, source_id: str, coa: Dict[str, str],
-                       included_accounts: Optional[set] = None) -> None:
+                       included_accounts: Optional[set] = None,
+                       trust_accounts: Optional[set] = None) -> None:
     """Converge the GL for ONE source row to its desired state (idempotent)."""
     types = _TABLE_SOURCE_TYPES.get(table)
     if not types:
@@ -553,6 +615,8 @@ def process_source_row(biz: str, table: str, source_id: str, coa: Dict[str, str]
         if table == "plaid_transactions" and included_accounts is not None \
                 and row.get("account_id") not in included_accounts:
             desired = []  # tx on an excluded/removed account → not in books
+        elif table == "plaid_transactions":
+            desired = desired_for_plaid(row, trust_accounts)
         else:
             desired = _TABLE_DESIRED[table](row)
     desired_by_type = {s["source_type"]: s for s in desired}
@@ -578,7 +642,8 @@ def reconcile_opening_balance(biz: str, coa: Dict[str, str]) -> None:
         if l["account_code"] == "1000" and not str(l["source_type"]).startswith("opening_balance")), 2)
     accts = sb_clients.sb_get_as_service(
         f"/plaid_accounts?business_id=eq.{biz}&type=eq.depository"
-        f"&included_in_bookkeeping=eq.true&deleted_at=is.null&select=last_balance") or []
+        f"&included_in_bookkeeping=eq.true&deleted_at=is.null"
+        f"&is_trust_account=not.is.true&select=last_balance") or []
     cash_on_hand = round(sum(float(a.get("last_balance") or 0) for a in accts), 2)
     desired = _opening_spec(cash_on_hand, net_nonopening)
 
@@ -587,12 +652,34 @@ def reconcile_opening_balance(biz: str, coa: Dict[str, str]) -> None:
     if desired is None:
         if cur:
             _reverse_je(biz, cur, coa)
-        return
-    if cur and _persisted_sig(_je_lines(cur["id"])) == _spec_sig(desired):
-        return                                              # unchanged
-    if cur:
-        _reverse_je(biz, cur, coa)
-    _post_entry(biz, desired, coa)
+    elif not (cur and _persisted_sig(_je_lines(cur["id"])) == _spec_sig(desired)):
+        if cur:
+            _reverse_je(biz, cur, coa)
+        _post_entry(biz, desired, coa)
+
+    # I.7 — same converge for the TRUST plug (lawyer verticals; no-op when the
+    # business has no trust accounts and no 1200 history).
+    net_trust = round(sum(
+        float(l["debit"]) - float(l["credit"]) for l in lines
+        if l["account_code"] == "1200"
+        and not str(l["source_type"]).startswith("trust_opening_balance")), 2)
+    taccts = sb_clients.sb_get_as_service(
+        f"/plaid_accounts?business_id=eq.{biz}&is_trust_account=is.true"
+        f"&included_in_bookkeeping=eq.true&deleted_at=is.null&select=last_balance") or []
+    trust_cash = round(sum(float(a.get("last_balance") or 0) for a in taccts), 2)
+    if not taccts and abs(net_trust) < 0.005:
+        tdesired = None                       # nothing trust-shaped here
+    else:
+        tdesired = _trust_opening_spec(trust_cash, net_trust)
+    tactives = _active_jes(biz, "trust_opening", ("trust_opening_balance",))
+    tcur = tactives[0] if tactives else None
+    if tdesired is None:
+        if tcur:
+            _reverse_je(biz, tcur, coa)
+    elif not (tcur and _persisted_sig(_je_lines(tcur["id"])) == _spec_sig(tdesired)):
+        if tcur:
+            _reverse_je(biz, tcur, coa)
+        _post_entry(biz, tdesired, coa)
 
 
 def _biz_type(biz: str) -> Optional[str]:
@@ -620,13 +707,15 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
         try:
             coa = ensure_chart_of_accounts(biz, _biz_type(biz))
             included = set(_included_account_ids(biz))
+            trust = set(_trust_account_ids(biz))
             seen = set()
             for r in biz_rows:
                 key = (r["source_table"], r["source_id"])
                 if key not in seen:
                     seen.add(key)
                     try:
-                        process_source_row(biz, r["source_table"], r["source_id"], coa, included)
+                        process_source_row(biz, r["source_table"], r["source_id"], coa,
+                                           included, trust)
                     except Exception as e:
                         logger.warning(f"[gl] process row failed {key}: {e}")
                 sb_clients.sb_patch_as_service(

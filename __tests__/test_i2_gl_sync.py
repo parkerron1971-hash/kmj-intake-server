@@ -23,8 +23,13 @@ def _num(x):
 
 def _passes(row, col, op, target):
     if op in ("is", "not.is"):
-        isnull = row.get(col) is None
-        return isnull if op == "is" else (not isnull)
+        # PostgREST `is` takes null/true/false. `not.is.true` matches false
+        # AND null (the I.7 is_trust_account pattern relies on this).
+        if target in ("true", "false"):
+            res = row.get(col) is not None and bool(row.get(col)) is (target == "true")
+        else:
+            res = row.get(col) is None
+        return res if op == "is" else (not res)
     val = row.get(col)
     if val is None:
         return op in ("neq",)  # missing ≠ a concrete target; matches neq only
@@ -52,9 +57,9 @@ def _parse(path):
         if col in ("select", "limit", "order", "on_conflict"):
             continue
         if rest.startswith("not.is."):
-            cons.append((col, "not.is", None))
+            cons.append((col, "not.is", rest[7:]))
         elif rest.startswith("is."):
-            cons.append((col, "is", None))
+            cons.append((col, "is", rest[3:]))
         elif rest.startswith("not.in."):
             cons.append((col, "not.in", rest[7:]))
         elif rest.startswith("in."):
