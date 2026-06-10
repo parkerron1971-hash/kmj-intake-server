@@ -56,6 +56,16 @@ BASE_TERMS: Dict[str, str] = {
     "expense":      "Expense",
     "expenses":     "Expenses",
     "bank":         "Bank",
+    # C.1.4 v1.5 (Category E) — vertical-ledger language surfaced by
+    # I.7/I.10: trust accounts (lawyer) + restricted funds (nonprofit).
+    "donor":          "Customer",
+    "donors":         "Customers",
+    "donation":       "Payment",
+    "donations":      "Payments",
+    "trust_account":  "Bank account",
+    "trust_deposit":  "Deposit",
+    "trust_disbursement": "Withdrawal",
+    "restricted_fund":    "Reserved funds",
 }
 
 
@@ -75,6 +85,26 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "booking":      "Consultation",
         "bookings":     "Consultations",
         # invoice → keep "Invoice" per F3 ambiguity ruling (Lawyer Invoice over Bill)
+        # I.7/I.10 — trust-account language.
+        "trust_account":      "Trust account (IOLTA)",
+        "trust_deposit":      "Client trust deposit",
+        "trust_disbursement": "Trust disbursement",
+    },
+    # Category E — nonprofit language (I.10 donor/restricted surfaces).
+    "nonprofit": {
+        "customer":     "Donor",
+        "customers":    "Donors",
+        "contact":      "Donor",
+        "contacts":     "Donors",
+        "donor":        "Donor",
+        "donors":       "Donors",
+        "donation":     "Gift",
+        "donations":    "Gifts",
+        "service":      "Program",
+        "services":     "Programs",
+        "offering":     "Program",
+        "offerings":    "Programs",
+        "restricted_fund": "Restricted fund",
     },
     "coach": {
         "customer":     "Client",
