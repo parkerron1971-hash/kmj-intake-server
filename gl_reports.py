@@ -131,20 +131,75 @@ def _pl_window(lines: List[Dict[str, Any]], start: _date, end: _date) -> Dict[st
     }
 
 
+def _pl_window_accrual(lines: List[Dict[str, Any]], start: _date, end: _date) -> Dict[str, Any]:
+    """Category E — TRUE accrual P&L straight from the books: income lines
+    net (revenue recognized at invoice ISSUE; bank income at settle) and
+    expense lines net (bills at ISSUE, expenses/bank at date). Closing
+    entries excluded (structural). Same response shape as the cash window."""
+    invoiced = refunds = plaid_income = 0.0
+    buckets: Dict[str, Dict[str, Any]] = {
+        b: {"bucket": b, "label": BUCKET_LABELS[b], "total": 0.0, "lines": {}}
+        for b in BUCKET_ORDER
+    }
+    for l in lines:
+        if not _in_window(l, start, end):
+            continue
+        st = str(l["source_type"])
+        if st == "closing" or st.startswith("closing_"):
+            continue
+        code = l["account_code"]
+        cr, dr = float(l["credit"]), float(l["debit"])
+        if l.get("account_type") == "income":
+            if st.startswith("invoice_refund"):
+                refunds += dr - cr
+            elif st.startswith("invoice_issue"):
+                invoiced += cr - dr
+            else:
+                plaid_income += cr - dr
+        elif l.get("account_type") == "expense":
+            bucket = l.get("profit_first_bucket") or "other"
+            b = buckets.get(bucket) or buckets["other"]
+            b["total"] += dr - cr
+            key = (l.get("subcategory") or "—").strip() or "—"
+            b["lines"][key] = b["lines"].get(key, 0.0) + dr - cr
+
+    invoiced, refunds = round(invoiced, 2), round(refunds, 2)
+    plaid_income = round(plaid_income, 2)
+    gross = round(invoiced - refunds + plaid_income, 2)
+    total_expenses = round(sum(b["total"] for b in buckets.values()), 2)
+    breakdown = []
+    for b in BUCKET_ORDER:
+        bb = buckets[b]
+        breakdown.append({
+            "bucket": b, "label": bb["label"], "total": round(bb["total"], 2),
+            "lines": [{"subcategory": k, "amount": round(v, 2)}
+                      for k, v in sorted(bb["lines"].items(), key=lambda kv: -kv[1])],
+        })
+    return {
+        "revenue": {"invoiced": invoiced, "refunds": refunds,
+                    "plaid_other_income": plaid_income, "gross_revenue": gross},
+        "expenses": {"by_bucket": breakdown, "total": total_expenses},
+        "net_income": round(gross - total_expenses, 2),
+    }
+
+
 def gl_profit_and_loss(biz: str, period: str, comparison: Optional[str] = None,
                        custom_from: Optional[str] = None,
-                       custom_to: Optional[str] = None) -> Dict[str, Any]:
+                       custom_to: Optional[str] = None,
+                       basis: str = "cash") -> Dict[str, Any]:
     start, end = reports_engine.period_bounds(period, custom_from, custom_to)
     lines = effective_lines(biz)
-    cur = _pl_window(lines, start, end)
+    window = _pl_window_accrual if basis == "accrual" else _pl_window
+    cur = window(lines, start, end)
     out: Dict[str, Any] = {
         "ok": True, "report": "pl", "period": period,
         "range": {"from": start.isoformat(), "to": end.isoformat()},
         "current": cur,
     }
+    out["basis"] = basis
     if comparison:
         cs, ce = reports_engine.comparison_bounds(start, end, comparison)
-        prev = _pl_window(lines, cs, ce)
+        prev = window(lines, cs, ce)
         out["comparison"] = {
             "label": comparison, "range": {"from": cs.isoformat(), "to": ce.isoformat()},
             "data": prev,

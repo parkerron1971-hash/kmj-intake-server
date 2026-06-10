@@ -710,11 +710,31 @@ def _biz_type(biz: str) -> Optional[str]:
 
 def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dict[str, Any]:
     """Drain unprocessed gl_sync_queue rows → converge each source → mark
-    processed. Idempotent. Prunes processed rows older than 7 days."""
+    processed. Idempotent. Prunes processed rows older than 7 days.
+
+    Category E — multi-replica safety: rows are CLAIMED first via an
+    atomic conditional PATCH (Postgres row locks re-evaluate the WHERE
+    under concurrency, so two replicas can never claim the same row);
+    stale claims (>5 min, a crashed worker) are reclaimable. Falls back
+    to the unclaimed path when the claim columns aren't migrated yet."""
+    import uuid as _uuid
     filt = f"&business_id=eq.{business_id}" if business_id else ""
-    rows = sb_clients.sb_get_as_service(
-        f"/gl_sync_queue?processed_at=is.null{filt}"
-        f"&order=enqueued_at.asc&limit={int(limit)}&select=id,business_id,source_table,source_id") or []
+    token = _uuid.uuid4().hex
+    stale = (datetime.now(timezone.utc) - _timedelta(minutes=5)).isoformat()
+    try:
+        sb_clients.sb_patch_as_service(
+            f"/gl_sync_queue?processed_at=is.null{filt}"
+            f"&or=(claimed_at.is.null,claimed_at.lt.{stale})",
+            {"claimed_by": token, "claimed_at": _now_iso()})
+        rows = sb_clients.sb_get_as_service(
+            f"/gl_sync_queue?claimed_by=eq.{token}&processed_at=is.null"
+            f"&order=enqueued_at.asc&limit={int(limit)}"
+            f"&select=id,business_id,source_table,source_id") or []
+    except Exception as e:
+        logger.warning(f"[gl] queue claim unavailable, falling back unclaimed: {e}")
+        rows = sb_clients.sb_get_as_service(
+            f"/gl_sync_queue?processed_at=is.null{filt}"
+            f"&order=enqueued_at.asc&limit={int(limit)}&select=id,business_id,source_table,source_id") or []
     if not rows:
         return {"ok": True, "processed": 0, "businesses": 0}
 

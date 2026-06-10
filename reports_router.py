@@ -83,6 +83,16 @@ def _generated_by(biz_row: Dict[str, Any], user: AuthedUser) -> str:
     return (settings.get("practitioner_name") or getattr(user, "email", None) or "")
 
 
+def _basis_for(biz_row, requested: Optional[str]) -> str:
+    """Category E — reporting basis: explicit request → per-business
+    default (settings.financial.default_reporting_basis) → cash. Accrual
+    needs the GL; the H.3a fallback stays cash."""
+    if requested in ("cash", "accrual"):
+        return requested
+    fin = ((biz_row or {}).get("settings") or {}).get("financial") or {}
+    return "accrual" if fin.get("default_reporting_basis") == "accrual" else "cash"
+
+
 def _fiscal_period(biz_row, period: str, from_: Optional[str], to: Optional[str]):
     """Category D — custom fiscal years. When the business sets
     settings.financial.fiscal_year_start_month != 1, the year-shaped named
@@ -112,14 +122,19 @@ def _fiscal_period(biz_row, period: str, from_: Optional[str], to: Optional[str]
 
 @router.get("/pl")
 def pl(biz: str, period: str = "this_month", comparison: Optional[str] = None,
+       basis: Optional[str] = None,
        from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
        user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz_row = _owner(biz, user)
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
-    return _gl_or_fallback(
+    b = _basis_for(biz_row, basis)
+    out = _gl_or_fallback(
         biz,
-        lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to),
+        lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to, basis=b),
         lambda: reports_engine.profit_and_loss(biz, period, comparison, from_, to))
+    out.setdefault("basis", b if out.get("source") == "gl" else "cash")
+    out["currency"] = "USD"   # Category E — explicit until multi-currency lands
+    return out
 
 
 @router.get("/ar-aging")
@@ -665,8 +680,10 @@ def export(biz: str, report: str, format: str = "csv",
             data = gl_reports_t4.audit_trail(biz, source_type=source_type_filter,
                                              date_from=from_, date_to=to)
         elif report == "pl":
+            b = _basis_for(biz_row, None)
             data = _gl_or_fallback(
-                biz, lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to),
+                biz, lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to,
+                                                           basis=b),
                 lambda: reports_engine.profit_and_loss(biz, period, comparison, from_, to))
         elif report == "cash_flow":
             data = _gl_or_fallback(
@@ -701,7 +718,8 @@ def export(biz: str, report: str, format: str = "csv",
         meta = pdf_reports.build_meta(
             business_name=biz_name, settings=biz_row.get("settings"),
             report_title=_REPORT_TITLES[report], period_label=period_label,
-            basis_label="Cash Basis", currency="USD",
+            basis_label=("Accrual Basis" if data.get("basis") == "accrual"
+                         else "Cash Basis"), currency="USD",
             generated_by=_generated_by(biz_row, user))
         try:
             pdf = pdf_reports.render(report, data, meta)

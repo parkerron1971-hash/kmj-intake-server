@@ -160,6 +160,8 @@ from business_collaborators_router import router as business_collaborators_route
 app.include_router(business_collaborators_router)
 from business_users_router import router as business_users_router
 app.include_router(business_users_router)
+from entity_groups_router import router as entity_groups_router
+app.include_router(entity_groups_router)
 # Phase F.1 — Stripe outbound contractor payments
 from contractors_router import router as contractors_router
 app.include_router(contractors_router)
