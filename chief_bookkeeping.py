@@ -227,6 +227,7 @@ def capture_learning_signal(business_id: str, proposal_type: str,
             "original_proposal": original,
             "practitioner_override": override,
             "override_reason": reason,
+            "created_at": _now_iso(),
         }, prefer=None)
     except Exception as e:
         logger.warning(f"[chief_bk] learning signal capture failed: {e}")
@@ -393,6 +394,13 @@ def analyze_uncategorized(business_id: str, *, limit: int = 25) -> List[Dict[str
         f"&select=transaction_id,amount,date,name,merchant_name,business_category,"
         f"plaid_category_primary,plaid_category_detail"
     ) or []
+    # G v1.5 — learning loop: stop proposing buckets the practitioner has
+    # repeatedly rejected (signals now feed BACK into generation).
+    try:
+        import chief_llm
+        suppressed = chief_llm.suppressed_categorizations(business_id)
+    except Exception:
+        suppressed = set()
     created: List[Dict[str, Any]] = []
     for t in rows:
         if _existing_pending_for_tx(business_id, t["transaction_id"]):
@@ -401,6 +409,8 @@ def analyze_uncategorized(business_id: str, *, limit: int = 25) -> List[Dict[str
             t.get("plaid_category_primary"), t.get("plaid_category_detail"))
         current = t.get("business_category")
         if not suggested or suggested == "other" or suggested == current:
+            continue
+        if suggested in suppressed:
             continue
         merchant = t.get("merchant_name") or t.get("name") or "this transaction"
         amt = abs(float(t.get("amount") or 0))
@@ -654,6 +664,8 @@ def approve_proposal(business_id: str, proposal_id: str, approved_by: str = "") 
     sb_clients.sb_patch_as_service(
         f"/chief_bookkeeping_proposals?id=eq.{proposal_id}&business_id=eq.{business_id}",
         {"status": "approved", "resolved_at": _now_iso()})
+    # G v1.5 — approvals are learning signals too (confirm the default).
+    capture_learning_signal(business_id, ptype, proposed, None, "approved")
     return {"ok": True, "executed": ptype}
 
 

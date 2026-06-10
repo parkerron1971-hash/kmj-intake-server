@@ -61,6 +61,36 @@ def counts(business_id: str, user: AuthedUser = Depends(require_user)) -> Dict[s
     return c
 
 
+# ─── Phase G v1.5 — LLM-in-loop endpoints ────────────────────────────
+
+class AskTransactionBody(BaseModel):
+    business_id: str
+    transaction_id: str
+    question: Optional[str] = None
+
+
+@router.post("/bookkeeping/ask-transaction")
+async def ask_transaction(body: AskTransactionBody,
+                          user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Practitioner highlights a transaction and asks Chief about it.
+    Claude answers in the archetype voice; a confident categorization comes
+    back as a PENDING proposal through the normal trust pipeline."""
+    biz_row = chief_bookkeeping.owner_business(body.business_id, user.id)
+    import chief_llm
+    return await chief_llm.ask_transaction(
+        body.business_id, biz_row.get("type"), body.transaction_id, body.question)
+
+
+@router.post("/bookkeeping/analyze-hard/{business_id}")
+async def analyze_hard(business_id: str,
+                       user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """LLM pass over the transactions the deterministic analyzers deflected
+    on (one batched call, ≤15 txns). Results are pending proposals."""
+    biz_row = chief_bookkeeping.owner_business(business_id, user.id)
+    import chief_llm
+    return await chief_llm.analyze_hard(business_id, biz_row.get("type"))
+
+
 @router.get("/proposals")
 def list_proposals(biz: str, status: Optional[str] = None,
                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:

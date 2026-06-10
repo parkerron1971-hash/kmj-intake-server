@@ -22,6 +22,8 @@ def _num(x):
 
 
 def _passes(row, col, op, target):
+    if op == "__or__":
+        return any(_passes(row, c2, o2, t2) for c2, o2, t2 in target)
     if op in ("is", "not.is"):
         # PostgREST `is` takes null/true/false. `not.is.true` matches false
         # AND null (the I.7 is_trust_account pattern relies on this).
@@ -55,6 +57,25 @@ def _parse(path):
             continue
         col, rest = part.split("=", 1)
         if col in ("select", "limit", "order", "on_conflict"):
+            continue
+        if col == "or":
+            # or=(a.is.null,b.eq.x) — one top-level OR of simple conditions.
+            inner = rest.strip("()")
+            sub = []
+            for piece in inner.split(","):
+                if "." not in piece:
+                    continue
+                c2, r2 = piece.split(".", 1)
+                if r2.startswith("not.is."):
+                    sub.append((c2, "not.is", r2[7:]))
+                elif r2.startswith("is."):
+                    sub.append((c2, "is", r2[3:]))
+                elif r2.startswith("in."):
+                    sub.append((c2, "in", r2[3:]))
+                elif "." in r2:
+                    o2, t2 = r2.split(".", 1)
+                    sub.append((c2, o2, t2))
+            cons.append(("__or__", "__or__", sub))
             continue
         if rest.startswith("not.is."):
             cons.append((col, "not.is", rest[7:]))
