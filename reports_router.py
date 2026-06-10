@@ -144,9 +144,13 @@ def trial_balance(biz: str, as_of: Optional[str] = None,
 
 @router.get("/general-ledger")
 def general_ledger(biz: str, account: Optional[str] = None,
+                   period: Optional[str] = None,
                    from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    if period and not (from_ or to):
+        s, e = reports_engine.period_bounds(period)
+        from_, to = s.isoformat(), e.isoformat()
     if not gl_reports.gl_active(biz):
         return {"ok": True, "report": "general_ledger", "accounts": [],
                 "range": {"from": from_, "to": to},
