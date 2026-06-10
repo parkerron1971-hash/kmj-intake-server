@@ -16,6 +16,13 @@ from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+import period_lock
+
+
+def _bill_row(bill_id: str) -> Dict[str, Any]:
+    rows = sb_clients.sb_get_as_service(
+        f"/bills?id=eq.{bill_id}&select=*&limit=1") or []
+    return rows[0] if rows else {}
 
 logger = logging.getLogger("bills_router")
 
@@ -246,12 +253,17 @@ class BillPatchBody(BaseModel):
     is_1099_eligible: Optional[bool] = None
     recurrence_paused: Optional[bool] = None
     notes: Optional[str] = None
+    override_reason: Optional[str] = None     # required to edit a closed-period bill
 
 
 @router.patch("/{bill_id}")
 def update_bill(bill_id: str, body: BillPatchBody,
                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner_for_bill(bill_id, user)
+    cur = _bill_row(bill_id)
+    period_lock.guard(body.business_id, (cur.get("created_at") or "")[:10],
+                      source_type="bill", source_id=bill_id, reason=body.override_reason,
+                      override_by=str(user.id), pre=cur, post=body.model_dump())
     patch: Dict[str, Any] = {"updated_at": _now_iso()}
     for f in ("vendor_name", "amount", "description", "subcategory", "due_date",
               "is_1099_eligible", "recurrence_paused", "notes"):
@@ -275,15 +287,18 @@ class MarkPaidBody(BaseModel):
     business_id: str
     paid_amount: Optional[float] = None
     paid_via: Optional[str] = "manual"
+    override_reason: Optional[str] = None
 
 
 @router.post("/{bill_id}/mark-paid")
 def mark_paid(bill_id: str, body: MarkPaidBody,
               user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    row = _owner_for_bill(bill_id, user)
-    cur = sb_clients.sb_get_as_service(
-        f"/bills?id=eq.{bill_id}&select=amount&limit=1") or [{}]
-    amt = body.paid_amount if body.paid_amount is not None else cur[0].get("amount")
+    _owner_for_bill(bill_id, user)
+    cur = _bill_row(bill_id)
+    period_lock.guard(body.business_id, (cur.get("created_at") or "")[:10],
+                      source_type="bill", source_id=bill_id, reason=body.override_reason,
+                      override_by=str(user.id), pre=cur, post={"status": "paid"})
+    amt = body.paid_amount if body.paid_amount is not None else cur.get("amount")
     sb_clients.sb_patch_as_service(
         f"/bills?id=eq.{bill_id}&business_id=eq.{body.business_id}",
         {"status": "paid", "paid_at": _now_iso(),
@@ -293,7 +308,12 @@ def mark_paid(bill_id: str, body: MarkPaidBody,
 
 
 @router.delete("/{bill_id}")
-def delete_bill(bill_id: str, biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+def delete_bill(bill_id: str, biz: str, override_reason: Optional[str] = None,
+                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    cur = _bill_row(bill_id)
+    period_lock.guard(biz, (cur.get("created_at") or "")[:10],
+                      source_type="bill", source_id=bill_id, reason=override_reason,
+                      override_by=str(user.id), pre=cur, post=None)
     sb_clients.sb_delete_as_service(f"/bills?id=eq.{bill_id}&business_id=eq.{biz}")
     return {"ok": True}

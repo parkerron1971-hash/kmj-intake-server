@@ -623,6 +623,7 @@ class TxPatchBody(BaseModel):
     business_subcategory: Optional[str] = None
     excluded_from_books: Optional[bool] = None
     notes: Optional[str] = None
+    override_reason: Optional[str] = None     # required to edit a closed-period txn
 
 
 @router.patch("/transactions/{transaction_id}")
@@ -633,7 +634,15 @@ def update_transaction(
 ) -> Dict[str, Any]:
     """Per-transaction edit from the detail drawer: bucket, subcategory,
     exclude-from-books, notes. Only provided fields are written."""
-    _require_owner_for_tx(transaction_id, user)
+    tx = _require_owner_for_tx(transaction_id, user)
+    # Phase I.3 PR2 — soft-lock: edits to a closed-period transaction need a reason.
+    import period_lock
+    cur = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?transaction_id=eq.{transaction_id}&select=date,business_id&limit=1") or [{}]
+    period_lock.guard(str(tx.get("business_id")), (cur[0].get("date") or "")[:10],
+                      source_type="plaid_transaction", source_id=transaction_id,
+                      reason=body.override_reason, override_by=str(user.id),
+                      pre=cur[0], post=body.model_dump())
     patch: Dict[str, Any] = {"updated_at": _now_iso()}
     if body.business_category is not None:
         if body.business_category not in plaid_categorization.ALL_BUCKETS:

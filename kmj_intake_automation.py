@@ -152,6 +152,9 @@ app.include_router(gl_router)
 # Phase I.3 — Period closing
 from accounting_periods_router import router as accounting_periods_router
 app.include_router(accounting_periods_router)
+# Phase I.3 PR2 — soft-lock audit trail
+from period_overrides_router import router as period_overrides_router
+app.include_router(period_overrides_router)
 # Phase VABI v1 — public read endpoint for vertical intelligence
 app.include_router(vertical_intelligence_router)
 # Phase VABI v1.5 — per-business overrides CRUD + Chief-driven generation
