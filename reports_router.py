@@ -16,10 +16,27 @@ from fastapi.responses import Response
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 import reports_engine
+import gl_reports
 
 logger = logging.getLogger("reports_router")
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+def _gl_or_fallback(biz: str, gl_fn, h3a_fn) -> Dict[str, Any]:
+    """Phase I.4 — the GL is authoritative once a business has active journal
+    entries; businesses without a GL (or on GL read failure) fall back to the
+    source-table engine. The response carries which source produced it."""
+    if gl_reports.gl_active(biz):
+        try:
+            data = gl_fn()
+            data["source"] = "gl"
+            return data
+        except Exception as e:
+            logger.warning(f"[reports] GL engine failed, falling back: {e}")
+    data = h3a_fn()
+    data["source"] = "source_tables"
+    return data
 
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
@@ -51,21 +68,44 @@ def pl(biz: str, period: str = "this_month", comparison: Optional[str] = None,
        from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
        user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
-    return reports_engine.profit_and_loss(biz, period, comparison, from_, to)
+    return _gl_or_fallback(
+        biz,
+        lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to),
+        lambda: reports_engine.profit_and_loss(biz, period, comparison, from_, to))
 
 
 @router.get("/ar-aging")
 def ar_aging(biz: str, as_of: Optional[str] = None,
              user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
-    return reports_engine.ar_aging(biz, as_of)
+    # Aging is a SUBLEDGER report (needs per-invoice due dates); the GL
+    # control account validates the total (I.4).
+    data = reports_engine.ar_aging(biz, as_of)
+    data["source"] = "source_tables"
+    try:
+        if gl_reports.gl_active(biz):
+            ctl = gl_reports.gl_control(biz)
+            data["gl_control_balance"] = ctl["ar"]
+            data["matches_gl"] = abs(ctl["ar"] - float(data.get("total_outstanding") or 0)) < 0.01
+    except Exception as e:
+        logger.warning(f"[reports] AR control check failed: {e}")
+    return data
 
 
 @router.get("/ap-aging")
 def ap_aging(biz: str, as_of: Optional[str] = None,
              user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
-    return reports_engine.ap_aging(biz, as_of)
+    data = reports_engine.ap_aging(biz, as_of)
+    data["source"] = "source_tables"
+    try:
+        if gl_reports.gl_active(biz):
+            ctl = gl_reports.gl_control(biz)
+            data["gl_control_balance"] = ctl["ap"]
+            data["matches_gl"] = abs(ctl["ap"] - float(data.get("total_outstanding") or 0)) < 0.01
+    except Exception as e:
+        logger.warning(f"[reports] AP control check failed: {e}")
+    return data
 
 
 @router.get("/cash-flow")
@@ -73,19 +113,61 @@ def cash_flow(biz: str, period: str = "this_month",
               from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
               user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
-    return reports_engine.cash_flow(biz, period, from_, to)
+    return _gl_or_fallback(
+        biz,
+        lambda: gl_reports.gl_cash_flow(biz, period, from_, to),
+        lambda: reports_engine.cash_flow(biz, period, from_, to))
 
 
 @router.get("/balance-sheet")
 def balance_sheet(biz: str, as_of: Optional[str] = None,
                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
-    return reports_engine.balance_sheet(biz, as_of)
+    return _gl_or_fallback(
+        biz,
+        lambda: gl_reports.gl_balance_sheet(biz, as_of),
+        lambda: reports_engine.balance_sheet(biz, as_of))
+
+
+# ─── Phase I.4 — GL-native reports ───────────────────────────────────
+
+@router.get("/trial-balance")
+def trial_balance(biz: str, as_of: Optional[str] = None,
+                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    if not gl_reports.gl_active(biz):
+        return {"ok": True, "report": "trial_balance", "accounts": [],
+                "totals": {"debits": 0, "credits": 0, "difference": 0, "balanced": True},
+                "as_of": as_of, "note": "No General Ledger yet — run Backfill in Admin."}
+    return gl_reports.trial_balance_report(biz, as_of)
+
+
+@router.get("/general-ledger")
+def general_ledger(biz: str, account: Optional[str] = None,
+                   from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
+                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    if not gl_reports.gl_active(biz):
+        return {"ok": True, "report": "general_ledger", "accounts": [],
+                "range": {"from": from_, "to": to},
+                "note": "No General Ledger yet — run Backfill in Admin."}
+    return gl_reports.general_ledger_report(biz, account, from_, to)
+
+
+@router.get("/journal")
+def journal(biz: str, limit: int = 50, offset: int = 0,
+            user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    if not gl_reports.gl_active(biz):
+        return {"ok": True, "report": "journal", "entries": [], "has_more": False,
+                "note": "No General Ledger yet — run Backfill in Admin."}
+    return gl_reports.journal_report(biz, limit, offset)
 
 
 _REPORT_TITLES = {
     "pl": "Profit & Loss", "ar_aging": "AR Aging", "ap_aging": "AP Aging",
     "cash_flow": "Cash Flow (Operating)", "balance_sheet": "Balance Sheet",
+    "trial_balance": "Trial Balance", "general_ledger": "General Ledger",
 }
 
 
@@ -99,9 +181,31 @@ def export(biz: str, report: str, format: str = "csv",
     if report not in _REPORT_TITLES:
         raise HTTPException(400, "unknown report")
     try:
-        data = reports_engine.run_report(
-            biz, report, period=period, as_of=as_of, comparison=comparison,
-            custom_from=from_, custom_to=to)
+        # Phase I.4 — exports use the same authoritative source as the screen.
+        if report == "trial_balance":
+            data = gl_reports.trial_balance_report(biz, as_of) if gl_reports.gl_active(biz) \
+                else {"ok": True, "report": "trial_balance", "as_of": as_of, "accounts": [],
+                      "totals": {"debits": 0, "credits": 0, "difference": 0, "balanced": True}}
+        elif report == "general_ledger":
+            data = gl_reports.general_ledger_report(biz, None, from_, to) \
+                if gl_reports.gl_active(biz) else {"ok": True, "report": "general_ledger",
+                                                   "accounts": [], "range": {"from": from_, "to": to}}
+        elif report == "pl":
+            data = _gl_or_fallback(
+                biz, lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to),
+                lambda: reports_engine.profit_and_loss(biz, period, comparison, from_, to))
+        elif report == "cash_flow":
+            data = _gl_or_fallback(
+                biz, lambda: gl_reports.gl_cash_flow(biz, period, from_, to),
+                lambda: reports_engine.cash_flow(biz, period, from_, to))
+        elif report == "balance_sheet":
+            data = _gl_or_fallback(
+                biz, lambda: gl_reports.gl_balance_sheet(biz, as_of),
+                lambda: reports_engine.balance_sheet(biz, as_of))
+        else:
+            data = reports_engine.run_report(
+                biz, report, period=period, as_of=as_of, comparison=comparison,
+                custom_from=from_, custom_to=to)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -186,10 +290,28 @@ def _csv_rows(report: str, data: Dict[str, Any]) -> list:
         rows.append(["Section", "Line", "Amount"])
         rows.append(["Assets", "Cash", a.get("cash", 0)])
         rows.append(["Assets", "Accounts Receivable", a.get("accounts_receivable", 0)])
+        if a.get("stripe_clearing"):
+            rows.append(["Assets", "Stripe Clearing (in transit, informational)", a.get("stripe_clearing", 0)])
         rows.append(["Assets", "Total Assets", a.get("total", 0)])
         rows.append(["Liabilities", "Accounts Payable", li.get("accounts_payable", 0)])
         rows.append(["Liabilities", "Total Liabilities", li.get("total", 0)])
         rows.append(["Equity", "Retained Earnings", eq.get("retained_earnings", 0)])
+    elif report == "trial_balance":
+        rows.append(["Code", "Account", "Type", "Debits", "Credits", "Balance"])
+        for a in data.get("accounts", []):
+            rows.append([a.get("code"), a.get("name"), a.get("type"),
+                         a.get("debits"), a.get("credits"), a.get("balance")])
+        t = data.get("totals") or {}
+        rows.append(["", "TOTALS", "", t.get("debits", 0), t.get("credits", 0), t.get("difference", 0)])
+    elif report == "general_ledger":
+        rows.append(["Account", "Date", "Source", "Memo", "Debit", "Credit", "Running Balance"])
+        for acct in data.get("accounts", []):
+            rows.append([f"{acct.get('code')} {acct.get('name')}", "", "OPENING", "", "", "",
+                         acct.get("opening_balance", 0)])
+            for e in acct.get("entries", []):
+                rows.append(["", e.get("date"), e.get("source_type"), e.get("memo"),
+                             e.get("debit"), e.get("credit"), e.get("running_balance")])
+            rows.append(["", "", "CLOSING", "", "", "", acct.get("closing_balance", 0)])
     return rows
 
 

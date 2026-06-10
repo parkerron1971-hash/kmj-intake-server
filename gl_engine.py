@@ -129,7 +129,7 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
         f"&select=id,amount,category,subcategory,vendor,date&limit=10000") or []
     bills = sb_clients.sb_get_as_service(
         f"/bills?business_id=eq.{biz}"
-        f"&select=id,vendor_name,amount,category,status,due_date,created_at,paid_at,paid_amount&limit=10000") or []
+        f"&select=id,vendor_name,amount,category,subcategory,status,due_date,created_at,paid_at,paid_amount&limit=10000") or []
     included = _included_account_ids(biz)
     plaid = []
     if included:
@@ -149,9 +149,11 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
 
 # ─── Entry generation (pure given fetched sources) ───────────────────
 
-def _line(code: str, debit: float = 0.0, credit: float = 0.0, memo: str = "") -> Dict[str, Any]:
+def _line(code: str, debit: float = 0.0, credit: float = 0.0, memo: str = "",
+          subcategory: Optional[str] = None, vendor: Optional[str] = None) -> Dict[str, Any]:
     return {"code": code, "type": _ACCOUNT_TYPE.get(code), "bucket": _ACCOUNT_BUCKET.get(code),
-            "debit": round(debit, 2), "credit": round(credit, 2), "memo": memo}
+            "debit": round(debit, 2), "credit": round(credit, 2), "memo": memo,
+            "subcategory": subcategory or None, "vendor": vendor or None}
 
 
 def _entry(entry_date: Optional[_date], source_type: str, source_id: str,
@@ -204,7 +206,9 @@ def desired_for_expense(e: Dict[str, Any]) -> List[Dict[str, Any]]:
     code = _BUCKET_TO_EXPENSE.get(e.get("category") or "other", "5900")
     memo = " · ".join([x for x in [e.get("vendor"), e.get("subcategory")] if x]) or ""
     return [_entry(_d(e.get("date")), "expense", e["id"], "Manual expense",
-                   [_line(code, debit=amt, memo=memo), _line("1000", credit=amt)])]
+                   [_line(code, debit=amt, memo=memo,
+                          subcategory=e.get("subcategory"), vendor=e.get("vendor")),
+                    _line("1000", credit=amt)])]
 
 
 def desired_for_bill(b: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -218,7 +222,9 @@ def desired_for_bill(b: Dict[str, Any]) -> List[Dict[str, Any]]:
     code = _BUCKET_TO_EXPENSE.get(b.get("category") or "operating", "5000")
     ed = _d(b.get("created_at")) or _d(b.get("due_date"))
     out.append(_entry(ed, "bill_issue", b["id"], f"Bill from {b.get('vendor_name')}",
-               [_line(code, debit=amt, memo=b.get("vendor_name") or ""), _line("2000", credit=amt)]))
+               [_line(code, debit=amt, memo=b.get("vendor_name") or "",
+                      subcategory=b.get("subcategory"), vendor=b.get("vendor_name")),
+                _line("2000", credit=amt, vendor=b.get("vendor_name"))]))
     if (b.get("status") or "").lower() == "paid":
         pamt = float(b.get("paid_amount") if b.get("paid_amount") is not None else amt)
         out.append(_entry(_d(b.get("paid_at")), "bill_payment", b["id"], "Bill paid",
@@ -242,14 +248,26 @@ def desired_for_plaid(t: Dict[str, Any]) -> List[Dict[str, Any]]:
                 t.get("plaid_category_primary"), t.get("plaid_category_detail")):
             return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Other income",
                            [_line("1000", debit=inflow), _line("4900", credit=inflow)])]
-        return []  # transfer-in / uncategorized → absorbed by opening equity
-    if amt > 0 and not plaid_categorization.is_income_category(
-            t.get("plaid_category_primary"), t.get("plaid_category_detail")):
+        # Transfer-in / uncategorized deposit: NOT income (P&L excludes it,
+        # matching H.3a) but it IS bank cash activity — book against Owner's
+        # Equity so GL cash activity mirrors the bank exactly (I.4).
+        return [_entry(_d(t.get("date")), "plaid_transaction", sid,
+                       "Transfer in / uncategorized deposit",
+                       [_line("1000", debit=inflow), _line("3100", credit=inflow)])]
+    if amt > 0:
+        if plaid_categorization.is_income_category(
+                t.get("plaid_category_primary"), t.get("plaid_category_detail")):
+            # Income-categorized OUTFLOW (refund/transfer out): not an expense
+            # (P&L parity with H.3a) but real cash out — Owner's Draw (I.4).
+            return [_entry(_d(t.get("date")), "plaid_transaction", sid,
+                           "Transfer out / income-categorized debit",
+                           [_line("3200", debit=amt), _line("1000", credit=amt)])]
         bucket = t.get("business_category") or plaid_categorization.map_plaid_to_bucket(
             t.get("plaid_category_primary"), t.get("plaid_category_detail"))
         code = _BUCKET_TO_EXPENSE.get(bucket, "5900")
         return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Bank expense",
-                       [_line(code, debit=amt, memo=t.get("business_subcategory") or ""),
+                       [_line(code, debit=amt, memo=t.get("business_subcategory") or "",
+                              subcategory=t.get("business_subcategory")),
                         _line("1000", credit=amt)])]
     return []
 
@@ -313,7 +331,9 @@ def _lines_from_specs(specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for ln in s["lines"]:
             out.append({"account_code": ln["code"], "account_type": ln["type"],
                         "profit_first_bucket": ln["bucket"], "source_type": s["source_type"],
-                        "debit": ln["debit"], "credit": ln["credit"], "entry_date": s["entry_date"]})
+                        "debit": ln["debit"], "credit": ln["credit"], "entry_date": s["entry_date"],
+                        "subcategory": ln.get("subcategory"), "vendor": ln.get("vendor"),
+                        "memo": ln.get("memo")})
     return out
 
 
@@ -340,26 +360,39 @@ def gl_ap(lines, upto=None):   return _bal(lines, "2000", "credit", upto)
 def gl_clearing(lines, upto=None): return _bal(lines, "1150", "debit", upto)
 
 
+def _st_matches(line_st: str, base: str) -> bool:
+    """Source-type match that folds reversal entries into their base type.
+    A reversal mirrors the original's debits/credits, so counting both (as
+    NET credit−debit / debit−credit) cancels reversed entries instead of
+    double-counting the original (the I.4 reversal-edit fix)."""
+    return line_st == base or line_st == f"{base}_reversal"
+
+
 def gl_pl_cash_basis(lines: List[Dict[str, Any]], start: _date, end: _date) -> Dict[str, Any]:
     """Cash-basis P&L from the ledger, reconstructed to match the H.3a engine:
        revenue = invoice cash receipts (Cr AR on invoice_payment)
                  + Plaid other income (Cr income on plaid_transaction)
                  − refunds (Dr income on invoice_refund)
-       expenses = Dr to expense accounts from manual expense + plaid (NOT bills)."""
+       expenses = Dr to expense accounts from manual expense + plaid (NOT bills).
+
+    All sums are NET (credit−debit or debit−credit) with reversal-aware
+    source matching, so reversed+reposted edits net out correctly."""
     revenue = expenses = 0.0
     for l in lines:
         ed = _d(l["entry_date"])
         if not ed or ed < start or ed > end:
             continue
         st, code = l["source_type"], l["account_code"]
-        if st == "invoice_payment" and code == "1100":
-            revenue += float(l["credit"])                     # AR credit = cash received
-        elif st == "plaid_transaction" and code in _INCOME_CODES:
-            revenue += float(l["credit"])                     # non-Stripe income
-        elif st == "invoice_refund" and code in _INCOME_CODES:
-            revenue -= float(l["debit"])                      # refund
-        elif st in ("expense", "plaid_transaction") and code in _EXPENSE_CODES:
-            expenses += float(l["debit"])                     # cash-paid expense (excludes bills)
+        cr, dr = float(l["credit"]), float(l["debit"])
+        if _st_matches(st, "invoice_payment") and code == "1100":
+            revenue += cr - dr                    # AR credit = cash received (net)
+        elif _st_matches(st, "plaid_transaction") and code in _INCOME_CODES:
+            revenue += cr - dr                    # non-Stripe income (net)
+        elif _st_matches(st, "invoice_refund") and code in _INCOME_CODES:
+            revenue -= dr - cr                    # refund (net)
+        elif (_st_matches(st, "expense") or _st_matches(st, "plaid_transaction")) \
+                and code in _EXPENSE_CODES:
+            expenses += dr - cr                   # cash-paid expense (net; excludes bills)
     revenue = round(revenue, 2)
     expenses = round(expenses, 2)
     return {"revenue": revenue, "expenses": expenses, "net_income": round(revenue - expenses, 2)}
@@ -387,7 +420,7 @@ def backfill(business_id: str, business_type: Optional[str]) -> Dict[str, Any]:
         res = sb_clients.sb_post_as_service("/journal_entries", {
             "business_id": business_id, "entry_date": s["entry_date"],
             "description": s["description"], "source_type": s["source_type"],
-            "source_id": s["source_id"],
+            "source_id": s["source_id"], "status": "active",
         })
         je = (res or [None])[0] if isinstance(res, list) else res
         if not je:
@@ -401,6 +434,7 @@ def backfill(business_id: str, business_type: Optional[str]) -> Dict[str, Any]:
                 "account_type": ln["type"], "profit_first_bucket": ln["bucket"],
                 "source_type": s["source_type"], "debit": ln["debit"], "credit": ln["credit"],
                 "entry_date": s["entry_date"], "memo": ln["memo"],
+                "subcategory": ln.get("subcategory"), "vendor": ln.get("vendor"),
             }, prefer=None)
             lines_created += 1
         created += 1
@@ -420,7 +454,8 @@ def reverse_backfill(business_id: str) -> Dict[str, Any]:
 def read_ledger(business_id: str) -> List[Dict[str, Any]]:
     return sb_clients.sb_get_as_service(
         f"/ledger_entries?business_id=eq.{business_id}"
-        f"&select=account_code,account_type,profit_first_bucket,source_type,debit,credit,entry_date"
+        f"&select=account_code,account_type,profit_first_bucket,source_type,debit,credit,"
+        f"entry_date,subcategory,vendor,memo,journal_entry_id"
         f"&limit=100000") or []
 
 
@@ -435,7 +470,7 @@ _SOURCE_FETCH = {
     "invoices": ("/invoices?id=eq.{id}&select=id,total,status,paid_at,sent_at,created_at,"
                  "due_date,payment_method,stripe_payment_url,refund_amount_cents,refunded_at&limit=1"),
     "business_expenses": "/business_expenses?id=eq.{id}&select=id,amount,category,subcategory,vendor,date&limit=1",
-    "bills": ("/bills?id=eq.{id}&select=id,vendor_name,amount,category,status,due_date,"
+    "bills": ("/bills?id=eq.{id}&select=id,vendor_name,amount,category,subcategory,status,due_date,"
               "created_at,paid_at,paid_amount&limit=1"),
     "plaid_transactions": ("/plaid_transactions?transaction_id=eq.{id}&select=transaction_id,amount,date,"
                            "business_category,business_subcategory,plaid_category_primary,"
@@ -444,25 +479,27 @@ _SOURCE_FETCH = {
 
 
 def _spec_sig(spec: Dict[str, Any]):
-    return tuple(sorted((l["code"], round(float(l["debit"]), 2), round(float(l["credit"]), 2))
+    return tuple(sorted((l["code"], round(float(l["debit"]), 2), round(float(l["credit"]), 2),
+                         l.get("subcategory") or "")
                         for l in spec["lines"]))
 
 
 def _persisted_sig(lines: List[Dict[str, Any]]):
-    return tuple(sorted((l["account_code"], round(float(l["debit"]), 2), round(float(l["credit"]), 2))
+    return tuple(sorted((l["account_code"], round(float(l["debit"]), 2), round(float(l["credit"]), 2),
+                         l.get("subcategory") or "")
                         for l in lines))
 
 
 def _je_lines(je_id: str) -> List[Dict[str, Any]]:
     return sb_clients.sb_get_as_service(
-        f"/ledger_entries?journal_entry_id=eq.{je_id}&select=account_code,debit,credit&limit=500") or []
+        f"/ledger_entries?journal_entry_id=eq.{je_id}&select=account_code,debit,credit,subcategory&limit=500") or []
 
 
 def _active_jes(biz: str, source_id: str, source_types) -> List[Dict[str, Any]]:
     return sb_clients.sb_get_as_service(
         f"/journal_entries?business_id=eq.{biz}&source_id=eq.{source_id}"
         f"&status=eq.active&source_type=in.({','.join(source_types)})"
-        f"&select=id,source_type&limit=50") or []
+        f"&select=id,source_type,entry_date&limit=50") or []
 
 
 def _post_entry(biz: str, spec: Dict[str, Any], coa: Dict[str, str], *,
@@ -481,16 +518,24 @@ def _post_entry(biz: str, spec: Dict[str, Any], coa: Dict[str, str], *,
             "account_code": ln["code"], "account_type": ln["type"], "profit_first_bucket": ln["bucket"],
             "source_type": spec["source_type"], "debit": ln["debit"], "credit": ln["credit"],
             "entry_date": spec["entry_date"], "memo": ln["memo"],
+            "subcategory": ln.get("subcategory"), "vendor": ln.get("vendor"),
         }, prefer=None)
     return je["id"]
 
 
 def _reverse_je(biz: str, je: Dict[str, Any], coa: Dict[str, str]) -> None:
-    """Append-only reversal: mark the entry reversed + post a mirror entry."""
+    """Append-only reversal: mark the entry reversed + post a mirror entry.
+
+    The reversal is dated at the ORIGINAL entry's date (not today) so a
+    cross-period edit nets to zero inside the original window — otherwise the
+    old amount would linger in the old period and a phantom negative would
+    appear in the current one. (Closed-period edits already pass through the
+    soft-lock override audit before reaching here.)"""
     lines = _je_lines(je["id"])
     rev_lines = [_line(l["account_code"], debit=float(l["credit"]), credit=float(l["debit"]),
                        memo="reversal") for l in lines]
-    rev_spec = _entry(_today(), je["source_type"] + "_reversal", je["id"], "Reversal", rev_lines)
+    rev_date = _d(je.get("entry_date")) or _today()
+    rev_spec = _entry(rev_date, je["source_type"] + "_reversal", je["id"], "Reversal", rev_lines)
     _post_entry(biz, rev_spec, coa, is_reversal=True, reverses=je["id"])
     sb_clients.sb_patch_as_service(f"/journal_entries?id=eq.{je['id']}", {"status": "reversed"})
 

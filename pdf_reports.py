@@ -514,6 +514,79 @@ def _reconciliation_body(d, s, money_cell, accent, stripe, rule, danger, colors,
     return out
 
 
+def _trial_balance_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
+                        Paragraph, Spacer, inch, meta):
+    accounts = d.get("accounts") or []
+    t = d.get("totals") or {}
+    out = [Paragraph("TRIAL BALANCE", s["section"])]
+    head = [Paragraph(h, s["th"]) for h in ("Code", "Account", "Type")] + \
+           [Paragraph(h, s["thr"]) for h in ("Debits", "Credits", "Balance")]
+    rows = [head]
+    for a in accounts:
+        rows.append([
+            Paragraph(str(a.get("code")), s["rowind"]),
+            Paragraph(str(a.get("name")), s["row"]),
+            Paragraph(str(a.get("type")), s["rowind"]),
+            money_cell(a.get("debits")), money_cell(a.get("credits")), money_cell(a.get("balance")),
+        ])
+    rows.append([Paragraph("", s["row"]), Paragraph("TOTALS", s["totlbl"]), Paragraph("", s["row"]),
+                 money_cell(t.get("debits"), bold=True), money_cell(t.get("credits"), bold=True),
+                 money_cell(t.get("difference"), bold=True)])
+    tbl = Table(rows, colWidths=[0.6 * inch, None, 0.8 * inch, 1.0 * inch, 1.0 * inch, 1.0 * inch],
+                repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("ALIGN", (3, 0), (5, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, stripe]),
+        ("LINEABOVE", (0, -1), (-1, -1), 1.2, colors.HexColor(_INK)),
+    ]))
+    out.append(tbl)
+    out.append(Spacer(1, 0.08 * inch))
+    balanced = bool(t.get("balanced"))
+    out.append(Paragraph("✓ In balance — total debits equal total credits." if balanced
+                         else "✗ OUT OF BALANCE — contact support.",
+                         s["row"] if balanced else s["danger"]))
+    return out
+
+
+def _general_ledger_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
+                         Paragraph, Spacer, inch, meta):
+    out = []
+    for acct in (d.get("accounts") or []):
+        out.append(Paragraph(f"{acct.get('code')} — {acct.get('name')}", s["section"]))
+        head = [Paragraph(h, s["th"]) for h in ("Date", "Source", "Memo")] + \
+               [Paragraph(h, s["thr"]) for h in ("Debit", "Credit", "Balance")]
+        rows = [head,
+                [Paragraph("", s["rowind"]), Paragraph("Opening balance", s["rowind"]),
+                 Paragraph("", s["rowind"]), Paragraph("", s["amt"]), Paragraph("", s["amt"]),
+                 money_cell(acct.get("opening_balance"))]]
+        for e in (acct.get("entries") or []):
+            rows.append([
+                Paragraph(str(e.get("date") or ""), s["rowind"]),
+                Paragraph(str(e.get("source_type") or "").replace("_", " "), s["rowind"]),
+                Paragraph(str(e.get("memo") or "")[:48], s["rowind"]),
+                money_cell(e.get("debit")), money_cell(e.get("credit")),
+                money_cell(e.get("running_balance")),
+            ])
+        rows.append([Paragraph("", s["rowind"]), Paragraph("Closing balance", s["totlbl"]),
+                     Paragraph("", s["rowind"]), Paragraph("", s["amt"]), Paragraph("", s["amt"]),
+                     money_cell(acct.get("closing_balance"), bold=True)])
+        tbl = Table(rows, colWidths=[0.8 * inch, 1.1 * inch, None, 0.85 * inch, 0.85 * inch, 1.0 * inch],
+                    repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("ALIGN", (3, 0), (5, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+            ("ROWBACKGROUNDS", (0, 2), (-1, -2), [colors.white, stripe]),
+            ("LINEABOVE", (0, -1), (-1, -1), 0.8, rule),
+        ]))
+        out.append(tbl)
+        if acct.get("truncated"):
+            out.append(Paragraph("… additional entries truncated; export CSV for the full account.",
+                                 s["note"]))
+        out.append(Spacer(1, 0.12 * inch))
+    if not out:
+        out.append(Paragraph("No ledger activity in this window.", s["row"]))
+    return out
+
+
 def _generic_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
                   Paragraph, Spacer, inch, meta):
     return [Paragraph("Report data:", s["section"]),
@@ -527,4 +600,6 @@ _BUILDERS = {
     "ap_aging": _ap_body,
     "cash_flow": _cash_flow_body,
     "reconciliation": _reconciliation_body,
+    "trial_balance": _trial_balance_body,
+    "general_ledger": _general_ledger_body,
 }
