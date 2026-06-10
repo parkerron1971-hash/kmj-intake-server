@@ -111,7 +111,17 @@ class RejectBody(BaseModel):
 @router.post("/proposals/{proposal_id}/approve")
 def approve(proposal_id: str, body: ProposalResolveBody,
             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    chief_bookkeeping.owner_business(body.business_id, user.id)
+    # Category D — an active accountant collaborator may approve
+    # period-close proposals (the two-signature counterparty). Everything
+    # else stays owner-only.
+    try:
+        chief_bookkeeping.owner_business(body.business_id, user.id)
+    except Exception:
+        from business_collaborators_router import is_active_accountant
+        p = chief_bookkeeping._get_proposal(body.business_id, proposal_id)
+        if not (p and p.get("proposal_type") == "propose_period_close"
+                and is_active_accountant(body.business_id, str(user.id))):
+            raise
     return chief_bookkeeping.approve_proposal(body.business_id, proposal_id, approved_by=str(user.id))
 
 

@@ -310,18 +310,46 @@ def bank_reconciliation(biz: str, period: str = "this_month",
 
 # ─── Audit Trail (period_edit_overrides) ─────────────────────────────
 
-def audit_trail(biz: str, *, limit: int = 500) -> Dict[str, Any]:
+def _snapshot_diff(pre: Any, post: Any) -> str:
+    """Compact 'field: old → new' line from the pre/post snapshots."""
+    if not isinstance(pre, dict) or not isinstance(post, dict):
+        return ""
+    bits = []
+    for k in sorted(set(pre) | set(post)):
+        if k in ("updated_at", "override_reason"):
+            continue
+        a, b = pre.get(k), post.get(k)
+        if a != b and b is not None:
+            bits.append(f"{k}: {a!r} → {b!r}")
+        if len(bits) >= 4:
+            break
+    return "; ".join(bits)
+
+
+def audit_trail(biz: str, *, source_type: Optional[str] = None,
+                date_from: Optional[str] = None, date_to: Optional[str] = None,
+                limit: int = 500) -> Dict[str, Any]:
+    filt = ""
+    if source_type:
+        filt += f"&source_type=eq.{source_type}"
+    if date_from:
+        filt += f"&override_at=gte.{date_from}"
+    if date_to:
+        filt += f"&override_at=lte.{date_to}T23:59:59Z"
     rows = sb_clients.sb_get_as_service(
-        f"/period_edit_overrides?business_id=eq.{biz}"
+        f"/period_edit_overrides?business_id=eq.{biz}{filt}"
         f"&order=override_at.desc&limit={int(limit)}"
         f"&select=id,source_type,source_id,override_reason,override_by_role,"
-        f"override_at,accounting_period_id") or []
+        f"override_at,accounting_period_id,pre_change_snapshot,post_change_snapshot") or []
     return {
         "ok": True, "report": "audit_trail",
+        "filters": {"source_type": source_type, "from": date_from, "to": date_to},
         "entries": [{
             "at": r.get("override_at"), "source_type": r.get("source_type"),
             "source_id": r.get("source_id"), "reason": r.get("override_reason"),
             "by_role": r.get("override_by_role") or "owner",
+            "change": _snapshot_diff(r.get("pre_change_snapshot"),
+                                     r.get("post_change_snapshot")),
         } for r in rows],
         "count": len(rows),
     }

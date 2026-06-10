@@ -633,8 +633,16 @@ def approve_proposal(business_id: str, proposal_id: str, approved_by: str = "") 
         period_id = proposed.get("period_id")
         if not period_id:
             raise HTTPException(400, "proposal missing period_id")
-        gl_engine.close_period(business_id, period_id,
-                               closed_by=(approved_by or "chief"), closed_via="chief_auto_close")
+        if proposed.get("requires_second_signature"):
+            # Category D — the second signature must be a DIFFERENT person.
+            if str(proposed.get("initiated_by") or "") == str(approved_by or ""):
+                raise HTTPException(403, "two-signature close: the second "
+                                         "signature must come from someone else")
+            gl_engine.close_period(business_id, period_id,
+                                   closed_by=str(approved_by), closed_via="two_signature")
+        else:
+            gl_engine.close_period(business_id, period_id,
+                                   closed_by=(approved_by or "chief"), closed_via="chief_auto_close")
     elif ptype == "propose_account_reconciliation":
         import gl_engine
         # Drain pending sync work + true-up the opening balance plug.

@@ -67,11 +67,39 @@ def _generated_by(biz_row: Dict[str, Any], user: AuthedUser) -> str:
     return (settings.get("practitioner_name") or getattr(user, "email", None) or "")
 
 
+def _fiscal_period(biz_row, period: str, from_: Optional[str], to: Optional[str]):
+    """Category D — custom fiscal years. When the business sets
+    settings.financial.fiscal_year_start_month != 1, the year-shaped named
+    periods translate to fiscal bounds HERE (custom from/to) so every report
+    engine stays calendar-agnostic. this_year/ytd → fiscal-year-to-date;
+    last_year → the full prior fiscal year."""
+    if period not in ("this_year", "last_year", "ytd"):
+        return period, from_, to
+    try:
+        fin = ((biz_row or {}).get("settings") or {}).get("financial") or {}
+        fy = int(fin.get("fiscal_year_start_month") or 1)
+    except Exception:
+        fy = 1
+    if fy < 2 or fy > 12:
+        return period, from_, to
+    from datetime import date as _d2, timedelta as _td
+    today = _d2.today()
+    start_year = today.year if today.month >= fy else today.year - 1
+    if period == "last_year":
+        start_year -= 1
+    fy_start = _d2(start_year, fy, 1)
+    fy_end = _d2(start_year + 1, fy, 1) - _td(days=1)
+    if period in ("this_year", "ytd"):
+        fy_end = today
+    return "custom", fy_start.isoformat(), fy_end.isoformat()
+
+
 @router.get("/pl")
 def pl(biz: str, period: str = "this_month", comparison: Optional[str] = None,
        from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
        user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)
+    biz_row = _owner(biz, user)
+    period, from_, to = _fiscal_period(biz_row, period, from_, to)
     return _gl_or_fallback(
         biz,
         lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to),
@@ -116,7 +144,8 @@ def ap_aging(biz: str, as_of: Optional[str] = None,
 def cash_flow(biz: str, period: str = "this_month",
               from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
               user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)
+    biz_row = _owner(biz, user)
+    period, from_, to = _fiscal_period(biz_row, period, from_, to)
     return _gl_or_fallback(
         biz,
         lambda: gl_reports.gl_cash_flow(biz, period, from_, to),
@@ -340,7 +369,8 @@ def _needs_gl(report: str, **extra) -> Dict[str, Any]:
 def revenue(biz: str, period: str = "this_month",
             from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)
+    biz_row = _owner(biz, user)
+    period, from_, to = _fiscal_period(biz_row, period, from_, to)
     if not gl_reports.gl_active(biz):
         return _needs_gl("revenue", total_revenue=0, by_account=[], by_source=[],
                          by_customer=[], by_offering=[], monthly=[])
@@ -354,7 +384,8 @@ def revenue(biz: str, period: str = "this_month",
 def expenses_detail(biz: str, period: str = "this_month",
                     from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)
+    biz_row = _owner(biz, user)
+    period, from_, to = _fiscal_period(biz_row, period, from_, to)
     if not gl_reports.gl_active(biz):
         return _needs_gl("expenses_detail", total_expenses=0, by_account=[],
                          by_vendor=[], by_subcategory=[], monthly=[])
@@ -401,6 +432,7 @@ def budget_vs_actual(biz: str, period: str = "this_month",
                      from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                      user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz_row = _owner(biz, user)
+    period, from_, to = _fiscal_period(biz_row, period, from_, to)
     if not gl_reports.gl_active(biz):
         return _needs_gl("budget_vs_actual", rows=[], has_any_budget=False)
     try:
@@ -421,7 +453,8 @@ def cash_forecast(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[st
 def profitability(biz: str, period: str = "this_year",
                   from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)
+    biz_row = _owner(biz, user)
+    period, from_, to = _fiscal_period(biz_row, period, from_, to)
     if not gl_reports.gl_active(biz):
         return _needs_gl("profitability", by_customer=[], by_offering=[])
     try:
@@ -453,7 +486,8 @@ def trust_reconciliation(biz: str, as_of: Optional[str] = None,
 def donors(biz: str, period: str = "this_year",
            from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
            user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)
+    biz_row = _owner(biz, user)
+    period, from_, to = _fiscal_period(biz_row, period, from_, to)
     try:
         return gl_reports_t4.donor_report(biz, period, from_, to)
     except ValueError as e:
@@ -474,7 +508,8 @@ def prep_990(biz: str, year: Optional[int] = None,
 def bank_reconciliation(biz: str, period: str = "this_month",
                         from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                         user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)
+    biz_row = _owner(biz, user)
+    period, from_, to = _fiscal_period(biz_row, period, from_, to)
     try:
         return gl_reports_t4.bank_reconciliation(biz, period, from_, to)
     except ValueError as e:
@@ -482,9 +517,13 @@ def bank_reconciliation(biz: str, period: str = "this_month",
 
 
 @router.get("/audit-trail-report")
-def audit_trail_report(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+def audit_trail_report(biz: str, source_type: Optional[str] = None,
+                       from_: Optional[str] = Query(None, alias="from"),
+                       to: Optional[str] = None,
+                       user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
-    return gl_reports_t4.audit_trail(biz)
+    return gl_reports_t4.audit_trail(biz, source_type=source_type,
+                                     date_from=from_, date_to=to)
 
 
 @router.get("/statement-customers")
@@ -545,11 +584,13 @@ async def customer_statement_send(biz: str, contact_id: str,
 def export(biz: str, report: str, format: str = "csv",
            period: str = "this_month", as_of: Optional[str] = None,
            comparison: Optional[str] = None, contact_id: Optional[str] = None,
+           source_type_filter: Optional[str] = None,
            from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
            user: AuthedUser = Depends(require_user)) -> Response:
     biz_row = _owner(biz, user)
     if report not in _REPORT_TITLES:
         raise HTTPException(400, "unknown report")
+    period, from_, to = _fiscal_period(biz_row, period, from_, to)
     try:
         # Phase I.4 — exports use the same authoritative source as the screen.
         if report == "summary_1099":
@@ -605,7 +646,8 @@ def export(biz: str, report: str, format: str = "csv",
         elif report == "bank_reconciliation":
             data = gl_reports_t4.bank_reconciliation(biz, period, from_, to)
         elif report == "audit_trail":
-            data = gl_reports_t4.audit_trail(biz)
+            data = gl_reports_t4.audit_trail(biz, source_type=source_type_filter,
+                                             date_from=from_, date_to=to)
         elif report == "pl":
             data = _gl_or_fallback(
                 biz, lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to),
@@ -773,10 +815,10 @@ def _csv_rows(report: str, data: Dict[str, Any]) -> list:
                          a.get("deposits"), a.get("withdrawals"), a.get("ending_balance"),
                          ri.get("pending_count"), ri.get("excluded_count")])
     elif report == "audit_trail":
-        rows.append(["When", "Source", "Source ID", "By", "Reason"])
+        rows.append(["When", "Source", "Source ID", "By", "Reason", "Change"])
         for e in data.get("entries", []):
             rows.append([e.get("at"), e.get("source_type"), e.get("source_id"),
-                         e.get("by_role"), e.get("reason")])
+                         e.get("by_role"), e.get("reason"), e.get("change")])
     elif report == "ar_aging":
         rows.append(["Invoice", "Contact", "Total", "Due", "Bucket", "Days Overdue"])
         for i in data.get("invoices", []):

@@ -932,10 +932,13 @@ def _audit_trail_body(d, s, money_cell, accent, stripe, rule, danger, colors, Ta
     head = [Paragraph(h, s["th"]) for h in ("When", "Source", "By", "Reason")]
     rows = [head]
     for e in d.get("entries") or []:
+        reason = str(e.get("reason"))[:90]
+        change = str(e.get("change") or "")[:140]
+        body = reason + (f"<br/><font size=6 color=grey>{change}</font>" if change else "")
         rows.append([Paragraph(str(e.get("at"))[:19].replace("T", " "), s["rowind"]),
                      Paragraph(f"{e.get('source_type')} {str(e.get('source_id'))[:12]}", s["rowind"]),
                      Paragraph(str(e.get("by_role")), s["rowind"]),
-                     Paragraph(str(e.get("reason"))[:90], s["row"])])
+                     Paragraph(body, s["row"])])
     if not (d.get("entries") or []):
         rows.append([Paragraph("(no closed-period edits on record)", s["rowind"]),
                      Paragraph("", s["row"]), Paragraph("", s["row"]), Paragraph("", s["row"])])

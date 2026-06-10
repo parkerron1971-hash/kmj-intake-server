@@ -835,26 +835,56 @@ def _month_end(y: int, m: int) -> _date:
     return _date(y, m, _calendar.monthrange(y, m)[1])
 
 
-def _period_specs(year: int):
-    """All calendar period rows for a year: 12 months + 4 quarters + 1 year."""
+def _period_specs(year: int, fy_start: int = 1):
+    """All period rows for a (fiscal) year. fy_start=1 → calendar year.
+    fy_start=7 → FY{year} = Jul 1 {year} – Jun 30 {year+1}: months stay
+    calendar months, quarters + the year align to the fiscal start
+    (Category D — K-12 ministry / nonprofit fiscal years)."""
+    fy_start = fy_start if 1 <= int(fy_start or 1) <= 12 else 1
+
+    def _ym(offset: int):
+        m0 = (fy_start - 1 + offset)
+        return year + m0 // 12, m0 % 12 + 1
+
     out = []
-    for m in range(1, 13):
-        out.append(("month", _date(year, m, 1), _month_end(year, m)))
+    for i in range(12):
+        y, m = _ym(i)
+        out.append(("month", _date(y, m, 1), _month_end(y, m)))
     for q in range(4):
-        sm = q * 3 + 1
-        out.append(("quarter", _date(year, sm, 1), _month_end(year, sm + 2)))
-    out.append(("year", _date(year, 1, 1), _date(year, 12, 31)))
+        sy, sm = _ym(q * 3)
+        ey, em = _ym(q * 3 + 2)
+        out.append(("quarter", _date(sy, sm, 1), _month_end(ey, em)))
+    ly, lm = _ym(11)
+    out.append(("year", _date(year, fy_start, 1), _month_end(ly, lm)))
     return out
 
 
-def generate_periods(business_id: str, year: int) -> Dict[str, Any]:
-    """Idempotently create the calendar period rows for a year."""
+def fiscal_year_start_month(business_id: str) -> int:
+    """settings.financial.fiscal_year_start_month (1-12; default 1)."""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
+        fin = ((rows[0].get("settings") or {}) if rows else {}).get("financial") or {}
+        v = int(fin.get("fiscal_year_start_month") or 1)
+        return v if 1 <= v <= 12 else 1
+    except Exception:
+        return 1
+
+
+def generate_periods(business_id: str, year: int,
+                     fy_start: Optional[int] = None) -> Dict[str, Any]:
+    """Idempotently create the (fiscal-)year period rows. Changing the
+    fiscal start later only ADDS new rows (idempotent by exact dates) —
+    stale calendar rows stay until closed/used; mid-year switching is a
+    bookkeeping decision the accountant owns (kept additive on purpose)."""
+    if fy_start is None:
+        fy_start = fiscal_year_start_month(business_id)
     existing = sb_clients.sb_get_as_service(
         f"/accounting_periods?business_id=eq.{business_id}"
         f"&select=period_type,period_start,period_end") or []
     have = {(r["period_type"], r["period_start"], r["period_end"]) for r in existing}
     created = 0
-    for ptype, start, end in _period_specs(year):
+    for ptype, start, end in _period_specs(year, fy_start):
         if (ptype, start.isoformat(), end.isoformat()) in have:
             continue
         sb_clients.sb_post_as_service("/accounting_periods", {
@@ -863,7 +893,7 @@ def generate_periods(business_id: str, year: int) -> Dict[str, Any]:
             "status": "open",
         }, prefer=None)
         created += 1
-    return {"ok": True, "created": created, "year": year}
+    return {"ok": True, "created": created, "year": year, "fiscal_year_start_month": fy_start}
 
 
 def _ledger_in_range(biz: str, start: str, end: str, codes) -> List[Dict[str, Any]]:

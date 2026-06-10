@@ -113,8 +113,34 @@ def generate(biz: str, year: Optional[int] = None,
 @router.post("/{period_id}/close")
 def close(period_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     ctx = _owner_for_period(period_id, user)
+    biz_id = str(ctx["period"]["business_id"])
     try:
-        return gl_engine.close_period(str(ctx["period"]["business_id"]), period_id,
+        # Category D — two-signature close: when enabled, the initiator's
+        # close becomes a pending proposal the OTHER party (accountant ↔
+        # owner) must approve. Sequential signoffs; both ids end up on the
+        # proposal row (audit).
+        settings = (ctx.get("biz") or {}).get("settings") or {}
+        if settings.get("period_close_two_signature"):
+            import chief_bookkeeping
+            pend = [p for p in chief_bookkeeping.list_proposals(biz_id, "pending")
+                    if p.get("proposal_type") == "propose_period_close"
+                    and (p.get("proposed") or {}).get("period_id") == period_id]
+            if pend:
+                return {"ok": True, "pending_second_signature": True,
+                        "proposal": pend[0],
+                        "note": "Awaiting the second signature on the existing request."}
+            row = chief_bookkeeping._insert_proposal(
+                biz_id, "propose_period_close",
+                proposed={"period_id": period_id,
+                          "initiated_by": str(user.id), "initiated_role": "owner",
+                          "requires_second_signature": True},
+                confidence=1.0,
+                reasoning=("Two-signature close: the owner requested this period "
+                           "be closed — your approval is the second signature."))
+            return {"ok": True, "pending_second_signature": True, "proposal": row,
+                    "note": "Close requested — your accountant's approval is the "
+                            "second signature."}
+        return gl_engine.close_period(biz_id, period_id,
                                       closed_by=str(user.id), closed_via="owner")
     except HTTPException:
         raise

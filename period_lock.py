@@ -50,16 +50,38 @@ def record_override(business_id: str, period: Optional[Dict[str, Any]], *,
     }, prefer=None)
 
 
+def lock_mode(business_id: str) -> str:
+    """Category D — per-business lock policy: 'soft' (default; edits allowed
+    with an audited reason) or 'hard' (closed periods reject every edit; the
+    reopen-period flow is the only legal path)."""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
+        mode = ((rows[0].get("settings") or {}) if rows else {}).get("period_lock_mode")
+        return "hard" if mode == "hard" else "soft"
+    except Exception:
+        return "soft"  # policy lookup failure must not brick edits
+
+
 def guard(business_id: str, day: str, *, source_type: str, source_id: str,
           reason: Optional[str], override_by: str, role: str = "owner",
           pre: Any = None, post: Any = None) -> None:
     """Backend gate for backend-mediated edits. If `day` is locked and no
     reason is supplied → 409. If a reason is supplied → record the override
-    and allow. No-op when the date isn't locked."""
+    and allow. Hard mode → 403 with NO override path. No-op when the date
+    isn't locked."""
     from fastapi import HTTPException
     p = locked_period(business_id, day)
     if not p:
         return
+    if lock_mode(business_id) == "hard":
+        raise HTTPException(403, {
+            "error": "period_hard_locked",
+            "message": f"Hard lock active — this date is in a closed period "
+                       f"({p.get('period_start')}–{p.get('period_end')}). "
+                       "Reopen the period (Bookkeeping → Admin → Periods) to edit.",
+            "period_id": p.get("id"),
+        })
     if not (reason or "").strip():
         raise HTTPException(409, {
             "error": "period_closed",
