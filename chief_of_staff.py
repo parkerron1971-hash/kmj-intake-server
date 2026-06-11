@@ -253,8 +253,21 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     key = _anthropic_key()
     if not key:
         return ""
+    # Arc 20B Part 1 — mid-conversation system messages: the prompt splits
+    # into a STABLE cached core (persona + full operating manual; identical
+    # across a business's calls -> Anthropic prompt cache holds it) and a
+    # small DYNAMIC state block appended after the split marker. State
+    # changes mid-conversation only ever rewrite the cheap tail.
+    sys_payload: Any = system
+    if isinstance(system, str) and "[[CHIEF_CACHE_SPLIT]]" in system:
+        stable, _, dynamic = system.partition("[[CHIEF_CACHE_SPLIT]]")
+        sys_payload = [
+            {"type": "text", "text": stable.rstrip(),
+             "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": dynamic.strip()},
+        ]
     payload: Dict[str, Any] = {
-        "model": CHIEF_MODEL, "max_tokens": max_tokens, "system": system,
+        "model": CHIEF_MODEL, "max_tokens": max_tokens, "system": sys_payload,
         "messages": messages,
     }
     if enable_web_search and CHIEF_WEB_SEARCH_ENABLED:
@@ -279,6 +292,16 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         return ""
     data = resp.json()
     usage = data.get("usage", {}) if isinstance(data, dict) else {}
+    # Arc 20B quality gate — observe the cache working in prod logs:
+    # cache_read >> input after the first call of a session = win confirmed.
+    try:
+        logger.info(
+            "chief cache: read=%s write=%s fresh_in=%s out=%s",
+            usage.get("cache_read_input_tokens"),
+            usage.get("cache_creation_input_tokens"),
+            usage.get("input_tokens"), usage.get("output_tokens"))
+    except Exception:
+        pass
     await log_api_usage(
         endpoint="/chief/backend",
         model=data.get("model") if isinstance(data, dict) else CHIEF_MODEL,
@@ -2459,6 +2482,21 @@ async def handle_create_contact(client, biz, action) -> Dict:
 
     created = inserted[0] if isinstance(inserted, list) else inserted
     contact_id = created.get("id") if isinstance(created, dict) else None
+    # Arc 20B — Tier 1 rules: contact_created event (fail-soft).
+    try:
+        import rules_engine
+        rules_engine.on_event(str(biz["id"]), "contact_created", {
+            "contact_id": contact_id,
+            "name": payload.get("name"),
+            "contact_name": payload.get("name"),
+            "email": payload.get("email"),
+            "contact_email": payload.get("email"),
+            "phone": payload.get("phone"),
+            "source": payload.get("source"),
+            "notes": None,
+        })
+    except Exception as _re_err:
+        logger.warning(f"rules emit contact_created failed soft: {_re_err}")
     return {
         "type": "create_contact",
         "result": f"added as {status}",
@@ -10870,25 +10908,7 @@ Lead with what needs attention. If there are pending drafts, mention the count. 
 
 {personality_block}
 
-REAL-TIME BUSINESS DATA (fresh every message):
-
-{context_block}
-{view_block}
-{strategy_block}
-
 {vertical_block}
-
-{priorities_block}
-
-{time_block}
-
-{forecast_block}
-
-{bookkeeping_block}
-
-{relationships_block}
-
-{session_context}
 
 {voice_examples}
 
@@ -10896,33 +10916,9 @@ REAL-TIME BUSINESS DATA (fresh every message):
 
 {suggestions_block}
 
-{sentiment_block}
-
 {delegation_block}
 
-{whatif_block}
-
-{pre_session_block}
-
-{weekly_block}
-
-{decision_block}
-
-{contextual_draft_block}
-
-{habit_recognition_block}
-
-{catchup_block}
-
 {web_search_block}
-
-{website_block}
-
-{testimonial_block}
-
-{nudges_block}
-
-{eod_block}
 
 YOU ARE THE CENTRAL ORCHESTRATOR. ALL agent operations flow through you. The practitioner never needs to interact with agents directly. When they want something done, you decide which agent handles it and trigger it. When agents create drafts, you show the results. When the practitioner wants to approve, edit, or dismiss, you handle it. You are the single point of contact for the entire system.
 
@@ -11403,7 +11399,53 @@ After every answer or action (except purely factual or greeting), propose 1-2 na
 VOICE:
 Direct, warm, operational. Match {practitioner}'s voice (profile: {json.dumps(voice)[:400]}). Reference specific names and numbers. No generic advice. Lead with the answer.
 
-Keep responses concise unless asked for depth.{greeting_clause}{resume_clause}"""
+Keep responses concise unless asked for depth.
+
+[[CHIEF_CACHE_SPLIT]]
+
+REAL-TIME BUSINESS DATA — STATE UPDATE (fresh every message; this section
+changes constantly while everything above it is your stable operating
+manual):
+
+{context_block}
+{view_block}
+{strategy_block}
+
+{priorities_block}
+
+{time_block}
+
+{forecast_block}
+
+{bookkeeping_block}
+
+{relationships_block}
+
+{session_context}
+
+{sentiment_block}
+
+{whatif_block}
+
+{pre_session_block}
+
+{weekly_block}
+
+{decision_block}
+
+{contextual_draft_block}
+
+{habit_recognition_block}
+
+{catchup_block}
+
+{website_block}
+
+{testimonial_block}
+
+{nudges_block}
+
+{eod_block}{greeting_clause}{resume_clause}"""
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -11896,7 +11938,17 @@ async def chief_chat(
             try:
                 jit_directive = _build_jit_directive(ctx, req.message or "")
                 if jit_directive:
-                    system = jit_directive + system
+                    marker = "[[CHIEF_CACHE_SPLIT]]"
+                    if marker in system:
+                        # Arc 20B — keep the cached stable prefix intact:
+                        # the directive leads the DYNAMIC block instead of
+                        # the whole prompt.
+                        system = system.replace(
+                            marker,
+                            marker + "\n\n*** PRIORITY DIRECTIVE (act on this "
+                            "first): ***\n" + jit_directive, 1)
+                    else:
+                        system = jit_directive + system
             except Exception as _jit_err:
                 logger.warning(f"[jit] directive build failed (non-fatal): {_jit_err}")
             effective_message = req.message

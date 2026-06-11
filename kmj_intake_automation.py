@@ -164,6 +164,9 @@ from entity_groups_router import router as entity_groups_router
 app.include_router(entity_groups_router)
 from launch_access import router as launch_access_router
 app.include_router(launch_access_router)
+from rules_router import router as rules_router, proposals_router as chief_proposals_router
+app.include_router(rules_router)
+app.include_router(chief_proposals_router)
 # Phase F.1 — Stripe outbound contractor payments
 from contractors_router import router as contractors_router
 app.include_router(contractors_router)
@@ -542,6 +545,11 @@ async def startup():
             import usage_metering as _um
             scheduler.add_job(_um.stripe_report_tick, "interval", hours=24,
                               id="stripe_usage_report")
+            # Arc 20B — invoice_overdue rule trigger (daily; exactly-once
+            # per invoice via the due_date == today-N window).
+            import rules_engine as _rules
+            scheduler.add_job(_rules.overdue_tick, "interval", hours=24,
+                              id="rules_overdue_tick")
             scheduler.add_job(_gl.divergence_tick, "interval", minutes=15, id="gl_divergence")
     except Exception as e:
         print(f"   [warn] GL sync jobs not scheduled: {e}")

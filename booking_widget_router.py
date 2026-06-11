@@ -939,6 +939,22 @@ def _create_appointment(
         "created_by": "booking_widget",
     })
     if isinstance(created, list) and created:
+        # Arc 20B — Tier 1 rules: booking_created event (fail-soft; the
+        # booking itself must never depend on the rules engine).
+        try:
+            import rules_engine
+            d = data or {}
+            rules_engine.on_event(business_id, "booking_created", {
+                "booking_id": created[0].get("id"),
+                "contact_name": d.get("name") or d.get("customer_name"),
+                "contact_email": d.get("email") or d.get("customer_email"),
+                "contact_id": d.get("contact_id"),
+                "offering": d.get("offering_name") or d.get("offering"),
+                "starts_at": d.get("starts_at") or d.get("time") or d.get("slot"),
+                "notes": d.get("notes"),
+            })
+        except Exception as _re_err:
+            logger.warning(f"rules emit booking_created failed soft: {_re_err}")
         return created[0]
     # C22 polish — same friendly-error treatment as contact + customer
     # create. The caller's existing `if not entry: raise HTTPException(500,
