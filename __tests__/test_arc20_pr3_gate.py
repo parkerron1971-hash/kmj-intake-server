@@ -111,6 +111,26 @@ def test_store_skips_uncacheable_and_empty(fake):
     assert fb.rows("inference_cache") == []
 
 
+def test_store_uses_upsert_for_stale_refresh(fake, monkeypatch):
+    """Finding 3: store() must UPSERT on the unique hash key so a post-TTL
+    miss overwrites the stale row instead of dying on the unique index."""
+    fb = fake
+    calls = []
+    import sb_clients
+    real_post = sb_clients.sb_post_as_service
+    def spy(path, body, prefer="rep"):
+        calls.append({"path": path, "prefer": prefer})
+        return real_post(path, body, prefer)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", spy)
+    ig.store("b1", "chief_llm", "q-stale", "fresh answer", "m", 10, 10)
+    cache_calls = [c for c in calls if c["path"].startswith("/inference_cache")]
+    assert cache_calls, "store did not write"
+    assert "on_conflict=business_id,surface,prompt_hash" in cache_calls[0]["path"]
+    assert cache_calls[0]["prefer"] == "resolution=merge-duplicates"
+    row = fb.rows("inference_cache")[0]
+    assert row["hit_count"] == 0 and row["response"] == "fresh answer"
+
+
 def test_stats_aggregate(fake):
     fb = fake
     ig.store("b1", "chief_llm", "q1", "a1", "claude-haiku-4-5", 100, 50)

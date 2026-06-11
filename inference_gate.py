@@ -176,16 +176,27 @@ def store(business_id: str, surface: str, request_text: str, response: str,
                 or not (response or "").strip():
             return
         emb = embedding if embedding is not None else _embed(request_text)
-        sb_clients.sb_post_as_service("/inference_cache", {
-            "business_id": business_id, "surface": surface, "task_type": task_type,
-            "prompt_hash": _hash(request_text),
-            "embedding": emb,
-            "request_preview": (request_text or "")[:300],
-            "response": response, "model": model,
-            "input_tokens": int(input_tokens or 0),
-            "output_tokens": int(output_tokens or 0),
-            "created_at": _now_iso(),
-        }, prefer=None)
+        # UPSERT (Finding 3): a post-TTL miss must OVERWRITE the stale row —
+        # plain insert hit the (business_id,surface,prompt_hash) unique index
+        # and the stale entry never refreshed. Resolution: fresh content +
+        # fresh created_at + hit_count reset to 0 (the stale answer's hits
+        # don't vouch for the new one). Concurrent same-prompt misses both
+        # upsert; last write wins — both wrote the same fresh answer, so the
+        # race is benign.
+        sb_clients.sb_post_as_service(
+            "/inference_cache?on_conflict=business_id,surface,prompt_hash", {
+                "business_id": business_id, "surface": surface, "task_type": task_type,
+                "prompt_hash": _hash(request_text),
+                "embedding": emb,
+                "request_preview": (request_text or "")[:300],
+                "response": response, "model": model,
+                "input_tokens": int(input_tokens or 0),
+                "output_tokens": int(output_tokens or 0),
+                "hit_count": 0,
+                "cost_cents_saved": 0,
+                "last_hit_at": None,
+                "created_at": _now_iso(),
+            }, prefer="resolution=merge-duplicates")
     except Exception as e:
         logger.warning(f"[gate] store failed soft: {e}")
 

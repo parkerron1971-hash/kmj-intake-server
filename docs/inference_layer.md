@@ -54,3 +54,29 @@ Every decision logs to `inference_gate_decisions` (surface, cache_hit, confidenc
 | Later | Pattern learning (cluster_id/outcome_weight come alive) | — |
 
 **Kevin setup for v1:** add `OPENAI_API_KEY` to Railway (any funded OpenAI account; embeddings only) + apply the migration. Without the key everything behaves exactly as today.
+
+
+---
+
+## 8. Post-deploy findings ledger (Arc 20B diagnostic fix arc)
+
+- **Finding 1 (FIXED, aa0d662):** PR3's gate block in `ai_proxy.py` referenced
+  `business_id` pre-assignment → UnboundLocalError → every `/ai/proxy`
+  request 500'd until the hotfix. Endpoint-level regression tests now
+  execute ai_proxy end-to-end (the gap that let it ship).
+- **Finding 2 (FIXED via `2026_06_10_arc20_inference_grant.sql`):** the RPC's
+  EXECUTE was revoked from PUBLIC without re-granting to `service_role` —
+  semantic matches were permission-denied (exact-hash still worked).
+  Verify: `SELECT proacl FROM pg_proc WHERE proname='match_inference_cache';`
+- **Finding 3 (FIXED):** `store()` now UPSERTs on
+  `(business_id, surface, prompt_hash)` so post-TTL misses overwrite the
+  stale row (fresh content/created_at, hit_count reset). Concurrent
+  same-prompt misses race benignly (both write the same fresh answer).
+- **Expectation note — ai_proxy caching is DORMANT in practice:** the gate
+  only engages when the frontend passes `metadata.business_id` AND a
+  cacheable task_type (`score`, `briefing`). Today no frontend caller does
+  both — **PulsePage's briefing call is the closest candidate** (it sends
+  `taskType: 'briefing'` but no business metadata). Until callers add
+  metadata, **the Inference panel will primarily show `chief_llm` traffic**
+  — that is the live cached surface, and it's the one the definitive smoke
+  exercises (Transactions → drawer → ASK CHIEF, same question twice).
