@@ -150,3 +150,36 @@ Ship **Tier 1 only** first. Instrument: % of active practitioners with ≥1 enab
 - **Surfaced:** Anthropic managed-agent hosting availability (architecture doesn't depend on it; verify before Phase B step 4). · Per-client consent UX (v1.5 scope, real product design work — sequenced behind validation, not skipped).
 
 *End of Phase A spec. Phase B awaits Kevin's rulings: which tiers, which autonomy steps, sequencing confirmation, and the two pricing calls.*
+
+
+---
+
+# Appendix A — Phase B implementation notes (Arc 20B, shipped)
+
+- **Part 1 shipped:** Chief's system prompt reordered stable-first with a
+  `[[CHIEF_CACHE_SPLIT]]` marker; `_call_claude` emits system blocks with
+  `cache_control: ephemeral` on the stable prefix; JIT directives moved into
+  the dynamic block. Cache telemetry (cache_read/cache_creation tokens)
+  logs per call — verify the win in Railway logs after a 3+ turn session.
+- **Parts 2+4 shipped together (the convergence, as predicted):**
+  `rules_engine.py` (closed grammar: 3 triggers, 8 operators, 7 verbs) with
+  proposal verbs writing to the NEW generic `chief_proposals` table with
+  `source="rule:<id>"` provenance. Inline call made: bookkeeping proposals
+  STAY in `chief_bookkeeping_proposals` (working prod surface with
+  domain-specific columns); the Trust Track endpoint unions both.
+- **Part 3 scoped honestly:** all five new proposal types + executors are
+  live; Chief-initiated generation ships with ONE deterministic analyzer
+  (overdue-invoice follow-ups, dedup-safe). More analyzers are additive —
+  rules generate the rest of the proposal volume meanwhile.
+- **Part 5 shipped:** Trust Track (Bookkeeping → Admin) — per-category
+  approval ratios, ≥80%/≥20 graduation candidates, transparency only.
+- **Part 6 shipped:** lawyer/therapist/counseling business types are born
+  with `settings.autonomy.client_facing_autonomy = "disabled"` +
+  `acknowledgment_required` — Phase C consumes these flags.
+- **Part 7 by construction:** v1 verbs are deterministic — a tested
+  invariant asserts a full rule run writes zero `api_usage` rows. Any
+  future LLM-invoking verb must log `task_type="rule_engine"` to meter as
+  weighted Chief interactions.
+- **Validation instrumentation:** adoption = businesses with ≥1 enabled
+  rule (practitioner_rules), volume = rule_runs/week — both queryable for
+  the 60-day ≥20% gate.

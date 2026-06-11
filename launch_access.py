@@ -186,13 +186,27 @@ def create_business(body: CreateBusinessBody,
     btype = (body.type or "").strip() or "custom"
     if not name:
         raise HTTPException(400, "business name required")
+    # Arc 20B Part 6 — regulated-vertical ruling: lawyer + therapist (and
+    # counseling-adjacent) businesses ship with client-facing autonomy
+    # DISABLED by default; enabling later requires explicit practitioner
+    # acknowledgment (Phase C consumes these flags; set at birth so the
+    # default exists before any autonomy ships).
+    settings = dict(body.settings or {})
+    bt_l = btype.lower()
+    if any(k in bt_l for k in ("law", "therap", "counsel")):
+        settings.setdefault("autonomy", {
+            "client_facing_autonomy": "disabled",
+            "disabled_reason": "regulated_vertical_default",
+            "acknowledgment_required": True,
+            "acknowledged_at": None,
+        })
     res = sb_clients.sb_post_as_service("/businesses", {
         "owner_id": uid,
         "name": name[:160],
         "type": btype[:60],
         "voice_profile": body.voice_profile or {},
         "cdi_vocabulary": body.cdi_vocabulary,
-        "settings": body.settings or {},
+        "settings": settings,
         **({"tier": body.tier} if body.tier else {}),
     })
     row = (res or [None])[0] if isinstance(res, list) else res

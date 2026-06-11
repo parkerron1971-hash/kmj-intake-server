@@ -237,6 +237,109 @@ def list_proposals(biz: str, status: str = "pending",
     return {"ok": True, "proposals": rows}
 
 
+@proposals_router.post("/analyze/{biz}")
+def analyze_ops(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Arc 20B Part 3 — Chief-initiated proposals in the NEW domains.
+    v1 analyzer (deterministic, Phase-G style; trust-layer 4 questions in
+    the proposal reasoning): overdue-invoice follow-up emails. The other
+    new domains (tasks, tags, scheduling, content) are fully live as
+    proposal types + executors — rules and future analyzers feed them."""
+    _owner(biz, user)
+    created: List[Dict[str, Any]] = []
+    invoices = sb_clients.sb_get_as_service(
+        f"/invoices?business_id=eq.{biz}&paid_at=is.null"
+        f"&status=in.(sent,viewed,overdue)"
+        f"&select=id,invoice_number,total,due_date,contact_id,contacts(name,email)"
+        f"&limit=100") or []
+    today = datetime.now(timezone.utc).date()
+    pending = sb_clients.sb_get_as_service(
+        f"/chief_proposals?business_id=eq.{biz}&status=eq.pending"
+        f"&proposal_type=eq.propose_followup_email&select=proposed&limit=100") or []
+    already = {(p0.get("proposed") or {}).get("invoice_id") for p0 in pending}
+    for inv in invoices:
+        due = inv.get("due_date")
+        if not due:
+            continue
+        try:
+            d = datetime.fromisoformat(str(due)[:10]).date()
+        except Exception:
+            continue
+        days = (today - d).days
+        if days < 7 or inv.get("id") in already:
+            continue
+        c = (inv.get("contacts") or {}) or {}
+        if not c.get("email"):
+            continue
+        res = sb_clients.sb_post_as_service("/chief_proposals", {
+            "business_id": biz,
+            "proposal_type": "propose_followup_email",
+            "source": "chief",
+            "proposed": {
+                "invoice_id": inv.get("id"),
+                "contact_id": inv.get("contact_id"),
+                "contact_name": c.get("name"),
+                "contact_email": c.get("email"),
+                "subject": f"Friendly nudge — invoice {inv.get('invoice_number')}",
+                "body": (f"Hi {c.get('name') or 'there'},\n\nJust a gentle "
+                         f"reminder that invoice {inv.get('invoice_number')} "
+                         f"(${float(inv.get('total') or 0):,.2f}) was due on "
+                         f"{due}. The payment link is on the invoice — and if "
+                         f"anything's off, just reply here.\n\nThank you!"),
+            },
+            "confidence": 0.85,
+            "reasoning": (f"Invoice {inv.get('invoice_number')} is {days} days "
+                          f"overdue and {c.get('name') or 'the client'} hasn't "
+                          "been nudged. Approve to send this reminder — nothing "
+                          "sends until you say so."),
+            "status": "pending",
+            "created_at": _now_iso(),
+        })
+        row = (res or [None])[0] if isinstance(res, list) else res
+        if row:
+            created.append(row)
+    return {"ok": True, "created": created}
+
+
+@proposals_router.get("/trust-track")
+def trust_track(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Arc 20B Part 5 — graduation transparency: per proposal-category
+    approval ratios across BOTH proposal tables. Categories at >=80%
+    approval over >=20 resolved are flagged as GRADUATION CANDIDATES —
+    pure transparency; autonomous action is a Phase C decision."""
+    _owner(biz, user)
+    cats: Dict[str, Dict[str, int]] = {}
+
+    def _tally(rows):
+        for r in rows:
+            t = r.get("proposal_type") or "?"
+            c = cats.setdefault(t, {"approved": 0, "rejected": 0, "pending": 0})
+            st = r.get("status")
+            if st in c:
+                c[st] += 1
+
+    _tally(sb_clients.sb_get_as_service(
+        f"/chief_proposals?business_id=eq.{biz}&select=proposal_type,status&limit=2000") or [])
+    _tally(sb_clients.sb_get_as_service(
+        f"/chief_bookkeeping_proposals?business_id=eq.{biz}"
+        f"&select=proposal_type,status&limit=2000") or [])
+
+    out = []
+    for t, c in sorted(cats.items()):
+        resolved = c["approved"] + c["rejected"]
+        ratio = round(c["approved"] / resolved, 3) if resolved else None
+        out.append({
+            "proposal_type": t, **c, "resolved": resolved,
+            "approval_ratio": ratio,
+            "graduation_candidate": bool(resolved >= 20 and ratio is not None
+                                         and ratio >= 0.8),
+        })
+    return {"ok": True, "categories": out,
+            "graduation_rule": ">=80% approval over >=20 resolved proposals",
+            "note": "Transparency only — autonomous action per category is a "
+                    "Phase C decision and would still require your explicit "
+                    "scope grant."}
+
+
 class ResolveBody(BaseModel):
     business_id: str
     override: Optional[Dict[str, Any]] = None

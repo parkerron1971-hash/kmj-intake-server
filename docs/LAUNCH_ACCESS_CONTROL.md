@@ -143,6 +143,15 @@ Then: Railway → service → Variables → `BILLING_ENFORCE=on` → redeploy.
   whoever exists at that moment, so don't run it after launch unless you
   mean it).
 
+## 6.5 Regulated-vertical autonomy defaults (Arc 20B)
+
+Businesses created with a lawyer / therapist / counseling type carry
+`settings.autonomy.client_facing_autonomy = "disabled"` from birth. When
+autonomous Chief capabilities ship (Phase C), these businesses CANNOT enable
+client-facing autonomy without an explicit acknowledgment screen
+(professional-ethics ruling). No action needed now — the flag simply exists
+so the default predates the feature. Grandfathering does NOT bypass this.
+
 ## 7. Support cheatsheet
 
 | Practitioner says | Likely cause | Fix |
