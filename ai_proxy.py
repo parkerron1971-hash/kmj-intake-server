@@ -211,6 +211,15 @@ async def ai_proxy(req: ProxyRequest):
     if req.metadata:
         anthropic_payload["metadata"] = req.metadata
 
+    # Identifying context for cost tracking + the inference gate. Frontend
+    # passes these via metadata; missing values are fine (logged as NULL).
+    # HOTFIX (Arc 20B diagnostic Finding 1): these MUST be assigned before
+    # the gate block below — referencing business_id pre-assignment raised
+    # UnboundLocalError on every request and 500'd the whole endpoint.
+    metadata = req.metadata or {}
+    business_id = metadata.get("business_id") or metadata.get("user_id")
+    user_id = metadata.get("auth_user_id")
+
     # Arc 20B Part 9 — Layer-2 gate for cacheable task_types (fail-open).
     _gate_req_text = None
     _gate_emb = None
@@ -242,12 +251,6 @@ async def ai_proxy(req: ProxyRequest):
         "anthropic-version": ANTHROPIC_VERSION,
         "content-type": "application/json",
     }
-
-    # Identifying context for cost tracking. Frontend passes these via
-    # the metadata field; missing values are fine (logged as NULL).
-    metadata = req.metadata or {}
-    business_id = metadata.get("business_id") or metadata.get("user_id")
-    user_id = metadata.get("auth_user_id")
 
     started_ms = int(time.time() * 1000)
     try:
