@@ -312,6 +312,14 @@ def set_grandfather(body: GrandfatherBody,
     return {"ok": True, "user_id": body.user_id, "is_grandfathered": bool(body.value)}
 
 
+@router.get("/inference-stats")
+def inference_stats(_owner=Depends(require_owner)) -> Dict[str, Any]:
+    """Arc 20B Part 9 — Layer-2 telemetry: hit rate, savings, cache size,
+    top cached requests, per-surface breakdown. Read-only."""
+    import inference_gate
+    return inference_gate.stats()
+
+
 @router.get("/readiness")
 def billing_readiness(_owner=Depends(require_owner)) -> Dict[str, Any]:
     """Pre-flight panel for flipping BILLING_ENFORCE — read-only; the env

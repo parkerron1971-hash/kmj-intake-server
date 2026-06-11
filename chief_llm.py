@@ -146,6 +146,19 @@ async def _call_claude(business_id: str, system: str, user_content: str,
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return None
+    # Arc 20B Part 9 — Layer-2 routing gate (fail-open; cache key includes
+    # the system prompt so business context changes invalidate matches).
+    _gate_hit = None
+    _gate_emb = None
+    try:
+        import inference_gate
+        _gate_hit = inference_gate.lookup(
+            business_id, "chief_llm", (system or "") + "\n###\n" + (user_content or ""))
+        if _gate_hit and _gate_hit.get("cached"):
+            return _gate_hit["response"]
+        _gate_emb = (_gate_hit or {}).get("_embedding")
+    except Exception as _g_err:
+        logger.warning(f"[chief_llm] gate failed open: {_g_err}")
     model = _model()
     payload = {
         "model": model, "max_tokens": max_tokens, "system": system,
@@ -184,6 +197,19 @@ async def _call_claude(business_id: str, system: str, user_content: str,
         usage_metering.check_thresholds(business_id)
     except Exception as e:
         logger.warning(f"[chief_llm] threshold check failed: {e}")
+    # Arc 20B Part 9 — remember the fresh answer for next time.
+    if text:
+        try:
+            import inference_gate
+            inference_gate.store(
+                business_id, "chief_llm",
+                (system or "") + "\n###\n" + (user_content or ""),
+                text, _model(),
+                int(usage.get("input_tokens") or 0),
+                int(usage.get("output_tokens") or 0),
+                embedding=_gate_emb)
+        except Exception as _g_err:
+            logger.warning(f"[chief_llm] gate store failed soft: {_g_err}")
     return text
 
 

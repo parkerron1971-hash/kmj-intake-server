@@ -211,6 +211,32 @@ async def ai_proxy(req: ProxyRequest):
     if req.metadata:
         anthropic_payload["metadata"] = req.metadata
 
+    # Arc 20B Part 9 — Layer-2 gate for cacheable task_types (fail-open).
+    _gate_req_text = None
+    _gate_emb = None
+    if business_id and req.task_type:
+        try:
+            import inference_gate
+            if inference_gate.surface_cacheable("ai_proxy", req.task_type):
+                import json as _json
+                _gate_req_text = (req.system or "") + "\n###\n" + _json.dumps(
+                    [m.model_dump() for m in req.messages], default=str)[:8000]
+                hit = inference_gate.lookup(str(business_id), "ai_proxy",
+                                            _gate_req_text, req.task_type)
+                if hit and hit.get("cached"):
+                    return {
+                        "content": hit["response"],
+                        "model": model,
+                        "stop_reason": "cached",
+                        "usage": {"input_tokens": 0, "output_tokens": 0,
+                                  "cache_layer2_hit": True,
+                                  "confidence": hit.get("confidence")},
+                        "raw": {"cached": True},
+                    }
+                _gate_emb = (hit or {}).get("_embedding")
+        except Exception as _g_err:
+            logger.warning(f"ai_proxy gate failed open: {_g_err}")
+
     headers = {
         "x-api-key": api_key,
         "anthropic-version": ANTHROPIC_VERSION,
@@ -288,6 +314,18 @@ async def ai_proxy(req: ProxyRequest):
         task_type=req.task_type,
         duration_ms=int(time.time() * 1000) - started_ms,
     )
+
+    # Arc 20B Part 9 — store the fresh answer for the gate.
+    if _gate_req_text and content_text:
+        try:
+            import inference_gate
+            inference_gate.store(str(business_id), "ai_proxy", _gate_req_text,
+                                 content_text, data.get("model", model),
+                                 int(usage.get("input_tokens") or 0),
+                                 int(usage.get("output_tokens") or 0),
+                                 task_type=req.task_type, embedding=_gate_emb)
+        except Exception as _g_err:
+            logger.warning(f"ai_proxy gate store failed soft: {_g_err}")
 
     # Arc 19 — usage-threshold check (50/80/100/cap). Fire-and-forget;
     # email is unavailable here (metadata carries ids only) so this writes
