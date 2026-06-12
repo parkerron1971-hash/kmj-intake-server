@@ -108,6 +108,12 @@ class OfferingCreateBody(BaseModel):
     currency: str = "usd"
     duration_min: Optional[int] = Field(default=None, gt=0)
     show_price_to_customer: bool = True
+    # Arc 27 — product fields (store MVP)
+    image_url: Optional[str] = Field(default=None, max_length=600)
+    sku: Optional[str] = Field(default=None, max_length=80)
+    inventory_qty: Optional[int] = Field(default=None, ge=0)
+    requires_shipping: Optional[bool] = None
+    fulfillment_note: Optional[str] = Field(default=None, max_length=600)
 
     @field_validator("category")
     @classmethod
@@ -132,6 +138,12 @@ class OfferingPatchBody(BaseModel):
     duration_min: Optional[int] = Field(default=None, gt=0)
     show_price_to_customer: Optional[bool] = None
     is_active: Optional[bool] = None
+    # Arc 27 — product fields (store MVP)
+    image_url: Optional[str] = Field(default=None, max_length=600)
+    sku: Optional[str] = Field(default=None, max_length=80)
+    inventory_qty: Optional[int] = Field(default=None, ge=0)
+    requires_shipping: Optional[bool] = None
+    fulfillment_note: Optional[str] = Field(default=None, max_length=600)
 
     @field_validator("category")
     @classmethod
@@ -195,6 +207,14 @@ def create_offering(body: OfferingCreateBody, user: AuthedUser = Depends(require
         "duration_min": body.duration_min,
         "show_price_to_customer": body.show_price_to_customer,
         "is_active": True,
+        # Arc 27 — product fields pass through when provided (columns
+        # exist after the arc27_store migration; PostgREST rejects
+        # unknown columns, so only include set fields).
+        **({"image_url": body.image_url} if body.image_url is not None else {}),
+        **({"sku": body.sku} if body.sku is not None else {}),
+        **({"inventory_qty": body.inventory_qty} if body.inventory_qty is not None else {}),
+        **({"requires_shipping": body.requires_shipping} if body.requires_shipping is not None else {}),
+        **({"fulfillment_note": body.fulfillment_note} if body.fulfillment_note is not None else {}),
     })
     if not (isinstance(created, list) and created):
         logger.warning(
@@ -227,6 +247,12 @@ def patch_offering(
     if body.duration_min is not None:          update["duration_min"] = body.duration_min
     if body.show_price_to_customer is not None: update["show_price_to_customer"] = body.show_price_to_customer
     if body.is_active is not None:             update["is_active"] = body.is_active
+    # Arc 27 — product fields
+    if body.image_url is not None:             update["image_url"] = body.image_url or None
+    if body.sku is not None:                   update["sku"] = body.sku or None
+    if body.inventory_qty is not None:         update["inventory_qty"] = body.inventory_qty
+    if body.requires_shipping is not None:     update["requires_shipping"] = body.requires_shipping
+    if body.fulfillment_note is not None:      update["fulfillment_note"] = body.fulfillment_note or None
     if not update:
         raise HTTPException(status_code=400, detail="no fields to update")
 
