@@ -172,8 +172,17 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
         f"/plaid_accounts?business_id=eq.{biz}&is_trust_account=is.true"
         f"&included_in_bookkeeping=eq.true&deleted_at=is.null&select=last_balance") or []
     trust_cash = round(sum(float(a.get("last_balance") or 0) for a in trust_accts), 2)
+    # Arc 27 — store orders (soft-fails to [] until the orders table
+    # migration is applied; PostgREST 404/400 → empty list path).
+    try:
+        orders = sb_clients.sb_get_as_service(
+            f"/orders?business_id=eq.{biz}"
+            f"&select=id,status,subtotal_cents,tax_cents,shipping_cents,total_cents,"
+            f"paid_at,refund_amount_cents,refunded_at&limit=10000") or []
+    except Exception:
+        orders = []
     return {"invoices": invoices, "expenses": expenses, "bills": bills,
-            "plaid": plaid, "cash_on_hand": cash_on_hand,
+            "plaid": plaid, "orders": orders, "cash_on_hand": cash_on_hand,
             "trust_ids": set(_trust_account_ids(biz)), "trust_cash": trust_cash}
 
 
@@ -331,16 +340,51 @@ def desired_for_plaid(t: Dict[str, Any],
     return []
 
 
+def desired_for_order(o: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Arc 27 — store orders. Paid via Stripe Checkout, always: Dr Stripe
+    Clearing (1150) for the charge total; Cr Product Revenue (4100) for
+    the goods, Cr Sales Tax Payable (2100) for collected tax, Cr Other
+    Income (4900) for shipping charged. Refunds reverse revenue against
+    the clearing account (same pattern as invoice_refund). Bank deposit
+    of the Stripe payout clears 1150 via the existing payout flow."""
+    out: List[Dict[str, Any]] = []
+    total = round(float(o.get("total_cents") or 0) / 100.0, 2)
+    if total <= 0:
+        return out
+    if (o.get("status") or "").lower() in ("paid", "fulfilled", "refunded") and o.get("paid_at"):
+        tax = round(float(o.get("tax_cents") or 0) / 100.0, 2)
+        shipping = round(float(o.get("shipping_cents") or 0) / 100.0, 2)
+        goods = round(total - tax - shipping, 2)
+        lines = [_line("1150", debit=total)]
+        if goods > 0:
+            lines.append(_line("4100", credit=goods))
+        if tax > 0:
+            lines.append(_line("2100", credit=tax))
+        if shipping > 0:
+            lines.append(_line("4900", credit=shipping, memo="Shipping charged"))
+        out.append(_entry(_d(o.get("paid_at")), "order_payment", o["id"],
+                          "Store order paid", lines))
+    rc = o.get("refund_amount_cents")
+    if rc and float(rc) > 0:
+        amt = round(float(rc) / 100.0, 2)
+        out.append(_entry(_d(o.get("refunded_at")) or _d(o.get("paid_at")),
+                          "order_refund", o["id"], "Store order refunded",
+                          [_line("4100", debit=amt), _line("1150", credit=amt)]))
+    return out
+
+
 # Source table → its GL source_types (for live reconciliation of one row).
 _TABLE_SOURCE_TYPES = {
     "invoices": ("invoice_issue", "invoice_payment", "invoice_refund"),
     "business_expenses": ("expense",),
     "bills": ("bill_issue", "bill_payment"),
     "plaid_transactions": ("plaid_transaction",),
+    "orders": ("order_payment", "order_refund"),
 }
 _TABLE_DESIRED = {
     "invoices": desired_for_invoice, "business_expenses": desired_for_expense,
     "bills": desired_for_bill, "plaid_transactions": desired_for_plaid,
+    "orders": desired_for_order,
 }
 
 
@@ -389,6 +433,8 @@ def generate_entries(sources: Dict[str, Any]) -> List[Dict[str, Any]]:
     trust_ids = sources.get("trust_ids") or set()
     for t in sources["plaid"]:
         specs += desired_for_plaid(t, trust_ids)
+    for o in sources.get("orders") or []:
+        specs += desired_for_order(o)
     opening = _opening_spec(sources["cash_on_hand"], _cash_net(specs))
     if opening:
         specs.append(opening)

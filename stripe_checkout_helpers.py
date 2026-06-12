@@ -33,7 +33,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=15.0, pool=10.0)
 
 # Closed enum for source_type. Enforced at this seam so misspellings
 # can't reach Stripe.
-ALLOWED_SOURCE_TYPES = {"booking", "consultation", "invoice", "manual"}
+ALLOWED_SOURCE_TYPES = {"booking", "consultation", "invoice", "manual", "order"}
 
 
 def _secret_key() -> str:
