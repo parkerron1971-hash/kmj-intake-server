@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from . import hero, about, offerings, testimonials, gallery, cta_band, contact_footer
+from . import hero, about, offerings, testimonials, gallery, cta_band, contact_footer, store
 from ._base import page_shell
 
 MODULES: Dict[str, Dict[str, Any]] = {
@@ -49,6 +49,11 @@ MODULES: Dict[str, Dict[str, Any]] = {
         "variants": cta_band.VARIANTS,
         "render": cta_band.render,
         "fields": ("headline", "subheadline", "cta_label"),
+    },
+    "store": {
+        "variants": store.VARIANTS,
+        "render": store.render,
+        "fields": ("eyebrow", "headline", "intro", "cta_label"),
     },
     "contact": {
         "variants": contact_footer.VARIANTS,

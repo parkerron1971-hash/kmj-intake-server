@@ -54,6 +54,7 @@ async def create_checkout_session(
     customer_email: Optional[str] = None,
     application_fee_amount_cents: int = 0,
     currency: str = "usd",
+    collect_shipping: bool = False,
 ) -> Dict[str, Any]:
     """Create a Stripe Checkout Session on the connected account.
 
@@ -100,6 +101,10 @@ async def create_checkout_session(
         form["customer_email"] = customer_email
     if application_fee_amount_cents and application_fee_amount_cents > 0:
         form["payment_intent_data[application_fee_amount]"] = application_fee_amount_cents
+    if collect_shipping:
+        # Arc 27 — physical goods: Stripe collects the address on the
+        # hosted page; the webhook copies it onto the order row.
+        form["shipping_address_collection[allowed_countries][0]"] = "US"
 
     # Encode line_items[] with indexed keys: line_items[0][price_data]...
     for i, item in enumerate(line_items):

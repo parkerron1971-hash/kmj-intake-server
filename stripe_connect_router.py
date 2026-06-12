@@ -500,6 +500,11 @@ def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
         _mark_booking_paid(source_id, payment_intent_id=pi_id, charge_id=None)
     elif source_type == "invoice":
         _mark_invoice_paid(source_id)
+    elif source_type == "order":
+        # Arc 27 — store orders ride the same metadata pattern.
+        from store_router import mark_order_paid
+        mark_order_paid(source_id, payment_intent_id=pi_id, charge_id=None,
+                        session=session)
 
 
 def _handle_payment_intent_succeeded(pi: Dict[str, Any]) -> None:
@@ -507,10 +512,15 @@ def _handle_payment_intent_succeeded(pi: Dict[str, Any]) -> None:
     before checkout.session.completed; mark idempotently so whichever
     arrives first wins."""
     source_type, source_id = _metadata_source(pi)
-    if not source_id or source_type != "booking":
+    if not source_id or source_type not in ("booking", "order"):
         return
     charges = ((pi.get("charges") or {}).get("data") or [])
     charge_id = charges[0].get("id") if charges else None
+    if source_type == "order":
+        from store_router import mark_order_paid
+        mark_order_paid(source_id, payment_intent_id=pi.get("id"),
+                        charge_id=charge_id, session=None)
+        return
     _mark_booking_paid(source_id, payment_intent_id=pi.get("id"), charge_id=charge_id)
 
 
@@ -593,6 +603,12 @@ def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
                 "refunded_at": _now_iso(),
             },
         )
+    elif source_type == "order" and source_id:
+        # Arc 27 — store orders: refund columns; status flips to
+        # 'refunded' only on full refund (gl_engine reverses revenue).
+        from store_router import record_order_refund
+        record_order_refund(source_id, refunded_cents,
+                            fully=bool(charge.get("refunded")))
 
 
 def _handle_dispute_created(dispute: Dict[str, Any], account_id: Optional[str]) -> None:

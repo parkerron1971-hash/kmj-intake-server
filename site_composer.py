@@ -90,8 +90,19 @@ def gather_context(business_id: str) -> Dict[str, Any]:
 
     testimonials = ((settings.get("website_content") or {}).get("testimonials")) or []
 
+    # Arc 27 — sellable products feed the store module + hosted store page.
+    try:
+        from store_router import _sellable_offerings
+        sellable = _sellable_offerings(business_id)
+    except Exception:
+        sellable = []
+    store = {"enabled": bool(sellable) and bool(slug),
+             "url": f"{RAILWAY_BASE}/public/store/{slug}/page" if slug else "",
+             "items": sellable}
+
     dna = brand_dna.build_brand_dna(business_id, bundle)
     return {
+        "store": store,
         "dna": dna,
         "bundle": bundle,
         "business": {"id": business_id, "name": biz.get("name") or "",
@@ -169,6 +180,8 @@ def _default_spec(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
     if dna["vibe"] == "bold" or "creative" in (biz.get("type") or ""):
         spec.insert(3, {"module": "gallery", "variant": "grid", "content": {}})
+    if (ctx.get("store") or {}).get("enabled"):
+        spec.insert(-2, {"module": "store", "variant": "featured", "content": {}})
     return spec
 
 
@@ -213,7 +226,8 @@ RULES
 - NEVER invent facts, testimonials, credentials, or offerings. The offerings and
   testimonials modules render the real records automatically — you only write the
   section framing (eyebrow/headline/intro).
-- Include "offerings" only if offerings exist; "testimonials" only if testimonials exist.
+- Include "offerings" only if offerings exist; "testimonials" only if testimonials exist;
+  "store" only if sellable products exist ({(ctx.get('store') or {}).get('enabled') and len((ctx.get('store') or {}).get('items') or []) or 0} on file).
 - headline ≤ 9 words. subheadline/intro: 1-2 sentences. about body: 2-4 sentences,
   first person where natural.
 - Choose variants for contrast and rhythm — don't pick the first variant of everything.
