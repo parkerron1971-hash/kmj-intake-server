@@ -164,6 +164,9 @@ from entity_groups_router import router as entity_groups_router
 app.include_router(entity_groups_router)
 from launch_access import router as launch_access_router
 app.include_router(launch_access_router)
+# Arc 25 - practitioner referral loop (codes + attribution + rewards)
+from referrals import router as referrals_router
+app.include_router(referrals_router)
 from rules_router import router as rules_router, proposals_router as chief_proposals_router
 app.include_router(rules_router)
 # Chief-in-your-pocket (2026-06-12) - Web Push (subscribe/test + senders)
