@@ -54,11 +54,33 @@ Pipeline:
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+
+# Arc 29 — abuse gate for the anon intake endpoint. Each submission
+# creates a contact + fires an AI scoring + draft, so unthrottled spam
+# is both a data-pollution and an AI-cost vector. Per-IP sliding window,
+# in-process (matches public_site._check_rate; resets on redeploy —
+# acceptable for a spam speed-bump, not a security boundary).
+_INTAKE_RATE_MAX = int(os.environ.get("INTAKE_RATE_PER_MIN", "6"))
+_INTAKE_WINDOW_SEC = 60
+_intake_buckets: Dict[str, Dict[str, float]] = {}
+
+
+def _intake_rate_ok(ip: str) -> bool:
+    now = time.time()
+    b = _intake_buckets.get(ip)
+    if not b or now - b["start"] > _INTAKE_WINDOW_SEC:
+        _intake_buckets[ip] = {"start": now, "count": 1}
+        return True
+    if b["count"] >= _INTAKE_RATE_MAX:
+        return False
+    b["count"] += 1
+    return True
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -318,7 +340,7 @@ def _route_condition_matches(route, submission):
 
 
 @router.post("/intake/submit")
-async def submit_intake(req: IntakeSubmission):
+async def submit_intake(req: IntakeSubmission, request: Request):
     """
     Receive a form submission, create a contact, score with AI,
     draft a response, and queue it for approval.
@@ -326,7 +348,23 @@ async def submit_intake(req: IntakeSubmission):
     if not get_supabase_url() or not get_supabase_anon():
         raise HTTPException(status_code=500, detail="SUPABASE_URL and SUPABASE_ANON must be set")
 
+    # Arc 29 — abuse gates (anon endpoint; runs before any AI/DB write).
+    client_ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() \
+        or (request.client.host if request.client else "unknown")
+    if not _intake_rate_ok(client_ip):
+        logger.warning(f"[intake] rate-limited ip={client_ip}")
+        raise HTTPException(status_code=429, detail="Too many submissions — please wait a minute and try again.")
+
     submission_data = req.data
+    # Honeypot: a hidden field bots fill and humans never see. Forms may
+    # include any of these names; if one arrives non-empty, drop silently
+    # (200 so the bot gets no signal) without creating a contact or
+    # spending an AI call.
+    for hp in ("_hp", "website_url", "company_url", "fax"):
+        if str(submission_data.get(hp) or "").strip():
+            logger.info(f"[intake] honeypot tripped ({hp}) ip={client_ip} — dropped")
+            return {"status": "ok", "contact_id": None, "queued": False}
+
     name = submission_data.get("name", "").strip()
     email = submission_data.get("email", "").strip()
     phone = submission_data.get("phone", "").strip()

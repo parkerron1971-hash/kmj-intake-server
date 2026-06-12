@@ -535,13 +535,27 @@ scheduler = AsyncIOScheduler()
 
 @app.on_event("startup")
 async def startup():
-    scheduler.add_job(check_followup_sequences, "interval", hours=1, id="followup_check")
+    # Arc 29 — leader election. renew_tick runs on EVERY replica and
+    # refreshes the lease; all other jobs are wrapped with .gate() so
+    # they execute on the single leader only. Single-replica deploys are
+    # unaffected (the lock fail-safes to leader). try_acquire() once now
+    # so the first job interval already knows its role.
+    import scheduler_lock
+    try:
+        scheduler_lock.try_acquire()
+    except Exception as _e:
+        print(f"   [warn] initial lease acquire failed (defaulting leader): {_e}")
+    scheduler.add_job(scheduler_lock.renew_tick, "interval",
+                      seconds=scheduler_lock.RENEW_SEC, id="scheduler_lease_renew")
+    g = scheduler_lock.gate
+    scheduler.add_job(g("followup_check", check_followup_sequences),
+                      "interval", hours=1, id="followup_check")
     # LGS Phase 3: drain the workflow_runs queue (Fork 7 — in-process cron, not a
     # frontend heartbeat). Internal workflows only for now; reactive/webhook paths
     # stay gated behind Stripe signature verification (Fork 21) + the connector slice.
     try:
         import workflow_engine
-        scheduler.add_job(workflow_engine.drain_tick, "interval", minutes=5, id="workflow_drain")
+        scheduler.add_job(g("workflow_drain", workflow_engine.drain_tick), "interval", minutes=5, id="workflow_drain")
     except Exception as e:
         print(f"   [warn] workflow drain job not scheduled: {e}")
     # Phase I.2 — GL live sync: drain the gl_sync_queue (no LISTEN/NOTIFY —
@@ -551,23 +565,23 @@ async def startup():
         import os as _os
         if (_os.environ.get("GL_SYNC_POLLER") or "on").lower() != "off":
             import gl_engine as _gl
-            scheduler.add_job(_gl.drain_tick, "interval", minutes=1, id="gl_drain")
+            scheduler.add_job(g("gl_drain", _gl.drain_tick), "interval", minutes=1, id="gl_drain")
             # Arc 19 — daily metered-usage report to Stripe (no-ops unless
             # BILLING_ENFORCE=on + Stripe configured).
             import usage_metering as _um
-            scheduler.add_job(_um.stripe_report_tick, "interval", hours=24,
+            scheduler.add_job(g("stripe_usage_report", _um.stripe_report_tick), "interval", hours=24,
                               id="stripe_usage_report")
             # Arc 20B — invoice_overdue rule trigger (daily; exactly-once
             # per invoice via the due_date == today-N window).
             import rules_engine as _rules
-            scheduler.add_job(_rules.overdue_tick, "interval", hours=24,
+            scheduler.add_job(g("rules_overdue_tick", _rules.overdue_tick), "interval", hours=24,
                               id="rules_overdue_tick")
             # Chief-in-your-pocket - morning brief push, 13:00 UTC daily
             # (per-business timezones are a follow-on).
             import push_notifications as _push
-            scheduler.add_job(_push.morning_brief_tick, "cron", hour=13, minute=0,
+            scheduler.add_job(g("push_morning_brief", _push.morning_brief_tick), "cron", hour=13, minute=0,
                               id="push_morning_brief")
-            scheduler.add_job(_gl.divergence_tick, "interval", minutes=15, id="gl_divergence")
+            scheduler.add_job(g("gl_divergence", _gl.divergence_tick), "interval", minutes=15, id="gl_divergence")
     except Exception as e:
         print(f"   [warn] GL sync jobs not scheduled: {e}")
     scheduler.start()

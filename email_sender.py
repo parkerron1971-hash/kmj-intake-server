@@ -27,9 +27,13 @@ dashboard to unlock general sends.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
+import time as _time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -525,6 +529,53 @@ def _strip_html(html: str) -> str:
 
 
 @router.post("/email/inbound")
+def _verify_resend_signature(raw_body: bytes, headers: Any) -> bool:
+    """Arc 29 — verify the Resend (Svix) webhook signature.
+
+    Resend signs webhooks with Svix: signed content is
+    "{svix-id}.{svix-timestamp}.{body}", HMAC-SHA256'd with the
+    base64-decoded secret (the part after the 'whsec_' prefix), and the
+    svix-signature header is a space-separated list of 'v1,<b64sig>'.
+
+    Fail-OPEN until configured (matches the platform's webhook pattern):
+    if RESEND_WEBHOOK_SECRET isn't set, allow + log a loud warning so
+    inbound email keeps working pre-setup; the moment the secret is set
+    on Railway, verification is strict and forged payloads are rejected.
+    Replay window: 5 minutes on the svix timestamp."""
+    secret = (os.environ.get("RESEND_WEBHOOK_SECRET") or "").strip()
+    if not secret:
+        logger.warning("[INBOUND] RESEND_WEBHOOK_SECRET not set — webhook "
+                       "signature NOT verified (set it on Railway to harden).")
+        return True
+    try:
+        svix_id = headers.get("svix-id") or headers.get("webhook-id") or ""
+        svix_ts = headers.get("svix-timestamp") or headers.get("webhook-timestamp") or ""
+        svix_sig = headers.get("svix-signature") or headers.get("webhook-signature") or ""
+        if not (svix_id and svix_ts and svix_sig):
+            logger.warning("[INBOUND] missing svix headers — rejected")
+            return False
+        # Replay guard (5 min).
+        try:
+            if abs(_time.time() - int(svix_ts)) > 300:
+                logger.warning("[INBOUND] svix timestamp outside tolerance — rejected")
+                return False
+        except (TypeError, ValueError):
+            return False
+        key = base64.b64decode(secret.split("_", 1)[1] if secret.startswith("whsec_") else secret)
+        signed = f"{svix_id}.{svix_ts}.".encode() + raw_body
+        expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+        # Header may carry multiple space-separated "v1,<sig>" entries.
+        for part in svix_sig.split():
+            _, _, sig = part.partition(",")
+            if sig and hmac.compare_digest(sig, expected):
+                return True
+        logger.warning("[INBOUND] svix signature mismatch — rejected")
+        return False
+    except Exception as e:
+        logger.warning(f"[INBOUND] signature verification error — rejected: {e}")
+        return False
+
+
 async def inbound_email(request: Request):
     """Process inbound email replies from Resend.
 
@@ -536,8 +587,13 @@ async def inbound_email(request: Request):
 
     Always returns 200 so Resend doesn't retry; failures are logged.
     """
+    raw_body = await request.body()
+    if not _verify_resend_signature(raw_body, request.headers):
+        # Forged or unverifiable — 200 so a real-but-misconfigured sender
+        # doesn't hammer retries, but do nothing with the payload.
+        return {"status": "ignored", "reason": "unverified_signature"}
     try:
-        payload = await request.json()
+        payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
         return {"status": "ignored", "reason": "non-json payload"}
 
