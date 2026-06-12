@@ -6574,6 +6574,16 @@ async def _find_offering_by_name(client, biz_id: str, name: str) -> Optional[Dic
     return rows[0]
 
 
+def _refresh_composed_site_bg(business_id: str) -> None:
+    """Arc 28b — Chief-mediated catalog writes keep module-composer
+    sites live, same as the offerings router hook. Fire-and-forget."""
+    try:
+        from site_composer import refresh_if_composed_async
+        refresh_if_composed_async(str(business_id))
+    except Exception as e:
+        logger.warning(f"[chief] composed-site refresh hook failed: {e}")
+
+
 async def handle_create_offering(client, biz, action) -> Dict:
     """Create a new offering. action: {name, category, current_price?,
     duration_min?, currency?, description?, show_price_to_customer?, slug?}
@@ -6656,6 +6666,7 @@ async def handle_create_offering(client, biz, action) -> Dict:
     # reply tells the practitioner where the thing actually went.
     store_str = (" — live in your store" if category in ("product", "course", "package")
                  and off.get("current_price") else "")
+    _refresh_composed_site_bg(biz["id"])
     return {
         "type": "create_offering",
         "result": "created",
@@ -6756,6 +6767,7 @@ async def handle_update_offering(client, biz, action) -> Dict:
     if "image_url" in patch:
         bits.append("image updated" if patch["image_url"] else "image removed")
     detail = "; ".join(bits) if bits else "updated"
+    _refresh_composed_site_bg(biz["id"])
     return {
         "type": "update_offering",
         "result": "updated",
@@ -6911,6 +6923,7 @@ async def handle_archive_offering(client, biz, action) -> Dict:
     })
     if not rows:
         return _fail("archive_offering", "archive failed")
+    _refresh_composed_site_bg(biz["id"])
     return {
         "type": "archive_offering",
         "result": "archived",

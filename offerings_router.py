@@ -83,6 +83,20 @@ _SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _VALID_CATEGORIES = {"service", "session", "event", "course", "product", "package", "custom"}
 
 
+def _refresh_composed_site(business_id: Optional[str]) -> None:
+    """Arc 28b — keep module-composer sites' offerings/store sections
+    live: any catalog mutation re-renders the page from its stored spec
+    in the background (no LLM; no-op for legacy/Smart Sites pages).
+    Never blocks or fails the catalog write."""
+    if not business_id:
+        return
+    try:
+        from site_composer import refresh_if_composed_async
+        refresh_if_composed_async(str(business_id))
+    except Exception as e:
+        logger.warning(f"[offerings] composed-site refresh hook failed: {e}")
+
+
 def _validate_slug(slug: str) -> str:
     s = (slug or "").strip().lower()
     if not _SLUG_RE.match(s):
@@ -222,6 +236,7 @@ def create_offering(body: OfferingCreateBody, user: AuthedUser = Depends(require
             f"see preceding sb_clients log line for detail"
         )
         raise HTTPException(status_code=500, detail="Something went wrong on our end — please try again.")
+    _refresh_composed_site(body.business_id)
     return {"ok": True, "offering": created[0]}
 
 
@@ -274,6 +289,7 @@ def patch_offering(
     rows = sb_clients.sb_get_as_service(
         f"/offerings?id=eq.{offering_id}&select=*&limit=1"
     ) or []
+    _refresh_composed_site(rows[0].get("business_id") if rows else None)
     return {"ok": True, "offering": rows[0] if rows else None}
 
 
@@ -284,6 +300,8 @@ def archive_offering(offering_id: str, user: AuthedUser = Depends(require_user))
         raise HTTPException(status_code=404, detail="offering not found")
     if str(owner) != str(user.id):
         raise HTTPException(status_code=403, detail="not authorized")
+    rows = sb_clients.sb_get_as_service(
+        f"/offerings?id=eq.{offering_id}&select=business_id&limit=1") or []
     sb_clients.sb_patch_as_service(
         f"/offerings?id=eq.{offering_id}",
         {
@@ -292,6 +310,7 @@ def archive_offering(offering_id: str, user: AuthedUser = Depends(require_user))
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         },
     )
+    _refresh_composed_site(rows[0].get("business_id") if rows else None)
     return {"ok": True, "offering_id": offering_id, "archived": True}
 
 

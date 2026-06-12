@@ -386,3 +386,35 @@ def get_spec(business_id: str,
             "dna": {k: ctx["dna"][k] for k in ("vibe", "intensity", "accent_style", "palette")},
             "modules": {mid: {"variants": list(s["variants"]), "fields": list(s["fields"])}
                         for mid, s in site_modules.MODULES.items()}}
+
+
+# ─── Arc 28b — live refresh on catalog change ─────────────────────────
+
+def refresh_if_composed(business_id: str) -> bool:
+    """Re-render a module-composer site from its stored spec (no LLM —
+    deterministic and cheap). Called when offerings change so the site's
+    offerings/store sections stay current without a manual recompose.
+    Returns True when a refresh happened. No-op for legacy / Smart Sites
+    pages (their own live-injection paths already handle freshness)."""
+    ctx = gather_context(business_id)
+    cfg = ((ctx.get("site") or {}).get("site_config") or {})
+    if cfg.get("html_source") != "module-composer" or not cfg.get("page_spec"):
+        return False
+    spec = sanitize_spec(cfg["page_spec"], ctx)
+    render_and_persist(business_id, spec, ctx)
+    return True
+
+
+def refresh_if_composed_async(business_id: str) -> None:
+    """Fire-and-forget wrapper for request paths (offerings CRUD) — the
+    catalog write must never wait on, or fail because of, a re-render."""
+    import threading
+
+    def _run() -> None:
+        try:
+            if refresh_if_composed(business_id):
+                logger.info(f"[composer] refreshed composed site for {business_id[:8]}")
+        except Exception as e:
+            logger.warning(f"[composer] background refresh failed (non-fatal): {e}")
+
+    threading.Thread(target=_run, daemon=True).start()

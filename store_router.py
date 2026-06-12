@@ -284,6 +284,22 @@ def mark_order_paid(order_id: str, *, payment_intent_id: Optional[str],
                                            {"inventory_qty": new_qty})
 
     _send_receipt_async(order_id)
+
+    # Arc 28b — tell the practitioner. Best-effort; mirrors the
+    # Stripe-webhook invoice-paid push pattern.
+    try:
+        import push_notifications
+        total = float(order.get("total_cents") or 0) / 100.0
+        n_items = sum(int(i.get("quantity") or 0) for i in items) or len(items)
+        push_notifications.send_to_business(
+            str(order["business_id"]),
+            title="Order paid 🎉",
+            body=f"${total:,.2f} — {n_items} item{'s' if n_items != 1 else ''}. "
+                 f"Tap to fulfill.",
+            nav="operate", tag=f"order-{order_id[:8]}")
+    except Exception as e:
+        logger.warning(f"[store] order push failed (non-fatal): {e}")
+
     logger.info(f"[store] order {order_id[:8]} marked paid")
 
 

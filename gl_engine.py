@@ -600,6 +600,10 @@ _SOURCE_FETCH = {
     "plaid_transactions": ("/plaid_transactions?transaction_id=eq.{id}&select=transaction_id,amount,date,"
                            "business_category,business_subcategory,plaid_category_primary,"
                            "plaid_category_detail,reconciled_to_payout_id,pending,excluded_from_books,account_id&limit=1"),
+    # Arc 28b — store orders live-sync (queue trigger in
+    # 2026_06_12_arc28b_orders_gl_trigger.sql).
+    "orders": ("/orders?id=eq.{id}&select=id,status,subtotal_cents,tax_cents,"
+               "shipping_cents,total_cents,paid_at,refund_amount_cents,refunded_at&limit=1"),
 }
 
 
