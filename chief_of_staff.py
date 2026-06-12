@@ -6768,6 +6768,52 @@ async def handle_update_offering(client, biz, action) -> Dict:
     }
 
 
+async def handle_offering_readiness(client, biz, action) -> Dict:
+    """Arc 28 — per-offering functional readiness via the behavior-
+    profile engine (offering_profiles.py). The label carries concrete
+    per-offering blockers so the second-pass reply can name exactly
+    what's broken and where the fix lives — never a vague 'looks good'.
+    """
+    import offering_profiles
+    try:
+        report = offering_profiles.business_readiness(str(biz["id"]))
+    except Exception as e:
+        return _fail("offering_readiness", f"readiness check failed: {e}")
+    per = report["offerings"]
+    summary = report["summary"]
+    state = report["business"]
+    if not per:
+        return {
+            "type": "offering_readiness",
+            "result": "empty",
+            "label": "🧭 No active offerings yet — nothing to check. "
+                     "Create offerings first (bookable services or store products).",
+            "nav": _nav("operate"),
+        }
+    problems = []
+    for r in per:
+        if not r["ready"] and r["behavior"] in ("bookable", "sellable"):
+            top = "; ".join(i["msg"] for i in r["issues"][:2])
+            problems.append(f"'{r['name']}' ⚠ {top}")
+    bits = [f"{summary['ready']}/{summary['total']} functional"]
+    if state["booking_enabled"] and state["booking_url"]:
+        bits.append(f"booking live at {state['booking_url']}")
+    if state["store_url"] and summary["sellable_ready"]:
+        bits.append(f"store live at {state['store_url']}")
+    if problems:
+        bits.append("blockers: " + " | ".join(problems[:4])
+                    + (f" (+{len(problems) - 4} more)" if len(problems) > 4 else ""))
+    return {
+        "type": "offering_readiness",
+        "result": "report",
+        "label": "🧭 Readiness: " + " — ".join(bits),
+        "summary": summary,
+        "business_state": state,
+        "offerings": per,
+        "nav": _nav("operate"),
+    }
+
+
 async def handle_setup_store(client, biz, action) -> Dict:
     """Arc 27 — configure and/or report the hosted storefront. action:
     {tax_rate_pct?, flat_shipping_usd?}. With no args it's a status
@@ -8839,6 +8885,8 @@ ACTION_HANDLERS = {
     "list_offerings":             handle_list_offerings,
     # Arc 27 — hosted storefront (configure / status)
     "setup_store":                handle_setup_store,
+    # Arc 28 — behavior-profile readiness report
+    "offering_readiness":         handle_offering_readiness,
     # Phase D.1.2 — availability CRUD
     "set_availability_day":       handle_set_availability_day,
     "set_availability_override":  handle_set_availability_override,
@@ -11235,6 +11283,11 @@ ACTIONS — STORE (the hosted e-commerce storefront — THIS EXISTS; never say y
          "charge sales tax" / "add $5 shipping"                             → setup_store with tax_rate_pct / flat_shipping_usd
     — The practitioner manages the same store visually at OPERATE → Catalog (Store panel: link, settings, order list with Fulfill). Composed sites feature store products automatically.
     — Checkout requires Stripe Connect on the business; if setup_store reports Stripe not connected, say so plainly and point to OPERATE → Payments. Never imply customers can pay before that's true.
+
+  READINESS + DISAMBIGUATION (Arc 28 — category is a CONTRACT, not a label):
+  [ACTION:{{"type":"offering_readiness"}}]  — per-offering functional check: bookable offerings need duration + booking page on + published site; sellable ones need price + site + Stripe (+ stock if tracked). Returns what's live (with URLs) and exactly what's blocking the rest.
+    — USE IT when the practitioner asks "is my store working?", "why can't people book?", "what's missing?", "is everything set up?", or right after you create offerings — confirm the thing you just made is actually reachable, and say so (or say what's still needed) in your reply.
+    — DISAMBIGUATE BEFORE CREATING: when the practitioner says "I sell X" / "add X" and it's not obvious, ask ONE short question first — "Is X something people book a time for, or something they buy outright?" (and for buyable: "physical or digital?"). Then create with the right category: book-a-time → service/session (+duration); physical → product + requires_shipping=true (+ inventory_qty if they mention stock); digital → product + requires_shipping=false + fulfillment_note carrying the download/access link; program → course; bundle → package. Do NOT guess category on ambiguous asks — a miscategorized offering lands in the wrong customer surface.
 
 ACTIONS — TIMERS & ALARMS:
   Countdown (duration-based, in SECONDS):
