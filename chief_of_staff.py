@@ -6614,6 +6614,21 @@ async def handle_create_offering(client, biz, action) -> Dict:
         payload["currency"] = action["currency"]
     if action.get("show_price_to_customer") is not None:
         payload["show_price_to_customer"] = bool(action["show_price_to_customer"])
+    # Arc 27 — store product fields (sellable categories surface in the
+    # hosted storefront; harmless no-ops for service/session categories).
+    if (action.get("image_url") or "").strip():
+        payload["image_url"] = str(action["image_url"]).strip()[:600]
+    if (action.get("sku") or "").strip():
+        payload["sku"] = str(action["sku"]).strip()[:80]
+    if action.get("inventory_qty") is not None:
+        try:
+            payload["inventory_qty"] = max(0, int(action["inventory_qty"]))
+        except (TypeError, ValueError):
+            return _fail("create_offering", f"invalid inventory_qty: {action.get('inventory_qty')!r}")
+    if action.get("requires_shipping") is not None:
+        payload["requires_shipping"] = bool(action["requires_shipping"])
+    if (action.get("fulfillment_note") or "").strip():
+        payload["fulfillment_note"] = str(action["fulfillment_note"]).strip()[:600]
     # Numeric coercions
     if "current_price" in action or "price" in action:
         raw = action.get("current_price", action.get("price"))
@@ -6636,10 +6651,15 @@ async def handle_create_offering(client, biz, action) -> Dict:
     off = rows[0]
     price_str = f" at ${off.get('current_price')}" if off.get("current_price") is not None else ""
     dur_str = f" ({off['duration_min']} min)" if off.get("duration_min") else ""
+    # Arc 27 — sellable categories with a price go live in the hosted
+    # storefront automatically; say so in the label so the second-pass
+    # reply tells the practitioner where the thing actually went.
+    store_str = (" — live in your store" if category in ("product", "course", "package")
+                 and off.get("current_price") else "")
     return {
         "type": "create_offering",
         "result": "created",
-        "label": f"💲 Created offering: {off.get('name')}{price_str}{dur_str}",
+        "label": f"💲 Created offering: {off.get('name')}{price_str}{dur_str}{store_str}",
         "offering_id": off.get("id"),
         "nav": _nav("build"),
         # C.1.3.1b — refresh OfferingsManager + any other listener when
@@ -6694,6 +6714,20 @@ async def handle_update_offering(client, biz, action) -> Dict:
             return _fail("update_offering", f"invalid duration_min: {raw!r}")
     if action.get("show_price_to_customer") is not None:
         patch["show_price_to_customer"] = bool(action["show_price_to_customer"])
+    # Arc 27 — store product fields.
+    if action.get("image_url") is not None:
+        patch["image_url"] = (str(action["image_url"]).strip()[:600]) or None
+    if action.get("sku") is not None:
+        patch["sku"] = (str(action["sku"]).strip()[:80]) or None
+    if action.get("inventory_qty") is not None:
+        try:
+            patch["inventory_qty"] = max(0, int(action["inventory_qty"]))
+        except (TypeError, ValueError):
+            return _fail("update_offering", f"invalid inventory_qty: {action.get('inventory_qty')!r}")
+    if action.get("requires_shipping") is not None:
+        patch["requires_shipping"] = bool(action["requires_shipping"])
+    if action.get("fulfillment_note") is not None:
+        patch["fulfillment_note"] = (str(action["fulfillment_note"]).strip()[:600]) or None
 
     if not patch:
         return _fail("update_offering", "no fields to update")
@@ -6715,6 +6749,12 @@ async def handle_update_offering(client, biz, action) -> Dict:
         bits.append(f"category → {patch['category']}")
     if "show_price_to_customer" in patch:
         bits.append(f"price-visible → {patch['show_price_to_customer']}")
+    if "inventory_qty" in patch:
+        bits.append(f"stock → {patch['inventory_qty']}")
+    if "requires_shipping" in patch:
+        bits.append(f"physical item → {patch['requires_shipping']}")
+    if "image_url" in patch:
+        bits.append("image updated" if patch["image_url"] else "image removed")
     detail = "; ".join(bits) if bits else "updated"
     return {
         "type": "update_offering",
@@ -6724,6 +6764,84 @@ async def handle_update_offering(client, biz, action) -> Dict:
         "offering": off,
         "nav": _nav("build"),
         # C.1.3.1b — see handle_create_offering note.
+        "frontend_event": {"name": "solutionist-offerings-changed"},
+    }
+
+
+async def handle_setup_store(client, biz, action) -> Dict:
+    """Arc 27 — configure and/or report the hosted storefront. action:
+    {tax_rate_pct?, flat_shipping_usd?}. With no args it's a status
+    check. The store itself always exists once the site has a slug —
+    offerings with category product/course/package + a price appear in
+    it automatically; this handler sets tax/shipping and returns the
+    live URL + product count so the reply can be concrete.
+
+    Trust-layer notes: result='blocked' (no published site) carries the
+    exact reason in the label so the second-pass reply can't narrate a
+    store that isn't reachable. The label always states what IS true
+    (URL, live product count, settings) — never an aspiration."""
+    sites = await _sb(client, "GET",
+        f"/business_sites?business_id=eq.{biz['id']}&select=slug&limit=1")
+    slug = (sites[0].get("slug") if sites else "") or ""
+    if not slug:
+        return {
+            "type": "setup_store",
+            "result": "blocked",
+            "label": ("🛒 Store not reachable yet — the business has no published "
+                      "site address. Generate the site first (BUILD → My Site → "
+                      "Compose my site); the store lives at that address."),
+            "nav": _nav("build"),
+        }
+    store_url = f"{FALLBACK_BASE}/public/store/{slug}/page"
+
+    # Settings (flat tax % + flat shipping) — only patch what was given.
+    changed = []
+    biz_rows = await _sb(client, "GET",
+        f"/businesses?id=eq.{biz['id']}&select=settings&limit=1")
+    settings = dict((biz_rows[0].get("settings") if biz_rows else {}) or {})
+    store_cfg = dict(settings.get("store") or {})
+    if action.get("tax_rate_pct") is not None:
+        try:
+            store_cfg["tax_rate_pct"] = max(0.0, min(20.0, float(action["tax_rate_pct"])))
+            changed.append(f"tax {store_cfg['tax_rate_pct']:g}%")
+        except (TypeError, ValueError):
+            return _fail("setup_store", f"invalid tax_rate_pct: {action.get('tax_rate_pct')!r}")
+    if action.get("flat_shipping_usd") is not None:
+        try:
+            store_cfg["flat_shipping_cents"] = max(0, int(round(float(action["flat_shipping_usd"]) * 100)))
+            changed.append(f"flat shipping ${store_cfg['flat_shipping_cents'] / 100:,.2f}")
+        except (TypeError, ValueError):
+            return _fail("setup_store", f"invalid flat_shipping_usd: {action.get('flat_shipping_usd')!r}")
+    if changed:
+        settings["store"] = store_cfg
+        await _sb(client, "PATCH", f"/businesses?id=eq.{biz['id']}", {"settings": settings})
+
+    sellable = await _sb(client, "GET",
+        f"/offerings?business_id=eq.{biz['id']}&is_active=eq.true"
+        "&category=in.(product,course,package)&current_price=gt.0"
+        "&select=id,name&limit=100") or []
+    payments_ready = bool(biz.get("stripe_account_id"))
+    if not payments_ready:
+        biz_pay = await _sb(client, "GET",
+            f"/businesses?id=eq.{biz['id']}&select=stripe_account_id&limit=1")
+        payments_ready = bool(biz_pay and biz_pay[0].get("stripe_account_id"))
+
+    bits = [f"{len(sellable)} product{'s' if len(sellable) != 1 else ''} live"]
+    if changed:
+        bits.append("set " + ", ".join(changed))
+    if not payments_ready:
+        bits.append("⚠ Stripe not connected — checkout will refuse until "
+                    "Payments is set up (OPERATE → Payments)")
+    if not sellable:
+        bits.append("add products via create_offering with category='product' and a price")
+    return {
+        "type": "setup_store",
+        "result": "configured" if changed else "ready",
+        "label": f"🛒 Store: {store_url} — " + "; ".join(bits),
+        "store_url": store_url,
+        "sellable_count": len(sellable),
+        "payments_ready": payments_ready,
+        "nav": _nav("operate"),
         "frontend_event": {"name": "solutionist-offerings-changed"},
     }
 
@@ -8719,6 +8837,8 @@ ACTION_HANDLERS = {
     "update_offering":            handle_update_offering,
     "archive_offering":           handle_archive_offering,
     "list_offerings":             handle_list_offerings,
+    # Arc 27 — hosted storefront (configure / status)
+    "setup_store":                handle_setup_store,
     # Phase D.1.2 — availability CRUD
     "set_availability_day":       handle_set_availability_day,
     "set_availability_override":  handle_set_availability_override,
@@ -11070,7 +11190,7 @@ ACTIONS — PRODUCTS & SERVICES:
   [ACTION:{{"type":"generate_payment_link","product_id":"<uuid>"}}]  — generates a Stripe payment link for a digital/physical/package product (services use the booking flow). Pass force_regenerate=true to rotate an existing link. The link is saved to products.stripe_payment_url and appears as a Buy Now button on the practitioner's website automatically.
   [ACTION:{{"type":"generate_payment_link","name":"Leadership Course"}}]  — fuzzy match by name when you don't have the id.
     — product_type values: service | digital | physical | package. pricing_type: fixed | hourly | per_session | subscription | custom.
-    — When the practitioner says "add a service", "create a product", "I sell...", "I have a course called..." → create_product.
+    — LEGACY surface: for NEW sellable goods prefer create_offering with category product/course/package (hosted store — see ACTIONS — STORE). Use create_product only when maintaining entries already in this catalog.
     — When they say "show my products/services" or "what do I offer?" → list_products.
     — When they say "change the price of X" or "raise my coaching rate to Y" → update_product (use name= to look up by name; product_id wins if both supplied).
     — Digital products with price > 0 get an auto-generated Stripe payment link (platform owner only). Set auto_deliver=true to enable email delivery on purchase.
@@ -11089,17 +11209,32 @@ ACTIONS — OFFERINGS (Phase C.1.2 — canonical pricing for service-based arche
     — `category` is a closed enum: service | session | event | course | product | package | custom. 'donation' is NOT a valid category — donations live in the restricted-modules surface.
     — ROUTING — OFFERINGS vs PRODUCTS (read carefully — they are SEPARATE catalogs):
        • OFFERINGS are the canonical pricing for archetype-referenced things — services a barber books, sessions a coach takes, courses a creator sells (when consumed by an archetype like booking_calendar). When the practitioner says "haircut", "session", "lesson", "massage", "appointment", "service" — DEFAULT to offerings.
-       • PRODUCTS are the legacy catalog. Use products ONLY for non-archetype-referenced things: physical goods, digital downloads, packaged bundles with Stripe payment links the practitioner sells off-archetype.
+       • OFFERINGS are ALSO the catalog behind the hosted STORE (see ACTIONS — STORE): physical goods, digital downloads, courses, and packages the practitioner SELLS go in offerings with category product/course/package. This is the DEFAULT for anything sellable.
+       • PRODUCTS are the LEGACY catalog (payment-link era). Do NOT add new sellable goods there; use it only to read/maintain entries that already live in it. If the practitioner has a legacy product they want in the store, recreate it as an offering with category='product'.
        • Phrase tells:
             "change the price of Haircut" / "raise my haircut to $35"   → update_offering
             "add a service called Massage at $90"                       → create_offering
             "list my services" / "what do I offer?"                     → list_offerings (default — if also relevant, you may follow with list_products)
             "stop offering X" / "archive my Y service"                  → archive_offering
-            "add a digital download" / "I sell an e-book"               → create_product (digital goods, off-archetype)
-            "set up payments for [a digital good]"                      → generate_payment_link (products only)
+            "add a digital download" / "I sell an e-book"               → create_offering category='product' (goes live in the hosted store — see ACTIONS — STORE)
+            "set up payments for [a legacy products-table entry]"       → generate_payment_link (legacy products only; new goods use the store)
        • When in doubt for a service-shaped name, prefer OFFERINGS. Products is the older surface; offerings is where the BookingCalendar widget + future archetype-priced surfaces read from.
     — Price updates on offerings do NOT propagate to historical bookings — past appointments preserve their captured price_at_booking (P5 ruling). Tell the practitioner this if they ask about retroactive changes.
     — show_price_to_customer=false hides the price in the customer-facing widget. Use for consultative-pricing services where the practitioner doesn't want to publish a number.
+
+ACTIONS — STORE (the hosted e-commerce storefront — THIS EXISTS; never say you can't build a store):
+  Every business with a published site HAS a store at <site-address>/public/store/<slug>/page. It is a real storefront: product grid, cart, multi-item Stripe checkout on the practitioner's connected account, inventory tracking, shipping address collection for physical goods, sales tax + flat shipping at checkout, automatic receipt emails, orders flowing into bookkeeping. Offerings with category product | course | package AND a price appear in it automatically — no extra publish step.
+  [ACTION:{{"type":"setup_store"}}]  — status check: returns the live store URL, how many products are live, and whether Stripe is connected. USE THIS FIRST whenever the practitioner asks about selling products, "build me a store", "set up a shop", or "how do people buy X".
+  [ACTION:{{"type":"setup_store","tax_rate_pct":6,"flat_shipping_usd":5}}]  — set the store's flat sales-tax % and/or flat shipping fee (charged once per order containing physical items).
+  [ACTION:{{"type":"create_offering","name":"Embrace the Shift","category":"product","current_price":25,"requires_shipping":true,"inventory_qty":50,"image_url":"https://…","fulfillment_note":"Ships within 3 business days"}}]  — a PHYSICAL product: requires_shipping makes checkout collect the address + apply the flat shipping fee; inventory_qty decrements on each paid order (omit it for untracked stock); fulfillment_note is included in the customer's receipt email (use it for download links on digital goods, pickup/shipping notes on physical ones).
+  [ACTION:{{"type":"update_offering","name":"Embrace the Shift","inventory_qty":40,"image_url":"https://…"}}]
+    — Phrase tells:
+         "build me a store" / "set up my shop" / "I want to sell products"  → setup_store (then offer to add their products as offerings)
+         "sell my book on my site" / "add my e-book for $15"                → create_offering with category='product' (+ requires_shipping for physical, fulfillment_note with the download link for digital), THEN setup_store so you can hand back the live store link
+         "how many do I have left" / "set stock to 20"                      → update_offering inventory_qty
+         "charge sales tax" / "add $5 shipping"                             → setup_store with tax_rate_pct / flat_shipping_usd
+    — The practitioner manages the same store visually at OPERATE → Catalog (Store panel: link, settings, order list with Fulfill). Composed sites feature store products automatically.
+    — Checkout requires Stripe Connect on the business; if setup_store reports Stripe not connected, say so plainly and point to OPERATE → Payments. Never imply customers can pay before that's true.
 
 ACTIONS — TIMERS & ALARMS:
   Countdown (duration-based, in SECONDS):
