@@ -24,3 +24,4 @@ PyJWT[crypto]>=2.8.0
 # tracks Plaid API versions via SDK release rather than a runtime
 # parameter; pin to the latest stable as of 2026-06.
 plaid-python>=24.0.0
+pywebpush==2.0.0

@@ -313,6 +313,22 @@ def _exec_proposal(biz_id: str, rule: Dict, verb_spec: Dict,
         "created_at": _now_iso(),
     })
     row = (res or [None])[0] if isinstance(res, list) else res
+    # Chief-in-your-pocket - an ask-me-first action reaches the
+    # practitioner's pocket the moment it's created. Guarded no-op when
+    # VAPID keys are unset or the import is unavailable (tests).
+    if row:
+        try:
+            import push_notifications as _push
+            _push.send_to_business(
+                biz_id,
+                title="Chief needs a yes ✦",
+                body=(f"Your automation \"{(rule.get('name') or 'rule')[:60]}\" "
+                      f"proposed: {verb_spec['proposal_type'].replace('_', ' ')}."),
+                nav="operate:queue",
+                tag=f"proposal-{(row or {}).get('id')}",
+            )
+        except Exception:
+            pass
     return {"ok": bool(row), "proposal_id": (row or {}).get("id")}
 
 

@@ -166,6 +166,9 @@ from launch_access import router as launch_access_router
 app.include_router(launch_access_router)
 from rules_router import router as rules_router, proposals_router as chief_proposals_router
 app.include_router(rules_router)
+# Chief-in-your-pocket (2026-06-12) - Web Push (subscribe/test + senders)
+from push_notifications import router as push_router
+app.include_router(push_router)
 app.include_router(chief_proposals_router)
 # Phase F.1 — Stripe outbound contractor payments
 from contractors_router import router as contractors_router
@@ -550,6 +553,11 @@ async def startup():
             import rules_engine as _rules
             scheduler.add_job(_rules.overdue_tick, "interval", hours=24,
                               id="rules_overdue_tick")
+            # Chief-in-your-pocket - morning brief push, 13:00 UTC daily
+            # (per-business timezones are a follow-on).
+            import push_notifications as _push
+            scheduler.add_job(_push.morning_brief_tick, "cron", hour=13, minute=0,
+                              id="push_morning_brief")
             scheduler.add_job(_gl.divergence_tick, "interval", minutes=15, id="gl_divergence")
     except Exception as e:
         print(f"   [warn] GL sync jobs not scheduled: {e}")
