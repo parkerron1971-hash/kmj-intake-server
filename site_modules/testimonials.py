@@ -1,0 +1,72 @@
+"""Testimonials module — renders REAL testimonials from ctx only
+(integrity rule: never invented). Content: eyebrow, headline.
+ctx['testimonials'] = [{quote, author, role?}]. Variants: spotlight, grid."""
+from __future__ import annotations
+
+from typing import Any, Dict, List, Tuple
+
+from ._base import safe, ov, eyebrow, heading_accent
+
+VARIANTS = ("spotlight", "grid")
+
+_MAX = 6
+
+
+def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
+    dna = ctx["dna"]
+    rows: List[Dict[str, Any]] = [t for t in (ctx.get("testimonials") or []) if (t.get("quote") or "").strip()][:_MAX]
+    if not rows:
+        return "", ""
+
+    eb = eyebrow("testimonials", content.get("eyebrow") or "Kind words")
+    headline = content.get("headline") or "What clients say"
+
+    if variant == "spotlight":
+        t = rows[0]
+        role = f'<span class="sxm-muted"> — {safe(t.get("role"))}</span>' if t.get("role") else ""
+        html = f"""
+<section class="sxm-section sxm-testi-spot sxm-reveal" id="testimonials">
+  <div class="sxm-inner sxm-testi-spot-inner">
+    {heading_accent(dna)}
+    {eb}
+    <blockquote class="sxm-testi-big">{safe(t['quote'])}</blockquote>
+    <div class="sxm-testi-attr">{safe(t.get('author') or 'A client')}{role}</div>
+  </div>
+</section>"""
+        css = """
+.sxm-testi-spot { background: var(--sx-surface-2); }
+.sxm-testi-spot-inner { max-width: 880px; text-align: center; }
+.sxm-testi-spot .sxm-mark, .sxm-testi-spot .sxm-eyebrow { margin-left: auto; margin-right: auto; }
+.sxm-testi-big { margin: 18px 0 26px; font-family: var(--sx-font-heading);
+  font-size: clamp(1.5rem, 3.2vw, 2.3rem); font-weight: 500; line-height: 1.35; font-style: italic; }
+.sxm-testi-attr { font-size: .95rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--sx-accent); }"""
+        return html, css
+
+    cards = []
+    for t in rows:
+        role = f'<div class="sxm-muted sxm-testi-role">{safe(t.get("role"))}</div>' if t.get("role") else ""
+        cards.append(f"""
+      <figure class="sxm-testi-card">
+        <blockquote>{safe(t['quote'])}</blockquote>
+        <figcaption>{safe(t.get('author') or 'A client')}{role}</figcaption>
+      </figure>""")
+    html = f"""
+<section class="sxm-section sxm-testi-grid-sec sxm-reveal" id="testimonials">
+  <div class="sxm-inner">
+    {heading_accent(dna)}
+    {eb}
+    <h2 {ov('testimonials', 'headline')}>{safe(headline)}</h2>
+    <div class="sxm-testi-grid">{''.join(cards)}
+    </div>
+  </div>
+</section>"""
+    css = """
+.sxm-testi-grid-sec { background: var(--sx-surface-2); }
+.sxm-testi-grid-sec h2 { margin-bottom: 34px; }
+.sxm-testi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 22px; }
+.sxm-testi-card { margin: 0; background: var(--sx-surface); border: 1px solid var(--sx-border);
+  border-radius: var(--sx-radius-card); padding: 28px; }
+.sxm-testi-card blockquote { margin: 0 0 18px; font-style: italic; line-height: 1.55; }
+.sxm-testi-card figcaption { font-weight: 700; font-size: .9rem; color: var(--sx-accent); }
+.sxm-testi-role { font-weight: 400; font-size: .82rem; margin-top: 2px; }"""
+    return html, css
