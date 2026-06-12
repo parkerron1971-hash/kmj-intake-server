@@ -34,6 +34,12 @@ SITE_DOMAIN = "mysolutionist.app"
 # Arc 18 — the web app's home (Vite app on Vercel; marketing stays here).
 APP_URL = "https://system.mysolutionist.app"
 DESKTOP_RELEASES_URL = ""  # set to the GitHub Releases URL once installers publish
+# Arc 25 — Android distribution. Env-driven so the links go live from
+# Railway the moment the first signed APK is uploaded (GitHub Releases),
+# no code deploy needed. PLAY_STORE_URL stays empty until the listing
+# is approved (docs/play_store_submission.md in the frontend repo).
+ANDROID_APK_URL = os.environ.get("ANDROID_APK_URL", "").strip()
+PLAY_STORE_URL = os.environ.get("PLAY_STORE_URL", "").strip()
 
 logger = logging.getLogger("marketing_pages")
 if not logger.handlers:
@@ -248,7 +254,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       <a href="/faq" class="{ax_faq}">FAQ</a>
       <a href="/about" class="{ax_about}">About</a>
       <a href="/help" class="{ax_help}">Help</a>
-      <a href="/download" class="{ax_download}" title="Desktop app for Windows &amp; macOS">Desktop</a>
+      <a href="/download" class="{ax_download}" title="Get the app for Android, iPhone, Windows &amp; macOS">Get the App</a>
       <a class="nav-login" href="{app_url}">Log in</a>
       <a class="nav-cta {ax_get_started}" href="/get-started">Get Started</a>
     </div>
@@ -273,7 +279,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       <a href="/about">About</a>
       <a href="/get-started">Get Started</a>
       <a href="{app_url}">Log in</a>
-      <a href="/download">Desktop app</a>
+      <a href="/download">Get the app</a>
       <a href="/help">Help</a>
       <a href="/privacy">Privacy</a>
       <a href="/data-deletion">Data Deletion</a>
@@ -1049,46 +1055,98 @@ def render_about() -> str:
 # ══════════════════════════════════════════════════════════════════════
 
 def render_download() -> str:
-    """Arc 18 — Desktop download page. Coming-soon copy until Tauri
-    installers publish to GitHub Releases (then set DESKTOP_RELEASES_URL
-    and this page links straight to it)."""
-    if DESKTOP_RELEASES_URL:
-        dl_block = f"""
-        <div class="dl-actions reveal">
-          <a class="nav-cta" style="font-size:15px;padding:12px 24px;" href="{_html.escape(DESKTOP_RELEASES_URL)}">Download for Windows &amp; macOS</a>
-          <p class="small" style="margin-top:10px;">Installers are published on our releases page.</p>
-        </div>"""
+    """Arc 18 desktop page, expanded in Arc 25 into the "Get the App"
+    surface: Android (direct APK + Play Store when live), iPhone (PWA
+    install steps), Desktop (Tauri coming-soon until DESKTOP_RELEASES_URL
+    is set). Android links are env-driven — see ANDROID_APK_URL above."""
+    # — Android card —
+    if PLAY_STORE_URL:
+        play_block = f"""<a class="nav-cta" style="display:inline-block;font-size:14px;padding:11px 20px;" href="{_html.escape(PLAY_STORE_URL)}">Get it on Google Play</a>"""
     else:
-        dl_block = f"""
-        <div class="dl-actions reveal">
+        play_block = """<span class="dl-soon">Play Store &mdash; coming soon</span>"""
+    if ANDROID_APK_URL:
+        android_block = f"""
+          <a class="nav-cta" style="display:inline-block;font-size:14px;padding:11px 20px;" href="{_html.escape(ANDROID_APK_URL)}">Download the Android app (APK)</a>
+          <div style="margin-top:14px;">{play_block}</div>
+          <details class="dl-steps">
+            <summary>How to install the APK</summary>
+            <ol>
+              <li>Tap the download button above and open the downloaded file.</li>
+              <li>If prompted, allow your browser to install unknown apps
+                  (Settings &rarr; Install unknown apps &rarr; allow).</li>
+              <li>Tap Install. Solutionist appears on your home screen.</li>
+            </ol>
+          </details>"""
+    else:
+        android_block = f"""
           <span class="dl-soon">Coming soon</span>
-          <p style="color:var(--text-secondary);max-width:520px;margin:14px auto 0;">
-            The desktop app for Windows and macOS is in final packaging.
-            Everything it does, the web app does today &mdash; same account,
-            same data, same Chief.
-          </p>
-          <a class="nav-cta" style="display:inline-block;margin-top:22px;font-size:15px;padding:12px 24px;" href="{APP_URL}">Use the web app now</a>
-        </div>"""
+          <p class="dl-note">The Android app is in final packaging. Until it lands,
+             install from the browser: open <strong>{APP_URL.replace("https://", "")}</strong>
+             in Chrome &rarr; menu (&#8942;) &rarr; <strong>Add to Home screen</strong>.</p>
+          <div style="margin-top:14px;">{play_block}</div>"""
+    # — Desktop card —
+    if DESKTOP_RELEASES_URL:
+        desktop_block = f"""
+          <a class="nav-cta" style="display:inline-block;font-size:14px;padding:11px 20px;" href="{_html.escape(DESKTOP_RELEASES_URL)}">Download for Windows &amp; macOS</a>"""
+    else:
+        desktop_block = f"""
+          <span class="dl-soon">Coming soon</span>
+          <p class="dl-note">The desktop app is in final packaging. Everything it does,
+             the web app does today &mdash; same account, same data, same Chief.</p>"""
     content = f"""
-<section class="hero" style="padding-top:96px;padding-bottom:64px;text-align:center;">
+<section class="hero" style="padding-top:96px;padding-bottom:40px;text-align:center;">
   <div class="container">
-    <h1 class="reveal">The Solutionist System,<br>on your desktop.</h1>
+    <h1 class="reveal">Solutionist, wherever you work.</h1>
     <p class="reveal" style="color:var(--text-muted);max-width:560px;margin:18px auto 0;">
-      A native desktop app for practitioners who live in their system all day
-      &mdash; faster, focused, always one click away.
+      One account, one system &mdash; phone, tablet, and desktop.
+      The web app at <a href="{APP_URL}" style="color:var(--accent);">{APP_URL.replace("https://", "")}</a> works everywhere today.
     </p>
-    {dl_block}
+  </div>
+</section>
+<section style="padding:0 0 80px;">
+  <div class="container">
+    <div class="dl-grid">
+      <div class="company-card reveal">
+        <h3>Android</h3>
+        {android_block}
+      </div>
+      <div class="company-card reveal reveal-delay-1">
+        <h3>iPhone &amp; iPad</h3>
+        <p class="dl-note">Installs as an app straight from Safari &mdash; no App Store needed.</p>
+        <details class="dl-steps" open>
+          <summary>Install steps</summary>
+          <ol>
+            <li>Open <strong>{APP_URL.replace("https://", "")}</strong> in Safari.</li>
+            <li>Tap the Share button, then <strong>Add to Home Screen</strong>.</li>
+            <li>Tap Add. Solutionist appears on your home screen.</li>
+          </ol>
+        </details>
+      </div>
+      <div class="company-card reveal reveal-delay-2">
+        <h3>Windows &amp; macOS</h3>
+        {desktop_block}
+      </div>
+    </div>
+    <p class="reveal" style="text-align:center;margin-top:34px;">
+      <a class="nav-cta" style="display:inline-block;font-size:15px;padding:12px 24px;" href="{APP_URL}">Use the web app now</a>
+    </p>
   </div>
 </section>"""
     return _render_shell(
-        title="Desktop App",
-        description="Download The Solutionist System desktop app for Windows and macOS.",
+        title="Get the App",
+        description="Get The Solutionist System on Android, iPhone, Windows, and macOS — one account, one system, every device.",
         content_html=content,
         path="/download",
         active="download",
         extra_css="""
-  .dl-soon{display:inline-block;margin-top:26px;padding:6px 16px;border:1px solid var(--border-strong);border-radius:99px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text-muted);}
-  .dl-actions{margin-top:8px;}
+  .dl-soon{display:inline-block;margin-top:4px;padding:6px 16px;border:1px solid var(--border-strong);border-radius:99px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text-muted);}
+  .dl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:8px;}
+  @media (max-width: 880px){.dl-grid{grid-template-columns:1fr;}}
+  .dl-grid .company-card h3{margin-bottom:12px;}
+  .dl-note{color:var(--text-secondary);font-size:13.5px;line-height:1.55;margin:8px 0 0;}
+  .dl-steps{margin-top:14px;text-align:left;}
+  .dl-steps summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--text-muted);letter-spacing:0.4px;}
+  .dl-steps ol{margin:10px 0 0;padding-left:20px;color:var(--text-secondary);font-size:13.5px;line-height:1.6;display:flex;flex-direction:column;gap:6px;}
 """,
     )
 
