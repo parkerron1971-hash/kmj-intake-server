@@ -167,6 +167,9 @@ app.include_router(launch_access_router)
 # Arc 25 - practitioner referral loop (codes + attribution + rewards)
 from referrals import router as referrals_router
 app.include_router(referrals_router)
+# Arc 26 - module composer (brand DNA -> deterministic section modules)
+from site_composer import router as site_composer_router
+app.include_router(site_composer_router)
 from rules_router import router as rules_router, proposals_router as chief_proposals_router
 app.include_router(rules_router)
 # Chief-in-your-pocket (2026-06-12) - Web Push (subscribe/test + senders)

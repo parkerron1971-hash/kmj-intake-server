@@ -582,6 +582,10 @@ def _inject_dynamic_sections(
     """Inject the products + gallery + testimonials sections into the
     served HTML.
 
+    Arc 26: module-composer pages render offerings/testimonials/gallery
+    from live data at compose time — appending the legacy sections would
+    double-render them, so marked pages pass through untouched.
+
     Placeholder-aware: if the template contains `{{PRODUCTS_SECTION}}`,
     `{{GALLERY_SECTION}}`, or `{{TESTIMONIALS_SECTION}}`, those tokens
     are replaced in place. This lets generated templates control where
@@ -591,6 +595,11 @@ def _inject_dynamic_sections(
     The site itself is regenerated rarely; this gives practitioners
     live updates without a regen cycle.
     """
+    # Arc 26 — composed pages already contain these sections (live data
+    # baked at compose/shuffle time); skip legacy injection entirely.
+    if 'name="x-solutionist-composer"' in html:
+        return html
+
     products_html = products_html or ""
     gallery_html = gallery_html or ""
     testimonials_html = testimonials_html or ""
