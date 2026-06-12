@@ -293,3 +293,20 @@ def archive_offering(offering_id: str, user: AuthedUser = Depends(require_user))
         },
     )
     return {"ok": True, "offering_id": offering_id, "archived": True}
+
+
+# ─── Arc 28 — category behavior readiness ────────────────────────────
+
+
+@router.get("/readiness")
+def offerings_readiness(
+    business_id: str = Query(...),
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Per-offering functional readiness (Arc 28 behavior profiles):
+    bookable offerings check duration + booking page + site; sellable
+    ones check price + site + Stripe + stock. Computed live from
+    business state — see offering_profiles.py."""
+    _require_owner(business_id, user)
+    import offering_profiles
+    return {"ok": True, **offering_profiles.business_readiness(business_id)}
