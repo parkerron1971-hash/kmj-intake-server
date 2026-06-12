@@ -85,6 +85,23 @@ from agents.chief_executive.router import router as chief_executive_router
 # Pass 4.0g — Multi-module composition (Cathedral + Studio Brut + Module Router)
 from agents.composer.router import router as composer_router
 
+# Arc 29 — error tracking. Env-gated: no-op until SENTRY_DSN is set on
+# Railway, then every unhandled exception + slow request is captured.
+# Optional dependency (sentry-sdk in requirements); import guarded so a
+# missing package never blocks boot.
+if os.environ.get("SENTRY_DSN"):
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=os.environ["SENTRY_DSN"],
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES_RATE", "0.0")),
+            environment=os.environ.get("RAILWAY_ENVIRONMENT", "production"),
+            send_default_pii=False,  # never ship customer PII to Sentry
+        )
+        print("   Sentry error tracking: ON")
+    except Exception as _e:
+        print(f"   [warn] Sentry init failed: {_e}")
+
 app = FastAPI(title="KMJ Intake Automation")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 # Guarantee CORS headers on ALL error responses (500/404/422/unhandled) — an
@@ -877,6 +894,7 @@ async def canva_callback(request: Request):
 
 @app.get("/health")
 async def health():
+    """Liveness: cheap, always 200 if the process is up."""
     return {
         "status": "running",
         "business": BUSINESS_NAME,
@@ -885,6 +903,49 @@ async def health():
         "scheduler": scheduler.running,
         "next_followup_check": str(scheduler.get_job("followup_check").next_run_time),
     }
+
+
+from fastapi.responses import JSONResponse
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Arc 29 — readiness probe: actually reaches dependencies + reports
+    leader role and which optional integrations are configured. Returns
+    503 when a hard dependency (Supabase) is unreachable so a load
+    balancer / uptime monitor can react instead of routing to a broken
+    instance. The shallow /health stays as the liveness probe."""
+    import scheduler_lock
+    checks: dict = {}
+
+    # Supabase reachability (hard dependency).
+    supabase_ok = False
+    try:
+        import sb_clients
+        r = sb_clients.sb_get_as_service("/businesses?select=id&limit=1")
+        supabase_ok = r is not None
+    except Exception as e:
+        checks["supabase_error"] = str(e)[:200]
+    checks["supabase"] = supabase_ok
+
+    checks["scheduler_running"] = scheduler.running
+    checks["is_scheduler_leader"] = scheduler_lock.is_leader()
+    checks["integrations"] = {
+        "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "openai": bool(os.environ.get("OPENAI_API_KEY")),
+        "stripe": bool(os.environ.get("STRIPE_SECRET_KEY")),
+        "stripe_webhook": bool(os.environ.get("STRIPE_SIGNING_SECRET")
+                               or os.environ.get("STRIPE_WEBHOOK_SECRET")),
+        "resend": bool(os.environ.get("RESEND_API_KEY")),
+        "resend_webhook_verified": bool(os.environ.get("RESEND_WEBHOOK_SECRET")),
+        "plaid": bool(os.environ.get("PLAID_CLIENT_ID")),
+        "push_vapid": bool(os.environ.get("VAPID_PRIVATE_KEY")),
+        "sentry": bool(os.environ.get("SENTRY_DSN")),
+        "billing_enforce": (os.environ.get("BILLING_ENFORCE") or "off").lower() == "on",
+    }
+    ready = supabase_ok and scheduler.running
+    status_code = 200 if ready else 503
+    return JSONResponse(status_code=status_code, content={"ready": ready, **checks})
 
 
 # ─────────────────────────────────────────────────────────────

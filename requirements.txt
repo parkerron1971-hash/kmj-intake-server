@@ -25,3 +25,9 @@ PyJWT[crypto]>=2.8.0
 # parameter; pin to the latest stable as of 2026-06.
 plaid-python>=24.0.0
 pywebpush==2.0.0
+# Arc 29 — error tracking. Optional at runtime (init is gated on
+# SENTRY_DSN in kmj_intake_automation.py); installed so the env var is
+# all that's needed to turn capture on. fastapi integration auto-detected.
+sentry-sdk[fastapi]>=2.0.0
+# Arc 29 — CI test runner (also used locally).
+pytest>=8.0.0
