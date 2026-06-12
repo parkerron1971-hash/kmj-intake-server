@@ -54,11 +54,14 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from agents.composer.cathedral_hero_composer import compose_cathedral_hero
+from lead_admin import require_owner  # Arc 28c — these diagnostic/spike
+# endpoints fire Claude calls with a client-supplied business_id; gate to
+# the platform owner (they are internal review tools, never end-user surfaces).
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +76,7 @@ class DiagComposeRequest(BaseModel):
 
 
 @router.post("/_diag/compose_hero")
-def diag_compose_hero(req: DiagComposeRequest) -> Dict[str, Any]:
+def diag_compose_hero(req: DiagComposeRequest, _owner=Depends(require_owner)) -> Dict[str, Any]:
     """Run the Cathedral Hero Composer for a business. Returns the
     composition JSON (variant + treatments + content + reasoning).
 
@@ -92,7 +95,7 @@ class DiagRouteModuleRequest(BaseModel):
 
 
 @router.post("/_diag/route_module")
-def diag_route_module(req: DiagRouteModuleRequest) -> Dict[str, Any]:
+def diag_route_module(req: DiagRouteModuleRequest, _owner=Depends(require_owner)) -> Dict[str, Any]:
     """Run the Module Router for a business. Returns the routing
     decision (module_id + confidence + reasoning + alternative_module
     + _route_metadata diagnostic envelope).
@@ -114,7 +117,7 @@ class DiagComposeAndRenderRequest(BaseModel):
 
 
 @router.post("/_diag/compose_and_render_hero")
-def diag_compose_and_render_hero(req: DiagComposeAndRenderRequest) -> Dict[str, Any]:
+def diag_compose_and_render_hero(req: DiagComposeAndRenderRequest, _owner=Depends(require_owner)) -> Dict[str, Any]:
     """Run the full Pass 4.0g multi-module pipeline for one business.
 
     Module Router decides cathedral vs studio_brut. Module-specific
@@ -131,7 +134,7 @@ def diag_compose_and_render_hero(req: DiagComposeAndRenderRequest) -> Dict[str, 
 # ─── Phase 4 spike render endpoints ────────────────────────────────
 
 @router.post("/_spike/render_hero/{business_id}")
-def spike_render_hero(business_id: str) -> Dict[str, Any]:
+def spike_render_hero(business_id: str, _owner=Depends(require_owner)) -> Dict[str, Any]:
     """Compose + render. Returns {composition, html, business_id}.
 
     The html is the standalone HTML5 doc (same content as the GET
@@ -143,7 +146,7 @@ def spike_render_hero(business_id: str) -> Dict[str, Any]:
 
 
 @router.get("/_spike/render_hero_html/{business_id}", response_class=HTMLResponse)
-def spike_render_hero_html(business_id: str) -> HTMLResponse:
+def spike_render_hero_html(business_id: str, _owner=Depends(require_owner)) -> HTMLResponse:
     """Browser-viewable spike endpoint. Fires Composer + renders, then
     serves the standalone HTML5 document directly as text/html.
 
@@ -164,7 +167,7 @@ def spike_render_hero_html(business_id: str) -> HTMLResponse:
 # ─── Phase 5 spike comparison page ─────────────────────────────────
 
 @router.get("/_spike/comparison_page", response_class=HTMLResponse)
-def spike_comparison_page() -> HTMLResponse:
+def spike_comparison_page(_owner=Depends(require_owner)) -> HTMLResponse:
     """Phase 5 — side-by-side comparison page.
 
     Server-side renders all three spike businesses' Heros + reasoning
@@ -187,7 +190,7 @@ def spike_comparison_page() -> HTMLResponse:
 # ─── Phase F multi-module comparison page ──────────────────────────
 
 @router.get("/_spike/multi_module_comparison", response_class=HTMLResponse)
-def spike_multi_module_comparison(refresh: int = 0) -> HTMLResponse:
+def spike_multi_module_comparison(refresh: int = 0, _owner=Depends(require_owner)) -> HTMLResponse:
     """Pass 4.0g Phase F — multi-module comparison page.
 
     Renders all three spike businesses through the full Pass 4.0g

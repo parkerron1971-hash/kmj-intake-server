@@ -79,6 +79,19 @@ def _business(business_id: str) -> Optional[Dict[str, Any]]:
     return rows[0] if rows else None
 
 
+def _require_owner(business_id: str, session: UserSession) -> None:
+    """Arc 28c — practitioner store endpoints read via service-role
+    (bypasses RLS), so the owner check MUST live here. Without it any
+    authenticated user could pass another business's id and read its
+    orders + customer PII. Mirrors offerings_router._require_owner."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    if str(rows[0].get("owner_id")) != str(session.user.id):
+        raise HTTPException(403, "not authorized for this business")
+
+
 def _sellable_offerings(business_id: str) -> List[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/offerings?business_id=eq.{business_id}&is_active=eq.true"
@@ -375,7 +388,8 @@ async def _send_receipt(order_id: str) -> None:
 
 @router.get("/store/orders")
 def list_orders(biz: str,
-                _: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+                session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    _require_owner(biz, session)
     orders = sb_clients.sb_get_as_service(
         f"/orders?business_id=eq.{biz}&order=created_at.desc&select=*&limit=200") or []
     ids = [o["id"] for o in orders]
@@ -393,7 +407,12 @@ def list_orders(biz: str,
 
 @router.post("/store/orders/{order_id}/fulfill")
 def fulfill_order(order_id: str,
-                  _: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+                  session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    rows = sb_clients.sb_get_as_service(
+        f"/orders?id=eq.{order_id}&select=business_id&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "order not found")
+    _require_owner(str(rows[0]["business_id"]), session)
     sb_clients.sb_patch_as_service(
         f"/orders?id=eq.{order_id}&status=eq.paid",
         {"status": "fulfilled", "fulfilled_at": _now_iso(), "updated_at": _now_iso()})
