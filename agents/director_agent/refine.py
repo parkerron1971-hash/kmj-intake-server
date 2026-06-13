@@ -428,22 +428,30 @@ def run_refine(
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     try:
-        from agents.director_agent.build_with_loop import run_build_loop
-        result = run_build_loop(
-            business_name=business_name,
-            module_id=module_id,
-            description=build_inputs.get("description"),
-            colors=build_inputs.get("colors"),
-            practitioner_voice=build_inputs.get("practitioner_voice"),
-            strategy_track_summary=build_inputs.get("strategy_track_summary"),
-            vocab_id=build_inputs.get("vocab_id") or "sovereign-authority",
-            max_attempts=int(build_inputs.get("max_attempts") or 2),
-            include_html=False,
-            business_id=business_id,
-            initial_punch_list=expanded_moves,
-        )
+        # CANONICAL ENGINE (DRL arc): the Director's legacy LLM-writes-HTML
+        # build loop is retired. A "redesign" from the MySite chat now runs
+        # the Module Composer (DRO-driven, concept-threaded, visual depth) —
+        # the practitioner's request + enriched moves become the brief.
+        from site_composer import compose_site
+        notes = (user_text or "").strip()
+        if expanded_moves:
+            changes = "; ".join(
+                str(m.get("instruction") or m.get("move") or m.get("text") or m)
+                for m in expanded_moves if m
+            ).strip()
+            if changes:
+                notes = (notes + " | Requested changes: " + changes).strip(" |")
+        composed = compose_site(business_id, brief_notes=notes, use_llm=True)
+        result = {
+            "status": "success",
+            "regenerated": True,
+            "persistence": {"site_id": composed.get("site_id"), "slug": composed.get("slug")},
+            "design_rationale_id": composed.get("design_rationale_id"),
+            "html_length": None,
+            "steps": [],
+        }
     except Exception as e:
-        logger.warning(f"[refine] run_build_loop crashed: {type(e).__name__}: {e}")
+        logger.warning(f"[refine] compose_site crashed: {type(e).__name__}: {e}")
         build_summary["error"] = f"{type(e).__name__}: {e}"
         build_summary["finished_at"] = time.strftime(
             "%Y-%m-%dT%H:%M:%SZ", time.gmtime(),

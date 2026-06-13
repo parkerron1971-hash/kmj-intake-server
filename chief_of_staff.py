@@ -5058,43 +5058,14 @@ async def _generate_strategy_site(client, biz: Dict, track: Dict) -> None:
     if existing:
         return
 
-    biz_name = biz.get("name", "")
-    biz_type = biz.get("type", "general")
-    practitioner = (biz.get("settings") or {}).get("practitioner_name", "")
-    voice = biz.get("voice_profile") or {}
-    bm = track.get("business_model") or {}
-    pricing = track.get("pricing_strategy") or {}
-    packages = track.get("service_packages") or []
-
-    system = (
-        f"You are the Website Generator. Create a complete, professional single-page website "
-        f"for \"{biz_name}\". Practitioner: {practitioner}. Type: {biz_type}. "
-        f"Use the strategy-track data below to populate sections. Generate ONLY HTML with "
-        f"embedded CSS — no markdown, no commentary. Mobile-responsive, modern, clean. "
-        f"Google Fonts allowed."
-    )
-    user = json.dumps({
-        "voice": voice,
-        "value_proposition": bm.get("value_proposition"),
-        "customer_segments": bm.get("customer_segments"),
-        "pricing_tiers": pricing.get("tiers"),
-        "service_packages": packages,
-    })[:4000]
-
-    html = await _call_claude(client, system, [{"role": "user", "content": f"Generate the site. Context:\n{user}"}], max_tokens=4096)
-    if not html or "<html" not in html.lower():
-        return
-    # Strip fences if present
-    if "```" in html:
-        parts = html.split("```")
-        for part in parts:
-            if "<html" in part.lower():
-                html = part.replace("html\n", "", 1).replace("html", "", 1) if part.lower().strip().startswith("html") else part
-                break
-    slug = "".join(c.lower() if c.isalnum() else "-" for c in biz_name).strip("-")[:60] or "site"
-    await _sb(client, "POST", "/business_sites", {
-        "business_id": biz_id, "html_content": html, "slug": slug, "status": "published",
-    })
+    # CANONICAL ENGINE (DRL arc): the legacy LLM-writes-HTML generator is
+    # retired. The initial strategy-launch site is composed by the Module
+    # Composer (DRO-driven). Run in a thread so the event loop isn't blocked.
+    try:
+        from site_composer import compose_site
+        await asyncio.to_thread(compose_site, biz_id, "", True)
+    except Exception as e:
+        logger.warning(f"[strategy] initial site compose failed (non-fatal): {e}")
 
 
 async def handle_session_summary(client, biz, action) -> Dict:
@@ -11152,7 +11123,7 @@ ACTIONS — QUEUE MANAGEMENT:
   [ACTION:{{"type":"bulk_dismiss","filter":"priority:low"}}]  — cap 20
 
 ACTIONS — LONG TASKS (heavy work that runs in the background, lands on the desktop):
-  [ACTION:{{"type":"enqueue_job","kind":"rebuild_site"}}]  — Rebuild / recompose the practitioner's website. This is SLOW, so it runs as a queued job: it finishes server-side and the result is waiting on their desktop. Use it whenever they ask to rebuild / recompose / refresh / redo their site, ESPECIALLY from their phone. After emitting it, tell them you've STARTED it and you'll let them know on their desktop when it's ready — do NOT claim the site is already rebuilt or describe the finished result, because it hasn't run yet.
+  [ACTION:{{"type":"enqueue_job","kind":"rebuild_site"}}]  — Rebuild / recompose / REDESIGN the practitioner's website. This is SLOW, so it runs as a queued job: it finishes server-side and the result is waiting on their desktop. Use it whenever they ask to rebuild / recompose / refresh / redo / REDESIGN / change the design of / make over their site, ESPECIALLY from their phone. To pass specific design requests, include "params":{{"brief_notes":"<their request, e.g. darker, more editorial, bigger hero>"}}. After emitting it, tell them you've STARTED it and you'll let them know on their desktop when it's ready — do NOT claim the site is already rebuilt or describe the finished result, because it hasn't run yet. NEVER hand-write HTML or describe a finished design yourself.
 
 ACTIONS — CONTACTS:
   [ACTION:{{"type":"create_contact","name":"...","email":"...","phone":"...","status":"lead"}}]
