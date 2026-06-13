@@ -1,0 +1,30 @@
+{
+  "exemplar_id": "e2_hartwell_vance",
+  "dro_version": 1,
+  "business_id": "exemplar:hartwell_vance",
+  "narrative": "Constructed; maximal contrast to E1 (light, formal, still, paper-warm). Third-generation estate/probate attorney, 25 years. Clients arrive after a death — grieving, executors by surprise, afraid of mistakes. She is precise, unhurried, quietly kind. Resulting direction: warm paper, walnut ink, engraved-letterhead gravity, totally still — the visual opposite of E1 on five axes, derived from signals not a 'lawyer template'.",
+  "signals": [
+    { "signal_id": "opening_posture", "value": "credential_first", "confidence": 0.85, "source": "intake", "evidence": ["twenty-five years, twelve hundred estates — that's what calms people"] },
+    { "signal_id": "communication_temperature", "value": 0.35, "confidence": 0.8, "source": "inferred", "evidence": ["zero analogies", "deliberate cadence"], "modifiers": [] },
+    { "signal_id": "audience_sophistication", "value": "novice", "confidence": 0.85, "source": "intake", "evidence": ["one-time need, they've never done this before"] },
+    { "signal_id": "audience_emotional_state", "value": ["vulnerable", "urgent"], "confidence": 0.9, "source": "intake", "evidence": ["grieving and have to settle an estate"] },
+    { "signal_id": "authority_style", "value": "expert_above", "confidence": 0.8, "source": "intake", "evidence": ["people need someone to just handle it"] },
+    { "signal_id": "first_five_seconds", "value": "calm_safe", "confidence": 0.9, "source": "intake", "evidence": ["you're in careful hands; nothing will be dropped"] },
+    { "signal_id": "vertical_conventions", "value": "honor", "confidence": 0.85, "source": "intake", "evidence": ["lawyers should look like lawyers; I just don't want to look dated"] },
+    { "signal_id": "brand_maturity", "value": "established_flexible", "confidence": 0.75, "source": "intake", "evidence": ["firm name carries weight, visuals dated"] },
+    { "signal_id": "offering_texture", "value": ["moment_of_need"], "confidence": 0.9, "source": "intake", "evidence": ["clients arrive after a death"] },
+    { "signal_id": "energy_signature", "value": "deliberate", "confidence": 0.85, "source": "inferred", "evidence": ["precise, unhurried"] }
+  ],
+  "decisions": {
+    "palette": { "base": "paper_neutral", "accent_strategy": "tonal_monochrome", "temperature": "neutral_warm", "because": "Warm cream + deep walnut ink: P4 (a room, not a stage — grieving people need daylight honesty) + P14 (zero-judgment surface; no red anywhere).", "from_signals": ["audience_emotional_state", "first_five_seconds"] },
+    "typography": { "display_personality": "editorial_serif", "body_personality": "readable_serif", "pairing_logic": "High formal contrast, serif on serif: the convention's trust job (P9) executed in warm Freight-class, not dated Times.", "scale_contrast": "confident", "because": "P5 (expert_above → formal contrast) + P9 (serif = stability signal, modernized in warmth).", "from_signals": ["authority_style", "vertical_conventions"] },
+    "layout": { "symmetry": "centered_formal", "density": "balanced", "hierarchy_approach": "guided_descent", "because": "P6 (symmetry = verdict, steadiness for the vulnerable) + P15 (proof in first viewport: years, estates, county courts).", "from_signals": ["audience_emotional_state", "opening_posture"] },
+    "motion": { "temperature": "none", "signature_move": "stillness", "because": "P8 + P12: a deliberate counselor does not animate; stillness IS the signature move.", "from_signals": ["energy_signature"] },
+    "hero_concept": { "direction": "typographic_statement", "concept_statement": "Your family's affairs, handled with care.", "metaphor_elements": [], "because": "Metaphors would feel evasive here; the promise itself is the picture (S6 calm/gravitas).", "from_signals": ["first_five_seconds", "audience_emotional_state"] },
+    "whitespace": { "philosophy": "editorial_rhythm", "because": "Measured rhythm matches a deliberate, unhurried counsel.", "from_signals": ["energy_signature"] },
+    "voice_to_visual": { "notes": ["numbers set in the display serif (credentials as typography)", "'handled' is the only emphasized word", "no red, no urgency devices anywhere (P14)"], "because": "Credential-first posture rendered as typographic gravity; vulnerability protected by removing all alarm cues.", "from_signals": ["opening_posture", "audience_emotional_state"] }
+  },
+  "anti_convergence": { "distinctiveness_check": { "verdict": "distinct", "axes_shared_with_nearest": 1, "compared_against": ["e1_kmj"], "notes": "Opposite of E1 on light/dark, symmetry, body type, motion, hero direction." }, "banned_defaults_avoided": ["no Times-on-white", "no navy default", "no stock courthouse photo"] },
+  "summary_for_practitioner": "Your site reads like warm engraved letterhead: cream paper, walnut ink, a steady serif voice, and complete stillness — because grieving families need to feel they're in careful, unhurried hands. Your twenty-five years and the estates you've settled sit right at the top, set in the same serif as the headline, so the proof calms before a single claim is made. No red, no countdowns, nothing that hurries a hard moment.",
+  "exemplars_consulted": []
+}

@@ -1,0 +1,30 @@
+{
+  "exemplar_id": "e3_coach_dre",
+  "dro_version": 1,
+  "business_id": "exemplar:coach_dre",
+  "narrative": "Constructed; maximal contrast (loud, kinetic, dense, vivid). Former D1 sprinter training 13-18-year-olds; sells to two audiences at once — parents (trust) and athletes (belonging). Gym-floor energy, short sentences, calls everyone 'fam'. Resulting direction: a stadium scoreboard crossed with a mixtape — vivid, kinetic, statistically proud — with one calm lane for parents. Opposite of E2 on every axis.",
+  "signals": [
+    { "signal_id": "opening_posture", "value": "vision_first", "confidence": 0.8, "source": "intake", "evidence": ["I see the athlete they haven't met yet"] },
+    { "signal_id": "communication_temperature", "value": 0.8, "confidence": 0.8, "source": "inferred", "evidence": ["calls everyone fam", "short sentences"], "modifiers": [] },
+    { "signal_id": "audience_sophistication", "value": "mixed", "confidence": 0.85, "source": "intake", "evidence": ["athletes novice-emotional, parents evaluating"] },
+    { "signal_id": "audience_emotional_state", "value": ["ambitious", "proud"], "confidence": 0.85, "source": "intake", "evidence": ["they're hungry — they want the next level"] },
+    { "signal_id": "authority_style", "value": "guide_alongside", "confidence": 0.8, "source": "intake", "evidence": ["locker-room older-brother"] },
+    { "signal_id": "first_five_seconds", "value": "energizing", "confidence": 0.9, "source": "intake", "evidence": ["locker room before the game"] },
+    { "signal_id": "vertical_conventions", "value": "break_deliberately", "confidence": 0.85, "source": "intake", "evidence": ["every gym is red-and-black aggression; we're not angry, we're ALIVE"] },
+    { "signal_id": "brand_maturity", "value": "blank_slate", "confidence": 0.9, "source": "intake", "evidence": ["blank page"] },
+    { "signal_id": "offering_texture", "value": ["transformation_arc"], "confidence": 0.85, "source": "intake", "evidence": ["seasons, PRs"] },
+    { "signal_id": "energy_signature", "value": "playful_quick", "confidence": 0.85, "source": "inferred", "evidence": ["short declaratives, jokes"] }
+  ],
+  "decisions": {
+    "palette": { "base": "deep_dark", "accent_strategy": "vivid_block", "temperature": "cool", "because": "Charcoal court + electric lime blocks: P10 (break ONE convention loudly — red-aggression default → alive-green) on P4's performance-under-lights stage.", "from_signals": ["vertical_conventions", "first_five_seconds"] },
+    "typography": { "display_personality": "condensed_impact", "body_personality": "neutral_sans", "pairing_logic": "Jersey-number display energy; neutral body so parents can actually read the schedule.", "scale_contrast": "dramatic", "because": "S10 + S6 want jersey-number impact; neutral body keeps the parent track legible.", "from_signals": ["energy_signature", "audience_sophistication"] },
+    "layout": { "symmetry": "grid_modular", "density": "dense_intentional", "hierarchy_approach": "parallel_panels", "because": "P7 inverted deliberately: density here IS the energy (stats, clips, boards); parallel panels serve the dual audience (athlete track / parent track).", "from_signals": ["audience_emotional_state", "audience_sophistication"] },
+    "motion": { "temperature": "expressive", "signature_move": "stat-counter sprint", "because": "P8: numbers race up on entry; the thesis is measurable progress.", "from_signals": ["offering_texture", "energy_signature"] },
+    "hero_concept": { "direction": "environment_mood", "concept_statement": "Real training footage tone, low-angle, lime light-streaks — the athletes are the subject; Dre appears mid-coaching, never posed.", "metaphor_elements": ["low-angle training footage", "lime light-streaks"], "because": "P13 partial: the athletes are the subject (belonging); the coach is alongside, not the hero.", "from_signals": ["authority_style", "first_five_seconds"] },
+    "whitespace": { "philosophy": "dense_energy", "because": "Held tension, not air — energy is the brand (S6 energizing).", "from_signals": ["first_five_seconds"] },
+    "voice_to_visual": { "notes": ["PR numbers get the lime accent", "'fam' voice echoed by team-grid imagery", "parent strip switches to a calm neutral band (P1 applied to the secondary audience)"], "because": "Athlete energy and parent reassurance live in one page via a switched lane for the calmer audience.", "from_signals": ["audience_sophistication", "audience_emotional_state"] }
+  },
+  "anti_convergence": { "distinctiveness_check": { "verdict": "distinct", "axes_shared_with_nearest": 1, "compared_against": ["e1_kmj", "e2_hartwell_vance"], "notes": "Opposite of E2 on every axis; differs from E1 on accent, density, motion, type personality." }, "banned_defaults_avoided": ["no red-and-black gym cliche", "no posed coach hero", "no Montserrat display"] },
+  "summary_for_practitioner": "Your site hits like a scoreboard the second it loads: a dark court with electric-lime energy, condensed jersey-type headlines, and PR numbers that race upward on entry — because the program is about measurable next-level progress. The athletes are the subject in real training footage; you show up mid-coaching, alongside them. And there's one calm, readable lane built just for parents to find the schedule and trust the structure.",
+  "exemplars_consulted": []
+}

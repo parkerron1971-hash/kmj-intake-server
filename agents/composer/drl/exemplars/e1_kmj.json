@@ -1,0 +1,30 @@
+{
+  "exemplar_id": "e1_kmj",
+  "dro_version": 1,
+  "business_id": "exemplar:kmj",
+  "narrative": "Captured, real — the seed. People-developer solving business problems through strategy, systems, and financial intelligence. Serves coaches, consultants, pastors, service providers — overwhelmed, inconsistent, needing capability AND reassurance. Resulting direction: dark editorial stage, one ember of meaning, a living diagram instead of stock photography; feels like a firm that built something, warm enough to hand you the keys.",
+  "signals": [
+    { "signal_id": "opening_posture", "value": "problem_first", "confidence": 0.9, "source": "intake", "evidence": ["if I solve their problem, that reveals who I am"] },
+    { "signal_id": "communication_temperature", "value": 0.75, "confidence": 0.85, "source": "inferred", "evidence": ["translates complexity into pictures people can see themselves in"], "modifiers": ["analogical"] },
+    { "signal_id": "audience_sophistication", "value": "novice", "confidence": 0.8, "source": "intake", "evidence": ["clients gain literacy and ownership", "reveals enough tech for clarity, not overwhelm"] },
+    { "signal_id": "audience_emotional_state", "value": ["overwhelmed"], "confidence": 0.9, "source": "intake", "evidence": ["overwhelmed, wants support + ownership + belief they can do it"] },
+    { "signal_id": "authority_style", "value": "guide_alongside", "confidence": 0.95, "source": "intake", "evidence": ["they drive, the system comes alongside", "system keeps running when they take a vacation"] },
+    { "signal_id": "first_five_seconds", "value": "legit_intentional", "confidence": 0.95, "source": "intake", "evidence": ["wow, this is actually legit"] },
+    { "signal_id": "vertical_conventions", "value": "break_deliberately", "confidence": 0.8, "source": "intake", "evidence": ["NOT generic or template-like"] },
+    { "signal_id": "brand_maturity", "value": "established_flexible", "confidence": 0.7, "source": "inferred", "evidence": [] },
+    { "signal_id": "offering_texture", "value": ["steady_rhythm", "transformation_arc"], "confidence": 0.75, "source": "inferred", "evidence": ["the system keeps running", "they gain literacy and ownership"] },
+    { "signal_id": "energy_signature", "value": "warm_steady", "confidence": 0.8, "source": "inferred", "evidence": ["teaches step-by-step language"] }
+  ],
+  "decisions": {
+    "palette": { "base": "deep_dark", "accent_strategy": "single_semantic", "temperature": "warm", "because": "Premium-legit (S6) wants dark gravitas; warm temperature keeps it human for overwhelmed clients (S4). Ember accent only on transformation words (P3).", "from_signals": ["first_five_seconds", "audience_emotional_state"] },
+    "typography": { "display_personality": "editorial_serif", "body_personality": "warm_sans", "pairing_logic": "Kindred-warmth pairing: serif on the 'legit' moment, warm sans body — contrast in size, kinship in temperature (P5, alongside-authority).", "scale_contrast": "confident", "because": "Editorial serif delivers 'intentional/legit'; warm sans keeps the co-pilot voice approachable (P5).", "from_signals": ["first_five_seconds", "authority_style"] },
+    "layout": { "symmetry": "asymmetric_tension", "density": "airy", "hierarchy_approach": "single_message_dominant", "because": "P1+P2: one message, air as confidence; asymmetry carries the alongside-motion energy.", "from_signals": ["authority_style", "first_five_seconds"] },
+    "motion": { "temperature": "subtle_entrance", "signature_move": "staggered rise", "because": "P8: staggered rise IS step-by-step literacy rendered in time; nothing flashy.", "from_signals": ["energy_signature", "audience_sophistication"] },
+    "hero_concept": { "direction": "visual_metaphor", "concept_statement": "Concentric arcs converging on a pulsing dot, with three floating nodes (People / Technology / Finance) — the practitioner's business at the center, the system surrounding and supporting.", "metaphor_elements": ["concentric arcs", "pulsing center dot", "three orbiting nodes"], "because": "P11: invisible offer + analogical speaker → constructed metaphor beats stock photography; co-pilot energy visualized.", "from_signals": ["communication_temperature", "authority_style"] },
+    "whitespace": { "philosophy": "confidence_air", "because": "P2: generous space says 'we're confident, not desperate'.", "from_signals": ["first_five_seconds"] },
+    "voice_to_visual": { "notes": ["outcome-first headline ('Your problems have solutions')", "alongside-language subhead ('built alongside you, not around you') echoed by two co-present visual elements", "accent color appears ONLY on transformation words"], "because": "Copy tone (outcome-led, alongside) mirrored in layout (co-present elements) and accent discipline.", "from_signals": ["opening_posture", "authority_style"] }
+  },
+  "anti_convergence": { "distinctiveness_check": { "verdict": "distinct", "axes_shared_with_nearest": 0, "compared_against": [], "notes": "Seed exemplar." }, "banned_defaults_avoided": ["no Inter display", "no purple gradient", "no laptop-latte stock"] },
+  "summary_for_practitioner": "Your site is a dark editorial stage with a single ember accent that lands only on the words that carry meaning. Instead of stock photos, a living diagram shows your business at the center with People, Technology, and Finance orbiting alongside — because you build systems that come alongside people, not around them. Generous space and a quiet staggered-rise animation say 'intentional and legit' the moment it loads.",
+  "exemplars_consulted": []
+}

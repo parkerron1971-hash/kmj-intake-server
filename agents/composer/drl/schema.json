@@ -1,0 +1,154 @@
+{
+  "$schema": "https://mysolutionist.app/schemas/design-rationale-v1.json",
+  "$id": "design-rationale-v1",
+  "title": "Design Rationale Object (DRO)",
+  "description": "The artifact Chief authors BEFORE any HTML exists. Stored per generation, auditable forever, renderable to the practitioner in plain language. Every design field carries a one-line `because` tracing to signal ids — that is the trust-layer contract. Directional vocabulary ONLY (never hex codes or font files); resolution to concrete assets happens downstream in brand_kit/creative_expression. See docs/design_rationale_layer.md.",
+  "type": "object",
+  "required": ["dro_version", "business_id", "signals", "decisions", "anti_convergence", "summary_for_practitioner"],
+  "properties": {
+    "dro_version": { "const": 1 },
+    "id": { "type": "string", "description": "uuid" },
+    "business_id": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "intake_source": {
+      "type": "object",
+      "description": "Traceability to the conversation that produced the signals.",
+      "properties": {
+        "transcript_ref": { "type": "string" },
+        "enriched_brief_hash": { "type": "string", "description": "post_processor.hash_brief of the sibling content brief" }
+      }
+    },
+    "signals": {
+      "type": "array",
+      "description": "Detected intake signals (taxonomy §1). The evidence quotes ARE the audit trail. Signals below confidence 0.5 are recorded but NOT consumed by translation.",
+      "items": {
+        "type": "object",
+        "required": ["signal_id", "value", "confidence", "evidence"],
+        "properties": {
+          "signal_id": {
+            "enum": ["opening_posture", "communication_temperature", "audience_sophistication",
+              "audience_emotional_state", "authority_style", "first_five_seconds",
+              "vertical_conventions", "brand_maturity", "offering_texture", "energy_signature"]
+          },
+          "value": {},
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "evidence": { "type": "array", "items": { "type": "string" }, "description": "verbatim practitioner quotes" },
+          "source": { "enum": ["intake", "inferred", "practitioner_set"] }
+        }
+      }
+    },
+    "decisions": {
+      "type": "object",
+      "description": "Every member requires `because` (one line) + `from_signals` (ids). Directional vocabulary — never hex codes or font files here.",
+      "required": ["palette", "typography", "layout", "motion", "hero_concept", "whitespace", "voice_to_visual"],
+      "properties": {
+        "palette": {
+          "type": "object",
+          "required": ["base", "accent_strategy", "temperature", "because", "from_signals"],
+          "properties": {
+            "base": { "enum": ["deep_dark", "soft_dark", "warm_light", "cool_light", "paper_neutral"] },
+            "accent_strategy": { "enum": ["single_semantic", "dual_complement", "tonal_monochrome", "vivid_block"], "description": "single_semantic = one accent reserved for meaning-bearing words/CTAs" },
+            "temperature": { "enum": ["warm", "cool", "neutral_warm", "neutral_cool"] },
+            "inherits_brand_assets": { "type": "boolean" },
+            "because": { "type": "string", "maxLength": 240 },
+            "from_signals": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "typography": {
+          "type": "object",
+          "required": ["display_personality", "body_personality", "pairing_logic", "because", "from_signals"],
+          "properties": {
+            "display_personality": { "enum": ["editorial_serif", "grotesque_bold", "humanist_warm", "geometric_precise", "expressive_display", "condensed_impact"] },
+            "body_personality": { "enum": ["warm_sans", "neutral_sans", "readable_serif", "mono_technical"] },
+            "pairing_logic": { "type": "string", "description": "WHY these two personalities together — contrast or kinship, and where each appears" },
+            "scale_contrast": { "enum": ["dramatic", "confident", "quiet"] },
+            "because": { "type": "string", "maxLength": 240 },
+            "from_signals": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "layout": {
+          "type": "object",
+          "required": ["symmetry", "density", "hierarchy_approach", "because", "from_signals"],
+          "properties": {
+            "symmetry": { "enum": ["asymmetric_tension", "centered_formal", "grid_modular", "editorial_columns"] },
+            "density": { "enum": ["airy", "balanced", "dense_intentional"] },
+            "hierarchy_approach": { "enum": ["single_message_dominant", "guided_descent", "parallel_panels"] },
+            "because": { "type": "string", "maxLength": 240 },
+            "from_signals": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "motion": {
+          "type": "object",
+          "required": ["temperature", "because", "from_signals"],
+          "properties": {
+            "temperature": { "enum": ["none", "subtle_entrance", "ambient_breathing", "expressive"] },
+            "signature_move": { "type": "string", "description": "ONE named motion idea max — motion has a thesis or it doesn't exist" },
+            "because": { "type": "string", "maxLength": 240 },
+            "from_signals": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "hero_concept": {
+          "type": "object",
+          "required": ["direction", "concept_statement", "because", "from_signals"],
+          "properties": {
+            "direction": { "enum": ["visual_metaphor", "typographic_statement", "portrait_presence", "artifact_showcase", "environment_mood"] },
+            "concept_statement": { "type": "string", "maxLength": 400, "description": "The idea in one breath" },
+            "metaphor_elements": { "type": "array", "items": { "type": "string" } },
+            "because": { "type": "string", "maxLength": 240 },
+            "from_signals": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "whitespace": {
+          "type": "object",
+          "required": ["philosophy", "because", "from_signals"],
+          "properties": {
+            "philosophy": { "enum": ["confidence_air", "warm_close", "editorial_rhythm", "dense_energy"] },
+            "because": { "type": "string", "maxLength": 240 },
+            "from_signals": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "voice_to_visual": {
+          "type": "object",
+          "required": ["notes", "because", "from_signals"],
+          "properties": {
+            "notes": { "type": "array", "items": { "type": "string" }, "description": "Specific copy<->design couplings" },
+            "because": { "type": "string", "maxLength": 240 },
+            "from_signals": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "anti_convergence": {
+      "type": "object",
+      "description": "Proof the distinctiveness check ran (§5).",
+      "required": ["distinctiveness_check"],
+      "properties": {
+        "distinctiveness_check": {
+          "type": "object",
+          "properties": {
+            "compared_against": { "type": "array", "items": { "type": "string" }, "description": "DRO ids of recent generations compared against" },
+            "axes_shared_with_nearest": { "type": "integer" },
+            "verdict": { "enum": ["distinct", "regenerated_once", "flagged"] },
+            "notes": { "type": "string" }
+          }
+        },
+        "banned_defaults_avoided": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "summary_for_practitioner": {
+      "type": "string",
+      "maxLength": 1200,
+      "description": "Plain-language 'here's why your site looks this way' — generated WITH the DRO, not on demand, so the audit answer is frozen at decision time."
+    },
+    "exemplars_consulted": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "exemplar_id": { "type": "string" },
+          "borrowed": { "type": "string", "description": "which MOVE was borrowed (never the surface)" }
+        }
+      }
+    }
+  }
+}

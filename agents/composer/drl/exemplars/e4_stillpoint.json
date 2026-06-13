@@ -1,0 +1,30 @@
+{
+  "exemplar_id": "e4_stillpoint",
+  "dro_version": 1,
+  "business_id": "exemplar:stillpoint",
+  "narrative": "Constructed; maximal contrast (pale, organic, slow, anti-grid). Breathwork + somatic therapy for high-achievers in burnout. Speaks slowly, almost whispered; skeptical OF marketing. Clients are skeptical of woo — engineers, surgeons, founders — bodies in fight-or-flight. Resulting direction: a site that lowers your heart rate — bone-and-fog stillness, one breathing image, serif calm, evidence in the footnotes. Opposite of E3 entirely.",
+  "signals": [
+    { "signal_id": "opening_posture", "value": "story_first", "confidence": 0.7, "source": "intake", "evidence": ["I started this after my own burnout"] },
+    { "signal_id": "communication_temperature", "value": 0.9, "confidence": 0.8, "source": "inferred", "evidence": ["sensory language", "low-analogy"], "modifiers": [] },
+    { "signal_id": "audience_sophistication", "value": "expert", "confidence": 0.85, "source": "intake", "evidence": ["engineers, surgeons, founders — analytical skeptics in their domains"] },
+    { "signal_id": "audience_emotional_state", "value": ["overwhelmed", "skeptical"], "confidence": 0.9, "source": "intake", "evidence": ["bodies in fight-or-flight", "skeptical of woo"] },
+    { "signal_id": "authority_style", "value": "enabler_behind", "confidence": 0.9, "source": "intake", "evidence": ["your nervous system does the work; I hold the room"] },
+    { "signal_id": "first_five_seconds", "value": "calm_safe", "confidence": 0.95, "source": "intake", "evidence": ["their shoulders should drop one centimeter"] },
+    { "signal_id": "vertical_conventions", "value": "break_deliberately", "confidence": 0.9, "source": "intake", "evidence": ["anti-lotus, anti-purple-gradient: wellness cliches trigger my skeptics"] },
+    { "signal_id": "brand_maturity", "value": "blank_slate", "confidence": 0.9, "source": "intake", "evidence": ["blank page"] },
+    { "signal_id": "offering_texture", "value": ["steady_rhythm"], "confidence": 0.8, "source": "intake", "evidence": ["ongoing practice"] },
+    { "signal_id": "energy_signature", "value": "deliberate", "confidence": 0.9, "source": "inferred", "evidence": ["whisper-paced, slow"] }
+  ],
+  "decisions": {
+    "palette": { "base": "warm_light", "accent_strategy": "tonal_monochrome", "temperature": "warm", "because": "Bone, fog, river-stone: P1 (meet overwhelm with quiet) + P10 (the broken convention is the wellness-purple cliche; the loud move is radical quietness) + P14.", "from_signals": ["audience_emotional_state", "vertical_conventions"] },
+    "typography": { "display_personality": "humanist_warm", "body_personality": "readable_serif", "pairing_logic": "Low scale contrast, nothing towers: P5 (enabler_behind) + skeptic-respect (no display theatrics to distrust).", "scale_contrast": "quiet", "because": "P5 (authority behind → nothing dominates) + P15 (skeptics distrust theatrics).", "from_signals": ["authority_style", "audience_emotional_state"] },
+    "layout": { "symmetry": "editorial_columns", "density": "airy", "hierarchy_approach": "guided_descent", "because": "Organic image masses break the grid edge, but structure stays legible for analytical minds (S3) while edges soften.", "from_signals": ["audience_sophistication", "first_five_seconds"] },
+    "motion": { "temperature": "ambient_breathing", "signature_move": "4-second breathe", "because": "P8: the ONE motion is literally the method — hero background scales 1.00->1.02 on a breath cycle; nothing else moves.", "from_signals": ["offering_texture", "energy_signature"] },
+    "hero_concept": { "direction": "environment_mood", "concept_statement": "Light through linen, no faces — the client is the subject, and the subject is their own body; faces would make it about someone else.", "metaphor_elements": ["light through linen", "no faces"], "because": "P13: enabler_behind → the client (their own body) is the subject, not a portrait.", "from_signals": ["authority_style", "first_five_seconds"] },
+    "whitespace": { "philosophy": "warm_close", "because": "Held, not empty — warm closeness shading to air; calm without coldness.", "from_signals": ["first_five_seconds", "audience_emotional_state"] },
+    "voice_to_visual": { "notes": ["skeptic strip: plain-language physiology with citations set in mono-technical (P15: proof for engineers)", "no superlatives anywhere", "no lotus, no purple, no woo iconography"], "because": "Analytical skeptics are met with cited physiology in a technical mono voice; the calm is earned, not asserted.", "from_signals": ["audience_sophistication", "vertical_conventions"] }
+  },
+  "anti_convergence": { "distinctiveness_check": { "verdict": "distinct", "axes_shared_with_nearest": 1, "compared_against": ["e1_kmj", "e2_hartwell_vance", "e3_coach_dre"], "notes": "Opposite of E3 entirely; differs from E2 in formality geometry (organic vs engraved) and from E1 in light/dark + metaphor strategy." }, "banned_defaults_avoided": ["no lotus/mandala", "no purple gradient", "no stock meditation photo"] },
+  "summary_for_practitioner": "Your site is built to lower a heart rate: bone, fog, and river-stone tones, a quiet humanist serif that never towers, and a single hero image of light through linen that breathes on a slow four-second cycle — the one motion on the page, because it is literally the method. For the skeptics you serve, the calm is backed by plain-language physiology with citations, set in a technical monospace. No lotus, no purple, no superlatives — just stillness that reads as competence.",
+  "exemplars_consulted": []
+}

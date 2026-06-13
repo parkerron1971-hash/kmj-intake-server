@@ -1,8 +1,20 @@
 # Design Rationale Layer (DRL) — Specification v1
 
-**Status:** Spec for review — no code in this arc. Implementation arc follows Kevin's review.
-**Author:** Claude Code (lead architect role), 2026-06-10.
+**Status:** APPROVED FOR BUILD — Kevin ruled 2026-06-13. Implementation arc (§9) is live; PR1 first.
+**Author:** Claude Code (lead architect role), 2026-06-10. Rulings + reconciliation added 2026-06-13.
 **Repo home:** `kmj-intake-server` (the composer pipeline lives here; frontend consumes via existing routers).
+
+---
+
+## 0. Rulings — locked 2026-06-13 (read with §7/§8)
+
+Folded in after a full Builder design-quality audit (the "Royal Palace" bespoke-bar brief). These supersede the v1 assumptions where they differ:
+
+1. **Canonical engine = the Module Composer.** The DRO is consumed by the **Composer**, not the Director. The Director `build-with-loop` (60–240s, 4–7 Claude calls → client timeouts) and the legacy `generateSite()` (LLM hand-writes full HTML → timeouts) are **retired as live builders**; the Director's critique loop is *harvested* into the composer. The composer runs as the Feature-2 `rebuild_site` background job, so a richer (slower) compose can never time out. ⇒ §7's "Director loop consumes DRO" path is **superseded**: DRO → Composer only.
+2. **Fabrication policy lives on the CONTENT sibling, not the DRO.** The DRO is design-direction only. Believable specifics (hours, "EST.", tier names, sample testimonials) are handled in the enriched-brief/composer copy layer with: **confirm-then-publish placeholders** (generated on-theme, clearly marked editable, owner must confirm before public) **and, when unconfirmed, design around real data** (tasteful non-numeric framing — never silently publish invented facts). Preserves the "no mocked numbers ever render" principle.
+3. **Fork F1 = RULED:** new `design_rationales` table (auditable history + feedback joins). See §8 F1.
+4. **Fork F4 = RULED:** distinctiveness check = platform-wide last-10, per-business double weight. See §8 F4.
+5. **Sequence:** DRL core (PR1–PR3) is the **first build** — highest leverage (lever 1+2+5 at once; most inputs already inferred-then-discarded today). Composer library depth (cinematic hero, icon+price cards, stat-split, palette scarcity/alternation, rendered image treatments + themed icons), verticalization packs, and contact-form wiring (today contact is `mailto:` only) follow.
 
 ---
 
