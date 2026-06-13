@@ -89,19 +89,12 @@ def _execute_kind(kind: str, business_id: str, params: dict) -> dict:
     Returns a JSON-serializable result dict. Raises on failure."""
     if kind == "rebuild_site":
         # Lazy import — avoids any import-time cost/cycles at module load.
-        from site_composer import (
-            gather_context, compose_spec_llm, _default_spec, render_and_persist,
-        )
-        ctx = gather_context(business_id)
+        # compose_site (DRL PR3) authors the Design Rationale Object first,
+        # then composes concept-threaded copy that obeys it.
+        from site_composer import compose_site
         notes = (params or {}).get("brief_notes") or ""
-        source = "llm"
-        try:
-            spec = compose_spec_llm(ctx, notes)
-        except Exception as e:
-            logger.warning(f"[chief_jobs] compose LLM failed, using default spec: {e}")
-            spec, source = _default_spec(ctx), "default"
-        result = render_and_persist(business_id, spec, ctx)
-        return {"composition_source": source, **(result if isinstance(result, dict) else {})}
+        result = compose_site(business_id, brief_notes=notes, use_llm=True)
+        return result if isinstance(result, dict) else {}
     raise ValueError(f"unknown job kind: {kind}")
 
 

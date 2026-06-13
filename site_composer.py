@@ -195,7 +195,48 @@ def _module_menu() -> str:
     return "\n".join(lines)
 
 
-def compose_spec_llm(ctx: Dict[str, Any], brief_notes: str = "") -> List[Dict[str, Any]]:
+def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
+    """Build the intake material the DRL signal-detection pass reads. We have
+    no raw transcript here, so we assemble the practitioner's own words from
+    context (name, type, tagline, about, voice, offerings)."""
+    bundle = ctx.get("bundle") or {}
+    intel = bundle.get("practitioner_intelligence") or {}
+    voice = bundle.get("voice") or {}
+    biz = ctx["business"]
+    parts = [
+        f"Business name: {biz.get('name')}",
+        f"Business type: {biz.get('type')}",
+        f"Tagline: {(bundle.get('business') or {}).get('tagline') or ''}",
+        f"About: {intel.get('about_business') or intel.get('about_me') or ''}",
+        f"Voice / tone: {voice.get('brand_voice') or ''} {voice.get('tone_words') or ''}",
+        f"Offerings: {', '.join(o.get('name') or '' for o in (ctx.get('offerings') or [])[:8])}",
+    ]
+    return "\n".join(p for p in parts if p.split(": ", 1)[-1].strip())
+
+
+def _dro_directive(dro: Dict[str, Any]) -> str:
+    """Turn the DRO into a COPY+STRUCTURE directive the composer must obey.
+    The renderer owns visual tokens (color/type/spacing); here the DRO drives
+    the CONCEPT VOICE in copy and the section order — the bespoke lever."""
+    d = (dro or {}).get("decisions") or {}
+    hero = d.get("hero_concept") or {}
+    v2v = d.get("voice_to_visual") or {}
+    layout = d.get("layout") or {}
+    motion = d.get("motion") or {}
+    notes = "; ".join(v2v.get("notes") or [])
+    concept = hero.get("concept_statement") or ""
+    return f"""DESIGN RATIONALE — OBEY THIS (authored from the practitioner's intake; it is the brief, not a suggestion):
+- CONCEPT: {concept}
+  Thread this concept through ALL copy. Reframe the hero headline, section eyebrows/labels, and EVERY call-to-action in the concept's voice (e.g. a "Royal Palace" concept turns "Book Now" into "Book Your Throne" and a testimonials eyebrow into "THE COURT"). Never use generic labels when an in-concept one fits.
+- Hero direction: {hero.get('direction') or ''}. The hero copy must deliver the concept above, not a generic value prop.
+- Voice→visual couplings to honor in copy: {notes or '(none)'}
+- Section order / hierarchy: {layout.get('hierarchy_approach') or 'guided_descent'} — order sections as a persuasion funnel (hook → credibility → offer → proof → conversion → contact), shaped by this hierarchy.
+- Pacing: layout density={layout.get('density') or 'balanced'}, motion={motion.get('temperature') or 'subtle_entrance'} — match copy length/rhythm to it (airy/quiet → fewer words; dense/expressive → punchier, more).
+- Still NEVER invent facts. Concept reframing is about VOICE, not fabricated specifics."""
+
+
+def compose_spec_llm(ctx: Dict[str, Any], brief_notes: str = "",
+                     dro: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     from studio_designer_agent import _call_claude, _extract_json
 
     bundle = ctx.get("bundle") or {}
@@ -205,8 +246,10 @@ def compose_spec_llm(ctx: Dict[str, Any], brief_notes: str = "") -> List[Dict[st
     off_names = ", ".join(o.get("name") or "" for o in (ctx.get("offerings") or [])[:8])
     n_testi = len(ctx.get("testimonials") or [])
 
-    prompt = f"""You are a creative director composing a one-page website. You do NOT write HTML or CSS — the platform renders everything. Your job: choose section modules + expression variants, and write the copy in the practitioner's voice.
+    dro_block = ("\n\n" + _dro_directive(dro) + "\n") if dro else ""
 
+    prompt = f"""You are a creative director composing a one-page website. You do NOT write HTML or CSS — the platform renders everything. Your job: choose section modules + expression variants, and write the copy in the practitioner's voice.
+{dro_block}
 BUSINESS
 - Name: {biz['name']}
 - Type: {biz['type']}
@@ -222,6 +265,7 @@ AVAILABLE MODULES (use each at most once; order is yours except hero first, cont
 {_module_menu()}
 
 RULES
+- If a DESIGN RATIONALE block appears above, it OVERRIDES generic instincts: concept-voice copy (in-concept headline/eyebrows/CTAs) and the section order it specifies are REQUIRED, not optional.
 - Copy must sound like THIS practitioner, not a template. Specific beats generic.
 - NEVER invent facts, testimonials, credentials, or offerings. The offerings and
   testimonials modules render the real records automatically — you only write the
@@ -249,7 +293,8 @@ def _mark(html: str) -> str:
 
 
 def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
-                       ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       ctx: Optional[Dict[str, Any]] = None,
+                       dro_id: Optional[str] = None) -> Dict[str, Any]:
     ctx = ctx or gather_context(business_id)
     title = ctx["business"]["name"] or "Welcome"
 
@@ -307,6 +352,8 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         "html_generated_at": datetime.now(timezone.utc).isoformat(),
         "use_smart_sites": False,
     })
+    if dro_id:
+        cfg["design_rationale_id"] = dro_id   # powers the "why your site looks this way" view (PR4)
     sb_clients.sb_patch_as_service(
         f"/business_sites?id=eq.{site['id']}",
         {"html_content": final_html, "site_config": cfg, "status": "published"})
@@ -316,6 +363,41 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
             "slots": {"found": slots_meta.get("slots_found", []),
                       "populated": len(slots_meta.get("slots_populated") or [])},
             "url": f"https://{ctx['business']['slug']}.mysolutionist.app" if ctx["business"]["slug"] else None}
+
+
+def compose_site(business_id: str, brief_notes: str = "",
+                 use_llm: bool = True) -> Dict[str, Any]:
+    """Canonical site-compose entry (DRL PR3). Produces a Design Rationale
+    Object first (best-effort), composes concept-threaded copy that obeys it,
+    then renders + persists. Shared by the /compose endpoint and the
+    Feature-2 `rebuild_site` background job, so both get DRO-driven output.
+    Degrades gracefully: if DRO production fails, composes without it; if LLM
+    composition fails, falls back to the deterministic default spec."""
+    ctx = gather_context(business_id)
+    dro: Optional[Dict[str, Any]] = None
+    dro_id: Optional[str] = None
+    source = "llm"
+
+    if use_llm:
+        # 1) Author the rationale from the practitioner's own words.
+        try:
+            from agents.composer.drl.passes import produce_dro
+            dro = produce_dro(business_id, _assemble_intake_text(ctx))
+            if dro:
+                dro_id = dro.get("id")
+        except Exception as e:
+            logger.warning(f"[composer] DRO production failed (non-fatal): {e}")
+        # 2) Compose copy that obeys the rationale.
+        try:
+            spec = compose_spec_llm(ctx, brief_notes or "", dro=dro)
+        except Exception as e:
+            logger.warning(f"[composer] LLM composition failed, using default: {e}")
+            spec, source = _default_spec(ctx), "default"
+    else:
+        spec, source = _default_spec(ctx), "default"
+
+    result = render_and_persist(business_id, spec, ctx, dro_id=dro_id)
+    return {"composition_source": source, "design_rationale_id": dro_id, **result}
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────
@@ -329,19 +411,8 @@ class ComposeBody(BaseModel):
 @router.post("/compose")
 def compose(body: ComposeBody,
             _: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
-    ctx = gather_context(body.business_id)
-    spec: List[Dict[str, Any]]
-    source = "llm"
-    if body.use_llm:
-        try:
-            spec = compose_spec_llm(ctx, body.brief_notes or "")
-        except Exception as e:
-            logger.warning(f"[composer] LLM composition failed, using default: {e}")
-            spec, source = _default_spec(ctx), "default"
-    else:
-        spec, source = _default_spec(ctx), "default"
-    result = render_and_persist(body.business_id, spec, ctx)
-    return {"ok": True, "composition_source": source, **result}
+    result = compose_site(body.business_id, body.brief_notes or "", body.use_llm)
+    return {"ok": True, **result}
 
 
 class ShuffleBody(BaseModel):
