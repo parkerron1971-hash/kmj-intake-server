@@ -11849,6 +11849,9 @@ class ChatRequest(BaseModel):
     # persona and hides phase-transition chatter from the practitioner.
     # Default (None/"chief") keeps the existing operational persona.
     mode: Optional[str] = None
+    # Originating device, so the desktop can surface a "while you were
+    # away, from your phone I did X" recap. 'mobile' | 'desktop' | 'voice'.
+    client_surface: Optional[str] = None
 
 
 def _is_greeting(msg: str) -> bool:
@@ -11996,6 +11999,40 @@ def _parse_greeting_tod(msg: str) -> Optional[str]:
     if rest.startswith(":") and rest.endswith("]"):
         return rest[1:-1].strip().lower() or None
     return None
+
+
+async def _log_chief_activity(client, *, user_id, business_id, source, taken):
+    """Best-effort: record the substantive actions Chief just executed to
+    public.chief_activity, tagged with the originating device, so the
+    desktop can recap "while you were away, from your phone I did X".
+    Skips pure navigation and failed actions (not "work done"). Never
+    blocks or raises into the chat response."""
+    if not user_id or not business_id or not taken:
+        return
+    src = source if source in ("mobile", "desktop", "voice", "system") else "desktop"
+    rows = []
+    for t in taken:
+        if not isinstance(t, dict):
+            continue
+        atype = t.get("type") or ""
+        if atype == "navigate" or _action_failed(t):
+            continue
+        label = t.get("label") or atype or "Action"
+        rows.append({
+            "user_id": user_id,
+            "business_id": business_id,
+            "source": src,
+            "action_type": atype or None,
+            "label": str(label)[:120],
+            "summary": (str(t.get("result"))[:240] if t.get("result") is not None else None),
+            "nav": (str(t.get("nav")) if t.get("nav") else None),
+        })
+    if not rows:
+        return
+    try:
+        await _sb(client, "POST", "/chief_activity", rows)
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"chief_activity log failed: {e}")
 
 
 @router.post("/agents/chief/chat")
@@ -12390,6 +12427,19 @@ async def chief_chat(
                 f"actions={len(taken)} greeting={is_greeting} memories={len(ctx.get('memories') or [])}"
             )
 
+            # Feature 1 — log work done so the desktop can recap actions
+            # taken from another device. Best-effort; never blocks the reply.
+            try:
+                await _log_chief_activity(
+                    client,
+                    user_id=getattr(getattr(user_session, "user", None), "id", None),
+                    business_id=biz.get("id"),
+                    source=req.client_surface,
+                    taken=taken,
+                )
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"chief_activity hook failed: {e}")
+
             # Final scrub: if `clean` is empty (parse fall-through) we
             # serve `raw`, which may still contain the hint markers we
             # injected into history. Belt-and-suspenders so nothing
@@ -12414,6 +12464,72 @@ async def chief_chat(
         # Pass RLS-readiness — restore prior user_jwt context. Safe to call
         # even if set_user_jwt's prior call raised after binding (token
         # captured before the try block).
+        sb_clients.reset_user_jwt(_jwt_token)
+
+
+@router.get("/agents/chief/activity")
+async def chief_activity(
+    business_id: Optional[str] = None,
+    source: Optional[str] = None,
+    unseen: bool = True,
+    limit: int = 20,
+    user_session: UserSession = Depends(require_user_session),
+):
+    """Feature 1 — the desktop "while you were away" recap. Returns the
+    practitioner's recent Chief actions (default: only UNSEEN ones), most
+    recent first. RLS (select_own) scopes to the caller automatically;
+    optional business_id / source narrow it (e.g. source=mobile to show
+    only what was done from the phone)."""
+    _jwt_token = sb_clients.set_user_jwt(user_session.token)
+    try:
+        q = "/chief_activity?select=id,source,action_type,label,summary,nav,created_at,seen_at"
+        q += "&order=created_at.desc"
+        q += f"&limit={max(1, min(int(limit or 20), 100))}"
+        if unseen:
+            q += "&seen_at=is.null"
+        if business_id:
+            q += f"&business_id=eq.{business_id}"
+        if source:
+            q += f"&source=eq.{source}"
+        async with httpx.AsyncClient() as client:
+            rows = await _sb(client, "GET", q)
+        return {"activity": rows or []}
+    except Exception as e:
+        logger.warning(f"chief_activity GET failed: {e}")
+        return {"activity": []}
+    finally:
+        sb_clients.reset_user_jwt(_jwt_token)
+
+
+class _SeenRequest(BaseModel):
+    ids: Optional[List[str]] = None      # specific rows; omit/empty → all unseen
+    business_id: Optional[str] = None
+
+
+@router.post("/agents/chief/activity/seen")
+async def chief_activity_seen(
+    req: _SeenRequest,
+    user_session: UserSession = Depends(require_user_session),
+):
+    """Mark recap rows as seen so they don't surface again. RLS (update_own)
+    guarantees a caller can only touch their own rows."""
+    _jwt_token = sb_clients.set_user_jwt(user_session.token)
+    try:
+        patch = {"seen_at": datetime.now(timezone.utc).isoformat()}
+        if req.ids:
+            id_list = ",".join(req.ids)
+            q = f"/chief_activity?id=in.({id_list})"
+        else:
+            q = "/chief_activity?seen_at=is.null"
+            if req.business_id:
+                q += f"&business_id=eq.{req.business_id}"
+        async with httpx.AsyncClient() as client:
+            await _sb(client, "PATCH", q, patch)
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"chief_activity seen failed: {e}")
+        return {"ok": False}
+    finally:
         sb_clients.reset_user_jwt(_jwt_token)
 
 
