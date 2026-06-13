@@ -257,6 +257,31 @@ def build_brand_dna(business_id: str, bundle: Optional[Dict[str, Any]] = None) -
     }
 
 
+# ─── DRL palette discipline ───────────────────────────────────────────
+# The Design Rationale Object decides palette.base ("dark is a stage, light
+# is a room"). We swap the NEUTRAL ground (bg/surface/text/muted/border) to a
+# clean preset for that base while KEEPING the brand accent — so the site
+# reads as the intended stage/room without losing brand identity.
+_BASE_GROUNDS: Dict[str, Dict[str, str]] = {
+    "deep_dark":    {"bg": "#0c0c0e", "surface": "#16161a", "surface2": "#1e1e24", "text": "#f4f3f1", "muted": "#a8a6a2", "border": "#2a2a30"},
+    "soft_dark":    {"bg": "#181a1f", "surface": "#212430", "surface2": "#2a2e3a", "text": "#eef0f3", "muted": "#a6abb6", "border": "#333845"},
+    "warm_light":   {"bg": "#faf7f2", "surface": "#ffffff", "surface2": "#f1ece3", "text": "#1f1b16", "muted": "#6b6258", "border": "#e6ded2"},
+    "cool_light":   {"bg": "#f7f9fb", "surface": "#ffffff", "surface2": "#eef2f6", "text": "#161a1f", "muted": "#5e6873", "border": "#e0e6ec"},
+    "paper_neutral": {"bg": "#f5f1ea", "surface": "#fffdf9", "surface2": "#ebe5da", "text": "#26221c", "muted": "#6f665a", "border": "#e2dacd"},
+}
+
+
+def apply_dro_palette(dna: Dict[str, Any], dro_palette: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return a copy of `dna` with its neutral ground swapped to the DRO's
+    palette.base preset (brand accent preserved). No-op if base is unknown."""
+    ground = _BASE_GROUNDS.get((dro_palette or {}).get("base") or "")
+    if not ground:
+        return dna
+    out = dict(dna)
+    out["palette"] = {**dna.get("palette", {}), **ground}
+    return out
+
+
 # ─── CSS emission ─────────────────────────────────────────────────────
 
 def css_variables(dna: Dict[str, Any]) -> str:

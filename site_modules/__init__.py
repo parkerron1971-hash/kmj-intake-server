@@ -93,4 +93,5 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
         if css and key not in seen_css:
             seen_css.add(key)
             css_parts.append(css)
-    return page_shell(ctx["dna"], title, "\n".join(body_parts), "\n".join(css_parts))
+    return page_shell(ctx["dna"], title, "\n".join(body_parts), "\n".join(css_parts),
+                      design=ctx.get("design"))

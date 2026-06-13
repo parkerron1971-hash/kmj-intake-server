@@ -429,6 +429,31 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
             "url": f"https://{ctx['business']['slug']}.mysolutionist.app" if ctx["business"]["slug"] else None}
 
 
+# DRO hero_concept.direction → hero module variant. Cinematic (full-bleed,
+# art-directed) for image-led concepts; statement (oversized type, no photo)
+# for typographic / visual-metaphor concepts (a real metaphor render is a
+# later lever).
+_HERO_DIRECTION_VARIANT = {
+    "environment_mood": "cinematic",
+    "artifact_showcase": "cinematic",
+    "portrait_presence": "cinematic",
+    "typographic_statement": "statement",
+    "visual_metaphor": "statement",
+}
+
+
+def _apply_hero_direction(spec: List[Dict[str, Any]], hero_concept: Optional[Dict[str, Any]]) -> None:
+    """Deterministically set the hero variant from the DRO's concept direction
+    (overrides the LLM's pick so the rationale reliably drives the hero)."""
+    variant = _HERO_DIRECTION_VARIANT.get((hero_concept or {}).get("direction") or "")
+    if not variant:
+        return
+    for s in spec:
+        if s.get("module") == "hero":
+            s["variant"] = variant
+            return
+
+
 def compose_site(business_id: str, brief_notes: str = "",
                  use_llm: bool = True) -> Dict[str, Any]:
     """Canonical site-compose entry (DRL PR3). Produces a Design Rationale
@@ -451,12 +476,22 @@ def compose_site(business_id: str, brief_notes: str = "",
                 dro_id = dro.get("id")
         except Exception as e:
             logger.warning(f"[composer] DRO production failed (non-fatal): {e}")
+        # 1b) DRO-driven DESIGN: the palette base (dark stage / light room) +
+        # accent scarcity flow into the render via ctx; copy obeys it next.
+        if dro:
+            decisions = dro.get("decisions") or {}
+            ctx["design"] = decisions
+            ctx["dna"] = brand_dna.apply_dro_palette(ctx["dna"], decisions.get("palette"))
         # 2) Compose copy that obeys the rationale.
         try:
             spec = compose_spec_llm(ctx, brief_notes or "", dro=dro)
         except Exception as e:
             logger.warning(f"[composer] LLM composition failed, using default: {e}")
             spec, source = _default_spec(ctx), "default"
+        # 3) Hero treatment from the DRO's concept direction (cinematic vs
+        # typographic) — deterministic so the rationale reliably drives it.
+        if dro:
+            _apply_hero_direction(spec, (dro.get("decisions") or {}).get("hero_concept"))
     else:
         spec, source = _default_spec(ctx), "default"
 

@@ -113,6 +113,15 @@ a {{ color: var(--sx-accent); text-decoration: none; }}
 }}
 .sxm-cta:hover {{ transform: translateY(-2px); background: var(--sx-accent-strong); }}
 .sxm-muted {{ color: var(--sx-muted); }}
+/* Palette discipline — dark/light section alternation gives the page rhythm
+   (a "stage then room then stage" cadence) instead of one flat ground. */
+.sxm-section:nth-of-type(even) {{ background: var(--sx-surface); }}
+/* Accent scarcity (DRO single_semantic): the accent carries MEANING, so it
+   stays on CTAs + links only; decorative accent (eyebrows, marks) goes quiet. */
+body.sx-scarce-accent .sxm-eyebrow {{ color: var(--sx-muted); }}
+body.sx-scarce-accent .sxm-mark-thin,
+body.sx-scarce-accent .sxm-mark-block {{ background: var(--sx-border); }}
+body.sx-scarce-accent .sxm-mark-soft {{ background: color-mix(in srgb, var(--sx-muted) 45%, transparent); }}
 {reveal_css}
 @media (max-width: 768px) {{ body {{ font-size: 15.5px; }} }}
 """
@@ -131,9 +140,13 @@ def reveal_script(dna: Dict[str, Any]) -> str:
             "{threshold:.12});els.forEach(function(e){io.observe(e)})}catch(e){}})();</script>")
 
 
-def page_shell(dna: Dict[str, Any], title: str, body: str, css: str) -> str:
+def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
+               design: Optional[Dict[str, Any]] = None) -> str:
     import brand_dna
     fonts = brand_dna.google_fonts_url(dna)
+    # DRO single_semantic → accent scarcity body class (CSS in base_css).
+    accent_strategy = ((design or {}).get("palette") or {}).get("accent_strategy")
+    body_class = "sx-scarce-accent" if accent_strategy == "single_semantic" else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -149,7 +162,7 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str) -> str:
 {css}
 </style>
 </head>
-<body>
+<body class="{body_class}">
 {body}
 {reveal_script(dna)}
 </body>
