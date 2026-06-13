@@ -1382,6 +1382,20 @@ def render_full_site_html(business_id: str, path: str = "/") -> str:
     generated_pages populated) the `path` argument selects which page
     to render. For single-page sites the path is ignored.
     """
+    # Canonical engine (DRL arc): a composer-built site serves its own
+    # html_content here too, so the MySite editor preview reflects the
+    # COMPOSER result (matches the live URL) even though the surrounding
+    # chrome is the Smart Sites editor.
+    try:
+        _rows = _sb_get(
+            f"/business_sites?business_id=eq.{business_id}"
+            "&select=html_content,site_config&limit=1") or []
+        if _rows:
+            _cfg = _rows[0].get("site_config") or {}
+            if _cfg.get("html_source") == "module-composer" and _rows[0].get("html_content"):
+                return _rows[0]["html_content"]
+    except Exception:
+        pass
     try:
         products = _sb_get(
             f"/products?business_id=eq.{business_id}"
