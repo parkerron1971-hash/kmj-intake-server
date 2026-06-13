@@ -137,6 +137,18 @@ def set_user_jwt(jwt: str) -> contextvars.Token:
     return _user_jwt_ctx.set(jwt)
 
 
+def clear_user_jwt() -> None:
+    """Force the current async context to SERVICE ROLE (no user JWT).
+
+    Used by background jobs spawned via asyncio.create_task from inside a
+    request: create_task copies the current context, so the task would
+    otherwise inherit the request's user JWT (which expires, and whose RLS
+    would block service-level writes). Calling this at the top of the task
+    body neutralizes the JWT for the TASK's own context copy only — the
+    originating request's context is unaffected."""
+    _user_jwt_ctx.set(None)
+
+
 def reset_user_jwt(token: contextvars.Token) -> None:
     """Restore the prior user_jwt context. Paired with set_user_jwt.
 

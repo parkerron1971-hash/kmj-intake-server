@@ -118,6 +118,8 @@ app.include_router(payment_router)
 app.include_router(growth_router)
 app.include_router(module_router)
 app.include_router(chief_router)
+from chief_jobs import router as chief_jobs_router  # Feature 2 — queued desk jobs
+app.include_router(chief_jobs_router)
 app.include_router(notification_router)
 app.include_router(whisper_router)
 app.include_router(email_router)

@@ -8818,8 +8818,39 @@ async def handle_create_growth_objective(client, biz, action):
     }
 
 
+async def handle_enqueue_job(client, biz, action) -> Dict:
+    """Feature 2 — queue a heavy job (e.g. rebuild_site) that runs
+    server-side and lands finished on the desktop. Returns immediately;
+    the completion notice arrives via the chief_activity recap rail."""
+    import chief_jobs
+    kind = str(action.get("kind") or action.get("job_kind") or "").strip()
+    owner = biz.get("owner_id")
+    if kind not in chief_jobs.KIND_META:
+        return {"type": "enqueue_job", "result": f"Failed: unknown job '{kind}'",
+                "label": "Job", "nav": None}
+    if not owner:
+        return {"type": "enqueue_job", "result": "Failed: no business owner on record",
+                "label": "Job", "nav": None}
+    try:
+        job = await chief_jobs.enqueue(
+            client, user_id=owner, business_id=biz["id"], kind=kind,
+            params=action.get("params") or {}, source=str(action.get("source") or "desktop"),
+        )
+    except Exception as e:  # pragma: no cover
+        return {"type": "enqueue_job", "result": f"Failed: {e}", "label": "Job", "nav": None}
+    meta = chief_jobs.KIND_META[kind]
+    return {
+        "type": "enqueue_job",
+        "result": "started — I'll let you know on your desktop when it's done",
+        "label": f"{meta['label']} — {meta.get('working', 'working on it')}",
+        "nav": None,
+        "job_id": (job or {}).get("id"),
+    }
+
+
 ACTION_HANDLERS = {
     "create_growth_objective": handle_create_growth_objective,
+    "enqueue_job":            handle_enqueue_job,
     "propose_module_from_intake": handle_propose_module_from_intake,
     "accept_module_spec":         handle_accept_module_spec,
     "reject_module_spec":         handle_reject_module_spec,
@@ -11120,6 +11151,9 @@ ACTIONS — QUEUE MANAGEMENT:
   [ACTION:{{"type":"bulk_approve","filter":"all|agent:nurture|priority:low"}}]  — cap 20
   [ACTION:{{"type":"bulk_dismiss","filter":"priority:low"}}]  — cap 20
 
+ACTIONS — LONG TASKS (heavy work that runs in the background, lands on the desktop):
+  [ACTION:{{"type":"enqueue_job","kind":"rebuild_site"}}]  — Rebuild / recompose the practitioner's website. This is SLOW, so it runs as a queued job: it finishes server-side and the result is waiting on their desktop. Use it whenever they ask to rebuild / recompose / refresh / redo their site, ESPECIALLY from their phone. After emitting it, tell them you've STARTED it and you'll let them know on their desktop when it's ready — do NOT claim the site is already rebuilt or describe the finished result, because it hasn't run yet.
+
 ACTIONS — CONTACTS:
   [ACTION:{{"type":"create_contact","name":"...","email":"...","phone":"...","status":"lead"}}]
   [ACTION:{{"type":"update_contact","contact_id":"<uuid>","email":"new@email.com"}}]
@@ -12065,7 +12099,7 @@ async def chief_chat(
             # Autopilot + escalations — needs the business row first so
             # we can read settings.autopilot. Fetch a minimal copy.
             try:
-                biz_rows = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=id,name,type,settings")
+                biz_rows = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=id,name,type,settings,owner_id")
                 biz_lite = (biz_rows or [None])[0]
                 if biz_lite:
                     auto_count = await _autopilot_sweep(client, biz_lite)
