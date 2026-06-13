@@ -247,8 +247,18 @@ def _inject_brand_meta(html: str, business_id: Optional[str]) -> str:
 
 
 def _use_smart_sites(site_row: Dict[str, Any]) -> bool:
-    """Pass 3: check if this business has opted into Smart Sites rendering."""
+    """Whether to render via the Smart Sites engine.
+
+    Canonical-engine rule (DRL arc, ruled 2026-06-13): the Module Composer
+    is the canonical builder. Once a site has been composed by it
+    (html_source == 'module-composer'), the composer's html_content is what
+    renders — the Smart Sites engine never shadows it, even if a stale
+    use_smart_sites flag lingers from an earlier opt-in. This prevents the
+    two engines from fighting over the same business_sites row (the bug that
+    made DRO-driven concept copy invisible)."""
     cfg = (site_row or {}).get("site_config") or {}
+    if cfg.get("html_source") == "module-composer":
+        return False
     return bool(cfg.get("use_smart_sites"))
 
 
