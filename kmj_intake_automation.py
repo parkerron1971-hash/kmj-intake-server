@@ -240,6 +240,68 @@ app.include_router(platform_console_router)
 # /billing/webhook (Stripe signature-verified), /billing/status (open).
 from stripe_billing import router as stripe_billing_router
 app.include_router(stripe_billing_router)
+# Arc 29 fix — health routes MUST register before public_site, whose
+# `/{path:path}` catch-all otherwise swallows /health* and returns its
+# own "Not found" (the bug Kevin hit). Same discipline as booking/
+# payments above. Handler bodies reference module globals (scheduler,
+# BUSINESS_NAME, …) resolved at request time, so defining them here —
+# above where those globals are assigned — is safe.
+from fastapi import APIRouter as _APIRouter
+from fastapi.responses import JSONResponse as _JSONResponse
+_health_router = _APIRouter()
+
+
+@_health_router.get("/health")
+async def health():
+    """Liveness: cheap, always 200 if the process is up."""
+    return {
+        "status": "running",
+        "business": BUSINESS_NAME,
+        "owner": OWNER_NAME,
+        "active_projects": len(COMPLETED_PROJECTS),
+        "scheduler": scheduler.running,
+        "next_followup_check": str(scheduler.get_job("followup_check").next_run_time)
+                               if scheduler.get_job("followup_check") else None,
+    }
+
+
+@_health_router.get("/health/ready")
+async def health_ready():
+    """Arc 29 — readiness probe: reaches dependencies + reports leader
+    role and which optional integrations are configured. 503 when a hard
+    dependency (Supabase) is unreachable so an uptime monitor can react."""
+    import scheduler_lock
+    checks: dict = {}
+    supabase_ok = False
+    try:
+        import sb_clients
+        r = sb_clients.sb_get_as_service("/businesses?select=id&limit=1")
+        supabase_ok = r is not None
+    except Exception as e:
+        checks["supabase_error"] = str(e)[:200]
+    checks["supabase"] = supabase_ok
+    checks["scheduler_running"] = scheduler.running
+    checks["is_scheduler_leader"] = scheduler_lock.is_leader()
+    checks["integrations"] = {
+        "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "openai": bool(os.environ.get("OPENAI_API_KEY")),
+        "stripe": bool(os.environ.get("STRIPE_SECRET_KEY")),
+        "stripe_webhook": bool(os.environ.get("STRIPE_SIGNING_SECRET")
+                               or os.environ.get("STRIPE_WEBHOOK_SECRET")),
+        "resend": bool(os.environ.get("RESEND_API_KEY")),
+        "resend_webhook_verified": bool(os.environ.get("RESEND_WEBHOOK_SECRET")),
+        "plaid": bool(os.environ.get("PLAID_CLIENT_ID")),
+        "push_vapid": bool(os.environ.get("VAPID_PRIVATE_KEY")),
+        "sentry": bool(os.environ.get("SENTRY_DSN")),
+        "billing_enforce": (os.environ.get("BILLING_ENFORCE") or "off").lower() == "on",
+    }
+    ready = supabase_ok and scheduler.running
+    return _JSONResponse(status_code=200 if ready else 503,
+                         content={"ready": ready, **checks})
+
+
+app.include_router(_health_router)
+
 # public_site_router MUST remain LAST — it defines `/` and `/{path:path}`
 # catch-alls that would otherwise shadow every specific API route.
 app.include_router(public_site_router)
@@ -892,60 +954,8 @@ async def canva_callback(request: Request):
     return HTMLResponse(content=html)
 
 
-@app.get("/health")
-async def health():
-    """Liveness: cheap, always 200 if the process is up."""
-    return {
-        "status": "running",
-        "business": BUSINESS_NAME,
-        "owner": OWNER_NAME,
-        "active_projects": len(COMPLETED_PROJECTS),
-        "scheduler": scheduler.running,
-        "next_followup_check": str(scheduler.get_job("followup_check").next_run_time),
-    }
-
-
-from fastapi.responses import JSONResponse
-
-
-@app.get("/health/ready")
-async def health_ready():
-    """Arc 29 — readiness probe: actually reaches dependencies + reports
-    leader role and which optional integrations are configured. Returns
-    503 when a hard dependency (Supabase) is unreachable so a load
-    balancer / uptime monitor can react instead of routing to a broken
-    instance. The shallow /health stays as the liveness probe."""
-    import scheduler_lock
-    checks: dict = {}
-
-    # Supabase reachability (hard dependency).
-    supabase_ok = False
-    try:
-        import sb_clients
-        r = sb_clients.sb_get_as_service("/businesses?select=id&limit=1")
-        supabase_ok = r is not None
-    except Exception as e:
-        checks["supabase_error"] = str(e)[:200]
-    checks["supabase"] = supabase_ok
-
-    checks["scheduler_running"] = scheduler.running
-    checks["is_scheduler_leader"] = scheduler_lock.is_leader()
-    checks["integrations"] = {
-        "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
-        "openai": bool(os.environ.get("OPENAI_API_KEY")),
-        "stripe": bool(os.environ.get("STRIPE_SECRET_KEY")),
-        "stripe_webhook": bool(os.environ.get("STRIPE_SIGNING_SECRET")
-                               or os.environ.get("STRIPE_WEBHOOK_SECRET")),
-        "resend": bool(os.environ.get("RESEND_API_KEY")),
-        "resend_webhook_verified": bool(os.environ.get("RESEND_WEBHOOK_SECRET")),
-        "plaid": bool(os.environ.get("PLAID_CLIENT_ID")),
-        "push_vapid": bool(os.environ.get("VAPID_PRIVATE_KEY")),
-        "sentry": bool(os.environ.get("SENTRY_DSN")),
-        "billing_enforce": (os.environ.get("BILLING_ENFORCE") or "off").lower() == "on",
-    }
-    ready = supabase_ok and scheduler.running
-    status_code = 200 if ready else 503
-    return JSONResponse(status_code=status_code, content={"ready": ready, **checks})
+# (/health + /health/ready moved above the public_site include — Arc 29
+#  fix for the catch-all shadowing that returned "Not found".)
 
 
 # ─────────────────────────────────────────────────────────────
