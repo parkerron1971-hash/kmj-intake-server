@@ -35,6 +35,15 @@ drop policy if exists chief_activity_select_own on public.chief_activity;
 create policy chief_activity_select_own on public.chief_activity
   for select using (auth.uid() = user_id);
 
+-- INSERT policy is REQUIRED: the chat handler logs activity under the
+-- practitioner's own JWT (authenticated role, not service_role), so RLS
+-- must permit a caller to insert rows for themselves. Without this, every
+-- log write is silently rejected and the recap stays empty. The check
+-- mirrors the data the handler writes (user_id = the caller).
+drop policy if exists chief_activity_insert_own on public.chief_activity;
+create policy chief_activity_insert_own on public.chief_activity
+  for insert with check (auth.uid() = user_id);
+
 drop policy if exists chief_activity_update_own on public.chief_activity;
 create policy chief_activity_update_own on public.chief_activity
   for update using (auth.uid() = user_id);
