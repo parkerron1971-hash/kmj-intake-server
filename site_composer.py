@@ -61,6 +61,53 @@ def _slugify(name: str) -> str:
     return s[:48] or "site"
 
 
+def _fetch_public_modules(business_id: str) -> List[Dict[str, Any]]:
+    """The practitioner's PUBLIC custom modules + their entries — the same
+    awareness the legacy renderer had. Each module the business runs (and
+    marked public) becomes a real section the composer can place and frame."""
+    try:
+        modules = sb_clients.sb_get_as_service(
+            f"/custom_modules?business_id=eq.{business_id}&is_active=eq.true"
+            "&select=id,name,schema,public_display&limit=50") or []
+    except Exception as e:
+        logger.warning(f"[composer] public-module fetch failed (non-fatal): {e}")
+        return []
+    out: List[Dict[str, Any]] = []
+    for m in modules:
+        pd = m.get("public_display") or {}
+        if not pd.get("enabled"):
+            continue
+        try:
+            entries = sb_clients.sb_get_as_service(
+                f"/module_entries?module_id=eq.{m['id']}&status=eq.active"
+                f"&order={pd.get('sort_by', 'created_at')}.desc"
+                f"&limit={min(int(pd.get('max_display', 12) or 12), 24)}"
+                "&select=id,data,created_at") or []
+        except Exception:
+            entries = []
+        visible = pd.get("visible_fields") or []
+        hidden = set(pd.get("hidden_fields") or ["assigned_to", "internal_notes", "contact_id"])
+        filter_status = pd.get("filter_status") or []
+        rows = []
+        for e in entries:
+            data = e.get("data") or {}
+            if filter_status and data.get("status") not in filter_status:
+                continue
+            kept = ({k: data.get(k) for k in visible if data.get(k) not in (None, "")}
+                    if visible else {k: v for k, v in data.items()
+                                     if k not in hidden and v not in (None, "")})
+            if kept:
+                rows.append(kept)
+        out.append({
+            "module_id": m["id"],
+            "title": pd.get("title_override") or m.get("name") or "",
+            "display_type": pd.get("display_type", "list"),
+            "description": pd.get("description") or "",
+            "entries": rows,
+        })
+    return out
+
+
 def gather_context(business_id: str) -> Dict[str, Any]:
     import brand_engine
     bundle = brand_engine.get_bundle(business_id) or {}
@@ -100,6 +147,20 @@ def gather_context(business_id: str) -> Dict[str, Any]:
              "url": f"{RAILWAY_BASE}/public/store/{slug}/page" if slug else "",
              "items": sellable}
 
+    # Logistics + socials the composer should KNOW (legacy renderer did).
+    link_page = settings.get("link_page") or {}
+    hours_cfg = (booking_cfg.get("hours") or {})
+    contact = {
+        "email": (settings.get("contact_email")
+                  or (bundle.get("practitioner") or {}).get("email") or ""),
+        "phone": settings.get("contact_phone") or link_page.get("phone") or "",
+        "address": settings.get("address") or link_page.get("address") or "",
+        "hours": (f"{hours_cfg.get('start')}–{hours_cfg.get('end')}"
+                  if hours_cfg.get("start") and hours_cfg.get("end") else ""),
+        "social": {k: v for k, v in (link_page.get("social_profiles") or {}).items() if v},
+        "submit_url": f"{RAILWAY_BASE}/sites/{business_id}/contact-submit",
+    }
+
     dna = brand_dna.build_brand_dna(business_id, bundle)
     return {
         "store": store,
@@ -112,8 +173,8 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "offerings": offerings,
         "testimonials": testimonials,
         "booking": booking,
-        "contact": {"email": (settings.get("contact_email")
-                              or (bundle.get("practitioner") or {}).get("email") or "")},
+        "public_modules": _fetch_public_modules(business_id),
+        "contact": contact,
         "footer": bundle.get("footer") or {},
     }
 
@@ -259,6 +320,8 @@ BUSINESS
 - Design vibe: {ctx['dna']['vibe']}, intensity: {ctx['dna']['intensity']}
 - Real offerings on file: {off_names or '(none)'}
 - Real testimonials on file: {n_testi}
+- Public custom modules the business RUNS (surface via the "showcase" section): {', '.join((m.get('title') or '') + f" ({len(m.get('entries') or [])})" for m in (ctx.get('public_modules') or [])) or '(none)'}
+- Contact wiring: a real contact form + {('hours, ' if (ctx.get('contact') or {}).get('hours') else '')}{('address, ' if (ctx.get('contact') or {}).get('address') else '')}{('phone, ' if (ctx.get('contact') or {}).get('phone') else '')}socials render automatically in the "contact" section — you only write its framing.
 {f'- Practitioner notes for this build: {brief_notes[:400]}' if brief_notes else ''}
 
 AVAILABLE MODULES (use each at most once; order is yours except hero first, contact last):
@@ -272,6 +335,7 @@ RULES
   section framing (eyebrow/headline/intro).
 - Include "offerings" only if offerings exist; "testimonials" only if testimonials exist;
   "store" only if sellable products exist ({(ctx.get('store') or {}).get('enabled') and len((ctx.get('store') or {}).get('items') or []) or 0} on file).
+- Include "showcase" whenever public custom modules exist (listed above) — it surfaces the real tools/programs the business runs; frame its eyebrow/headline/intro in-concept.
 - headline ≤ 9 words. subheadline/intro: 1-2 sentences. about body: 2-4 sentences,
   first person where natural.
 - Choose variants for contrast and rhythm — don't pick the first variant of everything.
