@@ -179,6 +179,32 @@ class _RetryReq(BaseModel):
     job_id: str
 
 
+class _RebuildReq(BaseModel):
+    business_id: str
+    brief_notes: Optional[str] = None
+
+
+@router.post("/jobs/rebuild")
+async def rebuild_site_endpoint(req: _RebuildReq,
+                                user_session: UserSession = Depends(require_user_session)):
+    """Enqueue a site rebuild as a BACKGROUND job (the canonical build path).
+    Used by MySite + the Composer panel so a build never blocks/times out —
+    it runs server-side and the desktop recap announces completion. Ownership
+    is verified before enqueuing."""
+    uid = getattr(getattr(user_session, "user", None), "id", None)
+    if not uid:
+        raise HTTPException(401, "auth required")
+    async with httpx.AsyncClient() as client:
+        owned = await _sb(client, "GET",
+                          f"/businesses?id=eq.{req.business_id}&owner_id=eq.{uid}&select=id&limit=1")
+        if not owned:
+            raise HTTPException(403, "not your business")
+        params = {"brief_notes": req.brief_notes} if (req.brief_notes or "").strip() else {}
+        job = await enqueue(client, user_id=uid, business_id=req.business_id,
+                            kind="rebuild_site", params=params, source="desktop")
+    return {"ok": True, "job_id": (job or {}).get("id")}
+
+
 @router.post("/jobs/retry")
 async def retry_job(req: _RetryReq, user_session: UserSession = Depends(require_user_session)):
     """Re-queue a failed job. Ownership verified before re-running."""
