@@ -159,6 +159,14 @@ def upsert_override(
             502,
             {"error": "override_persist_failed"},
         )
+    # Deterministic re-render (no LLM): a composed site re-renders its
+    # html_content with the new override applied, so inline edits show on
+    # the live site without an API/compose call. No-op for non-composed sites.
+    try:
+        from site_composer import refresh_if_composed_async
+        refresh_if_composed_async(req.business_id)
+    except Exception:
+        pass
     return persisted
 
 
@@ -180,6 +188,11 @@ def delete_one_override(
             502,
             {"error": "override_delete_failed"},
         )
+    try:
+        from site_composer import refresh_if_composed_async
+        refresh_if_composed_async(business_id)
+    except Exception:
+        pass
     return {"success": True, "business_id": business_id, "override_id": override_id}
 
 
@@ -201,6 +214,11 @@ def delete_override_by_path(
             502,
             {"error": "override_delete_failed"},
         )
+    try:
+        from site_composer import refresh_if_composed_async
+        refresh_if_composed_async(business_id)
+    except Exception:
+        pass
     return {
         "success": True,
         "business_id": business_id,

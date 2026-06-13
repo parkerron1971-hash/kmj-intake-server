@@ -356,6 +356,29 @@ def _mark(html: str) -> str:
     return html.replace("<head>", f"<head>\n{COMPOSER_MARK}", 1)
 
 
+def _inject_color_overrides(html: str, business_id: str) -> str:
+    """Apply per-element color overrides as a <style> block keyed on
+    data-override-target — deterministic, no HTML rewriting, no LLM. Each
+    color_role override (target_path → hex, from the Edit-Mode palette
+    picker) sets that element's text color."""
+    try:
+        from agents.override_system.override_storage import overrides_as_lookup
+        colors = overrides_as_lookup(business_id, "color_role") or {}
+    except Exception:
+        return html
+    rules: List[str] = []
+    for path, row in colors.items():
+        hexv = ((row or {}).get("override_value") or "").strip()
+        if not (hexv.startswith("#") and 4 <= len(hexv) <= 9):
+            continue
+        sel = str(path).replace("\\", "").replace('"', "").replace("<", "").replace(">", "")
+        rules.append(f'[data-override-target="{sel}"]{{color:{hexv} !important;}}')
+    if not rules:
+        return html
+    block = "<style>/* edit-mode color overrides */\n" + "\n".join(rules) + "\n</style>"
+    return html.replace("</head>", block + "</head>", 1) if "</head>" in html else html + block
+
+
 def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        ctx: Optional[Dict[str, Any]] = None,
                        dro_id: Optional[str] = None) -> Dict[str, Any]:
@@ -403,6 +426,19 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         final_html, _credits, _warns = resolve_html_slots(html, slot_records)
     except Exception as e:
         logger.warning(f"[composer] slot resolution failed (non-fatal): {e}")
+
+    # DETERMINISTIC INLINE EDITS (no API): apply the practitioner's text +
+    # color overrides onto the rendered HTML. Edits made in the editor
+    # (words, colors) persist as overrides and show on re-render WITHOUT any
+    # LLM call — the cost-reduction goal. Image swaps ride the slot system
+    # above. A re-render is triggered on every override save (see the
+    # override router → refresh_if_composed_async).
+    try:
+        from agents.override_system.override_resolver import resolve_html_overrides
+        final_html = resolve_html_overrides(final_html, business_id)   # text
+    except Exception as e:
+        logger.warning(f"[composer] text override resolution failed (non-fatal): {e}")
+    final_html = _inject_color_overrides(final_html, business_id)       # color
 
     # Persist: html_content serves live; site_config carries the spec.
     fresh = sb_clients.sb_get_as_service(
