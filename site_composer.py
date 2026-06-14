@@ -493,6 +493,26 @@ def _apply_hero_direction(spec: List[Dict[str, Any]], hero_concept: Optional[Dic
             return
 
 
+def _ensure_connections(spec: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Deterministically GUARANTEE the site connects to everything the
+    business actually uses — never left to the LLM (the cause of missing
+    modules/sections). Adds any missing connected section: showcase (public
+    custom modules), offerings, store. Contact + hero are guaranteed by
+    sanitize_spec. Sections insert before contact so it stays last."""
+    present = {s.get("module") for s in spec}
+    additions: List[Dict[str, Any]] = []
+    if ctx.get("public_modules") and "showcase" not in present:
+        additions.append({"module": "showcase", "variant": "cards", "content": {}})
+    if (ctx.get("offerings")) and "offerings" not in present:
+        additions.append({"module": "offerings", "variant": "cards", "content": {}})
+    if (ctx.get("store") or {}).get("enabled") and "store" not in present:
+        additions.append({"module": "store", "variant": "featured", "content": {}})
+    if not additions:
+        return spec
+    contact_idx = next((i for i, s in enumerate(spec) if s.get("module") == "contact"), len(spec))
+    return spec[:contact_idx] + additions + spec[contact_idx:]
+
+
 def compose_site(business_id: str, brief_notes: str = "",
                  use_llm: bool = True) -> Dict[str, Any]:
     """Canonical site-compose entry (DRL PR3). Produces a Design Rationale
@@ -533,6 +553,10 @@ def compose_site(business_id: str, brief_notes: str = "",
             _apply_hero_direction(spec, (dro.get("decisions") or {}).get("hero_concept"))
     else:
         spec, source = _default_spec(ctx), "default"
+
+    # Deterministically guarantee the site connects to everything the business
+    # uses (modules/offerings/store) — regardless of LLM choices or fallback.
+    spec = _ensure_connections(spec, ctx)
 
     result = render_and_persist(business_id, spec, ctx, dro_id=dro_id)
     return {"composition_source": source, "design_rationale_id": dro_id, **result}
