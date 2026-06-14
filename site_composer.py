@@ -473,8 +473,11 @@ _HERO_DIRECTION_VARIANT = {
     "environment_mood": "cinematic",
     "artifact_showcase": "cinematic",
     "portrait_presence": "cinematic",
+    # visual_metaphor would ideally render a constructed graphic, but that
+    # render isn't built yet — use the cinematic image hero so there's always
+    # a real hero image holder (no bare text-only hero).
+    "visual_metaphor": "cinematic",
     "typographic_statement": "statement",
-    "visual_metaphor": "statement",
 }
 
 

@@ -39,9 +39,16 @@ DRO_TEMPERATURE = 0.4                          # reasoning with creative latitud
 
 
 # ─── LLM plumbing ──────────────────────────────────────────────────────
+# Hard per-call timeout + a single retry. WITHOUT this the SDK default is
+# 600s/call with 2 retries, so one slow API call could stall a whole build
+# for 10+ minutes ("12 min producing nothing"). DRO authoring is best-effort:
+# a timeout just means we compose without the DRO, never a hung build.
+_CALL_TIMEOUT_S = 50.0
+
+
 def _client() -> Optional[Anthropic]:
     key = os.environ.get("ANTHROPIC_API_KEY")
-    return Anthropic(api_key=key) if key else None
+    return Anthropic(api_key=key, timeout=_CALL_TIMEOUT_S, max_retries=1) if key else None
 
 
 def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
@@ -49,6 +56,7 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
     msg = client.messages.create(
         model=DRL_MODEL, max_tokens=max_tokens, temperature=temperature,
         system=system, messages=[{"role": "user", "content": user}],
+        timeout=_CALL_TIMEOUT_S,
     )
     try:
         from api_usage_logger import log_api_usage_sync
