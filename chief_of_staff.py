@@ -7537,6 +7537,121 @@ async def handle_recall_conversation(client, biz, action) -> Dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# SERVER-SIDE CONVERSATION ARCHIVE (Step 1 — append-per-turn spine)
+# ═══════════════════════════════════════════════════════════════════════
+# Capture every Chief turn into the business's OPEN chief_conversations row
+# the instant it happens, so session history exists independent of the client
+# ever reopening (the old frontend archiver only fired on reopen after 4h —
+# graduation can't trust that). Atomicity ("one open row per business") is
+# enforced in the DB by the partial unique index + chief_append_turn RPC
+# (see __migrations__/2026_06_16_chief_conversations_server_archive.sql).
+# Summaries are generated lazily at CLOSE (one LLM call per conversation, same
+# cost as the retired client archiver), never per turn.
+_ARCHIVE_IDLE_MINUTES = 240  # 4h idle → a session is considered ended
+
+
+async def _summarize_for_archive(client: httpx.AsyncClient,
+                                 messages: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
+    """One cheap Claude call → (summary, key_topics). Best-effort: returns
+    ('', []) on any failure so closing a conversation never blocks."""
+    try:
+        tail = (messages or [])[-12:]
+        transcript = "\n".join(
+            f"{m.get('role')}: {(m.get('content') or '')[:400]}" for m in tail)
+        if not transcript.strip():
+            return "", []
+        sys = ("Summarize this Chief↔practitioner conversation in 2-3 sentences "
+               "(what was discussed + any decisions or actions taken), then list up "
+               "to 5 short key topics. Reply as STRICT JSON only: "
+               '{"summary": "...", "key_topics": ["...", "..."]}')
+        raw = await _call_claude(client, sys, [{"role": "user", "content": transcript}],
+                                 max_tokens=300, enable_web_search=False)
+        parsed = _parse_json(raw) or {}
+        summary = str(parsed.get("summary") or "")[:2000]
+        topics = [str(t)[:60] for t in (parsed.get("key_topics") or []) if t][:5]
+        return summary, topics
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"[archive] summarize failed: {e}")
+        return "", []
+
+
+async def _close_conversation(client: httpx.AsyncClient, conv_id: str,
+                              messages: List[Dict[str, Any]]) -> None:
+    """Fill summary/key_topics on a row that was just CLAIMED (ended_at already
+    set atomically by the claim RPC). Best-effort."""
+    if not conv_id:
+        return
+    summary, topics = await _summarize_for_archive(client, messages or [])
+    try:
+        await _sb(client, "PATCH", f"/chief_conversations?id=eq.{conv_id}",
+                  {"summary": summary, "key_topics": topics})
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"[archive] close patch failed: {e}")
+
+
+async def _close_conversation_bg(conv_id: str, messages: List[Dict[str, Any]]) -> None:
+    """Background close — own httpx client (the request's is closing) and no
+    user JWT in context, so the PATCH runs service-role (server-trusted)."""
+    try:
+        async with httpx.AsyncClient() as client:
+            await _close_conversation(client, conv_id, messages)
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"[archive] bg close failed: {e}")
+
+
+async def _archive_capture_turn(client: httpx.AsyncClient, business_id: Optional[str],
+                                user_text: Optional[str],
+                                assistant_text: Optional[str]) -> None:
+    """Append this turn to the business's open conversation row. Lazy-closes a
+    stale (>4h idle) open row first so a returning practitioner starts a fresh
+    session. Runs under the caller's JWT (the append/claim RPCs guard on
+    owner/member). Best-effort: never blocks or breaks the chat reply."""
+    if not business_id or not (user_text or assistant_text):
+        return
+    try:
+        # Lazy-close: atomically claim a stale open row; if we won it, summarize
+        # in the BACKGROUND so this turn isn't slowed by an LLM call.
+        stale = await _sb(client, "POST", "/rpc/chief_claim_stale_conversation",
+                          {"p_business_id": business_id,
+                           "p_idle_minutes": _ARCHIVE_IDLE_MINUTES}) or []
+        for row in (stale if isinstance(stale, list) else []):
+            asyncio.create_task(
+                _close_conversation_bg(row.get("id"), row.get("messages")))
+        # Append the turn — creates a fresh open row if none, else appends.
+        turn: List[Dict[str, str]] = []
+        if user_text:
+            turn.append({"role": "user", "content": user_text[:6000]})
+        if assistant_text:
+            turn.append({"role": "assistant", "content": assistant_text[:6000]})
+        if turn:
+            await _sb(client, "POST", "/rpc/chief_append_turn",
+                      {"p_business_id": business_id, "p_messages": turn})
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"[archive] capture failed (non-blocking): {e}")
+
+
+async def sweep_idle_conversations(idle_minutes: int = _ARCHIVE_IDLE_MINUTES) -> int:
+    """Backstop (hourly scheduler job): close + summarize OPEN rows idle
+    ≥ idle_minutes that never got a follow-up turn — the never-reopen case the
+    per-turn lazy-close can't reach. Service-role (trusted server job).
+    Returns the number closed."""
+    closed = 0
+    try:
+        async with httpx.AsyncClient() as client:
+            rows = await sb_clients.sb_as_service(
+                client, "POST", "/rpc/chief_claim_all_stale",
+                {"p_idle_minutes": idle_minutes}) or []
+            for row in (rows if isinstance(rows, list) else []):
+                await _close_conversation(client, row.get("id"), row.get("messages"))
+                closed += 1
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"[archive] sweep failed: {e}")
+    if closed:
+        logger.info(f"[archive] swept {closed} idle conversation(s) closed")
+    return closed
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # TIMERS & ALARMS
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -12642,6 +12757,17 @@ async def chief_chat(
             # injected into history. Belt-and-suspenders so nothing
             # internal-looking ever reaches the practitioner.
             response_text = clean if clean else _scrub_response_text(raw or "")
+
+            # Step 1 — server-side archive: append this turn to the open
+            # chief_conversations row so session history exists regardless of
+            # whether the client ever reopens. Lazy-closes a stale session
+            # first. Best-effort; never blocks the reply. (Coach-mode turns are
+            # captured too — they're still the practitioner's own history.)
+            try:
+                await _archive_capture_turn(
+                    client, biz.get("id"), req.message, response_text)
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"[archive] capture hook failed: {e}")
 
             return {
                 "response": response_text,

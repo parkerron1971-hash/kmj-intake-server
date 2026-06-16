@@ -665,6 +665,15 @@ async def startup():
             scheduler.add_job(g("gl_divergence", _gl.divergence_tick), "interval", minutes=15, id="gl_divergence")
     except Exception as e:
         print(f"   [warn] GL sync jobs not scheduled: {e}")
+    # Chief memory Step 1 — hourly backstop sweep: close + summarize OPEN
+    # chief_conversations rows idle >4h that never got a follow-up turn (the
+    # never-reopen case the per-turn lazy-close can't reach).
+    try:
+        import chief_of_staff as _cos
+        scheduler.add_job(g("chief_archive_sweep", _cos.sweep_idle_conversations),
+                          "interval", hours=1, id="chief_archive_sweep")
+    except Exception as e:
+        print(f"   [warn] chief archive sweep not scheduled: {e}")
     scheduler.start()
     print(f"🚀 KMJ Intake Automation running")
     print(f"   Owner: {OWNER_NAME} | {BUSINESS_NAME}")
