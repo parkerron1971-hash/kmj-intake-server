@@ -155,6 +155,25 @@ async def _call_claude(business_id: str, system: str, user_content: str,
         _gate_hit = inference_gate.lookup(
             business_id, "chief_llm", (system or "") + "\n###\n" + (user_content or ""))
         if _gate_hit and _gate_hit.get("cached"):
+            # Alignment fix (2026-07-03): cache hits used to return BEFORE
+            # usage logging + threshold checks, so cached interactions were
+            # invisible to telemetry/billing — contradicting
+            # docs/inference_layer.md §5. Log a zero-token row (the win
+            # stays visible AND countable) and keep the metering gate.
+            try:
+                from api_usage_logger import log_api_usage
+                await log_api_usage(
+                    endpoint=endpoint, model="layer2_cache",
+                    input_tokens=0, output_tokens=0,
+                    business_id=business_id, task_type="chief_bookkeeping",
+                    ok=True, error=None)
+            except Exception as _log_err:
+                logger.warning(f"[chief_llm] cached-hit usage log failed: {_log_err}")
+            try:
+                import usage_metering
+                usage_metering.check_thresholds(business_id)
+            except Exception as _m_err:
+                logger.warning(f"[chief_llm] cached-hit threshold check failed: {_m_err}")
             return _gate_hit["response"]
         _gate_emb = (_gate_hit or {}).get("_embedding")
     except Exception as _g_err:

@@ -235,6 +235,22 @@ async def ai_proxy(req: ProxyRequest):
                 hit = inference_gate.lookup(str(business_id), "ai_proxy",
                                             _gate_req_text, req.task_type)
                 if hit and hit.get("cached"):
+                    # Alignment fix (2026-07-03): meter the hit — cached
+                    # answers count as interactions (docs/inference_layer.md
+                    # §5) instead of vanishing from telemetry/billing.
+                    try:
+                        await log_api_usage(
+                            endpoint="/ai/proxy", model="layer2_cache",
+                            input_tokens=0, output_tokens=0,
+                            business_id=str(business_id),
+                            task_type=req.task_type, ok=True, error=None)
+                    except Exception as _log_err:
+                        logger.warning(f"ai_proxy cached-hit usage log failed: {_log_err}")
+                    try:
+                        import usage_metering
+                        usage_metering.check_thresholds(str(business_id))
+                    except Exception as _m_err:
+                        logger.warning(f"ai_proxy cached-hit threshold check failed: {_m_err}")
                     return {
                         "content": hit["response"],
                         "model": model,
