@@ -257,20 +257,52 @@ def _module_menu() -> str:
 
 
 def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
-    """Build the intake material the DRL signal-detection pass reads. We have
-    no raw transcript here, so we assemble the practitioner's own words from
-    context (name, type, tagline, about, voice, offerings)."""
+    """Build the intake material the DRL signal-detection pass reads.
+
+    Quality pass (2026-07-03): the DRL was reasoning over ~6 short fields,
+    so most signals came back `inferred`/low-confidence and were dropped
+    before authoring — the engine ran on fumes. Now we hand it every scrap
+    of the practitioner's OWN language the system already holds: identity
+    file, brand-kit messaging, voice profile, offering descriptions, and
+    their customers' words (testimonial quotes). The detection prompt is
+    untouched — only its input got richer.
+    """
     bundle = ctx.get("bundle") or {}
     intel = bundle.get("practitioner_intelligence") or {}
     voice = bundle.get("voice") or {}
     biz = ctx["business"]
+    settings = (biz.get("settings") or {}) if isinstance(biz.get("settings"), dict) else {}
+    kit = (settings.get("brand_kit") or {}) if isinstance(settings.get("brand_kit"), dict) else {}
+    vp = biz.get("voice_profile") if isinstance(biz.get("voice_profile"), dict) else {}
+    offerings = ctx.get("offerings") or []
+
+    kit_tone = kit.get("tone_words")
+    kit_tone_str = " ".join(kit_tone) if isinstance(kit_tone, list) else (kit_tone or "")
+
+    offering_descs = " | ".join(
+        (o.get("description") or "").strip()[:140]
+        for o in offerings[:5] if (o.get("description") or "").strip()
+    )
+
+    quotes = []
+    for t in (ctx.get("testimonials") or [])[:4]:
+        if isinstance(t, dict):
+            q = (t.get("quote") or t.get("text") or t.get("content") or "").strip()
+            if q:
+                quotes.append(q[:160])
+
     parts = [
         f"Business name: {biz.get('name')}",
         f"Business type: {biz.get('type')}",
-        f"Tagline: {(bundle.get('business') or {}).get('tagline') or ''}",
-        f"About: {intel.get('about_business') or intel.get('about_me') or ''}",
-        f"Voice / tone: {voice.get('brand_voice') or ''} {voice.get('tone_words') or ''}",
-        f"Offerings: {', '.join(o.get('name') or '' for o in (ctx.get('offerings') or [])[:8])}",
+        f"Tagline: {(bundle.get('business') or {}).get('tagline') or kit.get('tagline') or ''}",
+        f"Elevator pitch: {kit.get('elevator_pitch') or ''}",
+        f"About the business: {intel.get('about_business') or ''}",
+        f"About the practitioner: {intel.get('about_me') or ''}",
+        f"Voice / tone: {voice.get('brand_voice') or ''} {voice.get('tone_words') or ''} {kit_tone_str}".rstrip(),
+        f"Communication style: {(vp or {}).get('tone') or ''} {(vp or {}).get('style') or ''}".rstrip(),
+        f"Offerings: {', '.join(o.get('name') or '' for o in offerings[:8])}",
+        f"How they describe their offerings: {offering_descs}",
+        f"In their customers' words: {' | '.join(quotes)}",
     ]
     return "\n".join(p for p in parts if p.split(": ", 1)[-1].strip())
 
@@ -541,6 +573,15 @@ def compose_site(business_id: str, brief_notes: str = "",
             decisions = dro.get("decisions") or {}
             ctx["design"] = decisions
             ctx["dna"] = brand_dna.apply_dro_palette(ctx["dna"], decisions.get("palette"))
+            # Quality pass (2026-07-03): the rest of the DRO reaches the
+            # pixels too — typography personality, whitespace/density,
+            # motion temperature. Practitioner-pinned fonts stay supreme.
+            _design_cfg = ((ctx.get("bundle") or {}).get("design") or {})
+            _expr = (_design_cfg.get("creative_expression") or {})
+            _fonts_pinned = bool((_design_cfg.get("font_heading") or "").strip()
+                                 or (_expr.get("hero_font") or "").strip())
+            ctx["dna"] = brand_dna.apply_dro_style(
+                ctx["dna"], decisions, fonts_pinned=_fonts_pinned)
         # 2) Compose copy that obeys the rationale.
         try:
             spec = compose_spec_llm(ctx, brief_notes or "", dro=dro)
