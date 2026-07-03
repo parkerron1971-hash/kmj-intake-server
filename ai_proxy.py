@@ -92,7 +92,9 @@ ANTHROPIC_VERSION = "2023-06-01"
 # Server-owned model selection. Change here, no client redeploy needed.
 TASK_MODEL_MAP: Dict[str, str] = {
     "plan":     "claude-sonnet-4-5-20250929",
-    "build":    "claude-opus-4-6",
+    # Kevin's ruling (2026-07-03): builds (custom modules, page builder)
+    # run on Opus 4.8 — the highest-stakes generation gets the best model.
+    "build":    "claude-opus-4-8",
     "score":    "claude-sonnet-4-5-20250929",
     "draft":    "claude-sonnet-4-5-20250929",
     "volume":   "claude-haiku-4-5-20251001",

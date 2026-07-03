@@ -69,8 +69,11 @@ from voice_depth_agent import chief_voice_context_block as voice_chief_context_b
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
-CHIEF_MODEL = "claude-sonnet-4-5-20250929"
-DRAFT_MODEL = "claude-sonnet-4-5-20250929"
+# Kevin's ruling (2026-07-03): Chief dialogue runs on the newest Sonnet
+# so spoken/typed conversation quality is as good as it gets at chat
+# latency. Drafts ride the same tier.
+CHIEF_MODEL = "claude-sonnet-5"
+DRAFT_MODEL = "claude-sonnet-5"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
 # Loopback base for run_agent actions. Prefer localhost + PORT (no TLS, no DNS);
