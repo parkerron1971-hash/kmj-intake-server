@@ -365,13 +365,90 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
 
 def render_home() -> str:
     extra_css = """
-      .hero{position:relative;padding:88px 0 96px;text-align:center;overflow:hidden;}
-      .hero::before{content:'';position:absolute;inset:-80px 0 auto;height:520px;background:radial-gradient(60% 80% at 50% 0%, var(--glow), transparent 70%);pointer-events:none;}
+      /* ── Jarvis hero — the AI core commanding the modules (ported from
+         the app's Neon Command dashboard; Kevin's ruling 2026-07-03). ── */
+      .hero{position:relative;padding:76px 0 88px;overflow:hidden;}
+      .hero::before{content:'';position:absolute;inset:-80px 0 auto;height:560px;background:radial-gradient(60% 80% at 50% 0%, var(--glow), transparent 70%);pointer-events:none;}
+      .hero::after{content:'';position:absolute;inset:0;pointer-events:none;opacity:.7;background:
+        radial-gradient(1px 1px at 18% 24%, rgba(255,255,255,.5), transparent 45%),
+        radial-gradient(1px 1px at 72% 12%, rgba(255,255,255,.35), transparent 45%),
+        radial-gradient(1.5px 1.5px at 86% 58%, color-mix(in srgb, var(--accent) 60%, transparent), transparent 50%),
+        radial-gradient(1px 1px at 38% 78%, rgba(255,255,255,.3), transparent 45%),
+        radial-gradient(1px 1px at 8% 62%, color-mix(in srgb, var(--accent) 45%, transparent), transparent 50%);}
       .hero .container{position:relative;z-index:1;}
-      .hero h1{margin:18px auto 22px;max-width:900px;}
-      .hero .lead{max-width:680px;margin:0 auto 36px;}
-      .hero-ctas{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;}
+      .hero-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:44px;align-items:center;}
+      @media (max-width: 860px){.hero-grid{grid-template-columns:1fr;text-align:center;}
+        .hero-ctas{justify-content:center;}.hero-copy .stat-block{margin:0 auto;}}
+      .hero h1{margin:18px 0 22px;max-width:640px;font-size:clamp(38px,5.4vw,58px);line-height:1.06;}
+      @media (max-width:860px){.hero h1{margin:18px auto 22px;}}
+      .hero .lead{max-width:560px;margin:0 0 34px;}
+      @media (max-width:860px){.hero .lead{margin:0 auto 34px;}}
+      .hero-ctas{display:flex;flex-wrap:wrap;gap:12px;}
       .hero-note{margin-top:22px;font-size:12px;color:var(--text-dim);}
+      /* The AI core */
+      .core-stage{position:relative;height:420px;}
+      @media (max-width:860px){.core-stage{height:340px;max-width:420px;margin:0 auto;}}
+      .ai-core{position:absolute;top:50%;left:50%;width:180px;height:180px;transform:translate(-50%,-50%);}
+      .core-heart{position:absolute;inset:34px;border-radius:50%;
+        background:radial-gradient(circle at 38% 32%, color-mix(in srgb, var(--accent) 85%, #fff), var(--accent) 55%, color-mix(in srgb, var(--accent) 40%, #000));
+        box-shadow:0 0 60px color-mix(in srgb, var(--accent) 60%, transparent), 0 0 140px color-mix(in srgb, var(--accent) 30%, transparent);
+        animation:corePulse 3.6s ease-in-out infinite;}
+      .core-ring{position:absolute;border-radius:50%;border:1px solid color-mix(in srgb, var(--accent) 35%, transparent);}
+      .core-ring.r1{inset:6px;border-top-color:color-mix(in srgb, var(--accent) 85%, #fff);animation:coreSpin 9s linear infinite;}
+      .core-ring.r2{inset:-22px;border-style:dashed;opacity:.6;animation:coreSpin 22s linear infinite reverse;}
+      .core-ring.r3{inset:-52px;opacity:.35;border-top-color:color-mix(in srgb, var(--accent) 70%, transparent);animation:coreSpin 34s linear infinite;}
+      @keyframes coreSpin{to{transform:rotate(360deg);}}
+      @keyframes corePulse{0%,100%{transform:scale(1);}50%{transform:scale(1.06);}}
+      .core-chip{position:absolute;display:inline-flex;align-items:center;gap:7px;padding:8px 13px;border-radius:12px;
+        background:color-mix(in srgb, var(--surface) 80%, transparent);border:1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+        backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+        font-size:12.5px;font-weight:600;color:var(--text-secondary);white-space:nowrap;
+        box-shadow:0 8px 24px rgba(0,0,0,.35);animation:chipFloat 7s ease-in-out infinite;}
+      .core-chip .ci{color:var(--accent);filter:drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 70%, transparent));font-style:normal;}
+      .core-chip:nth-child(2n){animation-delay:-2.3s;}
+      .core-chip:nth-child(3n){animation-delay:-4.6s;}
+      @keyframes chipFloat{0%,100%{transform:translateY(0);}50%{transform:translateY(-8px);}}
+      @media (max-width:860px){.core-chip{font-size:11px;padding:6px 10px;}}
+      @media (prefers-reduced-motion: reduce){.core-ring,.core-heart,.core-chip{animation:none !important;}}
+      /* ── Demo reel — the looping animated walkthrough ── */
+      .demo-section{padding:72px 0;border-top:1px solid var(--border);}
+      .demo-frame{max-width:760px;margin:0 auto;border-radius:18px;overflow:hidden;border:1px solid var(--border);
+        background:var(--surface);box-shadow:0 30px 80px rgba(0,0,0,.45);}
+      .demo-chrome{display:flex;align-items:center;gap:7px;padding:11px 16px;border-bottom:1px solid var(--border);background:color-mix(in srgb, var(--surface) 70%, #000);}
+      .demo-chrome span{width:10px;height:10px;border-radius:50%;background:var(--border);}
+      .demo-chrome span:nth-child(1){background:#f87171;}.demo-chrome span:nth-child(2){background:#fbbf24;}.demo-chrome span:nth-child(3){background:#34d399;}
+      .demo-chrome em{margin-left:10px;font-style:normal;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-dim);}
+      .demo-body{display:flex;min-height:330px;}
+      .demo-side{width:56px;border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;gap:14px;padding-top:18px;background:color-mix(in srgb, var(--surface) 60%, #000);}
+      .demo-side i{width:26px;height:26px;border-radius:8px;background:color-mix(in srgb, var(--accent) 12%, transparent);border:1px solid color-mix(in srgb, var(--accent) 20%, transparent);font-style:normal;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--accent);}
+      @media (max-width:560px){.demo-side{display:none;}}
+      .demo-stage{position:relative;flex:1;}
+      .demo-scene{position:absolute;inset:0;padding:26px 28px;opacity:0;transition:opacity .6s ease;pointer-events:none;}
+      .demo-scene.active{opacity:1;}
+      .demo-bubble{max-width:78%;padding:11px 14px;border-radius:14px 14px 14px 4px;background:color-mix(in srgb, var(--accent) 16%, transparent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);font-size:13.5px;line-height:1.5;color:var(--text-primary);margin-bottom:12px;}
+      .demo-bubble.user{margin-left:auto;border-radius:14px 14px 4px 14px;background:color-mix(in srgb, var(--surface) 60%, #fff 4%);border-color:var(--border);}
+      .demo-tag{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--success);margin-top:4px;}
+      .demo-cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;height:100%;align-content:center;}
+      .demo-card{border-radius:14px;padding:16px;color:#fff;}
+      .demo-card b{display:block;font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;}
+      .demo-card span{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;opacity:.75;}
+      .demo-card.c1{background:linear-gradient(135deg,#6d28d9,#8b5cf6);}
+      .demo-card.c2{background:linear-gradient(135deg,#1d4ed8,#3b82f6);}
+      .demo-card.c3{background:linear-gradient(135deg,#1a2133,#212a40);border:1px solid rgba(255,255,255,.08);}
+      .demo-card.c4{background:linear-gradient(135deg,#c2410c,#f97316);}
+      .demo-invoice{max-width:340px;margin:34px auto 0;background:#fff;border-radius:14px;padding:20px;color:#1c2433;position:relative;}
+      .demo-invoice h4{margin:0 0 4px;font-size:15px;}
+      .demo-invoice small{color:#8a93a6;font-size:11.5px;}
+      .demo-invoice .amt{font-size:24px;font-weight:800;margin-top:10px;}
+      .demo-paid{position:absolute;top:14px;right:14px;padding:5px 12px;border-radius:99px;background:#dcfce7;color:#15803d;font-size:11px;font-weight:800;letter-spacing:.1em;transform:rotate(6deg) scale(0);transition:transform .45s cubic-bezier(.2,1.6,.4,1);}
+      .demo-scene.active .demo-paid{transform:rotate(6deg) scale(1);transition-delay:1.2s;}
+      .demo-agent{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;background:color-mix(in srgb, var(--surface) 60%, #fff 3%);border:1px solid var(--border);margin-bottom:10px;font-size:13px;color:var(--text-secondary);}
+      .demo-agent .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:demoBlink 1.2s ease-in-out infinite;}
+      .demo-agent .ok{color:var(--success);font-weight:700;margin-left:auto;font-size:12px;}
+      @keyframes demoBlink{0%,100%{opacity:.35;}50%{opacity:1;}}
+      .demo-steps{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:22px;}
+      .demo-step{padding:7px 14px;border-radius:99px;border:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text-dim);transition:all .25s;}
+      .demo-step.active{border-color:color-mix(in srgb, var(--accent) 55%, transparent);color:var(--accent);background:color-mix(in srgb, var(--accent) 10%, transparent);}
       .features-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:18px;}
       @media (max-width: 920px){.features-grid{grid-template-columns:repeat(2, 1fr);}}
       @media (max-width: 600px){.features-grid{grid-template-columns:1fr;}}
@@ -395,21 +472,124 @@ def render_home() -> str:
 <section class="hero">
   <span class="orb orb-1" aria-hidden></span>
   <span class="orb orb-2" aria-hidden></span>
-  <span class="orb orb-3" aria-hidden></span>
   <div class="container">
-    <span class="eyebrow reveal">For solo practitioners + small studios</span>
-    <h1 class="reveal reveal-delay-1">One workspace that runs your <span class="gradient-text">whole practice.</span></h1>
-    <p class="lead reveal reveal-delay-2">Contacts, invoices, sessions, content, goals, and an AI Chief of Staff that knows your business — replacing eight tools and the friction between them.</p>
-    <div class="hero-ctas reveal reveal-delay-3">
-      <a class="btn-primary" href="/get-started">Get Started →</a>
-      <a class="btn-secondary" href="/features">See what it does</a>
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <span class="eyebrow reveal">For solo practitioners + small studios</span>
+        <h1 class="reveal reveal-delay-1">Every problem<br>has a <span class="gradient-text">solution.</span></h1>
+        <p class="lead reveal reveal-delay-2">One workspace that runs your whole practice — contacts, invoices, sessions, content, goals — commanded by an AI Chief of Staff that knows your business. Eight tools, replaced.</p>
+        <div class="hero-ctas reveal reveal-delay-3">
+          <a class="btn-primary" href="/get-started">Start Solving →</a>
+          <a class="btn-secondary" href="#demo">Watch it work</a>
+        </div>
+        <div class="reveal reveal-delay-3" style="margin-top:18px;">
+          <span class="stat-block"><span class="big">8</span><span>tools replaced by one workspace</span></span>
+        </div>
+        <div class="hero-note reveal reveal-delay-3">Currently in private beta · Apply for access</div>
+      </div>
+      <div class="core-stage reveal reveal-delay-2" aria-hidden="true">
+        <div class="ai-core">
+          <span class="core-ring r1"></span>
+          <span class="core-ring r2"></span>
+          <span class="core-ring r3"></span>
+          <span class="core-heart"></span>
+        </div>
+        <span class="core-chip" style="top:2%;left:30%;"><i class="ci">♞</i>Strategy</span>
+        <span class="core-chip" style="top:14%;right:2%;"><i class="ci">◈</i>Finance</span>
+        <span class="core-chip" style="top:40%;right:-2%;"><i class="ci">✦</i>Branding</span>
+        <span class="core-chip" style="bottom:24%;right:2%;"><i class="ci">⚡</i>AI Automation</span>
+        <span class="core-chip" style="bottom:4%;right:22%;"><i class="ci">◔</i>Analytics</span>
+        <span class="core-chip" style="bottom:0%;left:24%;"><i class="ci">✎</i>Content</span>
+        <span class="core-chip" style="bottom:28%;left:0%;"><i class="ci">↗</i>Growth</span>
+        <span class="core-chip" style="top:34%;left:-2%;"><i class="ci">☑</i>Productivity</span>
+        <span class="core-chip" style="top:10%;left:4%;"><i class="ci">◎</i>Vision</span>
+      </div>
     </div>
-    <div class="reveal reveal-delay-3" style="margin-top:18px;">
-      <span class="stat-block"><span class="big">8</span><span>tools replaced by one workspace</span></span>
-    </div>
-    <div class="hero-note reveal reveal-delay-3">Currently in private beta · Apply for access</div>
   </div>
 </section>
+
+<section id="demo" class="demo-section">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">See it work</span>
+      <h2>Watch the system <span class="gradient-text">run a business.</span></h2>
+      <p>A live loop of the real workflow — your Chief in command.</p>
+    </div>
+    <div class="demo-frame reveal">
+      <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
+      <div class="demo-body">
+        <div class="demo-side" aria-hidden="true"><i>⌂</i><i>◫</i><i>✦</i><i>↗</i><i>⬡</i></div>
+        <div class="demo-stage">
+          <div class="demo-scene active" data-scene="0">
+            <div class="demo-bubble user">Chief, chase the overdue invoice for Jordan — nicely.</div>
+            <div class="demo-bubble">On it. I drafted a warm reminder for invoice #2041 ($480, 12 days overdue) in your voice — want to read it or should I send?</div>
+            <div class="demo-bubble user">Send it.</div>
+            <div class="demo-tag">✓ Reminder sent · logged to Jordan's timeline</div>
+          </div>
+          <div class="demo-scene" data-scene="1">
+            <div class="demo-cards">
+              <div class="demo-card c1"><span>Clients</span><b data-count="12">0</b></div>
+              <div class="demo-card c2"><span>Projects</span><b data-count="8">0</b></div>
+              <div class="demo-card c3"><span>Invoices</span><b data-count="4">0</b></div>
+              <div class="demo-card c4"><span>This Month</span><b data-count="2400" data-prefix="$">$0</b></div>
+            </div>
+          </div>
+          <div class="demo-scene" data-scene="2">
+            <div class="demo-invoice">
+              <h4>Invoice #2041 — Jordan M.</h4>
+              <small>Brand refresh · sent 12 days ago</small>
+              <div class="amt">$480.00</div>
+              <span class="demo-paid">PAID ✓</span>
+            </div>
+            <div class="demo-tag" style="display:flex;justify-content:center;margin-top:14px;">✓ Payment received · books updated automatically</div>
+          </div>
+          <div class="demo-scene" data-scene="3">
+            <div class="demo-agent"><span class="dot"></span> Content agent — drafting this week's posts <span class="ok">3 drafts</span></div>
+            <div class="demo-agent"><span class="dot"></span> Follow-up agent — checking on quiet clients <span class="ok">2 check-ins</span></div>
+            <div class="demo-agent"><span class="dot"></span> Bookkeeping — categorizing new transactions <span class="ok">done</span></div>
+            <div class="demo-tag">Everything lands in your approval queue — nothing sends without you.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="demo-steps" role="tablist" aria-label="Demo scenes">
+      <span class="demo-step active">1 · Ask your Chief</span>
+      <span class="demo-step">2 · Mission Control</span>
+      <span class="demo-step">3 · Get paid</span>
+      <span class="demo-step">4 · Agents work</span>
+    </div>
+  </div>
+</section>
+<script>
+(function(){
+  var scenes = document.querySelectorAll('.demo-scene');
+  var steps = document.querySelectorAll('.demo-step');
+  if (!scenes.length) return;
+  var idx = 0;
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function countUp(scene){
+    scene.querySelectorAll('[data-count]').forEach(function(el){
+      var target = parseInt(el.getAttribute('data-count'), 10) || 0;
+      var prefix = el.getAttribute('data-prefix') || '';
+      if (reduced) { el.textContent = prefix + target.toLocaleString(); return; }
+      var t0 = null;
+      function tick(ts){
+        if (!t0) t0 = ts;
+        var p = Math.min(1, (ts - t0) / 900);
+        el.textContent = prefix + Math.round(target * (1 - Math.pow(1 - p, 3))).toLocaleString();
+        if (p < 1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    });
+  }
+  function show(i){
+    scenes.forEach(function(s, j){ s.classList.toggle('active', j === i); });
+    steps.forEach(function(s, j){ s.classList.toggle('active', j === i); });
+    if (i === 1) countUp(scenes[1]);
+  }
+  setInterval(function(){ idx = (idx + 1) % scenes.length; show(idx); }, 6000);
+})();
+</script>
 
 <section id="features">
   <div class="container">
