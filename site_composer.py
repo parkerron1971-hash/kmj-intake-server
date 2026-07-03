@@ -113,7 +113,8 @@ def gather_context(business_id: str) -> Dict[str, Any]:
     bundle = brand_engine.get_bundle(business_id) or {}
 
     biz_rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id,name,type,settings&limit=1") or []
+        # voice_profile added (2026-07-03) — feeds the DRL intake text.
+        f"/businesses?id=eq.{business_id}&select=id,name,type,settings,voice_profile&limit=1") or []
     if not biz_rows:
         raise HTTPException(404, "business not found")
     biz = biz_rows[0]
@@ -168,6 +169,7 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "bundle": bundle,
         "business": {"id": business_id, "name": biz.get("name") or "",
                      "type": biz.get("type") or "", "slug": slug},
+        "voice_profile": biz.get("voice_profile") if isinstance(biz.get("voice_profile"), dict) else {},
         "settings": settings,
         "site": site,
         "offerings": offerings,
@@ -271,9 +273,11 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
     intel = bundle.get("practitioner_intelligence") or {}
     voice = bundle.get("voice") or {}
     biz = ctx["business"]
-    settings = (biz.get("settings") or {}) if isinstance(biz.get("settings"), dict) else {}
+    # ctx["business"] is the reduced dict — settings + voice_profile ride
+    # ctx directly (see gather_context).
+    settings = ctx.get("settings") if isinstance(ctx.get("settings"), dict) else {}
     kit = (settings.get("brand_kit") or {}) if isinstance(settings.get("brand_kit"), dict) else {}
-    vp = biz.get("voice_profile") if isinstance(biz.get("voice_profile"), dict) else {}
+    vp = ctx.get("voice_profile") if isinstance(ctx.get("voice_profile"), dict) else {}
     offerings = ctx.get("offerings") or []
 
     kit_tone = kit.get("tone_words")
