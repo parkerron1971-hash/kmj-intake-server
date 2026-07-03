@@ -423,80 +423,8 @@ def render_home() -> str:
       .demo-chrome span{width:10px;height:10px;border-radius:50%;background:var(--border);}
       .demo-chrome span:nth-child(1){background:#f87171;}.demo-chrome span:nth-child(2){background:#fbbf24;}.demo-chrome span:nth-child(3){background:#34d399;}
       .demo-chrome em{margin-left:10px;font-style:normal;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-dim);}
-      .demo-body{display:flex;min-height:330px;}
-      .demo-side{width:56px;border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;gap:14px;padding-top:18px;background:color-mix(in srgb, var(--surface) 60%, #000);}
-      .demo-side i{width:26px;height:26px;border-radius:8px;background:color-mix(in srgb, var(--accent) 12%, transparent);border:1px solid color-mix(in srgb, var(--accent) 20%, transparent);font-style:normal;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--accent);}
-      @media (max-width:560px){.demo-side{display:none;}}
-      .demo-stage{position:relative;flex:1;}
-      .demo-scene{position:absolute;inset:0;padding:26px 28px;opacity:0;transition:opacity .6s ease;pointer-events:none;}
-      .demo-scene.active{opacity:1;}
-      .demo-bubble{max-width:78%;padding:11px 14px;border-radius:14px 14px 14px 4px;background:color-mix(in srgb, var(--accent) 16%, transparent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);font-size:13.5px;line-height:1.5;color:var(--text-primary);margin-bottom:12px;}
-      .demo-bubble.user{margin-left:auto;border-radius:14px 14px 4px 14px;background:color-mix(in srgb, var(--surface) 60%, #fff 4%);border-color:var(--border);}
-      .demo-tag{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--success);margin-top:4px;}
-      .demo-cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;height:100%;align-content:center;}
-      .demo-card{border-radius:14px;padding:16px;color:#fff;}
-      .demo-card b{display:block;font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;}
-      .demo-card span{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;opacity:.75;}
-      .demo-card.c1{background:linear-gradient(135deg,#6d28d9,#8b5cf6);}
-      .demo-card.c2{background:linear-gradient(135deg,#1d4ed8,#3b82f6);}
-      .demo-card.c3{background:linear-gradient(135deg,#1a2133,#212a40);border:1px solid rgba(255,255,255,.08);}
-      .demo-card.c4{background:linear-gradient(135deg,#c2410c,#f97316);}
-      .demo-invoice{max-width:340px;margin:34px auto 0;background:#fff;border-radius:14px;padding:20px;color:#1c2433;position:relative;}
-      .demo-invoice h4{margin:0 0 4px;font-size:15px;}
-      .demo-invoice small{color:#8a93a6;font-size:11.5px;}
-      .demo-invoice .amt{font-size:24px;font-weight:800;margin-top:10px;}
-      .demo-paid{position:absolute;top:14px;right:14px;padding:5px 12px;border-radius:99px;background:#dcfce7;color:#15803d;font-size:11px;font-weight:800;letter-spacing:.1em;transform:rotate(6deg) scale(0);transition:transform .45s cubic-bezier(.2,1.6,.4,1);}
-      .demo-scene.active .demo-paid{transform:rotate(6deg) scale(1);transition-delay:1.2s;}
-      .demo-agent{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;background:color-mix(in srgb, var(--surface) 60%, #fff 3%);border:1px solid var(--border);margin-bottom:10px;font-size:13px;color:var(--text-secondary);}
-      .demo-agent .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:demoBlink 1.2s ease-in-out infinite;}
-      .demo-agent .ok{color:var(--success);font-weight:700;margin-left:auto;font-size:12px;}
-      @keyframes demoBlink{0%,100%{opacity:.35;}50%{opacity:1;}}
-      .demo-steps{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:22px;}
-      .demo-step{padding:7px 14px;border-radius:99px;border:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text-dim);transition:all .25s;}
-      .demo-step.active{border-color:color-mix(in srgb, var(--accent) 55%, transparent);color:var(--accent);background:color-mix(in srgb, var(--accent) 10%, transparent);}
-      /* ── Demo v2 — realism pass (2026-07-03): the loop mirrors the real
-         app: live KPI ribbon, Chief panel chrome, message choreography,
-         the gold celebrate burst, the Academy degree ring. ── */
-      .demo-ribbon{display:flex;gap:18px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--text-dim);background:color-mix(in srgb, var(--surface) 55%, #000);}
-      .demo-ribbon b{color:var(--text-primary);font-variant-numeric:tabular-nums;}
-      .demo-ribbon .hd{width:7px;height:7px;border-radius:50%;background:#34d399;box-shadow:0 0 8px #34d39988;display:inline-block;margin-right:5px;}
-      .demo-chief-head{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:700;letter-spacing:.1em;color:var(--accent);margin-bottom:12px;}
-      .demo-chief-head .on{width:6px;height:6px;border-radius:50%;background:#34d399;animation:demoBlink 2s ease-in-out infinite;}
-      /* Message choreography — replays every time the scene activates. */
-      .demo-scene.active .demo-bubble:nth-of-type(1){animation:demoBubble .4s ease .1s both;}
-      .demo-scene.active .demo-typing{animation:demoTypingShow 1.3s steps(1) .5s both;}
-      .demo-scene.active .demo-bubble:nth-of-type(2){animation:demoBubble .4s ease 1.7s both;}
-      .demo-scene.active .demo-bubble:nth-of-type(3){animation:demoBubble .4s ease 2.9s both;}
-      .demo-scene.active .demo-tag{animation:demoBubble .4s ease 3.7s both;}
-      @keyframes demoBubble{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
-      .demo-typing{display:inline-flex;gap:4px;padding:10px 14px;border-radius:14px 14px 14px 4px;background:color-mix(in srgb, var(--accent) 10%, transparent);opacity:0;margin-bottom:12px;}
-      .demo-typing i{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:demoDot 1s ease-in-out infinite;font-style:normal;}
-      .demo-typing i:nth-child(2){animation-delay:.15s;}.demo-typing i:nth-child(3){animation-delay:.3s;}
-      @keyframes demoDot{0%,100%{opacity:.3;transform:translateY(0);}50%{opacity:1;transform:translateY(-3px);}}
-      @keyframes demoTypingShow{0%{opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{opacity:0;}}
-      .demo-mc-label{font-size:9.5px;font-weight:800;letter-spacing:.2em;color:var(--text-dim);margin-bottom:12px;}
-      /* Gold celebrate burst — the Moments arc, on the PAID stamp. */
-      .demo-burst{position:absolute;top:10px;right:26px;width:0;height:0;pointer-events:none;}
-      .demo-burst i{position:absolute;width:6px;height:6px;border-radius:50%;background:#f5c542;opacity:0;font-style:normal;}
-      .demo-scene.active .demo-burst i{animation:demoBurst 1s ease 1.35s both;}
-      .demo-burst i:nth-child(1){--bx:-34px;--by:-30px;}.demo-burst i:nth-child(2){--bx:30px;--by:-38px;background:#ec4899;}
-      .demo-burst i:nth-child(3){--bx:44px;--by:6px;}.demo-burst i:nth-child(4){--bx:-44px;--by:10px;background:#8b5cf6;}
-      .demo-burst i:nth-child(5){--bx:8px;--by:-52px;}.demo-burst i:nth-child(6){--bx:-12px;--by:34px;background:#3b82f6;}
-      @keyframes demoBurst{0%{opacity:0;transform:translate(0,0) scale(.4);}25%{opacity:1;}100%{opacity:0;transform:translate(var(--bx), var(--by)) scale(1);}}
-      /* Academy degree ring — dashoffset transitions on each activation. */
-      .demo-academy{display:flex;align-items:center;gap:26px;height:100%;justify-content:center;flex-wrap:wrap;}
-      .demo-ring{position:relative;width:120px;height:120px;flex-shrink:0;}
-      .demo-ring svg{transform:rotate(-90deg);}
-      .demo-ring .bg{fill:none;stroke:color-mix(in srgb, #f5c542 18%, transparent);stroke-width:9;}
-      .demo-ring .fg{fill:none;stroke:#f5c542;stroke-width:9;stroke-linecap:round;stroke-dasharray:326;stroke-dashoffset:326;transition:stroke-dashoffset 1.6s cubic-bezier(.4,0,.2,1) .4s;filter:drop-shadow(0 0 10px #f5c54266);}
-      .demo-scene.active .demo-ring .fg{stroke-dashoffset:124;}
-      .demo-ring b{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:Georgia, serif;font-size:24px;color:#f5c542;}
-      .demo-academy-copy{max-width:250px;}
-      .demo-academy-copy .ac-eyebrow{font-size:9px;font-weight:800;letter-spacing:.22em;color:#f5c542;margin-bottom:6px;}
-      .demo-academy-copy h4{margin:0 0 6px;font-family:Georgia, serif;font-weight:500;font-size:19px;color:var(--text-primary);}
-      .demo-academy-copy p{margin:0;font-size:12px;line-height:1.55;color:var(--text-muted);}
-      .demo-seal{display:inline-flex;align-items:center;gap:6px;margin-top:10px;padding:4px 12px;border-radius:99px;font-size:10px;font-weight:800;letter-spacing:.1em;color:#f5c542;background:#f5c54216;border:1px solid #f5c54240;}
-      .demo-scene.active .demo-seal{animation:demoBubble .4s ease 1.6s both;}
+      .demo-video{width:100%;display:block;aspect-ratio:16/9;background:#000;}
+      .demo-caption{text-align:center;margin-top:18px;font-size:13px;color:var(--text-dim);}
       /* ── Page-flow quality: Fraunces-style section numerals + identity-
          colored feature cards (the app's own design language). ── */
       .sec-num{font-family:Georgia, 'Times New Roman', serif;font-size:30px;font-weight:500;line-height:1;color:color-mix(in srgb, var(--accent) 70%, var(--text-dim));display:block;margin-bottom:10px;}
@@ -578,107 +506,14 @@ def render_home() -> str:
     </div>
     <div class="demo-frame reveal">
       <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
-      <div class="demo-ribbon" aria-hidden="true">
-        <span><b>13</b> CONTACTS</span>
-        <span><b>$2.4k</b> THIS MONTH</span>
-        <span><b>4</b> INVOICES</span>
-        <span style="margin-left:auto;"><span class="hd"></span><b>62%</b> HEALTH</span>
-      </div>
-      <div class="demo-body">
-        <div class="demo-side" aria-hidden="true"><i>⌂</i><i>◫</i><i>✦</i><i>↗</i><i>⬡</i></div>
-        <div class="demo-stage">
-          <div class="demo-scene active" data-scene="0">
-            <div class="demo-chief-head"><span class="on"></span> ✦ CHIEF OF STAFF</div>
-            <div class="demo-bubble user">Chief, chase the overdue invoice for Jordan — nicely.</div>
-            <div class="demo-typing" aria-hidden="true"><i></i><i></i><i></i></div>
-            <div class="demo-bubble">On it. I drafted a warm reminder for invoice #2041 ($480, 12 days overdue) in your voice — want to read it or should I send?</div>
-            <div class="demo-bubble user">Send it.</div>
-            <div class="demo-tag">✓ Reminder sent · logged to Jordan's timeline</div>
-          </div>
-          <div class="demo-scene" data-scene="1">
-            <div class="demo-mc-label">MISSION CONTROL</div>
-            <div class="demo-cards">
-              <div class="demo-card c1"><span>Clients</span><b data-count="12">0</b></div>
-              <div class="demo-card c2"><span>Projects</span><b data-count="8">0</b></div>
-              <div class="demo-card c3"><span>Invoices</span><b data-count="4">0</b></div>
-              <div class="demo-card c4"><span>This Month</span><b data-count="2400" data-prefix="$">$0</b></div>
-            </div>
-          </div>
-          <div class="demo-scene" data-scene="2">
-            <div class="demo-invoice">
-              <h4>Invoice #2041 — Jordan M.</h4>
-              <small>Brand refresh · sent 12 days ago</small>
-              <div class="amt">$480.00</div>
-              <span class="demo-paid">PAID ✓</span>
-              <span class="demo-burst" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
-            </div>
-            <div class="demo-tag" style="display:flex;justify-content:center;margin-top:14px;">✓ Payment received · books updated · client health +2</div>
-          </div>
-          <div class="demo-scene" data-scene="3">
-            <div class="demo-academy">
-              <div class="demo-ring">
-                <svg width="120" height="120" viewBox="0 0 120 120">
-                  <circle class="bg" cx="60" cy="60" r="52"></circle>
-                  <circle class="fg" cx="60" cy="60" r="52"></circle>
-                </svg>
-                <b>62%</b>
-              </div>
-              <div class="demo-academy-copy">
-                <div class="ac-eyebrow">THE SOLUTIONIST ACADEMY</div>
-                <h4>Your Strategy Journey</h4>
-                <p>A dedicated Strategy Coach walks you through eight courses — discovery to launch plan.</p>
-                <span class="demo-seal">🎓 COURSE 05 SEALED — SERVICE PACKAGES</span>
-              </div>
-            </div>
-          </div>
-          <div class="demo-scene" data-scene="4">
-            <div class="demo-agent"><span class="dot"></span> Content agent — drafting this week's posts <span class="ok">3 drafts</span></div>
-            <div class="demo-agent"><span class="dot"></span> Nurture agent — checking on quiet clients <span class="ok">2 check-ins</span></div>
-            <div class="demo-agent"><span class="dot"></span> Bookkeeping — categorizing new transactions <span class="ok">done</span></div>
-            <div class="demo-tag">Everything lands in your approval queue — nothing sends without you.</div>
-          </div>
-        </div>
-      </div>
+      <video class="demo-video" controls playsinline preload="metadata" poster="/assets/demo-poster.jpg">
+        <source src="/assets/demo.mp4" type="video/mp4">
+        Your browser doesn't support embedded video - <a href="/assets/demo.mp4">download the demo</a>.
+      </video>
     </div>
-    <div class="demo-steps" role="tablist" aria-label="Demo scenes">
-      <span class="demo-step active">1 · Ask your Chief</span>
-      <span class="demo-step">2 · Mission Control</span>
-      <span class="demo-step">3 · Get paid</span>
-      <span class="demo-step">4 · The Academy</span>
-      <span class="demo-step">5 · Agents work</span>
-    </div>
+    <div class="demo-caption reveal">55 seconds - the real system, scene by scene: Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</div>
   </div>
 </section>
-<script>
-(function(){
-  var scenes = document.querySelectorAll('.demo-scene');
-  var steps = document.querySelectorAll('.demo-step');
-  if (!scenes.length) return;
-  var idx = 0;
-  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  function countUp(scene){
-    scene.querySelectorAll('[data-count]').forEach(function(el){
-      var target = parseInt(el.getAttribute('data-count'), 10) || 0;
-      var prefix = el.getAttribute('data-prefix') || '';
-      if (reduced) { el.textContent = prefix + target.toLocaleString(); return; }
-      var t0 = null;
-      function tick(ts){
-        if (!t0) t0 = ts;
-        var p = Math.min(1, (ts - t0) / 900);
-        el.textContent = prefix + Math.round(target * (1 - Math.pow(1 - p, 3))).toLocaleString();
-        if (p < 1) requestAnimationFrame(tick);
-      }
-      requestAnimationFrame(tick);
-    });
-  }
-  function show(i){
-    scenes.forEach(function(s, j){ s.classList.toggle('active', j === i); });
-    steps.forEach(function(s, j){ s.classList.toggle('active', j === i); });
-    if (i === 1) countUp(scenes[1]);
-  }
-  setInterval(function(){ idx = (idx + 1) % scenes.length; show(idx); }, 6000);
-})();
-</script>
 
 <section id="features">
   <div class="container">

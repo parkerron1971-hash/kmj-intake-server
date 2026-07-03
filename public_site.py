@@ -4747,6 +4747,16 @@ async def asset_mark_webp():
 async def asset_mark_png():
     return _brand_file("solutionist-mark.png", "image/png")
 
+# The real demo video (Remotion-rendered, ~7MB) + its poster frame —
+# replaces the animated HTML loop on the marketing home.
+@router.get("/assets/demo.mp4", include_in_schema=False)
+async def asset_demo_video():
+    return _brand_file("solutionist-demo.mp4", "video/mp4")
+
+@router.get("/assets/demo-poster.jpg", include_in_schema=False)
+async def asset_demo_poster():
+    return _brand_file("solutionist-demo-poster.jpg", "image/jpeg")
+
 @router.get("/favicon.png", include_in_schema=False)
 async def asset_favicon_png():
     return _brand_file("favicon.png", "image/png")
