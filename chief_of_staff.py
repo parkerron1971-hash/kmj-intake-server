@@ -3021,18 +3021,32 @@ async def _should_auto_approve(
     if level == "full":
         return True, "full_auto"
 
-    # Smart mode — apply contextual rules
+    # Smart mode — contextual rules. Phase 2 (2026-07-03): the thresholds
+    # are practitioner-tunable via settings.agents (Agent Configuration
+    # sliders); the previous hardcoded values remain the defaults, so
+    # untouched businesses behave exactly as before.
+    agents_cfg = ((biz.get("settings") or {}).get("agents") or {})
+
+    def _num(key: str, default: float) -> float:
+        try:
+            v = agents_cfg.get(key)
+            return float(v) if v is not None else default
+        except (TypeError, ValueError):
+            return default
+
     if agent_name == "nurture":
         if contact and (contact.get("status") or "").lower() == "vip":
             return False, "vip_contact_review"
         health = contact.get("health_score") if contact else None
-        if isinstance(health, (int, float)) and health < 30:
+        min_health = _num("nurture_auto_min_health", 30)
+        if isinstance(health, (int, float)) and health < min_health:
             return False, "at_risk_review"
         last = (contact or {}).get("last_interaction")
         if last:
             try:
+                cooldown_h = max(0.0, _num("nurture_auto_cooldown_hours", 48))
                 last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
-                if (datetime.now(timezone.utc) - last_dt).total_seconds() < 48 * 3600:
+                if (datetime.now(timezone.utc) - last_dt).total_seconds() < cooldown_h * 3600:
                     return False, "recent_contact_cooldown"
             except Exception:
                 pass
@@ -3046,7 +3060,8 @@ async def _should_auto_approve(
     if agent_name == "payment":
         invoice_id = (draft.get("data") or {}).get("invoice_id") if isinstance(draft.get("data"), dict) else None
         reminders = await _count_payment_reminders(client, biz["id"], invoice_id)
-        if reminders < 2:
+        max_auto = int(_num("payment_auto_max_reminders", 2))
+        if reminders < max_auto:
             return True, "routine_reminder"
         return False, "escalated_reminder"
 
