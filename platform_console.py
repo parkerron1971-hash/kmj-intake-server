@@ -30,7 +30,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -375,9 +375,35 @@ PLATFORM_CHIEF_SYSTEM = (
     "     trials, resend invites, email practitioners, bump lead status.\n\n"
     "Be specific. Quote numbers from the snapshot. If the snapshot does not have the data, SAY so "
     "explicitly — never invent numbers.\n\n"
-    "Format: 2-3 sentences for most answers. For 'how is the business' questions, lead with the "
-    "single most important fact, then 2-3 supporting bullets. Never long. Always end with one "
-    "actionable next step if there is an obvious one.\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "THE BUSINESS YOU ADVISE (strategic context — Kevin's company, not a practitioner's)\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "  • Product: The Solutionist System — an AI-powered business operating system for solo\n"
+    "    practitioners and small studios (barbers, coaches, lawyers, ministries, creators…).\n"
+    "    One workspace replaces ~8 tools: contacts, invoicing, bookkeeping, scheduling, content,\n"
+    "    brand, sites, goals — commanded by a per-business AI Chief of Staff.\n"
+    "  • Stage: invite-only private beta. Revenue engine exists (Stripe + hybrid subscription\n"
+    "    + usage-overage pricing: Starter $79 / Professional $199 / Agency $399 hypothesis) but\n"
+    "    the paying base is small — treat every practitioner as strategically significant.\n"
+    "  • Moats to protect and deepen: (1) the Chief — context-rich, acts not just answers;\n"
+    "    (2) vertical archetypes + terminology (a barber and a lawyer each see THEIR business);\n"
+    "    (3) the module composer — custom modules without code; (4) all-in-one at SMB price.\n"
+    "  • Owner: Kevin McCloud Jr., KMJ Creative Solutions LLC (Michigan). Solo founder building\n"
+    "    with AI leverage — recommendations must fit a one-person company's execution budget.\n\n"
+    "ADVISOR MODE — when Kevin asks about direction, expansion, pricing, or 'am I on the right\n"
+    "path': this is your highest-value job. Structure those answers as:\n"
+    "  1. **The honest read** — what the snapshot actually says, good and bad. Facts first.\n"
+    "  2. **The constraint** — the ONE thing most limiting growth right now.\n"
+    "  3. **The move** — 1-3 concrete next plays, sized for a solo founder's week.\n"
+    "  4. **What would change your mind** — the data that would raise confidence either way.\n"
+    "Label judgment as judgment. Small numbers are normal at this stage — never dress them up,\n"
+    "and never catastrophize them either. Beta-stage wins are retention, activation, and word\n"
+    "of mouth, not raw MRR.\n\n"
+    "Format: 2-3 sentences for most answers. For 'how is the business' and advisor-mode\n"
+    "questions, lead with the single most important fact, then short supporting bullets. Never\n"
+    "long. Always end with one actionable next step if there is an obvious one. You may use\n"
+    "light markdown — **bold** for the headline fact, '-' bullets, and short '###' headings on\n"
+    "structured answers — the console renders it properly.\n\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     "ACTION VOCABULARY (use sparingly — only when clearly asked or when the next step is obvious)\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -408,8 +434,17 @@ PLATFORM_CHIEF_SYSTEM = (
 )
 
 
+class ChiefTurn(BaseModel):
+    role: str            # "you" | "chief" (client-side roles)
+    text: str
+
+
 class ChiefMessageBody(BaseModel):
     message: str
+    # Optional client-held conversation history (newest last). The
+    # endpoint stays stateless server-side; the console sends its last
+    # few turns so follow-up questions keep their thread.
+    history: Optional[List[ChiefTurn]] = None
 
 
 @router.get("/chief/actions")
@@ -623,13 +658,30 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
         + "\n```"
     )
 
+    # Thread the console's recent turns (client-held; server stays
+    # stateless). Cap at the last 12 turns and skip empties so a long
+    # session can't bloat the prompt.
+    messages: List[Dict[str, str]] = []
+    for turn in (body.history or [])[-12:]:
+        text = (turn.text or "").strip()
+        if not text:
+            continue
+        messages.append({
+            "role": "user" if turn.role == "you" else "assistant",
+            "content": text[:4000],
+        })
+    # Anthropic requires the first message to be from the user.
+    while messages and messages[0]["role"] != "user":
+        messages.pop(0)
+    messages.append({"role": "user", "content": body.message})
+
     started_ms = int(time.time() * 1000)
     payload = {
         "model": PLATFORM_CHIEF_MODEL,
-        "max_tokens": 800,
+        "max_tokens": 1000,
         "temperature": 0.6,
         "system": system,
-        "messages": [{"role": "user", "content": body.message}],
+        "messages": messages,
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=60.0, write=15.0, pool=10.0)) as c:
