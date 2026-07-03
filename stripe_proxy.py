@@ -627,12 +627,26 @@ async def _match_invoice_for_payment(
 
 @router.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
-    """Handle Stripe webhook payloads. Signature verification is
-    intentionally skipped here — STRIPE_WEBHOOK_SECRET is not yet wired
-    in env. Add `stripe.Webhook.construct_event` checks once the secret
-    is provisioned. Until then, we accept any POST and rely on the
-    matching logic to filter spurious traffic."""
+    """Handle Stripe webhook payloads (payment links / invoice matching).
+
+    Signature verification: enabled the moment STRIPE_PAYMENTS_WEBHOOK_SECRET
+    (or STRIPE_WEBHOOK_SECRET as a fallback) is set in env — uses the same
+    HMAC check as the subscription webhook in stripe_billing.py. Until the
+    secret is provisioned we accept unsigned POSTs (previous behavior) and
+    log a warning so the gap stays visible in Railway logs."""
     body = await request.body()
+    _wh_secret = (
+        os.environ.get("STRIPE_PAYMENTS_WEBHOOK_SECRET")
+        or os.environ.get("STRIPE_WEBHOOK_SECRET")
+        or ""
+    ).strip()
+    if _wh_secret:
+        from stripe_billing import _verify_stripe_signature
+        _verify_stripe_signature(body, request.headers.get("stripe-signature", ""), _wh_secret)
+    else:
+        logger.warning(
+            "stripe webhook: UNSIGNED (set STRIPE_PAYMENTS_WEBHOOK_SECRET to enable verification)"
+        )
     try:
         event = json.loads(body)
     except Exception:

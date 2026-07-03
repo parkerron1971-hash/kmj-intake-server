@@ -103,7 +103,22 @@ if os.environ.get("SENTRY_DSN"):
         print(f"   [warn] Sentry init failed: {_e}")
 
 app = FastAPI(title="KMJ Intake Automation")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# CORS — env-driven. Default stays "*" DELIBERATELY: auth is bearer-token
+# (no cookies → no CSRF surface) and the public embeds (booking widget,
+# intake forms) are fetched from arbitrary practitioner-site origins, so a
+# hard allowlist would break them. To restrict the app-facing API anyway,
+# set CORS_ALLOWED_ORIGINS to a comma-separated origin list on Railway —
+# but keep in mind that also fences the public embeds.
+_cors_origins = [
+    o.strip() for o in os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",") if o.strip()
+] or ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,  # bearer tokens only — never cookie auth
+)
 # Guarantee CORS headers on ALL error responses (500/404/422/unhandled) — an
 # unhandled exception escapes CORSMiddleware otherwise, masking every error as
 # a browser CORS block. See cors_error_handlers.py.
@@ -242,6 +257,11 @@ app.include_router(platform_console_router)
 # /billing/webhook (Stripe signature-verified), /billing/status (open).
 from stripe_billing import router as stripe_billing_router
 app.include_router(stripe_billing_router)
+# Hardening pass 1 — data export + account/business deletion (GDPR
+# portability + erasure). /account/export, DELETE /account/business/{id},
+# DELETE /account. All JWT-authed, ownership verified server-side.
+from account_lifecycle import router as account_lifecycle_router
+app.include_router(account_lifecycle_router)
 # Arc 29 fix — health routes MUST register before public_site, whose
 # `/{path:path}` catch-all otherwise swallows /health* and returns its
 # own "Not found" (the bug Kevin hit). Same discipline as booking/
