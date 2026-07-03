@@ -102,6 +102,49 @@ def plan_of(business_row: Optional[Dict[str, Any]]) -> Optional[str]:
     return price_to_plan().get(business_row.get("subscription_plan") or "")
 
 
+def access_state(business_row: Optional[Dict[str, Any]],
+                 grandfathered: bool = False) -> Dict[str, Any]:
+    """Subscription access enforcement (2026-07-03, Kevin's ruling:
+    'if no person paid then they lose access').
+
+    Returns {state, reason} where state is:
+      'full'   — use the app normally
+      'grace'  — payment failed; warn loudly, don't lock yet (Stripe
+                 Smart Retries run during past_due/incomplete)
+      'locked' — no live subscription; the frontend shows the paywall
+                 (data is never deleted; export stays available)
+
+    Dormant like everything else: enforcement_on() off → always full.
+    Grandfathered users and comp_tier businesses never lock.
+    """
+    if not enforcement_on():
+        return {"state": "full", "reason": "enforcement_off"}
+    if grandfathered:
+        return {"state": "full", "reason": "grandfathered"}
+    row = business_row or {}
+    comp = (row.get("comp_tier") or "").strip().lower()
+    if comp in PLANS:
+        return {"state": "full", "reason": f"comp_{comp}"}
+    status = (row.get("subscription_status") or "").strip().lower()
+    if status == "active":
+        return {"state": "full", "reason": "active"}
+    if status == "trialing":
+        trial_end = (row.get("trial_ends_at") or "").strip()
+        if trial_end:
+            from datetime import datetime, timezone
+            try:
+                end = datetime.fromisoformat(trial_end.replace("Z", "+00:00"))
+                if end < datetime.now(timezone.utc):
+                    return {"state": "locked", "reason": "trial_expired"}
+            except ValueError:
+                pass  # unparseable date — treat the Stripe status as truth
+        return {"state": "full", "reason": "trialing"}
+    if status in ("past_due", "unpaid", "incomplete"):
+        return {"state": "grace", "reason": "payment_failed"}
+    return {"state": "locked",
+            "reason": "canceled" if status == "canceled" else "no_subscription"}
+
+
 def enforcement_on() -> bool:
     return (os.environ.get("BILLING_ENFORCE") or "off").lower() == "on"
 

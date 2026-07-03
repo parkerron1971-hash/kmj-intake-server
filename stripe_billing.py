@@ -203,6 +203,37 @@ async def billing_status_endpoint():
     }
 
 
+@router.get("/access")
+async def billing_access(business_id: str, user: AuthedUser = Depends(require_user)):
+    """The app-shell gate: is this business allowed in? (2026-07-03,
+    Kevin's ruling: no payment → lose access to the subscription.)
+
+    Any authed user may ask (team members need the answer too — the
+    state itself isn't sensitive). Frontend shows the paywall on
+    'locked' and a warning banner on 'grace'. Fails OPEN ('full') on
+    any internal error — a billing read must never brick the app."""
+    import feature_gates
+    try:
+        import usage_metering
+        business = await _load_business(business_id)
+        grandfathered = usage_metering.is_grandfathered_user(
+            str(business.get("owner_id") or ""))
+        state = feature_gates.access_state(business, grandfathered)
+        return {
+            "ok": True,
+            **state,
+            "subscription_status": business.get("subscription_status"),
+            "trial_ends_at": business.get("trial_ends_at"),
+            "plan": feature_gates.plan_of(business),
+            "enforce": feature_gates.enforcement_on(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"/billing/access failed open: {e}")
+        return {"ok": True, "state": "full", "reason": "error_fail_open"}
+
+
 @router.get("/plans")
 async def billing_plans():
     """The configured tiers with live price display data from Stripe.
