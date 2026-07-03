@@ -319,6 +319,85 @@ async def subscriptions_summary(_owner=Depends(require_owner)):
     }
 
 
+# ─── The platform's own business (dogfood books) ───────────────────────
+# Kevin's ruling 2026-07-03: The Solutionist System is its own company —
+# its books run INSIDE Solutionist (a business flagged
+# settings.platform_books=true under the owner's account). Mission
+# Control's Money & Website page sets it up and tracks it from here.
+
+PLATFORM_BIZ_NAME = "The Solutionist System"
+
+
+async def _find_platform_business(c: httpx.AsyncClient, headers: Dict[str, str],
+                                  owner_id: str) -> Optional[Dict[str, Any]]:
+    r = await c.get(
+        f"{SUPABASE_URL}/rest/v1/businesses",
+        headers=headers,
+        params={
+            "owner_id": f"eq.{owner_id}",
+            "settings->>platform_books": "eq.true",
+            "select": "id,name,created_at,settings",
+            "limit": "1",
+        },
+    )
+    if r.status_code < 400:
+        rows = r.json() or []
+        if rows:
+            return rows[0]
+    return None
+
+
+@router.get("/business/platform-books")
+async def platform_books_status(owner=Depends(require_owner)):
+    """Does the platform's own business exist yet, and is its bank on?"""
+    headers = _service_headers()
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        biz = await _find_platform_business(c, headers, str(owner.id))
+        plaid_connected = False
+        if biz:
+            try:
+                pr = await c.get(
+                    f"{SUPABASE_URL}/rest/v1/plaid_accounts",
+                    headers=headers,
+                    params={"business_id": f"eq.{biz['id']}", "select": "id", "limit": "1"},
+                )
+                plaid_connected = pr.status_code < 400 and bool(pr.json())
+            except Exception:
+                pass
+    return {"ok": True, "exists": bool(biz), "business": biz,
+            "plaid_connected": plaid_connected}
+
+
+@router.post("/business/platform-setup")
+async def platform_books_setup(owner=Depends(require_owner)):
+    """Idempotent: create the platform's own business under the owner's
+    account (settings.platform_books=true) if it doesn't exist yet."""
+    headers = _service_headers()
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        existing = await _find_platform_business(c, headers, str(owner.id))
+        if existing:
+            return {"ok": True, "created": False, "business": existing}
+        r = await c.post(
+            f"{SUPABASE_URL}/rest/v1/businesses",
+            headers=headers,
+            json={
+                "owner_id": str(owner.id),
+                "name": PLATFORM_BIZ_NAME,
+                "type": "saas",
+                "settings": {
+                    "platform_books": True,
+                    "practitioner_name": "Kevin McCloud Jr.",
+                },
+            },
+        )
+        if r.status_code >= 400:
+            raise HTTPException(502, f"platform business insert failed: {r.text[:300]}")
+        rows = r.json()
+        biz = rows[0] if isinstance(rows, list) and rows else rows
+        logger.info(f"platform business created: {biz.get('id')}")
+    return {"ok": True, "created": True, "business": biz}
+
+
 @router.get("/subscriptions/list")
 async def subscriptions_list(_owner=Depends(require_owner)):
     """The subscriber ROSTER (2026-07-03): every business with its
