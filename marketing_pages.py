@@ -454,6 +454,57 @@ def render_home() -> str:
       .demo-steps{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:22px;}
       .demo-step{padding:7px 14px;border-radius:99px;border:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text-dim);transition:all .25s;}
       .demo-step.active{border-color:color-mix(in srgb, var(--accent) 55%, transparent);color:var(--accent);background:color-mix(in srgb, var(--accent) 10%, transparent);}
+      /* ── Demo v2 — realism pass (2026-07-03): the loop mirrors the real
+         app: live KPI ribbon, Chief panel chrome, message choreography,
+         the gold celebrate burst, the Academy degree ring. ── */
+      .demo-ribbon{display:flex;gap:18px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--text-dim);background:color-mix(in srgb, var(--surface) 55%, #000);}
+      .demo-ribbon b{color:var(--text-primary);font-variant-numeric:tabular-nums;}
+      .demo-ribbon .hd{width:7px;height:7px;border-radius:50%;background:#34d399;box-shadow:0 0 8px #34d39988;display:inline-block;margin-right:5px;}
+      .demo-chief-head{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:700;letter-spacing:.1em;color:var(--accent);margin-bottom:12px;}
+      .demo-chief-head .on{width:6px;height:6px;border-radius:50%;background:#34d399;animation:demoBlink 2s ease-in-out infinite;}
+      /* Message choreography — replays every time the scene activates. */
+      .demo-scene.active .demo-bubble:nth-of-type(1){animation:demoBubble .4s ease .1s both;}
+      .demo-scene.active .demo-typing{animation:demoTypingShow 1.3s steps(1) .5s both;}
+      .demo-scene.active .demo-bubble:nth-of-type(2){animation:demoBubble .4s ease 1.7s both;}
+      .demo-scene.active .demo-bubble:nth-of-type(3){animation:demoBubble .4s ease 2.9s both;}
+      .demo-scene.active .demo-tag{animation:demoBubble .4s ease 3.7s both;}
+      @keyframes demoBubble{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+      .demo-typing{display:inline-flex;gap:4px;padding:10px 14px;border-radius:14px 14px 14px 4px;background:color-mix(in srgb, var(--accent) 10%, transparent);opacity:0;margin-bottom:12px;}
+      .demo-typing i{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:demoDot 1s ease-in-out infinite;font-style:normal;}
+      .demo-typing i:nth-child(2){animation-delay:.15s;}.demo-typing i:nth-child(3){animation-delay:.3s;}
+      @keyframes demoDot{0%,100%{opacity:.3;transform:translateY(0);}50%{opacity:1;transform:translateY(-3px);}}
+      @keyframes demoTypingShow{0%{opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{opacity:0;}}
+      .demo-mc-label{font-size:9.5px;font-weight:800;letter-spacing:.2em;color:var(--text-dim);margin-bottom:12px;}
+      /* Gold celebrate burst — the Moments arc, on the PAID stamp. */
+      .demo-burst{position:absolute;top:10px;right:26px;width:0;height:0;pointer-events:none;}
+      .demo-burst i{position:absolute;width:6px;height:6px;border-radius:50%;background:#f5c542;opacity:0;font-style:normal;}
+      .demo-scene.active .demo-burst i{animation:demoBurst 1s ease 1.35s both;}
+      .demo-burst i:nth-child(1){--bx:-34px;--by:-30px;}.demo-burst i:nth-child(2){--bx:30px;--by:-38px;background:#ec4899;}
+      .demo-burst i:nth-child(3){--bx:44px;--by:6px;}.demo-burst i:nth-child(4){--bx:-44px;--by:10px;background:#8b5cf6;}
+      .demo-burst i:nth-child(5){--bx:8px;--by:-52px;}.demo-burst i:nth-child(6){--bx:-12px;--by:34px;background:#3b82f6;}
+      @keyframes demoBurst{0%{opacity:0;transform:translate(0,0) scale(.4);}25%{opacity:1;}100%{opacity:0;transform:translate(var(--bx), var(--by)) scale(1);}}
+      /* Academy degree ring — dashoffset transitions on each activation. */
+      .demo-academy{display:flex;align-items:center;gap:26px;height:100%;justify-content:center;flex-wrap:wrap;}
+      .demo-ring{position:relative;width:120px;height:120px;flex-shrink:0;}
+      .demo-ring svg{transform:rotate(-90deg);}
+      .demo-ring .bg{fill:none;stroke:color-mix(in srgb, #f5c542 18%, transparent);stroke-width:9;}
+      .demo-ring .fg{fill:none;stroke:#f5c542;stroke-width:9;stroke-linecap:round;stroke-dasharray:326;stroke-dashoffset:326;transition:stroke-dashoffset 1.6s cubic-bezier(.4,0,.2,1) .4s;filter:drop-shadow(0 0 10px #f5c54266);}
+      .demo-scene.active .demo-ring .fg{stroke-dashoffset:124;}
+      .demo-ring b{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:Georgia, serif;font-size:24px;color:#f5c542;}
+      .demo-academy-copy{max-width:250px;}
+      .demo-academy-copy .ac-eyebrow{font-size:9px;font-weight:800;letter-spacing:.22em;color:#f5c542;margin-bottom:6px;}
+      .demo-academy-copy h4{margin:0 0 6px;font-family:Georgia, serif;font-weight:500;font-size:19px;color:var(--text-primary);}
+      .demo-academy-copy p{margin:0;font-size:12px;line-height:1.55;color:var(--text-muted);}
+      .demo-seal{display:inline-flex;align-items:center;gap:6px;margin-top:10px;padding:4px 12px;border-radius:99px;font-size:10px;font-weight:800;letter-spacing:.1em;color:#f5c542;background:#f5c54216;border:1px solid #f5c54240;}
+      .demo-scene.active .demo-seal{animation:demoBubble .4s ease 1.6s both;}
+      /* ── Page-flow quality: Fraunces-style section numerals + identity-
+         colored feature cards (the app's own design language). ── */
+      .sec-num{font-family:Georgia, 'Times New Roman', serif;font-size:30px;font-weight:500;line-height:1;color:color-mix(in srgb, var(--accent) 70%, var(--text-dim));display:block;margin-bottom:10px;}
+      .feature-card{border-radius:20px;transition:transform .22s ease, border-color .22s ease, box-shadow .3s ease;}
+      .feature-card:hover{transform:translateY(-4px);border-color:color-mix(in srgb, var(--fc, var(--accent)) 45%, transparent);box-shadow:0 14px 40px rgba(0,0,0,.35), 0 0 26px color-mix(in srgb, var(--fc, var(--accent)) 14%, transparent);}
+      .feature-card h3{color:var(--text-primary);}
+      .feature-card .card-icon{filter:drop-shadow(0 0 8px color-mix(in srgb, var(--fc, var(--accent)) 40%, transparent));}
+      .feature-card .fc-tag{display:inline-block;margin-bottom:8px;font-size:9px;font-weight:800;letter-spacing:.18em;color:var(--fc, var(--accent));}
       .features-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:18px;}
       @media (max-width: 920px){.features-grid{grid-template-columns:repeat(2, 1fr);}}
       @media (max-width: 600px){.features-grid{grid-template-columns:1fr;}}
@@ -520,22 +571,32 @@ def render_home() -> str:
 <section id="demo" class="demo-section">
   <div class="container">
     <div class="section-head reveal">
+      <span class="sec-num" aria-hidden="true">01</span>
       <span class="eyebrow">See it work</span>
       <h2>Watch the system <span class="gradient-text">run a business.</span></h2>
       <p>A live loop of the real workflow — your Chief in command.</p>
     </div>
     <div class="demo-frame reveal">
       <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
+      <div class="demo-ribbon" aria-hidden="true">
+        <span><b>13</b> CONTACTS</span>
+        <span><b>$2.4k</b> THIS MONTH</span>
+        <span><b>4</b> INVOICES</span>
+        <span style="margin-left:auto;"><span class="hd"></span><b>62%</b> HEALTH</span>
+      </div>
       <div class="demo-body">
         <div class="demo-side" aria-hidden="true"><i>⌂</i><i>◫</i><i>✦</i><i>↗</i><i>⬡</i></div>
         <div class="demo-stage">
           <div class="demo-scene active" data-scene="0">
+            <div class="demo-chief-head"><span class="on"></span> ✦ CHIEF OF STAFF</div>
             <div class="demo-bubble user">Chief, chase the overdue invoice for Jordan — nicely.</div>
+            <div class="demo-typing" aria-hidden="true"><i></i><i></i><i></i></div>
             <div class="demo-bubble">On it. I drafted a warm reminder for invoice #2041 ($480, 12 days overdue) in your voice — want to read it or should I send?</div>
             <div class="demo-bubble user">Send it.</div>
             <div class="demo-tag">✓ Reminder sent · logged to Jordan's timeline</div>
           </div>
           <div class="demo-scene" data-scene="1">
+            <div class="demo-mc-label">MISSION CONTROL</div>
             <div class="demo-cards">
               <div class="demo-card c1"><span>Clients</span><b data-count="12">0</b></div>
               <div class="demo-card c2"><span>Projects</span><b data-count="8">0</b></div>
@@ -549,12 +610,30 @@ def render_home() -> str:
               <small>Brand refresh · sent 12 days ago</small>
               <div class="amt">$480.00</div>
               <span class="demo-paid">PAID ✓</span>
+              <span class="demo-burst" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
             </div>
-            <div class="demo-tag" style="display:flex;justify-content:center;margin-top:14px;">✓ Payment received · books updated automatically</div>
+            <div class="demo-tag" style="display:flex;justify-content:center;margin-top:14px;">✓ Payment received · books updated · client health +2</div>
           </div>
           <div class="demo-scene" data-scene="3">
+            <div class="demo-academy">
+              <div class="demo-ring">
+                <svg width="120" height="120" viewBox="0 0 120 120">
+                  <circle class="bg" cx="60" cy="60" r="52"></circle>
+                  <circle class="fg" cx="60" cy="60" r="52"></circle>
+                </svg>
+                <b>62%</b>
+              </div>
+              <div class="demo-academy-copy">
+                <div class="ac-eyebrow">THE SOLUTIONIST ACADEMY</div>
+                <h4>Your Strategy Journey</h4>
+                <p>A dedicated Strategy Coach walks you through eight courses — discovery to launch plan.</p>
+                <span class="demo-seal">🎓 COURSE 05 SEALED — SERVICE PACKAGES</span>
+              </div>
+            </div>
+          </div>
+          <div class="demo-scene" data-scene="4">
             <div class="demo-agent"><span class="dot"></span> Content agent — drafting this week's posts <span class="ok">3 drafts</span></div>
-            <div class="demo-agent"><span class="dot"></span> Follow-up agent — checking on quiet clients <span class="ok">2 check-ins</span></div>
+            <div class="demo-agent"><span class="dot"></span> Nurture agent — checking on quiet clients <span class="ok">2 check-ins</span></div>
             <div class="demo-agent"><span class="dot"></span> Bookkeeping — categorizing new transactions <span class="ok">done</span></div>
             <div class="demo-tag">Everything lands in your approval queue — nothing sends without you.</div>
           </div>
@@ -565,7 +644,8 @@ def render_home() -> str:
       <span class="demo-step active">1 · Ask your Chief</span>
       <span class="demo-step">2 · Mission Control</span>
       <span class="demo-step">3 · Get paid</span>
-      <span class="demo-step">4 · Agents work</span>
+      <span class="demo-step">4 · The Academy</span>
+      <span class="demo-step">5 · Agents work</span>
     </div>
   </div>
 </section>
@@ -603,40 +683,41 @@ def render_home() -> str:
 <section id="features">
   <div class="container">
     <div class="section-head reveal">
-      <span class="eyebrow">What it does</span>
-      <h2>Six surfaces, one workspace.</h2>
-      <p>Each tab is its own command center. They share contacts, content, brand, and your Chief — so nothing falls between the cracks.</p>
+      <span class="sec-num" aria-hidden="true">02</span>
+      <span class="eyebrow">What's inside</span>
+      <h2>Every room has its own <span class="gradient-text">personality.</span></h2>
+      <p>One workspace, six rooms — each designed for what happens in it, all sharing your contacts, your brand, and your Chief.</p>
     </div>
     <div class="features-grid">
-      <div class="card feature-card reveal">
+      <div class="card feature-card reveal" style="--fc:#ec4899;">
         <div class="mini-visual" aria-hidden><div class="mv-orbit"><span class="center"></span><span class="moon"></span><span class="moon moon-2"></span></div></div>
-        <div class="card-icon">🏠</div><h3>Command Center</h3>
-        <p>Daily dashboard: today's schedule, what needs attention, recent activity. Voice-first option — wake your Chief by name.</p>
+        <div class="card-icon">🏠</div><span class="fc-tag">COMMAND CENTER</span><h3>Mission Control</h3>
+        <p>Your AI core with live module satellites, four stat cards counting your real numbers, today's schedule, and what needs attention — the first thing you see every day.</p>
       </div>
-      <div class="card feature-card reveal reveal-delay-1">
-        <div class="mini-visual" aria-hidden><div class="mv-stack"><span></span><span></span><span></span></div></div>
-        <div class="card-icon">🧱</div><h3>Build</h3>
-        <p>Practitioner sites, brand kits, intake forms, integrations. Connect Stripe, Facebook Pages, and the tools you already use.</p>
-      </div>
-      <div class="card feature-card reveal reveal-delay-2">
-        <div class="mini-visual" aria-hidden><div class="mv-grid"><span></span><span></span><span></span><span class="live"></span><span></span><span></span><span class="live"></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span class="live"></span></div></div>
-        <div class="card-icon">⚙️</div><h3>Operate</h3>
-        <p>Contacts, invoices, calendar, tasks, email + SMS hubs. The day-to-day plumbing that keeps clients moving forward.</p>
-      </div>
-      <div class="card feature-card reveal">
+      <div class="card feature-card reveal reveal-delay-1" style="--fc:#f5c542;">
         <div class="mini-visual" aria-hidden><div class="mv-bars"><span></span><span></span><span></span><span></span><span></span></div></div>
-        <div class="card-icon">📈</div><h3>Grow</h3>
-        <p>Revenue analytics, goals across five lenses, sales funnel, and a content calendar with pillars.</p>
+        <div class="card-icon">🎓</div><span class="fc-tag">THE ACADEMY</span><h3>Strategy &amp; Foundation Tracks</h3>
+        <p>A dedicated Strategy Coach walks you through eight courses — discovery to launch plan — with a degree ring, sealed courses, and a diploma when you graduate.</p>
       </div>
-      <div class="card feature-card reveal reveal-delay-1">
+      <div class="card feature-card reveal reveal-delay-2" style="--fc:#ec4899;">
         <div class="mini-visual" aria-hidden><div class="mv-spark"><span class="core"></span></div></div>
-        <div class="card-icon">🤖</div><h3>Chief of Staff</h3>
-        <p>An AI that reads your real data every turn. Drafts emails, plans posts, sets goals, sends reports, and gives tactical input on what to push.</p>
+        <div class="card-icon">🎨</div><span class="fc-tag">THE CREATIVE STUDIO</span><h3>Brand Studio + Fitting Room</h3>
+        <p>Walk into a storefront built from your own brand. Try your identity on real artifacts — business card, invoice, social post — and watch everything repaint as you edit.</p>
       </div>
-      <div class="card feature-card reveal reveal-delay-2">
-        <div class="mini-visual" aria-hidden><div class="mv-publish"><span class="platform fb">f</span><span class="flow"></span><span class="platform ig">📷</span></div></div>
-        <div class="card-icon">📣</div><h3>Publish anywhere</h3>
-        <p>Connect your Facebook Page and linked Instagram Business account, then publish from the Content tab in one click.</p>
+      <div class="card feature-card reveal" style="--fc:#3b82f6;">
+        <div class="mini-visual" aria-hidden><div class="mv-grid"><span></span><span></span><span></span><span class="live"></span><span></span><span></span><span class="live"></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span class="live"></span></div></div>
+        <div class="card-icon">⚙️</div><span class="fc-tag">OPERATE</span><h3>The day-to-day, handled</h3>
+        <p>Contacts, invoices, calendar, tasks, email + SMS hubs, bookkeeping with reconciliation — the plumbing that keeps clients moving, all talking to each other.</p>
+      </div>
+      <div class="card feature-card reveal reveal-delay-1" style="--fc:#a78bfa;">
+        <div class="mini-visual" aria-hidden><div class="mv-publish"><span class="platform fb">✦</span><span class="flow"></span><span class="platform ig">◎</span></div></div>
+        <div class="card-icon">✦</div><span class="fc-tag">CHIEF OF STAFF</span><h3>An AI that knows your business</h3>
+        <p>Reads your real data every turn. Drafts emails, chases invoices, preps sessions, navigates you anywhere — by chat or by voice. Autopilot handles the routine while you sleep.</p>
+      </div>
+      <div class="card feature-card reveal reveal-delay-2" style="--fc:#06b6d4;">
+        <div class="mini-visual" aria-hidden><div class="mv-stack"><span></span><span></span><span></span></div></div>
+        <div class="card-icon">🌐</div><span class="fc-tag">SMART SITES</span><h3>A live website, designed — not templated</h3>
+        <p>Your site is composed from your brand DNA and your own words — typography, spacing, and motion reasoned from who you are, live on your own link in minutes.</p>
       </div>
     </div>
     <div style="text-align:center;margin-top:36px;" class="reveal">
@@ -648,6 +729,7 @@ def render_home() -> str:
 <section id="audience" class="audience">
   <div class="container">
     <div class="section-head" style="margin-bottom:32px;">
+      <span class="sec-num" aria-hidden="true">03</span>
       <span class="eyebrow">Who it's for</span>
       <h2 style="margin-top:14px;">Built for people who serve people.</h2>
     </div>
@@ -666,6 +748,7 @@ def render_home() -> str:
 <section>
   <div class="container">
     <div class="section-head reveal">
+      <span class="sec-num" aria-hidden="true">04</span>
       <span class="eyebrow">Why Solutionist</span>
       <h2>One workspace replacing the chaos of eight.</h2>
     </div>
