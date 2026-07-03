@@ -282,6 +282,82 @@ def apply_dro_palette(dna: Dict[str, Any], dro_palette: Optional[Dict[str, Any]]
     return out
 
 
+def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
+                    *, fonts_pinned: bool = False) -> Dict[str, Any]:
+    """DRL render conformance (2026-07-03, quality pass).
+
+    The DRO already authors typography personality, whitespace philosophy,
+    layout density and motion temperature — and until now the renderer
+    threw all of it away (only palette.base reached the pixels). Consume
+    those axes ADDITIVELY:
+
+      - tolerant string matching (DRO values are LLM-authored prose-ish
+        labels, not enums); unknown values are a no-op
+      - practitioner-pinned fonts (brand kit / creative-expression) are
+        never overridden — same precedence as derive_typography
+      - DRO-absent composes return the dna untouched, byte-for-byte
+
+    Deliberately NOT consumed yet: layout.symmetry (no renderer hook) and
+    visual_metaphor (constructed hero not built) — flagged in the DRL doc.
+    """
+    d = decisions or {}
+    if not d:
+        return dna
+    out = dict(dna)
+    t = dict(out.get("typography") or {})
+    r = dict(out.get("rhythm") or {})
+
+    def _has(v: Any, *words: str) -> bool:
+        s = str(v or "").lower()
+        return any(w in s for w in words)
+
+    # ── Typography: display personality → vetted pair + weight shift ──
+    pers = (d.get("typography") or {}).get("display_personality")
+    if pers and not fonts_pinned:
+        if _has(pers, "editorial", "literary", "serif", "heritage", "classic", "storyteller", "warm"):
+            t["heading"], t["body"] = "Fraunces", "Source Sans 3"
+        elif _has(pers, "refined", "quiet", "elegant", "understated", "luxur", "discreet"):
+            t["heading"], t["body"] = "Libre Caslon Text", "Inter"
+        elif _has(pers, "geometric", "modern", "bold", "brutal", "tech", "commanding", "expressive", "confident"):
+            t["heading"], t["body"] = "Bricolage Grotesque", "Inter"
+    if _has(pers, "quiet", "understated", "refined", "discreet"):
+        try:
+            t["heading_weight"] = min(int(t.get("heading_weight") or 700), 700)
+        except (TypeError, ValueError):
+            pass
+        t["letter_tight"] = "-0.01em"
+    elif _has(pers, "loud", "brutal", "commanding", "expressive"):
+        try:
+            t["heading_weight"] = max(int(t.get("heading_weight") or 700), 800)
+        except (TypeError, ValueError):
+            pass
+
+    # ── Whitespace / density → whole rhythm-tier swap (pads are clamp()
+    #    strings, so we move between the vetted tiers, never invent px) ──
+    ws = d.get("whitespace") or {}
+    ws_text = f"{ws.get('philosophy') or ''} {ws.get('approach') or ''} {ws.get('strategy') or ''}"
+    density = (d.get("layout") or {}).get("density")
+    airy = _has(ws_text, "generous", "luxur", "breath", "air", "sanctuar", "monastic") \
+        or _has(density, "airy", "sparse", "minimal", "spacious")
+    dense = _has(ws_text, "compress", "tight", "efficient", "packed") \
+        or _has(density, "dense", "packed", "rich", "abundant")
+    if airy and not dense:
+        r = derive_rhythm("bold")          # the airiest vetted tier
+    elif dense and not airy:
+        r = derive_rhythm("restrained")    # the tightest vetted tier
+
+    # ── Motion temperature → the tier page_shell already reads ──
+    mt = (d.get("motion") or {}).get("temperature")
+    if _has(mt, "still", "calm", "none", "minimal", "static"):
+        out["motion"] = "subtle"
+    elif _has(mt, "kinetic", "expressive", "playful", "rich", "dramatic", "alive"):
+        out["motion"] = "rich"
+
+    out["typography"] = t
+    out["rhythm"] = r
+    return out
+
+
 # ─── CSS emission ─────────────────────────────────────────────────────
 
 def css_variables(dna: Dict[str, Any]) -> str:

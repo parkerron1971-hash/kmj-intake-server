@@ -571,7 +571,9 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
             f"&select=id,category,title,priority"),
         _sb(client, "GET",
             f"/custom_modules?business_id=eq.{biz_id}&is_active=eq.true"
-            f"&select=id,name,slug,description&limit=50"),
+            # schema included (2026-07-03) so the Chief knows each module's
+            # FIELD NAMES — create/update_module_entry stops guessing keys.
+            f"&select=id,name,slug,description,schema&limit=50"),
         _sb(client, "GET",
             f"/chief_memories?business_id=eq.{biz_id}&is_active=eq.true"
             f"&order=importance.desc,created_at.desc&limit=50"
@@ -1302,13 +1304,22 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         for i in ctx["insights"][:5]
     ]
 
-    # Modules
+    # Modules — field digest included (2026-07-03) so entry actions use
+    # REAL field names instead of guessing the data payload keys.
     module_lines = []
     for m in ctx["modules"][:20]:
         count = ctx["module_counts"].get(m["id"], 0)
         desc = f" — {m.get('description')}" if m.get('description') else ""
         slug_part = f" slug={m.get('slug')}" if m.get('slug') else ""
-        module_lines.append(f"  - {m.get('name')} ({count} entries){desc} [id={m.get('id')}{slug_part}]")
+        try:
+            _fields = ((m.get("schema") or {}).get("fields") or [])[:12]
+            fields_part = " fields: " + ", ".join(
+                f"{f.get('name')}({f.get('type')})" for f in _fields if f.get("name")
+            ) if _fields else ""
+        except Exception:
+            fields_part = ""
+        module_lines.append(
+            f"  - {m.get('name')} ({count} entries){desc} [id={m.get('id')}{slug_part}]{fields_part}")
 
     # At-risk contacts
     at_risk_lines = [
