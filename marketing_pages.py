@@ -389,10 +389,15 @@ def render_home() -> str:
       .core-stage{position:relative;height:420px;}
       @media (max-width:860px){.core-stage{height:340px;max-width:420px;margin:0 auto;}}
       .ai-core{position:absolute;top:50%;left:50%;width:180px;height:180px;transform:translate(-50%,-50%);}
-      .core-heart{position:absolute;inset:34px;border-radius:50%;
-        background:radial-gradient(circle at 38% 32%, color-mix(in srgb, var(--accent) 85%, #fff), var(--accent) 55%, color-mix(in srgb, var(--accent) 40%, #000));
-        box-shadow:0 0 60px color-mix(in srgb, var(--accent) 60%, transparent), 0 0 140px color-mix(in srgb, var(--accent) 30%, transparent);
-        animation:corePulse 3.6s ease-in-out infinite;}
+      /* The real S-mark floats at the core — same crop the app's orb
+         uses, served at /assets/mark.webp. Halo glows behind it. */
+      .core-halo{position:absolute;inset:10px;border-radius:50%;
+        background:radial-gradient(circle, color-mix(in srgb, var(--accent) 38%, transparent), transparent 70%);
+        filter:blur(16px);animation:corePulse 3.6s ease-in-out infinite;}
+      .core-logo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;animation:coreFloat 5.5s ease-in-out infinite;}
+      .core-logo img{width:152px;height:152px;display:block;
+        filter:drop-shadow(0 0 26px color-mix(in srgb, var(--accent) 55%, transparent)) drop-shadow(0 16px 32px rgba(0,0,0,.5));}
+      @keyframes coreFloat{0%,100%{transform:translateY(0);}50%{transform:translateY(-12px);}}
       .core-ring{position:absolute;border-radius:50%;border:1px solid color-mix(in srgb, var(--accent) 35%, transparent);}
       .core-ring.r1{inset:6px;border-top-color:color-mix(in srgb, var(--accent) 85%, #fff);animation:coreSpin 9s linear infinite;}
       .core-ring.r2{inset:-22px;border-style:dashed;opacity:.6;animation:coreSpin 22s linear infinite reverse;}
@@ -409,7 +414,7 @@ def render_home() -> str:
       .core-chip:nth-child(3n){animation-delay:-4.6s;}
       @keyframes chipFloat{0%,100%{transform:translateY(0);}50%{transform:translateY(-8px);}}
       @media (max-width:860px){.core-chip{font-size:11px;padding:6px 10px;}}
-      @media (prefers-reduced-motion: reduce){.core-ring,.core-heart,.core-chip{animation:none !important;}}
+      @media (prefers-reduced-motion: reduce){.core-ring,.core-halo,.core-logo,.core-chip{animation:none !important;}}
       /* ── Demo reel — the looping animated walkthrough ── */
       .demo-section{padding:72px 0;border-top:1px solid var(--border);}
       .demo-frame{max-width:760px;margin:0 auto;border-radius:18px;overflow:hidden;border:1px solid var(--border);
@@ -492,7 +497,11 @@ def render_home() -> str:
           <span class="core-ring r1"></span>
           <span class="core-ring r2"></span>
           <span class="core-ring r3"></span>
-          <span class="core-heart"></span>
+          <span class="core-halo"></span>
+          <picture class="core-logo">
+            <source srcset="/assets/mark.webp" type="image/webp">
+            <img src="/assets/mark.png" alt="" width="152" height="152" loading="eager">
+          </picture>
         </div>
         <span class="core-chip" style="top:2%;left:30%;"><i class="ci">♞</i>Strategy</span>
         <span class="core-chip" style="top:14%;right:2%;"><i class="ci">◈</i>Finance</span>

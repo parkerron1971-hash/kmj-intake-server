@@ -4736,6 +4736,17 @@ async def asset_logo_nav():
 async def asset_og():
     return _brand_file("solutionist-og.png", "image/png")
 
+# Square S-mark crop (512²) for the marketing hero's floating core —
+# same 700² crop the app's LogoMark uses, pre-rendered so the page
+# never ships the 2.2MB lockup. WebP primary, PNG fallback.
+@router.get("/assets/mark.webp", include_in_schema=False)
+async def asset_mark_webp():
+    return _brand_file("solutionist-mark.webp", "image/webp")
+
+@router.get("/assets/mark.png", include_in_schema=False)
+async def asset_mark_png():
+    return _brand_file("solutionist-mark.png", "image/png")
+
 @router.get("/favicon.png", include_in_schema=False)
 async def asset_favicon_png():
     return _brand_file("favicon.png", "image/png")
