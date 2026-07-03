@@ -387,7 +387,10 @@ def render_home() -> str:
       .hero-note{margin-top:22px;font-size:12px;color:var(--text-dim);}
       /* The AI core */
       .core-stage{position:relative;height:420px;}
-      @media (max-width:860px){.core-stage{height:340px;max-width:420px;margin:0 auto;}}
+      /* width:100% matters — margin:auto turns off grid stretch, and with
+         only absolute children the stage otherwise collapses to 0 wide
+         (which piled every chip into a center column on phones). */
+      @media (max-width:860px){.core-stage{height:340px;width:100%;max-width:420px;margin:0 auto;}}
       .ai-core{position:absolute;top:50%;left:50%;width:180px;height:180px;transform:translate(-50%,-50%);}
       /* The real S-mark floats at the core — same crop the app's orb
          uses, served at /assets/mark.webp. Halo glows behind it. */
@@ -413,7 +416,28 @@ def render_home() -> str:
       .core-chip:nth-child(2n){animation-delay:-2.3s;}
       .core-chip:nth-child(3n){animation-delay:-4.6s;}
       @keyframes chipFloat{0%,100%{transform:translateY(0);}50%{transform:translateY(-8px);}}
-      @media (max-width:860px){.core-chip{font-size:11px;padding:6px 10px;}}
+      /* ── Mobile: redistribute the chips into an even ring around the
+         core (the desktop inline positions were tuned for the wide
+         stage — on a phone they bunch and clip). Each chip is centered
+         on its ring point via translate; the float animation carries
+         the same centering so nothing jumps. ── */
+      @media (max-width:860px){
+        .core-chip{font-size:11px;padding:6px 10px;gap:5px;}
+        .core-stage .core-chip{right:auto !important;bottom:auto !important;
+          transform:translate(-50%,-50%);animation-name:chipFloatMobile;}
+        .core-stage .core-chip:nth-of-type(1){top:10% !important;left:50% !important;}
+        .core-stage .core-chip:nth-of-type(2){top:19.4% !important;left:74.4% !important;}
+        .core-stage .core-chip:nth-of-type(3){top:43% !important;left:87.4% !important;}
+        .core-stage .core-chip:nth-of-type(4){top:70% !important;left:82.9% !important;}
+        .core-stage .core-chip:nth-of-type(5){top:87.6% !important;left:63% !important;}
+        .core-stage .core-chip:nth-of-type(6){top:87.6% !important;left:37% !important;}
+        .core-stage .core-chip:nth-of-type(7){top:70% !important;left:17.1% !important;}
+        .core-stage .core-chip:nth-of-type(8){top:43% !important;left:12.6% !important;}
+        .core-stage .core-chip:nth-of-type(9){top:19.4% !important;left:25.6% !important;}
+        @keyframes chipFloatMobile{0%,100%{transform:translate(-50%,-50%);}50%{transform:translate(-50%,calc(-50% - 7px));}}
+      }
+      @media (max-width:440px){.core-chip{font-size:10px;padding:5px 8px;}
+        .core-stage{height:320px;}}
       @media (prefers-reduced-motion: reduce){.core-ring,.core-halo,.core-logo,.core-chip{animation:none !important;}}
       /* ── Demo reel — the looping animated walkthrough ── */
       .demo-section{padding:72px 0;border-top:1px solid var(--border);}
