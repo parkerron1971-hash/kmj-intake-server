@@ -101,6 +101,63 @@ def _body_is_html(body: str) -> bool:
     return b.startswith("<!doctype") or b.startswith("<html") or "<p" in b or "<div" in b or "<br" in b
 
 
+# ─── Suppression list (hardening pass 1, 2026-07-03) ────────────────
+# Resend tells us about hard bounces + spam complaints via the webhook
+# below; we record them in email_suppressions (service-role-only table,
+# supabase/email-suppressions-migration.sql) and refuse to send to those
+# addresses again. Reads FAIL OPEN — a missing table or transient DB
+# error must never take sending down.
+
+_SUPPRESS_PATH = "/email_suppressions"
+
+
+def _sb_service_headers() -> Dict[str, str]:
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    return {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+
+async def is_suppressed(email: str) -> Optional[Dict[str, Any]]:
+    """Suppression row for this address, or None. Fails open."""
+    addr = (email or "").strip().lower()
+    if not addr or not os.environ.get("SUPABASE_SERVICE_ROLE_KEY"):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            r = await client.get(
+                f"{os.environ.get('SUPABASE_URL', '')}/rest/v1{_SUPPRESS_PATH}",
+                headers=_sb_service_headers(),
+                params={"email": f"eq.{addr}", "select": "email,reason,last_seen", "limit": "1"},
+            )
+            if r.status_code >= 400:
+                return None  # migration not run / transient — fail open
+            rows = r.json() if r.text else []
+            return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+async def add_suppression(email: str, reason: str, event_type: str) -> None:
+    addr = (email or "").strip().lower()
+    if not addr or not os.environ.get("SUPABASE_SERVICE_ROLE_KEY"):
+        return
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            r = await client.post(
+                f"{os.environ.get('SUPABASE_URL', '')}/rest/v1{_SUPPRESS_PATH}",
+                headers={**_sb_service_headers(), "Prefer": "resolution=merge-duplicates"},
+                content=json.dumps({
+                    "email": addr,
+                    "reason": reason,
+                    "event_type": event_type,
+                    "last_seen": datetime.now(timezone.utc).isoformat(),
+                }),
+            )
+            if r.status_code >= 400:
+                logger.warning(f"suppression upsert failed {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        logger.warning(f"suppression upsert failed: {e}")
+
+
 async def send_via_resend(
     *,
     to_email: str,
@@ -120,6 +177,18 @@ async def send_via_resend(
     key = os.environ.get("RESEND_API_KEY")
     if not key:
         raise RuntimeError("RESEND_API_KEY is not configured")
+
+    # Suppression check — every send path funnels through here, so one
+    # gate protects invoices, reminders, booking confirmations, Chief
+    # sends, everything.
+    sup = await is_suppressed(to_email)
+    if sup:
+        why = "marked a previous email as spam" if sup.get("reason") == "complained" else "hard-bounced"
+        logger.warning(f"send BLOCKED — {to_email} is suppressed ({sup.get('reason')})")
+        raise RuntimeError(
+            f"Not sent: {to_email} {why} previously. Verify the address is right; "
+            f"a platform admin can clear it from email_suppressions if it was a mistake."
+        )
 
     payload: Dict[str, Any] = {
         "from": _format_address(from_email, from_name),
@@ -759,7 +828,7 @@ async def inbound_email(request: Request):
 # Resend dashboard:
 #   resend.com -> Webhooks -> Add webhook
 #   URL:    https://<this-host>/email/webhook
-#   Events: email.opened
+#   Events: email.opened, email.bounced, email.complained
 #
 # We always return 200 so Resend doesn't retry — failures are logged.
 
@@ -796,8 +865,19 @@ async def resend_webhook(request: Request):
         return {"status": "ignored", "reason": "non-json payload"}
 
     evt = _extract_open_event(payload)
+
+    # Deliverability signals → suppression list (hardening pass 1).
+    # Enable email.bounced + email.complained on the Resend webhook.
+    if evt["type"] in ("email.bounced", "email.complained"):
+        if evt["to_email"]:
+            reason = "complained" if evt["type"] == "email.complained" else "bounced"
+            await add_suppression(evt["to_email"], reason, evt["type"])
+            logger.warning(f"[SUPPRESS] {evt['to_email']} → {reason}")
+            return {"status": "suppressed", "to": evt["to_email"], "reason": reason}
+        return {"status": "ignored", "reason": "bounce event without recipient"}
+
     if evt["type"] != "email.opened":
-        # Other event types (delivered, bounced, etc) — accept and ignore
+        # Other event types (delivered, delayed, etc) — accept and ignore
         return {"status": "ignored", "reason": f"unsupported event {evt['type']}"}
 
     to_email = evt["to_email"]
