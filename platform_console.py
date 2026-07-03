@@ -319,6 +319,77 @@ async def subscriptions_summary(_owner=Depends(require_owner)):
     }
 
 
+@router.get("/subscriptions/list")
+async def subscriptions_list(_owner=Depends(require_owner)):
+    """The subscriber ROSTER (2026-07-03): every business with its
+    subscription state, tier, comp/grandfather flags, and the computed
+    access verdict — so Mission Control knows exactly who has one, who
+    pays, and who would lose access under enforcement."""
+    import feature_gates
+    headers = _service_headers()
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        br = await c.get(
+            f"{SUPABASE_URL}/rest/v1/businesses",
+            headers=headers,
+            params={
+                "select": "id,name,owner_id,subscription_status,subscription_plan,"
+                          "trial_ends_at,comp_tier,created_at",
+                "is_active": "eq.true",
+                "order": "created_at.desc",
+                "limit": "500",
+            },
+        )
+        if br.status_code >= 400:
+            # comp_tier column may be missing pre-migration — retry without it.
+            br = await c.get(
+                f"{SUPABASE_URL}/rest/v1/businesses",
+                headers=headers,
+                params={
+                    "select": "id,name,owner_id,subscription_status,subscription_plan,"
+                              "trial_ends_at,created_at",
+                    "is_active": "eq.true",
+                    "order": "created_at.desc",
+                    "limit": "500",
+                },
+            )
+        if br.status_code >= 400:
+            raise HTTPException(502, f"businesses fetch failed: {br.text[:200]}")
+        businesses = br.json() or []
+
+        # One batched read: which owners are grandfathered.
+        gf: set = set()
+        try:
+            gr = await c.get(
+                f"{SUPABASE_URL}/rest/v1/user_profiles",
+                headers=headers,
+                params={"is_grandfathered": "is.true", "select": "user_id", "limit": "1000"},
+            )
+            if gr.status_code < 400:
+                gf = {str(x.get("user_id")) for x in (gr.json() or [])}
+        except Exception:
+            pass
+
+    out: List[Dict[str, Any]] = []
+    price_map = feature_gates.price_to_plan()
+    for b in businesses:
+        grandfathered = str(b.get("owner_id")) in gf
+        state = feature_gates.access_state(b, grandfathered)
+        out.append({
+            "business_id":         b.get("id"),
+            "name":                b.get("name"),
+            "subscription_status": b.get("subscription_status"),
+            "plan":                feature_gates.plan_of(b),
+            "stripe_plan":         price_map.get(b.get("subscription_plan") or ""),
+            "comp_tier":           b.get("comp_tier"),
+            "grandfathered":       grandfathered,
+            "trial_ends_at":       b.get("trial_ends_at"),
+            "created_at":          b.get("created_at"),
+            "access_state":        state["state"],
+            "access_reason":       state["reason"],
+        })
+    return {"ok": True, "rows": out, "enforce": feature_gates.enforcement_on()}
+
+
 # ─── Costs ──────────────────────────────────────────────────────────────
 
 @router.get("/costs/summary")
