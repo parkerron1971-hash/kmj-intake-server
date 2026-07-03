@@ -3098,6 +3098,48 @@ async def _process_autopilot_for_draft(
     return result
 
 
+async def autopilot_sweep_tick() -> None:
+    """Scheduled Autopilot sweep (Automation Center, 2026-07-03).
+
+    The sweep used to run ONLY at the top of /agents/chief/chat, so
+    "Full Auto" did nothing while the practitioner was away — the
+    opposite of the feature's promise. This tick runs on the scheduler
+    leader (registered in kmj_intake_automation.py, every 10 minutes,
+    gated by scheduler_lock) and sweeps every business whose autopilot
+    config could act. The lookback overlaps the interval; the sweep is
+    idempotent per draft (status filter), so overlap is safe.
+
+    Kill switch: AUTOPILOT_SWEEP=off.
+    """
+    if (os.environ.get("AUTOPILOT_SWEEP") or "on").lower() == "off":
+        return
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        try:
+            rows = await _sb(
+                client, "GET",
+                "/businesses?select=id,name,type,settings,owner_id&limit=500",
+            )
+        except Exception as e:  # pragma: no cover
+            print(f"[Autopilot tick] business fetch failed: {e}", flush=True)
+            return
+        for biz in rows or []:
+            ap = ((biz.get("settings") or {}).get("autopilot") or {})
+            levels = [ap.get("overall")] + list((ap.get("per_team") or {}).values())
+            if not any(lvl in ("smart", "full") for lvl in levels):
+                continue  # all-manual businesses have nothing to sweep
+            try:
+                auto = await _autopilot_sweep(client, biz, lookback_minutes=15)
+                esc = await _evaluate_escalations(client, biz)
+                if auto or esc:
+                    print(
+                        f"[Autopilot tick] {biz.get('name') or biz.get('id')}: "
+                        f"{auto} auto-approved, {esc} escalation(s)",
+                        flush=True,
+                    )
+            except Exception as e:  # pragma: no cover
+                print(f"[Autopilot tick] {biz.get('id')}: {e}", flush=True)
+
+
 async def _autopilot_sweep(client, biz: Dict[str, Any], lookback_minutes: int = 15) -> int:
     """At the top of each chief_chat, look at drafts created in the last
     few minutes and auto-process whatever the autopilot config allows.
