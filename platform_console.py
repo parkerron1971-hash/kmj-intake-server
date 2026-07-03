@@ -257,7 +257,15 @@ async def subscriptions_summary(_owner=Depends(require_owner)):
     trial_ending_soon: List[Dict[str, Any]] = []
     payment_issues: List[Dict[str, Any]] = []
     total_businesses = 0
-    mrr_cents = 0  # Computed once we have subscription_plan + Stripe price metadata; placeholder for now
+    # Launch-ops (2026-07-03): real MRR — active subs' price ids map to
+    # plan names via env, plan names to list price. Was a hardcoded 0.
+    mrr_cents = 0
+    try:
+        from feature_gates import price_to_plan as _p2p
+        from usage_metering import TIER_PRICE_CENTS as _tier_cents
+        _price_map = _p2p()
+    except Exception:
+        _price_map, _tier_cents = {}, {}
 
     if view_present:
         total_businesses = len(rows)
@@ -265,6 +273,10 @@ async def subscriptions_summary(_owner=Depends(require_owner)):
             stat = row.get("subscription_status")
             if stat:
                 by_status[stat] = by_status.get(stat, 0) + 1
+            if stat == "active":
+                _plan = _price_map.get(row.get("subscription_plan") or "")
+                if _plan:
+                    mrr_cents += _tier_cents.get(_plan, 0)
             days_left = row.get("trial_days_left")
             if isinstance(days_left, (int, float)) and 0 < days_left <= 7:
                 trial_ending_soon.append({

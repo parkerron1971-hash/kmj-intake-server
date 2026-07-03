@@ -103,11 +103,23 @@ def _token_state(inv: Optional[Dict[str, Any]]) -> str:
     return "pending"
 
 
+def _uses_left(inv: Dict[str, Any]) -> int:
+    """Launch-ops: multi-use invites. Pre-migration rows (no max_uses
+    column) behave exactly like before: one use."""
+    max_uses = int(inv.get("max_uses") or 1)
+    uses = int(inv.get("uses_count") or 0)
+    return max(0, max_uses - uses)
+
+
 @router.get("/invites/validate")
 def validate_invite(token: str) -> Dict[str, Any]:
     """Public — the signup screen asks before showing the form."""
     inv = _load_token(token)
     state = _token_state(inv)
+    # Multi-use links stay valid while uses remain, even after the
+    # first redemption flipped a legacy-minded status.
+    if state == "accepted" and _uses_left(inv) > 0:
+        state = "pending"
     return {"ok": True, "valid": state == "pending",
             "state": state,
             "email": inv.get("email") if state == "pending" else None}
@@ -120,18 +132,33 @@ class RedeemBody(BaseModel):
 @router.post("/redeem")
 def redeem_invite(body: RedeemBody,
                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    """Signed-in user consumes their platform invite (first use wins).
+    """Signed-in user consumes their platform invite. Single-use invites
+    keep first-use-wins; multi-use links admit until uses run out.
     Marks the profile invited — NOT grandfathered (Kevin's ruling)."""
     inv = _load_token(body.token)
     state = _token_state(inv)
     if state == "accepted" and str(inv.get("accepted_by_user_id")) == str(user.id):
         return {"ok": True, "already": True}
+    multi = int(inv.get("max_uses") or 1) > 1
+    if multi and state == "accepted" and _uses_left(inv) > 0:
+        state = "pending"  # multi-use link with uses remaining
     if state != "pending":
         raise HTTPException(409, f"invite is {state}")
+    uses_after = int(inv.get("uses_count") or 0) + 1
+    patch: Dict[str, Any] = {"accepted_at": _now_iso(),
+                             "accepted_by_user_id": str(user.id)}
+    if multi:
+        patch["uses_count"] = uses_after
+        if uses_after >= int(inv.get("max_uses") or 1):
+            patch["status"] = "accepted"
+    else:
+        patch["status"] = "accepted"
+        # Pre-migration rows have no uses_count; only write it when the
+        # row already carries the column.
+        if "uses_count" in inv:
+            patch["uses_count"] = uses_after
     sb_clients.sb_patch_as_service(
-        f"/invite_tokens?id=eq.{inv['id']}",
-        {"status": "accepted", "accepted_at": _now_iso(),
-         "accepted_by_user_id": str(user.id)})
+        f"/invite_tokens?id=eq.{inv['id']}", patch)
     if _profile(str(user.id)):
         sb_clients.sb_patch_as_service(
             f"/user_profiles?user_id=eq.{user.id}",
@@ -229,24 +256,14 @@ def access_status(user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
 # ─── Admin (platform owner only) ─────────────────────────────────────
 
 class InviteCreateBody(BaseModel):
-    email: str
+    # Email optional for multi-use links (a shareable code isn't tied to
+    # one inbox). Single-use invites still require it.
+    email: Optional[str] = None
+    max_uses: int = 1
+    label: Optional[str] = None   # e.g. "barber-group-july" — shows in the list
 
 
-@router.post("/invites")
-async def create_invite(body: InviteCreateBody,
-                        _owner=Depends(require_owner)) -> Dict[str, Any]:
-    email = (body.email or "").strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(400, "valid email required")
-    res = sb_clients.sb_post_as_service("/invite_tokens", {
-        "email": email, "created_by": "platform_owner",
-    })
-    row = (res or [None])[0] if isinstance(res, list) else res
-    if not row:
-        raise HTTPException(500, "invite insert failed")
-    invite_url = f"{_APP_BASE}/?invite={row.get('token')}"
-
-    email_sent = False
+async def _send_invite_email(email: str, invite_url: str) -> bool:
     try:
         from email_sender import send_via_resend
         await send_via_resend(
@@ -261,11 +278,65 @@ async def create_invite(body: InviteCreateBody,
                   f"Create your account here:\n{invite_url}\n\n"
                   "The link is yours alone and expires in 30 days.\n\n"
                   "— Kevin\nKMJ Creative Solutions · mysolutionist.app"))
-        email_sent = True
+        return True
     except Exception as e:
         logger.warning(f"[access] invite email failed: {e}")
+        return False
+
+
+async def _mint_invite(email: Optional[str], max_uses: int = 1,
+                       label: Optional[str] = None) -> Dict[str, Any]:
+    """Insert an invite row + return {invite, invite_url, email_sent}.
+    Tolerates the pre-migration schema (no max_uses/label columns) by
+    retrying a plain single-use insert."""
+    payload: Dict[str, Any] = {"created_by": "platform_owner"}
+    if email:
+        payload["email"] = email
+    if max_uses > 1 or label:
+        payload.update({"max_uses": max_uses, **({"label": label} if label else {})})
+    res = sb_clients.sb_post_as_service("/invite_tokens", payload)
+    row = (res or [None])[0] if isinstance(res, list) else res
+    if not row and (max_uses > 1 or label):
+        # launch-ops migration not applied — fall back to single-use.
+        res = sb_clients.sb_post_as_service("/invite_tokens", {
+            "email": email, "created_by": "platform_owner"})
+        row = (res or [None])[0] if isinstance(res, list) else res
+    if not row:
+        raise HTTPException(500, "invite insert failed")
+    invite_url = f"{_APP_BASE}/?invite={row.get('token')}"
+    email_sent = False
+    if email:
+        email_sent = await _send_invite_email(email, invite_url)
     return {"ok": True, "invite": row, "invite_url": invite_url,
             "email_sent": email_sent}
+
+
+@router.post("/invites")
+async def create_invite(body: InviteCreateBody,
+                        _owner=Depends(require_owner)) -> Dict[str, Any]:
+    email = (body.email or "").strip().lower() or None
+    max_uses = max(1, min(int(body.max_uses or 1), 500))
+    if max_uses == 1 and (not email or "@" not in email):
+        raise HTTPException(400, "valid email required for single-use invites")
+    if email and "@" not in email:
+        raise HTTPException(400, "email looks invalid")
+    return await _mint_invite(email, max_uses, (body.label or "").strip() or None)
+
+
+@router.post("/invites/{invite_id}/resend")
+async def resend_invite(invite_id: str, _owner=Depends(require_owner)) -> Dict[str, Any]:
+    rows = sb_clients.sb_get_as_service(
+        f"/invite_tokens?id=eq.{invite_id}&select=*&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "invite not found")
+    inv = rows[0]
+    if not inv.get("email"):
+        raise HTTPException(400, "multi-use links have no email — copy the link instead")
+    if _token_state(inv) != "pending":
+        raise HTTPException(409, f"invite is {_token_state(inv)}")
+    invite_url = f"{_APP_BASE}/?invite={inv.get('token')}"
+    sent = await _send_invite_email(inv["email"], invite_url)
+    return {"ok": True, "email_sent": sent, "invite_url": invite_url}
 
 
 @router.get("/invites")
@@ -288,6 +359,93 @@ def list_waitlist(_owner=Depends(require_owner)) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         "/waitlist?order=created_at.desc&limit=500&select=*") or []
     return {"ok": True, "entries": rows, "count": len(rows)}
+
+
+@router.post("/waitlist-entries/{entry_id}/approve")
+async def approve_waitlist_entry(entry_id: str,
+                                 _owner=Depends(require_owner)) -> Dict[str, Any]:
+    """One-click waitlist → invite: mints a single-use invite for the
+    entry's email, emails it, and stamps the waitlist row."""
+    rows = sb_clients.sb_get_as_service(
+        f"/waitlist?id=eq.{entry_id}&select=*&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "waitlist entry not found")
+    email = (rows[0].get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(400, "waitlist entry has no usable email")
+    result = await _mint_invite(email, 1, None)
+    try:
+        sb_clients.sb_patch_as_service(
+            f"/waitlist?id=eq.{entry_id}",
+            {"invited_at": _now_iso()})
+    except Exception:
+        pass  # column may not exist — the invite itself is the record
+    return result
+
+
+# ─── Launch-ops: unit grants + tier override (platform owner) ─────────
+
+class GrantUnitsBody(BaseModel):
+    business_id: str
+    units: int
+    # 'YYYY-MM' → one month only; omit → recurring monthly bonus.
+    month: Optional[str] = None
+    reason: Optional[str] = None
+
+
+@router.post("/grant-units")
+def grant_units(body: GrantUnitsBody,
+                _owner=Depends(require_owner)) -> Dict[str, Any]:
+    """Give a business bonus Chief interactions (beta testers, partners,
+    make-goods). Consumed by usage_metering.usage_summary — grants top
+    up the tier allotment and lift the bill cap by the same amount."""
+    if not body.business_id:
+        raise HTTPException(400, "business_id required")
+    units = int(body.units or 0)
+    if units == 0 or abs(units) > 100_000:
+        raise HTTPException(400, "units must be non-zero and sane (±100k)")
+    if body.month and not (len(body.month) == 7 and body.month[4] == "-"):
+        raise HTTPException(400, "month must be 'YYYY-MM'")
+    res = sb_clients.sb_post_as_service("/usage_grants", {
+        "business_id": body.business_id,
+        "units": units,
+        "month": body.month,
+        "reason": (body.reason or "").strip() or None,
+    })
+    row = (res or [None])[0] if isinstance(res, list) else res
+    if not row:
+        raise HTTPException(500, "grant insert failed — is the launch-ops migration applied?")
+    return {"ok": True, "grant": row}
+
+
+@router.get("/grants")
+def list_grants(business_id: Optional[str] = None,
+                _owner=Depends(require_owner)) -> Dict[str, Any]:
+    q = "/usage_grants?order=created_at.desc&limit=200&select=*"
+    if business_id:
+        q += f"&business_id=eq.{business_id}"
+    rows = sb_clients.sb_get_as_service(q) or []
+    return {"ok": True, "grants": rows}
+
+
+class TierBody(BaseModel):
+    comp_tier: Optional[str] = None   # 'starter'|'professional'|'practice'|null to clear
+    reason: Optional[str] = None
+
+
+@router.post("/business/{business_id}/tier")
+def set_comp_tier(business_id: str, body: TierBody,
+                  _owner=Depends(require_owner)) -> Dict[str, Any]:
+    """Owner tier override — comp a business at any tier without a
+    Stripe subscription (feature_gates.plan_of prefers comp_tier).
+    Pass comp_tier null to clear back to Stripe-derived."""
+    tier = (body.comp_tier or "").strip().lower() or None
+    if tier is not None and tier not in ("starter", "professional", "practice"):
+        raise HTTPException(400, "comp_tier must be starter|professional|practice|null")
+    sb_clients.sb_patch_as_service(
+        f"/businesses?id=eq.{business_id}", {"comp_tier": tier})
+    logger.info(f"[access] comp_tier={tier} business={business_id} reason={body.reason}")
+    return {"ok": True, "business_id": business_id, "comp_tier": tier}
 
 
 class GrandfatherBody(BaseModel):
