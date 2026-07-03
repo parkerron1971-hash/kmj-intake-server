@@ -639,6 +639,15 @@ async def startup():
         scheduler.add_job(g("workflow_drain", workflow_engine.drain_tick), "interval", minutes=5, id="workflow_drain")
     except Exception as e:
         print(f"   [warn] workflow drain job not scheduled: {e}")
+    # Automation Center (2026-07-03): Autopilot on a clock. The sweep was
+    # chat-request-driven, so Full Auto did nothing while the practitioner
+    # was away. Kill switch: AUTOPILOT_SWEEP=off.
+    try:
+        from chief_of_staff import autopilot_sweep_tick
+        scheduler.add_job(g("autopilot_sweep", autopilot_sweep_tick),
+                          "interval", minutes=10, id="autopilot_sweep")
+    except Exception as e:
+        print(f"   [warn] autopilot sweep job not scheduled: {e}")
     # Phase I.2 — GL live sync: drain the gl_sync_queue (no LISTEN/NOTIFY —
     # PostgREST only) + periodic divergence reconciliation. Env kill-switch:
     # GL_SYNC_POLLER=off disables both jobs without a code change.
