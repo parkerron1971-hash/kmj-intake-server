@@ -72,8 +72,30 @@ def _biz_row(business_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}"
         f"&select=id,owner_id,settings,subscription_status,subscription_plan,"
+        f"stripe_subscription_id,comp_tier&limit=1") or []
+    if rows:
+        return rows[0]
+    # comp_tier column absent (launch-ops migration not applied yet) —
+    # PostgREST 400s on unknown columns; retry without it.
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}"
+        f"&select=id,owner_id,settings,subscription_status,subscription_plan,"
         f"stripe_subscription_id&limit=1") or []
     return rows[0] if rows else None
+
+
+def grant_units_this_month(business_id: str) -> int:
+    """Owner-granted bonus units (usage_grants table): rows with month
+    NULL apply every month; rows with month == current 'YYYY-MM' apply
+    that month only. Fails open to 0 when the table doesn't exist."""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/usage_grants?business_id=eq.{business_id}"
+            f"&or=(month.is.null,month.eq.{_month_key()})"
+            f"&select=units&limit=200") or []
+        return sum(int(r.get("units") or 0) for r in rows)
+    except Exception:
+        return 0
 
 
 def is_grandfathered_user(user_id: Optional[str]) -> bool:
@@ -112,6 +134,17 @@ def usage_summary(business_id: str,
         if allotment is not None and overage_cents_rate:
             # 2×-bill promise: overage spend ≤ tier price → max extra units.
             cap_units = allotment + TIER_PRICE_CENTS[plan] // overage_cents_rate
+
+    # Launch-ops: owner-granted bonus units top up the plan allotment
+    # (and lift the cap by the same amount, so grants never trigger the
+    # bill-cap early). Grants without a plan do nothing — plan-less
+    # businesses are already unlimited while unenforced.
+    if allotment is not None:
+        bonus = grant_units_this_month(business_id)
+        if bonus > 0:
+            allotment += bonus
+            if cap_units is not None:
+                cap_units += bonus
 
     overage_units = max(0, used - allotment) if allotment is not None else 0
     if cap_units is not None:

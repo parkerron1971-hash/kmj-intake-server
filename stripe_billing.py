@@ -294,10 +294,24 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
         logger.info(f"Created Stripe customer {customer_id} for business {biz['id']}")
 
     # Mint the Checkout Session.
+    # PAYG (launch-ops 2026-07-03): attach the tier's METERED overage
+    # price as a second line item when configured — this was the one
+    # missing wire between "reports overage" (usage_metering) and
+    # "actually bills overage". Metered items take no quantity.
+    line_items: list = [{"price": price_id, "quantity": 1}]
+    try:
+        import feature_gates as _fg
+        _plan_name = _fg.price_to_plan().get(price_id)
+        if _plan_name:
+            _ov = (os.environ.get(f"STRIPE_PRICE_ID_{_plan_name.upper()}_OVERAGE") or "").strip()
+            if _ov:
+                line_items.append({"price": _ov})
+    except Exception:
+        pass  # overage attach is best-effort; base plan must never fail
     session = await _stripe_post("/checkout/sessions", {
         "mode": "subscription",
         "customer": customer_id,
-        "line_items": [{"price": price_id, "quantity": 1}],
+        "line_items": line_items,
         "success_url": _success_url() + "?session_id={CHECKOUT_SESSION_ID}",
         "cancel_url":  _cancel_url(),
         # Echo business_id in metadata so the webhook can resolve back

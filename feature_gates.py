@@ -86,9 +86,16 @@ def price_to_plan() -> Dict[str, str]:
 
 
 def plan_of(business_row: Optional[Dict[str, Any]]) -> Optional[str]:
-    """The business's tier when its subscription is in good standing."""
+    """The business's tier when its subscription is in good standing.
+
+    Launch-ops (2026-07-03): an owner-set `comp_tier` wins over Stripe —
+    the manual override for beta testers / partners / comped accounts.
+    Set via POST /access/business/{id}/tier; no subscription required."""
     if not business_row:
         return None
+    comp = (business_row.get("comp_tier") or "").strip().lower()
+    if comp in PLANS:
+        return comp
     status = business_row.get("subscription_status")
     if status not in ("trialing", "active"):
         return None
