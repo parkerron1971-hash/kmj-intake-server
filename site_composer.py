@@ -42,6 +42,7 @@ from auth_supabase import UserSession
 
 import brand_dna
 import site_modules
+from auth_supabase import AuthedUser, require_user
 
 logger = logging.getLogger("site_composer")
 
@@ -52,6 +53,60 @@ COMPOSER_MARK = '<meta name="x-solutionist-composer" content="module-composer">'
 
 _MAX_FIELD = {"body": 900, "intro": 400, "note": 300, "subheadline": 260,
               "pull_quote": 260, "headline": 120, "eyebrow": 60, "cta_label": 40}
+
+
+# ─── Arc 2 "Ask the Owner" — design preferences ───────────────────────
+
+_PREF_STR_CAP = 400
+_IMAGERY_PRIORITIES = ("my_photos", "atmosphere", "typography")
+_BOLDNESS_TO_INTENSITY = {1: "restrained", 2: "confident", 3: "bold"}
+
+
+def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
+    """Lenient shape validation for the Ask-the-Owner design_prefs object:
+    unknown keys dropped, strings trimmed + capped, feel_words ≤ 3,
+    imagery_priority / boldness clamped to their enums. Returns None when
+    nothing usable remains — callers treat that as 'no prefs given'."""
+    if not isinstance(raw, dict):
+        return None
+    out: Dict[str, Any] = {}
+    fw = raw.get("feel_words")
+    if isinstance(fw, (list, tuple)):
+        words = [str(w).strip()[:_PREF_STR_CAP] for w in fw
+                 if isinstance(w, (str, int, float)) and str(w).strip()]
+        if words:
+            out["feel_words"] = words[:3]
+    for key in ("inspiration", "avoid", "notes"):
+        v = raw.get(key)
+        if isinstance(v, str) and v.strip():
+            out[key] = v.strip()[:_PREF_STR_CAP]
+    ip = raw.get("imagery_priority")
+    if isinstance(ip, str) and ip.strip().lower() in _IMAGERY_PRIORITIES:
+        out["imagery_priority"] = ip.strip().lower()
+    try:
+        b = int(raw.get("boldness"))
+    except (TypeError, ValueError):
+        b = None
+    if b in (1, 2, 3):
+        out["boldness"] = b
+    return out or None
+
+
+def _persist_site_prefs(business_id: str, prefs: Dict[str, Any]) -> None:
+    """Write sanitized prefs to businesses.settings.site_prefs via the
+    read-modify-write settings idiom (same as rules_router.pause_all) so
+    sibling settings keys survive. Called BEFORE gather_context so the
+    compose that follows reads the fresh prefs back from settings."""
+    from datetime import datetime, timezone
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    settings = dict(rows[0].get("settings") or {})
+    settings["site_prefs"] = {
+        **prefs, "updated_at": datetime.now(timezone.utc).isoformat()}
+    sb_clients.sb_patch_as_service(
+        f"/businesses?id=eq.{business_id}", {"settings": settings})
 
 
 # ─── Context gathering ────────────────────────────────────────────────
@@ -180,8 +235,38 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "sms_capable": _platform_sms_capable(),
     }
 
+    # Arc 2 "Ask the Owner": stored prefs shape the DNA even on the no-LLM
+    # path. feel_words feed the legacy vibe keyword matcher (_infer_vibe
+    # reads voice.tone_words) and boldness maps onto the legacy intensity
+    # ladder. Precedence: an explicit design.vibe_family still beats
+    # feel_words (an exact enum choice outranks fuzzy words), but boldness —
+    # the owner's freshest explicit answer — wins over the older
+    # creative_expression intensity dial.
+    site_prefs = (settings.get("site_prefs")
+                  if isinstance(settings.get("site_prefs"), dict) else {})
+    if site_prefs:
+        feel = [str(w).strip() for w in (site_prefs.get("feel_words") or [])
+                if str(w or "").strip()]
+        if feel:
+            voice = bundle.get("voice") if isinstance(bundle.get("voice"), dict) else {}
+            tw = voice.get("tone_words")
+            if isinstance(tw, list):
+                voice["tone_words"] = tw + feel
+            else:
+                voice["tone_words"] = ((f"{tw} " if tw else "") + " ".join(feel))
+            bundle["voice"] = voice
+        intensity = _BOLDNESS_TO_INTENSITY.get(site_prefs.get("boldness"))
+        if intensity:
+            design_cfg = bundle.get("design") if isinstance(bundle.get("design"), dict) else {}
+            expr = (design_cfg.get("creative_expression")
+                    if isinstance(design_cfg.get("creative_expression"), dict) else {})
+            expr["intensity"] = intensity
+            design_cfg["creative_expression"] = expr
+            bundle["design"] = design_cfg
+
     dna = brand_dna.build_brand_dna(business_id, bundle)
     return {
+        "site_prefs": site_prefs,
         "store": store,
         "dna": dna,
         "bundle": bundle,
@@ -336,7 +421,37 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
         f"How they describe their offerings: {offering_descs}",
         f"In their customers' words: {' | '.join(quotes)}",
     ]
-    return "\n".join(p for p in parts if p.split(": ", 1)[-1].strip())
+    text = "\n".join(p for p in parts if p.split(": ", 1)[-1].strip())
+
+    # Arc 2 "Ask the Owner": the owner's stated preferences are the highest-
+    # priority evidence the DRL can get — a clearly-attributed first-person
+    # block so detect_signals can quote it VERBATIM (its whole design is
+    # evidence-quoted signals). Only fields actually present render; when no
+    # prefs exist the intake text is byte-identical to before.
+    prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+    pref_lines: List[str] = []
+    if prefs.get("feel_words"):
+        pref_lines.append("The site should feel: "
+                          + ", ".join(str(w) for w in prefs["feel_words"]) + ".")
+    if prefs.get("inspiration"):
+        pref_lines.append(f"Inspiration: {prefs['inspiration']}")
+    if prefs.get("avoid"):
+        pref_lines.append(f"It should NOT feel: {prefs['avoid']}")
+    if prefs.get("imagery_priority"):
+        label = {"my_photos": "lead with my own photos",
+                 "atmosphere": "atmosphere / mood imagery",
+                 "typography": "typography-led, minimal imagery",
+                 }.get(prefs["imagery_priority"], prefs["imagery_priority"])
+        pref_lines.append(f"Imagery: {label}.")
+    if prefs.get("boldness") in (1, 2, 3):
+        pref_lines.append(f"Boldness: {prefs['boldness']}/3.")
+    if prefs.get("notes"):
+        pref_lines.append(f"Notes: {prefs['notes']}")
+    if pref_lines:
+        text += ("\n\nTHE OWNER'S OWN STYLE WORDS "
+                 "(verbatim, highest priority evidence):\n"
+                 + "\n".join(pref_lines))
+    return text
 
 
 def _dro_directive(dro: Dict[str, Any]) -> str:
@@ -506,7 +621,9 @@ def _ensure_og_image(html: str, slot_records: Dict[str, Any]) -> str:
 def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        ctx: Optional[Dict[str, Any]] = None,
                        dro_id: Optional[str] = None,
-                       dro: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       dro: Optional[Dict[str, Any]] = None,
+                       dro_status: Optional[str] = None,
+                       dro_summary: Optional[str] = None) -> Dict[str, Any]:
     ctx = ctx or gather_context(business_id)
     title = ctx["business"]["name"] or "Welcome"
 
@@ -597,6 +714,15 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     })
     if dro_id:
         cfg["design_rationale_id"] = dro_id   # powers the "why your site looks this way" view (PR4)
+    # Arc 2: surface whether the rationale actually drove THIS compose.
+    # Only compose_site sets these (shuffle/refresh re-renders pass None and
+    # leave the stored status untouched — they reuse the composed spec).
+    if dro_status:
+        cfg["dro_status"] = dro_status
+        if dro_status == "applied" and dro_summary:
+            cfg["dro_summary"] = dro_summary
+        else:
+            cfg.pop("dro_summary", None)   # never show a stale summary on fallback
     sb_clients.sb_patch_as_service(
         f"/business_sites?id=eq.{site['id']}",
         {"html_content": final_html, "site_config": cfg, "status": "published"})
@@ -657,26 +783,47 @@ def _ensure_connections(spec: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List
 
 
 def compose_site(business_id: str, brief_notes: str = "",
-                 use_llm: bool = True) -> Dict[str, Any]:
+                 use_llm: bool = True,
+                 design_prefs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Canonical site-compose entry (DRL PR3). Produces a Design Rationale
     Object first (best-effort), composes concept-threaded copy that obeys it,
     then renders + persists. Shared by the /compose endpoint and the
     Feature-2 `rebuild_site` background job, so both get DRO-driven output.
     Degrades gracefully: if DRO production fails, composes without it; if LLM
-    composition fails, falls back to the deterministic default spec."""
+    composition fails, falls back to the deterministic default spec.
+
+    Arc 2 "Ask the Owner": `design_prefs` (feel_words/inspiration/avoid/
+    imagery_priority/boldness/notes) is sanitized and persisted to
+    businesses.settings.site_prefs BEFORE composing, so gather_context reads
+    it back; recomposes without fresh prefs reuse the stored ones."""
+    prefs = sanitize_design_prefs(design_prefs)
+    if prefs:
+        _persist_site_prefs(business_id, prefs)
+
     ctx = gather_context(business_id)
     dro: Optional[Dict[str, Any]] = None
     dro_id: Optional[str] = None
     source = "llm"
+    dro_fail_reason: Optional[str] = None
 
     if use_llm:
         # 1) Author the rationale from the practitioner's own words.
         try:
             from agents.composer.drl.passes import produce_dro
-            dro = produce_dro(business_id, _assemble_intake_text(ctx))
+            intake = _assemble_intake_text(ctx)
+            dro = produce_dro(business_id, intake)
+            if dro is None:
+                # One retry — cheap insurance against a transient LLM/parse
+                # hiccup before accepting a rationale-less compose.
+                logger.info(f"[composer] DRO production returned None for "
+                            f"{business_id[:8]} — retrying once")
+                dro = produce_dro(business_id, intake)
             if dro:
                 dro_id = dro.get("id")
+            else:
+                dro_fail_reason = "produce_dro returned None after retry"
         except Exception as e:
+            dro_fail_reason = f"DRO production raised: {e}"
             logger.warning(f"[composer] DRO production failed (non-fatal): {e}")
         # 1b) DRO-driven DESIGN: the palette base (dark stage / light room) +
         # accent scarcity flow into the render via ctx; copy obeys it next.
@@ -705,13 +852,29 @@ def compose_site(business_id: str, brief_notes: str = "",
             _apply_hero_direction(spec, (dro.get("decisions") or {}).get("hero_concept"))
     else:
         spec, source = _default_spec(ctx), "default"
+        dro_fail_reason = "use_llm=False (deterministic compose requested)"
+
+    # Arc 2: surface the DRO outcome — no more silent skips. "applied" means
+    # this compose's design + copy were driven by a fresh rationale;
+    # "fallback" means it composed without one (reason logged below).
+    dro_status = "applied" if dro else "fallback"
+    dro_summary: Optional[str] = None
+    if dro:
+        dro_summary = ((((dro.get("decisions") or {}).get("hero_concept") or {})
+                        .get("concept_statement"))
+                       or dro.get("summary_for_practitioner") or None)
+    else:
+        logger.warning(f"[composer] DRO FALLBACK compose for business "
+                       f"{business_id}: {dro_fail_reason or 'unknown reason'}")
 
     # Deterministically guarantee the site connects to everything the business
     # uses (modules/offerings/store) — regardless of LLM choices or fallback.
     spec = _ensure_connections(spec, ctx)
 
-    result = render_and_persist(business_id, spec, ctx, dro_id=dro_id, dro=dro)
-    return {"composition_source": source, "design_rationale_id": dro_id, **result}
+    result = render_and_persist(business_id, spec, ctx, dro_id=dro_id, dro=dro,
+                                dro_status=dro_status, dro_summary=dro_summary)
+    return {"composition_source": source, "design_rationale_id": dro_id,
+            "dro_status": dro_status, "dro_summary": dro_summary, **result}
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────
@@ -720,13 +883,52 @@ class ComposeBody(BaseModel):
     business_id: str
     brief_notes: Optional[str] = None
     use_llm: bool = True
+    design_prefs: Optional[Dict[str, Any]] = None   # Arc 2 "Ask the Owner"
 
 
 @router.post("/compose")
 def compose(body: ComposeBody,
             _: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
-    result = compose_site(body.business_id, body.brief_notes or "", body.use_llm)
+    result = compose_site(body.business_id, body.brief_notes or "", body.use_llm,
+                          design_prefs=body.design_prefs)
     return {"ok": True, **result}
+
+
+@router.get("/rationale/{business_id}")
+def get_rationale(business_id: str,
+                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Arc 2 (feeds Arc 4's panel) — 'why your site looks this way'.
+    Owner-gated read of the stored rationale behind the composed page.
+    Returns nulls (not 404) when no compose/rationale exists yet."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="business not found")
+    if str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(status_code=403, detail="not authorized for this business")
+
+    site_rows = sb_clients.sb_get_as_service(
+        f"/business_sites?business_id=eq.{business_id}"
+        "&select=site_config&limit=1") or []
+    cfg = (site_rows[0].get("site_config") or {}) if site_rows else {}
+
+    rationale = None
+    rid = cfg.get("design_rationale_id")
+    if rid:
+        dr_rows = sb_clients.sb_get_as_service(
+            f"/design_rationales?id=eq.{rid}&select=id,dro,created_at&limit=1") or []
+        if dr_rows:
+            dro = dr_rows[0].get("dro") or {}
+            rationale = {
+                "id": dr_rows[0].get("id"),
+                "created_at": dr_rows[0].get("created_at"),
+                "signals": dro.get("signals"),           # each w/ verbatim evidence
+                "decisions": dro.get("decisions"),       # each w/ because + from_signals
+                "summary_for_practitioner": dro.get("summary_for_practitioner"),
+            }
+    return {"dro_status": cfg.get("dro_status"),
+            "dro_summary": cfg.get("dro_summary"),
+            "rationale": rationale}
 
 
 class ShuffleBody(BaseModel):
