@@ -4844,6 +4844,13 @@ async def public_login_redirect():
 async def post_lead(req: LeadIntakeRequest):
     return await handle_lead_intake(req)
 
+# A2P CTA page — the publicly verifiable SMS opt-in (2026-07-04).
+# Carriers' reviewers fetch this; it must stay public + crawlable.
+@router.get("/sms", include_in_schema=False)
+async def public_sms_optin():
+    from legal_content import render_sms_page_html
+    return HTMLResponse(content=render_sms_page_html(), media_type="text/html")
+
 # Legal + help routes
 @router.get("/privacy", include_in_schema=False)
 async def public_privacy():

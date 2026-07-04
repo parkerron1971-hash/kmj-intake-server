@@ -317,6 +317,50 @@ async def route_inbound(
         )}
 
 
+# ─── Public web-form opt-in (the /sms page's endpoint) ────────────────
+
+_OPTIN_HITS: Dict[str, List[float]] = {}
+
+
+class OptInBody(BaseModel):
+    phone: str
+    name: Optional[str] = None
+    consent: bool = False
+
+
+@router.post("/api/sms/opt-in")
+async def sms_opt_in(body: OptInBody):
+    """Records a web-form SMS consent (sms_consents audit row). Public —
+    it backs the crawlable /sms page that A2P reviewers verify. Light
+    in-memory rate limit (same approach as the intake endpoint)."""
+    import time as _time
+    if not body.consent:
+        return JSONResponse({"error": "The consent box must be checked to sign up."}, 400)
+    phone = normalize_phone(body.phone)
+    if not phone:
+        return JSONResponse({"error": "That phone number doesn't look valid — use +1XXXXXXXXXX."}, 400)
+
+    # 5 submissions/minute per phone — enough for humans, boring for bots.
+    now = _time.time()
+    hits = [t for t in _OPTIN_HITS.get(phone, []) if now - t < 60]
+    if len(hits) >= 5:
+        return JSONResponse({"error": "Too many attempts — try again in a minute."}, 429)
+    hits.append(now)
+    _OPTIN_HITS[phone] = hits
+
+    async with httpx.AsyncClient() as client:
+        res = await _sb_post(client, "/sms_consents", {
+            "phone": phone,
+            "name": (body.name or "").strip()[:120] or None,
+            "source": "web_form",
+        })
+        if res is None:
+            logger.warning("[ROUTE] consent insert failed — sms-consents migration applied?")
+            return JSONResponse({"error": "Could not save right now — please try again later."}, 502)
+    logger.info(f"[ROUTE] web-form consent recorded for {phone}")
+    return {"ok": True}
+
+
 # ─── Practitioner keyword management ──────────────────────────────────
 
 class KeywordBody(BaseModel):
