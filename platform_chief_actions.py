@@ -368,6 +368,63 @@ async def _handler_mark_lead_status(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# ─── Operator log (the Business Chief's memory of the business) ───────
+# Kevin's ruling 2026-07-04: he WILL forget changes — Chief is the
+# keeper of record. These two actions let Chief write/resolve entries
+# in platform_changelog; every snapshot reads the log back.
+
+_VALID_LOG_CATEGORIES = {"shipped", "config", "decision", "pending", "note"}
+
+
+async def _handler_log_platform_note(action: Dict[str, Any]) -> Dict[str, Any]:
+    title = (action.get("title") or "").strip()
+    if not title:
+        return {"ok": False, "label": "Log entry needs a title", "error": "missing title"}
+    category = (action.get("category") or "note").strip().lower()
+    if category not in _VALID_LOG_CATEGORIES:
+        category = "note"
+    status = "pending" if category == "pending" else \
+             ("pending" if (action.get("status") or "").lower() == "pending" else "done")
+    headers = _service_headers()
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.post(
+            f"{SUPABASE_URL}/rest/v1/platform_changelog",
+            headers=headers,
+            json={
+                "category": category,
+                "title": title[:300],
+                "detail": (action.get("detail") or "").strip()[:2000] or None,
+                "status": status,
+            },
+        )
+        if r.status_code >= 400:
+            return {"ok": False, "label": "Log write failed — is the platform-changelog migration applied?",
+                    "error": r.text[:200]}
+        rows = r.json() if r.text else []
+        note_id = (rows[0].get("id") if isinstance(rows, list) and rows else None)
+    return {"ok": True,
+            "label": f"Logged [{category}] {title[:80]}" + (" (pending)" if status == "pending" else ""),
+            "note_id": note_id}
+
+
+async def _handler_resolve_platform_note(action: Dict[str, Any]) -> Dict[str, Any]:
+    note_id = action.get("note_id")
+    if not note_id:
+        return {"ok": False, "label": "Which entry? note_id required", "error": "missing note_id"}
+    headers = _service_headers()
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.patch(
+            f"{SUPABASE_URL}/rest/v1/platform_changelog",
+            headers=headers,
+            params={"id": f"eq.{note_id}"},
+            json={"status": "done",
+                  "resolved_at": datetime.now(timezone.utc).isoformat()},
+        )
+        if r.status_code >= 400:
+            return {"ok": False, "label": "Resolve failed", "error": r.text[:200]}
+    return {"ok": True, "label": f"Marked entry #{note_id} done"}
+
+
 # ─── Dispatcher ────────────────────────────────────────────────────────
 
 HANDLERS = {
@@ -375,6 +432,8 @@ HANDLERS = {
     "resend_invite":           _handler_resend_invite,
     "send_practitioner_email": _handler_send_practitioner_email,
     "mark_lead_status":        _handler_mark_lead_status,
+    "log_platform_note":       _handler_log_platform_note,
+    "resolve_platform_note":   _handler_resolve_platform_note,
 }
 
 
