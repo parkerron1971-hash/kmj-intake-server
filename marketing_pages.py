@@ -28,7 +28,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr
 
 CONTACT_EMAIL = "kmjcreativesolution@gmail.com"
-BUSINESS_NAME = "KMJ Creative Solutions LLC"
+BUSINESS_NAME = "The Solutionist System LLC"
 SITE_NAME = "The Solutionist System"
 SITE_DOMAIN = "mysolutionist.app"
 # Arc 18 — the web app's home (Vite app on Vercel; marketing stays here).
@@ -270,7 +270,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
         <img class="logo" src="/assets/logo-nav.png" alt="The Solutionist System" style="height:28px;">
         <span class="brand-text">The Solutionist System</span>
       </span>
-      <span class="small">Built by KMJ Creative Solutions LLC · Michigan, USA</span>
+      <span class="small">Built by The Solutionist System LLC · Michigan, USA</span>
     </div>
     <div class="footer-links">
       <a href="/features">Features</a>
@@ -1106,7 +1106,7 @@ def render_about() -> str:
         <p>So we built one workspace where everything lives together — with an AI Chief of Staff that actually knows your business, not generic prompts. We're growing it carefully in private beta. If you're a coach, pastor, ministry leader, consultant, or solo studio, I'd love to talk.</p>
         <div class="founder-sig">
           Kevin McCloud Jr.
-          <span class="small">Founder &middot; KMJ Creative Solutions LLC</span>
+          <span class="small">Founder &middot; The Solutionist System LLC</span>
         </div>
       </div>
     </div>
@@ -1143,7 +1143,7 @@ def render_about() -> str:
   <div class="container-narrow">
     <div class="section-head reveal" style="text-align:left;">
       <span class="eyebrow">The company</span>
-      <h2>KMJ Creative Solutions LLC.</h2>
+      <h2>The Solutionist System LLC.</h2>
     </div>
     <div class="company-row">
       <div class="company-card reveal">
@@ -1176,7 +1176,7 @@ def render_about() -> str:
 """
     return _render_shell(
         title="About",
-        description="Built by Kevin McCloud Jr. at KMJ Creative Solutions LLC. A Michigan-based company building one workspace for solo practitioners.",
+        description="Built by Kevin McCloud Jr. at The Solutionist System LLC. A Michigan-based company building one workspace for solo practitioners.",
         content_html=body, path="/about", active="about", extra_css=extra_css,
     )
 
@@ -1546,7 +1546,7 @@ async def handle_lead_intake(req: LeadIntakeRequest) -> Dict[str, Any]:
 <li><strong>You'll get grandfathered pricing</strong> when we launch publicly.</li>
 </ol>
 <p style="font-size:14px;color:#666;margin-top:18px;">Questions before then? Just reply to this email — it goes straight to Kevin.</p>
-<p style="margin-top:24px;font-size:14px;color:#444;">Talk soon,<br><strong>Kevin McCloud Jr.</strong><br>Founder, KMJ Creative Solutions LLC</p>
+<p style="margin-top:24px;font-size:14px;color:#444;">Talk soon,<br><strong>Kevin McCloud Jr.</strong><br>Founder, The Solutionist System LLC</p>
 </body></html>"""
         try:
             await send_via_resend(

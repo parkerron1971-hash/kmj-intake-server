@@ -4380,7 +4380,7 @@ MARKETING_HTML = """<!DOCTYPE html>
         <p>So we built one workspace where everything lives together — with an AI Chief of Staff that actually knows your business, not generic prompts. We're growing it carefully in private beta. If you're a coach, pastor, consultant, or solo studio, I'd love to talk.</p>
         <div class="founder-sig">
           Kevin McCloud Jr.
-          <span class="small">Founder &middot; KMJ Creative Solutions LLC</span>
+          <span class="small">Founder &middot; The Solutionist System LLC</span>
         </div>
       </div>
     </div>
@@ -4402,7 +4402,7 @@ MARKETING_HTML = """<!DOCTYPE html>
   <div class="footer-inner">
     <div class="footer-brand">
       <span class="brand"><span class="dot"></span>The Solutionist System</span>
-      <span class="small">Built by KMJ Creative Solutions LLC · Michigan, USA</span>
+      <span class="small">Built by The Solutionist System LLC · Michigan, USA</span>
     </div>
     <div class="footer-links">
       <a href="/help">Help</a>
@@ -4413,7 +4413,7 @@ MARKETING_HTML = """<!DOCTYPE html>
     </div>
   </div>
   <div class="footer-bottom">
-    <span>&copy; 2026 KMJ Creative Solutions LLC</span>
+    <span>&copy; 2026 The Solutionist System LLC</span>
     <span>mysolutionist.app</span>
   </div>
 </footer>
