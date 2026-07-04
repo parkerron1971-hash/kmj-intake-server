@@ -19,9 +19,25 @@ booking {enabled, url}, offerings [rows], assets {logo_url, ...}.
 """
 from __future__ import annotations
 
+import hashlib as _hashlib
 import html as _html
 import json as _json
 from typing import Any, Dict, List, Optional, Tuple
+
+# Ultra-subtle SVG fractal noise, inlined as a data URI (Arc 3 finish;
+# ported from the shelved cinematic_authority background_treatment).
+# Shared by the page-level film-grain overlay and the constructed hero.
+GRAIN_DATA_URI = (
+    "url(\"data:image/svg+xml;utf8,"
+    "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' "
+    "viewBox='0 0 160 160'>"
+    "<filter id='g'>"
+    "<feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' "
+    "stitchTiles='stitch'/>"
+    "</filter>"
+    "<rect width='100%25' height='100%25' filter='url(%23g)'/>"
+    "</svg>\")"
+)
 
 
 def safe(value: Any) -> str:
@@ -100,14 +116,121 @@ def cta_button(ctx: Dict[str, Any], label: str, section: str,
             f'<span {ov(section, field)}>{safe(label or "Get in touch")}</span></a>')
 
 
+# ─── DRO → body-class mappers (Arc 3 "Expressive Range") ─────────────
+
+def signature_move_class(dna: Dict[str, Any],
+                         design: Optional[Dict[str, Any]]) -> str:
+    """DRO motion.signature_move (a free-text named motion idea) → one of
+    three page-level signature moves, deterministically. Empty string when
+    motion is subtle/none or no move was authored — the previous no-op
+    stays the no-DRO behavior."""
+    if (dna or {}).get("motion", "standard") == "subtle":
+        return ""
+    motion = (design or {}).get("motion") or {}
+    move = str(motion.get("signature_move") or "").strip().lower()
+    if not move:
+        return ""
+    if "none" in str(motion.get("temperature") or "").lower():
+        return ""
+    if any(w in move for w in ("cascade", "stagger", "sequen", "waterfall", "step")):
+        return "sx-sig-cascade"
+    if any(w in move for w in ("drift", "float", "ambient", "breath", "orbit", "sway", "hover")):
+        return "sx-sig-drift"
+    if any(w in move for w in ("underline", "sweep", "rule", "trace", "line")):
+        return "sx-sig-underline"
+    # A named move that matches no family still gets a thesis — stable
+    # hash-pick so the same DRO always renders the same signature.
+    pick = int(_hashlib.sha256(move.encode()).hexdigest()[:8], 16) % 3
+    return ("sx-sig-cascade", "sx-sig-drift", "sx-sig-underline")[pick]
+
+
+def image_treatment_class(dna: Dict[str, Any],
+                          design: Optional[Dict[str, Any]]) -> str:
+    """DRO palette temperature / accent strategy (vibe fallback) → one
+    soft image-grade class. Treatments are capped-gentle by design —
+    practitioner photos stay recognizable."""
+    pal = (design or {}).get("palette") or {}
+    strategy = str(pal.get("accent_strategy") or "").lower()
+    temp = str(pal.get("temperature") or "").lower()
+    if strategy in ("vivid_block", "dual_complement"):
+        return "sx-img-duowash"
+    if "warm" in temp:
+        return "sx-img-warmfilm"
+    if "cool" in temp:
+        return "sx-img-mono"
+    return {"warm": "sx-img-warmfilm", "bold": "sx-img-duowash",
+            "formal": "sx-img-mono"}.get((dna or {}).get("vibe") or "", "")
+
+
 # ─── Base CSS shared by all modules (emitted once per page) ───────────
+
+# Signature-move CSS (Arc 3). Lives inside the motion!=subtle branch —
+# the moves piggyback on the reveal observer's .sxm-in class, which only
+# exists when the reveal script ships. reduced-motion kills all three.
+_SIG_CSS = """
+/* Signature moves — DRO motion.signature_move → body class (Arc 3) */
+body.sx-sig-cascade .sxm-reveal .sxm-inner > * { opacity: 0; transform: translateY(16px);
+  transition: opacity .6s var(--sx-ease), transform .6s var(--sx-ease); }
+body.sx-sig-cascade .sxm-reveal.sxm-in .sxm-inner > * { opacity: 1; transform: none; }
+body.sx-sig-cascade .sxm-reveal.sxm-in .sxm-inner > *:nth-child(2) { transition-delay: .08s; }
+body.sx-sig-cascade .sxm-reveal.sxm-in .sxm-inner > *:nth-child(3) { transition-delay: .16s; }
+body.sx-sig-cascade .sxm-reveal.sxm-in .sxm-inner > *:nth-child(4) { transition-delay: .24s; }
+body.sx-sig-cascade .sxm-reveal.sxm-in .sxm-inner > *:nth-child(5) { transition-delay: .32s; }
+body.sx-sig-cascade .sxm-reveal.sxm-in .sxm-inner > *:nth-child(6) { transition-delay: .4s; }
+body.sx-sig-cascade .sxm-reveal.sxm-in .sxm-inner > *:nth-child(7) { transition-delay: .48s; }
+body.sx-sig-cascade .sxm-reveal.sxm-in .sxm-inner > *:nth-child(n+8) { transition-delay: .56s; }
+@keyframes sx-drift { from { transform: translate3d(0, 0, 0) rotate(0deg); }
+  to { transform: translate3d(1.6%, -2.2%, 0) rotate(1.4deg); } }
+@keyframes sx-drift-pan { from { transform: scale(1.04); }
+  to { transform: scale(1.09) translate3d(-.8%, -.8%, 0); } }
+body.sx-sig-drift .sxm-orn-layer { animation: sx-drift 16s ease-in-out infinite alternate; }
+body.sx-sig-drift .sxm-orn-layer:nth-child(2) { animation-duration: 22s; animation-direction: alternate-reverse; }
+body.sx-sig-drift .sxm-motif { animation: sx-drift 19s ease-in-out infinite alternate-reverse; }
+body.sx-sig-drift .sxm-cine-bg, body.sx-sig-drift .sxm-hero-bgimg {
+  animation: sx-drift-pan 26s ease-in-out infinite alternate; }
+body.sx-sig-underline .sxm-reveal h2 { position: relative; padding-bottom: 14px; }
+body.sx-sig-underline .sxm-reveal h2::after { content: ""; position: absolute; left: 0; bottom: 0;
+  height: 3px; width: min(150px, 55%); border-radius: 99px;
+  background: linear-gradient(90deg, var(--sx-accent), transparent);
+  transform: scaleX(0); transform-origin: left; transition: transform .9s var(--sx-ease) .2s; }
+body.sx-sig-underline .sxm-reveal.sxm-in h2::after { transform: scaleX(1); }
+@media (prefers-reduced-motion: reduce) {
+  body.sx-sig-cascade .sxm-reveal .sxm-inner > * { opacity: 1; transform: none; transition: none; }
+  body.sx-sig-drift .sxm-orn-layer, body.sx-sig-drift .sxm-motif,
+  body.sx-sig-drift .sxm-cine-bg, body.sx-sig-drift .sxm-hero-bgimg { animation: none !important; }
+  body.sx-sig-underline .sxm-reveal h2::after { transform: scaleX(1); transition: none; }
+}"""
+
+# Image-treatment CSS (Arc 3): one soft grade per page via body class.
+# Grades hit only slot imagery (img[data-slot]) — practitioner product
+# photos (store) and logos are untouched. Overlays ride .sxm-imgbox
+# wrappers; every gradient fades (soft-gradient rule).
+_TREATMENT_CSS = """
+.sxm-imgbox { position: relative; border-radius: var(--sx-radius-image); overflow: hidden; }
+body.sx-img-warmfilm img[data-slot] { filter: sepia(.10) saturate(1.08) contrast(1.02) brightness(1.01); }
+body.sx-img-warmfilm .sxm-imgbox::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  border-radius: inherit; background: radial-gradient(ellipse at center, transparent 60%, rgba(16, 10, 4, .16) 100%); }
+body.sx-img-mono img[data-slot] { filter: saturate(.45) contrast(1.09) brightness(1.01); }
+body.sx-img-duowash img[data-slot] { filter: saturate(.9) contrast(1.04); }
+body.sx-img-duowash .sxm-imgbox::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  border-radius: inherit; background: color-mix(in srgb, var(--sx-accent) 26%, transparent);
+  mix-blend-mode: soft-light; }"""
+
+# Film-grain finish (Arc 3, quality-bar signature): ultra-subtle static
+# noise over the whole page. pointer-events: none — purely atmospheric.
+_GRAIN_CSS = (
+    "\nbody::after { content: \"\"; position: fixed; inset: 0; z-index: 9998;"
+    " pointer-events: none; background-image: " + GRAIN_DATA_URI + ";"
+    " background-size: 160px 160px; opacity: .02; }"
+)
+
 
 def base_css(dna: Dict[str, Any]) -> str:
     motion = dna.get("motion", "standard")
     reveal_css = "" if motion == "subtle" else """
-.sxm-reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s ease; }
+.sxm-reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s var(--sx-ease), transform .7s var(--sx-ease); }
 .sxm-reveal.sxm-in { opacity: 1; transform: none; }
-@media (prefers-reduced-motion: reduce) { .sxm-reveal { opacity: 1; transform: none; transition: none; } }"""
+@media (prefers-reduced-motion: reduce) { .sxm-reveal { opacity: 1; transform: none; transition: none; } }""" + _SIG_CSS
     return f"""
 *, *::before, *::after {{ box-sizing: border-box; }}
 html {{ scroll-behavior: smooth; }}
@@ -135,7 +258,7 @@ a {{ color: var(--sx-accent); text-decoration: none; }}
 .sxm-cta {{
   display: inline-block; padding: 16px 30px; border-radius: var(--sx-radius-button);
   background: var(--sx-accent); color: var(--sx-on-accent); font-weight: 700;
-  letter-spacing: .04em; font-size: .95rem; transition: transform .18s ease, background .18s ease;
+  letter-spacing: .04em; font-size: .95rem; transition: transform .22s var(--sx-ease), background .22s var(--sx-ease);
 }}
 .sxm-cta:hover {{ transform: translateY(-2px); background: var(--sx-accent-strong); }}
 .sxm-muted {{ color: var(--sx-muted); }}
@@ -149,6 +272,8 @@ body.sx-scarce-accent .sxm-mark-thin,
 body.sx-scarce-accent .sxm-mark-block {{ background: var(--sx-border); }}
 body.sx-scarce-accent .sxm-mark-soft {{ background: color-mix(in srgb, var(--sx-muted) 45%, transparent); }}
 {reveal_css}
+{_TREATMENT_CSS}
+{_GRAIN_CSS}
 @media (max-width: 768px) {{ body {{ font-size: 15.5px; }} }}
 """
 
@@ -276,7 +401,18 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
     fonts = brand_dna.google_fonts_url(dna)
     # DRO single_semantic → accent scarcity body class (CSS in base_css).
     accent_strategy = ((design or {}).get("palette") or {}).get("accent_strategy")
-    body_class = "sx-scarce-accent" if accent_strategy == "single_semantic" else ""
+    classes = []
+    if accent_strategy == "single_semantic":
+        classes.append("sx-scarce-accent")
+    # Arc 3: signature move + image treatment reach the pixels as body
+    # classes (deterministic; empty strings drop out).
+    sig = signature_move_class(dna, design)
+    if sig:
+        classes.append(sig)
+    treat = image_treatment_class(dna, design)
+    if treat:
+        classes.append(treat)
+    body_class = " ".join(classes)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
