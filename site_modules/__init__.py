@@ -17,8 +17,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 
 from . import (hero, about, offerings, testimonials, gallery, cta_band,
-               contact_footer, store, showcase)
-from ._base import page_shell
+               contact_footer, store, showcase, header)
+from ._base import page_shell, build_page_meta
 
 MODULES: Dict[str, Dict[str, Any]] = {
     "hero": {
@@ -73,10 +73,15 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
                 title: str) -> str:
     """sections = [{module, variant, content}] → full HTML document.
     Unknown modules/variants soft-fail to defaults; CSS is emitted once
-    per module id regardless of how often it appears."""
+    per module id regardless of how often it appears.
+
+    The header/nav is STRUCTURAL chrome (Arc 1 'Wear the Brand'): it is
+    not in MODULES (never LLM-choosable) and always renders first, built
+    from the sections that actually produced HTML."""
     body_parts: List[str] = []
     css_parts: List[str] = []
     seen_css = set()
+    rendered_ids: List[str] = []
     for sec in sections:
         mid = sec.get("module")
         spec = MODULES.get(mid)
@@ -89,9 +94,13 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
         if not html:
             continue
         body_parts.append(html)
+        rendered_ids.append(mid)
         key = f"{mid}:{variant}"
         if css and key not in seen_css:
             seen_css.add(key)
             css_parts.append(css)
+    header_html, header_css = header.render_header(rendered_ids, ctx)
+    body_parts.insert(0, header_html)
+    css_parts.insert(0, header_css)
     return page_shell(ctx["dna"], title, "\n".join(body_parts), "\n".join(css_parts),
-                      design=ctx.get("design"))
+                      design=ctx.get("design"), meta=build_page_meta(ctx))

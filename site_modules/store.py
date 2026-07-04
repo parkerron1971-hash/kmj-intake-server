@@ -27,9 +27,10 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 
     cards = []
     for o in items:
-        img = (f'<img class="sxm-store-img" src="{safe_url(o.get("image_url"))}" alt="">'
+        img = (f'<img class="sxm-store-img" src="{safe_url(o.get("image_url"))}" '
+               f'alt="{safe(o.get("name") or "Product photo")}">'
                if str(o.get("image_url") or "").startswith("http")
-               else '<div class="sxm-store-img sxm-store-img-ph"></div>')
+               else '<div class="sxm-store-img sxm-store-img-ph" role="presentation"></div>')
         try:
             price = f"${float(o.get('current_price') or 0):,.2f}"
         except (TypeError, ValueError):

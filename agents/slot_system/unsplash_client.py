@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any, Dict, Optional
 
 import httpx
@@ -309,6 +310,43 @@ def _extract_mood(enriched_brief: Optional[Dict], designer_pick: Optional[Dict])
     return " ".join(words_ordered)
 
 
+# Slot → index into the concept-keyword list (rotates keywords across
+# the gallery so four slots don't fire four identical queries).
+_CONCEPT_SLOT_ROTATION = {
+    "hero_main": 0,
+    "chamber_main": 1,
+    "gallery_1": 0,
+    "gallery_2": 1,
+    "gallery_3": 2,
+    "gallery_4": 3,
+}
+
+_KEYWORD_STOPWORDS = {
+    "the", "a", "an", "and", "or", "of", "for", "with", "into", "that",
+    "this", "their", "your", "our", "its", "is", "are", "as", "to", "in",
+    "on", "at", "by", "from", "like", "feels", "feel", "brand", "site",
+    "page", "website", "business", "client", "clients", "customer",
+    "customers", "visitor", "visitors",
+}
+
+
+def _clean_concept_keywords(raw: Any) -> list:
+    """Sanitize DRO-derived concept keywords into short Unsplash-safe
+    terms: 1–2 words each, letters only, stopwords dropped, deduped."""
+    out: list = []
+    seen: set = set()
+    for item in (raw or [])[:12]:
+        words = [w for w in re.findall(r"[a-z]+", str(item or "").lower())
+                 if w not in _KEYWORD_STOPWORDS and len(w) > 2]
+        if not words:
+            continue
+        term = " ".join(words[:2])
+        if term not in seen:
+            seen.add(term)
+            out.append(term)
+    return out
+
+
 def build_unsplash_query(
     slot_name: str,
     enriched_brief: Optional[Dict[str, Any]],
@@ -317,10 +355,18 @@ def build_unsplash_query(
 ) -> str:
     """Compose an Unsplash query string for a slot.
 
-    Pattern: per-slot template with {subject} + {mood} substitution.
-    Subject is the business type (extracted from name + description,
-    fallback to content_archetype default). Mood is a 1–2 phrase
-    distillation of inferred_vibe + brand_metaphor + designer's
+    Concept-aware path (Arc 1 'Wear the Brand'): when the brief carries
+    `concept_keywords` (derived from the DRO's hero concept — see
+    site_composer._dro_slot_brief), atmosphere slots search
+    '{subject} {concept keyword} {mood}' so the imagery serves the
+    DESIGN CONCEPT, not a generic '{subject} interior' stock shot.
+    Keywords rotate across gallery slots for variety. Deterministic —
+    pure string composition.
+
+    Fallback (no concept): per-slot template with {subject} + {mood}
+    substitution. Subject is the business type (extracted from name +
+    description, fallback to content_archetype default). Mood is a 1–2
+    phrase distillation of inferred_vibe + brand_metaphor + designer's
     accent_style / sub_strand_id.
 
     Falls back to a generic 'workspace cinematic' for unknown slots
@@ -339,6 +385,14 @@ def build_unsplash_query(
 
     subject = _extract_subject(business_name, description, archetype)
     mood = _extract_mood(enriched_brief, designer_pick)
+
+    concept_kws = _clean_concept_keywords(enriched_brief.get("concept_keywords"))
+    if concept_kws and slot_name in _CONCEPT_SLOT_ROTATION:
+        kw = concept_kws[_CONCEPT_SLOT_ROTATION[slot_name] % len(concept_kws)]
+        # Keep the total at 3–6 words (Unsplash relevance sweet spot):
+        # subject (1–2) + concept keyword (1–2) + mood (1–2).
+        words = f"{subject} {kw} {mood}".split()
+        return " ".join(dict.fromkeys(words))[:100].strip()
 
     pattern = _SLOT_QUERY_PATTERNS.get(slot_name, "{subject} {mood}")
     return pattern.format(subject=subject, mood=mood).strip()

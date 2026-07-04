@@ -108,6 +108,21 @@ def _fetch_public_modules(business_id: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _platform_sms_capable() -> bool:
+    """True when the platform can actually send SMS (Twilio primary or
+    Telnyx fallback env present) — gates the contact-form SMS opt-in
+    checkbox so we never collect consent we can't honor."""
+    import os
+    try:
+        from sms_service import _twilio_configured
+        if _twilio_configured():
+            return True
+    except Exception:
+        pass
+    return bool((os.environ.get("TELNYX_API_KEY") or "").strip()
+                and (os.environ.get("TELNYX_PHONE_NUMBER") or "").strip())
+
+
 def gather_context(business_id: str) -> Dict[str, Any]:
     import brand_engine
     bundle = brand_engine.get_bundle(business_id) or {}
@@ -160,6 +175,9 @@ def gather_context(business_id: str) -> Dict[str, Any]:
                   if hours_cfg.get("start") and hours_cfg.get("end") else ""),
         "social": {k: v for k, v in (link_page.get("social_profiles") or {}).items() if v},
         "submit_url": f"{RAILWAY_BASE}/sites/{business_id}/contact-submit",
+        # A2P compliance (Arc 1): the contact module renders the SMS
+        # opt-in checkbox only when the platform can actually text.
+        "sms_capable": _platform_sms_capable(),
     }
 
     dna = brand_dna.build_brand_dna(business_id, bundle)
@@ -222,15 +240,25 @@ def sanitize_spec(raw: Any, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _default_spec(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Deterministic vibe-keyed composition — the no-LLM floor."""
+    """Deterministic vibe-keyed composition — the no-LLM floor. Copy
+    comes from the practitioner's own words: tagline as the headline
+    when present (business name is the fallback, not the lead), the
+    elevator pitch as the supporting line. Never generated."""
     dna = ctx["dna"]
     biz = ctx["business"]
     hero_variant = {"warm": "split", "formal": "statement", "bold": "banner"}[dna["vibe"]]
-    tagline = ((ctx.get("bundle") or {}).get("business") or {}).get("tagline") or ""
+    b = (ctx.get("bundle") or {}).get("business") or {}
+    tagline = str(b.get("tagline") or "").strip()
+    pitch = str(b.get("elevator_pitch") or "").strip()
+    headline = tagline or biz["name"]
+    subheadline = pitch if pitch and pitch != headline else (tagline if tagline != headline else "")
     spec = [
         {"module": "hero", "variant": hero_variant,
-         "content": {"headline": biz["name"], "subheadline": tagline,
+         "content": {"headline": headline, "subheadline": subheadline,
                      "cta_label": "Book a session"}},
+        # about body left empty on purpose: the about module backfills it
+        # from practitioner_intelligence.about_business (real data) and
+        # DROPS the section when nothing real exists.
         {"module": "about", "variant": "portrait" if dna["vibe"] != "formal" else "narrative",
          "content": {"headline": "The practice"}},
         {"module": "offerings", "variant": "cards" if dna["vibe"] != "formal" else "list",
@@ -415,15 +443,75 @@ def _inject_color_overrides(html: str, business_id: str) -> str:
     return html.replace("</head>", block + "</head>", 1) if "</head>" in html else html + block
 
 
+_CONCEPT_STOP = {"the", "a", "an", "and", "or", "of", "for", "with", "that",
+                 "this", "their", "your", "our", "its", "into", "like",
+                 "feels", "feel", "where", "when", "every", "into"}
+
+
+def _dro_slot_brief(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Distill the DRO (+ business specifics) into the enriched_brief shape
+    the slot pipeline's query/prompt composers already consume — so hero/
+    atmosphere/gallery imagery derives from the DESIGN CONCEPT instead of
+    a generic '{subject} interior {mood}' stock query. Pure composition."""
+    biz = ctx.get("business") or {}
+    d = ((dro or {}).get("decisions") or {})
+    hero = d.get("hero_concept") or {}
+    concept = str(hero.get("concept_statement") or "")
+
+    # Concept keywords: metaphor_elements first (already short terms),
+    # then significant words from the concept statement.
+    keywords: List[str] = [str(k) for k in (hero.get("metaphor_elements") or []) if str(k or "").strip()]
+    for w in re.findall(r"[A-Za-z]+", concept):
+        lw = w.lower()
+        if len(lw) > 3 and lw not in _CONCEPT_STOP and lw not in [k.lower() for k in keywords]:
+            keywords.append(lw)
+        if len(keywords) >= 8:
+            break
+
+    # Vibe text: _extract_mood substring-matches its vocab against this.
+    vibe_bits = [
+        str((d.get("palette") or {}).get("temperature") or ""),
+        str((d.get("motion") or {}).get("temperature") or ""),
+        str((d.get("typography") or {}).get("display_personality") or ""),
+        str((d.get("whitespace") or {}).get("philosophy") or ""),
+        str((ctx.get("dna") or {}).get("vibe") or ""),
+    ]
+    return {
+        "inferred_vibe": " ".join(b for b in vibe_bits if b).strip(),
+        "brand_metaphor": concept,
+        "content_archetype": str(biz.get("type") or ""),
+        "concept_keywords": keywords,
+    }
+
+
+def _ensure_og_image(html: str, slot_records: Dict[str, Any]) -> str:
+    """After slot resolution the hero image URL is knowable — if the shell
+    didn't already emit og:image (no brand social card), promote the
+    resolved hero to the share image. Deterministic head injection, same
+    trust model as _mark/_inject_color_overrides."""
+    if 'property="og:image"' in html or "</head>" not in html:
+        return html
+    rec = (slot_records or {}).get("hero_main") or {}
+    url = str(rec.get("custom_url") or rec.get("default_url") or "")
+    if not url.startswith("http"):
+        return html
+    import html as _h
+    u = _h.escape(url, quote=True)
+    block = (f'<meta property="og:image" content="{u}">\n'
+             f'<meta name="twitter:card" content="summary_large_image">\n'
+             f'<meta name="twitter:image" content="{u}">\n')
+    return html.replace("</head>", block + "</head>", 1)
+
+
 def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        ctx: Optional[Dict[str, Any]] = None,
-                       dro_id: Optional[str] = None) -> Dict[str, Any]:
+                       dro_id: Optional[str] = None,
+                       dro: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     ctx = ctx or gather_context(business_id)
     title = ctx["business"]["name"] or "Welcome"
 
-    html = _mark(site_modules.render_page(spec, ctx, title))
-
-    # Ensure a business_sites row exists (slug drives the live URL).
+    # Ensure a business_sites row exists BEFORE rendering — the slug
+    # drives the live URL and the page's canonical/og:url tags.
     site = ctx.get("site")
     if not site:
         slug = _slugify(ctx["business"]["name"])
@@ -441,12 +529,30 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         ctx["site"] = site
         ctx["business"]["slug"] = slug
 
+    html = _mark(site_modules.render_page(spec, ctx, title))
+
+    # No DRO handed in (shuffle/refresh paths) → best-effort load of the
+    # stored one so image queries stay concept-aware on re-renders.
+    if dro is None:
+        stored_id = dro_id or (((site or {}).get("site_config") or {})
+                               .get("design_rationale_id"))
+        if stored_id:
+            try:
+                rows = sb_clients.sb_get_as_service(
+                    f"/design_rationales?id=eq.{stored_id}&select=dro&limit=1") or []
+                dro = (rows[0] or {}).get("dro") if rows else None
+            except Exception as e:
+                logger.info(f"[composer] stored DRO fetch skipped: {e}")
+
     # Slot population (existing pipeline) then resolution into the HTML.
+    # The enriched_brief threads the DRO's design concept into the
+    # Unsplash/DALL-E query composers (params existed, were never passed).
     slots_meta: Dict[str, Any] = {}
     try:
         from agents.slot_system.builder_post_process import populate_slots_for_site
         slots_meta = populate_slots_for_site(
             html=html, business_id=business_id,
+            enriched_brief=_dro_slot_brief(ctx, dro),
             business=(ctx.get("bundle") or {}).get("business") or {},
         ) or {}
     except Exception as e:
@@ -460,6 +566,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         slot_records = ((fresh[0].get("site_config") or {}).get("slots")
                         if fresh else {}) or {}
         final_html, _credits, _warns = resolve_html_slots(html, slot_records)
+        final_html = _ensure_og_image(final_html, slot_records)
     except Exception as e:
         logger.warning(f"[composer] slot resolution failed (non-fatal): {e}")
 
@@ -603,7 +710,7 @@ def compose_site(business_id: str, brief_notes: str = "",
     # uses (modules/offerings/store) — regardless of LLM choices or fallback.
     spec = _ensure_connections(spec, ctx)
 
-    result = render_and_persist(business_id, spec, ctx, dro_id=dro_id)
+    result = render_and_persist(business_id, spec, ctx, dro_id=dro_id, dro=dro)
     return {"composition_source": source, "design_rationale_id": dro_id, **result}
 
 

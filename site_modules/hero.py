@@ -11,10 +11,14 @@ VARIANTS = ("split", "statement", "banner", "cinematic")
 
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
     dna = ctx["dna"]
-    headline = content.get("headline") or (ctx.get("business") or {}).get("name") or "Welcome"
+    biz_name = (ctx.get("business") or {}).get("name") or ""
+    headline = content.get("headline") or biz_name or "Welcome"
     sub = content.get("subheadline") or ""
     eb = eyebrow("hero", content.get("eyebrow") or "")
     cta = cta_button(ctx, content.get("cta_label") or "Book a session", "hero")
+    # Deterministic, meaningful alt for the hero image (Arc 1).
+    img_alt = safe(f"{biz_name} — {headline}" if biz_name and biz_name != headline
+                   else headline)
 
     if variant == "cinematic":
         # Full-bleed, art-directed: tall viewport, image graded by a layered
@@ -22,7 +26,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
         # "walk into a strategy session" first impression.
         html = f"""
 <section class="sxm-hero-cine" id="top">
-  <img data-slot="hero_main" src="" alt="" class="sxm-cine-bg">
+  <img data-slot="hero_main" src="" alt="{img_alt}" class="sxm-cine-bg">
   <div class="sxm-cine-scrim"></div>
   <div class="sxm-inner sxm-cine-inner">
     <div class="sxm-cine-copy">
@@ -70,7 +74,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     if variant == "banner":
         html = f"""
 <section class="sxm-hero-banner" id="top">
-  <img data-slot="hero_main" src="" alt="" class="sxm-hero-bgimg">
+  <img data-slot="hero_main" src="" alt="{img_alt}" class="sxm-hero-bgimg">
   <div class="sxm-hero-banner-scrim"></div>
   <div class="sxm-inner sxm-hero-banner-inner">
     {eb}
@@ -101,7 +105,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
       {cta}
     </div>
     <div class="sxm-hero-visual">
-      <img data-slot="hero_main" src="" alt="">
+      <img data-slot="hero_main" src="" alt="{img_alt}">
     </div>
   </div>
 </section>"""

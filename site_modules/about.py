@@ -9,12 +9,34 @@ from ._base import safe, ov, eyebrow, heading_accent
 VARIANTS = ("portrait", "narrative")
 
 
+def _backfill_body(ctx: Dict[str, Any]) -> str:
+    """Real-data fallback for an empty about body: the practitioner's
+    own about_business prose (brand bundle), trimmed ~400 chars on a
+    word boundary. Never generated."""
+    intel = (ctx.get("bundle") or {}).get("practitioner_intelligence") or {}
+    blob = " ".join(str(intel.get("about_business") or "").split())
+    if not blob:
+        return ""
+    if len(blob) <= 400:
+        return blob
+    cut = blob[:400].rsplit(" ", 1)[0].rstrip(",;:—- ")
+    return cut + "…"
+
+
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
     dna = ctx["dna"]
     eb = eyebrow("about", content.get("eyebrow") or "About")
     headline = content.get("headline") or "The practice"
-    body = content.get("body") or ""
+    body = (content.get("body") or "").strip() or _backfill_body(ctx)
+    if not body:
+        # Nothing real to say → no section. Never render heading-only.
+        return "", ""
     quote = content.get("pull_quote") or ""
+    # Meaningful portrait alt: the practitioner (or the business) by name.
+    who = ((ctx.get("bundle") or {}).get("practitioner") or {}).get("display_name") or ""
+    if not who or who == "The Practitioner":
+        who = (ctx.get("business") or {}).get("name") or "Portrait"
+    img_alt = safe(who)
     quote_html = (f'<blockquote class="sxm-about-quote" {ov("about", "pull_quote")}>{safe(quote)}</blockquote>'
                   if quote else "")
 
@@ -43,7 +65,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 <section class="sxm-section sxm-about-portrait sxm-reveal" id="about">
   <div class="sxm-inner sxm-about-grid">
     <div class="sxm-about-photo">
-      <img data-slot="about_subject" src="" alt="">
+      <img data-slot="about_subject" src="" alt="{img_alt}">
     </div>
     <div>
       {heading_accent(dna)}

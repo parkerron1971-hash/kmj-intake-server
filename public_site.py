@@ -1396,14 +1396,42 @@ def _check_contact_rate(ip: str) -> bool:
     return True
 
 
+def _record_website_sms_consent(business_id: str, phone_raw: str,
+                                name: str) -> None:
+    """SMS consent audit row for a website contact-form opt-in (Arc 1,
+    2026-07-04). Mirrors booking_widget_router._record_booking_sms_consent:
+    best-effort, never blocks or fails the submission."""
+    try:
+        from sms_service import normalize_phone
+        import sb_clients
+        phone = normalize_phone(str(phone_raw or ""))
+        if not phone:
+            logger.info("[consent] sms_consent checked but no usable phone on contact form")
+            return
+        sb_clients.sb_post_as_service("/sms_consents", {
+            "phone": phone,
+            "name": (name or "").strip()[:120] or None,
+            "source": "website_contact",
+            "business_id": business_id,
+        })
+        logger.info(f"[consent] website contact SMS consent recorded {phone} biz={business_id[:8]}")
+    except Exception as e:
+        logger.warning(f"[consent] website contact consent record failed: {e}")
+
+
 @router.post("/sites/{business_id}/contact-submit")
 async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], request: Request):
     """Send a contact-form submission via Resend.
 
-    Body: { name, email, message }. Rate-limited per client IP at 5/min.
-    Returns {ok: true} on success or {ok: false, error: str} on email
-    service failure (so the front-end form shows a graceful message
-    rather than crashing).
+    Body: { name, email, message, phone?, sms_consent? }. Rate-limited
+    per client IP at 5/min. Returns {ok: true} on success or {ok: false,
+    error: str} on email service failure (so the front-end form shows a
+    graceful message rather than crashing).
+
+    sms_consent (Arc 1): the composed-site contact form shows an
+    UNCHECKED opt-in checkbox + optional phone field when the platform
+    is SMS-capable; a checked box with a usable phone is recorded in
+    sms_consents (source='website_contact') — the A2P audit trail.
     """
     client_ip = request.client.host if request.client else "unknown"
     if not _check_contact_rate(client_ip):
@@ -1418,6 +1446,11 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
         raise HTTPException(400, "Missing required fields")
     if "@" not in email or "." not in email:
         raise HTTPException(400, "Invalid email")
+
+    # SMS opt-in audit (best-effort; recorded once the submission is
+    # valid, independent of email-delivery outcome).
+    if body.get("sms_consent") is True and str(body.get("phone") or "").strip():
+        _record_website_sms_consent(business_id, str(body.get("phone"))[:40], name)
 
     try:
         from brand_engine import get_bundle, _sb_get as be_get
