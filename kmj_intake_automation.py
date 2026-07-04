@@ -145,6 +145,10 @@ app.include_router(sms_router)
 # Coexists with the Telnyx sms_service until routing picks a lane.
 from twilio_sms import router as twilio_sms_router
 app.include_router(twilio_sms_router)
+# SMS routing brain (Kevin's one-number architecture): binding-first
+# routing, practitioner keywords, opt-out ledger, scoped broadcast.
+from sms_routing import router as sms_routing_router
+app.include_router(sms_routing_router)
 app.include_router(brand_engine_router)
 app.include_router(voice_depth_router)
 app.include_router(restricted_router)

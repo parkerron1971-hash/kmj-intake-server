@@ -215,6 +215,22 @@ async def _log_event(
     })
 
 
+async def is_opted_out(client: httpx.AsyncClient, phone: str,
+                       business_id: Optional[str] = None) -> bool:
+    """Platform-wide STOP check (Direct model: one number → STOP
+    suppresses everything). Checked before EVERY outbound send. Fails
+    OPEN — a DB blip must not block transactional sends; carrier-level
+    STOP still protects. business_id reserved for ISV per-pair use."""
+    try:
+        rows = await _sb_get(
+            client,
+            f"/sms_opt_outs?phone=eq.{phone}&business_id=is.null&select=id&limit=1",
+        ) or []
+        return bool(rows)
+    except Exception:
+        return False
+
+
 def _twilio_configured() -> bool:
     """Twilio is the primary rail when its env is present (2026-07-04 —
     Kevin's Messaging Service). Telnyx stays as the fallback."""
@@ -243,6 +259,14 @@ async def send_sms(req: SendSmsRequest):
         )
 
     async with httpx.AsyncClient() as client:
+        # Consent gate — never send to a number that opted out.
+        if await is_opted_out(client, to_clean):
+            return JSONResponse(
+                {"error": f"{to_clean} has opted out of texts (STOP). "
+                          f"They can text START to opt back in."},
+                422,
+            )
+
         # Resolve contact by phone if caller didn't supply one.
         contact_id = req.contact_id
         if not contact_id and req.business_id:
@@ -412,30 +436,47 @@ async def record_inbound_sms(
     text: str,
     provider_id: str = "",
     media: Optional[List[Dict[str, Any]]] = None,
+    business_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Shared inbound pipeline — used by BOTH the Telnyx webhook above
-    and the Twilio webhook (twilio_sms.py). Resolves contact + business,
-    persists the row (read=false → drives the unread badge), logs the
-    event, notifies Chief, and bumps contact health.
+    """Shared inbound pipeline — used by the Telnyx webhook and by the
+    Twilio routing layer (sms_routing.route_inbound). Resolves the
+    contact, persists the row (read=false → drives the unread badge),
+    logs the event, notifies Chief, and bumps contact health.
 
-    Business resolution: the contact's owning business when the sender
-    is known; otherwise the oldest business (single-tenant default —
-    per-business number mapping is the multi-tenant follow-on)."""
-    contact = await _find_contact_global(client, from_number)
+    Business resolution:
+      • business_id given (Twilio path) — the BINDING decided it; the
+        contact is looked up (or created) INSIDE that business only.
+      • business_id None (legacy Telnyx path) — global contact match,
+        else oldest business (single-tenant default)."""
     contact_id: Optional[str] = None
     contact_name: Optional[str] = None
-    business_id: Optional[str] = None
     current_health = 50
 
-    if contact:
-        contact_id = contact.get("id")
-        contact_name = contact.get("name")
-        business_id = contact.get("business_id")
-        current_health = int(contact.get("health_score") or 50)
+    if business_id:
+        contact = await _find_contact_by_phone(client, business_id, from_number)
+        if not contact:
+            created = await _sb_post(client, "/contacts", {
+                "business_id": business_id,
+                "name": from_number,      # practitioner renames later
+                "phone": from_number,
+                "status": "active",
+            })
+            contact = (created or [None])[0] if isinstance(created, list) else created
+        if contact:
+            contact_id = contact.get("id")
+            contact_name = contact.get("name")
+            current_health = int(contact.get("health_score") or 50)
     else:
-        biz_rows = await _sb_get(client, "/businesses?select=id&order=created_at.asc&limit=1") or []
-        if biz_rows:
-            business_id = biz_rows[0]["id"]
+        contact = await _find_contact_global(client, from_number)
+        if contact:
+            contact_id = contact.get("id")
+            contact_name = contact.get("name")
+            business_id = contact.get("business_id")
+            current_health = int(contact.get("health_score") or 50)
+        else:
+            biz_rows = await _sb_get(client, "/businesses?select=id&order=created_at.asc&limit=1") or []
+            if biz_rows:
+                business_id = biz_rows[0]["id"]
 
     if not business_id:
         logger.info(f"[SMS] no business found for inbound from {from_number}")
