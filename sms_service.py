@@ -215,18 +215,30 @@ async def _log_event(
     })
 
 
+def _twilio_configured() -> bool:
+    """Twilio is the primary rail when its env is present (2026-07-04 —
+    Kevin's Messaging Service). Telnyx stays as the fallback."""
+    return all(
+        (os.environ.get(k) or "").strip()
+        for k in ("TWILIO_ACCOUNT_SID", "TWILIO_API_KEY_SID",
+                  "TWILIO_API_KEY_SECRET", "TWILIO_MESSAGING_SERVICE_SID")
+    )
+
+
 @router.post("/sms/send")
 async def send_sms(req: SendSmsRequest):
-    """Send an SMS message via Telnyx and persist it as outbound."""
+    """Send an SMS (Twilio Messaging Service first; Telnyx fallback)
+    and persist it as outbound."""
     to_clean = normalize_phone(req.to)
     if not to_clean:
         return JSONResponse({"error": f"Invalid phone number: {req.to}"}, 400)
     if not req.message.strip():
         return JSONResponse({"error": "Message body required"}, 400)
 
-    if not os.environ.get("TELNYX_API_KEY"):
+    use_twilio = _twilio_configured()
+    if not use_twilio and not os.environ.get("TELNYX_API_KEY"):
         return JSONResponse(
-            {"error": "Telnyx not configured. Set TELNYX_API_KEY in Railway."},
+            {"error": "SMS not configured. Set the TWILIO_* vars (or TELNYX_API_KEY) in Railway."},
             503,
         )
 
@@ -238,13 +250,24 @@ async def send_sms(req: SendSmsRequest):
             if match:
                 contact_id = match.get("id")
 
-        try:
-            tx = await _send_via_telnyx(client, to_clean, req.message)
-        except RuntimeError as e:
-            logger.warning(f"[SMS] send failed: {e}")
-            return JSONResponse({"error": str(e)}, 502)
-
-        telnyx_id = (tx.get("data") or {}).get("id", "") if isinstance(tx, dict) else ""
+        if use_twilio:
+            try:
+                from starlette.concurrency import run_in_threadpool
+                import twilio_sms
+                # Provider message id lands in the telnyx_id column —
+                # provider-agnostic in intent; the status callback
+                # (/webhooks/twilio/status) PATCHes on it.
+                telnyx_id = await run_in_threadpool(twilio_sms.send_sms, to_clean, req.message)
+            except Exception as e:
+                logger.warning(f"[SMS] twilio send failed: {e}")
+                return JSONResponse({"error": str(e)[:300]}, 502)
+        else:
+            try:
+                tx = await _send_via_telnyx(client, to_clean, req.message)
+            except RuntimeError as e:
+                logger.warning(f"[SMS] send failed: {e}")
+                return JSONResponse({"error": str(e)}, 502)
+            telnyx_id = (tx.get("data") or {}).get("id", "") if isinstance(tx, dict) else ""
 
         msg_id = await _store_sms(
             client,
@@ -376,77 +399,96 @@ async def receive_sms(request: Request):
             logger.info(f"[SMS] dropped inbound — from={from_number_raw} text_len={len(text)}")
             return {"status": "ignored", "reason": "missing_from_or_text"}
 
-        # Resolve business + contact. If the contact exists in our DB,
-        # we use their owning business; otherwise we fall back to the
-        # first business in the table (single-tenant default).
-        contact = await _find_contact_global(client, from_number)
-        contact_id: Optional[str] = None
-        contact_name: Optional[str] = None
-        business_id: Optional[str] = None
-        current_health = 50
-
-        if contact:
-            contact_id = contact.get("id")
-            contact_name = contact.get("name")
-            business_id = contact.get("business_id")
-            current_health = int(contact.get("health_score") or 50)
-        else:
-            biz_rows = await _sb_get(client, "/businesses?select=id&order=created_at.asc&limit=1") or []
-            if biz_rows:
-                business_id = biz_rows[0]["id"]
-
-        if not business_id:
-            logger.info(f"[SMS] no business found for inbound from {from_number}")
-            return {"status": "unresolved", "from": from_number}
-
-        # Persist
-        msg_id = await _store_sms(
-            client,
-            business_id=business_id,
-            contact_id=contact_id,
-            phone_number=from_number,
-            message=text,
-            direction="inbound",
-            telnyx_id=telnyx_id,
-            status="received",
-            media=media,
+        return await record_inbound_sms(
+            client, from_number=from_number, text=text,
+            provider_id=telnyx_id, media=media,
         )
 
-        await _log_event(client, business_id, contact_id, "sms_received", {
-            "from": from_number,
-            "from_name": contact_name or "",
-            "preview": text[:200],
-            "telnyx_id": telnyx_id,
-            "has_media": bool(media),
+
+async def record_inbound_sms(
+    client: httpx.AsyncClient,
+    *,
+    from_number: str,
+    text: str,
+    provider_id: str = "",
+    media: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Shared inbound pipeline — used by BOTH the Telnyx webhook above
+    and the Twilio webhook (twilio_sms.py). Resolves contact + business,
+    persists the row (read=false → drives the unread badge), logs the
+    event, notifies Chief, and bumps contact health.
+
+    Business resolution: the contact's owning business when the sender
+    is known; otherwise the oldest business (single-tenant default —
+    per-business number mapping is the multi-tenant follow-on)."""
+    contact = await _find_contact_global(client, from_number)
+    contact_id: Optional[str] = None
+    contact_name: Optional[str] = None
+    business_id: Optional[str] = None
+    current_health = 50
+
+    if contact:
+        contact_id = contact.get("id")
+        contact_name = contact.get("name")
+        business_id = contact.get("business_id")
+        current_health = int(contact.get("health_score") or 50)
+    else:
+        biz_rows = await _sb_get(client, "/businesses?select=id&order=created_at.asc&limit=1") or []
+        if biz_rows:
+            business_id = biz_rows[0]["id"]
+
+    if not business_id:
+        logger.info(f"[SMS] no business found for inbound from {from_number}")
+        return {"status": "unresolved", "from": from_number}
+
+    # Persist
+    msg_id = await _store_sms(
+        client,
+        business_id=business_id,
+        contact_id=contact_id,
+        phone_number=from_number,
+        message=text,
+        direction="inbound",
+        telnyx_id=provider_id,
+        status="received",
+        media=media,
+    )
+
+    await _log_event(client, business_id, contact_id, "sms_received", {
+        "from": from_number,
+        "from_name": contact_name or "",
+        "preview": text[:200],
+        "telnyx_id": provider_id,
+        "has_media": bool(media),
+        "sms_id": msg_id,
+    })
+
+    await _sb_post(client, "/chief_notifications", {
+        "business_id": business_id,
+        "type": "info",
+        "title": f"Text from {contact_name or from_number}",
+        "body": text[:200],
+        "suggested_action": f"Reply to {contact_name or from_number}",
+        "status": "unread",
+        "data": {
+            "contact_id": contact_id,
             "sms_id": msg_id,
+            "from_number": from_number,
+            "preview": text[:200],
+        },
+    })
+
+    if contact_id:
+        await _sb_patch(client, f"/contacts?id=eq.{contact_id}", {
+            "health_score": min(100, current_health + 5),
+            "last_interaction": datetime.now(timezone.utc).isoformat(),
         })
 
-        await _sb_post(client, "/chief_notifications", {
-            "business_id": business_id,
-            "type": "info",
-            "title": f"Text from {contact_name or from_number}",
-            "body": text[:200],
-            "suggested_action": f"Reply to {contact_name or from_number}",
-            "status": "unread",
-            "data": {
-                "contact_id": contact_id,
-                "sms_id": msg_id,
-                "from_number": from_number,
-                "preview": text[:200],
-            },
-        })
-
-        if contact_id:
-            await _sb_patch(client, f"/contacts?id=eq.{contact_id}", {
-                "health_score": min(100, current_health + 5),
-                "last_interaction": datetime.now(timezone.utc).isoformat(),
-            })
-
-        logger.info(
-            f"[SMS] inbound from={from_number} biz={business_id[:8]} "
-            f"contact={(contact_id or 'unknown')[:8]} len={len(text)}"
-        )
-        return {"status": "processed", "sms_id": msg_id}
+    logger.info(
+        f"[SMS] inbound from={from_number} biz={business_id[:8]} "
+        f"contact={(contact_id or 'unknown')[:8]} len={len(text)}"
+    )
+    return {"status": "processed", "sms_id": msg_id}
 
 
 # ─── Conversation thread ─────────────────────────────────────────────
@@ -533,6 +575,9 @@ async def send_session_reminder(req: SessionReminderRequest):
 async def sms_health():
     return {
         "status": "ok",
+        "provider": "twilio" if _twilio_configured() else
+                    ("telnyx" if os.environ.get("TELNYX_API_KEY") else "none"),
+        "twilio_configured": _twilio_configured(),
         "telnyx_configured": bool(os.environ.get("TELNYX_API_KEY")),
         "telnyx_phone": os.environ.get("TELNYX_PHONE_NUMBER", ""),
     }
