@@ -349,23 +349,52 @@ async def _find_platform_business(c: httpx.AsyncClient, headers: Dict[str, str],
 
 @router.get("/business/platform-books")
 async def platform_books_status(owner=Depends(require_owner)):
-    """Does the platform's own business exist yet, and is its bank on?"""
+    """Does the platform's own business exist yet, and is its bank on?
+
+    Fix (2026-07-03): the connection record is the plaid_items row —
+    written by /plaid/exchange the moment Link succeeds. plaid_accounts
+    only populates after the FIRST transactions sync, so checking it
+    showed "not connected" right after a successful connect (Kevin got
+    Plaid's confirmation email while the chip said no). Items first,
+    accounts as a legacy fallback."""
     headers = _service_headers()
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         biz = await _find_platform_business(c, headers, str(owner.id))
         plaid_connected = False
+        institution = None
         if biz:
             try:
                 pr = await c.get(
-                    f"{SUPABASE_URL}/rest/v1/plaid_accounts",
+                    f"{SUPABASE_URL}/rest/v1/plaid_items",
                     headers=headers,
-                    params={"business_id": f"eq.{biz['id']}", "select": "id", "limit": "1"},
+                    params={
+                        "business_id": f"eq.{biz['id']}",
+                        "select": "item_id,institution_name,status",
+                        "limit": "5",
+                    },
                 )
-                plaid_connected = pr.status_code < 400 and bool(pr.json())
+                if pr.status_code < 400:
+                    items = pr.json() or []
+                    live = [i for i in items
+                            if (i.get("status") or "active") not in ("revoked", "removed")]
+                    if live:
+                        plaid_connected = True
+                        institution = live[0].get("institution_name")
             except Exception:
                 pass
+            if not plaid_connected:
+                try:
+                    pr = await c.get(
+                        f"{SUPABASE_URL}/rest/v1/plaid_accounts",
+                        headers=headers,
+                        params={"business_id": f"eq.{biz['id']}", "select": "id", "limit": "1"},
+                    )
+                    plaid_connected = pr.status_code < 400 and bool(pr.json())
+                except Exception:
+                    pass
     return {"ok": True, "exists": bool(biz), "business": biz,
-            "plaid_connected": plaid_connected}
+            "plaid_connected": plaid_connected,
+            "institution": institution}
 
 
 @router.post("/business/platform-setup")
