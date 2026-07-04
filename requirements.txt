@@ -31,3 +31,6 @@ pywebpush==2.0.0
 sentry-sdk[fastapi]>=2.0.0
 # Arc 29 — CI test runner (also used locally).
 pytest>=8.0.0
+# Twilio SMS rail (twilio_sms.py) — outbound via Messaging Service +
+# inbound webhook signature validation (RequestValidator).
+twilio>=9.0.0
