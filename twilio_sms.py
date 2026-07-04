@@ -159,30 +159,35 @@ async def twilio_inbound_sms(request: Request):
     body = params.get("Body", "")
     logger.info(f"inbound SMS from={from_number} body={body[:500]}")
 
-    # Routing (2026-07-04): inbound texts flow into the SAME pipeline
-    # the Telnyx webhook uses — sms_messages row (read=false → unread
-    # badge), events, chief_notifications, contact health bump. So a
-    # reply shows up in the SMS Hub thread the moment Twilio delivers
-    # it. Media rides along (MediaUrl0..N). Future: match business by
-    # the To number once per-business numbers exist.
+    # Routing (2026-07-04, Kevin's architecture): ONE platform number —
+    # Chief routes every inbound BINDING FIRST, KEYWORD SECOND
+    # (sms_routing.route_inbound: STOP/START/HELP → keyword bind +
+    # connection/consent confirmation → binding route → disambiguate →
+    # keyword prompt). Auto-replies go back as TwiML on this response —
+    # same number, no extra API call.
     if from_number and body.strip():
         try:
-            import httpx
-            from sms_service import record_inbound_sms, normalize_phone
+            from sms_routing import route_inbound
             media = []
             n_media = int(params.get("NumMedia") or 0)
             for i in range(min(n_media, 10)):
                 url = params.get(f"MediaUrl{i}")
                 if url:
                     media.append({"url": url})
-            async with httpx.AsyncClient() as client:
-                await record_inbound_sms(
-                    client,
-                    from_number=normalize_phone(from_number) or from_number,
-                    text=body,
-                    provider_id=params.get("MessageSid", ""),
-                    media=media,
+            result = await route_inbound(
+                from_number=from_number,
+                text=body,
+                provider_id=params.get("MessageSid", ""),
+                media=media,
+            )
+            reply = result.get("reply")
+            if reply:
+                from xml.sax.saxutils import escape
+                twiml = (
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    f"<Response><Message>{escape(reply)}</Message></Response>"
                 )
+                return Response(content=twiml, media_type="application/xml")
         except Exception as e:
             # Never bounce Twilio — a failed insert would trigger
             # retries and double-processing. Log loudly instead.
