@@ -18,9 +18,20 @@ import html as _html
 
 LAST_UPDATED_DATE = "July 4, 2026"
 BUSINESS_NAME = "The Solutionist System LLC"
-BUSINESS_ADDRESS = "[BUSINESS ADDRESS]"   # Placeholder per brief — fill before launch
+# No public postal address by choice (2026-07-04): Kevin works from home
+# and a street address is NOT required on the site — A2P checks the SMS
+# language, not addresses (the brand address lives privately in Twilio).
+# If a mailing address is ever added (PO Box before email marketing per
+# CAN-SPAM), set it here and the contact blocks pick it up automatically.
+BUSINESS_ADDRESS = ""
 CONTACT_EMAIL = "kmjcreativesolution@gmail.com"
 DOMAIN = "mysolutionist.app"
+
+
+def _address_line() -> str:
+    """Postal address line for contact blocks — empty string when no
+    public address is configured (renders nothing, no placeholder)."""
+    return f"{BUSINESS_ADDRESS}<br>" if BUSINESS_ADDRESS.strip() else ""
 
 # ──────────────────────────────────────────────────────────────────────
 # Shared HTML shell — matches the landing page (MARKETING_HTML) styling
@@ -280,8 +291,7 @@ updating the &ldquo;Last updated&rdquo; date above.</p>
 <h2>Contact us</h2>
 <p>For any questions about this policy or your data, contact:<br>
 {BUSINESS_NAME}<br>
-{BUSINESS_ADDRESS}<br>
-Email: <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a></p>
+{_address_line()}Email: <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a></p>
 """
     return render_page(
         title="Privacy Policy",
@@ -476,8 +486,7 @@ notice in the Service. Continued use after changes take effect constitutes accep
 
 <h2>15. Contact</h2>
 <p>{BUSINESS_NAME}<br>
-{BUSINESS_ADDRESS}<br>
-Email: <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a></p>
+{_address_line()}Email: <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a></p>
 """
     return render_page(
         title="Terms of Service",
