@@ -159,9 +159,75 @@ async def twilio_inbound_sms(request: Request):
     body = params.get("Body", "")
     logger.info(f"inbound SMS from={from_number} body={body[:500]}")
 
-    # TODO(sms-routing): keyword routing / dispatch layer goes here —
-    # match the business by the To number, hand the message to Chief /
-    # the conversation store, auto-reply per business rules. Until then
-    # we acknowledge receipt and do nothing else.
+    # Routing (2026-07-04): inbound texts flow into the SAME pipeline
+    # the Telnyx webhook uses — sms_messages row (read=false → unread
+    # badge), events, chief_notifications, contact health bump. So a
+    # reply shows up in the SMS Hub thread the moment Twilio delivers
+    # it. Media rides along (MediaUrl0..N). Future: match business by
+    # the To number once per-business numbers exist.
+    if from_number and body.strip():
+        try:
+            import httpx
+            from sms_service import record_inbound_sms, normalize_phone
+            media = []
+            n_media = int(params.get("NumMedia") or 0)
+            for i in range(min(n_media, 10)):
+                url = params.get(f"MediaUrl{i}")
+                if url:
+                    media.append({"url": url})
+            async with httpx.AsyncClient() as client:
+                await record_inbound_sms(
+                    client,
+                    from_number=normalize_phone(from_number) or from_number,
+                    text=body,
+                    provider_id=params.get("MessageSid", ""),
+                    media=media,
+                )
+        except Exception as e:
+            # Never bounce Twilio — a failed insert would trigger
+            # retries and double-processing. Log loudly instead.
+            logger.error(f"inbound SMS processing failed: {e}")
 
     return Response(content=EMPTY_TWIML, media_type="application/xml")
+
+
+# ─── Delivery status callback ──────────────────────────────────────────
+# Twilio Messaging Service → Integration → "Delivery Status Callback":
+#   https://<this-host>/webhooks/twilio/status
+# Maps Twilio statuses onto the strings the SMS Hub renders as ticks
+# (sent ✓ / delivered ✓✓ / failed ✗).
+
+_STATUS_MAP = {
+    "queued": "sent", "accepted": "sent", "sending": "sent", "sent": "sent",
+    "delivered": "delivered",
+    "undelivered": "failed", "failed": "failed",
+}
+
+
+@router.post("/webhooks/twilio/status")
+async def twilio_status_callback(request: Request):
+    form = await request.form()
+    params = {k: str(v) for k, v in form.items()}
+
+    auth_token = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
+    if auth_token:
+        from twilio.request_validator import RequestValidator
+        validator = RequestValidator(auth_token)
+        if not validator.validate(_public_url(request), params,
+                                  request.headers.get("x-twilio-signature", "")):
+            return Response(status_code=403)
+
+    sid = params.get("MessageSid", "")
+    status = _STATUS_MAP.get((params.get("MessageStatus") or "").lower())
+    if sid and status:
+        try:
+            import httpx
+            from sms_service import _sb_patch
+            async with httpx.AsyncClient() as client:
+                await _sb_patch(client, f"/sms_messages?telnyx_id=eq.{sid}", {"status": status})
+            if status == "failed":
+                logger.warning(f"delivery FAILED sid={sid} code={params.get('ErrorCode', '')}")
+        except Exception as e:
+            logger.warning(f"status update failed: {e}")
+
+    return Response(status_code=204)
