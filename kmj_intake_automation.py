@@ -700,6 +700,12 @@ async def startup():
             scheduler.add_job(g("push_morning_brief", _push.morning_brief_tick), "cron", hour=13, minute=0,
                               id="push_morning_brief")
             scheduler.add_job(g("gl_divergence", _gl.divergence_tick), "interval", minutes=15, id="gl_divergence")
+            # Hermes (2026-07-04) — the comms watcher: hourly deterministic
+            # pass over the SMS/email rails; findings → platform_changelog
+            # → Business Chief snapshot. One brain, many senses.
+            import hermes_agent as _hermes
+            scheduler.add_job(g("hermes_tick", _hermes.hermes_tick), "interval", hours=1,
+                              id="hermes_tick")
     except Exception as e:
         print(f"   [warn] GL sync jobs not scheduled: {e}")
     scheduler.start()

@@ -749,6 +749,101 @@ async def add_changelog(body: ChangelogBody, _owner=Depends(require_owner)):
     return res
 
 
+# ─── The agent fleet (Mission Control → Agents) ───────────────────────
+# One brain, many senses (Kevin's ruling 2026-07-04). The registry is
+# the flow map: who watches what, where findings go, who narrates.
+
+AGENT_REGISTRY: List[Dict[str, Any]] = [
+    {
+        "id": "business_chief",
+        "name": "Business Chief",
+        "kind": "brain",
+        "beat": "The one intelligence you talk to. Reads every watcher's findings "
+                "(operator log), the live snapshot, and the ship feed; narrates, "
+                "advises, takes actions, keeps the record.",
+        "schedule": "on demand (your conversations)",
+        "writes_to": "platform_changelog (log_platform_note), chief_actions",
+    },
+    {
+        "id": "hermes",
+        "name": "Hermes",
+        "kind": "watcher",
+        "beat": "Communications rails: SMS delivery failures, customer texts left "
+                "unanswered 4h+, messages stuck undelivered, opt-out/suppression "
+                "spikes, Twilio config posture.",
+        "schedule": "hourly",
+        "writes_to": "platform_agent_runs (every tick), platform_changelog (findings only)",
+    },
+    {
+        "id": "stripe_usage_report",
+        "name": "Usage Reporter",
+        "kind": "system",
+        "beat": "Reports metered Chief-interaction overage to Stripe (dormant until "
+                "BILLING_ENFORCE=on).",
+        "schedule": "daily",
+        "writes_to": "usage_stripe_reports, Stripe usage records",
+    },
+    {
+        "id": "autopilot_sweep",
+        "name": "Autopilot Sweep",
+        "kind": "system",
+        "beat": "Per-business automation rules (practitioner-side machinery, not "
+                "platform ops).",
+        "schedule": "interval",
+        "writes_to": "agent_queue, events (per business)",
+    },
+    {
+        "id": "push_morning_brief",
+        "name": "Morning Brief",
+        "kind": "system",
+        "beat": "Daily push notification brief to practitioners' phones.",
+        "schedule": "daily 13:00 UTC",
+        "writes_to": "web push",
+    },
+]
+
+
+@router.get("/agents")
+async def get_agents(_owner=Depends(require_owner)):
+    """Registry + run history + recent findings — the whole flow in one
+    read: watchers → runs → findings → (operator log) → Business Chief."""
+    headers = _service_headers()
+    runs: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        try:
+            r = await c.get(
+                f"{SUPABASE_URL}/rest/v1/platform_agent_runs",
+                headers=headers,
+                params={"select": "id,agent,started_at,finished_at,ok,findings,summary",
+                        "order": "started_at.desc", "limit": "30"},
+            )
+            if r.status_code < 400:
+                runs = r.json() or []
+        except Exception:
+            pass
+        try:
+            r = await c.get(
+                f"{SUPABASE_URL}/rest/v1/platform_changelog",
+                headers=headers,
+                params={"agent": "not.is.null",
+                        "select": "id,created_at,agent,category,title,detail,status",
+                        "order": "created_at.desc", "limit": "20"},
+            )
+            if r.status_code < 400:
+                findings = r.json() or []
+        except Exception:
+            pass
+    return {"ok": True, "registry": AGENT_REGISTRY, "runs": runs, "findings": findings}
+
+
+@router.post("/agents/hermes/run")
+async def run_hermes_now(_owner=Depends(require_owner)):
+    """Manual tick from the console — same pass the hourly schedule runs."""
+    from hermes_agent import hermes_tick
+    return await hermes_tick()
+
+
 class ChiefTurn(BaseModel):
     role: str            # "you" | "chief" (client-side roles)
     text: str
