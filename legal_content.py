@@ -16,8 +16,8 @@ import html as _html
 # Editable copy — change these in place; routes pick up automatically.
 # ──────────────────────────────────────────────────────────────────────
 
-LAST_UPDATED_DATE = "May 24, 2026"
-BUSINESS_NAME = "KMJ Creative Solutions LLC"
+LAST_UPDATED_DATE = "July 4, 2026"
+BUSINESS_NAME = "The Solutionist System LLC"
 BUSINESS_ADDRESS = "[BUSINESS ADDRESS]"   # Placeholder per brief — fill before launch
 CONTACT_EMAIL = "kmjcreativesolution@gmail.com"
 DOMAIN = "mysolutionist.app"
@@ -231,6 +231,26 @@ to operate the Service.</p>
       information.</li>
 </ul>
 
+<h2>SMS / Text Messaging</h2>
+<p><strong>Consent.</strong> When you opt in to receive SMS messages from the Solutionist
+System, we collect and use your mobile number solely to send you the messages you
+consented to &mdash; booking confirmations, appointment reminders, account notifications,
+customer-support replies, and occasional service updates. You may opt in by entering
+your mobile number and agreeing to receive texts on our website or booking pages
+({DOMAIN}), or by texting a keyword to our number to begin a conversation. Consent to
+receive text messages is <strong>not</strong> a condition of any purchase.</p>
+
+<p><strong>No sharing of mobile opt-in data.</strong> We do not sell, rent, or share your
+mobile opt-in information or phone number with third parties or affiliates for their
+marketing or promotional purposes. Mobile opt-in data is not shared with any third
+party except subprocessors (such as our messaging delivery provider) strictly for the
+purpose of delivering the messages you requested.</p>
+
+<p><strong>Frequency, rates, and opting out.</strong> Message frequency varies. Message
+and data rates may apply. Reply <strong>STOP</strong> to unsubscribe at any time, or
+<strong>HELP</strong> for assistance. You can also contact us at
+<a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a> to opt out.</p>
+
 <h2>Third-party services</h2>
 <p>The Service relies on the following third parties, each with its own privacy
 practices:</p>
@@ -238,6 +258,9 @@ practices:</p>
   <li><strong>Meta Platforms (Facebook and Instagram)</strong> &mdash; for publishing to connected accounts.</li>
   <li><strong>Supabase</strong> &mdash; for secure data storage.</li>
   <li><strong>Railway</strong> &mdash; for application hosting.</li>
+  <li><strong>Twilio</strong> &mdash; for delivering SMS messages you have opted in to receive.</li>
+  <li><strong>Stripe</strong> &mdash; for payment processing.</li>
+  <li><strong>Plaid</strong> &mdash; for bank connections you authorize.</li>
 </ul>
 
 <h2>Data retention</h2>
@@ -325,12 +348,136 @@ def render_terms_html() -> str:
 <h1>Terms of Service</h1>
 <span class="meta">Last updated: {LAST_UPDATED_DATE}</span>
 
-<p>These Terms of Service govern your use of the Solutionist System, operated by
-{BUSINESS_NAME}. By using the Service, you agree to these terms. A full
-version of these terms will be provided here. For questions, contact
-<a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>.</p>
+<p>These Terms of Service (&ldquo;Terms&rdquo;) govern your use of the Solutionist System
+(the &ldquo;Service&rdquo;), operated by {BUSINESS_NAME} (&ldquo;we,&rdquo; &ldquo;us,&rdquo;
+&ldquo;our&rdquo;). By creating an account or using the Service, you agree to these Terms.
+If you do not agree, do not use the Service.</p>
 
-<p><em>(Full Terms of Service to be completed.)</em></p>
+<h2>1. The Service</h2>
+<p>The Solutionist System is a business operating platform for solo practitioners and
+small studios: contacts, scheduling and bookings, invoicing and payments, bookkeeping,
+websites and content tools, goals, and an AI assistant (&ldquo;Chief&rdquo;). Features vary
+by subscription tier and may change as the Service evolves.</p>
+
+<h2>2. Accounts and eligibility</h2>
+<ul>
+  <li>You must be at least 18 years old and using the Service for business purposes.</li>
+  <li>You are responsible for your account credentials and for all activity under your
+      account. Notify us promptly of any unauthorized use.</li>
+  <li>You agree to provide accurate information and keep it current.</li>
+</ul>
+
+<h2>3. Subscriptions, fees, and usage</h2>
+<ul>
+  <li><strong>Plans and pricing.</strong> Paid plans, included usage allotments, and any
+      usage-based charges are described at the point of purchase. Fees are billed through
+      our payment processor (Stripe) on a recurring basis until you cancel.</li>
+  <li><strong>Trials.</strong> Free trials, where offered, convert to paid subscriptions
+      at the end of the trial unless you cancel first. When a trial ends or a
+      subscription lapses, access to the Service may be suspended until payment resumes;
+      your data is retained as described in our <a href="/privacy">Privacy Policy</a>.</li>
+  <li><strong>Usage-based charges.</strong> Certain AI features are metered. Where
+      overage applies, it is billed at the rates disclosed at purchase, and total monthly
+      charges are capped as described there.</li>
+  <li><strong>Cancellation.</strong> You may cancel at any time via Settings &rarr;
+      Billing; cancellation takes effect at the end of the current billing period.
+      Except where required by law, fees already paid are non-refundable.</li>
+  <li><strong>Changes.</strong> We may change pricing with reasonable advance notice;
+      changes apply from your next billing period.</li>
+</ul>
+
+<h2>4. SMS / text messaging terms</h2>
+<ul>
+  <li><strong>Program.</strong> The Service can send SMS messages such as booking
+      confirmations, appointment reminders, account notifications, customer-support
+      replies, and occasional service updates.</li>
+  <li><strong>Opt-in.</strong> You (or your customers) opt in by providing a mobile
+      number and agreeing to receive texts on our website or booking pages, or by
+      texting a keyword to our number. Consent is not a condition of any purchase.</li>
+  <li><strong>Frequency and rates.</strong> Message frequency varies. Message and data
+      rates may apply and are charged by your mobile carrier.</li>
+  <li><strong>Opting out.</strong> Reply <strong>STOP</strong> to any message to
+      unsubscribe, or <strong>HELP</strong> for assistance. You may also contact us at
+      <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>.</li>
+  <li><strong>Carriers.</strong> Mobile carriers are not liable for delayed or
+      undelivered messages. You are responsible for notifying us if you change or
+      release your mobile number.</li>
+  <li>Our handling of mobile numbers and opt-in data is described in the
+      <a href="/privacy">Privacy Policy</a>, including our commitment not to share
+      mobile opt-in data with third parties for marketing.</li>
+</ul>
+
+<h2>5. Your content and data</h2>
+<ul>
+  <li><strong>Yours stays yours.</strong> You retain all rights to the business data and
+      content you put into the Service (contacts, invoices, books, content, sites). You
+      grant us only the license needed to operate the Service for you.</li>
+  <li><strong>Export.</strong> You can export your data at any time from Settings &rarr;
+      Your Data.</li>
+  <li><strong>Your responsibilities.</strong> You are responsible for the lawfulness of
+      the data you upload, for obtaining any consents your customers&rsquo; data requires
+      (including SMS consent where you message your customers), and for how you use
+      outputs of the Service in your business.</li>
+</ul>
+
+<h2>6. AI features</h2>
+<p>Chief and other AI features generate content and suggestions automatically. They can
+be wrong. AI output is provided for convenience and does not constitute legal, tax,
+accounting, financial, or other professional advice. Review AI-generated content
+(including bookkeeping categorizations, drafts, and reports) before relying on it, and
+consult a qualified professional where it matters.</p>
+
+<h2>7. Acceptable use</h2>
+<p>You agree not to: use the Service to send spam or unlawful, deceptive, or harassing
+messages; violate telecom regulations (including TCPA and carrier requirements) when
+messaging your customers; attempt to breach, probe, or overload the Service; infringe
+others&rsquo; rights; or resell the Service without our written agreement. We may suspend
+or terminate accounts that violate these rules or create risk for the platform or other
+users.</p>
+
+<h2>8. Third-party services</h2>
+<p>The Service integrates third parties (including Stripe, Plaid, Twilio, Meta, Supabase,
+and Railway). Your use of those features is also subject to the applicable third
+party&rsquo;s terms, and we are not responsible for third-party services.</p>
+
+<h2>9. Availability and changes</h2>
+<p>We work hard to keep the Service available, but it is provided &ldquo;as is&rdquo; and
+&ldquo;as available&rdquo; without warranties of any kind, express or implied. We may
+modify, add, or remove features, and we may suspend the Service for maintenance. During
+beta periods, features may change quickly.</p>
+
+<h2>10. Limitation of liability</h2>
+<p>To the maximum extent permitted by law, {BUSINESS_NAME} will not be liable for
+indirect, incidental, special, consequential, or punitive damages, or for lost profits,
+revenue, or data. Our total liability for any claim relating to the Service is limited
+to the amounts you paid us in the twelve (12) months before the claim arose.</p>
+
+<h2>11. Indemnification</h2>
+<p>You will indemnify and hold us harmless from claims arising out of your content, your
+use of the Service in violation of these Terms, or your violation of law &mdash;
+including telecom and messaging regulations in connection with messages you direct the
+Service to send.</p>
+
+<h2>12. Termination</h2>
+<p>You may stop using the Service and delete your account at any time (Settings &rarr;
+Your Data). We may suspend or terminate the Service for material breach of these Terms.
+Sections that by their nature should survive (including 5, 6, 10, and 11) survive
+termination.</p>
+
+<h2>13. Governing law</h2>
+<p>These Terms are governed by the laws of the State of Michigan, without regard to its
+conflict-of-laws rules. Disputes will be resolved in the state or federal courts located
+in Michigan, and you consent to their jurisdiction.</p>
+
+<h2>14. Changes to these Terms</h2>
+<p>We may update these Terms from time to time. Material changes will be reflected by
+updating the &ldquo;Last updated&rdquo; date above and, where appropriate, by additional
+notice in the Service. Continued use after changes take effect constitutes acceptance.</p>
+
+<h2>15. Contact</h2>
+<p>{BUSINESS_NAME}<br>
+{BUSINESS_ADDRESS}<br>
+Email: <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a></p>
 """
     return render_page(
         title="Terms of Service",
