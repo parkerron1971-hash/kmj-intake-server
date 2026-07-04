@@ -619,6 +619,114 @@ HELP_ARTICLES: List[Dict[str, str]] = [
 ]
 
 
+def render_sms_page_html() -> str:
+    """Public SMS opt-in page (/sms) — the A2P CTA fix (2026-07-04).
+
+    The campaign was rejected because reviewers could not publicly see
+    the opt-in mechanism (it lived behind the app login). This page IS
+    the verifiable CTA: a real, working form with a mobile field, an
+    UNCHECKED optional consent checkbox, the full disclosure beside it,
+    links to Privacy + Terms, and a description of the keyword path.
+    POSTs to /api/sms/opt-in (sms_routing.py) which records the consent
+    audit row in sms_consents."""
+    body = f"""
+<span class="badge">Text Messaging</span>
+<h1>Get texts from The Solutionist System</h1>
+<span class="meta">Booking confirmations, appointment reminders, and account updates &mdash; straight to your phone.</span>
+
+<p>The Solutionist System sends SMS messages such as booking confirmations, appointment
+reminders, account notifications, and customer-support replies on behalf of the
+businesses that use our platform. You can sign up here, or by texting a
+business&rsquo;s keyword to our number.</p>
+
+<h2>Sign up for texts</h2>
+<form id="sms-optin-form" style="max-width:480px;margin-top:14px;">
+  <label for="sms-name" style="display:block;font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">Name (optional)</label>
+  <input id="sms-name" name="name" type="text" autocomplete="name" placeholder="Your name"
+         style="width:100%;padding:11px 14px;margin-bottom:14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text-primary);font-family:inherit;font-size:14px;outline:none;">
+  <label for="sms-phone" style="display:block;font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">Mobile number</label>
+  <input id="sms-phone" name="phone" type="tel" autocomplete="tel" required placeholder="+1 555 123 4567"
+         style="width:100%;padding:11px 14px;margin-bottom:14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text-primary);font-family:inherit;font-size:14px;outline:none;">
+  <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;color:var(--text-secondary);line-height:1.6;cursor:pointer;">
+    <input id="sms-consent" name="consent" type="checkbox" style="margin-top:3px;flex-shrink:0;">
+    <span>By checking this box, I agree to receive recurring SMS messages from
+    <strong style="color:var(--text-primary);">The Solutionist System</strong> (booking confirmations,
+    appointment reminders, account notifications, and support replies). Consent is not a
+    condition of any purchase. Message frequency varies. Message and data rates may apply.
+    Reply <strong>STOP</strong> to opt out at any time, or <strong>HELP</strong> for help.
+    See our <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Service</a>.</span>
+  </label>
+  <button id="sms-submit" type="submit" disabled
+          style="margin-top:16px;padding:12px 26px;border-radius:11px;border:0;cursor:pointer;font-family:inherit;font-size:14px;font-weight:700;color:#fff;background:linear-gradient(100deg,var(--accent),var(--info));opacity:.5;">
+    Sign up for texts
+  </button>
+  <div id="sms-msg" style="margin-top:12px;font-size:13px;"></div>
+</form>
+
+<h2>Or text a keyword</h2>
+<p>Each business on our platform has its own keyword. Text that keyword to our number and
+you&rsquo;ll be connected with them &mdash; texting the keyword is your opt-in, and we&rsquo;ll
+confirm with a message that includes how to get help (HELP) or stop (STOP) at any time.</p>
+
+<h2>The fine print</h2>
+<ul>
+  <li>Message frequency varies. Message and data rates may apply.</li>
+  <li>Reply <strong>STOP</strong> to cancel at any time; reply <strong>HELP</strong> for help,
+      or email <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>.</li>
+  <li>We never sell, rent, or share your mobile opt-in information &mdash; details in our
+      <a href="/privacy">Privacy Policy</a>.</li>
+  <li>Carriers are not liable for delayed or undelivered messages.</li>
+</ul>
+
+<script>
+(function() {{
+  var box = document.getElementById('sms-consent');
+  var btn = document.getElementById('sms-submit');
+  var msg = document.getElementById('sms-msg');
+  box.addEventListener('change', function() {{
+    btn.disabled = !box.checked;
+    btn.style.opacity = box.checked ? '1' : '.5';
+  }});
+  document.getElementById('sms-optin-form').addEventListener('submit', function(e) {{
+    e.preventDefault();
+    if (!box.checked) return;
+    btn.disabled = true; btn.textContent = 'Signing up…';
+    fetch('/api/sms/opt-in', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{
+        phone: document.getElementById('sms-phone').value,
+        name: document.getElementById('sms-name').value,
+        consent: true
+      }})
+    }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ ok: r.ok, j: j }}; }}); }})
+      .then(function(res) {{
+        if (res.ok) {{
+          msg.style.color = 'var(--info)';
+          msg.textContent = "You're signed up. Watch for a confirmation once messaging goes live — reply STOP anytime to opt out.";
+          btn.textContent = 'Signed up ✓';
+        }} else {{
+          msg.style.color = '#f87171';
+          msg.textContent = (res.j && res.j.error) || 'Something went wrong — try again.';
+          btn.disabled = false; btn.textContent = 'Sign up for texts';
+        }}
+      }})
+      .catch(function() {{
+        msg.style.color = '#f87171';
+        msg.textContent = 'Network error — try again.';
+        btn.disabled = false; btn.textContent = 'Sign up for texts';
+      }});
+  }});
+}})();
+</script>
+"""
+    return render_page(
+        title="Text Messaging",
+        description="Sign up for SMS updates from The Solutionist System — booking confirmations, reminders, and account notifications.",
+        content_html=body,
+    )
+
+
 def render_help_html() -> str:
     # Group articles by category in insertion order so the editor controls
     # ordering by just rearranging the list.
