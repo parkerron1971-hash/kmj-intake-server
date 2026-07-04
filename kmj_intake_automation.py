@@ -141,6 +141,10 @@ app.include_router(email_router)
 app.include_router(meta_router)
 app.include_router(stripe_router)
 app.include_router(sms_router)
+# Twilio SMS rail (2026-07-04) — outbound send + signed inbound webhook.
+# Coexists with the Telnyx sms_service until routing picks a lane.
+from twilio_sms import router as twilio_sms_router
+app.include_router(twilio_sms_router)
 app.include_router(brand_engine_router)
 app.include_router(voice_depth_router)
 app.include_router(restricted_router)
