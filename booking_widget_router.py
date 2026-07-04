@@ -527,6 +527,12 @@ class BookAnonBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     email: str = Field(..., min_length=3, max_length=320)
     data: Dict[str, Any]  # field values for the appointment (date, service, etc.)
+    # SMS consent (2026-07-04, A2P architecture): the booking form shows
+    # an UNCHECKED optional checkbox; true = customer agreed to receive
+    # texts (confirmations/reminders). Recorded in sms_consents — the
+    # audit trail. Wired automatically for EVERY business + every
+    # custom booking module, because they all book through here.
+    sms_consent: bool = False
     # Phase C.1.2 — optional canonical-pricing fields.
     # When the schema's service field is type='offering_ref', the widget
     # sends the offering_id directly + the price the customer was quoted.
@@ -662,6 +668,12 @@ async def book_anon(
     except Exception as e:
         logger.warning(f"confirmation email scheduling failed: {e}")
 
+    # SMS consent audit (best-effort, never blocks the booking): the
+    # customer checked the optional box → record who/when/where so the
+    # platform can text them (and prove consent to carriers).
+    if body.sms_consent:
+        _record_booking_sms_consent(business_id, entry_data, body.name)
+
     return {
         "ok": True,
         "appointment_id": entry["id"],
@@ -679,6 +691,8 @@ class BookBody(BaseModel):
     # Phase C.1.2 — same canonical-pricing fields as BookAnonBody.
     offering_id: Optional[str] = None
     quoted_price: Optional[float] = None
+    # SMS consent — same contract as BookAnonBody.
+    sms_consent: bool = False
 
 
 @router.post("/widgets/booking/{business_id}/book")
@@ -732,6 +746,11 @@ async def book(
     except Exception as e:
         logger.warning(f"confirmation email scheduling failed: {e}")
 
+    # SMS consent audit — same contract as the walk-in path.
+    if body.sms_consent:
+        _record_booking_sms_consent(
+            business_id, entry_data, ctx.customer_row.get("name") or "")
+
     return {"ok": True, "appointment_id": entry["id"]}
 
 
@@ -768,6 +787,30 @@ async def request_fresh_link(body: FreshLinkBody, request: Request) -> Dict[str,
 # ─────────────────────────────────────────────────────────────────────
 # Helpers (private)
 # ─────────────────────────────────────────────────────────────────────
+
+
+def _record_booking_sms_consent(business_id: str, entry_data: Dict[str, Any],
+                                name: str) -> None:
+    """SMS consent audit row for a booking-form opt-in (2026-07-04).
+    Best-effort — never blocks or fails a booking. The phone comes from
+    whatever phone-ish field the module schema collected."""
+    try:
+        from sms_service import normalize_phone
+        raw = (entry_data.get("phone") or entry_data.get("customer_phone")
+               or entry_data.get("mobile") or "")
+        phone = normalize_phone(str(raw))
+        if not phone:
+            logger.info("[consent] sms_consent checked but no usable phone on booking")
+            return
+        sb_clients.sb_post_as_service("/sms_consents", {
+            "phone": phone,
+            "name": (name or "").strip()[:120] or None,
+            "source": "booking",
+            "business_id": business_id,
+        })
+        logger.info(f"[consent] booking SMS consent recorded {phone} biz={business_id[:8]}")
+    except Exception as e:
+        logger.warning(f"[consent] booking consent record failed: {e}")
 
 
 def _find_or_create_contact(business_id: str, name: str, email_lower: str) -> str:
