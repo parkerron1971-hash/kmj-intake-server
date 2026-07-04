@@ -120,13 +120,41 @@ def upsert_override(
     color_role and slot_image upserts persist but are NO-OPs at render
     in PART 1 (see override_resolver.py). They land in the table so
     PART 3 / future passes can read them once the resolvers are wired."""
+    # Arc 4 "Trust & Polish" — reconciliation groundwork: text overrides
+    # need original_value (the composer copy the edit replaced) so a
+    # future recompose can tell "this override still targets the same
+    # sentence" from "the composer rewrote this". The edit UI doesn't
+    # send it, so on a FIRST-TIME text edit we capture the current
+    # innerHTML at the target path from the persisted document (which at
+    # that moment is still un-overridden composer copy at that path).
+    # Re-edits keep their existing original_value — the row already
+    # remembers the true composer text.
+    original_value = req.original_value
+    if original_value is None and req.override_type == "text":
+        try:
+            existing = override_storage.get_override(
+                req.business_id, "text", req.target_path)
+            if not existing:
+                from brand_engine import _sb_get as be_get
+                rows = be_get(
+                    f"/business_sites?business_id=eq.{req.business_id}"
+                    "&select=site_config&limit=1") or []
+                doc = (((rows[0].get("site_config") or {}).get("generated_html")
+                        if rows else "") or "")
+                for t in find_override_targets(doc):
+                    if t.get("target_path") == req.target_path:
+                        original_value = t.get("current_value")
+                        break
+        except Exception as e:
+            logger.info(f"[override_router] original_value capture skipped: {e}")
+
     persisted = override_storage.upsert_override(
         business_id=req.business_id,
         override_type=req.override_type,
         target_path=req.target_path,
         override_value=req.override_value,
         target_selector=req.target_selector,
-        original_value=req.original_value,
+        original_value=original_value,
         created_via=req.created_via,
     )
     if not persisted:
@@ -159,6 +187,13 @@ def upsert_override(
             502,
             {"error": "override_persist_failed"},
         )
+    # Arc 4: a fresh edit is made against the CURRENT document, so a row
+    # previously staled by reconciliation comes back to life. The upsert's
+    # merge-duplicates path preserves the old status column value, hence
+    # the explicit flip (soft-fails if the status migration isn't applied).
+    if (persisted.get("status") or "active") == "stale" and persisted.get("id"):
+        if override_storage.mark_overrides_status([persisted["id"]], "active"):
+            persisted["status"] = "active"
     # Deterministic re-render (no LLM): a composed site re-renders its
     # html_content with the new override applied, so inline edits show on
     # the live site without an API/compose call. No-op for non-composed sites.
