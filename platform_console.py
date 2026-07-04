@@ -611,6 +611,27 @@ PLATFORM_CHIEF_SYSTEM = (
     "      Sends a direct email to a practitioner. Draft the body yourself — warm + concise.\n\n"
     "  • [ACTION:{\"type\":\"mark_lead_status\",\"lead_id\":\"<uuid>\",\"status\":\"contacted\"|\"qualified\"|\"declined\"|\"archived\",\"note\":\"...\"}]\n"
     "      Bumps a marketing_leads.status with an optional internal note.\n\n"
+    "  • [ACTION:{\"type\":\"log_platform_note\",\"category\":\"shipped\"|\"config\"|\"decision\"|\"pending\"|\"note\",\"title\":\"...\",\"detail\":\"...\"}]\n"
+    "      Writes an entry to the operator log (your memory of the business).\n\n"
+    "  • [ACTION:{\"type\":\"resolve_platform_note\",\"note_id\":<id from the snapshot's operator_log>}]\n"
+    "      Marks a pending log entry done.\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "KEEPER OF THE RECORD (Kevin forgets — you don't)\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "The snapshot carries your memory of the business itself:\n"
+    "  • operator_log — config flips, migrations run, decisions, notes (you wrote these)\n"
+    "  • pending_items — follow-ups not yet done. Surface these UNPROMPTED when relevant\n"
+    "    (\"before you flip billing on, the log shows X is still pending\").\n"
+    "  • recent_ships — merged pull requests from both repos = what actually shipped, with dates.\n"
+    "Duties:\n"
+    "  • When Kevin TELLS you something changed (\"I ran the migration\", \"campaign resubmitted\",\n"
+    "    \"set the Stripe prices\") — LOG IT with log_platform_note, category config/decision, in the\n"
+    "    same reply. Don't ask permission for logging; it's your job. Confirm in one short clause.\n"
+    "  • When something must happen later, log it as category pending; when he says it's done,\n"
+    "    resolve it.\n"
+    "  • When he asks \"what changed?\", \"where did we leave off?\", or \"what's still open?\" —\n"
+    "    answer from operator_log + recent_ships with dates. Never guess from memory of the\n"
+    "    conversation alone; the log is the truth.\n\n"
     "RULES:\n"
     "  • Only fire an action when the operator asks or the action is the obviously-correct response "
     "    to what's in the snapshot.\n"
@@ -623,6 +644,109 @@ PLATFORM_CHIEF_SYSTEM = (
     "You have access to a current snapshot of the platform state. Use it for both answering AND "
     "for sourcing UUIDs for actions."
 )
+
+
+# ─── The Chief's memory: operator log + shipped-work feed ─────────────
+# (2026-07-04, Kevin: "I will forget a lot of things.") Two sources:
+#   1. platform_changelog — the operator's log Chief writes via the
+#      log_platform_note action (config flips, decisions, pending).
+#   2. GitHub merged PRs from both repos — the shipped-work record
+#      that exists automatically; nobody has to remember to write it.
+
+_GH_REPOS = ("parkerron1971-hash/kmj-intake-server",
+             "parkerron1971-hash/solutionist-studio")
+_gh_cache: Dict[str, Any] = {"at": 0.0, "data": []}
+
+
+async def _recent_merged_prs(limit_per_repo: int = 10) -> List[Dict[str, Any]]:
+    """Merged PRs across both repos, newest first. 15-min in-process
+    cache; GITHUB_TOKEN optional (public repos work unauthenticated
+    within rate limits). Fails soft to []."""
+    now = time.time()
+    if now - _gh_cache["at"] < 900 and _gh_cache["data"]:
+        return _gh_cache["data"]
+    gh_headers = {"Accept": "application/vnd.github+json"}
+    token = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    if token:
+        gh_headers["Authorization"] = f"Bearer {token}"
+    out: List[Dict[str, Any]] = []
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            for repo in _GH_REPOS:
+                r = await c.get(
+                    f"https://api.github.com/repos/{repo}/pulls",
+                    headers=gh_headers,
+                    params={"state": "closed", "sort": "updated",
+                            "direction": "desc", "per_page": "20"},
+                )
+                if r.status_code >= 400:
+                    continue
+                short = repo.split("/")[-1]
+                for pr in r.json():
+                    if not pr.get("merged_at"):
+                        continue
+                    out.append({
+                        "repo": short,
+                        "number": pr.get("number"),
+                        "title": pr.get("title"),
+                        "merged_at": pr.get("merged_at"),
+                    })
+                    if len([p for p in out if p["repo"] == short]) >= limit_per_repo:
+                        break
+        out.sort(key=lambda p: p.get("merged_at") or "", reverse=True)
+        _gh_cache["at"] = now
+        _gh_cache["data"] = out
+    except Exception as e:
+        logger.warning(f"merged-PR feed failed: {e}")
+    return out
+
+
+async def _changelog_rows(c: httpx.AsyncClient, headers: Dict[str, str],
+                          limit: int = 25) -> List[Dict[str, Any]]:
+    try:
+        r = await c.get(
+            f"{SUPABASE_URL}/rest/v1/platform_changelog",
+            headers=headers,
+            params={"select": "id,created_at,category,title,detail,status",
+                    "order": "created_at.desc", "limit": str(limit)},
+        )
+        if r.status_code < 400:
+            return r.json() or []
+    except Exception:
+        pass
+    return []  # migration not run — fail soft
+
+
+@router.get("/changelog")
+async def get_changelog(_owner=Depends(require_owner)):
+    """The Ship's Log: operator entries + recent merged PRs, one call."""
+    headers = _service_headers()
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        rows = await _changelog_rows(c, headers, limit=50)
+    ships = await _recent_merged_prs()
+    return {"ok": True,
+            "log": rows,
+            "pending": [r for r in rows if r.get("status") == "pending"],
+            "ships": ships}
+
+
+class ChangelogBody(BaseModel):
+    title: str
+    detail: Optional[str] = None
+    category: str = "note"
+    status: Optional[str] = None
+
+
+@router.post("/changelog")
+async def add_changelog(body: ChangelogBody, _owner=Depends(require_owner)):
+    from platform_chief_actions import _handler_log_platform_note
+    res = await _handler_log_platform_note({
+        "title": body.title, "detail": body.detail,
+        "category": body.category, "status": body.status,
+    })
+    if not res.get("ok"):
+        raise HTTPException(502, res.get("error") or "log write failed")
+    return res
 
 
 class ChiefTurn(BaseModel):
@@ -820,6 +944,28 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
                 pass
     except Exception as e:
         snap["activity_error"] = str(e)
+
+    # The Chief's memory (2026-07-04): operator log + pending follow-ups
+    # + the shipped-work feed. This is how Chief keeps account of
+    # changes Kevin will otherwise forget.
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            log_rows = await _changelog_rows(c, headers, limit=25)
+        snap["operator_log"] = [
+            {"id": r.get("id"), "when": r.get("created_at"),
+             "category": r.get("category"), "title": r.get("title"),
+             "detail": (r.get("detail") or "")[:300], "status": r.get("status")}
+            for r in log_rows
+        ]
+        snap["pending_items"] = [
+            e for e in snap["operator_log"] if e.get("status") == "pending"
+        ]
+    except Exception as e:
+        snap["operator_log_error"] = str(e)
+    try:
+        snap["recent_ships"] = await _recent_merged_prs()
+    except Exception:
+        pass
 
     snap["blind_spots"] = [
         "Backend errors / Railway log stream (no aggregator wired)",
