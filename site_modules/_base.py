@@ -20,6 +20,7 @@ booking {enabled, url}, offerings [rows], assets {logo_url, ...}.
 from __future__ import annotations
 
 import html as _html
+import json as _json
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -37,6 +38,31 @@ def safe_url(value: Any) -> str:
     if low.startswith(("javascript:", "data:", "vbscript:")):
         return ""
     return _html.escape(s, quote=True)
+
+
+# Platform → profile-URL base. Shared by contact_footer (visible social
+# links) and build_page_meta (JSON-LD sameAs). Handles may be full URLs
+# or bare @handles.
+SOCIAL_BASES: Dict[str, str] = {
+    "instagram": "https://instagram.com/",
+    "facebook": "https://facebook.com/",
+    "youtube": "https://youtube.com/",
+    "twitter": "https://twitter.com/",
+    "linkedin": "https://linkedin.com/in/",
+    "tiktok": "https://tiktok.com/@",
+}
+
+
+def social_profile_url(platform: str, handle: Any) -> str:
+    """Full profile URL from a platform + handle (or pass-through URL).
+    Empty string when it can't be resolved to a real URL."""
+    h = str(handle or "").strip()
+    if not h:
+        return ""
+    if h.startswith("http"):
+        return h
+    base = SOCIAL_BASES.get((platform or "").lower())
+    return base + h.lstrip("@") if base else ""
 
 
 def ov(section: str, field: str) -> str:
@@ -140,8 +166,112 @@ def reveal_script(dna: Dict[str, Any]) -> str:
             "{threshold:.12});els.forEach(function(e){io.observe(e)})}catch(e){}})();</script>")
 
 
+def _trim_words(text: str, limit: int) -> str:
+    """Trim to <= limit chars on a word boundary (no mid-word cuts)."""
+    t = " ".join(str(text or "").split())
+    if len(t) <= limit:
+        return t
+    cut = t[:limit].rsplit(" ", 1)[0].rstrip(",;:—- ")
+    return cut
+
+
+def build_page_meta(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Deterministic SEO/identity payload for page_shell — built ONLY
+    from real business data; every field may be empty and empty fields
+    emit no tags. (Arc 1 'Wear the Brand'.)"""
+    bundle = ctx.get("bundle") or {}
+    b = bundle.get("business") or {}
+    intel = bundle.get("practitioner_intelligence") or {}
+    assets = bundle.get("assets") or {}
+    biz = ctx.get("business") or {}
+    contact = ctx.get("contact") or {}
+
+    name = (biz.get("name") or b.get("name") or "").strip()
+    tagline = str(b.get("tagline") or "").strip()
+    pitch = str(b.get("elevator_pitch") or "").strip()
+    about = str(intel.get("about_business") or "").strip()
+    description = tagline or pitch or (_trim_words(about, 155) if about else "")
+
+    slug = str(biz.get("slug") or "").strip()
+    canonical = f"https://{slug}.mysolutionist.app" if slug else ""
+
+    favicon = assets.get("favicon") or ""
+    social_card = assets.get("social_card") or ""
+    og_title = f"{name} — {tagline}" if (name and tagline) else name
+
+    same_as = [u for u in (
+        social_profile_url(k, v) for k, v in (contact.get("social") or {}).items()
+    ) if u.startswith("http")]
+
+    # JSON-LD LocalBusiness — only fields that exist; empties are omitted.
+    jsonld: Dict[str, Any] = {"@context": "https://schema.org",
+                              "@type": "LocalBusiness"}
+    for key, val in (("name", name), ("description", description),
+                     ("url", canonical), ("telephone", contact.get("phone")),
+                     ("email", contact.get("email")),
+                     ("address", contact.get("address"))):
+        if str(val or "").strip():
+            jsonld[key] = str(val).strip()
+    hours = str(contact.get("hours") or "").strip()
+    if hours:
+        jsonld["openingHours"] = hours.replace("–", "-")
+    if same_as:
+        jsonld["sameAs"] = same_as
+    if len(jsonld) <= 2:  # only @context/@type → nothing real to state
+        jsonld = {}
+
+    return {
+        "description": description,
+        "canonical": canonical,
+        "favicon": favicon if str(favicon).startswith("http") else "",
+        "og_title": og_title,
+        "og_image": social_card if str(social_card).startswith("http") else "",
+        "jsonld": jsonld,
+    }
+
+
+def _head_meta_block(meta: Optional[Dict[str, Any]]) -> str:
+    """Emit description/canonical/favicon/OG/Twitter/JSON-LD tags —
+    ONLY for fields that carry data (never an empty tag). og:image at
+    shell time is the brand social card; when absent, the composer
+    injects the resolved hero image post slot-resolution
+    (site_composer._ensure_og_image)."""
+    if not meta:
+        return ""
+    lines: List[str] = []
+    desc = str(meta.get("description") or "").strip()
+    canonical = str(meta.get("canonical") or "").strip()
+    og_title = str(meta.get("og_title") or "").strip()
+    og_image = str(meta.get("og_image") or "").strip()
+    favicon = str(meta.get("favicon") or "").strip()
+
+    if desc:
+        lines.append(f'<meta name="description" content="{safe(desc)}">')
+    if canonical:
+        lines.append(f'<link rel="canonical" href="{safe_url(canonical)}">')
+    if favicon:
+        lines.append(f'<link rel="icon" href="{safe_url(favicon)}">')
+    if og_title:
+        lines.append(f'<meta property="og:title" content="{safe(og_title)}">')
+    if desc:
+        lines.append(f'<meta property="og:description" content="{safe(desc)}">')
+    if canonical:
+        lines.append(f'<meta property="og:url" content="{safe_url(canonical)}">')
+    lines.append('<meta property="og:type" content="website">')
+    if og_image:
+        lines.append(f'<meta property="og:image" content="{safe_url(og_image)}">')
+        lines.append('<meta name="twitter:card" content="summary_large_image">')
+        lines.append(f'<meta name="twitter:image" content="{safe_url(og_image)}">')
+    jsonld = meta.get("jsonld") or {}
+    if jsonld:
+        payload = _json.dumps(jsonld, ensure_ascii=False).replace("</", "<\\/")
+        lines.append(f'<script type="application/ld+json">{payload}</script>')
+    return "\n".join(lines)
+
+
 def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
-               design: Optional[Dict[str, Any]] = None) -> str:
+               design: Optional[Dict[str, Any]] = None,
+               meta: Optional[Dict[str, Any]] = None) -> str:
     import brand_dna
     fonts = brand_dna.google_fonts_url(dna)
     # DRO single_semantic → accent scarcity body class (CSS in base_css).
@@ -153,6 +283,7 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{safe(title)}</title>
+{_head_meta_block(meta)}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="{fonts}" rel="stylesheet">

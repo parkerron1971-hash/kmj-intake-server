@@ -8,17 +8,19 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple
 
-from ._base import safe, safe_url, ov, heading_accent
+from ._base import safe, safe_url, ov, heading_accent, social_profile_url
 
 VARIANTS = ("standard",)
 
-_SOCIAL = {
-    "instagram": ("\U0001F4F8", "https://instagram.com/"),
-    "facebook": ("\U0001F4D8", "https://facebook.com/"),
-    "youtube": ("\U0001F4FA", "https://youtube.com/"),
-    "twitter": ("\U0001F426", "https://twitter.com/"),
-    "linkedin": ("\U0001F4BC", "https://linkedin.com/in/"),
-    "tiktok": ("\U0001F3B5", "https://tiktok.com/@"),
+# Display names for social platforms — links carry REAL text labels
+# (accessibility: never emoji-only anchors).
+_SOCIAL_NAMES = {
+    "instagram": "Instagram",
+    "facebook": "Facebook",
+    "youtube": "YouTube",
+    "twitter": "Twitter",
+    "linkedin": "LinkedIn",
+    "tiktok": "TikTok",
 }
 
 
@@ -27,23 +29,48 @@ def _social_links(social: Dict[str, Any]) -> str:
     for plat, handle in (social or {}).items():
         if not handle:
             continue
-        icon, base = _SOCIAL.get(plat, ("\U0001F517", ""))
-        h = str(handle).strip()
-        url = h if h.startswith("http") else (base + h.lstrip("@") if base else "#")
+        url = social_profile_url(plat, handle)
+        if not url:
+            continue
+        label = _SOCIAL_NAMES.get((plat or "").lower(), str(plat).strip().title() or "Profile")
         out.append(f'<a class="sxm-social" href="{safe_url(url)}" target="_blank" '
-                   f'rel="noopener" title="{safe(plat)}">{icon}</a>')
+                   f'rel="noopener" aria-label="{safe(label)}">{safe(label)}</a>')
     return f'<div class="sxm-contact-social">{"".join(out)}</div>' if out else ""
 
 
 def _logistics(contact: Dict[str, Any]) -> str:
     bits = []
     if contact.get("hours"):
-        bits.append(f'<span class="sxm-muted">\U0001F557 {safe(contact["hours"])}</span>')
+        bits.append('<span class="sxm-muted"><span aria-hidden="true">\U0001F557 </span>'
+                    f'Hours: {safe(contact["hours"])}</span>')
     if contact.get("address"):
-        bits.append(f'<span class="sxm-muted">\U0001F4CD {safe(contact["address"])}</span>')
+        bits.append('<span class="sxm-muted"><span aria-hidden="true">\U0001F4CD </span>'
+                    f'{safe(contact["address"])}</span>')
     if contact.get("phone"):
-        bits.append(f'<a class="sxm-muted" href="tel:{safe_url(contact["phone"])}">\U0001F4DE {safe(contact["phone"])}</a>')
+        bits.append(f'<a class="sxm-muted" href="tel:{safe_url(contact["phone"])}">'
+                    f'<span aria-hidden="true">\U0001F4DE </span>{safe(contact["phone"])}</a>')
     return f'<div class="sxm-contact-logistics">{"".join(bits)}</div>' if bits else ""
+
+
+def _sms_consent_block(ctx: Dict[str, Any]) -> str:
+    """SMS opt-in for the contact form (A2P compliance, Arc 1). Rendered
+    ONLY when the platform can actually text (contact.sms_capable) and
+    only inside a real form. UNCHECKED by default; wording mirrors the
+    booking-widget / /sms opt-in disclosure. Includes an optional phone
+    field — consent without a number is unrecordable."""
+    if not (ctx.get("contact") or {}).get("sms_capable"):
+        return ""
+    biz_name = safe((ctx.get("business") or {}).get("name") or "this business")
+    return f"""
+      <input name="phone" type="tel" autocomplete="tel" placeholder="Mobile number (optional — for text updates)">
+      <label class="sxm-sms-consent">
+        <input type="checkbox" name="sms_consent" value="1">
+        <span>By checking this box, I agree to receive SMS messages from {biz_name}
+        via The Solutionist System (replies, confirmations, and reminders). Consent is
+        not a condition of any purchase. Message frequency varies. Message and data
+        rates may apply. Reply <strong>STOP</strong> to opt out at any time, or
+        <strong>HELP</strong> for help.</span>
+      </label>"""
 
 
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
@@ -72,7 +99,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     <form id="sxm-contact-form" class="sxm-contact-form" data-endpoint="{safe_url(submit_url)}">
       <input name="name" type="text" placeholder="Your name" required>
       <input name="email" type="email" placeholder="Your email" required>
-      <textarea name="message" rows="4" placeholder="How can we help?" required></textarea>
+      <textarea name="message" rows="4" placeholder="How can we help?" required></textarea>{_sms_consent_block(ctx)}
       <button type="submit" class="sxm-cta">Send message</button>
     </form>"""
         script_html = """
@@ -83,8 +110,12 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     ev.preventDefault();
     var fd=new FormData(f), b=f.querySelector('button');
     b.disabled=true; b.textContent='Sending…';
+    var payload={name:fd.get('name'),email:fd.get('email'),message:fd.get('message')};
+    var ph=fd.get('phone'); if(ph){ payload.phone=ph; }
+    var c=f.querySelector('input[name="sms_consent"]');
+    if(c){ payload.sms_consent=!!c.checked; }
     fetch(f.getAttribute('data-endpoint'),{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:fd.get('name'),email:fd.get('email'),message:fd.get('message')})})
+      body:JSON.stringify(payload)})
       .then(function(r){return r.json();})
       .then(function(){ f.innerHTML='<p class="sxm-sent">Thanks — your message is on its way.</p>'; })
       .catch(function(){ b.disabled=false; b.textContent='Send message'; });
@@ -125,11 +156,16 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-contact-form input, .sxm-contact-form textarea { padding: 13px 15px; font: inherit; color: var(--sx-text);
   background: var(--sx-surface); border: 1px solid var(--sx-border); border-radius: var(--sx-radius-card); width: 100%; box-sizing: border-box; }
 .sxm-contact-form button { margin-top: 4px; cursor: pointer; }
+.sxm-sms-consent { display: flex; gap: 10px; align-items: flex-start; font-size: .82rem;
+  line-height: 1.55; color: var(--sx-muted); cursor: pointer; }
+.sxm-sms-consent input { margin-top: 3px; flex-shrink: 0; accent-color: var(--sx-accent); }
 .sxm-sent { font-size: 1.05rem; font-weight: 600; color: var(--sx-accent); text-align: center; }
 .sxm-contact-logistics { display: flex; gap: 22px; justify-content: center; flex-wrap: wrap; margin-top: 22px; font-size: .92rem; }
 .sxm-contact-mail { display: inline-block; margin-top: 16px; font-size: 1rem; font-weight: 600; border-bottom: 1.5px solid var(--sx-accent); padding-bottom: 2px; }
-.sxm-contact-social { display: flex; gap: 16px; justify-content: center; margin-top: 20px; font-size: 1.5rem; }
-.sxm-contact-social a { text-decoration: none; }
+.sxm-contact-social { display: flex; gap: 10px 18px; justify-content: center; flex-wrap: wrap; margin-top: 20px; font-size: .92rem; }
+.sxm-contact-social a { text-decoration: none; font-weight: 600; letter-spacing: .03em;
+  border-bottom: 1.5px solid var(--sx-accent-soft); padding-bottom: 1px; }
+.sxm-contact-social a:hover { border-bottom-color: var(--sx-accent); }
 .sxm-footer { border-top: 1px solid var(--sx-border); padding: 26px var(--sx-gutter); }
 .sxm-footer-inner { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; font-size: .82rem; color: var(--sx-muted); }
 .sxm-footer-power { color: var(--sx-muted); }

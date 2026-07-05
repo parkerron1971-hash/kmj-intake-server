@@ -13,8 +13,10 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     dna = ctx["dna"]
     eb = eyebrow("gallery", content.get("eyebrow") or "")
     headline = content.get("headline") or "The work"
+    biz_name = (ctx.get("business") or {}).get("name") or "Business"
     imgs = "".join(
-        f'\n      <img data-slot="gallery_{i}" src="" alt="" class="sxm-gal-img sxm-gal-{i}">'
+        f'\n      <img data-slot="gallery_{i}" src="" '
+        f'alt="{safe(biz_name)} gallery image {i}" class="sxm-gal-img sxm-gal-{i}">'
         for i in range(1, 5))
     html = f"""
 <section class="sxm-section sxm-gallery sxm-reveal" id="gallery">
