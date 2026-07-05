@@ -158,6 +158,23 @@ def signature_move_class(dna: Dict[str, Any],
     return ("sx-sig-cascade", "sx-sig-drift", "sx-sig-underline")[pick]
 
 
+# Arc 6 "Creative Engine" — rule-break treatment → body class. The
+# treatment vocabulary + free-text mapping live in brand_dna
+# (resolve_rule_break); this is the render-side registry.
+RULE_BREAK_CLASSES: Dict[str, str] = {
+    "oversize_headline": "sx-rb-oversize",
+    "hard_silence": "sx-rb-silence",
+    "wrong_accent_moment": "sx-rb-wrongaccent",
+    "broken_grid": "sx-rb-brokengrid",
+}
+
+
+def rule_break_treatment(design: Optional[Dict[str, Any]]) -> str:
+    """DRO decisions.rule_break → treatment key ('' when absent)."""
+    import brand_dna
+    return brand_dna.resolve_rule_break((design or {}).get("rule_break"))
+
+
 def image_treatment_class(dna: Dict[str, Any],
                           design: Optional[Dict[str, Any]]) -> str:
     """DRO palette temperature / accent strategy (vibe fallback) → one
@@ -230,6 +247,44 @@ body.sx-img-duowash .sxm-imgbox::after { content: ""; position: absolute; inset:
   border-radius: inherit; background: color-mix(in srgb, var(--sx-accent) 26%, transparent);
   mix-blend-mode: soft-light; }"""
 
+# Arc 6 "Creative Engine" — rule-break treatment CSS + the restraint
+# budget's reduced tiers. Each treatment is ONE loud moment:
+#   sx-rb-oversize    — hero display clamps up a tier (#top = every hero)
+#   sx-rb-silence     — the emptiest section (render_page marks it
+#                       .sx-rb-target) doubles its vertical air and drops
+#                       ornament (eyebrow/mark/alternating band)
+#   sx-rb-wrongaccent — the hero CTA + accent word spend --sx-accent-break
+#   sx-rb-brokengrid  — the about image slips its column (offset + tilt)
+# `.sx-rb-soft` = the rule-break at REDUCED strength (budget spent on the
+# motion signature instead); `.sx-sig-soft` = the signature move at
+# reduced strength (budget spent on the rule-break). page_shell applies
+# exactly one of the two at loud strength — never both.
+_RULE_BREAK_CSS = """
+body.sx-rb-oversize #top h1 { font-size: clamp(3.9rem, 10vw, 8.2rem); line-height: .98; }
+body.sx-rb-oversize.sx-rb-soft #top h1 { font-size: clamp(3.3rem, 8.2vw, 6.6rem); }
+body.sx-rb-silence .sx-rb-target { padding-top: calc(var(--sx-section-pad) * 2);
+  padding-bottom: calc(var(--sx-section-pad) * 2); background: var(--sx-bg); }
+body.sx-rb-silence .sx-rb-target .sxm-eyebrow,
+body.sx-rb-silence .sx-rb-target .sxm-mark { display: none; }
+body.sx-rb-silence.sx-rb-soft .sx-rb-target { padding-top: calc(var(--sx-section-pad) * 1.4);
+  padding-bottom: calc(var(--sx-section-pad) * 1.4); }
+body.sx-rb-wrongaccent #top .sxm-cta { background: var(--sx-accent-break, var(--sx-accent));
+  color: var(--sx-on-accent-break, var(--sx-on-accent)); }
+body.sx-rb-wrongaccent #top .sxm-cta:hover { background: var(--sx-accent-break, var(--sx-accent-strong)); filter: brightness(1.08); }
+body.sx-rb-wrongaccent #top .sxm-accent-word { color: var(--sx-accent-break, var(--sx-accent)); }
+body.sx-rb-wrongaccent.sx-rb-soft #top .sxm-cta { background: var(--sx-accent); color: var(--sx-on-accent); filter: none; }
+body.sx-rb-brokengrid #about .sxm-imgbox { transform: translateY(clamp(26px, 5vw, 64px)) rotate(-1.4deg); }
+body.sx-rb-brokengrid.sx-rb-soft #about .sxm-imgbox { transform: translateY(clamp(12px, 2.4vw, 30px)) rotate(-0.5deg); }
+@media (max-width: 768px) {
+  body.sx-rb-brokengrid #about .sxm-imgbox { transform: translateY(14px) rotate(-0.8deg); }
+}
+/* Signature move at reduced strength (restraint budget: rule-break is loud) */
+body.sx-sig-soft.sx-sig-cascade .sxm-reveal.sxm-in .sxm-inner > * { transition-delay: 0s !important; }
+body.sx-sig-soft.sx-sig-drift .sxm-orn-layer, body.sx-sig-soft.sx-sig-drift .sxm-motif,
+body.sx-sig-soft.sx-sig-drift .sxm-cine-bg, body.sx-sig-soft.sx-sig-drift .sxm-hero-bgimg {
+  animation-duration: 44s !important; }
+body.sx-sig-soft.sx-sig-underline .sxm-reveal h2::after { width: 64px; height: 2px; }"""
+
 # Film-grain finish (Arc 3, quality-bar signature): ultra-subtle static
 # noise over the whole page. pointer-events: none — purely atmospheric.
 _GRAIN_CSS = (
@@ -287,6 +342,7 @@ body.sx-scarce-accent .sxm-mark-block {{ background: var(--sx-border); }}
 body.sx-scarce-accent .sxm-mark-soft {{ background: color-mix(in srgb, var(--sx-muted) 45%, transparent); }}
 {reveal_css}
 {_TREATMENT_CSS}
+{_RULE_BREAK_CSS}
 {_GRAIN_CSS}
 @media (max-width: 768px) {{ body {{ font-size: 15.5px; }} }}
 """
@@ -426,6 +482,23 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
     treat = image_treatment_class(dna, design)
     if treat:
         classes.append(treat)
+    # Arc 6 — rule-break treatment + the RESTRAINT BUDGET. When BOTH a
+    # signature move and a rule-break exist, exactly ONE applies at loud
+    # strength: the owner's loud_where='motion' (design_prefs v3, stamped
+    # onto decisions as _owner_loud_where by site_composer) hands the
+    # budget to the signature move (rule-break renders reduced via
+    # .sx-rb-soft); otherwise the DRO's ONE deliberate rule-break is the
+    # loud moment and the signature move renders reduced (.sx-sig-soft).
+    rb_treatment = rule_break_treatment(design)
+    rb_class = RULE_BREAK_CLASSES.get(rb_treatment, "")
+    if rb_class:
+        classes.append(rb_class)
+        if sig:
+            loud_where = str((design or {}).get("_owner_loud_where") or "")
+            if loud_where == "motion":
+                classes.append("sx-rb-soft")     # motion is loud, break quiet
+            else:
+                classes.append("sx-sig-soft")    # break is loud, motion quiet
     body_class = " ".join(classes)
     return f"""<!DOCTYPE html>
 <html lang="en">

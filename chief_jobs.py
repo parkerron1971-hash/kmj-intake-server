@@ -81,6 +81,14 @@ KIND_META: Dict[str, Dict[str, Any]] = {
         "done": "your site is ready",
         "nav": "build:mysite",
     },
+    # Arc 6 "Creative Engine" — three candidate design directions
+    # (3× DRO author + 3× copy pass ≈ 60-120s; always a background job).
+    "compose_directions": {
+        "label": "Design directions",
+        "working": "designing three directions for your site",
+        "done": "three design directions are ready — pick one",
+        "nav": "build:mysite",
+    },
 }
 
 
@@ -98,6 +106,15 @@ def _execute_kind(kind: str, business_id: str, params: dict) -> dict:
         # reuses the stored site_prefs automatically.
         result = compose_site(business_id, brief_notes=notes, use_llm=True,
                               design_prefs=(params or {}).get("design_prefs"))
+        return result if isinstance(result, dict) else {}
+    if kind == "compose_directions":
+        # Arc 6 — authors + stores the three direction drafts; the result
+        # carries the directions list (draft_id/stance/label/summary/
+        # tagline). The frontend then GETs /composer/directions/{biz} for
+        # preview tokens.
+        from site_composer import compose_directions
+        result = compose_directions(
+            business_id, design_prefs=(params or {}).get("design_prefs"))
         return result if isinstance(result, dict) else {}
     raise ValueError(f"unknown job kind: {kind}")
 

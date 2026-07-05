@@ -14,11 +14,38 @@ Registry contract:
 """
 from __future__ import annotations
 
+import re as _re
 from typing import Any, Dict, List, Tuple
 
 from . import (hero, about, offerings, testimonials, gallery, cta_band,
                contact_footer, store, showcase, header, statband)
-from ._base import page_shell, build_page_meta
+from ._base import page_shell, build_page_meta, rule_break_treatment
+
+_TAG_RE = _re.compile(r"<[^>]+>")
+
+
+def _mark_silence_target(body_parts: List[str], rendered_ids: List[str]) -> None:
+    """Arc 6 hard_silence rule-break: the EMPTIEST rendered section (least
+    visible text; hero and contact excluded — the break never lands on the
+    entry or the exit) gets class sx-rb-target so the doubled-whitespace /
+    no-ornament CSS (base_css) has a single deterministic home. In place."""
+    best_i, best_len = -1, None
+    for i, (mid, html) in enumerate(zip(rendered_ids, body_parts)):
+        if mid in ("hero", "contact"):
+            continue
+        text_len = len(" ".join(_TAG_RE.sub(" ", html).split()))
+        if best_len is None or text_len < best_len:
+            best_i, best_len = i, text_len
+    if best_i < 0:
+        return
+    part = body_parts[best_i]
+    marked, n = _re.subn(r'(<section\b[^>]*class=")', r"\1sx-rb-target ",
+                         part, count=1)
+    if not n:  # a section tag without a class attribute
+        marked, n = _re.subn(r"<section\b", '<section class="sx-rb-target"',
+                             part, count=1)
+    if n:
+        body_parts[best_i] = marked
 
 MODULES: Dict[str, Dict[str, Any]] = {
     "hero": {
@@ -104,6 +131,11 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
         if css and key not in seen_css:
             seen_css.add(key)
             css_parts.append(css)
+    # Arc 6 — hard_silence rule-break needs a target section; mark the
+    # emptiest one BEFORE the header is prepended (indexes align with
+    # rendered_ids).
+    if rule_break_treatment(ctx.get("design")) == "hard_silence":
+        _mark_silence_target(body_parts, rendered_ids)
     header_html, header_css = header.render_header(rendered_ids, ctx)
     body_parts.insert(0, header_html)
     css_parts.insert(0, header_css)
