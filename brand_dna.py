@@ -359,8 +359,10 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
         never overridden — same precedence as derive_typography
       - DRO-absent composes return the dna untouched, byte-for-byte
 
-    Deliberately NOT consumed yet: layout.symmetry (no renderer hook) and
-    visual_metaphor (constructed hero not built) — flagged in the DRL doc.
+    layout.symmetry and hero visual_metaphor are consumed ELSEWHERE
+    (Arc 3): site_composer._apply_symmetry_preference steers defaulted
+    section variants and _apply_hero_direction maps visual_metaphor to
+    the constructed hero. The Arc 4 quality gate verifies both post-render.
     """
     d = decisions or {}
     if not d:

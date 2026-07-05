@@ -123,10 +123,16 @@ def resolve_html_overrides(
     if not text_overrides_raw:
         return html
 
+    # Arc 4 "Trust & Polish": overrides marked stale by the recompose
+    # reconciliation (composer wrote new text at the path, or the path no
+    # longer exists) are NEVER applied — they'd silently mask fresh
+    # composer copy. Rows predating the status column (key absent) are
+    # treated as active.
     text_by_path = {
         path: row.get("override_value", "")
         for path, row in text_overrides_raw.items()
         if row.get("override_value") is not None
+        and (row.get("status") or "active") != "stale"
     }
     try:
         new_html, applied = _apply_text_overrides(html, text_by_path)
@@ -142,6 +148,82 @@ def resolve_html_overrides(
             f"returning HTML unchanged: {e}"
         )
         return html
+
+
+# ─── Arc 4 "Trust & Polish" — recompose reconciliation ──────────────
+
+_RECON_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _norm_text(fragment: str) -> str:
+    """Comparison normal form: tags stripped (composer copy may carry
+    accent <em>/<span> fragments), entities unescaped, whitespace
+    collapsed. original_value was captured as innerHTML at edit time, so
+    both sides normalize identically."""
+    return " ".join(
+        html_lib.unescape(_RECON_TAG_RE.sub(" ", str(fragment or ""))).split())
+
+
+def reconcile_text_overrides(business_id: str, fresh_html: str) -> Dict[str, Any]:
+    """Diff every stored TEXT override against a freshly-composed document
+    (BEFORE overrides are applied) and mark rows stale/active:
+
+      - path missing from the fresh doc               → stale (orphaned)
+      - composer wrote NEW text at the path (fresh ≠
+        the override's original_value)                → stale (rewrote)
+      - fresh text still matches original_value       → active (applies)
+      - legacy row without original_value             → active (unknown
+        provenance; staling it would visibly revert a real edit)
+
+    Stale rows are never deleted — GET /composer/spec exposes them so a
+    future UI can offer re-apply. Status writes are best-effort: if the
+    status column migration isn't applied yet, marking soft-fails (logged)
+    and behavior degrades to the pre-Arc-4 apply-everything.
+
+    Returns {"applied": n, "stale": n, "unknown_kept": n, "stale_paths": [...]}."""
+    from agents.override_system import override_storage
+
+    result: Dict[str, Any] = {"applied": 0, "stale": 0,
+                              "unknown_kept": 0, "stale_paths": []}
+    rows = override_storage.list_overrides(business_id, "text")
+    if not rows:
+        return result
+
+    fresh_by_path: Dict[str, str] = {}
+    for t in find_override_targets(fresh_html):
+        fresh_by_path.setdefault(t["target_path"], t.get("current_value") or "")
+
+    to_stale: List[str] = []
+    to_activate: List[str] = []
+    for row in rows:
+        path = row.get("target_path")
+        prev_status = (row.get("status") or "active")
+        if path not in fresh_by_path:
+            new_status = "stale"          # orphaned — path left the document
+        else:
+            original = row.get("original_value")
+            if original is None or not str(original).strip():
+                new_status = "active"     # legacy row — provenance unknown
+                result["unknown_kept"] += 1
+            elif _norm_text(fresh_by_path[path]) != _norm_text(original):
+                new_status = "stale"      # composer produced NEW copy here
+            else:
+                new_status = "active"     # composer copy unchanged — apply
+        if new_status == "stale":
+            result["stale"] += 1
+            result["stale_paths"].append(path)
+            if prev_status != "stale" and row.get("id"):
+                to_stale.append(str(row["id"]))
+        else:
+            result["applied"] += 1
+            if prev_status == "stale" and row.get("id"):
+                to_activate.append(str(row["id"]))
+
+    if to_stale:
+        override_storage.mark_overrides_status(to_stale, "stale")
+    if to_activate:
+        override_storage.mark_overrides_status(to_activate, "active")
+    return result
 
 
 # ─── Diagnostic helpers (used by router /chief/override/_diag) ──────

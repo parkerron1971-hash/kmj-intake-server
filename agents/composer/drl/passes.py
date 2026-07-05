@@ -13,8 +13,13 @@
 #
 # Mirrors compose_hero's discipline: one Anthropic call per pass, code-fence
 # strip, one retry on parse/validation failure, structured soft-fallback on
-# any error (never raises into the caller). NOT consumed by the composer yet
-# — PR3 wires the DRO into compose. All DB access is service role.
+# any error (never raises into the caller). CONSUMED by the composer:
+# site_composer.compose_site calls produce_dro() and threads the DRO into
+# the design tokens (brand_dna.apply_dro_palette/style), the copy directive
+# (_dro_directive), variant selection (symmetry + hero direction), and the
+# Arc 4 quality gate; the stored rationale is served by GET
+# /composer/rationale (frontend DesignRationalePanel). All DB access is
+# service role.
 # ═══════════════════════════════════════════════════════════════════════
 
 import json
