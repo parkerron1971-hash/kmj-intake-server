@@ -196,11 +196,112 @@ def _infer_intensity(bundle: Dict[str, Any], vibe: str) -> str:
     return {"warm": "confident", "formal": "restrained", "bold": "bold"}[vibe]
 
 
+# ─── Owner color-language steering (Smart Sites Arc 5) ────────────────
+# site_prefs.colors {use_brand, love[], avoid[]} nudges ACCENT derivation
+# deterministically: a fixed word→hue map (hex passthrough), an avoid-
+# family rotation, and use_brand=False dropping brand-kit colors from
+# accent derivation. WCAG enforcement downstream is untouched — the
+# steered accent flows through the same _ensure_contrast/_on_color math.
+
+_COLOR_WORDS: Dict[str, str] = {
+    "terracotta": "#c56a4a", "turquoise": "#3ab0a2", "burgundy": "#6d2331",
+    "charcoal": "#3a3a3c", "lavender": "#b19cd9", "mustard": "#d4a017",
+    "emerald": "#2e8b57", "magenta": "#c2185b", "crimson": "#a51c30",
+    "forest": "#2c5f2d", "indigo": "#3f51b5", "violet": "#7f3fbf",
+    "maroon": "#701c1c", "salmon": "#e8907e", "copper": "#b87333",
+    "bronze": "#a97142", "silver": "#a8a9ad", "purple": "#7d5ba6",
+    "orange": "#e07b39", "yellow": "#e8c15a", "coral": "#e2725b",
+    "olive": "#7a7d3a", "blush": "#e8b4b8", "peach": "#f2b380",
+    "cream": "#f2e8d5", "beige": "#d9c7a7", "brown": "#7a5c43",
+    "black": "#1a1a1a", "white": "#f7f5f0", "green": "#3f7d4e",
+    "sage": "#9caf88", "rust": "#b7410e", "navy": "#1f3a5f",
+    "teal": "#2a7f7f", "gold": "#d4af37", "pink": "#d98ca0",
+    "blue": "#3a6ea5", "grey": "#8a8a8e", "gray": "#8a8a8e",
+    "rose": "#c96f7b", "plum": "#8e4585", "mint": "#98d7c2",
+    "sky": "#7ab8d9", "red": "#b0413e", "tan": "#c9a97a",
+}
+_HUE_FAMILY_DEG = 30.0     # ± window that counts as "the same hue family"
+_NEUTRAL_SAT = 0.14        # HSV saturation floor below which a color is neutral
+
+
+def pref_color_to_hex(token: Any) -> Optional[str]:
+    """One owner color token ('sage', 'sage green', '#9caf88') → hex.
+    Earliest word match wins (longer name on a tie) so 'sage green'
+    resolves to sage, the specific modifier, not green."""
+    s = str(token or "").strip().lower()
+    if not s:
+        return None
+    rgb = _parse_hex(s)
+    if rgb:
+        return _to_hex(rgb)
+    best: Optional[Tuple[Tuple[int, int], str]] = None
+    for word in _COLOR_WORDS:
+        i = s.find(word)
+        if i >= 0 and (best is None or (i, -len(word)) < best[0]):
+            best = ((i, -len(word)), word)
+    return _COLOR_WORDS[best[1]] if best else None
+
+
+def _hue_sat(hex_color: str) -> Tuple[float, float]:
+    """(hue 0..1, HSV saturation). HSV — not HLS — saturation, which
+    would read near-white creams as fully saturated."""
+    import colorsys
+    rgb = _parse_hex(hex_color) or (0.5, 0.5, 0.5)
+    h, s, _v = colorsys.rgb_to_hsv(*rgb)
+    return h, s
+
+
+def _in_hue_family(candidate: str, avoid_hexes: List[str]) -> bool:
+    """True when `candidate` lands in any avoided hue family. Neutral
+    avoids (charcoal/gray/...) match neutral candidates by saturation."""
+    ch, cs = _hue_sat(candidate)
+    for av in avoid_hexes:
+        ah, as_ = _hue_sat(av)
+        if as_ < _NEUTRAL_SAT:
+            if cs < _NEUTRAL_SAT:
+                return True
+            continue
+        if cs < _NEUTRAL_SAT:
+            continue
+        dh = abs(ch - ah)
+        dh = min(dh, 1.0 - dh) * 360.0
+        if dh <= _HUE_FAMILY_DEG:
+            return True
+    return False
+
+
+def _steer_accent(accent: str, love_hexes: List[str], avoid_hexes: List[str],
+                  fallback: str) -> str:
+    """Avoid-family rotation: when the derived accent lands in an avoided
+    hue family, rotate to the next candidate (loved colors first, then the
+    vibe default, then 60° hue rotations of the accent itself)."""
+    if not avoid_hexes or not _in_hue_family(accent, avoid_hexes):
+        return accent
+    h, l, s = _hls(accent)
+    rotations = [_from_hls((h + step / 360.0) % 1.0, l, max(s, 0.35))
+                 for step in (60, 120, 180, 240, 300)]
+    for cand in [*love_hexes, fallback, *rotations]:
+        if cand and _parse_hex(cand) and not _in_hue_family(cand, avoid_hexes):
+            return cand
+    return accent      # everything is avoided — owner contradiction, keep
+
+
 # ─── Token derivation ─────────────────────────────────────────────────
 
-def derive_palette(design: Dict[str, Any], vibe: str, business_id: str) -> Dict[str, str]:
+def derive_palette(design: Dict[str, Any], vibe: str, business_id: str,
+                   color_prefs: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     """Full surface/ink system from up to 5 brand colors. Dark- or
-    light-mode is taken from the brand background's luminance."""
+    light-mode is taken from the brand background's luminance.
+
+    Arc 5: `color_prefs` (sanitized site_prefs.colors) steers the accent:
+    use_brand=False ignores brand-kit colors for accent derivation, loved
+    colors nudge accent choice when no brand accent applies, avoided hue
+    families rotate the accent to the next candidate."""
+    prefs = color_prefs if isinstance(color_prefs, dict) else {}
+    ignore_brand = prefs.get("use_brand") is False
+    love_hexes = [h for h in (pref_color_to_hex(t) for t in (prefs.get("love") or [])[:4]) if h]
+    avoid_hexes = [h for h in (pref_color_to_hex(t) for t in (prefs.get("avoid") or [])[:4]) if h]
+
     defaults = _VIBE_DEFAULTS[vibe]
     bg = design.get("background_color") if _parse_hex(design.get("background_color")) else defaults["bg"]
     accent = design.get("accent_color") if _parse_hex(design.get("accent_color")) else None
@@ -208,7 +309,14 @@ def derive_palette(design: Dict[str, Any], vibe: str, business_id: str) -> Dict[
     secondary = design.get("secondary_color") if _parse_hex(design.get("secondary_color")) else None
     text = design.get("text_color") if _parse_hex(design.get("text_color")) else None
 
+    if ignore_brand:
+        # Owner explicitly diverging from the brand kit for this site.
+        accent = primary = secondary = None
+
+    if (accent or primary) is None and love_hexes:
+        accent = love_hexes[0]                  # loved color leads
     accent = accent or primary or defaults["accent"]
+    accent = _steer_accent(accent, love_hexes, avoid_hexes, defaults["accent"])
     primary = primary or accent
 
     dark_mode = _luminance(bg) < 0.35
@@ -284,8 +392,10 @@ def derive_radius(vibe: str, intensity: str) -> Dict[str, str]:
     return {"card": "22px", "button": "999px", "image": "18px"}     # warm default
 
 
-def build_brand_dna(business_id: str, bundle: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """The one entry point: brand bundle → complete token set."""
+def build_brand_dna(business_id: str, bundle: Optional[Dict[str, Any]] = None,
+                    color_prefs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The one entry point: brand bundle → complete token set.
+    `color_prefs` (Arc 5) = sanitized site_prefs.colors — see derive_palette."""
     if bundle is None:
         import brand_engine
         bundle = brand_engine.get_bundle(business_id) or {}
@@ -298,7 +408,7 @@ def build_brand_dna(business_id: str, bundle: Optional[Dict[str, Any]] = None) -
 
     vibe = _infer_vibe(bundle)
     intensity = _infer_intensity(bundle, vibe)
-    palette = derive_palette(design, vibe, business_id)
+    palette = derive_palette(design, vibe, business_id, color_prefs=color_prefs)
     typography = derive_typography(design, vibe, intensity)
 
     expr = design.get("creative_expression") or {}
@@ -337,6 +447,20 @@ def apply_dro_palette(dna: Dict[str, Any], dro_palette: Optional[Dict[str, Any]]
     """Return a copy of `dna` with its neutral ground swapped to the DRO's
     palette.base preset (brand accent preserved). No-op if base is unknown."""
     ground = _BASE_GROUNDS.get((dro_palette or {}).get("base") or "")
+    if not ground:
+        return dna
+    out = dict(dna)
+    out["palette"] = {**dna.get("palette", {}), **ground}
+    return out
+
+
+def apply_owner_ground(dna: Dict[str, Any], direction: Optional[str]) -> Dict[str, Any]:
+    """Arc 5 — the OWNER's chosen color direction (site_prefs.colors.
+    direction) maps 1:1 onto _BASE_GROUNDS and is a HARD preference:
+    site_composer applies it after apply_dro_palette so the owner's
+    ground beats the model's, and on no-DRO composes it's the ground,
+    period. Same neutral-ground swap discipline (brand accent kept)."""
+    ground = _BASE_GROUNDS.get(str(direction or "").strip().lower())
     if not ground:
         return dna
     out = dict(dna)

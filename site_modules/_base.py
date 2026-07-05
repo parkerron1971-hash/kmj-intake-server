@@ -106,12 +106,26 @@ def heading_accent(dna: Dict[str, Any]) -> str:
 def cta_button(ctx: Dict[str, Any], label: str, section: str,
                field: str = "cta_label") -> str:
     """A CTA that always WORKS: booking page when enabled, else a
-    mailto/contact anchor. Never a dead button."""
+    mailto/contact anchor. Never a dead button.
+
+    Arc 5: ctx.cta_goal (the owner's stated #1 conversion goal) steers
+    the destination deterministically — buy → the store page (when it
+    exists), contact → the contact anchor. book/follow keep the default
+    ladder (booking page > #contact; socials live in the contact
+    section). Function-first: a goal never produces a dead href."""
     booking = ctx.get("booking") or {}
-    if booking.get("enabled") and booking.get("url"):
-        href = safe_url(booking["url"])
-    else:
+    store = ctx.get("store") or {}
+    goal = str(ctx.get("cta_goal") or "")
+    href = ""
+    if goal == "buy" and store.get("enabled") and store.get("url"):
+        href = safe_url(store["url"])
+    elif goal == "contact":
         href = "#contact"
+    if not href:
+        if booking.get("enabled") and booking.get("url"):
+            href = safe_url(booking["url"])
+        else:
+            href = "#contact"
     return (f'<a class="sxm-cta" href="{href}">'
             f'<span {ov(section, field)}>{safe(label or "Get in touch")}</span></a>')
 

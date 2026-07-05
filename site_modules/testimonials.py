@@ -1,6 +1,7 @@
 """Testimonials module — renders REAL testimonials from ctx only
 (integrity rule: never invented). Content: eyebrow, headline.
-ctx['testimonials'] = [{quote, author, role?}]. Variants: spotlight, grid."""
+ctx['testimonials'] = [{quote, name|author, role?}] — the canonical store
+writes 'name'; 'author' is honored for older rows. Variants: spotlight, grid."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
@@ -14,7 +15,11 @@ _MAX = 6
 
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
     dna = ctx["dna"]
-    rows: List[Dict[str, Any]] = [t for t in (ctx.get("testimonials") or []) if (t.get("quote") or "").strip()][:_MAX]
+    # isinstance guard: specs/ctx can carry legacy string entries — one
+    # non-dict row must not crash the whole render (self-defense even
+    # though gather_context filters too).
+    rows: List[Dict[str, Any]] = [t for t in (ctx.get("testimonials") or [])
+                                  if isinstance(t, dict) and (t.get("quote") or "").strip()][:_MAX]
     if not rows:
         return "", ""
 
@@ -30,7 +35,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     {heading_accent(dna)}
     {eb}
     <blockquote class="sxm-testi-big">{safe(t['quote'])}</blockquote>
-    <div class="sxm-testi-attr">{safe(t.get('author') or 'A client')}{role}</div>
+    <div class="sxm-testi-attr">{safe(t.get('author') or t.get('name') or 'A client')}{role}</div>
   </div>
 </section>"""
         css = """
@@ -55,7 +60,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
             support.append(f"""
       <figure class="sxm-mq-sup">
         <blockquote>{safe(s['quote'])}</blockquote>
-        <figcaption>{safe(s.get('author') or 'A client')}{s_role}</figcaption>
+        <figcaption>{safe(s.get('author') or s.get('name') or 'A client')}{s_role}</figcaption>
       </figure>""")
         support_html = (f'<div class="sxm-mq-pair">{"".join(support)}\n    </div>'
                         if support else "")
@@ -66,7 +71,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     {heading_accent(dna)}
     {eb}
     <blockquote class="sxm-mq-big">{safe(t['quote'])}</blockquote>
-    <div class="sxm-testi-attr">{safe(t.get('author') or 'A client')}{role}</div>
+    <div class="sxm-testi-attr">{safe(t.get('author') or t.get('name') or 'A client')}{role}</div>
     {support_html}
   </div>
 </section>"""
@@ -94,7 +99,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
         cards.append(f"""
       <figure class="sxm-testi-card">
         <blockquote>{safe(t['quote'])}</blockquote>
-        <figcaption>{safe(t.get('author') or 'A client')}{role}</figcaption>
+        <figcaption>{safe(t.get('author') or t.get('name') or 'A client')}{role}</figcaption>
       </figure>""")
     html = f"""
 <section class="sxm-section sxm-testi-grid-sec sxm-reveal" id="testimonials">

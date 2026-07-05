@@ -114,7 +114,7 @@ def critique(
 @router.post("/build-with-loop")
 def build_with_loop(
     req: BuildWithLoopRequest,
-    _: UserSession = Depends(sb_clients.authed_request),
+    session: UserSession = Depends(sb_clients.authed_request),
 ):
     """Run the full Director build-with-loop pipeline (Pass 4.0b PART 4).
 
@@ -150,6 +150,15 @@ def build_with_loop(
             return JSONResponse(status_code=410, content={
                 "error": "This build engine was retired — sites are composed "
                          "by the Module Composer. POST /composer/compose instead."})
+        # Owner gate (mirrors /composer/rationale): the reroute runs a
+        # full LLM compose that overwrites the live site via service role.
+        owner_rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{req.business_id}&select=owner_id&limit=1") or []
+        if not owner_rows:
+            raise HTTPException(status_code=404, detail="business not found")
+        if str(owner_rows[0].get("owner_id")) != str(session.user.id):
+            raise HTTPException(status_code=403,
+                                detail="not authorized for this business")
         logger.warning(
             "[director.build-with-loop] DEPRECATED path hit — rerouting to "
             f"the Module Composer for business {req.business_id[:8]} "

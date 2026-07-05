@@ -122,8 +122,24 @@ def _brand_head_meta_tags(business_id: str) -> str:
     return "\n    ".join(parts)
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+from auth_supabase import AuthedUser, require_user
+
+
+def _require_business_owner(business_id: str, user: AuthedUser) -> None:
+    """Owner gate for destructive/expensive site endpoints (mirrors
+    /composer/rationale's check): 404 for an unknown business, 403 when
+    the verified caller isn't its owner. These endpoints trigger
+    service-role writes / LLM composes — session auth alone isn't enough."""
+    import sb_clients
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="business not found")
+    if str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(status_code=403, detail="not authorized for this business")
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1214,8 +1230,11 @@ async def smart_preview_endpoint(business_id: str, body: Dict[str, Any]):
 
 
 @router.post("/sites/{business_id}/smart-enable")
-async def smart_enable_endpoint(business_id: str):
+async def smart_enable_endpoint(business_id: str,
+                                user: AuthedUser = Depends(require_user)):
     """Flip use_smart_sites = true. Seeds defaults from bundle if empty.
+    Owner-gated: the reroute below synchronously overwrites the live
+    composed site (service-role write).
 
     ─── Smart Sites Arc 4 — RETIRED ENGINE, LIVE CALLER ────────────────
     Decision: LIVE frontend caller — MySite.tsx:185 handleEnableSmartSites
@@ -1233,6 +1252,7 @@ async def smart_enable_endpoint(business_id: str):
       - after the await, MySite refetches the site row; html_source ==
         'module-composer' routes it to the composed-site editor view.
     """
+    _require_business_owner(business_id, user)
     import site_composer as _sc
     if not _sc.legacy_site_engines_enabled():
         logger.warning(f"[smart-enable] DEPRECATED path hit — rerouting to a "
@@ -2178,8 +2198,11 @@ async def generate_design_rec_endpoint(business_id: str):
 # Builder Agent so the live URL + preview pick up the new direction.
 
 @router.post("/sites/{business_id}/promote-alternative")
-async def promote_alternative_endpoint(business_id: str, alternative_index: int):
+async def promote_alternative_endpoint(business_id: str, alternative_index: int,
+                                       user: AuthedUser = Depends(require_user)):
     """Promote one of the Designer Agent's alternatives to primary.
+    Owner-gated: the reroute below kicks a background LLM compose that
+    overwrites the live site.
 
     Reuses the design-rec cooldown (60s window) so the user can't thrash
     LLM calls. Re-fires Brief Expander + Builder in a background thread
@@ -2203,6 +2226,7 @@ async def promote_alternative_endpoint(business_id: str, alternative_index: int)
         raise HTTPException(
             status_code=400, detail="alternative_index must be 0 or 1",
         )
+    _require_business_owner(business_id, user)
 
     import site_composer as _sc
     if not _sc.legacy_site_engines_enabled():
@@ -2442,8 +2466,10 @@ async def set_site_type_endpoint(business_id: str, site_type: str):
 
 
 @router.post("/sites/{business_id}/generate-multi-page")
-async def generate_multi_page_endpoint(business_id: str):
-    """Generate every page in a multi-page site.
+async def generate_multi_page_endpoint(business_id: str,
+                                       user: AuthedUser = Depends(require_user)):
+    """Generate every page in a multi-page site. Owner-gated: both
+    branches kick background LLM builds.
 
     Runs Brief Expander + Builder once per page. Persists
     site_config.generated_pages[page_id] = html. Cost-cap-gated AND
@@ -2462,41 +2488,12 @@ async def generate_multi_page_endpoint(business_id: str):
     caller's waitForPagesComplete poll resolves and refreshes the preview
     (which serves the composed page) instead of showing a 10-minute
     timeout. generated_pages is NOT written — no fake multi-page state.
+
+    Bug-sweep 2026-07: the reroute now sits BEHIND the kill-switch /
+    cost-cap / in-flight guards it used to bypass — an unauthed (now
+    authed) caller could previously fire unlimited background composes.
     """
-    import site_composer as _sc
-    if not _sc.legacy_site_engines_enabled():
-        logger.warning(f"[gen-multi-page] DEPRECATED path hit — rerouting to a "
-                       f"single-page Module Composer compose for {business_id[:8]}")
-
-        def _compose_bg_multipage():
-            try:
-                _sc.compose_site(business_id)
-                from brand_engine import _sb_get as be_get, _sb_patch as be_patch
-                rows = be_get(f"/business_sites?business_id=eq.{business_id}"
-                              "&select=id,site_config&limit=1") or []
-                if rows:
-                    cfg = dict(rows[0].get("site_config") or {})
-                    cfg["pages_generated_at"] = time.strftime(
-                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    cfg["site_pages"] = ["home"]
-                    be_patch(f"/business_sites?id=eq.{rows[0]['id']}",
-                             {"site_config": cfg})
-            except Exception as e:
-                logger.warning(f"[gen-multi-page] composer reroute failed: {e}")
-
-        import threading
-        threading.Thread(target=_compose_bg_multipage,
-                         name=f"composer-multipage-{business_id[:8]}",
-                         daemon=True).start()
-        return {
-            "ok": True,
-            "engine": "module-composer",
-            "deprecated": True,
-            "site_pages": ["home"],
-            "note": ("Multi-page generation was retired — your site is composed "
-                     "as a single page by the Module Composer. "
-                     "POST /composer/compose directly next time."),
-        }
+    _require_business_owner(business_id, user)
 
     try:
         from studio_config import MULTI_PAGE_ENABLED
@@ -2529,6 +2526,46 @@ async def generate_multi_page_endpoint(business_id: str):
             status_code=429,
             detail="Multi-page generation already running for this business.",
         )
+
+    import site_composer as _sc
+    if not _sc.legacy_site_engines_enabled():
+        logger.warning(f"[gen-multi-page] DEPRECATED path hit — rerouting to a "
+                       f"single-page Module Composer compose for {business_id[:8]}")
+        # The reroute claims the same in-flight slot as the legacy build so
+        # concurrent calls can't stack background composes.
+        _multi_page_in_flight.add(business_id)
+
+        def _compose_bg_multipage():
+            try:
+                _sc.compose_site(business_id)
+                from brand_engine import _sb_get as be_get, _sb_patch as be_patch
+                rows = be_get(f"/business_sites?business_id=eq.{business_id}"
+                              "&select=id,site_config&limit=1") or []
+                if rows:
+                    cfg = dict(rows[0].get("site_config") or {})
+                    cfg["pages_generated_at"] = time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    cfg["site_pages"] = ["home"]
+                    be_patch(f"/business_sites?id=eq.{rows[0]['id']}",
+                             {"site_config": cfg})
+            except Exception as e:
+                logger.warning(f"[gen-multi-page] composer reroute failed: {e}")
+            finally:
+                _multi_page_in_flight.discard(business_id)
+
+        import threading
+        threading.Thread(target=_compose_bg_multipage,
+                         name=f"composer-multipage-{business_id[:8]}",
+                         daemon=True).start()
+        return {
+            "ok": True,
+            "engine": "module-composer",
+            "deprecated": True,
+            "site_pages": ["home"],
+            "note": ("Multi-page generation was retired — your site is composed "
+                     "as a single page by the Module Composer. "
+                     "POST /composer/compose directly next time."),
+        }
 
     try:
         from brand_engine import (

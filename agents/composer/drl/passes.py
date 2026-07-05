@@ -276,9 +276,29 @@ def _dro_system_prompt() -> str:
     )
 
 
+def _reference_analysis_block(reference_analysis: Optional[List[Dict[str, Any]]]) -> str:
+    """Arc 5 — deterministic study of the reference sites the owner named
+    (reference_analyzer output, compacted). DIRECTION EVIDENCE only."""
+    if not reference_analysis:
+        return ""
+    try:
+        from reference_analyzer import compact_summary
+        compact = compact_summary(reference_analysis)
+    except Exception:
+        compact = []
+    if not compact:
+        return ""
+    return (
+        "REFERENCE SITES THE OWNER ADMIRES (fetched + analyzed by the "
+        "platform — treat as DIRECTION EVIDENCE for mood/ground/contrast/"
+        "type-class/density; NEVER copy their content, branding or exact "
+        f"colors):\n{json.dumps(compact, indent=2)}\n\n")
+
+
 def _dro_user_prompt(business_id: str, signals: List[Dict[str, Any]],
                      exemplars: List[Dict[str, Any]],
-                     recent_signatures: List[List[Any]]) -> str:
+                     recent_signatures: List[List[Any]],
+                     reference_analysis: Optional[List[Dict[str, Any]]] = None) -> str:
     consumable = [s for s in signals
                   if isinstance(s.get("confidence"), (int, float))
                   and sig.is_consumable(s["confidence"])]
@@ -286,6 +306,7 @@ def _dro_user_prompt(business_id: str, signals: List[Dict[str, Any]],
         f"BUSINESS: {business_id}\n\n"
         f"DETECTED SIGNALS (only these drive design; confidence<{sig.CONSUME_THRESHOLD} "
         f"recorded but not consumed):\n{json.dumps(consumable, indent=2)}\n\n"
+        + _reference_analysis_block(reference_analysis) +
         f"CONTRASTING EXEMPLARS (learn the MOVE, never copy the surface):\n"
         f"{json.dumps([_exemplar_for_prompt(e) for e in exemplars], indent=2)}\n\n"
         f"RECENTLY-USED 8-AXIS SIGNATURES (justify any repetition from signals; "
@@ -301,17 +322,21 @@ def _dro_user_prompt(business_id: str, signals: List[Dict[str, Any]],
 
 
 def author_dro(business_id: str, signals: List[Dict[str, Any]],
-               recent: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """signals + principles + exemplars + recent signatures → validated DRO.
-    One retry on validation failure; one regeneration on distinctiveness
-    collision. Returns None on hard failure (caller decides fallback)."""
+               recent: List[Dict[str, Any]],
+               reference_analysis: Optional[List[Dict[str, Any]]] = None,
+               ) -> Optional[Dict[str, Any]]:
+    """signals + principles + exemplars + recent signatures (+ Arc 5
+    reference-site analysis) → validated DRO. One retry on validation
+    failure; one regeneration on distinctiveness collision. Returns None
+    on hard failure (caller decides fallback)."""
     client = _client()
     if not client:
         return None
     exemplars = _select_exemplars(signals)
     recent_sigs = [distinctiveness_signature(r) for r in recent]
     system = _dro_system_prompt()
-    user = _dro_user_prompt(business_id, signals, exemplars, recent_sigs)
+    user = _dro_user_prompt(business_id, signals, exemplars, recent_sigs,
+                            reference_analysis=reference_analysis)
 
     def _attempt(extra: str = "") -> Optional[Dict[str, Any]]:
         try:
@@ -397,14 +422,19 @@ def persist_dro(business_id: str, dro: Dict[str, Any]) -> Optional[str]:
 
 
 # ─── Orchestrator ────────────────────────────────────────────────────────
-def produce_dro(business_id: str, transcript: str) -> Optional[Dict[str, Any]]:
+def produce_dro(business_id: str, transcript: str,
+                reference_analysis: Optional[List[Dict[str, Any]]] = None,
+                ) -> Optional[Dict[str, Any]]:
     """Full pass: detect signals → fetch recent → author DRO (with
     distinctiveness) → persist. Returns the DRO (with `id` stamped) or None.
-    Best-effort: never raises into the caller (PR3 wires this ahead of compose)."""
+    Best-effort: never raises into the caller (PR3 wires this ahead of compose).
+    `reference_analysis` (Arc 5) = reference_analyzer results for the sites
+    the owner admires — rides into the authoring prompt as direction evidence."""
     try:
         signals = detect_signals(business_id, transcript)
         recent = fetch_recent_dros(business_id)
-        dro = author_dro(business_id, signals, recent)
+        dro = author_dro(business_id, signals, recent,
+                         reference_analysis=reference_analysis)
         if dro is None:
             return None
         dro_id = persist_dro(business_id, dro)
