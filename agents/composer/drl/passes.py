@@ -39,7 +39,11 @@ logger = logging.getLogger("drl.passes")
 DRL_MODEL = "claude-sonnet-4-5-20250929"     # same tier as the composer
 SIGNAL_MAX_TOKENS = 1800
 SIGNAL_TEMPERATURE = 0.2                       # extraction — low/deterministic
-DRO_MAX_TOKENS = 3000
+# Arc 6 grew the DRO (rule_break/tension/first_impression blocks, each with
+# because + from_signals) — 3000 truncated the JSON mid-object, and a parse
+# failure returned None with NO retry, killing all three direction stances
+# identically ("0/3 succeeded"). Roomy cap + parse-retry in author_dro.
+DRO_MAX_TOKENS = 6000
 DRO_TEMPERATURE = 0.4                          # reasoning with creative latitude
 
 
@@ -420,9 +424,24 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
             logger.warning(f"[drl] DRO authoring call failed for {business_id}: {e}")
             return None
         parsed = _parse_json(raw)
-        return parsed if isinstance(parsed, dict) else None
+        if not isinstance(parsed, dict):
+            # Diagnose, don't guess: truncation = long raw w/ no closing
+            # brace in the tail; refusal/preamble shows in the head.
+            r = raw or ""
+            logger.warning(f"[drl] DRO parse failed for {business_id}: "
+                           f"len={len(r)} head={r[:60]!r} tail={r[-60:]!r}")
+            return None
+        return parsed
 
     dro = _attempt()
+    if dro is None:
+        # Parse/call failures get one clean retry too — previously only
+        # VALIDATION problems retried, so a single truncated or fenced
+        # response hard-failed the whole authoring.
+        dro = _attempt(
+            "\n\nYour previous response was not parseable JSON. Output ONLY "
+            "the complete JSON object — no prose, no code fences — and make "
+            "sure the JSON is fully closed.")
     if dro is not None:
         problems = _validate_dro(dro)
         if problems:
