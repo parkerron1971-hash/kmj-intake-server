@@ -58,15 +58,47 @@ _MAX_FIELD = {"body": 900, "intro": 400, "note": 300, "subheadline": 260,
 # ─── Arc 2 "Ask the Owner" — design preferences ───────────────────────
 
 _PREF_STR_CAP = 400
+_PREF_URL_CAP = 300
 _IMAGERY_PRIORITIES = ("my_photos", "atmosphere", "typography")
 _BOLDNESS_TO_INTENSITY = {1: "restrained", 2: "confident", 3: "bold"}
+# Arc 5 "Design Depth" — v2 enums (frontend built to this exact contract).
+_COLOR_DIRECTIONS = ("deep_dark", "soft_dark", "warm_light", "cool_light",
+                     "paper_neutral")     # 1:1 with brand_dna._BASE_GROUNDS
+_CTA_GOALS = ("book", "buy", "contact", "follow")
+_AUDIENCE_CAP = 240
+_MAX_INSPIRATION_URLS = 3
+
+
+def _sanitize_pref_url(u: Any) -> Optional[str]:
+    """One inspiration URL: http/https only, hostname required + lowercased,
+    fragments stripped. Lenient: a bare domain gets https:// prefixed.
+    Returns None when nothing safe remains."""
+    from urllib.parse import urlparse, urlunparse
+    if not isinstance(u, str) or not u.strip():
+        return None
+    s = u.strip()[:_PREF_URL_CAP]
+    if "://" not in s and not s.lower().startswith(("javascript:", "data:", "vbscript:", "file:", "ftp:")):
+        s = "https://" + s
+    try:
+        p = urlparse(s)
+    except ValueError:
+        return None
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return None
+    host = p.hostname.lower()
+    netloc = host + (f":{p.port}" if p.port else "")
+    return urlunparse((p.scheme, netloc, p.path or "", p.params, p.query, ""))
 
 
 def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
-    """Lenient shape validation for the Ask-the-Owner design_prefs object:
+    """Lenient shape validation for the Ask-the-Owner design_prefs object
+    (v2, Arc 5 — every field optional, backward compatible with v1):
     unknown keys dropped, strings trimmed + capped, feel_words ≤ 3,
-    imagery_priority / boldness clamped to their enums. Returns None when
-    nothing usable remains — callers treat that as 'no prefs given'."""
+    inspiration_urls ≤ 3 (http/https only, hostnames lowercased),
+    colors {use_brand, direction, love ≤ 4, avoid ≤ 4}, audience ≤ 240,
+    cta_goal / imagery_priority / boldness clamped to their enums.
+    Returns None when nothing usable remains — callers treat that as
+    'no prefs given'."""
     if not isinstance(raw, dict):
         return None
     out: Dict[str, Any] = {}
@@ -80,6 +112,47 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
         v = raw.get(key)
         if isinstance(v, str) and v.strip():
             out[key] = v.strip()[:_PREF_STR_CAP]
+
+    # v2 — inspiration_urls (validated; bad entries silently dropped)
+    iu = raw.get("inspiration_urls")
+    if isinstance(iu, (list, tuple)):
+        urls: List[str] = []
+        for u in iu:
+            su = _sanitize_pref_url(u)
+            if su and su not in urls:
+                urls.append(su)
+            if len(urls) >= _MAX_INSPIRATION_URLS:
+                break
+        if urls:
+            out["inspiration_urls"] = urls
+
+    # v2 — colors {use_brand, direction, love[≤4], avoid[≤4]}
+    c = raw.get("colors")
+    if isinstance(c, dict):
+        cout: Dict[str, Any] = {}
+        if isinstance(c.get("use_brand"), bool):
+            cout["use_brand"] = c["use_brand"]
+        d = c.get("direction")
+        if isinstance(d, str) and d.strip().lower() in _COLOR_DIRECTIONS:
+            cout["direction"] = d.strip().lower()
+        for key in ("love", "avoid"):
+            v = c.get(key)
+            if isinstance(v, (list, tuple)):
+                vals = [str(x).strip()[:40] for x in v
+                        if isinstance(x, (str, int, float)) and str(x).strip()]
+                if vals:
+                    cout[key] = vals[:4]
+        if cout:
+            out["colors"] = cout
+
+    # v2 — audience + cta_goal
+    aud = raw.get("audience")
+    if isinstance(aud, str) and aud.strip():
+        out["audience"] = aud.strip()[:_AUDIENCE_CAP]
+    goal = raw.get("cta_goal")
+    if isinstance(goal, str) and goal.strip().lower() in _CTA_GOALS:
+        out["cta_goal"] = goal.strip().lower()
+
     ip = raw.get("imagery_priority")
     if isinstance(ip, str) and ip.strip().lower() in _IMAGERY_PRIORITIES:
         out["imagery_priority"] = ip.strip().lower()
@@ -96,15 +169,20 @@ def _persist_site_prefs(business_id: str, prefs: Dict[str, Any]) -> None:
     """Write sanitized prefs to businesses.settings.site_prefs via the
     read-modify-write settings idiom (same as rules_router.pause_all) so
     sibling settings keys survive. Called BEFORE gather_context so the
-    compose that follows reads the fresh prefs back from settings."""
+    compose that follows reads the fresh prefs back from settings.
+    Arc 5: the stored reference_analysis rides along — compose_site
+    re-runs it only when the inspiration_urls actually changed."""
     from datetime import datetime, timezone
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
     settings = dict(rows[0].get("settings") or {})
-    settings["site_prefs"] = {
-        **prefs, "updated_at": datetime.now(timezone.utc).isoformat()}
+    prior = settings.get("site_prefs") if isinstance(settings.get("site_prefs"), dict) else {}
+    fresh = {**prefs, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if isinstance(prior.get("reference_analysis"), dict):
+        fresh["reference_analysis"] = prior["reference_analysis"]
+    settings["site_prefs"] = fresh
     sb_clients.sb_patch_as_service(
         f"/businesses?id=eq.{business_id}", {"settings": settings})
 
@@ -207,7 +285,13 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "url": f"{RAILWAY_BASE}/public/booking/{slug}" if slug else "",
     }
 
-    testimonials = ((settings.get("website_content") or {}).get("testimonials")) or []
+    # Only real dict rows the owner left visible reach composed sites —
+    # hidden quotes (show_on_website=False) must not render, inflate the
+    # statband count, or pad the LLM prompt; legacy string entries are
+    # dropped (modules also self-defend, but the context is the choke point).
+    _testi_raw = ((settings.get("website_content") or {}).get("testimonials")) or []
+    testimonials = [t for t in _testi_raw
+                    if isinstance(t, dict) and t.get("show_on_website", True)]
 
     # Arc 27 — sellable products feed the store module + hosted store page.
     try:
@@ -265,9 +349,22 @@ def gather_context(business_id: str) -> Dict[str, Any]:
             design_cfg["creative_expression"] = expr
             bundle["design"] = design_cfg
 
-    dna = brand_dna.build_brand_dna(business_id, bundle)
+    # Arc 5 "Design Depth": the owner's color language steers derivation
+    # deterministically — colors.love/avoid/use_brand nudge the accent in
+    # derive_palette; colors.direction is a HARD ground preference applied
+    # here so no-DRO paths (fallback compose, shuffle, refresh) honor it
+    # too. compose_site re-asserts it after apply_dro_palette (owner beats
+    # model) and logs when the DRO's base was overridden.
+    color_prefs = (site_prefs.get("colors")
+                   if isinstance(site_prefs.get("colors"), dict) else None)
+    dna = brand_dna.build_brand_dna(business_id, bundle, color_prefs=color_prefs)
+    if (color_prefs or {}).get("direction"):
+        dna = brand_dna.apply_owner_ground(dna, color_prefs["direction"])
+    cta_goal = (site_prefs.get("cta_goal")
+                if site_prefs.get("cta_goal") in _CTA_GOALS else None)
     return {
         "site_prefs": site_prefs,
+        "cta_goal": cta_goal,
         "store": store,
         "dna": dna,
         "bundle": bundle,
@@ -354,10 +451,12 @@ def _default_spec(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     pitch = str(b.get("elevator_pitch") or "").strip()
     headline = tagline or biz["name"]
     subheadline = pitch if pitch and pitch != headline else (tagline if tagline != headline else "")
+    goal_label = _CTA_GOAL_LABELS.get(str(ctx.get("cta_goal") or ""),
+                                      "Book a session")
     spec = [
         {"module": "hero", "variant": hero_variant,
          "content": {"headline": headline, "subheadline": subheadline,
-                     "cta_label": "Book a session"}},
+                     "cta_label": goal_label}},
         # about body left empty on purpose: the about module backfills it
         # from practitioner_intelligence.about_business (real data) and
         # DROPS the section when nothing real exists.
@@ -452,8 +551,40 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
                           + ", ".join(str(w) for w in prefs["feel_words"]) + ".")
     if prefs.get("inspiration"):
         pref_lines.append(f"Inspiration: {prefs['inspiration']}")
+    if prefs.get("inspiration_urls"):
+        pref_lines.append("Sites I admire: "
+                          + ", ".join(str(u) for u in prefs["inspiration_urls"][:3]))
     if prefs.get("avoid"):
         pref_lines.append(f"It should NOT feel: {prefs['avoid']}")
+    # Arc 5 v2 — color language, audience, conversion goal.
+    colors = prefs.get("colors") if isinstance(prefs.get("colors"), dict) else {}
+    if colors:
+        color_bits: List[str] = []
+        direction = colors.get("direction")
+        if direction:
+            color_bits.append("overall ground: "
+                              + str(direction).replace("_", " "))
+        if colors.get("use_brand") is False:
+            color_bits.append("do NOT use my existing brand colors")
+        elif colors.get("use_brand") is True:
+            color_bits.append("build on my brand colors")
+        if colors.get("love"):
+            color_bits.append("colors I love: "
+                              + ", ".join(str(x) for x in colors["love"][:4]))
+        if colors.get("avoid"):
+            color_bits.append("colors to avoid: "
+                              + ", ".join(str(x) for x in colors["avoid"][:4]))
+        if color_bits:
+            pref_lines.append("Color direction: " + "; ".join(color_bits) + ".")
+    if prefs.get("audience"):
+        pref_lines.append(f"Who it's for: {prefs['audience']}")
+    if prefs.get("cta_goal"):
+        goal_label = {"book": "book an appointment/session",
+                      "buy": "buy from the store",
+                      "contact": "reach out / get in touch",
+                      "follow": "follow us on social",
+                      }.get(prefs["cta_goal"], prefs["cta_goal"])
+        pref_lines.append(f"The #1 thing a visitor should do: {goal_label}.")
     if prefs.get("imagery_priority"):
         label = {"my_photos": "lead with my own photos",
                  "atmosphere": "atmosphere / mood imagery",
@@ -468,6 +599,34 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
         text += ("\n\nTHE OWNER'S OWN STYLE WORDS "
                  "(verbatim, highest priority evidence):\n"
                  + "\n".join(pref_lines))
+
+    # Arc 5 — the platform's deterministic study of the reference sites the
+    # owner named. DIRECTION EVIDENCE (mood/type-class/density), never a
+    # copy source; the analyzer extracted these with no LLM involved.
+    ra = prefs.get("reference_analysis") if isinstance(prefs.get("reference_analysis"), dict) else {}
+    ok_results = [r for r in (ra.get("results") or [])
+                  if isinstance(r, dict) and r.get("ok")]
+    if ok_results:
+        ref_lines: List[str] = []
+        for r in ok_results[:3]:
+            pal = r.get("palette") or {}
+            fonts = r.get("fonts") or []
+            classes = sorted({f.get("class") for f in fonts if f.get("class")})
+            dens = (r.get("density") or {}).get("label") or ""
+            bits = [f"palette reads '{pal.get('read') or 'unknown'}'"]
+            if classes:
+                bits.append("type is " + "/".join(classes))
+            if dens:
+                bits.append(f"layout feels {dens}")
+            desc = (r.get("description") or r.get("title") or "").strip()
+            if desc:
+                bits.append(f'describes itself as "{desc[:160]}"')
+            ref_lines.append(f"- {r.get('url')}: " + "; ".join(bits))
+        text += ("\n\nREFERENCE SITES THE OWNER ADMIRES (fetched + analyzed):\n"
+                 + "\n".join(ref_lines)
+                 + "\n(Direction evidence only — echo the mood, contrast, type "
+                   "feel and pacing they imply. NEVER copy their content, "
+                   "branding or exact colors.)")
     return text
 
 
@@ -491,6 +650,22 @@ def _dro_directive(dro: Dict[str, Any]) -> str:
 - Layout symmetry: {layout.get('symmetry') or 'unspecified'} — asymmetric_tension/editorial_columns lean toward the offset variants (hero "editorial", about "pullquote", offerings "featured", testimonials "marquee", gallery "mosaic"); centered_formal leans toward the centered ones (hero "statement", about "narrative", testimonials "spotlight").
 - Pacing: layout density={layout.get('density') or 'balanced'}, motion={motion.get('temperature') or 'subtle_entrance'} — match copy length/rhythm to it (airy/quiet → fewer words; dense/expressive → punchier, more).
 - Still NEVER invent facts. Concept reframing is about VOICE, not fabricated specifics."""
+
+
+def _cta_goal_prompt_line(ctx: Dict[str, Any]) -> str:
+    """Arc 5 — the owner's cta_goal steers the composer's CTA emphasis."""
+    goal = str(ctx.get("cta_goal") or "")
+    phrasing = {
+        "book": "BOOK — every primary CTA drives to booking; hero + cta-band "
+                "labels are booking phrasing (in the concept's voice).",
+        "buy": "BUY — lead visitors to the store; the store section matters, "
+               "CTA labels use shop/buy phrasing (in the concept's voice).",
+        "contact": "CONTACT — CTAs invite a conversation (contact form), "
+                   "not a transaction.",
+        "follow": "FOLLOW — emphasize the social presence; frame the contact "
+                  "section around following along, socials front and center.",
+    }.get(goal)
+    return (f"- THE OWNER'S #1 CONVERSION GOAL: {phrasing}\n" if phrasing else "")
 
 
 def compose_spec_llm(ctx: Dict[str, Any], brief_notes: str = "",
@@ -519,7 +694,7 @@ BUSINESS
 - Real testimonials on file: {n_testi}
 - Public custom modules the business RUNS (surface via the "showcase" section): {', '.join((m.get('title') or '') + f" ({len(m.get('entries') or [])})" for m in (ctx.get('public_modules') or [])) or '(none)'}
 - Contact wiring: a real contact form + {('hours, ' if (ctx.get('contact') or {}).get('hours') else '')}{('address, ' if (ctx.get('contact') or {}).get('address') else '')}{('phone, ' if (ctx.get('contact') or {}).get('phone') else '')}socials render automatically in the "contact" section — you only write its framing.
-{f'- Practitioner notes for this build: {brief_notes[:400]}' if brief_notes else ''}
+{_cta_goal_prompt_line(ctx)}{f'- Practitioner notes for this build: {brief_notes[:400]}' if brief_notes else ''}
 
 AVAILABLE MODULES (use each at most once; order is yours except hero first, contact last):
 {_module_menu()}
@@ -884,6 +1059,43 @@ def _ensure_og_image(html: str, slot_records: Dict[str, Any]) -> str:
     return html.replace("</head>", block + "</head>", 1)
 
 
+def _apply_dro_design(ctx: Dict[str, Any], dro: Dict[str, Any],
+                      business_id: str) -> None:
+    """Apply a DRO's design decisions onto ctx IN PLACE — the single
+    application block shared by compose_site (fresh rationale) and
+    render_and_persist (stored rationale on shuffle/refresh/override
+    re-renders, so an inline edit never re-skins the site).
+
+    Order matters and is preserved exactly: ctx["design"] → palette →
+    style (practitioner-pinned fonts stay supreme) → the OWNER's color
+    direction re-assert LAST (Arc 5: owner beats model)."""
+    decisions = dro.get("decisions") or {}
+    ctx["design"] = decisions
+    ctx["dna"] = brand_dna.apply_dro_palette(ctx["dna"], decisions.get("palette"))
+    # Quality pass (2026-07-03): the rest of the DRO reaches the
+    # pixels too — typography personality, whitespace/density,
+    # motion temperature. Practitioner-pinned fonts stay supreme.
+    _design_cfg = ((ctx.get("bundle") or {}).get("design") or {})
+    _expr = (_design_cfg.get("creative_expression") or {})
+    _fonts_pinned = bool((_design_cfg.get("font_heading") or "").strip()
+                         or (_expr.get("hero_font") or "").strip())
+    ctx["dna"] = brand_dna.apply_dro_style(
+        ctx["dna"], decisions, fonts_pinned=_fonts_pinned)
+    # Arc 5 — the OWNER's color direction is a HARD preference:
+    # when it conflicts with the DRO's palette.base, the owner
+    # wins (gather_context already grounded the no-DRO paths).
+    _own_dir = (((ctx.get("site_prefs") or {}).get("colors") or {})
+                .get("direction"))
+    if _own_dir:
+        _dro_base = (decisions.get("palette") or {}).get("base")
+        if _dro_base and _dro_base != _own_dir:
+            logger.info(
+                f"[composer] owner color direction '{_own_dir}' "
+                f"overrides DRO palette base '{_dro_base}' for "
+                f"{business_id[:8]} (owner beats model)")
+        ctx["dna"] = brand_dna.apply_owner_ground(ctx["dna"], _own_dir)
+
+
 def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        ctx: Optional[Dict[str, Any]] = None,
                        dro_id: Optional[str] = None,
@@ -923,10 +1135,9 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         ctx["site"] = site
         ctx["business"]["slug"] = slug
 
-    html = _mark(site_modules.render_page(spec, ctx, title))
-
-    # No DRO handed in (shuffle/refresh paths) → best-effort load of the
-    # stored one so image queries stay concept-aware on re-renders.
+    # No DRO handed in (shuffle/refresh/override-save paths) → load the
+    # stored one BEFORE rendering. Fetched once here and reused for both
+    # the design re-application below and the slot briefs further down.
     if dro is None:
         stored_id = dro_id or (((site or {}).get("site_config") or {})
                                .get("design_rationale_id"))
@@ -937,6 +1148,16 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                 dro = (rows[0] or {}).get("dro") if rows else None
             except Exception as e:
                 logger.info(f"[composer] stored DRO fetch skipped: {e}")
+
+    # Re-apply the stored design when ctx doesn't already carry one
+    # (compose_site applies it pre-call and sets ctx["design"]). Without
+    # this, every re-render path dropped the DRO — one inline edit
+    # re-skinned the site back to default fonts/palette and lost the
+    # signature-move class + constructed-hero seed.
+    if dro and not ctx.get("design"):
+        _apply_dro_design(ctx, dro, business_id)
+
+    html = _mark(site_modules.render_page(spec, ctx, title))
 
     # Slot population (existing pipeline) then resolution into the HTML.
     # The enriched_brief threads the DRO's design concept into the
@@ -1174,6 +1395,93 @@ def _ensure_connections(spec: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List
     return spec[:contact_idx] + additions + spec[contact_idx:]
 
 
+# ─── Arc 5 — reference-site study (the marquee feature) ──────────────
+
+_REFERENCE_BUDGET_S = 20.0     # overall wall-clock budget per compose
+
+
+def _maybe_analyze_references(business_id: str,
+                              ctx: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """Run reference_analyzer over site_prefs.inspiration_urls when the
+    stored analysis is missing or the URLs changed; persist the result to
+    settings.site_prefs.reference_analysis and mirror it onto ctx so the
+    intake text sees it. Overall budget 20s (asyncio.wait_for around a
+    worker thread) — on timeout/error the compose proceeds with whatever
+    analysis (if any) already existed. Never raises."""
+    prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+    urls = [str(u) for u in (prefs.get("inspiration_urls") or [])
+            if isinstance(u, str) and u.strip()][:_MAX_INSPIRATION_URLS]
+    stored = (prefs.get("reference_analysis")
+              if isinstance(prefs.get("reference_analysis"), dict) else {})
+    if not urls:
+        return None
+    if stored.get("urls") == urls and isinstance(stored.get("results"), list):
+        return stored["results"]      # fresh enough — same URLs already studied
+
+    results: Optional[List[Dict[str, Any]]] = None
+    try:
+        import asyncio
+        from reference_analyzer import analyze_references
+
+        async def _run() -> List[Dict[str, Any]]:
+            return await asyncio.wait_for(
+                asyncio.to_thread(analyze_references, urls),
+                timeout=_REFERENCE_BUDGET_S)
+
+        results = asyncio.run(_run())
+    except Exception as e:
+        # TimeoutError, event-loop conflicts, analyzer bugs — all soft.
+        logger.warning(f"[composer] reference analysis skipped for "
+                       f"{business_id[:8]} (non-fatal): {e}")
+        return stored.get("results") if isinstance(stored.get("results"), list) else None
+
+    from datetime import datetime, timezone
+    record = {"analyzed_at": datetime.now(timezone.utc).isoformat(),
+              "urls": urls, "results": results}
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
+        if rows:
+            settings = dict(rows[0].get("settings") or {})
+            sp = dict(settings.get("site_prefs")
+                      if isinstance(settings.get("site_prefs"), dict) else {})
+            sp["reference_analysis"] = record
+            settings["site_prefs"] = sp
+            sb_clients.sb_patch_as_service(
+                f"/businesses?id=eq.{business_id}", {"settings": settings})
+    except Exception as e:
+        logger.warning(f"[composer] reference-analysis persist failed "
+                       f"(non-fatal): {e}")
+    # Mirror onto ctx so _assemble_intake_text reads the fresh study.
+    if isinstance(ctx.get("site_prefs"), dict):
+        ctx["site_prefs"]["reference_analysis"] = record
+    else:
+        ctx["site_prefs"] = {"reference_analysis": record}
+    ok_n = sum(1 for r in (results or []) if isinstance(r, dict) and r.get("ok"))
+    logger.info(f"[composer] studied {ok_n}/{len(urls)} reference site(s) "
+                f"for {business_id[:8]}")
+    return results
+
+
+# Arc 5 — cta_goal → deterministic hero/cta-band label defaults. Applied
+# only when the composer left cta_label empty, so an in-concept CTA the
+# LLM wrote ("Book Your Throne") always survives.
+_CTA_GOAL_LABELS = {"book": "Book a session", "buy": "Shop the store",
+                    "contact": "Get in touch", "follow": "Follow along"}
+
+
+def _apply_cta_goal(spec: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+    label = _CTA_GOAL_LABELS.get(str(ctx.get("cta_goal") or ""))
+    if not label:
+        return spec
+    for s in spec:
+        if s.get("module") in ("hero", "cta"):
+            content = s.setdefault("content", {})
+            if not str(content.get("cta_label") or "").strip():
+                content["cta_label"] = label
+    return spec
+
+
 def compose_site(business_id: str, brief_notes: str = "",
                  use_llm: bool = True,
                  design_prefs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1198,18 +1506,24 @@ def compose_site(business_id: str, brief_notes: str = "",
     source = "llm"
     dro_fail_reason: Optional[str] = None
 
+    # Arc 5 — ACTUALLY STUDY the reference sites the owner named (cached
+    # by URL set; ≤20s budget; fail-soft). Runs before intake assembly so
+    # both the DRL signal pass and the DRO author see the evidence.
+    ref_analysis = _maybe_analyze_references(business_id, ctx)
+
     if use_llm:
         # 1) Author the rationale from the practitioner's own words.
         try:
             from agents.composer.drl.passes import produce_dro
             intake = _assemble_intake_text(ctx)
-            dro = produce_dro(business_id, intake)
+            dro = produce_dro(business_id, intake, reference_analysis=ref_analysis)
             if dro is None:
                 # One retry — cheap insurance against a transient LLM/parse
                 # hiccup before accepting a rationale-less compose.
                 logger.info(f"[composer] DRO production returned None for "
                             f"{business_id[:8]} — retrying once")
-                dro = produce_dro(business_id, intake)
+                dro = produce_dro(business_id, intake,
+                                  reference_analysis=ref_analysis)
             if dro:
                 dro_id = dro.get("id")
             else:
@@ -1220,18 +1534,7 @@ def compose_site(business_id: str, brief_notes: str = "",
         # 1b) DRO-driven DESIGN: the palette base (dark stage / light room) +
         # accent scarcity flow into the render via ctx; copy obeys it next.
         if dro:
-            decisions = dro.get("decisions") or {}
-            ctx["design"] = decisions
-            ctx["dna"] = brand_dna.apply_dro_palette(ctx["dna"], decisions.get("palette"))
-            # Quality pass (2026-07-03): the rest of the DRO reaches the
-            # pixels too — typography personality, whitespace/density,
-            # motion temperature. Practitioner-pinned fonts stay supreme.
-            _design_cfg = ((ctx.get("bundle") or {}).get("design") or {})
-            _expr = (_design_cfg.get("creative_expression") or {})
-            _fonts_pinned = bool((_design_cfg.get("font_heading") or "").strip()
-                                 or (_expr.get("hero_font") or "").strip())
-            ctx["dna"] = brand_dna.apply_dro_style(
-                ctx["dna"], decisions, fonts_pinned=_fonts_pinned)
+            _apply_dro_design(ctx, dro, business_id)
         # 2) Compose copy that obeys the rationale.
         try:
             spec = compose_spec_llm(ctx, brief_notes or "", dro=dro)
@@ -1264,6 +1567,11 @@ def compose_site(business_id: str, brief_notes: str = "",
     # uses (modules/offerings/store) — regardless of LLM choices or fallback.
     spec = _ensure_connections(spec, ctx)
 
+    # Arc 5 — cta_goal fills hero/cta labels the composer left empty
+    # (explicit in-concept labels always survive; hrefs are steered
+    # deterministically inside site_modules.cta_button via ctx.cta_goal).
+    spec = _apply_cta_goal(spec, ctx)
+
     # Arc 3 — wire the DRO's layout.symmetry to variant selection where the
     # LLM didn't explicitly pick (also strips the internal markers), then let
     # the hero-concept direction have the final word on the hero (constructed
@@ -1287,6 +1595,19 @@ def compose_site(business_id: str, brief_notes: str = "",
 
 # ─── Endpoints ────────────────────────────────────────────────────────
 
+def _require_owner(business_id: str, user_id: str) -> None:
+    """Owner gate shared by every composer endpoint (the exact check
+    /composer/rationale shipped with): 404 for an unknown business,
+    403 when the verified caller isn't its owner. Session-only auth is
+    NOT enough here — these endpoints do service-role writes."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="business not found")
+    if str(rows[0].get("owner_id")) != str(user_id):
+        raise HTTPException(status_code=403, detail="not authorized for this business")
+
+
 class ComposeBody(BaseModel):
     business_id: str
     brief_notes: Optional[str] = None
@@ -1296,7 +1617,8 @@ class ComposeBody(BaseModel):
 
 @router.post("/compose")
 def compose(body: ComposeBody,
-            _: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+            session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    _require_owner(body.business_id, session.user.id)
     result = compose_site(body.business_id, body.brief_notes or "", body.use_llm,
                           design_prefs=body.design_prefs)
     return {"ok": True, **result}
@@ -1308,12 +1630,7 @@ def get_rationale(business_id: str,
     """Arc 2 (feeds Arc 4's panel) — 'why your site looks this way'.
     Owner-gated read of the stored rationale behind the composed page.
     Returns nulls (not 404) when no compose/rationale exists yet."""
-    rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
-    if not rows:
-        raise HTTPException(status_code=404, detail="business not found")
-    if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(status_code=403, detail="not authorized for this business")
+    _require_owner(business_id, user.id)
 
     site_rows = sb_clients.sb_get_as_service(
         f"/business_sites?business_id=eq.{business_id}"
@@ -1339,6 +1656,55 @@ def get_rationale(business_id: str,
             "rationale": rationale}
 
 
+@router.get("/prefill-signals/{business_id}")
+def prefill_signals(business_id: str,
+                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Arc 5 — intake awareness for the adaptive design interview: what the
+    platform ALREADY knows, so the frontend skips questions the strategy
+    track / brand intake answered (Kevin's rule: never re-ask). Cheap —
+    one get_bundle read, zero LLM."""
+    _require_owner(business_id, user.id)
+
+    import brand_engine
+    bundle = brand_engine.get_bundle(business_id) or {}
+    intel = bundle.get("practitioner_intelligence") or {}
+    voice = bundle.get("voice") if isinstance(bundle.get("voice"), dict) else {}
+    design = bundle.get("design") if isinstance(bundle.get("design"), dict) else {}
+
+    # Non-trivial about text (>80 chars) — the interview can skip "tell
+    # us about your business".
+    has_about = len(str(intel.get("about_business") or "").strip()) > 80
+
+    # >=2 colors that differ from the platform defaults = a real brand
+    # kit choice (bundle design merges DEFAULT_DESIGN for missing slots).
+    defaults = getattr(brand_engine, "DEFAULT_DESIGN", {}) or {}
+    custom_colors = 0
+    for key in ("primary_color", "secondary_color", "accent_color",
+                "background_color", "text_color"):
+        v = str(design.get(key) or "").strip().lower()
+        if v and v != str(defaults.get(key) or "").strip().lower():
+            custom_colors += 1
+    has_brand_colors = custom_colors >= 2
+
+    # Tone words: brand-kit tone_words ride the design section; the voice
+    # section's tones list is the fallback.
+    tone_words = design.get("tone_words")
+    if not (isinstance(tone_words, list) and tone_words):
+        tone_words = voice.get("tones") if isinstance(voice.get("tones"), list) else []
+    known_feel_words = [str(w).strip() for w in (tone_words or [])
+                        if str(w or "").strip()][:6]
+
+    strategy = intel.get("strategy_track") if isinstance(intel.get("strategy_track"), dict) else {}
+    audience_known = bool(str(voice.get("audience") or "").strip()
+                          or str((strategy or {}).get("target_audience") or "").strip())
+
+    return {"has_about": has_about,
+            "has_brand_colors": has_brand_colors,
+            "has_voice": bool(known_feel_words),
+            "known_feel_words": known_feel_words,
+            "audience_known": audience_known}
+
+
 class ShuffleBody(BaseModel):
     business_id: str
     section_index: int
@@ -1346,9 +1712,10 @@ class ShuffleBody(BaseModel):
 
 @router.post("/shuffle")
 def shuffle(body: ShuffleBody,
-            _: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+            session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
     """Cycle one section to its next expression variant and re-render.
     Deterministic + instant — no LLM call."""
+    _require_owner(body.business_id, session.user.id)
     ctx = gather_context(body.business_id)
     site = ctx.get("site")
     spec_raw = ((site or {}).get("site_config") or {}).get("page_spec")
@@ -1371,7 +1738,8 @@ def shuffle(body: ShuffleBody,
 
 @router.get("/spec/{business_id}")
 def get_spec(business_id: str,
-             _: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+             session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    _require_owner(business_id, session.user.id)
     ctx = gather_context(business_id)
     cfg = ((ctx.get("site") or {}).get("site_config") or {})
     # Arc 4 — stale text overrides (reconciliation marked them; never

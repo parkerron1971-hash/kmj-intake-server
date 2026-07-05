@@ -51,7 +51,7 @@ def collect_stats(ctx: Dict[str, Any]) -> List[Tuple[str, str]]:
     if n_off >= 2:
         stats.append((str(n_off), "Ways to work together"))
     n_t = len([t for t in (ctx.get("testimonials") or [])
-               if (t.get("quote") or "").strip()])
+               if isinstance(t, dict) and (t.get("quote") or "").strip()])
     if n_t >= 2:
         stats.append((str(n_t), "Client voices"))
     sessions = ctx.get("sessions_completed")  # not populated today —

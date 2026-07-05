@@ -135,9 +135,23 @@ async def enqueue(client: httpx.AsyncClient, *, user_id: str, business_id: str,
                   kind: str, params: Optional[dict] = None,
                   source: str = "desktop") -> Optional[dict]:
     """Insert a queued job and kick off its runner. Returns the job row.
-    Raises ValueError for an unknown kind."""
+    Raises ValueError for an unknown kind.
+
+    Server-side dedupe: when a job of the same kind for the same business
+    is already queued/running, the EXISTING row is returned (with
+    "deduped": True riding along) instead of enqueuing a second compose —
+    callers treat it identically to a fresh enqueue."""
     if kind not in KIND_META:
         raise ValueError(f"unknown job kind: {kind}")
+    existing = await _sb(
+        client, "GET",
+        f"/chief_jobs?business_id=eq.{business_id}&kind=eq.{kind}"
+        "&status=in.(queued,running)&select=*&order=created_at.desc&limit=1")
+    if isinstance(existing, list) and existing:
+        logger.info(f"[chief_jobs] dedupe: {kind} already "
+                    f"{existing[0].get('status')} for {business_id[:8]} — "
+                    f"returning job {existing[0].get('id')}")
+        return {**existing[0], "deduped": True}
     rows = await _sb(client, "POST", "/chief_jobs", [{
         "user_id": user_id, "business_id": business_id, "kind": kind,
         "status": "queued", "source": source, "params": params or {},
@@ -163,7 +177,7 @@ async def list_jobs(
     if not uid:
         return {"jobs": []}
     q = (f"/chief_jobs?user_id=eq.{uid}"
-         "&select=id,kind,status,error,created_at,started_at,finished_at"
+         "&select=id,kind,status,error,result,created_at,started_at,finished_at"
          f"&order=created_at.desc&limit={max(1, min(int(limit or 10), 50))}")
     if active:
         q += "&status=in.(queued,running)"
@@ -217,7 +231,10 @@ async def rebuild_site_endpoint(req: _RebuildReq,
                 params["design_prefs"] = prefs
         job = await enqueue(client, user_id=uid, business_id=req.business_id,
                             kind="rebuild_site", params=params, source="desktop")
-    return {"ok": True, "job_id": (job or {}).get("id")}
+    out = {"ok": True, "job_id": (job or {}).get("id")}
+    if (job or {}).get("deduped"):
+        out["deduped"] = True
+    return out
 
 
 @router.post("/jobs/retry")
