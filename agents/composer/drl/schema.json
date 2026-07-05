@@ -115,6 +115,36 @@
             "because": { "type": "string", "maxLength": 240 },
             "from_signals": { "type": "array", "items": { "type": "string" } }
           }
+        },
+        "rule_break": {
+          "type": "object",
+          "description": "Arc 6 (Creative Engine) — the EXACTLY-ONE deliberate rule-break. Optional (absence = the design spends its budget on the signature move instead). The renderer maps `what` onto a small deterministic treatment vocabulary: oversize_headline | hard_silence | wrong_accent_moment | broken_grid.",
+          "properties": {
+            "what": { "type": "string", "maxLength": 200, "description": "The one rule being broken, named plainly (e.g. 'the headline is a size too big on purpose')" },
+            "where": { "type": "string", "maxLength": 120, "description": "The single place it happens (hero / one section / one CTA)" },
+            "because": { "type": "string", "maxLength": 240 }
+          }
+        },
+        "tension": {
+          "type": "object",
+          "description": "Arc 6 — character = the tension between two poles the design holds at once. Optional.",
+          "properties": {
+            "pole_a": { "type": "string", "maxLength": 80 },
+            "pole_b": { "type": "string", "maxLength": 80 },
+            "expression": { "type": "string", "maxLength": 240, "description": "HOW the design holds both poles (which decisions carry which pole)" },
+            "because": { "type": "string", "maxLength": 240 },
+            "from_signals": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "first_impression": {
+          "type": "object",
+          "description": "Arc 6 — the first 3 seconds are designed, not accidental. Optional.",
+          "properties": {
+            "feel_in_3s": { "type": "string", "maxLength": 160, "description": "What a stranger FEELS 3 seconds in, before reading" },
+            "remember": { "type": "string", "maxLength": 160, "description": "The one thing they should remember" },
+            "because": { "type": "string", "maxLength": 240 },
+            "from_signals": { "type": "array", "items": { "type": "string" } }
+          }
         }
       }
     },

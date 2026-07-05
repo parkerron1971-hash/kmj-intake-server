@@ -429,6 +429,69 @@ def build_brand_dna(business_id: str, bundle: Optional[Dict[str, Any]] = None,
     }
 
 
+# ─── Arc 6 "Creative Engine" — rule-break vocabulary ──────────────────
+# The DRO authors decisions.rule_break {what, where, because} in free
+# text; the renderer can only DO a small deterministic vocabulary. This
+# mapping is the bridge: keyword-match `what` (+`where`) onto the closest
+# treatment. Default = oversize_headline (the safest loud move).
+#
+#   oversize_headline   — hero display type clamps up a tier
+#   hard_silence        — the emptiest section doubles its vertical
+#                         whitespace and drops all ornament (marked
+#                         sx-rb-target by site_modules.render_page)
+#   wrong_accent_moment — ONE hero moment (CTA + accent word) uses a
+#                         deliberately-shifted hue (150° rotation,
+#                         WCAG-checked → palette.accent_break)
+#   broken_grid         — the about/pullquote image breaks its column
+#                         (offset + slight rotation)
+
+RULE_BREAK_TREATMENTS = ("oversize_headline", "hard_silence",
+                         "wrong_accent_moment", "broken_grid")
+
+# Ordered: first family whose keyword hits wins (silence before type so
+# "quiet oversized emptiness" reads as silence; accent before grid so
+# "wrong color on the grid CTA" reads as the accent moment).
+_RULE_BREAK_KEYWORDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("hard_silence", ("silence", "empty", "emptiness", "whitespace", "void",
+                      "pause", "breath", "nothing", "blank", "quiet section",
+                      "negative space", "stillness")),
+    ("wrong_accent_moment", ("accent", "color", "colour", "hue", "clash",
+                             "wrong color", "off-palette", "off palette",
+                             "unexpected color", "discordant", "jarring")),
+    ("broken_grid", ("grid", "offset", "misalign", "off-axis", "off axis",
+                     "tilt", "rotate", "overlap", "collide", "column",
+                     "escape", "spill", "crooked", "askew")),
+    ("oversize_headline", ("oversize", "oversized", "huge", "massive",
+                           "giant", "too big", "too large", "scale",
+                           "headline", "display type", "type size",
+                           "enormous", "monumental")),
+)
+
+
+def resolve_rule_break(rule_break: Any) -> str:
+    """DRO decisions.rule_break (free text) → one treatment from
+    RULE_BREAK_TREATMENTS, deterministically. Empty/absent → ''."""
+    rb = rule_break if isinstance(rule_break, dict) else {}
+    blob = f"{rb.get('what') or ''} {rb.get('where') or ''}".strip().lower()
+    if not blob:
+        return ""
+    for treatment, words in _RULE_BREAK_KEYWORDS:
+        if any(w in blob for w in words):
+            return treatment
+    return "oversize_headline"
+
+
+def derive_break_accent(accent: str, bg: str) -> Tuple[str, str]:
+    """The wrong_accent_moment color: rotate the accent hue 150° (wrong on
+    purpose — near-complement, never a neighbor), floor the saturation so
+    it reads as a CHOICE, then WCAG-check against the page ground the same
+    way every other ink is checked. Returns (accent_break, on_accent_break)."""
+    h, l, s = _hls(accent or "#d99a4e")
+    cand = _from_hls((h + 150.0 / 360.0) % 1.0, l, max(s, 0.45))
+    cand = _ensure_contrast(cand, bg or "#111111", 4.5)
+    return cand, _on_color(cand)
+
+
 # ─── DRL palette discipline ───────────────────────────────────────────
 # The Design Rationale Object decides palette.base ("dark is a stage, light
 # is a room"). We swap the NEUTRAL ground (bg/surface/text/muted/border) to a
@@ -550,10 +613,54 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
 
     # ── Motion temperature → the tier page_shell already reads ──
     mt = (d.get("motion") or {}).get("temperature")
-    if _has(mt, "still", "calm", "none", "minimal", "static"):
+    motion_stilled = _has(mt, "still", "calm", "none", "minimal", "static")
+    if motion_stilled:
         out["motion"] = "subtle"
     elif _has(mt, "kinetic", "expressive", "playful", "rich", "dramatic", "alive"):
         out["motion"] = "rich"
+
+    # ── Arc 6: tension = the character engine. Deterministic + documented:
+    #    pole_a (the ROOT pole) drives the typography pairing — but only
+    #    when the DRO's display_personality didn't already resolve one and
+    #    fonts aren't practitioner-pinned; pole_b (the ENERGY pole) biases
+    #    the motion tier — energetic words lift to rich, calm words drop
+    #    to subtle — unless the DRO's motion.temperature explicitly stilled
+    #    the page (an explicit still always wins). Net effect: heritage-
+    #    pole + electric-pole → classic serif pairing WITH the vivid
+    #    energy, both poles visible at once.
+    tn = d.get("tension") or {}
+    pole_a, pole_b = str(tn.get("pole_a") or ""), str(tn.get("pole_b") or "")
+    if pole_a and pole_b:
+        if not pairing_key and not fonts_pinned:
+            tension_key = resolve_font_pairing(pole_a)
+            if tension_key:
+                pair = FONT_PAIRINGS[tension_key]
+                t["heading"], t["body"] = pair["heading"], pair["body"]
+                try:
+                    w = int(t.get("heading_weight") or 700)
+                except (TypeError, ValueError):
+                    w = 700
+                t["heading_weight"] = max(min(w, pair.get("wmax", 900)),
+                                          pair.get("wmin", 300))
+                if pair.get("letter"):
+                    t["letter_tight"] = pair["letter"]
+        if not motion_stilled:
+            if _has(pole_b, "electric", "vivid", "bold", "alive", "energetic",
+                    "loud", "neon", "fierce", "kinetic", "wild"):
+                out["motion"] = "rich"
+            elif _has(pole_b, "calm", "still", "quiet", "serene", "hushed",
+                      "monastic"):
+                out["motion"] = "subtle"
+
+    # ── Arc 6: wrong_accent_moment rule-break → a WCAG-checked shifted
+    #    accent lands in the palette; page_shell + base_css spend it on
+    #    exactly ONE hero moment (--sx-accent-break).
+    if resolve_rule_break(d.get("rule_break")) == "wrong_accent_moment":
+        pal = dict(out.get("palette") or {})
+        brk, on_brk = derive_break_accent(pal.get("accent") or "",
+                                          pal.get("bg") or "")
+        pal["accent_break"], pal["on_accent_break"] = brk, on_brk
+        out["palette"] = pal
 
     out["typography"] = t
     out["rhythm"] = r
@@ -568,7 +675,12 @@ def css_variables(dna: Dict[str, Any]) -> str:
     site without touching a single module."""
     p, t = dna["palette"], dna["typography"]
     r, rad = dna["rhythm"], dna["radius"]
-    return f""":root {{
+    # Arc 6 — wrong_accent_moment rule-break vars (only when derived).
+    break_vars = ""
+    if p.get("accent_break"):
+        break_vars = (f"\n  --sx-accent-break: {p['accent_break']};"
+                      f"\n  --sx-on-accent-break: {p.get('on_accent_break') or '#101010'};")
+    return f""":root {{{break_vars}
   --sx-bg: {p['bg']};
   --sx-surface: {p['surface']};
   --sx-surface-2: {p['surface2']};

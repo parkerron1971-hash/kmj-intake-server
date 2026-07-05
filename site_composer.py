@@ -29,10 +29,15 @@ offerings/testimonials/gallery from live data at compose time).
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
+import os
 import re
+import time
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -67,6 +72,10 @@ _COLOR_DIRECTIONS = ("deep_dark", "soft_dark", "warm_light", "cool_light",
 _CTA_GOALS = ("book", "buy", "contact", "follow")
 _AUDIENCE_CAP = 240
 _MAX_INSPIRATION_URLS = 3
+# Arc 6 "Creative Engine" — v3 creative brief enums/caps.
+_LOUD_WHERE = ("motion", "type", "imagery", "layout")
+_CREATIVE_CAPS = {"metaphor": 200, "surprise": 200, "remember": 160}
+_TENSION_POLE_CAP = 80
 
 
 def _sanitize_pref_url(u: Any) -> Optional[str]:
@@ -162,6 +171,35 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
         b = None
     if b in (1, 2, 3):
         out["boldness"] = b
+
+    # v3 (Arc 6) — creative brief: metaphor/surprise/remember free text,
+    # loud_where enum, tension {pole_a, pole_b, lean 1..5}. All optional;
+    # bad entries silently dropped, same leniency as everything above.
+    cr = raw.get("creative")
+    if isinstance(cr, dict):
+        cout: Dict[str, Any] = {}
+        for key, cap in _CREATIVE_CAPS.items():
+            v = cr.get(key)
+            if isinstance(v, str) and v.strip():
+                cout[key] = v.strip()[:cap]
+        lw = cr.get("loud_where")
+        if isinstance(lw, str) and lw.strip().lower() in _LOUD_WHERE:
+            cout["loud_where"] = lw.strip().lower()
+        tn = cr.get("tension")
+        if isinstance(tn, dict):
+            pa = str(tn.get("pole_a") or "").strip()[:_TENSION_POLE_CAP]
+            pb = str(tn.get("pole_b") or "").strip()[:_TENSION_POLE_CAP]
+            if pa and pb:
+                tout: Dict[str, Any] = {"pole_a": pa, "pole_b": pb}
+                try:
+                    lean = int(tn.get("lean"))
+                except (TypeError, ValueError):
+                    lean = None
+                if lean in (1, 2, 3, 4, 5):
+                    tout["lean"] = lean
+                cout["tension"] = tout
+        if cout:
+            out["creative"] = cout
     return out or None
 
 
@@ -593,6 +631,28 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
         pref_lines.append(f"Imagery: {label}.")
     if prefs.get("boldness") in (1, 2, 3):
         pref_lines.append(f"Boldness: {prefs['boldness']}/3.")
+    # Arc 6 v3 — the creative brief also rides the intake so the signal
+    # pass can quote it verbatim (the authoring pass ADDITIONALLY receives
+    # it as a dedicated highest-priority block — see passes._creative_brief_block).
+    creative = (prefs.get("creative")
+                if isinstance(prefs.get("creative"), dict) else {})
+    if creative.get("metaphor"):
+        pref_lines.append(f"The business feels like: {creative['metaphor']}")
+    if creative.get("surprise"):
+        pref_lines.append("What people would never guess about us: "
+                          f"{creative['surprise']}")
+    if creative.get("remember"):
+        pref_lines.append("Three seconds in, remember this: "
+                          f"{creative['remember']}")
+    if creative.get("loud_where"):
+        pref_lines.append("The ONE loud design moment should live in: "
+                          f"{creative['loud_where']}.")
+    _tn = creative.get("tension") if isinstance(creative.get("tension"), dict) else {}
+    if _tn.get("pole_a") and _tn.get("pole_b"):
+        lean = _tn.get("lean")
+        pref_lines.append(f"We are both '{_tn['pole_a']}' and '{_tn['pole_b']}'"
+                          + (f" (lean {lean}/5 toward '{_tn['pole_b']}')"
+                             if isinstance(lean, int) else "") + ".")
     if prefs.get("notes"):
         pref_lines.append(f"Notes: {prefs['notes']}")
     if pref_lines:
@@ -1007,6 +1067,19 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
             checks.append({"name": "dro_signature_move",
                            "ok": expected_sig in html,
                            "detail": f"expected body class {expected_sig}"})
+        # (e2b) Arc 6 — the authored rule-break's body class reached the
+        # document (loud or reduced tier; presence is the contract).
+        try:
+            from site_modules._base import RULE_BREAK_CLASSES
+            import brand_dna as _bd
+            _rb_cls = RULE_BREAK_CLASSES.get(
+                _bd.resolve_rule_break(decisions.get("rule_break")), "")
+        except Exception:
+            _rb_cls = ""
+        if _rb_cls:
+            checks.append({"name": "dro_rule_break",
+                           "ok": _rb_cls in html,
+                           "detail": f"expected body class {_rb_cls}"})
         # (e3) constructed hero present for visual_metaphor concepts.
         direction = ((decisions.get("hero_concept") or {}).get("direction") or "")
         if direction == "visual_metaphor":
@@ -1069,7 +1142,15 @@ def _apply_dro_design(ctx: Dict[str, Any], dro: Dict[str, Any],
     Order matters and is preserved exactly: ctx["design"] → palette →
     style (practitioner-pinned fonts stay supreme) → the OWNER's color
     direction re-assert LAST (Arc 5: owner beats model)."""
-    decisions = dro.get("decisions") or {}
+    decisions = dict(dro.get("decisions") or {})
+    # Arc 6 — the owner's loud_where (creative brief) rides the decisions
+    # dict so page_shell can arbitrate the restraint budget (signature
+    # move vs. rule-break) without a new plumbing channel.
+    _creative = (((ctx.get("site_prefs") or {}).get("creative"))
+                 if isinstance((ctx.get("site_prefs") or {}).get("creative"), dict)
+                 else {})
+    if _creative.get("loud_where"):
+        decisions["_owner_loud_where"] = _creative["loud_where"]
     ctx["design"] = decisions
     ctx["dna"] = brand_dna.apply_dro_palette(ctx["dna"], decisions.get("palette"))
     # Quality pass (2026-07-03): the rest of the DRO reaches the
@@ -1096,6 +1177,30 @@ def _apply_dro_design(ctx: Dict[str, Any], dro: Dict[str, Any],
         ctx["dna"] = brand_dna.apply_owner_ground(ctx["dna"], _own_dir)
 
 
+def _ensure_site_row(business_id: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure a business_sites row exists (slug drives the live URL and
+    the canonical/og:url tags). Shared by render_and_persist and the
+    directions engine (drafts persist onto site_config). Mutates ctx."""
+    site = ctx.get("site")
+    if site:
+        return site
+    slug = _slugify(ctx["business"]["name"])
+    taken = sb_clients.sb_get_as_service(
+        f"/business_sites?slug=eq.{slug}&select=id&limit=1") or []
+    if taken:
+        slug = f"{slug}-{business_id[:6]}"
+    created = sb_clients.sb_post_as_service("/business_sites", {
+        "business_id": business_id, "slug": slug,
+        "status": "published", "html_content": "",
+    })
+    site = (created or [None])[0] if isinstance(created, list) else created
+    if not site:
+        raise HTTPException(500, "could not create business_sites row")
+    ctx["site"] = site
+    ctx["business"]["slug"] = slug
+    return site
+
+
 def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        ctx: Optional[Dict[str, Any]] = None,
                        dro_id: Optional[str] = None,
@@ -1118,22 +1223,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
 
     # Ensure a business_sites row exists BEFORE rendering — the slug
     # drives the live URL and the page's canonical/og:url tags.
-    site = ctx.get("site")
-    if not site:
-        slug = _slugify(ctx["business"]["name"])
-        taken = sb_clients.sb_get_as_service(
-            f"/business_sites?slug=eq.{slug}&select=id&limit=1") or []
-        if taken:
-            slug = f"{slug}-{business_id[:6]}"
-        created = sb_clients.sb_post_as_service("/business_sites", {
-            "business_id": business_id, "slug": slug,
-            "status": "published", "html_content": "",
-        })
-        site = (created or [None])[0] if isinstance(created, list) else created
-        if not site:
-            raise HTTPException(500, "could not create business_sites row")
-        ctx["site"] = site
-        ctx["business"]["slug"] = slug
+    site = _ensure_site_row(business_id, ctx)
 
     # No DRO handed in (shuffle/refresh/override-save paths) → load the
     # stored one BEFORE rendering. Fetched once here and reused for both
@@ -1511,19 +1601,27 @@ def compose_site(business_id: str, brief_notes: str = "",
     # both the DRL signal pass and the DRO author see the evidence.
     ref_analysis = _maybe_analyze_references(business_id, ctx)
 
+    # Arc 6 — the owner's creative brief flows into DRO authoring on the
+    # SINGLE compose path too (directions are opt-in, not a prerequisite).
+    creative = ((ctx.get("site_prefs") or {}).get("creative")
+                if isinstance((ctx.get("site_prefs") or {}).get("creative"), dict)
+                else None)
+
     if use_llm:
         # 1) Author the rationale from the practitioner's own words.
         try:
             from agents.composer.drl.passes import produce_dro
             intake = _assemble_intake_text(ctx)
-            dro = produce_dro(business_id, intake, reference_analysis=ref_analysis)
+            dro = produce_dro(business_id, intake, reference_analysis=ref_analysis,
+                              creative=creative)
             if dro is None:
                 # One retry — cheap insurance against a transient LLM/parse
                 # hiccup before accepting a rationale-less compose.
                 logger.info(f"[composer] DRO production returned None for "
                             f"{business_id[:8]} — retrying once")
                 dro = produce_dro(business_id, intake,
-                                  reference_analysis=ref_analysis)
+                                  reference_analysis=ref_analysis,
+                                  creative=creative)
             if dro:
                 dro_id = dro.get("id")
             else:
@@ -1591,6 +1689,261 @@ def compose_site(business_id: str, brief_notes: str = "",
                                 full_recompose=True)
     return {"composition_source": source, "design_rationale_id": dro_id,
             "dro_status": dro_status, "dro_summary": dro_summary, **result}
+
+
+# ─── Arc 6 "Creative Engine" — the directions engine ─────────────────
+#
+# Taste is CHOSEN, not described: one directions run authors THREE
+# candidate DROs with distinct creative stances, composes copy for each,
+# renders each deterministically (no slot population — previews use
+# placeholder-safe imagery), and stores the drafts on
+# site_config.direction_drafts. The owner previews all three and CHOOSES;
+# choose runs the full normal publish path (slots, override reconcile,
+# quality gate, rationale persistence). Directions run as a
+# 'compose_directions' chief_jobs job (6-7 LLM calls ≈ 60-120s — too
+# long for a sync request).
+
+DIRECTION_STANCES: Dict[str, str] = {
+    "concept-literal": (
+        "CONCEPT-LITERAL — design the metaphor as literally as craft "
+        "allows. The organizing idea must be VISIBLE in the decisions "
+        "(hero direction, metaphor elements, palette temperature), not "
+        "just described in copy. If the owner gave a metaphor, build the "
+        "site AS that place/material/song. Spend the rule-break where the "
+        "metaphor lands hardest."),
+    "tension-led": (
+        "TENSION-LED — let the two poles fight visibly. decisions.tension "
+        "is MANDATORY for this candidate: pick decisions that hold both "
+        "poles at once (one pole carries structure/typography, the other "
+        "carries energy/accent), and place the ONE rule-break exactly at "
+        "their collision point."),
+    "quiet-editorial": (
+        "QUIET-EDITORIAL — maximum restraint; whitespace is the luxury. "
+        "Airy density, quiet scale contrast, motion none or subtle. "
+        "Exactly ONE perfect loud moment (the rule-break) — it is the "
+        "only raised voice on the page; everything else whispers."),
+}
+
+_PREVIEW_TOKEN_TTL_S = 30 * 60      # 30 minutes
+
+
+def _preview_secret() -> bytes:
+    """HMAC key for direction-preview tokens, derived from an existing
+    server secret (same idiom family as customer_token/meta_oauth —
+    stateless signed+expiring tokens). CUSTOMER_TOKEN_SECRET when set,
+    else the Supabase service key; domain-separated by prefix so this
+    key can never be replayed against those surfaces."""
+    base = (os.environ.get("CUSTOMER_TOKEN_SECRET", "").strip()
+            or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip())
+    if not base:
+        raise HTTPException(500, "no server secret available for preview tokens")
+    return hashlib.sha256(f"composer-direction-preview:{base}".encode()).digest()
+
+
+def mint_preview_token(business_id: str, draft_id: str,
+                       ttl_s: int = _PREVIEW_TOKEN_TTL_S) -> str:
+    """`<exp>.<hexsig>` — HMAC-SHA256 over business_id + draft_id + expiry.
+    business_id/draft_id ride the preview URL path, so the token only
+    carries the expiry + signature (an iframe can't send auth headers)."""
+    exp = int(time.time()) + int(ttl_s)
+    sig = hmac.new(_preview_secret(),
+                   f"{business_id}.{draft_id}.{exp}".encode(),
+                   hashlib.sha256).hexdigest()
+    return f"{exp}.{sig}"
+
+
+def verify_preview_token(business_id: str, draft_id: str, token: str) -> bool:
+    try:
+        exp_s, sig = str(token or "").split(".", 1)
+        exp = int(exp_s)
+    except (ValueError, AttributeError):
+        return False
+    if exp < time.time():
+        return False
+    expected = hmac.new(_preview_secret(),
+                        f"{business_id}.{draft_id}.{exp}".encode(),
+                        hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig)
+
+
+_LABEL_STOP = _CONCEPT_STOP | {"business", "brand", "site", "place",
+                               "space", "room", "feel", "feeling"}
+_STANCE_FALLBACK_LABELS = {"concept-literal": "The Concept",
+                           "tension-led": "The Tension",
+                           "quiet-editorial": "The Quiet One"}
+
+
+def _direction_label(dro: Dict[str, Any], taken: List[str],
+                     stance_key: str) -> str:
+    """Deterministic human title from the DRO's concept words — 'The
+    Coronation' from a coronation concept. Metaphor elements first (already
+    distilled), then significant concept-statement words; stance fallback
+    when nothing usable remains. Never repeats a sibling's label."""
+    hero_c = ((dro.get("decisions") or {}).get("hero_concept") or {})
+    words: List[str] = [str(w) for w in (hero_c.get("metaphor_elements") or [])
+                        if str(w or "").strip()]
+    words += re.findall(r"[A-Za-z]+", str(hero_c.get("concept_statement") or ""))
+    used = {t.lower() for t in taken}
+    for w in words:
+        lw = w.strip().lower()
+        if len(lw) > 3 and lw not in _LABEL_STOP:
+            label = "The " + lw.title()
+            if label.lower() not in used:
+                return label
+    fallback = _STANCE_FALLBACK_LABELS.get(stance_key, "The Direction")
+    return fallback if fallback.lower() not in used else fallback + " II"
+
+
+# Preview-only <head> style: empty data-slot images get a soft brand-
+# toned gradient placeholder (previews render with NO slot population —
+# they must still look intentional).
+_PREVIEW_PLACEHOLDER_CSS = (
+    "<style>/* directions preview — placeholder-safe slot imagery */\n"
+    'img[data-slot][src=""], img[data-slot]:not([src]), img[data-slot][src="#"] {'
+    " min-height: 260px; color: transparent; font-size: 0;"
+    " background: linear-gradient(135deg, var(--sx-surface-2) 0%,"
+    " var(--sx-accent-soft) 78%, var(--sx-surface) 100%); }\n"
+    "</style>")
+
+
+def _preview_html(html: str) -> str:
+    return (html.replace("</head>", _PREVIEW_PLACEHOLDER_CSS + "\n</head>", 1)
+            if "</head>" in html else html + _PREVIEW_PLACEHOLDER_CSS)
+
+
+def _load_direction_drafts(business_id: str) -> tuple:
+    """(site_row, drafts_dict) — drafts_dict is {} when none stored."""
+    rows = sb_clients.sb_get_as_service(
+        f"/business_sites?business_id=eq.{business_id}"
+        "&select=id,slug,site_config&limit=1") or []
+    site = rows[0] if rows else None
+    cfg = ((site or {}).get("site_config") or {})
+    drafts = cfg.get("direction_drafts")
+    return site, (drafts if isinstance(drafts, dict) else {})
+
+
+def _store_direction_drafts(business_id: str, ctx: Dict[str, Any],
+                            items: List[Dict[str, Any]]) -> None:
+    """Overwrite site_config.direction_drafts WHOLESALE (that is the cap —
+    one drafts set per business; a new run replaces the old)."""
+    from datetime import datetime, timezone
+    site = _ensure_site_row(business_id, ctx)
+    fresh = sb_clients.sb_get_as_service(
+        f"/business_sites?id=eq.{site['id']}&select=site_config&limit=1") or []
+    cfg = dict((fresh[0].get("site_config") or {}) if fresh else {})
+    cfg["direction_drafts"] = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "items": items,
+    }
+    sb_clients.sb_patch_as_service(
+        f"/business_sites?id=eq.{site['id']}", {"site_config": cfg})
+
+
+def _direction_pipeline(business_id: str, ctx: Dict[str, Any],
+                        dro: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The spec half of the normal compose pipeline for ONE direction:
+    copy pass (fallback to the deterministic default spec), connection
+    guarantees, cta_goal fill, symmetry steering, hero direction."""
+    try:
+        spec = compose_spec_llm(ctx, "", dro=dro)
+    except Exception as e:
+        logger.warning(f"[composer.directions] copy pass failed for "
+                       f"{business_id[:8]} — using default spec: {e}")
+        spec = _default_spec(ctx)
+        for s in spec:
+            s["_variant_defaulted"] = True
+    spec = _ensure_connections(spec, ctx)
+    spec = _apply_cta_goal(spec, ctx)
+    decisions = dro.get("decisions") or {}
+    spec = _apply_symmetry_preference(spec, decisions.get("layout"))
+    _apply_hero_direction(spec, decisions.get("hero_concept"))
+    return spec
+
+
+def compose_directions(business_id: str,
+                       design_prefs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Author THREE candidate directions (distinct stances), compose copy
+    for each, deterministically render each as a smoke check, and store
+    the drafts. Runs SEQUENTIALLY with a per-direction try — one failed
+    direction returns the ones that worked; fewer than 2 → 502.
+
+    Distinctiveness: each candidate is authored with the ACCEPTED sibling
+    candidates prepended to the recent-DRO cohort, so author_dro's
+    existing _collides check enforces separation across the three drafts
+    as well as against history. Candidate DROs are NOT persisted to
+    design_rationales here — the chosen one is persisted at choose time."""
+    prefs = sanitize_design_prefs(design_prefs)
+    if prefs:
+        _persist_site_prefs(business_id, prefs)
+
+    ctx = gather_context(business_id)
+    ref_analysis = _maybe_analyze_references(business_id, ctx)
+    intake = _assemble_intake_text(ctx)
+    creative = ((ctx.get("site_prefs") or {}).get("creative")
+                if isinstance((ctx.get("site_prefs") or {}).get("creative"), dict)
+                else None)
+
+    from agents.composer.drl import passes as drl_passes
+    # ONE signal pass shared by all three candidates (same intake).
+    signals = drl_passes.detect_signals(business_id, intake)
+    recent = drl_passes.fetch_recent_dros(business_id)
+
+    import copy as _copy
+    items: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    for stance_key, stance_text in DIRECTION_STANCES.items():
+        try:
+            sibling_dros = [it["dro"] for it in items]
+            dro = drl_passes.author_dro(
+                business_id, signals, sibling_dros + recent,
+                reference_analysis=ref_analysis,
+                creative=creative, stance=stance_text)
+            if not dro:
+                errors.append(f"{stance_key}: DRO authoring failed")
+                continue
+            dctx = _copy.deepcopy(ctx)
+            _apply_dro_design(dctx, dro, business_id)
+            spec = _direction_pipeline(business_id, dctx, dro)
+            # Deterministic render smoke — previews re-render from the
+            # stored dro+spec, so prove it renders NOW.
+            html = site_modules.render_page(
+                spec, dctx, dctx["business"]["name"] or "Preview")
+            if "<body" not in (html or ""):
+                raise ValueError("render produced no document")
+            label = _direction_label(dro, [it["label"] for it in items],
+                                     stance_key)
+            hero_sec = next((s for s in spec if s.get("module") == "hero"), {})
+            tagline = str((hero_sec.get("content") or {}).get("headline") or "")
+            concept = str((((dro.get("decisions") or {}).get("hero_concept")
+                            or {}).get("concept_statement")) or "")
+            summary = concept or str(dro.get("summary_for_practitioner") or "")
+            items.append({
+                "draft_id": uuid4().hex[:12],
+                "stance": stance_key,
+                "label": label,
+                "dro": dro,
+                "spec": spec,
+                "dro_summary": summary[:400],
+                "tagline": tagline,
+            })
+            logger.info(f"[composer.directions] '{stance_key}' authored for "
+                        f"{business_id[:8]}: {label}")
+        except Exception as e:
+            errors.append(f"{stance_key}: {e}")
+            logger.warning(f"[composer.directions] '{stance_key}' failed for "
+                           f"{business_id[:8]} (continuing): {e}")
+
+    if len(items) < 2:
+        raise HTTPException(502, "could not author enough directions "
+                                 f"({len(items)}/3 succeeded): "
+                                 + ("; ".join(errors) or "unknown"))
+
+    _store_direction_drafts(business_id, ctx, items)
+    return {"ok": True, "count": len(items),
+            "directions": [{k: it[k] for k in
+                            ("draft_id", "stance", "label", "dro_summary",
+                             "tagline")} for it in items],
+            "errors": errors}
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────
@@ -1767,6 +2120,163 @@ def get_spec(business_id: str,
             "dna": {k: ctx["dna"][k] for k in ("vibe", "intensity", "accent_style", "palette")},
             "modules": {mid: {"variants": list(s["variants"]), "fields": list(s["fields"])}
                         for mid, s in site_modules.MODULES.items()}}
+
+
+# ─── Arc 6 — directions endpoints ─────────────────────────────────────
+
+class DirectionsBody(BaseModel):
+    business_id: str
+    design_prefs: Optional[Dict[str, Any]] = None   # v3 (incl. creative)
+
+
+@router.post("/directions")
+async def start_directions(body: DirectionsBody,
+                           session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    """Enqueue a 'compose_directions' job (6-7 LLM calls ≈ 60-120s — never
+    sync). Returns {ok, job_id}; the frontend polls /agents/chief/jobs as
+    usual, then GETs /composer/directions/{business_id} for the drafts +
+    preview tokens. Reuses the chief_jobs enqueue/dedupe/stale-sweep rail."""
+    import asyncio
+    import httpx
+    import chief_jobs
+    uid = session.user.id
+    await asyncio.to_thread(_require_owner, body.business_id, uid)
+    params: Dict[str, Any] = {}
+    prefs = sanitize_design_prefs(body.design_prefs)
+    if prefs:
+        params["design_prefs"] = prefs
+    async with httpx.AsyncClient() as client:
+        job = await chief_jobs.enqueue(client, user_id=uid,
+                                       business_id=body.business_id,
+                                       kind="compose_directions",
+                                       params=params, source="desktop")
+    if not job:
+        raise HTTPException(500, "could not enqueue directions job")
+    out = {"ok": True, "job_id": job.get("id")}
+    if job.get("deduped"):
+        out["deduped"] = True
+    return out
+
+
+@router.get("/directions/{business_id}")
+def list_directions(business_id: str,
+                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Stored direction drafts + short-lived preview tokens (30 min HMAC —
+    minted fresh on every list, so re-opening the picker re-arms expired
+    iframes). Lightweight: no LLM, no render."""
+    _require_owner(business_id, user.id)
+    _site, drafts = _load_direction_drafts(business_id)
+    items = drafts.get("items") or []
+    directions = []
+    for it in items:
+        if not isinstance(it, dict) or not it.get("draft_id"):
+            continue
+        did = str(it["draft_id"])
+        token = mint_preview_token(business_id, did)
+        directions.append({
+            "draft_id": did,
+            "stance": it.get("stance"),
+            "label": it.get("label"),
+            "dro_summary": it.get("dro_summary"),
+            "tagline": it.get("tagline"),
+            "preview_token": token,
+            "preview_url": (f"{RAILWAY_BASE}/composer/directions/"
+                            f"{business_id}/{did}/preview?t={token}"),
+        })
+    return {"ok": True, "created_at": drafts.get("created_at"),
+            "directions": directions}
+
+
+@router.get("/directions/{business_id}/{draft_id}/preview")
+def preview_direction(business_id: str, draft_id: str, t: str = ""):
+    """text/html deterministic re-render of one stored draft (dro+spec →
+    render_page; NO LLM, NO slot population — placeholder gradients keep
+    previews intentional). Auth = the signed ?t= token (an iframe cannot
+    send Authorization headers); minted owner-side by GET /directions."""
+    from fastapi.responses import HTMLResponse
+    if not verify_preview_token(business_id, draft_id, t):
+        raise HTTPException(401, "invalid or expired preview token")
+    _site, drafts = _load_direction_drafts(business_id)
+    draft = next((it for it in (drafts.get("items") or [])
+                  if isinstance(it, dict) and it.get("draft_id") == draft_id),
+                 None)
+    if not draft:
+        raise HTTPException(404, "draft not found (a newer directions run "
+                                 "may have replaced it)")
+    ctx = gather_context(business_id)
+    dro = draft.get("dro") or {}
+    _apply_dro_design(ctx, dro, business_id)
+    spec = sanitize_spec({"sections": draft.get("spec") or []}, ctx)
+    html = site_modules.render_page(spec, ctx,
+                                    ctx["business"]["name"] or "Preview")
+    return HTMLResponse(_preview_html(html))
+
+
+class ChooseDirectionBody(BaseModel):
+    business_id: str
+    draft_id: str
+
+
+@router.post("/directions/choose")
+def choose_direction(body: ChooseDirectionBody,
+                     session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    """Publish the chosen draft as the LIVE site through the full normal
+    pipeline: rationale persisted to design_rationales NOW (candidates
+    never were), slots populated, overrides reconciled (full_recompose
+    semantics — this IS a fresh composition), quality gate, dro_status
+    applied, drafts cleared. Returns {ok, url}."""
+    _require_owner(body.business_id, session.user.id)
+    _site, drafts = _load_direction_drafts(body.business_id)
+    draft = next((it for it in (drafts.get("items") or [])
+                  if isinstance(it, dict) and it.get("draft_id") == body.draft_id),
+                 None)
+    if not draft:
+        raise HTTPException(404, "draft not found — run directions again")
+
+    ctx = gather_context(body.business_id)
+    dro = dict(draft.get("dro") or {})
+    from agents.composer.drl.passes import persist_dro
+    dro_id = persist_dro(body.business_id, dro)
+    if dro_id:
+        dro["id"] = dro_id
+    _apply_dro_design(ctx, dro, body.business_id)
+    spec = sanitize_spec({"sections": draft.get("spec") or []}, ctx)
+    concept = str((((dro.get("decisions") or {}).get("hero_concept") or {})
+                   .get("concept_statement")) or "")
+    dro_summary = concept or str(dro.get("summary_for_practitioner") or "") or None
+
+    result = render_and_persist(
+        body.business_id, spec, ctx, dro_id=dro_id, dro=dro,
+        dro_status="applied", dro_summary=dro_summary,
+        defaulted_modules=[], full_recompose=True)
+
+    # Clear the drafts + record the choice (provenance for the rationale
+    # panel). Read-modify-write AFTER render_and_persist so its own
+    # site_config update isn't clobbered.
+    try:
+        from datetime import datetime, timezone
+        fresh = sb_clients.sb_get_as_service(
+            f"/business_sites?id=eq.{result['site_id']}&select=site_config&limit=1") or []
+        cfg = dict((fresh[0].get("site_config") or {}) if fresh else {})
+        cfg.pop("direction_drafts", None)
+        cfg["direction_choice"] = {
+            "draft_id": body.draft_id, "stance": draft.get("stance"),
+            "label": draft.get("label"),
+            "chosen_at": datetime.now(timezone.utc).isoformat(),
+        }
+        sb_clients.sb_patch_as_service(
+            f"/business_sites?id=eq.{result['site_id']}",
+            {"site_config": cfg})
+    except Exception as e:
+        logger.warning(f"[composer.directions] draft cleanup failed "
+                       f"(non-fatal): {e}")
+
+    return {"ok": True, "url": result.get("url"),
+            "chosen": {"draft_id": body.draft_id,
+                       "stance": draft.get("stance"),
+                       "label": draft.get("label")},
+            "design_rationale_id": dro_id,
+            "quality_report": result.get("quality_report")}
 
 
 # ─── Arc 28b — live refresh on catalog change ─────────────────────────

@@ -267,6 +267,31 @@ def _dro_system_prompt() -> str:
         "Every decision MUST carry a one-line `because` and `from_signals` "
         "(the signal_ids that drove it) — that is the trust contract. When two "
         "principles collide, name the collision and the winner in `because`.\n\n"
+        "=== THE CREATIVE ENGINE (Arc 6 — the design philosophy; non-negotiable) ===\n"
+        "1. ONE ORGANIZING IDEA RULES EVERYTHING. hero_concept.concept_statement "
+        "is the BOSS of every other decision: palette, typography, layout, motion "
+        "and whitespace must each be defensible as serving THAT idea. If a "
+        "decision can't argue from the concept, change the decision.\n"
+        "2. EXACTLY ONE DELIBERATE RULE-BREAK. Author decisions.rule_break "
+        "{what, where, because}: one — and only one — knowing violation of good "
+        "manners, placed where it lands hardest. This is where the RESTRAINT "
+        "BUDGET spends: the page gets ONE signature moment at full volume "
+        "(either the rule-break or the motion signature move, never both loud), "
+        "and everything else stays quiet to pay for it.\n"
+        "3. CHARACTER IS TENSION BETWEEN TWO POLES. Author decisions.tension "
+        "{pole_a, pole_b, expression}: name the two truths the business holds at "
+        "once (e.g. heritage vs. electric) and say HOW the design holds both — "
+        "which decisions carry which pole. A design with no tension has no "
+        "character.\n"
+        "4. DESIGN THE FIRST 3 SECONDS. Author decisions.first_impression "
+        "{feel_in_3s, remember}: what a stranger feels before reading anything, "
+        "and the one thing they should remember. Every hero-adjacent decision "
+        "answers to this.\n"
+        "5. MATERIAL TRUTH. Layout choices must be honest to the data the "
+        "business actually has (the offering/testimonial counts and texture in "
+        "the signals): never author a proof-heavy, gallery-led or stat-led "
+        "direction the material can't fill. An honest sparse page beats a "
+        "padded one.\n\n"
         "Apply the translation principles below as MOVES, not lookups. Avoid "
         "the banned defaults (generic display fonts, purple-gradient SaaS look, "
         "the centered-hero+3-cards+CTA skeleton, stock-photo cliches, decorative "
@@ -295,15 +320,55 @@ def _reference_analysis_block(reference_analysis: Optional[List[Dict[str, Any]]]
         f"colors):\n{json.dumps(compact, indent=2)}\n\n")
 
 
+def _creative_brief_block(creative: Optional[Dict[str, Any]]) -> str:
+    """Arc 6 — the owner's creative brief (design_prefs v3 `creative`),
+    rendered VERBATIM as the highest-priority authoring evidence. The
+    metaphor seeds concept_statement; loud_where constrains where the
+    rule-break / signature move may spend the restraint budget."""
+    c = creative if isinstance(creative, dict) else {}
+    lines: List[str] = []
+    if c.get("metaphor"):
+        lines.append(f'- The business feels like: "{c["metaphor"]}" '
+                     "<- SEED hero_concept.concept_statement from this metaphor.")
+    if c.get("surprise"):
+        lines.append(f'- What people would never guess: "{c["surprise"]}"')
+    if c.get("remember"):
+        lines.append(f'- Three seconds in, a stranger should remember: '
+                     f'"{c["remember"]}" <- this IS first_impression.remember.')
+    if c.get("loud_where"):
+        lines.append(f"- The ONE loud moment lives in: {c['loud_where']} "
+                     "<- the rule-break/signature move may spend the restraint "
+                     "budget ONLY there; every other channel stays quiet.")
+    tn = c.get("tension") if isinstance(c.get("tension"), dict) else {}
+    if tn.get("pole_a") and tn.get("pole_b"):
+        lean = tn.get("lean")
+        lean_txt = (f" (lean {lean}/5 toward '{tn['pole_b']}')"
+                    if isinstance(lean, int) else "")
+        lines.append(f"- Tension to hold: '{tn['pole_a']}' vs '{tn['pole_b']}'"
+                     f"{lean_txt} <- author decisions.tension from exactly these poles.")
+    if not lines:
+        return ""
+    return ("OWNER'S CREATIVE BRIEF (verbatim, HIGHEST PRIORITY — outranks "
+            "every other signal; the metaphor is the organizing idea unless "
+            "it is unusable):\n" + "\n".join(lines) + "\n\n")
+
+
 def _dro_user_prompt(business_id: str, signals: List[Dict[str, Any]],
                      exemplars: List[Dict[str, Any]],
                      recent_signatures: List[List[Any]],
-                     reference_analysis: Optional[List[Dict[str, Any]]] = None) -> str:
+                     reference_analysis: Optional[List[Dict[str, Any]]] = None,
+                     creative: Optional[Dict[str, Any]] = None,
+                     stance: Optional[str] = None) -> str:
     consumable = [s for s in signals
                   if isinstance(s.get("confidence"), (int, float))
                   and sig.is_consumable(s["confidence"])]
+    stance_block = (f"AUTHORING STANCE FOR THIS CANDIDATE (one of three "
+                    f"directions being authored — commit to it fully):\n"
+                    f"{stance}\n\n" if stance else "")
     return (
         f"BUSINESS: {business_id}\n\n"
+        + _creative_brief_block(creative)
+        + stance_block +
         f"DETECTED SIGNALS (only these drive design; confidence<{sig.CONSUME_THRESHOLD} "
         f"recorded but not consumed):\n{json.dumps(consumable, indent=2)}\n\n"
         + _reference_analysis_block(reference_analysis) +
@@ -314,7 +379,10 @@ def _dro_user_prompt(business_id: str, signals: List[Dict[str, Any]],
         "OUTPUT ONLY the DRO as JSON: "
         '{"dro_version":1,"business_id":"...","signals":[...echo the consumed signals...],'
         '"decisions":{"palette":{...},"typography":{...},"layout":{...},"motion":{...},'
-        '"hero_concept":{...},"whitespace":{...},"voice_to_visual":{...}},'
+        '"hero_concept":{...},"whitespace":{...},"voice_to_visual":{...},'
+        '"rule_break":{"what":"...","where":"...","because":"..."},'
+        '"tension":{"pole_a":"...","pole_b":"...","expression":"how the design holds both","because":"..."},'
+        '"first_impression":{"feel_in_3s":"...","remember":"...","because":"..."}},'
         '"anti_convergence":{"distinctiveness_check":{}},'
         '"summary_for_practitioner":"plain-language why-your-site-looks-this-way",'
         '"exemplars_consulted":[{"exemplar_id":"..","borrowed":"the move, named"}]}'
@@ -324,11 +392,16 @@ def _dro_user_prompt(business_id: str, signals: List[Dict[str, Any]],
 def author_dro(business_id: str, signals: List[Dict[str, Any]],
                recent: List[Dict[str, Any]],
                reference_analysis: Optional[List[Dict[str, Any]]] = None,
+               creative: Optional[Dict[str, Any]] = None,
+               stance: Optional[str] = None,
                ) -> Optional[Dict[str, Any]]:
     """signals + principles + exemplars + recent signatures (+ Arc 5
-    reference-site analysis) → validated DRO. One retry on validation
-    failure; one regeneration on distinctiveness collision. Returns None
-    on hard failure (caller decides fallback)."""
+    reference-site analysis, + Arc 6 owner creative brief / directions
+    stance) → validated DRO. One retry on validation failure; one
+    regeneration on distinctiveness collision. `recent` may include the
+    sibling candidate DROs of a directions run — the same collision check
+    then enforces distinctiveness ACROSS the three candidates. Returns
+    None on hard failure (caller decides fallback)."""
     client = _client()
     if not client:
         return None
@@ -336,7 +409,8 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
     recent_sigs = [distinctiveness_signature(r) for r in recent]
     system = _dro_system_prompt()
     user = _dro_user_prompt(business_id, signals, exemplars, recent_sigs,
-                            reference_analysis=reference_analysis)
+                            reference_analysis=reference_analysis,
+                            creative=creative, stance=stance)
 
     def _attempt(extra: str = "") -> Optional[Dict[str, Any]]:
         try:
@@ -424,17 +498,24 @@ def persist_dro(business_id: str, dro: Dict[str, Any]) -> Optional[str]:
 # ─── Orchestrator ────────────────────────────────────────────────────────
 def produce_dro(business_id: str, transcript: str,
                 reference_analysis: Optional[List[Dict[str, Any]]] = None,
+                creative: Optional[Dict[str, Any]] = None,
                 ) -> Optional[Dict[str, Any]]:
     """Full pass: detect signals → fetch recent → author DRO (with
     distinctiveness) → persist. Returns the DRO (with `id` stamped) or None.
     Best-effort: never raises into the caller (PR3 wires this ahead of compose).
     `reference_analysis` (Arc 5) = reference_analyzer results for the sites
-    the owner admires — rides into the authoring prompt as direction evidence."""
+    the owner admires — rides into the authoring prompt as direction evidence.
+    `creative` (Arc 6) = sanitized design_prefs.creative — the owner's
+    creative brief, quoted verbatim at highest priority in the authoring
+    prompt. (The directions engine calls detect_signals/author_dro directly
+    so it can share one signal pass across three candidates and defer
+    persistence to the choose step.)"""
     try:
         signals = detect_signals(business_id, transcript)
         recent = fetch_recent_dros(business_id)
         dro = author_dro(business_id, signals, recent,
-                         reference_analysis=reference_analysis)
+                         reference_analysis=reference_analysis,
+                         creative=creative)
         if dro is None:
             return None
         dro_id = persist_dro(business_id, dro)
