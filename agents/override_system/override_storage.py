@@ -205,6 +205,33 @@ def upsert_override(
     return None
 
 
+_VALID_STATUSES = {"active", "stale"}
+
+
+def mark_overrides_status(override_ids: List[str], status: str) -> bool:
+    """Arc 4 reconciliation — batch-set the `status` column ('active' |
+    'stale') on override rows. Best-effort: when the
+    supabase/site-override-status-migration.sql hasn't been applied yet
+    the PATCH 400s (sb_clients logs it and returns None) and behavior
+    degrades to the pre-Arc-4 apply-everything — a render is never
+    failed over a status write."""
+    if not override_ids or status not in _VALID_STATUSES:
+        return False
+    import sb_clients
+    ids = ",".join(str(i) for i in override_ids if i)
+    if not ids:
+        return False
+    try:
+        sb_clients.sb_patch_as_service(
+            f"/site_content_overrides?id=in.({ids})", {"status": status})
+        return True
+    except Exception as e:  # defensive — sb_patch_as_service soft-fails itself
+        logger.warning(
+            f"[override_storage] status mark → {status} failed for "
+            f"{len(override_ids)} row(s): {e}")
+        return False
+
+
 def delete_override_by_id(business_id: str, override_id: str) -> bool:
     """Delete a single override by its UUID. business_id is required as
     a scoping safety check — the DELETE only fires when both match.

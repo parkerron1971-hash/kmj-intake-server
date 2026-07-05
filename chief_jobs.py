@@ -93,7 +93,11 @@ def _execute_kind(kind: str, business_id: str, params: dict) -> dict:
         # then composes concept-threaded copy that obeys it.
         from site_composer import compose_site
         notes = (params or {}).get("brief_notes") or ""
-        result = compose_site(business_id, brief_notes=notes, use_llm=True)
+        # Arc 2 "Ask the Owner": compose_site sanitizes + persists the prefs
+        # to businesses.settings.site_prefs before composing; when absent it
+        # reuses the stored site_prefs automatically.
+        result = compose_site(business_id, brief_notes=notes, use_llm=True,
+                              design_prefs=(params or {}).get("design_prefs"))
         return result if isinstance(result, dict) else {}
     raise ValueError(f"unknown job kind: {kind}")
 
@@ -182,6 +186,7 @@ class _RetryReq(BaseModel):
 class _RebuildReq(BaseModel):
     business_id: str
     brief_notes: Optional[str] = None
+    design_prefs: Optional[Dict[str, Any]] = None   # Arc 2 "Ask the Owner"
 
 
 @router.post("/jobs/rebuild")
@@ -199,7 +204,17 @@ async def rebuild_site_endpoint(req: _RebuildReq,
                           f"/businesses?id=eq.{req.business_id}&owner_id=eq.{uid}&select=id&limit=1")
         if not owned:
             raise HTTPException(403, "not your business")
-        params = {"brief_notes": req.brief_notes} if (req.brief_notes or "").strip() else {}
+        params: Dict[str, Any] = {}
+        if (req.brief_notes or "").strip():
+            params["brief_notes"] = req.brief_notes
+        if req.design_prefs is not None:
+            # Lenient shape validation at the door (unknown keys dropped,
+            # strings trimmed/capped, enums clamped) so the stored job params
+            # are already clean. Lazy import — same pattern as _execute_kind.
+            from site_composer import sanitize_design_prefs
+            prefs = sanitize_design_prefs(req.design_prefs)
+            if prefs:
+                params["design_prefs"] = prefs
         job = await enqueue(client, user_id=uid, business_id=req.business_id,
                             kind="rebuild_site", params=params, source="desktop")
     return {"ok": True, "job_id": (job or {}).get("id")}

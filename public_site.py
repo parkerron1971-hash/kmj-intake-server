@@ -1215,7 +1215,53 @@ async def smart_preview_endpoint(business_id: str, body: Dict[str, Any]):
 
 @router.post("/sites/{business_id}/smart-enable")
 async def smart_enable_endpoint(business_id: str):
-    """Flip use_smart_sites = true. Seeds defaults from bundle if empty."""
+    """Flip use_smart_sites = true. Seeds defaults from bundle if empty.
+
+    ─── Smart Sites Arc 4 — RETIRED ENGINE, LIVE CALLER ────────────────
+    Decision: LIVE frontend caller — MySite.tsx:185 handleEnableSmartSites
+    → smartSites.ts enableSmartSites (smartSites.ts:128) — so NOT 410'd.
+    When LEGACY_SITE_ENGINES is off (default) this reroutes to the
+    canonical Module Composer: a DETERMINISTIC compose (use_llm=False —
+    the caller awaits this synchronously, so no long LLM calls) that
+    produces a real composed page from the business's live data; the
+    practitioner can then run the full LLM compose from the composer
+    panel. Compatibility contract with enableSmartSites():
+      - it reads result.ok and result.site_config.generated_decoration;
+        the latter, when absent, fires the legacy /generate-decoration
+        LLM in the background — so the response (NOT the DB) carries a
+        marker there to keep that retired engine dormant;
+      - after the await, MySite refetches the site row; html_source ==
+        'module-composer' routes it to the composed-site editor view.
+    """
+    import site_composer as _sc
+    if not _sc.legacy_site_engines_enabled():
+        logger.warning(f"[smart-enable] DEPRECATED path hit — rerouting to a "
+                       f"deterministic Module Composer compose for {business_id[:8]}")
+        result = _sc.compose_site(business_id, use_llm=False)
+        try:
+            from brand_engine import _sb_get as be_get
+            rows = be_get(f"/business_sites?business_id=eq.{business_id}"
+                          "&select=site_config&limit=1") or []
+            cfg = dict((rows[0].get("site_config") or {}) if rows else {})
+        except Exception:
+            cfg = {}
+        # Response-only trims + shims: the document itself is heavy and
+        # the frontend doesn't read it here; the generated_decoration
+        # marker only suppresses the legacy decoration auto-fire.
+        cfg.pop("generated_html", None)
+        cfg.setdefault("generated_decoration", {"engine": "module-composer"})
+        return {
+            "ok": True,
+            "use_smart_sites": False,
+            "engine": "module-composer",
+            "deprecated": True,
+            "note": ("Smart Sites was retired — this site was composed by the "
+                     "Module Composer. POST /composer/compose for the full "
+                     "LLM composition."),
+            "site_config": cfg,
+            "composer": {k: result.get(k) for k in ("slug", "url", "sections",
+                                                    "composition_source")},
+        }
     try:
         from smart_sites import enable_smart_sites
         result = enable_smart_sites(business_id)
@@ -2140,11 +2186,50 @@ async def promote_alternative_endpoint(business_id: str, alternative_index: int)
     using the same _run_builder_job helper as /generate-design-recommendation.
     Returns immediately; client polls /decoration-status to see when
     html_generated_at advances past the call timestamp.
+
+    ─── Smart Sites Arc 4 — RETIRED ENGINE, LIVE CALLER ────────────────
+    Decision: LIVE frontend caller — DesignDNAPanel.tsx:224 "Use This
+    Direction" → decorationGen.ts promoteAlternative (decorationGen.ts:333)
+    — so NOT 410'd. Strand alternatives don't exist in the Module
+    Composer; the honest equivalent of "try a different direction" is a
+    fresh composer run, so when LEGACY_SITE_ENGINES is off (default) this
+    kicks compose_site in a background thread (compose can exceed the 60s
+    edge timeout — same returns-immediately semantics as before).
+    Compatibility contract with the caller: it reads only ok/detail, then
+    polls /decoration-status until html_generated_at advances — which the
+    composer's render_and_persist writes.
     """
     if alternative_index not in (0, 1):
         raise HTTPException(
             status_code=400, detail="alternative_index must be 0 or 1",
         )
+
+    import site_composer as _sc
+    if not _sc.legacy_site_engines_enabled():
+        logger.warning(f"[promote-alt] DEPRECATED path hit — rerouting to a "
+                       f"fresh Module Composer compose for {business_id[:8]}")
+
+        def _compose_bg_promote():
+            try:
+                _sc.compose_site(business_id)
+            except Exception as e:
+                logger.warning(f"[promote-alt] composer reroute failed: {e}")
+
+        import threading
+        threading.Thread(target=_compose_bg_promote,
+                         name=f"composer-promote-{business_id[:8]}",
+                         daemon=True).start()
+        return {
+            "ok": True,
+            "engine": "module-composer",
+            "deprecated": True,
+            "promoted_index": alternative_index,
+            "builder_kicked_off": True,
+            "html_status": "building",
+            "note": ("Design alternatives were retired with the legacy engine — "
+                     "a fresh Module Composer composition is building instead. "
+                     "POST /composer/compose directly next time."),
+        }
 
     try:
         from brand_engine import (
@@ -2365,7 +2450,54 @@ async def generate_multi_page_endpoint(business_id: str):
     kill-switch-gated. Builds in a background daemon thread because a
     full 4-page run takes ~4-8 minutes (longer than Railway's 60s edge
     timeout).
+
+    ─── Smart Sites Arc 4 — RETIRED ENGINE, LIVE CALLER ────────────────
+    Decision: LIVE frontend caller — DesignDNAPanel.tsx:271 "Generate All
+    Pages" → decorationGen.ts generateMultiPage (decorationGen.ts:393) —
+    so NOT 410'd. The Module Composer is single-page by design; the
+    composer equivalent is a fresh one-page compose. When
+    LEGACY_SITE_ENGINES is off (default) this runs compose_site in a
+    background thread (same returns-immediately semantics), then stamps
+    site_config.pages_generated_at + site_pages=["home"] purely so the
+    caller's waitForPagesComplete poll resolves and refreshes the preview
+    (which serves the composed page) instead of showing a 10-minute
+    timeout. generated_pages is NOT written — no fake multi-page state.
     """
+    import site_composer as _sc
+    if not _sc.legacy_site_engines_enabled():
+        logger.warning(f"[gen-multi-page] DEPRECATED path hit — rerouting to a "
+                       f"single-page Module Composer compose for {business_id[:8]}")
+
+        def _compose_bg_multipage():
+            try:
+                _sc.compose_site(business_id)
+                from brand_engine import _sb_get as be_get, _sb_patch as be_patch
+                rows = be_get(f"/business_sites?business_id=eq.{business_id}"
+                              "&select=id,site_config&limit=1") or []
+                if rows:
+                    cfg = dict(rows[0].get("site_config") or {})
+                    cfg["pages_generated_at"] = time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    cfg["site_pages"] = ["home"]
+                    be_patch(f"/business_sites?id=eq.{rows[0]['id']}",
+                             {"site_config": cfg})
+            except Exception as e:
+                logger.warning(f"[gen-multi-page] composer reroute failed: {e}")
+
+        import threading
+        threading.Thread(target=_compose_bg_multipage,
+                         name=f"composer-multipage-{business_id[:8]}",
+                         daemon=True).start()
+        return {
+            "ok": True,
+            "engine": "module-composer",
+            "deprecated": True,
+            "site_pages": ["home"],
+            "note": ("Multi-page generation was retired — your site is composed "
+                     "as a single page by the Module Composer. "
+                     "POST /composer/compose directly next time."),
+        }
+
     try:
         from studio_config import MULTI_PAGE_ENABLED
     except Exception as e:
@@ -2842,7 +2974,21 @@ async def generate_html_endpoint(business_id: str):
     and a complete Builder pass takes 60-120 s. Poll /decoration-status to
     observe completion: `has_generated_html: true` means success;
     `html_build_failed_at` set means the most recent build failed.
+
+    ─── Smart Sites Arc 4 — RETIRED ENGINE, NO LIVE CALLER ─────────────
+    Decision: 410 when LEGACY_SITE_ENGINES is off (default). Verified
+    2026-07-04: zero callers in the frontend repo (grep for
+    "generate-html" across solutionist-studio/src matches nothing live —
+    only .bak snapshots of decorationGen mention neighboring endpoints).
+    The Builder-Agent pipeline this drove is superseded by the Module
+    Composer end to end.
     """
+    import site_composer as _sc
+    if not _sc.legacy_site_engines_enabled():
+        return JSONResponse(status_code=410, content={
+            "error": "This build engine was retired — sites are composed by "
+                     "the Module Composer. POST /composer/compose instead."})
+
     can_build, seconds_remaining = _check_html_build_cooldown(business_id)
     if not can_build:
         raise HTTPException(

@@ -21,6 +21,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import sb_clients
@@ -127,7 +128,50 @@ def build_with_loop(
     expander + builder ×1-2 + critique ×1-2). Latency 60–240s. Caller
     can pass include_html=false to drop the final HTML from the response
     payload (audit trail still includes html_length + CTA extraction).
+
+    ─── Smart Sites Arc 4 — RETIRED ENGINE, LIVE CALLER ────────────────
+    Decision: this endpoint HAS a live frontend caller — MySite's
+    DesignDNAPanel "Generate Site" button (DesignDNAPanel.tsx:156 →
+    decorationGen.ts runBuildWithLoop, decorationGen.ts:263) — so it is
+    NOT 410'd. When LEGACY_SITE_ENGINES is off (default) it reroutes to
+    the canonical Module Composer: the request's `description` becomes
+    compose brief_notes. Compatibility contract with the caller:
+      - the frontend only checks response.ok / 409 / 422 (it reads no
+        body fields on success), so any 200 JSON is shape-compatible;
+      - completion is detected by polling GET /director/_diag/site_state
+        until has_generated_html + a fresh html_generated_at — both of
+        which the composer's render_and_persist writes to site_config.
+    Callers without business_id (ephemeral verification runs) get the
+    410 retirement message — there is nothing to compose onto.
     """
+    import site_composer
+    if not site_composer.legacy_site_engines_enabled():
+        if not req.business_id:
+            return JSONResponse(status_code=410, content={
+                "error": "This build engine was retired — sites are composed "
+                         "by the Module Composer. POST /composer/compose instead."})
+        logger.warning(
+            "[director.build-with-loop] DEPRECATED path hit — rerouting to "
+            f"the Module Composer for business {req.business_id[:8]} "
+            "(frontend: DesignDNAPanel Generate)")
+        try:
+            result = site_composer.compose_site(
+                req.business_id, brief_notes=req.description or "")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"[director.build-with-loop] composer reroute "
+                           f"failed: {type(e).__name__}: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+        return {
+            "status": "completed",
+            "engine": "module-composer",
+            "deprecated": True,
+            "note": ("build-with-loop was retired; this request was composed "
+                     "by the Module Composer. POST /composer/compose directly."),
+            "composer": result,
+        }
+
     try:
         return run_build_loop(
             business_name=req.business_name,
