@@ -1,12 +1,66 @@
-"""Hero module — 3 expression variants. Content: eyebrow, headline,
-subheadline, cta_label. Image slot: hero_main (split/banner only)."""
+"""Hero module — 6 expression variants. Content: eyebrow, headline,
+subheadline, cta_label. Image slot: hero_main (split/banner/cinematic/
+editorial); 'constructed' builds a typographic hero over a generated
+ornament field — no photo at all (Arc 3, DRO visual_metaphor)."""
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Any, Dict, Tuple
 
-from ._base import safe, ov, cta_button, eyebrow, heading_accent
+from ._base import safe, ov, cta_button, eyebrow, heading_accent, GRAIN_DATA_URI
 
-VARIANTS = ("split", "statement", "banner", "cinematic")
+VARIANTS = ("split", "statement", "banner", "cinematic", "editorial", "constructed")
+
+_ALPHA_RE = re.compile(r"[A-Za-z0-9']+")
+
+
+def _accent_headline(headline: str, section: str = "hero") -> str:
+    """The quality-bar accent-word idiom (ported from the shelved
+    cathedral heading primitive): exactly ONE emphasized italic word in
+    the accent color, picked deterministically — the longest word, the
+    headline's likely center of gravity (first wins ties). Every
+    fragment is escaped; single-word headlines pass through plain."""
+    words = str(headline or "").split()
+    if len(words) < 2:
+        return safe(headline)
+
+    def _alpha_len(w: str) -> int:
+        return sum(len(m) for m in _ALPHA_RE.findall(w))
+
+    target = max(range(len(words)), key=lambda i: _alpha_len(words[i]))
+    return " ".join(
+        f'<em class="sxm-accent-word">{safe(w)}</em>' if i == target else safe(w)
+        for i, w in enumerate(words))
+
+
+_ACCENT_WORD_CSS = """
+.sxm-accent-word { font-style: italic; color: var(--sx-accent); }"""
+
+
+def _constructed_recipe(ctx: Dict[str, Any]) -> Tuple[str, str]:
+    """(arrangement, motif) for the constructed hero — deterministic from
+    the DRO concept words (hash-picked), so the same rationale always
+    renders the same ornament field. Concept keywords steer the motif:
+    regal/stellar words → diamond, luminous words → ring, journey words
+    → bar; otherwise the hash decides."""
+    design = ctx.get("design") or {}
+    hero_c = design.get("hero_concept") or {}
+    words = [str(w) for w in (hero_c.get("metaphor_elements") or []) if str(w or "").strip()]
+    blob = (" ".join(words + [str(hero_c.get("concept_statement") or "")])).strip().lower()
+    seed_src = blob or str((ctx.get("dna") or {}).get("seed") or "0")
+    h = int(hashlib.sha256(seed_src.encode()).hexdigest()[:8], 16)
+
+    if any(k in blob for k in ("crown", "royal", "diamond", "gem", "star", "peak", "throne")):
+        motif = "diamond"
+    elif any(k in blob for k in ("light", "glow", "sun", "halo", "warm", "fire", "dawn", "radian")):
+        motif = "ring"
+    elif any(k in blob for k in ("path", "journey", "line", "thread", "river", "road", "bridge", "horizon")):
+        motif = "bar"
+    else:
+        motif = ("diamond", "ring", "bar")[h % 3]
+    arrangement = ("orbital", "horizon", "ascend")[(h >> 4) % 3]
+    return arrangement, motif
 
 
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
@@ -53,6 +107,105 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   opacity: .92; }
 .sxm-hero-cine .sxm-eyebrow { color: var(--sx-accent); }
 @media (max-width: 768px) { .sxm-hero-cine { min-height: 92vh; } }"""
+        return html, css
+
+    if variant == "editorial":
+        # Arc 3 — asymmetric offset split (craft source: cathedral
+        # asymmetric_left + the italic accent-word signature). Oversized
+        # display type overhangs the image column; the visual sits a
+        # beat lower — asymmetric tension, not a broken grid.
+        html = f"""
+<section class="sxm-section sxm-hero-ed" id="top">
+  <div class="sxm-inner sxm-hero-ed-grid">
+    <div class="sxm-hero-ed-copy">
+      {eb}
+      <h1 {ov('hero', 'headline')}>{_accent_headline(headline)}</h1>
+      <p class="sxm-hero-sub" {ov('hero', 'subheadline')}>{safe(sub)}</p>
+      {cta}
+    </div>
+    <div class="sxm-hero-ed-visual sxm-imgbox">
+      <img data-slot="hero_main" src="" alt="{img_alt}">
+    </div>
+  </div>
+</section>"""
+        css = _ACCENT_WORD_CSS + """
+.sxm-hero-ed { min-height: 86vh; display: flex; align-items: center; overflow: hidden; }
+.sxm-hero-ed-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: clamp(28px, 5vw, 72px);
+  align-items: start; width: 100%; }
+.sxm-hero-ed h1 { font-size: clamp(3rem, 7.4vw, 6.4rem); line-height: 1.02; max-width: 13ch;
+  position: relative; z-index: 2; margin: 0 clamp(-140px, -12%, 0px) 26px 0; }
+.sxm-hero-ed .sxm-hero-sub { font-size: 1.14rem; max-width: 44ch; margin-bottom: 34px; color: var(--sx-muted); }
+.sxm-hero-ed-visual { margin-top: clamp(46px, 9vh, 120px); }
+.sxm-hero-ed-visual img { width: 100%; aspect-ratio: 4/5; object-fit: cover; }
+@media (max-width: 860px) {
+  .sxm-hero-ed { min-height: 0; }
+  .sxm-hero-ed-grid { grid-template-columns: 1fr; }
+  .sxm-hero-ed h1 { margin-right: 0; max-width: none; }
+  .sxm-hero-ed-visual { margin-top: 8px; }
+}"""
+        return html, css
+
+    if variant == "constructed":
+        # Arc 3 — the CONSTRUCTED hero (DRO visual_metaphor): no stock
+        # photo. A typographic statement over a generated ornament field
+        # — layered soft radial/conic accent gradients (every gradient
+        # fades), subtle grain, and geometric motifs echoing the concept
+        # keywords. Arrangement + motif are hash-picked from the DRO
+        # concept words, so the metaphor — not a photo — is the image.
+        arrangement, motif = _constructed_recipe(ctx)
+        field = "".join(
+            f'\n    <span class="sxm-orn-layer sxm-orn-{c}"></span>' for c in "abc"
+        ) + "".join(
+            f'\n    <span class="sxm-motif sxm-motif-{motif} sxm-m{i}"></span>'
+            for i in (1, 2, 3))
+        html = f"""
+<section class="sxm-hero-constructed sxm-orn-{arrangement}" id="top">
+  <div class="sxm-orn-field" aria-hidden="true">{field}
+  </div>
+  <div class="sxm-inner sxm-hero-con-inner">
+    {eb}
+    <h1 {ov('hero', 'headline')}>{_accent_headline(headline)}</h1>
+    <p class="sxm-hero-sub" {ov('hero', 'subheadline')}>{safe(sub)}</p>
+    {cta}
+  </div>
+</section>"""
+        css = _ACCENT_WORD_CSS + """
+.sxm-hero-constructed { position: relative; min-height: 92vh; display: flex; align-items: center;
+  padding: var(--sx-section-pad) var(--sx-gutter); overflow: hidden; isolation: isolate; }
+.sxm-hero-constructed::after { content: ""; position: absolute; inset: 0; z-index: -1;
+  pointer-events: none; background-image: """ + GRAIN_DATA_URI + """;
+  background-size: 160px 160px; opacity: .05; }
+.sxm-orn-field { position: absolute; inset: 0; z-index: -2; }
+.sxm-orn-layer { position: absolute; border-radius: 50%; }
+.sxm-orn-a { top: -20%; right: -30%; width: 70vw; height: 70vw;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--sx-accent) 26%, transparent), transparent 72%); }
+.sxm-orn-b { bottom: -30%; left: -20%; width: 60vw; height: 60vw;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--sx-accent-strong) 18%, transparent), transparent 70%); }
+.sxm-orn-c { inset: 0; width: 100%; height: 100%; border-radius: 0;
+  background: conic-gradient(from 210deg at 70% 20%, transparent 0deg,
+    color-mix(in srgb, var(--sx-accent) 8%, transparent) 80deg, transparent 160deg); }
+.sxm-orn-horizon .sxm-orn-a { top: auto; right: -25%; bottom: -45%; left: -25%; width: auto; height: 80vh;
+  background: radial-gradient(ellipse at 50% 100%, color-mix(in srgb, var(--sx-accent) 24%, transparent), transparent 70%); }
+.sxm-orn-horizon .sxm-orn-b { top: -35%; right: auto; bottom: auto; left: 30%; }
+.sxm-orn-ascend .sxm-orn-a { top: auto; right: auto; bottom: -25%; left: -15%; }
+.sxm-orn-ascend .sxm-orn-b { top: -25%; right: -15%; bottom: auto; left: auto; }
+.sxm-orn-ascend .sxm-orn-c { background: conic-gradient(from 30deg at 20% 80%, transparent 0deg,
+  color-mix(in srgb, var(--sx-accent) 9%, transparent) 70deg, transparent 150deg); }
+.sxm-motif { position: absolute; }
+.sxm-motif-diamond { width: 18px; height: 18px; background: var(--sx-accent);
+  transform: rotate(45deg); opacity: .35; }
+.sxm-motif-ring { width: 46px; height: 46px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--sx-accent) 65%, transparent); opacity: .5; }
+.sxm-motif-bar { width: 90px; height: 2px; transform: rotate(-18deg);
+  background: linear-gradient(90deg, var(--sx-accent), transparent); opacity: .5; }
+.sxm-m1 { top: 18%; right: 14%; }
+.sxm-m2 { top: 36%; right: 26%; opacity: .26; }
+.sxm-m3 { bottom: 22%; left: 12%; opacity: .2; }
+.sxm-hero-con-inner { position: relative; width: 100%; }
+.sxm-hero-constructed h1 { font-size: clamp(3.2rem, 8vw, 7rem); max-width: 14ch; margin-bottom: 26px; }
+.sxm-hero-constructed .sxm-hero-sub { font-size: 1.16rem; max-width: 46ch; margin-bottom: 36px;
+  color: var(--sx-text); opacity: .9; }
+@media (max-width: 768px) { .sxm-hero-constructed { min-height: 80vh; } }"""
         return html, css
 
     if variant == "statement":
@@ -104,7 +257,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
       <p class="sxm-hero-sub sxm-muted" {ov('hero', 'subheadline')}>{safe(sub)}</p>
       {cta}
     </div>
-    <div class="sxm-hero-visual">
+    <div class="sxm-hero-visual sxm-imgbox">
       <img data-slot="hero_main" src="" alt="{img_alt}">
     </div>
   </div>

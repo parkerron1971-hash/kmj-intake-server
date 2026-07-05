@@ -104,6 +104,66 @@ _VIBE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 _INTENSITY_ORDER = ("restrained", "confident", "bold")
 
 
+# ─── Typography range (Arc 3 "Expressive Range") ──────────────────────
+# One distinct, vetted Google-font pairing per DRO display personality —
+# chosen like a type director: display faces categorically distinct,
+# body faces genuinely readable. wmin/wmax clamp --sx-heading-weight to
+# the weights the face actually ships (no faux-bold synthesis on
+# weight-locked display faces like Anton / Archivo Black), `letter`
+# overrides letter-spacing where the face wants it.
+FONT_PAIRINGS: Dict[str, Dict[str, Any]] = {
+    "editorial_serif":    {"heading": "Fraunces", "body": "Source Sans 3", "wmax": 900},
+    "heritage":           {"heading": "Libre Caslon Text", "body": "Lora", "wmax": 700},
+    "modern_grotesque":   {"heading": "Space Grotesk", "body": "Inter", "wmax": 700},
+    "warm_humanist":      {"heading": "Bricolage Grotesque", "body": "Nunito Sans", "wmax": 800},
+    "bold_statement":     {"heading": "Archivo Black", "body": "Archivo", "wmax": 400, "letter": "-0.01em"},
+    "storyteller":        {"heading": "Newsreader", "body": "Source Sans 3", "wmax": 700},
+    "quiet_luxury":       {"heading": "Cormorant Garamond", "body": "Outfit", "wmin": 500, "wmax": 600, "letter": "0.01em"},
+    "technical_precise":  {"heading": "IBM Plex Mono", "body": "IBM Plex Sans", "wmax": 600, "letter": "0em"},
+    "playful":            {"heading": "Baloo 2", "body": "Karla", "wmax": 800},
+    "condensed_impact":   {"heading": "Anton", "body": "Barlow", "wmax": 400, "letter": "0em"},
+    "expressive_display": {"heading": "Syne", "body": "Manrope", "wmax": 800},
+}
+
+# DRO schema enums map exactly; prose-ish labels resolve by keyword.
+_PAIRING_EXACT = {
+    "editorial_serif": "editorial_serif",
+    "grotesque_bold": "bold_statement",
+    "humanist_warm": "warm_humanist",
+    "geometric_precise": "modern_grotesque",
+    "expressive_display": "expressive_display",
+    "condensed_impact": "condensed_impact",
+}
+
+_PAIRING_FUZZY = (
+    ("quiet_luxury", ("quiet", "luxur", "elegant", "refined", "understated", "discreet")),
+    ("heritage", ("heritage", "classic", "traditional", "timeless")),
+    ("technical_precise", ("technical", "precis", "mono", "engineer", "system")),
+    ("condensed_impact", ("condensed", "compact", "poster", "impact")),
+    ("bold_statement", ("bold", "brutal", "loud", "statement", "commanding", "heavy", "black")),
+    ("storyteller", ("story", "narrat", "literary", "book")),
+    ("playful", ("playful", "fun", "round", "friendly", "joy", "whimsic")),
+    ("warm_humanist", ("humanist", "warm", "human", "approachable", "welcom")),
+    ("expressive_display", ("expressive", "artistic", "creative", "eccentric", "display")),
+    ("editorial_serif", ("editorial", "serif", "magazine", "literati")),
+    ("modern_grotesque", ("grotesque", "modern", "geometric", "minimal", "clean", "tech")),
+)
+
+
+def resolve_font_pairing(display_personality: Any) -> Optional[str]:
+    """DRO typography.display_personality (schema enum OR prose-ish
+    label) → FONT_PAIRINGS key, or None when nothing matches."""
+    s = str(display_personality or "").strip().lower()
+    if not s:
+        return None
+    if s in _PAIRING_EXACT:
+        return _PAIRING_EXACT[s]
+    for key, words in _PAIRING_FUZZY:
+        if any(w in s for w in words):
+            return key
+    return None
+
+
 def _seed_int(business_id: str, salt: str = "") -> int:
     """Stable per-business seed so derivation is deterministic but
     distinct across businesses (no two brands share tie-break choices)."""
@@ -218,7 +278,9 @@ def derive_radius(vibe: str, intensity: str) -> Dict[str, str]:
     if vibe == "bold" and intensity == "bold":
         return {"card": "4px", "button": "6px", "image": "8px"}     # brutalist edge
     if vibe == "formal":
-        return {"card": "14px", "button": "10px", "image": "12px"}
+        # Arc 3 finish: the 999px pill CTA is a quality-bar signature —
+        # formal keeps its quieter cards/images but CTAs go full pill.
+        return {"card": "14px", "button": "999px", "image": "12px"}
     return {"card": "22px", "button": "999px", "image": "18px"}     # warm default
 
 
@@ -311,15 +373,13 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
         s = str(v or "").lower()
         return any(w in s for w in words)
 
-    # ── Typography: display personality → vetted pair + weight shift ──
-    pers = (d.get("typography") or {}).get("display_personality")
-    if pers and not fonts_pinned:
-        if _has(pers, "editorial", "literary", "serif", "heritage", "classic", "storyteller", "warm"):
-            t["heading"], t["body"] = "Fraunces", "Source Sans 3"
-        elif _has(pers, "refined", "quiet", "elegant", "understated", "luxur", "discreet"):
-            t["heading"], t["body"] = "Libre Caslon Text", "Inter"
-        elif _has(pers, "geometric", "modern", "bold", "brutal", "tech", "commanding", "expressive", "confident"):
-            t["heading"], t["body"] = "Bricolage Grotesque", "Inter"
+    # ── Typography: display personality → its OWN vetted pairing ──
+    # Arc 3 "Expressive Range": every DRO personality (and prose-ish
+    # label) resolves to a distinct pairing via FONT_PAIRINGS instead of
+    # collapsing onto 3 pairs. Practitioner-pinned fonts still win.
+    tspec = d.get("typography") or {}
+    pers = tspec.get("display_personality")
+    pairing_key = resolve_font_pairing(pers)
     if _has(pers, "quiet", "understated", "refined", "discreet"):
         try:
             t["heading_weight"] = min(int(t.get("heading_weight") or 700), 700)
@@ -331,6 +391,22 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
             t["heading_weight"] = max(int(t.get("heading_weight") or 700), 800)
         except (TypeError, ValueError):
             pass
+    if pairing_key and not fonts_pinned:
+        pair = FONT_PAIRINGS[pairing_key]
+        t["heading"], t["body"] = pair["heading"], pair["body"]
+        # body_personality refinement: an explicitly serif body reads as
+        # Lora (the vetted readable serif) when the pairing chose a sans.
+        if _has(tspec.get("body_personality"), "serif") and t["body"] != "Lora":
+            t["body"] = "Lora"
+        # Clamp the heading weight to what the display face actually
+        # ships — no faux-bold on weight-locked faces.
+        try:
+            w = int(t.get("heading_weight") or 700)
+        except (TypeError, ValueError):
+            w = 700
+        t["heading_weight"] = max(min(w, pair.get("wmax", 900)), pair.get("wmin", 300))
+        if pair.get("letter"):
+            t["letter_tight"] = pair["letter"]
 
     # ── Whitespace / density → whole rhythm-tier swap (pads are clamp()
     #    strings, so we move between the vetted tiers, never invent px) ──
@@ -389,13 +465,50 @@ def css_variables(dna: Dict[str, Any]) -> str:
   --sx-radius-card: {rad['card']};
   --sx-radius-button: {rad['button']};
   --sx-radius-image: {rad['image']};
+  --sx-ease: cubic-bezier(0.16, 1, 0.3, 1);
 }}"""
 
 
+# Per-family css2 axis specs (Arc 3): variable fonts get ranges, static
+# fonts get explicit weight lists, single-weight display faces load bare.
+# Requesting weights a family doesn't ship makes the css2 endpoint 400 —
+# this registry loads exactly what each face offers. Italic axes ride
+# along for the faces the accent-word idiom italicizes.
+_GOOGLE_AXES: Dict[str, Optional[str]] = {
+    "Fraunces": "ital,opsz,wght@0,9..144,300..900;1,9..144,300..900",
+    "Source Sans 3": "ital,wght@0,300..900;1,300..900",
+    "Libre Caslon Text": "ital,wght@0,400;0,700;1,400",
+    "Lora": "ital,wght@0,400..700;1,400..700",
+    "Space Grotesk": "wght@300..700",
+    "Inter": "wght@300..900",
+    "Bricolage Grotesque": "opsz,wght@12..96,200..800",
+    "Nunito Sans": "opsz,wght@6..12,300..1000",
+    "Archivo Black": None,
+    "Archivo": "wght@400..900",
+    "Newsreader": "ital,opsz,wght@0,6..72,300..800;1,6..72,300..800",
+    "Cormorant Garamond": "ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500",
+    "Outfit": "wght@300..900",
+    "IBM Plex Mono": "ital,wght@0,400;0,500;0,600;1,400",
+    "IBM Plex Sans": "ital,wght@0,300;0,400;0,500;0,600;0,700;1,400",
+    "Baloo 2": "wght@400..800",
+    "Karla": "ital,wght@0,300..800;1,300..800",
+    "Anton": None,
+    "Barlow": "ital,wght@0,400;0,500;0,600;0,700;1,400",
+    "Syne": "wght@400..800",
+    "Manrope": "wght@300..800",
+}
+
+
 def google_fonts_url(dna: Dict[str, Any]) -> str:
+    """<link> URL loading exactly the chosen pairing. Unknown families
+    (practitioner-pinned) request the near-universal 400;700."""
     fams: List[str] = []
     for name in (dna["typography"]["heading"], dna["typography"]["body"]):
         if name and name not in fams:
             fams.append(name)
-    parts = [f"family={f.replace(' ', '+')}:wght@300;400;500;600;700;800;900" for f in fams]
+    parts: List[str] = []
+    for f in fams:
+        axes = _GOOGLE_AXES.get(f, "wght@400;700")
+        fam = f.replace(" ", "+")
+        parts.append(f"family={fam}:{axes}" if axes else f"family={fam}")
     return "https://fonts.googleapis.com/css2?" + "&".join(parts) + "&display=swap"

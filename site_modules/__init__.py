@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 
 from . import (hero, about, offerings, testimonials, gallery, cta_band,
-               contact_footer, store, showcase, header)
+               contact_footer, store, showcase, header, statband)
 from ._base import page_shell, build_page_meta
 
 MODULES: Dict[str, Dict[str, Any]] = {
@@ -39,6 +39,11 @@ MODULES: Dict[str, Dict[str, Any]] = {
     "testimonials": {
         "variants": testimonials.VARIANTS,
         "render": testimonials.render,
+        "fields": ("eyebrow", "headline"),
+    },
+    "statband": {
+        "variants": statband.VARIANTS,
+        "render": statband.render,
         "fields": ("eyebrow", "headline"),
     },
     "gallery": {

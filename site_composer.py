@@ -184,7 +184,8 @@ def gather_context(business_id: str) -> Dict[str, Any]:
 
     biz_rows = sb_clients.sb_get_as_service(
         # voice_profile added (2026-07-03) — feeds the DRL intake text.
-        f"/businesses?id=eq.{business_id}&select=id,name,type,settings,voice_profile&limit=1") or []
+        # created_at added (Arc 3) — feeds statband's years-in-business.
+        f"/businesses?id=eq.{business_id}&select=id,name,type,settings,voice_profile,created_at&limit=1") or []
     if not biz_rows:
         raise HTTPException(404, "business not found")
     biz = biz_rows[0]
@@ -271,7 +272,8 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "dna": dna,
         "bundle": bundle,
         "business": {"id": business_id, "name": biz.get("name") or "",
-                     "type": biz.get("type") or "", "slug": slug},
+                     "type": biz.get("type") or "", "slug": slug,
+                     "created_at": biz.get("created_at") or ""},
         "voice_profile": biz.get("voice_profile") if isinstance(biz.get("voice_profile"), dict) else {},
         "settings": settings,
         "site": site,
@@ -286,10 +288,18 @@ def gather_context(business_id: str) -> Dict[str, Any]:
 
 # ─── Spec validation ─────────────────────────────────────────────────
 
-def sanitize_spec(raw: Any, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+def sanitize_spec(raw: Any, ctx: Dict[str, Any],
+                  mark_defaults: bool = False) -> List[Dict[str, Any]]:
     """Clamp an LLM (or stored) spec to the module registry: known
     modules and variants only, known content fields only, length caps,
-    hero first, contact last, no duplicate modules."""
+    hero first, contact last, no duplicate modules.
+
+    mark_defaults (Arc 3): sections whose variant had to be defaulted
+    (missing/invalid — i.e. the LLM did NOT explicitly pick) carry an
+    internal `_variant_defaulted` flag so the DRO symmetry preference
+    can steer them; _apply_symmetry_preference strips the flag before
+    anything is persisted. Stored-spec re-sanitizes (shuffle/refresh)
+    keep the default False and are byte-identical to before."""
     sections_in = (raw or {}).get("sections") if isinstance(raw, dict) else raw
     out: List[Dict[str, Any]] = []
     seen = set()
@@ -302,7 +312,8 @@ def sanitize_spec(raw: Any, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         seen.add(mid)
         variant = sec.get("variant")
-        if variant not in spec["variants"]:
+        defaulted = variant not in spec["variants"]
+        if defaulted:
             variant = spec["variants"][0]
         content_in = sec.get("content") or {}
         content = {}
@@ -312,11 +323,17 @@ def sanitize_spec(raw: Any, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                 v = str(v)
             if isinstance(v, str) and v.strip():
                 content[f] = v.strip()[:_MAX_FIELD.get(f, 200)]
-        out.append({"module": mid, "variant": variant, "content": content})
+        entry = {"module": mid, "variant": variant, "content": content}
+        if mark_defaults and defaulted:
+            entry["_variant_defaulted"] = True
+        out.append(entry)
 
     # Structural guarantees regardless of what the LLM did.
     if not any(s["module"] == "hero" for s in out):
-        out.insert(0, _default_spec(ctx)[0])
+        hero_default = _default_spec(ctx)[0]
+        if mark_defaults:
+            hero_default = {**hero_default, "_variant_defaulted": True}
+        out.insert(0, hero_default)
     if not any(s["module"] == "contact" for s in out):
         out.append({"module": "contact", "variant": "standard", "content": {}})
     out.sort(key=lambda s: (0 if s["module"] == "hero" else
@@ -471,6 +488,7 @@ def _dro_directive(dro: Dict[str, Any]) -> str:
 - Hero direction: {hero.get('direction') or ''}. The hero copy must deliver the concept above, not a generic value prop.
 - Voice→visual couplings to honor in copy: {notes or '(none)'}
 - Section order / hierarchy: {layout.get('hierarchy_approach') or 'guided_descent'} — order sections as a persuasion funnel (hook → credibility → offer → proof → conversion → contact), shaped by this hierarchy.
+- Layout symmetry: {layout.get('symmetry') or 'unspecified'} — asymmetric_tension/editorial_columns lean toward the offset variants (hero "editorial", about "pullquote", offerings "featured", testimonials "marquee", gallery "mosaic"); centered_formal leans toward the centered ones (hero "statement", about "narrative", testimonials "spotlight").
 - Pacing: layout density={layout.get('density') or 'balanced'}, motion={motion.get('temperature') or 'subtle_entrance'} — match copy length/rhythm to it (airy/quiet → fewer words; dense/expressive → punchier, more).
 - Still NEVER invent facts. Concept reframing is about VOICE, not fabricated specifics."""
 
@@ -506,6 +524,15 @@ BUSINESS
 AVAILABLE MODULES (use each at most once; order is yours except hero first, contact last):
 {_module_menu()}
 
+VARIANT GUIDE (when to reach for the expressive variants):
+- hero "editorial": asymmetric offset split, oversized display type, one accent-italic word — personality-forward, editorial brands.
+- hero "constructed": typographic statement over a generated ornament field, NO photo — when the concept is abstract/metaphorical or imagery is weak.
+- about "pullquote": magazine spread — one strong line pulled large + narrative column + framed portrait. Pick when the about copy has a quotable line.
+- offerings "featured": the first offering as a flagship feature card (with image), the rest as numbered compact rows — when one offering clearly leads.
+- "statband": 3-4 big real numbers (years in business, offerings, testimonials). Include for established businesses; it renders nothing when the numbers aren't there, so never lean copy on it.
+- testimonials "marquee": one oversized hero quote + two supporting — when the best quote deserves a spotlight and 3+ exist.
+- gallery "mosaic": varied-size image mosaic with soft fades — for visual businesses with strong imagery.
+
 RULES
 - If a DESIGN RATIONALE block appears above, it OVERRIDES generic instincts: concept-voice copy (in-concept headline/eyebrows/CTAs) and the section order it specifies are REQUIRED, not optional.
 - Copy must sound like THIS practitioner, not a template. Specific beats generic.
@@ -526,7 +553,9 @@ Respond with ONLY this JSON:
     parsed = _extract_json(raw)
     if not parsed:
         raise ValueError("composer LLM returned no JSON")
-    return sanitize_spec(parsed, ctx)
+    # mark_defaults: sections without an explicit valid variant stay
+    # steerable by the DRO symmetry preference (Arc 3).
+    return sanitize_spec(parsed, ctx, mark_defaults=True)
 
 
 # ─── Render + persist ────────────────────────────────────────────────
@@ -736,18 +765,55 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
 
 # DRO hero_concept.direction → hero module variant. Cinematic (full-bleed,
 # art-directed) for image-led concepts; statement (oversized type, no photo)
-# for typographic / visual-metaphor concepts (a real metaphor render is a
-# later lever).
+# for typographic concepts; constructed (Arc 3) for visual metaphors — a
+# generated ornament field built FROM the concept words, no stock photo.
 _HERO_DIRECTION_VARIANT = {
     "environment_mood": "cinematic",
     "artifact_showcase": "cinematic",
     "portrait_presence": "cinematic",
-    # visual_metaphor would ideally render a constructed graphic, but that
-    # render isn't built yet — use the cinematic image hero so there's always
-    # a real hero image holder (no bare text-only hero).
-    "visual_metaphor": "cinematic",
+    "visual_metaphor": "constructed",
     "typographic_statement": "statement",
 }
+
+
+# Arc 3 — DRO layout.symmetry → variant preference map. Applied ONLY to
+# sections the LLM did not explicitly pick a valid variant for (the
+# `_variant_defaulted` marker from sanitize_spec / _ensure_connections),
+# so an explicit composer choice always survives. Hero is additionally
+# subject to _apply_hero_direction, which runs after and outranks this.
+_SYMMETRY_ASYM = {"hero": "editorial", "about": "pullquote",
+                  "offerings": "featured", "testimonials": "marquee",
+                  "gallery": "mosaic"}
+_SYMMETRY_CENTERED = {"hero": "statement", "about": "narrative",
+                      "offerings": "cards", "testimonials": "spotlight",
+                      "gallery": "grid"}
+_SYMMETRY_MODULAR = {"hero": "split", "about": "portrait",
+                     "offerings": "cards", "gallery": "grid"}
+
+
+def _apply_symmetry_preference(spec: List[Dict[str, Any]],
+                               layout: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Wire the DRO's layout.symmetry to the pixels (previously a no-op):
+    asymmetric leans → offset/editorial variants, symmetric → centered
+    ones. Tolerant matching (DRO values are prose-ish); always strips the
+    internal `_variant_defaulted` markers, DRO or not."""
+    sym = str((layout or {}).get("symmetry") or "").lower()
+    if "asym" in sym or "tension" in sym or "editorial" in sym:
+        pref = _SYMMETRY_ASYM
+    elif "center" in sym or "formal" in sym or "symmetr" in sym:
+        pref = _SYMMETRY_CENTERED
+    elif "grid" in sym or "modular" in sym:
+        pref = _SYMMETRY_MODULAR
+    else:
+        pref = None
+    for s in spec:
+        defaulted = bool(s.pop("_variant_defaulted", False))
+        if not (pref and defaulted):
+            continue
+        variant = pref.get(s.get("module"))
+        if variant and variant in site_modules.MODULES[s["module"]]["variants"]:
+            s["variant"] = variant
+    return spec
 
 
 def _apply_hero_direction(spec: List[Dict[str, Any]], hero_concept: Optional[Dict[str, Any]]) -> None:
@@ -770,12 +836,18 @@ def _ensure_connections(spec: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List
     sanitize_spec. Sections insert before contact so it stays last."""
     present = {s.get("module") for s in spec}
     additions: List[Dict[str, Any]] = []
+    # Additions are by definition not an explicit LLM pick — mark them so
+    # the DRO symmetry preference (Arc 3) may steer their variant; the
+    # marker is stripped in _apply_symmetry_preference.
     if ctx.get("public_modules") and "showcase" not in present:
-        additions.append({"module": "showcase", "variant": "cards", "content": {}})
+        additions.append({"module": "showcase", "variant": "cards", "content": {},
+                          "_variant_defaulted": True})
     if (ctx.get("offerings")) and "offerings" not in present:
-        additions.append({"module": "offerings", "variant": "cards", "content": {}})
+        additions.append({"module": "offerings", "variant": "cards", "content": {},
+                          "_variant_defaulted": True})
     if (ctx.get("store") or {}).get("enabled") and "store" not in present:
-        additions.append({"module": "store", "variant": "featured", "content": {}})
+        additions.append({"module": "store", "variant": "featured", "content": {},
+                          "_variant_defaulted": True})
     if not additions:
         return spec
     contact_idx = next((i for i, s in enumerate(spec) if s.get("module") == "contact"), len(spec))
@@ -846,10 +918,11 @@ def compose_site(business_id: str, brief_notes: str = "",
         except Exception as e:
             logger.warning(f"[composer] LLM composition failed, using default: {e}")
             spec, source = _default_spec(ctx), "default"
-        # 3) Hero treatment from the DRO's concept direction (cinematic vs
-        # typographic) — deterministic so the rationale reliably drives it.
-        if dro:
-            _apply_hero_direction(spec, (dro.get("decisions") or {}).get("hero_concept"))
+            if dro:
+                # No LLM picks exist on the fallback spec — every variant
+                # is steerable by the DRO's symmetry preference (Arc 3).
+                for s in spec:
+                    s["_variant_defaulted"] = True
     else:
         spec, source = _default_spec(ctx), "default"
         dro_fail_reason = "use_llm=False (deterministic compose requested)"
@@ -870,6 +943,15 @@ def compose_site(business_id: str, brief_notes: str = "",
     # Deterministically guarantee the site connects to everything the business
     # uses (modules/offerings/store) — regardless of LLM choices or fallback.
     spec = _ensure_connections(spec, ctx)
+
+    # Arc 3 — wire the DRO's layout.symmetry to variant selection where the
+    # LLM didn't explicitly pick (also strips the internal markers), then let
+    # the hero-concept direction have the final word on the hero (constructed
+    # for visual_metaphor, cinematic for image-led, statement for typographic).
+    decisions = (dro or {}).get("decisions") or {}
+    spec = _apply_symmetry_preference(spec, decisions.get("layout"))
+    if dro:
+        _apply_hero_direction(spec, decisions.get("hero_concept"))
 
     result = render_and_persist(business_id, spec, ctx, dro_id=dro_id, dro=dro,
                                 dro_status=dro_status, dro_summary=dro_summary)
