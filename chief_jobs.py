@@ -137,21 +137,48 @@ async def enqueue(client: httpx.AsyncClient, *, user_id: str, business_id: str,
     """Insert a queued job and kick off its runner. Returns the job row.
     Raises ValueError for an unknown kind.
 
-    Server-side dedupe: when a job of the same kind for the same business
-    is already queued/running, the EXISTING row is returned (with
+    Server-side dedupe: when a FRESH job of the same kind for the same
+    business is already queued/running, the EXISTING row is returned (with
     "deduped": True riding along) instead of enqueuing a second compose —
-    callers treat it identically to a fresh enqueue."""
+    callers treat it identically to a fresh enqueue.
+
+    Stale-job recovery: jobs run in-process (asyncio.create_task), so a
+    deploy/restart mid-run leaves rows stuck at queued/running forever.
+    Without a cutoff, dedupe would then pin every future enqueue to that
+    corpse — the business could never compose again. Any same-kind row
+    older than STALE_AFTER_MIN is marked failed here and a new job starts."""
     if kind not in KIND_META:
         raise ValueError(f"unknown job kind: {kind}")
+    STALE_AFTER_MIN = 10
     existing = await _sb(
         client, "GET",
         f"/chief_jobs?business_id=eq.{business_id}&kind=eq.{kind}"
-        "&status=in.(queued,running)&select=*&order=created_at.desc&limit=1")
-    if isinstance(existing, list) and existing:
+        "&status=in.(queued,running)&select=*&order=created_at.desc&limit=5")
+    now = datetime.now(timezone.utc)
+    fresh: Optional[dict] = None
+    for row in (existing if isinstance(existing, list) else []):
+        started = row.get("started_at") or row.get("created_at") or ""
+        try:
+            age_min = (now - datetime.fromisoformat(
+                str(started).replace("Z", "+00:00"))).total_seconds() / 60
+        except Exception:
+            age_min = STALE_AFTER_MIN + 1  # unparseable → treat as stale
+        if age_min <= STALE_AFTER_MIN:
+            fresh = fresh or row
+        else:
+            logger.warning(f"[chief_jobs] sweeping stale {row.get('status')} "
+                           f"{kind} job {row.get('id')} ({age_min:.0f}min old) "
+                           f"for {business_id[:8]} — likely orphaned by a restart")
+            await _sb(client, "PATCH", f"/chief_jobs?id=eq.{row['id']}", {
+                "status": "failed",
+                "error": "interrupted by a server restart — safe to retry",
+                "finished_at": now.isoformat(),
+            })
+    if fresh:
         logger.info(f"[chief_jobs] dedupe: {kind} already "
-                    f"{existing[0].get('status')} for {business_id[:8]} — "
-                    f"returning job {existing[0].get('id')}")
-        return {**existing[0], "deduped": True}
+                    f"{fresh.get('status')} for {business_id[:8]} — "
+                    f"returning job {fresh.get('id')}")
+        return {**fresh, "deduped": True}
     rows = await _sb(client, "POST", "/chief_jobs", [{
         "user_id": user_id, "business_id": business_id, "kind": kind,
         "status": "queued", "source": source, "params": params or {},
