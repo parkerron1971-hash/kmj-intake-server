@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple
 
-from ._base import safe, safe_url, ov, heading_accent, social_profile_url
+from ._base import (safe, safe_url, ov, heading_accent, social_profile_url,
+                    accent_headline, diamond_mark)
 
 VARIANTS = ("standard",)
 
@@ -132,7 +133,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 <section class="sxm-section sxm-contact sxm-reveal" id="contact">
   <div class="sxm-inner sxm-contact-inner">
     {heading_accent(dna)}
-    <h2 {ov('contact', 'headline')}>{safe(headline)}</h2>
+    <h2 {ov('contact', 'headline')}>{accent_headline(headline)}</h2>
     {note_html}
     {f'<div class="sxm-contact-actions">{cta_html}</div>' if cta_html else ''}
     {form_html}
@@ -143,7 +144,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 </section>
 <footer class="sxm-footer">
   <div class="sxm-inner sxm-footer-inner">
-    <span>{footer_line}</span>
+    <span class="sxm-footer-brand">{diamond_mark(dna)}{footer_line}</span>
     <a href="https://mysolutionist.app/" target="_blank" rel="noopener" class="sxm-footer-power">Powered by Solutionist</a>
   </div>
 </footer>{script_html}"""
@@ -167,6 +168,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   border-bottom: 1.5px solid var(--sx-accent-soft); padding-bottom: 1px; }
 .sxm-contact-social a:hover { border-bottom-color: var(--sx-accent); }
 .sxm-footer { border-top: 1px solid var(--sx-border); padding: 26px var(--sx-gutter); }
+.sxm-footer-brand { display: inline-flex; align-items: center; }
 .sxm-footer-inner { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; font-size: .82rem; color: var(--sx-muted); }
 .sxm-footer-power { color: var(--sx-muted); }
 .sxm-footer-power:hover { color: var(--sx-accent); }"""

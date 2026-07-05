@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from ._base import safe, safe_url, ov, eyebrow, heading_accent
+from ._base import safe, safe_url, ov, eyebrow, heading_accent, accent_headline
 
 VARIANTS = ("featured",)
 
@@ -36,7 +36,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
         except (TypeError, ValueError):
             price = ""
         cards.append(f"""
-      <a class="sxm-store-card" href="{safe_url(url)}">
+      <a class="sxm-store-card sxm-card" href="{safe_url(url)}">
         {img}
         <div class="sxm-store-meta"><span>{safe(o.get('name'))}</span>
         <span class="sxm-store-price">{safe(price)}</span></div>
@@ -47,7 +47,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   <div class="sxm-inner">
     {heading_accent(dna)}
     {eb}
-    <h2 {ov('store', 'headline')}>{safe(headline)}</h2>
+    <h2 {ov('store', 'headline')}>{accent_headline(headline)}</h2>
     {intro_html}
     <div class="sxm-store-grid">{''.join(cards)}
     </div>
@@ -61,8 +61,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-store-intro { font-size: 1.02rem; margin-bottom: 10px; }
 .sxm-store-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px; margin-top: 30px; }
 .sxm-store-card { display: block; background: var(--sx-surface); border: 1px solid var(--sx-border);
-  border-radius: var(--sx-radius-card); overflow: hidden; color: var(--sx-text); transition: transform .18s ease; }
-.sxm-store-card:hover { transform: translateY(-3px); }
+  border-radius: var(--sx-radius-card); overflow: hidden; color: var(--sx-text); }
 .sxm-store-img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; }
 .sxm-store-img-ph { background: linear-gradient(135deg, var(--sx-accent-soft), var(--sx-surface-2)); }
 .sxm-store-meta { display: flex; justify-content: space-between; gap: 10px; padding: 14px 16px; font-weight: 600; }

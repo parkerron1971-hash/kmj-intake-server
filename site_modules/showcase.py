@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from ._base import safe, ov, eyebrow, heading_accent
+from ._base import safe, ov, eyebrow, heading_accent, accent_headline
 
 VARIANTS = ("cards", "list")
 
@@ -16,8 +16,9 @@ _MAX_MODULES = 4
 _MAX_FIELDS_PER_ENTRY = 4
 
 
-def _entry_card(entry: Dict[str, Any]) -> str:
-    """Render one entry as a small card from its kept fields (label: value)."""
+def _entry_card(entry: Dict[str, Any], card: bool = False) -> str:
+    """Render one entry as a small card from its kept fields (label: value).
+    `card=True` (cards layout) adds the shared quality-floor depth/hover."""
     lines = []
     for i, (k, v) in enumerate(entry.items()):
         if k == "created_at" or i >= _MAX_FIELDS_PER_ENTRY:
@@ -28,7 +29,8 @@ def _entry_card(entry: Dict[str, Any]) -> str:
             lines.append(f'<div class="sxm-sc-title">{val}</div>')
         else:
             lines.append(f'<div class="sxm-sc-field"><span class="sxm-muted">{label}:</span> {val}</div>')
-    return f'<div class="sxm-sc-entry">{"".join(lines)}</div>' if lines else ""
+    cls = "sxm-sc-entry sxm-card" if card else "sxm-sc-entry"
+    return f'<div class="{cls}">{"".join(lines)}</div>' if lines else ""
 
 
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
@@ -46,10 +48,11 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 
     blocks = []
     for m in mods:
-        cards = "".join(_entry_card(e) for e in m["entries"][:8])
+        layout_class = "sxm-sc-cards" if (variant != "list" and m.get("display_type") != "list") else "sxm-sc-list"
+        cards = "".join(_entry_card(e, card=(layout_class == "sxm-sc-cards"))
+                        for e in m["entries"][:8])
         desc = safe(m.get("description") or "")
         desc_html = f'<p class="sxm-sc-mdesc sxm-muted">{desc}</p>' if desc else ""
-        layout_class = "sxm-sc-cards" if (variant != "list" and m.get("display_type") != "list") else "sxm-sc-list"
         blocks.append(f"""
     <div class="sxm-sc-module">
       <h3 class="sxm-sc-mtitle">{safe(m.get('title') or '')}</h3>
@@ -62,7 +65,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   <div class="sxm-inner">
     {heading_accent(dna)}
     {eb}
-    <h2 {ov('showcase', 'headline')}>{safe(headline)}</h2>
+    <h2 {ov('showcase', 'headline')}>{accent_headline(headline)}</h2>
     {intro_html}
     {''.join(blocks)}
   </div>

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from ._base import safe, safe_url, ov, eyebrow, heading_accent
+from ._base import safe, safe_url, ov, eyebrow, heading_accent, accent_headline
 
 VARIANTS = ("cards", "list", "featured")
 
@@ -84,9 +84,9 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   <div class="sxm-inner">
     {heading_accent(dna)}
     {eb}
-    <h2 {ov('offerings', 'headline')}>{safe(headline)}</h2>
+    <h2 {ov('offerings', 'headline')}>{accent_headline(headline)}</h2>
     {intro_html}
-    <div class="sxm-offf-feature">
+    <div class="sxm-offf-feature sxm-card">
       <div class="sxm-imgbox sxm-offf-img">
         <img data-slot="chamber_main" src="" alt="{safe(feature['name'])}">
       </div>
@@ -133,13 +133,15 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 }"""
         return html, css
 
+    # Cards get the shared quality-floor depth/hover; list rows stay flat.
+    item_class = "sxm-off-item" if variant == "list" else "sxm-off-item sxm-card"
     items = []
     for o in rows:
         cta = (f'<a class="sxm-off-book" href="{book_href}">Book</a>' if book_href else "")
         desc = safe(o.get("description") or "")
         desc_html = f'<p class="sxm-off-desc sxm-muted">{desc}</p>' if desc else ""
         items.append(f"""
-      <div class="sxm-off-item">
+      <div class="{item_class}">
         <div class="sxm-off-head">
           <h3>{safe(o['name'])}</h3>
           {_duration(o)}
@@ -154,7 +156,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   <div class="sxm-inner">
     {heading_accent(dna)}
     {eb}
-    <h2 {ov('offerings', 'headline')}>{safe(headline)}</h2>
+    <h2 {ov('offerings', 'headline')}>{accent_headline(headline)}</h2>
     {intro_html}
     <div class="{layout_class}">{''.join(items)}
     </div>

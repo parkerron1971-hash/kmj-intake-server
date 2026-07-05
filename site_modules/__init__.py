@@ -19,7 +19,8 @@ from typing import Any, Dict, List, Tuple
 
 from . import (hero, about, offerings, testimonials, gallery, cta_band,
                contact_footer, store, showcase, header, statband)
-from ._base import page_shell, build_page_meta, rule_break_treatment
+from ._base import (page_shell, build_page_meta, rule_break_treatment,
+                    diamond_field)
 
 _TAG_RE = _re.compile(r"<[^>]+>")
 
@@ -46,6 +47,45 @@ def _mark_silence_target(body_parts: List[str], rendered_ids: List[str]) -> None
                              part, count=1)
     if n:
         body_parts[best_i] = marked
+
+# Quality-floor arc 7 — TRUE RHYTHM: sections eligible to carry the deep
+# AUTHORITY band (the old navy chapter-break). Hero and contact never (the
+# entry and the exit keep their own grounds); the accent bands (cta/
+# statband) are already the gold punctuation; store keeps product photos
+# on their native ground.
+_AUTHORITY_CANDIDATES = ("about", "offerings", "gallery", "testimonials",
+                         "showcase")
+
+
+def _mark_authority_band(body_parts: List[str], rendered_ids: List[str],
+                         ctx: Dict[str, Any]) -> None:
+    """Mark ONE mid-page section as the authority band (class
+    sxm-authority; CSS in _base._QUALITY_CSS re-inks everything inside
+    via custom-property overrides). The pick is deterministic: the middle
+    eligible section (≈ the 3rd/4th section of a typical page). A section
+    already carrying the hard_silence rule-break target is skipped — the
+    silence move owns that section's ground. Floating diamonds ride along
+    (skipped for the brut identity and when there are none). In place."""
+    idxs = [i for i, mid in enumerate(rendered_ids)
+            if mid in _AUTHORITY_CANDIDATES
+            and "sx-rb-target" not in body_parts[i]]
+    if not idxs:
+        return
+    target = idxs[len(idxs) // 2]
+    part = body_parts[target]
+    marked, n = _re.subn(r'(<section\b[^>]*class=")', r"\1sxm-authority ",
+                         part, count=1)
+    if not n:  # a section tag without a class attribute
+        marked, n = _re.subn(r"<section\b", '<section class="sxm-authority"',
+                             part, count=1)
+    if not n:
+        return
+    diamonds = diamond_field(ctx.get("dna") or {}, 2)
+    if diamonds:
+        marked = _re.sub(r"(<section\b[^>]*>)",
+                         lambda m: m.group(1) + diamonds, marked, count=1)
+    body_parts[target] = marked
+
 
 MODULES: Dict[str, Dict[str, Any]] = {
     "hero": {
@@ -136,6 +176,9 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
     # rendered_ids).
     if rule_break_treatment(ctx.get("design")) == "hard_silence":
         _mark_silence_target(body_parts, rendered_ids)
+    # Quality-floor arc 7 — the authority band lands AFTER silence marking
+    # (it never claims the silence target's ground).
+    _mark_authority_band(body_parts, rendered_ids, ctx)
     header_html, header_css = header.render_header(rendered_ids, ctx)
     body_parts.insert(0, header_html)
     css_parts.insert(0, header_css)
