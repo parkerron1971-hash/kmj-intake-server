@@ -535,6 +535,15 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
     file, brand-kit messaging, voice profile, offering descriptions, and
     their customers' words (testimonial quotes). The detection prompt is
     untouched — only its input got richer.
+
+    ORDER MATTERS (Arc 7): detect_signals truncates this text at a fixed
+    cap, so blocks are ordered by evidence priority — (1) the owner's own
+    style words + creative brief, (2) the reference-site analysis, then
+    (3) tagline/pitch/about/voice and (4) offerings/testimonials. The
+    owner's freshest evidence must NEVER be the part that truncates
+    (previously it was appended LAST — rich businesses lost exactly the
+    new answers). When no prefs/reference analysis exist the output is
+    byte-identical to the plain parts join.
     """
     bundle = ctx.get("bundle") or {}
     intel = bundle.get("practitioner_intelligence") or {}
@@ -575,7 +584,7 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
         f"How they describe their offerings: {offering_descs}",
         f"In their customers' words: {' | '.join(quotes)}",
     ]
-    text = "\n".join(p for p in parts if p.split(": ", 1)[-1].strip())
+    base_text = "\n".join(p for p in parts if p.split(": ", 1)[-1].strip())
 
     # Arc 2 "Ask the Owner": the owner's stated preferences are the highest-
     # priority evidence the DRL can get — a clearly-attributed first-person
@@ -655,10 +664,14 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
                              if isinstance(lean, int) else "") + ".")
     if prefs.get("notes"):
         pref_lines.append(f"Notes: {prefs['notes']}")
+
+    # Arc 7 — assemble in evidence-priority order: owner blocks FIRST so a
+    # truncated transcript loses boilerplate, never the owner's answers.
+    segments: List[str] = []
     if pref_lines:
-        text += ("\n\nTHE OWNER'S OWN STYLE WORDS "
-                 "(verbatim, highest priority evidence):\n"
-                 + "\n".join(pref_lines))
+        segments.append("THE OWNER'S OWN STYLE WORDS "
+                        "(verbatim, highest priority evidence):\n"
+                        + "\n".join(pref_lines))
 
     # Arc 5 — the platform's deterministic study of the reference sites the
     # owner named. DIRECTION EVIDENCE (mood/type-class/density), never a
@@ -682,12 +695,13 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
             if desc:
                 bits.append(f'describes itself as "{desc[:160]}"')
             ref_lines.append(f"- {r.get('url')}: " + "; ".join(bits))
-        text += ("\n\nREFERENCE SITES THE OWNER ADMIRES (fetched + analyzed):\n"
-                 + "\n".join(ref_lines)
-                 + "\n(Direction evidence only — echo the mood, contrast, type "
-                   "feel and pacing they imply. NEVER copy their content, "
-                   "branding or exact colors.)")
-    return text
+        segments.append("REFERENCE SITES THE OWNER ADMIRES (fetched + analyzed):\n"
+                        + "\n".join(ref_lines)
+                        + "\n(Direction evidence only — echo the mood, contrast, type "
+                          "feel and pacing they imply. NEVER copy their content, "
+                          "branding or exact colors.)")
+    segments.append(base_text)
+    return "\n\n".join(segments)
 
 
 def _dro_directive(dro: Dict[str, Any]) -> str:
@@ -863,6 +877,27 @@ def _dro_slot_brief(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]]) -> Dict[
     }
 
 
+def _slot_concept_fingerprint(slot_brief: Optional[Dict[str, Any]]) -> str:
+    """Arc 7 — stable fingerprint of the imagery CONCEPT in a slot brief
+    (concept_keywords + brand_metaphor, normalized: lowercased, keywords
+    sorted as a set, metaphor whitespace-collapsed). Persisted on
+    site_config.slot_concept at compose time; a later full recompose
+    re-rolls the platform-default slot imagery ONLY when this fingerprint
+    changed. Returns "" when the brief carries no concept at all (DRO
+    fallback) — empty never triggers a re-roll, so a rationale-less
+    recompose can't churn good concept imagery into generic stock."""
+    sb = slot_brief or {}
+    kws = sorted({str(k).strip().lower()
+                  for k in (sb.get("concept_keywords") or [])
+                  if str(k or "").strip()})
+    metaphor = " ".join(str(sb.get("brand_metaphor") or "").lower().split())
+    if not kws and not metaphor:
+        return ""
+    payload = json.dumps({"keywords": kws, "metaphor": metaphor},
+                         sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 # ─── Arc 4 "Trust & Polish" — legacy-engine kill switch ──────────────
 
 def legacy_site_engines_enabled() -> bool:
@@ -930,11 +965,17 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
                       dro: Optional[Dict[str, Any]] = None,
                       dro_status: Optional[str] = None,
                       defaulted_modules: Optional[List[str]] = None,
+                      previous_html: Optional[str] = None,
                       ) -> tuple:
     """Conformance report over the final document. Returns
     (report_dict, fixes) where fixes is a list of fixable spec issues
     the ONE self-heal pass may apply ({"fix": "refill_headline",
-    "module": mid} / {"fix": "resanitize"})."""
+    "module": mid} / {"fix": "resanitize"}).
+
+    previous_html (Arc 7): the live document this render is about to
+    replace — handed in on full recomposes only. Powers the
+    'differs_from_previous' visible-change check (report-only, adds no
+    fixes, never blocks publish)."""
     from datetime import datetime, timezone
     checks: List[Dict[str, Any]] = []
     fixes: List[Dict[str, Any]] = []
@@ -1036,11 +1077,27 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
                    "detail": (f"rendered empty: {empty_texts}" if empty_texts
                               else "all rendered headlines/eyebrows carry text")})
 
+    # (g) Arc 7 — visible-change check (full recompose only; caller hands
+    # previous_html in). Report-only: an identical page never blocks
+    # publish and adds no fixes, but the report now SAYS this compose
+    # produced an identical page instead of silently shipping a no-op.
+    if previous_html is not None and str(previous_html).strip():
+        def _norm_hash(doc: str) -> str:
+            return hashlib.sha256(
+                re.sub(r"\s+", "", str(doc or "")).encode("utf-8")).hexdigest()
+        identical = _norm_hash(html) == _norm_hash(previous_html)
+        checks.append({
+            "name": "differs_from_previous", "ok": not identical,
+            "detail": ("this compose produced an identical page "
+                       "(normalized hash unchanged from the previous document)"
+                       if identical
+                       else "document differs from the previous compose")})
+
     # (e) DRO-honor checks — only when THIS render applied a fresh
-    # rationale (dro_status == 'applied'). Shuffle/refresh re-renders
-    # skip these: a user shuffling the hero away from 'constructed' is
-    # an explicit choice, not a conformance failure.
-    if dro and dro_status == "applied":
+    # rationale (dro_status 'applied'/'applied_thin'). Shuffle/refresh
+    # re-renders skip these: a user shuffling the hero away from
+    # 'constructed' is an explicit choice, not a conformance failure.
+    if dro and dro_status in ("applied", "applied_thin"):
         decisions = dro.get("decisions") or {}
         # (e1) symmetry-preferred variants honored for DEFAULTED sections.
         pref = _symmetry_pref(decisions.get("layout"))
@@ -1252,14 +1309,43 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     # Slot population (existing pipeline) then resolution into the HTML.
     # The enriched_brief threads the DRO's design concept into the
     # Unsplash/DALL-E query composers (params existed, were never passed).
+    #
+    # Arc 7 — CONCEPT-KEYED IMAGE RE-ROLL: a full recompose whose design
+    # concept actually changed (fingerprint of concept_keywords +
+    # brand_metaphor vs the stored site_config.slot_concept) re-rolls the
+    # platform-default slot imagery. Custom uploads are never touched,
+    # placeholder-strategy slots (portraits) stay placeholder, DALL-E
+    # budget caps still apply inside the pipeline, and the self-heal
+    # recursion never re-rolls twice (slots persisted on the first pass).
     slots_meta: Dict[str, Any] = {}
+    slot_brief = _dro_slot_brief(ctx, dro)
+    new_concept_fp = _slot_concept_fingerprint(slot_brief)
+    stored_concept_fp = str((((site or {}).get("site_config")) or {})
+                            .get("slot_concept") or "")
+    reroll_defaults = bool(full_recompose and not _heal_attempted
+                           and new_concept_fp
+                           and new_concept_fp != stored_concept_fp)
     try:
         from agents.slot_system.builder_post_process import populate_slots_for_site
         slots_meta = populate_slots_for_site(
             html=html, business_id=business_id,
-            enriched_brief=_dro_slot_brief(ctx, dro),
+            enriched_brief=slot_brief,
             business=(ctx.get("bundle") or {}).get("business") or {},
+            reroll_defaults=reroll_defaults,
         ) or {}
+        if full_recompose:
+            _pop = slots_meta.get("slots_populated") or []
+            _skip = slots_meta.get("slots_skipped") or []
+            _rerolled = sum(1 for p in _pop if p.get("rerolled"))
+            _kept_custom = sum(1 for s in _skip
+                               if s.get("reason") == "kept_custom")
+            _kept_same = (0 if reroll_defaults else
+                          sum(1 for s in _skip
+                              if s.get("reason") == "already_set"))
+            logger.info(
+                f"[composer.slots] {business_id[:8]} "
+                f"concept_changed={reroll_defaults} rerolled={_rerolled} "
+                f"kept_custom={_kept_custom} kept_same_concept={_kept_same}")
     except Exception as e:
         logger.warning(f"[composer] slot population failed (non-fatal): {e}")
 
@@ -1316,10 +1402,26 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     # then whatever the second pass yields is persisted. Never blocks
     # publish. Wrapped so a gate bug can never take down a render.
     quality_report: Dict[str, Any] = {"passed": True, "checks": []}
+    # Arc 7 — read the PREVIOUS live document before it's overwritten so
+    # the gate can say whether this compose visibly changed anything.
+    # Full recomposes only; the DB isn't written until the persist block
+    # below, so the self-heal recursion still reads the pre-compose page.
+    prev_html: Optional[str] = None
+    if full_recompose:
+        try:
+            _prev_rows = sb_clients.sb_get_as_service(
+                f"/business_sites?id=eq.{site['id']}"
+                "&select=html_content&limit=1") or []
+            _prev = ((_prev_rows[0].get("html_content") if _prev_rows else "")
+                     or "")
+            prev_html = _prev if _prev.strip() else None
+        except Exception as e:
+            logger.info(f"[composer] previous-html read skipped: {e}")
     try:
         quality_report, fixes = _run_quality_gate(
             business_id, spec, ctx, final_html, dro=dro,
-            dro_status=dro_status, defaulted_modules=defaulted_modules)
+            dro_status=dro_status, defaulted_modules=defaulted_modules,
+            previous_html=prev_html)
         if not quality_report["passed"] and fixes and not _heal_attempted:
             healed = _apply_quality_fixes(spec, ctx, fixes)
             if healed is not None:
@@ -1362,12 +1464,20 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         # powers the "why your site looks this way" view — served by
         # GET /composer/rationale, rendered by DesignRationalePanel.tsx.
         cfg["design_rationale_id"] = dro_id
+    # Arc 7 — persist the imagery-concept fingerprint so the NEXT full
+    # recompose can tell whether the concept actually changed (and only
+    # then re-roll the default slot imagery). Never clobbered by an
+    # empty fingerprint (DRO-fallback composes keep the stored concept).
+    if full_recompose and new_concept_fp:
+        cfg["slot_concept"] = new_concept_fp
     # Arc 2: surface whether the rationale actually drove THIS compose.
     # Only compose_site sets these (shuffle/refresh re-renders pass None and
     # leave the stored status untouched — they reuse the composed spec).
+    # Arc 7: 'applied_thin' = a real rationale ran on a thin brief (<3
+    # consumable signals) — it keeps its summary like 'applied'.
     if dro_status:
         cfg["dro_status"] = dro_status
-        if dro_status == "applied" and dro_summary:
+        if dro_status in ("applied", "applied_thin") and dro_summary:
             cfg["dro_summary"] = dro_summary
         else:
             cfg.pop("dro_summary", None)   # never show a stale summary on fallback
@@ -1651,7 +1761,25 @@ def compose_site(business_id: str, brief_notes: str = "",
     # Arc 2: surface the DRO outcome — no more silent skips. "applied" means
     # this compose's design + copy were driven by a fresh rationale;
     # "fallback" means it composed without one (reason logged below).
+    # Arc 7: "applied_thin" = the rationale succeeded but ran on a thin
+    # brief (fewer than THIN_BRIEF_MIN_SIGNALS consumable signals actually
+    # fed author_dro) — honest status instead of a confident 'applied'.
+    # Downstream that treats != 'fallback' as applied keeps working; the
+    # frontend renders the new value separately.
     dro_status = "applied" if dro else "fallback"
+    if dro:
+        try:
+            from agents.composer.drl.passes import THIN_BRIEF_MIN_SIGNALS
+            _n_consumable = dro.get("consumable_signal_count")
+            if (isinstance(_n_consumable, int)
+                    and _n_consumable < THIN_BRIEF_MIN_SIGNALS):
+                dro_status = "applied_thin"
+                logger.info(
+                    f"[composer] thin-brief compose for {business_id[:8]}: "
+                    f"only {_n_consumable} consumable signal(s) drove the "
+                    f"rationale (threshold {THIN_BRIEF_MIN_SIGNALS})")
+        except Exception as e:
+            logger.info(f"[composer] thin-brief status check skipped: {e}")
     dro_summary: Optional[str] = None
     if dro:
         dro_summary = ((((dro.get("decisions") or {}).get("hero_concept") or {})

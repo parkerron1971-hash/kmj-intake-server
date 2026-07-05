@@ -62,6 +62,7 @@ def populate_slots_for_site(
     designer_pick: Optional[Dict[str, Any]] = None,
     business: Optional[Dict[str, Any]] = None,
     force_regenerate: bool = False,
+    reroll_defaults: bool = False,
 ) -> Dict[str, Any]:
     """Walk every data-slot in `html`, populate each slot's default_url
     via its strategy, persist results.
@@ -74,6 +75,13 @@ def populate_slots_for_site(
       force_regenerate: when True, regenerate even if default_url is
         already set. Used by the PART 5 /reroll endpoint, NOT by the
         normal build flow.
+      reroll_defaults: Arc 7 concept-keyed re-roll — regenerate slots
+        whose record has a default_url but NO custom_url (owner uploads
+        are sacred and skip with reason "kept_custom"). Passed by
+        site_composer.render_and_persist on a full recompose whose
+        design concept actually changed. Regeneration failure keeps the
+        old default in place (never cleared to nothing), and populated
+        entries that replaced a prior default carry rerolled=True.
 
     Returns:
       {
@@ -84,7 +92,8 @@ def populate_slots_for_site(
           ...
         ],
         "slots_skipped": [
-          {slot_name, reason: "already_set"|"placeholder_strategy"
+          {slot_name, reason: "already_set"|"kept_custom"
+                             |"placeholder_strategy"
                              |"unknown_slot"|"no_unsplash_result"
                              |"budget_cap"|"dalle_failed"},
           ...
@@ -154,9 +163,18 @@ def populate_slots_for_site(
             continue
 
         existing = existing_slots.get(slot_name) or {}
-        if not force_regenerate and existing.get("default_url"):
-            skipped.append({"slot_name": slot_name, "reason": "already_set"})
-            continue
+        had_default = bool(existing.get("default_url"))
+        if had_default and not force_regenerate:
+            if not reroll_defaults:
+                skipped.append({"slot_name": slot_name, "reason": "already_set"})
+                continue
+            if existing.get("custom_url"):
+                # Owner-uploaded imagery is never re-rolled.
+                skipped.append({"slot_name": slot_name, "reason": "kept_custom"})
+                continue
+            # concept changed → fall through and regenerate this default
+            # (on failure the old default_url stays in place — the paths
+            # below only overwrite via set_slot_default on success).
 
         strategy = defn.get("default_strategy")
 
@@ -214,13 +232,16 @@ def populate_slots_for_site(
                     query=query,
                 )
                 if ok:
-                    populated.append({
+                    entry = {
                         "slot_name": slot_name,
                         "source": "unsplash",
                         "url": result["url"],
                         "cost_usd": 0.0,
                         "credit": result.get("credit"),
-                    })
+                    }
+                    if had_default:
+                        entry["rerolled"] = True
+                    populated.append(entry)
                     continue
                 warnings.append(f"persist failed for {slot_name}")
                 # fall through to dalle fallback below if applicable
@@ -295,13 +316,16 @@ def populate_slots_for_site(
             if not ok:
                 warnings.append(f"persist failed for {slot_name} (DALL-E URL)")
                 continue
-            populated.append({
+            entry = {
                 "slot_name": slot_name,
                 "source": "dalle",
                 "url": gen["url"],
                 "cost_usd": gen.get("cost_usd", expected),
                 "credit": None,
-            })
+            }
+            if had_default:
+                entry["rerolled"] = True
+            populated.append(entry)
             budget_used += float(gen.get("cost_usd", expected))
 
     return {

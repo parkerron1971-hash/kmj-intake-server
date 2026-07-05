@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Tuple
 
-from ._base import safe, ov, eyebrow, heading_accent
+from ._base import safe, ov, eyebrow, heading_accent, accent_headline
 
 VARIANTS = ("portrait", "narrative", "pullquote")
 
@@ -69,7 +69,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     <blockquote class="sxm-pq-line" {ov('about', 'pull_quote')}>{safe(pulled)}</blockquote>
     <div class="sxm-pq-grid">
       <div class="sxm-pq-col">
-        <h2 {ov('about', 'headline')}>{safe(headline)}</h2>
+        <h2 {ov('about', 'headline')}>{accent_headline(headline)}</h2>
         <p class="sxm-about-body" {ov('about', 'body')}>{safe(body)}</p>
       </div>
       <div class="sxm-pq-photo">
@@ -87,7 +87,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-pq-line::before { content: "\\201C"; color: var(--sx-accent); margin-right: 8px; }
 .sxm-pq-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: clamp(32px, 6vw, 80px); align-items: start; }
 .sxm-pq-col h2 { margin-bottom: 18px; }
-.sxm-pq-col .sxm-about-body { font-size: 1.06rem; }
+.sxm-pq-col .sxm-about-body { font-size: 1.06rem; line-height: 1.8; }
 .sxm-pq-photo { position: relative; padding: 0 18px 18px 0; }
 .sxm-pq-photo::before { content: ""; position: absolute; top: 18px; left: 18px; right: 0; bottom: 0;
   border: 2px solid color-mix(in srgb, var(--sx-accent) 55%, transparent);
@@ -103,7 +103,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   <div class="sxm-inner sxm-about-narrow">
     {heading_accent(dna)}
     {eb}
-    <h2 {ov('about', 'headline')}>{safe(headline)}</h2>
+    <h2 {ov('about', 'headline')}>{accent_headline(headline)}</h2>
     <p class="sxm-about-body" {ov('about', 'body')}>{safe(body)}</p>
     {quote_html}
   </div>
@@ -112,7 +112,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-about-narrative { background: var(--sx-surface); }
 .sxm-about-narrow { max-width: 760px; }
 .sxm-about-narrative h2 { margin-bottom: 22px; }
-.sxm-about-body { font-size: 1.08rem; }
+.sxm-about-body { font-size: 1.08rem; line-height: 1.8; }
 .sxm-about-quote { margin: 30px 0 0; padding-left: 22px; border-left: 3px solid var(--sx-accent);
   font-family: var(--sx-font-heading); font-size: 1.3rem; font-style: italic; line-height: 1.4; }"""
         return html, css
@@ -127,7 +127,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     <div>
       {heading_accent(dna)}
       {eb}
-      <h2 {ov('about', 'headline')}>{safe(headline)}</h2>
+      <h2 {ov('about', 'headline')}>{accent_headline(headline)}</h2>
       <p class="sxm-about-body" {ov('about', 'body')}>{safe(body)}</p>
       {quote_html}
     </div>
@@ -138,7 +138,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-about-grid { display: grid; grid-template-columns: .8fr 1.2fr; gap: clamp(32px, 6vw, 76px); align-items: center; }
 .sxm-about-photo img { width: 100%; aspect-ratio: 4/5; object-fit: cover; border-radius: var(--sx-radius-image); }
 .sxm-about-portrait h2 { margin-bottom: 20px; }
-.sxm-about-body { font-size: 1.06rem; }
+.sxm-about-body { font-size: 1.06rem; line-height: 1.8; }
 .sxm-about-quote { margin: 28px 0 0; padding-left: 22px; border-left: 3px solid var(--sx-accent);
   font-family: var(--sx-font-heading); font-size: 1.25rem; font-style: italic; line-height: 1.4; }
 @media (max-width: 860px) { .sxm-about-grid { grid-template-columns: 1fr; } }"""

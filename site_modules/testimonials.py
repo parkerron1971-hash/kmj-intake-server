@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from ._base import safe, ov, eyebrow, heading_accent
+from ._base import safe, ov, eyebrow, heading_accent, accent_headline
 
 VARIANTS = ("spotlight", "grid", "marquee")
 
@@ -88,7 +88,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-mq-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 26px; margin-top: 46px; }
 .sxm-mq-sup { margin: 0; border-left: 3px solid var(--sx-accent); padding-left: 18px; }
-.sxm-mq-sup blockquote { margin: 0 0 12px; font-style: italic; line-height: 1.55; }
+.sxm-mq-sup blockquote { margin: 0 0 12px; font-style: italic; line-height: 1.8; }
 .sxm-mq-sup figcaption { font-weight: 700; font-size: .9rem; color: var(--sx-accent); }
 .sxm-testi-role { font-weight: 400; font-size: .82rem; margin-top: 2px; }"""
         return html, css
@@ -97,7 +97,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     for t in rows:
         role = f'<div class="sxm-muted sxm-testi-role">{safe(t.get("role"))}</div>' if t.get("role") else ""
         cards.append(f"""
-      <figure class="sxm-testi-card">
+      <figure class="sxm-testi-card sxm-card">
         <blockquote>{safe(t['quote'])}</blockquote>
         <figcaption>{safe(t.get('author') or t.get('name') or 'A client')}{role}</figcaption>
       </figure>""")
@@ -106,7 +106,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   <div class="sxm-inner">
     {heading_accent(dna)}
     {eb}
-    <h2 {ov('testimonials', 'headline')}>{safe(headline)}</h2>
+    <h2 {ov('testimonials', 'headline')}>{accent_headline(headline)}</h2>
     <div class="sxm-testi-grid">{''.join(cards)}
     </div>
   </div>
@@ -117,7 +117,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-testi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 22px; }
 .sxm-testi-card { margin: 0; background: var(--sx-surface); border: 1px solid var(--sx-border);
   border-radius: var(--sx-radius-card); padding: 28px; }
-.sxm-testi-card blockquote { margin: 0 0 18px; font-style: italic; line-height: 1.55; }
+.sxm-testi-card blockquote { margin: 0 0 18px; font-style: italic; line-height: 1.8; }
 .sxm-testi-card figcaption { font-weight: 700; font-size: .9rem; color: var(--sx-accent); }
 .sxm-testi-role { font-weight: 400; font-size: .82rem; margin-top: 2px; }"""
     return html, css

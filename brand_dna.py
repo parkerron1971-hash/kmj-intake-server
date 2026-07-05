@@ -334,6 +334,31 @@ def derive_palette(design: Dict[str, Any], vibe: str, business_id: str,
     accent_strong = _from_hls(h, l + (0.08 if dark_mode else -0.08), s)
     border = _shift_l(bg, 0.10 if dark_mode else -0.10)
 
+    # Quality-floor arc 7 — the full-bleed accent band made --sx-on-accent
+    # a body-text surface, so its contrast is now ENFORCED (4.5), not just
+    # best-of-two.
+    on_accent = _ensure_contrast(_on_color(accent), accent, 4.5)
+
+    # AUTHORITY band (quality-floor arc 7): the deep chapter-break surface —
+    # the role navy played in the original bar. Light grounds: the darkest
+    # brand color pulled deep (hue kept, lightness ~0.13). Dark grounds: a
+    # deeper-still accent-tinted tone so the band still reads as a distinct
+    # chapter. Inks are contrast-enforced like every other pair; the accent
+    # gets its own on-authority variant (3:1 — headings/marks scale).
+    if dark_mode:
+        ah, _al, asat = _hls(accent)
+        bg_l = _hls(bg)[1]
+        authority = _from_hls(ah, min(max(bg_l - 0.04, 0.03), 0.10),
+                              min(asat * 0.5, 0.32))
+    else:
+        cands = [c for c in (primary, secondary, accent) if c and _parse_hex(c)]
+        seed_color = min(cands, key=_luminance) if cands else text
+        hh, _ll, ss = _hls(seed_color)
+        authority = _from_hls(hh, 0.13, max(min(ss, 0.75), 0.25))
+    on_authority = _ensure_contrast(
+        "#f4f0e8" if _luminance(authority) < 0.5 else "#15130e", authority, 4.5)
+    accent_on_authority = _ensure_contrast(accent, authority, 3.0)
+
     return {
         "mode": "dark" if dark_mode else "light",
         "bg": bg,
@@ -344,10 +369,13 @@ def derive_palette(design: Dict[str, Any], vibe: str, business_id: str,
         "accent": accent,
         "accent_soft": accent_soft,
         "accent_strong": accent_strong,
-        "on_accent": _on_color(accent),
+        "on_accent": on_accent,
         "primary": primary,
         "secondary": secondary or surface_2,
         "border": border,
+        "authority": authority,
+        "on_authority": on_authority,
+        "accent_on_authority": accent_on_authority,
     }
 
 
@@ -359,19 +387,26 @@ def derive_typography(design: Dict[str, Any], vibe: str, intensity: str) -> Dict
     if (expr.get("hero_font") or "").strip():
         heading = expr["hero_font"].strip()
 
-    h1 = {"restrained": "clamp(2.6rem, 5vw, 4.2rem)",
-          "confident": "clamp(3rem, 6.5vw, 5.2rem)",
-          "bold": "clamp(3.4rem, 8vw, 6.4rem)"}[intensity]
+    # Quality-floor arc 7 — DISPLAY FLOORS from the original bar
+    # (cinematic_authority_intelligence.md §3): confident is the default
+    # bar — h1 clamp(3.7rem, 9vw, 5.4rem) w900 / h2 clamp(2.4rem, 5vw,
+    # 3.5rem) w800. Restrained stays a deliberate step down but its h1
+    # min rises to 3.2rem; bold sits a step above confident.
+    h1 = {"restrained": "clamp(3.2rem, 5.5vw, 4.2rem)",
+          "confident": "clamp(3.7rem, 9vw, 5.4rem)",
+          "bold": "clamp(3.9rem, 9.5vw, 6.4rem)"}[intensity]
     h2 = {"restrained": "clamp(1.9rem, 3.2vw, 2.6rem)",
-          "confident": "clamp(2rem, 4vw, 3.1rem)",
-          "bold": "clamp(2.2rem, 4.6vw, 3.6rem)"}[intensity]
-    weight = {"restrained": 700, "confident": 800, "bold": 900}[intensity]
+          "confident": "clamp(2.4rem, 5vw, 3.5rem)",
+          "bold": "clamp(2.6rem, 5.4vw, 3.8rem)"}[intensity]
+    weight = {"restrained": 700, "confident": 900, "bold": 900}[intensity]
+    h2_weight = {"restrained": 700, "confident": 800, "bold": 900}[intensity]
     return {
         "heading": heading,
         "body": body,
         "h1": h1, "h2": h2,
         "heading_weight": weight,
-        "letter_tight": "-0.025em" if intensity != "restrained" else "-0.01em",
+        "h2_weight": h2_weight,
+        "letter_tight": "-0.03em" if intensity != "restrained" else "-0.01em",
     }
 
 
@@ -389,7 +424,10 @@ def derive_radius(vibe: str, intensity: str) -> Dict[str, str]:
         # Arc 3 finish: the 999px pill CTA is a quality-bar signature —
         # formal keeps its quieter cards/images but CTAs go full pill.
         return {"card": "14px", "button": "999px", "image": "12px"}
-    return {"card": "22px", "button": "999px", "image": "18px"}     # warm default
+    # Quality-floor arc 7: default card radius 22 → 28px — the original
+    # bar's signature "premium modern app" corner (brut stays sharp,
+    # formal stays 14px — deliberate identities keep their language).
+    return {"card": "28px", "button": "999px", "image": "18px"}     # warm default
 
 
 def build_brand_dna(business_id: str, bundle: Optional[Dict[str, Any]] = None,
@@ -680,6 +718,14 @@ def css_variables(dna: Dict[str, Any]) -> str:
     if p.get("accent_break"):
         break_vars = (f"\n  --sx-accent-break: {p['accent_break']};"
                       f"\n  --sx-on-accent-break: {p.get('on_accent_break') or '#101010'};")
+    # Quality-floor arc 7 — h2 weight rides one step below h1 (900/800 at
+    # confident) but never above the face's clamped heading weight (the
+    # wmax clamp in apply_dro_style already capped heading_weight).
+    try:
+        h2w: Any = min(int(t.get("h2_weight") or t["heading_weight"]),
+                       int(t["heading_weight"]))
+    except (TypeError, ValueError):
+        h2w = t["heading_weight"]
     return f""":root {{{break_vars}
   --sx-bg: {p['bg']};
   --sx-surface: {p['surface']};
@@ -691,11 +737,15 @@ def css_variables(dna: Dict[str, Any]) -> str:
   --sx-accent-strong: {p['accent_strong']};
   --sx-on-accent: {p['on_accent']};
   --sx-border: {p['border']};
+  --sx-authority: {p.get('authority') or p['surface2']};
+  --sx-on-authority: {p.get('on_authority') or p['text']};
+  --sx-accent-on-authority: {p.get('accent_on_authority') or p['accent']};
   --sx-font-heading: '{t['heading']}', Georgia, serif;
   --sx-font-body: '{t['body']}', -apple-system, sans-serif;
   --sx-h1: {t['h1']};
   --sx-h2: {t['h2']};
   --sx-heading-weight: {t['heading_weight']};
+  --sx-h2-weight: {h2w};
   --sx-letter-tight: {t['letter_tight']};
   --sx-section-pad: {r['section_pad']};
   --sx-gutter: {r['gutter']};

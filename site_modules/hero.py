@@ -5,37 +5,17 @@ ornament field — no photo at all (Arc 3, DRO visual_metaphor)."""
 from __future__ import annotations
 
 import hashlib
-import re
 from typing import Any, Dict, Tuple
 
-from ._base import safe, ov, cta_button, eyebrow, heading_accent, GRAIN_DATA_URI
+from ._base import (safe, ov, cta_button, eyebrow, heading_accent,
+                    accent_headline, diamond_field, GRAIN_DATA_URI)
 
 VARIANTS = ("split", "statement", "banner", "cinematic", "editorial", "constructed")
 
-_ALPHA_RE = re.compile(r"[A-Za-z0-9']+")
-
-
-def _accent_headline(headline: str, section: str = "hero") -> str:
-    """The quality-bar accent-word idiom (ported from the shelved
-    cathedral heading primitive): exactly ONE emphasized italic word in
-    the accent color, picked deterministically — the longest word, the
-    headline's likely center of gravity (first wins ties). Every
-    fragment is escaped; single-word headlines pass through plain."""
-    words = str(headline or "").split()
-    if len(words) < 2:
-        return safe(headline)
-
-    def _alpha_len(w: str) -> int:
-        return sum(len(m) for m in _ALPHA_RE.findall(w))
-
-    target = max(range(len(words)), key=lambda i: _alpha_len(words[i]))
-    return " ".join(
-        f'<em class="sxm-accent-word">{safe(w)}</em>' if i == target else safe(w)
-        for i, w in enumerate(words))
-
-
-_ACCENT_WORD_CSS = """
-.sxm-accent-word { font-style: italic; color: var(--sx-accent); }"""
+# Quality-floor arc 7: the accent-word idiom was promoted to _base
+# (accent_headline) and now marks EVERY hero variant's h1; its CSS
+# (.sxm-accent-word) ships in base_css. Alias kept for older callers.
+_accent_headline = accent_headline
 
 
 def _constructed_recipe(ctx: Dict[str, Any]) -> Tuple[str, str]:
@@ -81,11 +61,12 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
         html = f"""
 <section class="sxm-hero-cine" id="top">
   <img data-slot="hero_main" src="" alt="{img_alt}" class="sxm-cine-bg">
-  <div class="sxm-cine-scrim"></div>
+  <div class="sxm-cine-scrim"></div>{diamond_field(dna, 3)}
   <div class="sxm-inner sxm-cine-inner">
     <div class="sxm-cine-copy">
+      {heading_accent(dna)}
       {eb}
-      <h1 {ov('hero', 'headline')}>{safe(headline)}</h1>
+      <h1 {ov('hero', 'headline')}>{accent_headline(headline)}</h1>
       <p class="sxm-cine-sub" {ov('hero', 'subheadline')}>{safe(sub)}</p>
       {cta}
     </div>
@@ -102,7 +83,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   linear-gradient(105deg, color-mix(in srgb, var(--sx-bg) 72%, transparent) 0%, transparent 55%); }
 .sxm-cine-inner { position: relative; width: 100%; }
 .sxm-cine-copy { max-width: 22ch; }
-.sxm-hero-cine h1 { font-size: clamp(2.8rem, 7.2vw, 6rem); margin-bottom: 22px; }
+.sxm-hero-cine h1 { font-size: clamp(3.2rem, 7.2vw, 6rem); margin-bottom: 22px; }
 .sxm-hero-cine .sxm-cine-sub { font-size: 1.18rem; max-width: 44ch; margin-bottom: 36px; color: var(--sx-text);
   opacity: .92; }
 .sxm-hero-cine .sxm-eyebrow { color: var(--sx-accent); }
@@ -118,8 +99,9 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 <section class="sxm-section sxm-hero-ed" id="top">
   <div class="sxm-inner sxm-hero-ed-grid">
     <div class="sxm-hero-ed-copy">
+      {heading_accent(dna)}
       {eb}
-      <h1 {ov('hero', 'headline')}>{_accent_headline(headline)}</h1>
+      <h1 {ov('hero', 'headline')}>{accent_headline(headline)}</h1>
       <p class="sxm-hero-sub" {ov('hero', 'subheadline')}>{safe(sub)}</p>
       {cta}
     </div>
@@ -128,11 +110,11 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     </div>
   </div>
 </section>"""
-        css = _ACCENT_WORD_CSS + """
+        css = """
 .sxm-hero-ed { min-height: 86vh; display: flex; align-items: center; overflow: hidden; }
 .sxm-hero-ed-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: clamp(28px, 5vw, 72px);
   align-items: start; width: 100%; }
-.sxm-hero-ed h1 { font-size: clamp(3rem, 7.4vw, 6.4rem); line-height: 1.02; max-width: 13ch;
+.sxm-hero-ed h1 { font-size: clamp(3.5rem, 7.4vw, 6.4rem); line-height: 1.02; max-width: 13ch;
   position: relative; z-index: 2; margin: 0 clamp(-140px, -12%, 0px) 26px 0; }
 .sxm-hero-ed .sxm-hero-sub { font-size: 1.14rem; max-width: 44ch; margin-bottom: 34px; color: var(--sx-muted); }
 .sxm-hero-ed-visual { margin-top: clamp(46px, 9vh, 120px); }
@@ -163,13 +145,14 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   <div class="sxm-orn-field" aria-hidden="true">{field}
   </div>
   <div class="sxm-inner sxm-hero-con-inner">
+    {heading_accent(dna)}
     {eb}
-    <h1 {ov('hero', 'headline')}>{_accent_headline(headline)}</h1>
+    <h1 {ov('hero', 'headline')}>{accent_headline(headline)}</h1>
     <p class="sxm-hero-sub" {ov('hero', 'subheadline')}>{safe(sub)}</p>
     {cta}
   </div>
 </section>"""
-        css = _ACCENT_WORD_CSS + """
+        css = """
 .sxm-hero-constructed { position: relative; min-height: 92vh; display: flex; align-items: center;
   padding: var(--sx-section-pad) var(--sx-gutter); overflow: hidden; isolation: isolate; }
 .sxm-hero-constructed::after { content: ""; position: absolute; inset: 0; z-index: -1;
@@ -212,8 +195,9 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
         html = f"""
 <section class="sxm-section sxm-hero-statement" id="top">
   <div class="sxm-inner">
+    {heading_accent(dna)}
     {eb}
-    <h1 {ov('hero', 'headline')}>{safe(headline)}</h1>
+    <h1 {ov('hero', 'headline')}>{accent_headline(headline)}</h1>
     <p class="sxm-hero-sub sxm-muted" {ov('hero', 'subheadline')}>{safe(sub)}</p>
     {cta}
   </div>
@@ -230,8 +214,9 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   <img data-slot="hero_main" src="" alt="{img_alt}" class="sxm-hero-bgimg">
   <div class="sxm-hero-banner-scrim"></div>
   <div class="sxm-inner sxm-hero-banner-inner">
+    {heading_accent(dna)}
     {eb}
-    <h1 {ov('hero', 'headline')}>{safe(headline)}</h1>
+    <h1 {ov('hero', 'headline')}>{accent_headline(headline)}</h1>
     <p class="sxm-hero-sub" {ov('hero', 'subheadline')}>{safe(sub)}</p>
     {cta}
   </div>
@@ -252,8 +237,9 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 <section class="sxm-section sxm-hero-split" id="top">
   <div class="sxm-inner sxm-hero-split-grid">
     <div class="sxm-hero-copy">
+      {heading_accent(dna)}
       {eb}
-      <h1 {ov('hero', 'headline')}>{safe(headline)}</h1>
+      <h1 {ov('hero', 'headline')}>{accent_headline(headline)}</h1>
       <p class="sxm-hero-sub sxm-muted" {ov('hero', 'subheadline')}>{safe(sub)}</p>
       {cta}
     </div>

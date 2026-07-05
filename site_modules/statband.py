@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
-from ._base import safe, ov, eyebrow, heading_accent
+from ._base import safe, ov, eyebrow, heading_accent, accent_headline, diamond_field
 
 VARIANTS = ("band",)
 
@@ -69,7 +69,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 
     eb = eyebrow("statband", content.get("eyebrow") or "")
     headline = content.get("headline") or ""
-    headline_html = (f'<h2 {ov("statband", "headline")}>{safe(headline)}</h2>'
+    headline_html = (f'<h2 {ov("statband", "headline")}>{accent_headline(headline)}</h2>'
                      if headline else "")
     blocks = "".join(f"""
       <div class="sxm-stat">
@@ -79,7 +79,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
       </div>""" for num, label in stats)
 
     html = f"""
-<section class="sxm-section sxm-statband sxm-reveal" id="stats">
+<section class="sxm-section sxm-statband sxm-reveal" id="stats">{diamond_field(dna, 2)}
   <div class="sxm-inner">
     {heading_accent(dna) if (headline or content.get('eyebrow')) else ''}
     {eb}
@@ -88,16 +88,29 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     </div>
   </div>
 </section>"""
+    # Quality-floor arc 7: the stat band IS the original bar's full-bleed
+    # solid 'gold band' (was surface-2). Every ink inside re-tones to the
+    # contrast-enforced on-accent (marks, eyebrow, rules, labels).
     css = """
-.sxm-statband { background: var(--sx-surface-2); }
-.sxm-statband h2 { margin-bottom: 30px; }
+.sxm-statband { position: relative; overflow: hidden;
+  background: var(--sx-accent); color: var(--sx-on-accent);
+  padding-top: clamp(64px, 8vw, 80px); padding-bottom: clamp(64px, 8vw, 80px); }
+.sxm-statband .sxm-inner { position: relative; }
+.sxm-statband h2 { margin-bottom: 30px; color: var(--sx-on-accent); }
+.sxm-statband .sxm-accent-word { color: var(--sx-on-accent); font-weight: 500; }
+.sxm-statband .sxm-eyebrow { color: color-mix(in srgb, var(--sx-on-accent) 85%, var(--sx-accent)); }
+.sxm-statband .sxm-mark-thin { background: linear-gradient(90deg, var(--sx-on-accent),
+  color-mix(in srgb, var(--sx-on-accent) 30%, transparent)); }
+.sxm-statband .sxm-mark-soft { background: color-mix(in srgb, var(--sx-on-accent) 45%, transparent); }
+.sxm-statband .sxm-mark-block { background: var(--sx-on-accent); }
+.sxm-statband .sxm-diamond { color: var(--sx-on-accent); }
 .sxm-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: clamp(24px, 4vw, 48px); }
 .sxm-stat-n { display: block; font-family: var(--sx-font-heading);
   font-size: clamp(2.8rem, 6vw, 4.6rem); font-weight: var(--sx-heading-weight);
   letter-spacing: var(--sx-letter-tight); line-height: 1; }
 .sxm-stat-rule { display: block; width: 44px; height: 3px; border-radius: 99px;
-  margin: 14px 0 10px; background: linear-gradient(90deg, var(--sx-accent), transparent); }
+  margin: 14px 0 10px; background: linear-gradient(90deg, var(--sx-on-accent), transparent); }
 .sxm-stat-label { font-size: .8rem; letter-spacing: .2em; text-transform: uppercase;
-  color: var(--sx-muted); font-weight: 600; }"""
+  color: color-mix(in srgb, var(--sx-on-accent) 82%, var(--sx-accent)); font-weight: 600; }"""
     return html, css

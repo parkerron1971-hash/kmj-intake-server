@@ -37,8 +37,23 @@ from agents.composer.drl import signals as sig
 logger = logging.getLogger("drl.passes")
 
 DRL_MODEL = "claude-sonnet-4-5-20250929"     # same tier as the composer
-SIGNAL_MAX_TOKENS = 1800
+# Arc 7 quality floor: 1800 truncated the signal JSON on rich intakes —
+# a parse failure silently returned [] and the DRO authored blind while
+# still reporting dro_status='applied'. Roomy cap + parse-retry below.
+SIGNAL_MAX_TOKENS = 3200
 SIGNAL_TEMPERATURE = 0.2                       # extraction — low/deterministic
+# Arc 7: how much intake material the signal pass reads. The owner's
+# freshest evidence leads the transcript (site_composer._assemble_intake_text
+# puts it FIRST), so the tail — not the newest prefs — is what truncates.
+SIGNAL_TRANSCRIPT_CAP = 12000
+# Arc 7 same-business freshness: a recompose sharing >= this many of the
+# 8 distinctiveness axes with the business's OWN last DRO gets one regen
+# (the platform-wide _collides check only fires at >= 6 vs a mixed cohort,
+# so a same-shell recompose could share 5/8 with itself and pass).
+OWN_REPEAT_AXES_THRESHOLD = 5
+# Arc 7 honest thin-brief status: a DRO driven by fewer consumable
+# signals than this is 'applied_thin', not 'applied' (site_composer).
+THIN_BRIEF_MIN_SIGNALS = 3
 # Arc 6 grew the DRO (rule_break/tension/first_impression blocks, each with
 # because + from_signals) — 3000 truncated the JSON mid-object, and a parse
 # failure returned None with NO retry, killing all three direction stances
@@ -165,23 +180,41 @@ def _signal_system_prompt() -> str:
 
 def detect_signals(business_id: str, transcript: str) -> List[Dict[str, Any]]:
     """Transcript/context → signals[]. Soft-fails to [] (the authoring pass
-    can still proceed conservatively)."""
+    can still proceed conservatively). One clean retry on a call/parse
+    failure — mirrors author_dro's discipline; previously a single
+    truncated response silently starved the whole DRO of evidence."""
     client = _client()
     if not client or not (transcript or "").strip():
         return []
-    user = f"Practitioner intake material for business {business_id}:\n\n{transcript.strip()[:8000]}"
-    try:
-        raw = _call(client, _signal_system_prompt(), user,
-                    max_tokens=SIGNAL_MAX_TOKENS, temperature=SIGNAL_TEMPERATURE,
-                    business_id=business_id, task="signals")
-    except Exception as e:
-        logger.warning(f"[drl] signal detection call failed for {business_id}: {e}")
-        return []
-    parsed = _parse_json(raw)
-    if not isinstance(parsed, dict):
-        return []
-    out = parsed.get("signals")
-    if not isinstance(out, list):
+    system = _signal_system_prompt()
+    user = (f"Practitioner intake material for business {business_id}:\n\n"
+            f"{transcript.strip()[:SIGNAL_TRANSCRIPT_CAP]}")
+
+    def _attempt(extra: str = "") -> Optional[List[Any]]:
+        try:
+            raw = _call(client, system, user + extra,
+                        max_tokens=SIGNAL_MAX_TOKENS, temperature=SIGNAL_TEMPERATURE,
+                        business_id=business_id, task="signals")
+        except Exception as e:
+            logger.warning(f"[drl] signal detection call failed for {business_id}: {e}")
+            return None
+        parsed = _parse_json(raw)
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("signals"), list):
+            # Diagnose, don't guess: truncation = long raw w/ no closing
+            # brace in the tail; refusal/preamble shows in the head.
+            r = raw or ""
+            logger.warning(f"[drl] signal parse failed for {business_id}: "
+                           f"len={len(r)} head={r[:60]!r} tail={r[-60:]!r}")
+            return None
+        return parsed["signals"]
+
+    out = _attempt()
+    if out is None:
+        out = _attempt(
+            "\n\nYour previous response was not parseable JSON. Output ONLY "
+            "the complete JSON object — no prose, no code fences — and make "
+            "sure the JSON is fully closed.")
+    if out is None:
         return []
     valid_ids = set(sig.signal_ids())
     return [s for s in out if isinstance(s, dict) and s.get("signal_id") in valid_ids]
@@ -398,13 +431,16 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
                reference_analysis: Optional[List[Dict[str, Any]]] = None,
                creative: Optional[Dict[str, Any]] = None,
                stance: Optional[str] = None,
+               extra_instruction: Optional[str] = None,
                ) -> Optional[Dict[str, Any]]:
     """signals + principles + exemplars + recent signatures (+ Arc 5
     reference-site analysis, + Arc 6 owner creative brief / directions
     stance) → validated DRO. One retry on validation failure; one
     regeneration on distinctiveness collision. `recent` may include the
     sibling candidate DROs of a directions run — the same collision check
-    then enforces distinctiveness ACROSS the three candidates. Returns
+    then enforces distinctiveness ACROSS the three candidates.
+    `extra_instruction` (Arc 7) appends a caller-supplied directive to the
+    authoring prompt — used by the same-business freshness regen. Returns
     None on hard failure (caller decides fallback)."""
     client = _client()
     if not client:
@@ -415,6 +451,8 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
     user = _dro_user_prompt(business_id, signals, exemplars, recent_sigs,
                             reference_analysis=reference_analysis,
                             creative=creative, stance=stance)
+    if extra_instruction:
+        user += "\n\n" + str(extra_instruction)
 
     def _attempt(extra: str = "") -> Optional[Dict[str, Any]]:
         try:
@@ -502,6 +540,22 @@ def fetch_recent_dros(business_id: str, n: int = sig.DISTINCTIVENESS_COHORT_N) -
     return out
 
 
+def fetch_own_last_dro(business_id: str) -> Optional[Dict[str, Any]]:
+    """The business's OWN most recent stored DRO (the design behind its
+    current live site), or None. Arc 7 same-business freshness reads this
+    directly — fetch_recent_dros mixes in the platform cohort, which lets
+    a recompose share 5/8 axes with ITSELF and still pass _collides."""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/design_rationales?business_id=eq.{business_id}"
+            "&select=id,dro&order=created_at.desc&limit=1") or []
+    except Exception as e:
+        logger.warning(f"[drl] fetch_own_last_dro failed for {business_id}: {e}")
+        return None
+    blob = rows[0].get("dro") if rows else None
+    return blob if isinstance(blob, dict) else None
+
+
 def persist_dro(business_id: str, dro: Dict[str, Any]) -> Optional[str]:
     """Insert into design_rationales; return the new row id."""
     try:
@@ -528,18 +582,75 @@ def produce_dro(business_id: str, transcript: str,
     creative brief, quoted verbatim at highest priority in the authoring
     prompt. (The directions engine calls detect_signals/author_dro directly
     so it can share one signal pass across three candidates and defer
-    persistence to the choose step.)"""
+    persistence to the choose step.)
+
+    Arc 7 additions (single-compose path only — directions bypass this):
+      - same-business freshness: the fresh DRO is compared against the
+        business's OWN last DRO on the 8 distinctiveness axes; >= 5 shared
+        triggers ONE regen naming the repeated axes (accept whatever comes
+        back — no loop).
+      - the returned DRO carries `consumable_signal_count` (runtime-only,
+        stamped AFTER persist) so compose_site can report 'applied_thin'
+        when the rationale ran on a thin brief."""
     try:
         signals = detect_signals(business_id, transcript)
+        consumable_n = sum(
+            1 for s in signals
+            if isinstance(s.get("confidence"), (int, float))
+            and sig.is_consumable(s["confidence"]))
         recent = fetch_recent_dros(business_id)
         dro = author_dro(business_id, signals, recent,
                          reference_analysis=reference_analysis,
                          creative=creative)
         if dro is None:
             return None
+
+        # Same-business freshness (runs BEFORE persist, so own-last is
+        # genuinely the previous compose). Deterministic palette/ground/
+        # font pins make the shell identical when the axes repeat — this
+        # is the "recompose looks exactly the same" guard.
+        own_last = fetch_own_last_dro(business_id)
+        if own_last is not None:
+            mine = distinctiveness_signature(dro)
+            prev = distinctiveness_signature(own_last)
+            repeated = [axis for axis, m, p in
+                        zip(sig.DISTINCTIVENESS_AXES, mine, prev)
+                        if m is not None and m == p]
+            if len(repeated) >= OWN_REPEAT_AXES_THRESHOLD:
+                logger.info(
+                    f"[drl] same-business repeat for {business_id}: new DRO "
+                    f"shares {len(repeated)}/8 axes with own last "
+                    f"({repeated}) — regenerating once")
+                regen = author_dro(
+                    business_id, signals, recent,
+                    reference_analysis=reference_analysis, creative=creative,
+                    extra_instruction=(
+                        "IMPORTANT — FRESHNESS: this design repeats the "
+                        f"business's CURRENT live site on {len(repeated)} of "
+                        f"the 8 distinctiveness axes ({', '.join(repeated)}). "
+                        "Vary at least 2 of those axes while honoring the "
+                        "signals and the owner's stated constraints. "
+                        "Output ONLY the JSON."))
+                if regen is not None:
+                    now_shared = sum(
+                        1 for m, p in zip(distinctiveness_signature(regen), prev)
+                        if m is not None and m == p)
+                    logger.info(
+                        f"[drl] same-business regen accepted for {business_id}: "
+                        f"now shares {now_shared}/8 axes with own last "
+                        f"(was {len(repeated)}/8)")
+                    dro = regen
+                else:
+                    logger.info(
+                        f"[drl] same-business regen failed for {business_id} — "
+                        f"keeping the original DRO ({len(repeated)}/8 shared)")
+
         dro_id = persist_dro(business_id, dro)
         if dro_id:
             dro["id"] = dro_id
+        # Runtime-only metadata (never persisted): feeds the honest
+        # thin-brief status in compose_site.
+        dro["consumable_signal_count"] = consumable_n
         return dro
     except Exception as e:
         logger.warning(f"[drl] produce_dro failed for {business_id}: {e}")

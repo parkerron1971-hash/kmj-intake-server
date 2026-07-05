@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple
 
-from ._base import safe, ov, eyebrow, heading_accent
+from ._base import safe, ov, eyebrow, heading_accent, accent_headline
 
 VARIANTS = ("grid", "mosaic")
 
@@ -22,7 +22,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
         # translated to imagery in token discipline). Soft bottom mask
         # fade on every tile — gradients always fade, never hard-edged.
         tiles = "".join(
-            f'\n      <div class="sxm-imgbox sxm-mo-t{i}">'
+            f'\n      <div class="sxm-imgbox sxm-card-lite sxm-mo-t{i}">'
             f'<img data-slot="gallery_{i}" src="" '
             f'alt="{safe(biz_name)} gallery image {i}" class="sxm-mo-img"></div>'
             for i in range(1, 5))
@@ -31,7 +31,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   <div class="sxm-inner">
     {heading_accent(dna)}
     {eb}
-    <h2 {ov('gallery', 'headline')}>{safe(headline)}</h2>
+    <h2 {ov('gallery', 'headline')}>{accent_headline(headline)}</h2>
     <div class="sxm-gal-mosaic">{tiles}
     </div>
   </div>
@@ -57,14 +57,14 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 
     imgs = "".join(
         f'\n      <img data-slot="gallery_{i}" src="" '
-        f'alt="{safe(biz_name)} gallery image {i}" class="sxm-gal-img sxm-gal-{i}">'
+        f'alt="{safe(biz_name)} gallery image {i}" class="sxm-gal-img sxm-card-lite sxm-gal-{i}">'
         for i in range(1, 5))
     html = f"""
 <section class="sxm-section sxm-gallery sxm-reveal" id="gallery">
   <div class="sxm-inner">
     {heading_accent(dna)}
     {eb}
-    <h2 {ov('gallery', 'headline')}>{safe(headline)}</h2>
+    <h2 {ov('gallery', 'headline')}>{accent_headline(headline)}</h2>
     <div class="sxm-gal-grid">{imgs}
     </div>
   </div>

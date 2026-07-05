@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from ._base import safe, safe_url
+from ._base import safe, safe_url, diamond_mark
 
 # Rendered-module id → (anchor, label). Order here is only a fallback;
 # links are emitted in the order the sections rendered on the page.
@@ -52,7 +52,10 @@ def render_header(rendered_ids: List[str], ctx: Dict[str, Any]) -> Tuple[str, st
         brand_inner = (f'<img class="sxm-header-logo" src="{safe_url(logo_url)}" '
                        f'alt="{safe(name)} logo">')
     else:
-        brand_inner = f'<span class="sxm-header-wordmark">{safe(name)}</span>'
+        # Quality-floor arc 7: the bar's small static diamond beside the
+        # wordmark (skipped for brut; a real logo IS the brand mark).
+        brand_inner = (f'{diamond_mark(ctx.get("dna") or {})}'
+                       f'<span class="sxm-header-wordmark">{safe(name)}</span>')
 
     links = []
     for mid in rendered_ids:
@@ -98,9 +101,21 @@ html { scroll-padding-top: 84px; }
   -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
   mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%); }
 .sxm-header-nav::-webkit-scrollbar { display: none; }
-.sxm-header-nav a { color: var(--sx-text); font-size: .9rem; font-weight: 600;
-  letter-spacing: .02em; white-space: nowrap; opacity: .82; transition: opacity .15s ease; }
+/* Quality-floor arc 7 — the bar's nav voice: small caps, wide tracking,
+   accent underline sweeping 0→100% on hover. */
+.sxm-header-nav a { position: relative; color: var(--sx-text); font-size: .72rem;
+  font-weight: 700; letter-spacing: .2em; text-transform: uppercase;
+  white-space: nowrap; opacity: .82; padding: 6px 0;
+  transition: opacity .15s ease, color .15s ease; }
+.sxm-header-nav a::after { content: ""; position: absolute; left: 0; bottom: 0;
+  height: 2px; width: 100%; background: var(--sx-accent);
+  transform: scaleX(0); transform-origin: left;
+  transition: transform .3s var(--sx-ease); }
 .sxm-header-nav a:hover { opacity: 1; color: var(--sx-accent); }
+.sxm-header-nav a:hover::after { transform: scaleX(1); }
+@media (prefers-reduced-motion: reduce) {
+  .sxm-header-nav a::after { transition: none; }
+}
 .sxm-header-cta { padding: 10px 20px; font-size: .85rem; flex-shrink: 0; }
 @media (max-width: 768px) {
   .sxm-header-inner { min-height: 56px; gap: 12px; }

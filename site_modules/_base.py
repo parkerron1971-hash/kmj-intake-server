@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib as _hashlib
 import html as _html
 import json as _json
+import re as _re2
 from typing import Any, Dict, List, Optional, Tuple
 
 # Ultra-subtle SVG fractal noise, inlined as a data URI (Arc 3 finish;
@@ -90,6 +91,59 @@ def eyebrow(section: str, text: str, field: str = "eyebrow") -> str:
     if not text:
         return ""
     return f'<div class="sxm-eyebrow" {ov(section, field)}>{safe(text)}</div>'
+
+
+_ALPHA_RE = _re2.compile(r"[A-Za-z0-9']+")
+
+
+def accent_headline(headline: str) -> str:
+    """The quality-bar accent-word idiom (the original bar's 'one italic
+    accent word in every heading'), promoted from hero.py to shared
+    plumbing (quality-floor arc 7): exactly ONE emphasized italic word in
+    the accent color, picked deterministically — the longest word, the
+    heading's likely center of gravity (first wins ties). Every fragment
+    is escaped; single-word headings pass through plain. Styling lives in
+    base_css (.sxm-accent-word); accent/authority bands re-tone it."""
+    words = str(headline or "").split()
+    if len(words) < 2:
+        return safe(headline)
+
+    def _alpha_len(w: str) -> int:
+        return sum(len(m) for m in _ALPHA_RE.findall(w))
+
+    target = max(range(len(words)), key=lambda i: _alpha_len(words[i]))
+    return " ".join(
+        f'<em class="sxm-accent-word">{safe(w)}</em>' if i == target else safe(w)
+        for i, w in enumerate(words))
+
+
+def is_brut(dna: Optional[Dict[str, Any]]) -> bool:
+    """The studio-brut / 'bold formal' identity (the brutalist-radius
+    branch of brand_dna.derive_radius): its language is sharp edges and
+    color-blocks — ornament layers (diamonds) are skipped for it."""
+    d = dna or {}
+    return d.get("vibe") == "bold" and d.get("intensity") == "bold"
+
+
+def diamond_field(dna: Optional[Dict[str, Any]], count: int = 3) -> str:
+    """2-3 floating diamond ornaments (the original bar's brand shape —
+    a rotated square, opacity .04-.08, gentle float; static when motion
+    is subtle, killed by prefers-reduced-motion). Empty string for the
+    brut identity — their language is color-blocks, not ornament."""
+    if is_brut(dna):
+        return ""
+    n = max(2, min(int(count or 3), 3))
+    return "".join(
+        f'<span class="sxm-diamond sxm-d{i}" aria-hidden="true"></span>'
+        for i in range(1, n + 1))
+
+
+def diamond_mark(dna: Optional[Dict[str, Any]]) -> str:
+    """Small STATIC diamond (header wordmark / footer brand mark).
+    Skipped for the brut identity."""
+    if is_brut(dna):
+        return ""
+    return '<span class="sxm-diamond-mark" aria-hidden="true"></span>'
 
 
 def heading_accent(dna: Dict[str, Any]) -> str:
@@ -285,6 +339,62 @@ body.sx-sig-soft.sx-sig-drift .sxm-cine-bg, body.sx-sig-soft.sx-sig-drift .sxm-h
   animation-duration: 44s !important; }
 body.sx-sig-soft.sx-sig-underline .sxm-reveal h2::after { width: 64px; height: 2px; }"""
 
+# Quality-floor arc 7 — the owner's original design bar, ported into the
+# live renderer as its DEFAULT floor (source: agents/design_intelligence/
+# cinematic_authority_intelligence.md; enforcement values from the retired
+# studio_solutionist_quality.py). Shared card depth + hover, the AUTHORITY
+# rhythm band, the diamond ornament layer, and the CTA shimmer keyframes.
+# All motion here is killed by prefers-reduced-motion (below) and the
+# looping pieces also stop on motion=subtle (base_css branch).
+_QUALITY_CSS = """
+/* Card depth + hover (bar: resting 22/60 shadow, hover -8px + accent border) */
+.sxm-card { box-shadow: 0 22px 60px color-mix(in srgb, var(--sx-text) 8%, transparent);
+  transition: transform .5s var(--sx-ease), box-shadow .5s var(--sx-ease),
+    border-color .5s var(--sx-ease); }
+.sxm-card:hover { transform: translateY(-8px); border-color: var(--sx-accent);
+  box-shadow: 0 40px 80px color-mix(in srgb, var(--sx-text) 12%, transparent); }
+.sxm-card-lite { box-shadow: 0 22px 60px color-mix(in srgb, var(--sx-text) 8%, transparent);
+  transition: transform .5s var(--sx-ease), box-shadow .5s var(--sx-ease); }
+.sxm-card-lite:hover { transform: translateY(-4px);
+  box-shadow: 0 30px 64px color-mix(in srgb, var(--sx-text) 11%, transparent); }
+/* TRUE RHYTHM — the AUTHORITY band: ONE mid-page section on the deep
+   authority ground (render_page marks it). Custom-property overrides
+   re-ink everything inside (text, muted, borders, cards, accent) with
+   the contrast-enforced on-authority variants from brand_dna. */
+.sxm-section.sxm-authority { position: relative; overflow: hidden;
+  background: var(--sx-authority); color: var(--sx-on-authority);
+  --sx-text: var(--sx-on-authority);
+  --sx-muted: color-mix(in srgb, var(--sx-on-authority) 74%, var(--sx-authority));
+  --sx-border: color-mix(in srgb, var(--sx-on-authority) 18%, transparent);
+  --sx-surface: color-mix(in srgb, var(--sx-on-authority) 7%, transparent);
+  --sx-surface-2: color-mix(in srgb, var(--sx-on-authority) 11%, transparent);
+  --sx-accent: var(--sx-accent-on-authority); }
+.sxm-section.sxm-authority h2, .sxm-section.sxm-authority h3 { color: var(--sx-on-authority); }
+/* Diamond ornament layer — the bar's brand shape (rotated square). */
+.sxm-diamond { position: absolute; width: 110px; height: 110px; z-index: 0;
+  border: 1.5px solid currentColor; color: var(--sx-accent); opacity: .07;
+  transform: rotate(45deg); pointer-events: none;
+  animation: sxm-float 6s ease-in-out infinite; }
+.sxm-d1 { top: 12%; right: 7%; }
+.sxm-d2 { bottom: 16%; left: 5%; width: 64px; height: 64px; opacity: .05;
+  animation-duration: 7.2s; animation-delay: 1.1s; }
+.sxm-d3 { top: 44%; right: 26%; width: 40px; height: 40px; opacity: .04;
+  animation-duration: 5.2s; animation-delay: .5s; }
+.sxm-diamond-mark { display: inline-block; width: 9px; height: 9px;
+  margin-right: 10px; background: var(--sx-accent); transform: rotate(45deg);
+  flex-shrink: 0; }
+.sxm-footer .sxm-diamond-mark { width: 7px; height: 7px; margin-right: 8px; }
+@keyframes sxm-float {
+  0%, 100% { transform: rotate(45deg) translateY(0); }
+  50% { transform: rotate(45deg) translateY(-14px); } }
+@keyframes sxm-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .sxm-cta::before, .sxm-diamond { animation: none !important; }
+  .sxm-cta:hover, .sxm-card:hover, .sxm-card-lite:hover { transform: none; }
+}"""
+
 # Film-grain finish (Arc 3, quality-bar signature): ultra-subtle static
 # noise over the whole page. pointer-events: none — purely atmospheric.
 _GRAIN_CSS = (
@@ -296,10 +406,16 @@ _GRAIN_CSS = (
 
 def base_css(dna: Dict[str, Any]) -> str:
     motion = dna.get("motion", "standard")
+    # Quality-floor arc 7: reveal travels 48px over .9s — the bar's
+    # "things don't rush in, they arrive" (was 18px/.7s).
     reveal_css = "" if motion == "subtle" else """
-.sxm-reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s var(--sx-ease), transform .7s var(--sx-ease); }
+.sxm-reveal { opacity: 0; transform: translateY(48px); transition: opacity .9s var(--sx-ease), transform .9s var(--sx-ease); }
 .sxm-reveal.sxm-in { opacity: 1; transform: none; }
 @media (prefers-reduced-motion: reduce) { .sxm-reveal { opacity: 1; transform: none; transition: none; } }""" + _SIG_CSS
+    # motion=subtle stills the LOOPING pieces (CTA shimmer, diamond float)
+    # — a stilled page keeps the premium statics, drops the perpetual motion.
+    loop_kill = ("\n.sxm-cta::before, .sxm-diamond { animation: none; }"
+                 if motion == "subtle" else "")
     return f"""
 *, *::before, *::after {{ box-sizing: border-box; }}
 html {{ scroll-behavior: smooth; }}
@@ -311,29 +427,35 @@ body {{
 img {{ max-width: 100%; display: block; }}
 h1, h2, h3 {{ font-family: var(--sx-font-heading); line-height: 1.08; margin: 0; }}
 h1 {{ font-size: var(--sx-h1); font-weight: var(--sx-heading-weight); letter-spacing: var(--sx-letter-tight); }}
-h2 {{ font-size: var(--sx-h2); font-weight: var(--sx-heading-weight); letter-spacing: var(--sx-letter-tight); }}
+h2 {{ font-size: var(--sx-h2); font-weight: var(--sx-h2-weight, var(--sx-heading-weight)); letter-spacing: var(--sx-letter-tight); }}
 p {{ margin: 0 0 1.15em; max-width: 62ch; }}
 a {{ color: var(--sx-accent); text-decoration: none; }}
 .sxm-section {{ padding: var(--sx-section-pad) var(--sx-gutter); }}
 .sxm-inner {{ max-width: var(--sx-content-max); margin: 0 auto; }}
 .sxm-eyebrow {{
   font-size: .76rem; letter-spacing: .26em; text-transform: uppercase;
-  color: var(--sx-accent); font-weight: 600; margin-bottom: 14px;
+  color: var(--sx-accent); font-weight: 700; margin-bottom: 14px;
 }}
+.sxm-accent-word {{ font-style: italic; color: var(--sx-accent); }}
 .sxm-mark {{ display: block; margin-bottom: 22px; }}
-.sxm-mark-thin {{ width: 56px; height: 2px; background: var(--sx-accent); }}
+.sxm-mark-thin {{ width: 48px; height: 3px;
+  background: linear-gradient(90deg, var(--sx-accent), var(--sx-accent-soft)); }}
 .sxm-mark-soft {{ width: 72px; height: 6px; border-radius: 99px; background: var(--sx-accent-soft); }}
 .sxm-mark-block {{ width: 26px; height: 26px; background: var(--sx-accent); }}
 .sxm-cta {{
-  display: inline-block; padding: 16px 30px; border-radius: var(--sx-radius-button);
-  background: var(--sx-accent); color: var(--sx-on-accent); font-weight: 700;
-  letter-spacing: .04em; font-size: .95rem; transition: transform .22s var(--sx-ease), background .22s var(--sx-ease);
+  position: relative; overflow: hidden;
+  display: inline-block; padding: 18px 44px; border-radius: var(--sx-radius-button);
+  background: var(--sx-accent); color: var(--sx-on-accent); font-weight: 800;
+  font-size: 13px; letter-spacing: .18em; text-transform: uppercase;
+  box-shadow: 0 16px 40px color-mix(in srgb, var(--sx-accent) 25%, transparent);
+  transition: transform .4s var(--sx-ease), background .4s var(--sx-ease), box-shadow .4s var(--sx-ease);
 }}
-.sxm-cta:hover {{ transform: translateY(-2px); background: var(--sx-accent-strong); }}
+.sxm-cta::before {{ content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .35), transparent);
+  background-size: 200% 100%; animation: sxm-shimmer 2.5s linear infinite; }}
+.sxm-cta:hover {{ transform: translateY(-3px); background: var(--sx-accent-strong);
+  box-shadow: 0 20px 50px color-mix(in srgb, var(--sx-accent) 35%, transparent); }}
 .sxm-muted {{ color: var(--sx-muted); }}
-/* Palette discipline — dark/light section alternation gives the page rhythm
-   (a "stage then room then stage" cadence) instead of one flat ground. */
-.sxm-section:nth-of-type(even) {{ background: var(--sx-surface); }}
 /* Accent scarcity (DRO single_semantic): the accent carries MEANING, so it
    stays on CTAs + links only; decorative accent (eyebrows, marks) goes quiet. */
 body.sx-scarce-accent .sxm-eyebrow {{ color: var(--sx-muted); }}
@@ -341,6 +463,7 @@ body.sx-scarce-accent .sxm-mark-thin,
 body.sx-scarce-accent .sxm-mark-block {{ background: var(--sx-border); }}
 body.sx-scarce-accent .sxm-mark-soft {{ background: color-mix(in srgb, var(--sx-muted) 45%, transparent); }}
 {reveal_css}
+{_QUALITY_CSS}{loop_kill}
 {_TREATMENT_CSS}
 {_RULE_BREAK_CSS}
 {_GRAIN_CSS}
