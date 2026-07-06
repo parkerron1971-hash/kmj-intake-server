@@ -966,6 +966,7 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
                       dro_status: Optional[str] = None,
                       defaulted_modules: Optional[List[str]] = None,
                       previous_html: Optional[str] = None,
+                      atelier_meta: Optional[Dict[str, Any]] = None,
                       ) -> tuple:
     """Conformance report over the final document. Returns
     (report_dict, fixes) where fixes is a list of fixable spec issues
@@ -1092,6 +1093,27 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
                        "(normalized hash unchanged from the previous document)"
                        if identical
                        else "document differs from the previous compose")})
+
+    # (h) Arc 8 — atelier scoping check (REPORT-ONLY, adds no fixes):
+    # every bespoke fragment that claims to be in the document has its
+    # scoped .atl-{uid} CSS present and its root class in the body.
+    frags = (atelier_meta or {}).get("fragments") or {}
+    if frags:
+        unscoped: List[str] = []
+        for mid, f in frags.items():
+            m_uid = re.search(r"atl-([0-9a-f]{6,12})",
+                              str((f or {}).get("html") or ""))
+            if not m_uid:
+                unscoped.append(f"{mid}: no atl- uid on fragment")
+                continue
+            uid = m_uid.group(1)
+            if f"atl-{uid}" not in html or f".atl-{uid}" not in html:
+                unscoped.append(f"{mid}: atl-{uid} markup/css missing "
+                                "from the document")
+        checks.append({"name": "atelier_scoped", "ok": not unscoped,
+                       "detail": ("; ".join(unscoped) if unscoped else
+                                  f"{len(frags)} bespoke section(s) present "
+                                  "+ css scoped")})
 
     # (e) DRO-honor checks — only when THIS render applied a fresh
     # rationale (dro_status 'applied'/'applied_thin'). Shuffle/refresh
@@ -1267,7 +1289,8 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        defaulted_modules: Optional[List[str]] = None,
                        full_recompose: bool = False,
                        _heal_attempted: bool = False,
-                       _recon: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       _recon: Optional[Dict[str, Any]] = None,
+                       _atelier: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     # Arc 4: `full_recompose` is True ONLY from compose_site (a fresh
     # spec) — it triggers override reconciliation. Shuffle/refresh/
     # override-triggered re-renders keep it False so a practitioner's
@@ -1304,7 +1327,46 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     if dro and not ctx.get("design"):
         _apply_dro_design(ctx, dro, business_id)
 
-    html = _mark(site_modules.render_page(spec, ctx, title))
+    # Arc 8 — THE ATELIER: 2-3 bespoke LLM-written sections where eyes
+    # land (always the hero + the DRO's rule-break section), replacing
+    # their module renders BEFORE slot population / override resolution /
+    # the quality gate — so slots, edits and conformance checks treat
+    # bespoke sections exactly like module ones. Full composes generate;
+    # shuffle/refresh/override re-renders REUSE the fragments stored on
+    # site_config.atelier; the self-heal recursion reuses the first
+    # pass's fragments (never pays twice). ATELIER_ENABLED=0 → markers
+    # off, no calls: byte-identical to the Arc 7 pipeline.
+    _stored_atelier = (((site or {}).get("site_config") or {}).get("atelier")
+                       if isinstance(((site or {}).get("site_config") or {})
+                                     .get("atelier"), dict) else {})
+    atelier_active = False
+    atelier_meta: Optional[Dict[str, Any]] = None
+    try:
+        import atelier as _atelier_mod
+        atelier_active = _atelier_mod.atelier_enabled() and bool(
+            (full_recompose and dro)
+            or (_atelier or {}).get("fragments")
+            or (not full_recompose and (_stored_atelier.get("fragments") or {})))
+    except Exception as e:
+        logger.warning(f"[composer] atelier unavailable (non-fatal): {e}")
+
+    html = _mark(site_modules.render_page(spec, ctx, title,
+                                          fragment_markers=atelier_active))
+    if atelier_active:
+        try:
+            html, atelier_meta = _atelier_mod.run_atelier(
+                html, spec, ctx, dro, business_id,
+                regenerate=bool(full_recompose and not _heal_attempted
+                                and _atelier is None),
+                # A full recompose NEVER reuses the previous compose's
+                # stored fragments (stale copy would mask the fresh
+                # composition) — only the heal recursion's precomputed
+                # set or a fresh generation apply here.
+                stored=({} if full_recompose else _stored_atelier),
+                precomputed=_atelier)
+        except Exception as e:
+            logger.warning(f"[composer] atelier failed (non-fatal): {e}")
+            atelier_meta = None
 
     # Slot population (existing pipeline) then resolution into the HTML.
     # The enriched_brief threads the DRO's design concept into the
@@ -1421,7 +1483,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         quality_report, fixes = _run_quality_gate(
             business_id, spec, ctx, final_html, dro=dro,
             dro_status=dro_status, defaulted_modules=defaulted_modules,
-            previous_html=prev_html)
+            previous_html=prev_html, atelier_meta=atelier_meta)
         if not quality_report["passed"] and fixes and not _heal_attempted:
             healed = _apply_quality_fixes(spec, ctx, fixes)
             if healed is not None:
@@ -1433,7 +1495,8 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                     dro_status=dro_status, dro_summary=dro_summary,
                     defaulted_modules=defaulted_modules,
                     full_recompose=full_recompose,
-                    _heal_attempted=True, _recon=overrides_reconciled)
+                    _heal_attempted=True, _recon=overrides_reconciled,
+                    _atelier=atelier_meta)
         quality_report["self_healed"] = _heal_attempted
         if not quality_report["passed"]:
             logger.warning(
@@ -1464,6 +1527,16 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         # powers the "why your site looks this way" view — served by
         # GET /composer/rationale, rendered by DesignRationalePanel.tsx.
         cfg["design_rationale_id"] = dro_id
+    # Arc 8 — persist which sections went bespoke + the validated
+    # fragments themselves (html/css keyed by module) so shuffle/refresh/
+    # override re-renders reuse them without an LLM call. A full
+    # recompose that produced no bespoke output (fell back everywhere, or
+    # the atelier is disabled) clears the stored set — stale fragments
+    # must never mask a fresh composition.
+    if atelier_meta and (atelier_meta.get("fragments") or {}):
+        cfg["atelier"] = atelier_meta
+    elif full_recompose:
+        cfg.pop("atelier", None)
     # Arc 7 — persist the imagery-concept fingerprint so the NEXT full
     # recompose can tell whether the concept actually changed (and only
     # then re-roll the default slot imagery). Never clobbered by an
@@ -1495,6 +1568,8 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         result["overrides_reconciled"] = {
             "applied": overrides_reconciled.get("applied", 0),
             "stale": overrides_reconciled.get("stale", 0)}
+    if atelier_meta and (atelier_meta.get("fragments") or {}):
+        result["atelier"] = {"sections": sorted(atelier_meta["fragments"])}
     return result
 
 

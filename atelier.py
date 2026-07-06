@@ -1,0 +1,588 @@
+"""
+atelier.py — Arc 8 "THE ATELIER" — bespoke AI-written sections.
+
+Breaks the fixed-library ceiling: 2-3 sections per page (always the
+hero, plus wherever the DRO's rule-break lands) are WRITTEN by an LLM —
+the revival of the original studio_builder_agent's creativity — inside
+modern guardrails:
+
+  - ONE LLM call per section (ATELIER_MODEL, temp 0.8, 60s timeout,
+    usage-logged task='atelier'), same _call idiom as drl/passes.py.
+  - A HARD output contract (scoped .atl-{uid} CSS, --sx-* tokens only,
+    data-slot imagery, data-override-target copy paths, no scripts /
+    external URLs / fixed positioning) enforced by atelier_validator.
+  - One REPAIR attempt on validation failure, then a SILENT fallback to
+    the module-library section — quality can only go up: zero bespoke
+    sections is exactly the Arc 7 page.
+
+Integration (site_composer.render_and_persist): render_page emits
+section comment markers (<!--sx:{module}:{i}-->) when the atelier is
+active; run_atelier() replaces the marked module sections with the
+validated bespoke fragments BEFORE slot population / override
+resolution / the quality gate, so all downstream systems treat bespoke
+sections exactly like module ones. Fragments persist on
+site_config.atelier so shuffle/refresh/override re-renders REUSE them
+(no LLM); only a full recompose regenerates.
+
+Cost/time: 2-3 calls x ~8k output tokens ≈ $0.10-0.25 and ~60-90s per
+full compose — inside the compose background job's budget.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
+
+logger = logging.getLogger("atelier")
+
+ATELIER_MODEL_DEFAULT = "claude-sonnet-4-5-20250929"
+ATELIER_TEMPERATURE = 0.8          # creative latitude — the point of the atelier
+ATELIER_MAX_TOKENS = 8000
+_CALL_TIMEOUT_S = 60.0
+
+# Sections that must stay modular: their value is DATA RENDERED RIGHT
+# (live records, working forms, real product cards) — bespoke rewriting
+# risks fidelity for no aesthetic win. contact/store per the Arc 8 brief;
+# statband/showcase by the same data-dense principle.
+_NEVER_BESPOKE = frozenset({"contact", "store", "statband", "showcase"})
+
+# module id → the stable DOM id its <section> must carry (mirror of
+# site_composer._SECTION_DOM_IDS — kept local to avoid an import cycle;
+# the quality gate + header nav anchors depend on these ids).
+_SECTION_DOM_IDS = {
+    "hero": "top", "about": "about", "offerings": "offerings",
+    "testimonials": "testimonials", "gallery": "gallery", "cta": "cta",
+    "contact": "contact", "store": "store", "showcase": "showcase",
+    "statband": "stats",
+}
+
+# Which data-slot names a bespoke section of each kind may use (subset
+# of agents/slot_system SLOT_DEFINITIONS, role-matched to the section).
+ALLOWED_SLOTS: Dict[str, Tuple[str, ...]] = {
+    "hero": ("hero_main",),
+    "about": ("about_subject",),
+    "gallery": ("gallery_1", "gallery_2", "gallery_3", "gallery_4",
+                "chamber_main"),
+    "offerings": ("chamber_main",),
+    "testimonials": ("decorative_1",),
+    "cta": (),
+}
+
+# Rule-break `where` free text → module id (which section the loud
+# moment lives in). First hit wins; hero keywords intentionally absent —
+# the hero is ALWAYS bespoke already, so the break's section gets the
+# second seat.
+_WHERE_KEYWORDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("about", ("about", "story", "bio", "practice", "practitioner",
+               "portrait", "founder")),
+    ("offerings", ("offering", "service", "package", "price", "pricing",
+                   "menu")),
+    ("testimonials", ("testimonial", "quote", "proof", "review",
+                      "client words", "voices")),
+    ("gallery", ("gallery", "image", "imagery", "photo", "work",
+                 "mosaic")),
+    ("cta", ("cta", "call to action", "invitation", "book", "closing",
+             "conversion")),
+)
+
+# The complete --sx-* token contract — every variable page_shell's :root
+# defines (brand_dna.css_variables), with its role. This IS the palette
+# and type system a bespoke section may reference; anything else fails
+# validation.
+TOKEN_CONTRACT: Tuple[Tuple[str, str], ...] = (
+    ("--sx-bg", "page ground — the section's default background"),
+    ("--sx-surface", "raised surface one step off the ground (cards, panels)"),
+    ("--sx-surface-2", "second surface step (nested panels, hover grounds)"),
+    ("--sx-text", "primary text on the page ground"),
+    ("--sx-muted", "secondary/supporting text"),
+    ("--sx-accent", "THE brand accent — spend with intent (CTAs, accent words, rules)"),
+    ("--sx-accent-soft", "soft wash of the accent (tints, soft rules, gradient tails)"),
+    ("--sx-accent-strong", "deeper accent for hover/pressed states"),
+    ("--sx-on-accent", "text/icons ON an accent-filled surface"),
+    ("--sx-border", "hairlines and card borders"),
+    ("--sx-authority", "the deep authority ground (the navy chapter-break) — "
+                       "full-bleed color-block moments"),
+    ("--sx-on-authority", "text on the authority ground"),
+    ("--sx-accent-on-authority", "accent recalibrated for the authority ground"),
+    ("--sx-accent-break", "the ONE deliberately-wrong accent (rule-break only; "
+                          "may be undefined — always give a fallback: "
+                          "var(--sx-accent-break, var(--sx-accent)))"),
+    ("--sx-on-accent-break", "text on the wrong-accent (fallback var(--sx-on-accent))"),
+    ("--sx-font-heading", "display face — headings only"),
+    ("--sx-font-body", "body face"),
+    ("--sx-h1", "h1 scale (already clamp()ed)"),
+    ("--sx-h2", "h2 scale (already clamp()ed)"),
+    ("--sx-heading-weight", "display weight"),
+    ("--sx-h2-weight", "h2 weight"),
+    ("--sx-letter-tight", "negative tracking for display type"),
+    ("--sx-section-pad", "the section's vertical padding rhythm (>=120px desktop)"),
+    ("--sx-gutter", "horizontal page gutter"),
+    ("--sx-content-max", "content max-width"),
+    ("--sx-radius-card", "card corner radius"),
+    ("--sx-radius-button", "button radius (pill)"),
+    ("--sx-radius-image", "image frame radius"),
+    ("--sx-ease", "the house easing curve — use it on every transition"),
+)
+
+
+def atelier_enabled() -> bool:
+    """Env gate, default ON. ATELIER_ENABLED=0 restores the exact Arc 7
+    module-only pipeline (render_page emits no markers, no LLM calls)."""
+    return (os.environ.get("ATELIER_ENABLED") or "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def _model() -> str:
+    return (os.environ.get("ATELIER_MODEL") or "").strip() or ATELIER_MODEL_DEFAULT
+
+
+# ─── LLM plumbing (the drl/passes.py _call idiom) ─────────────────────
+
+def _client():
+    from anthropic import Anthropic
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    return (Anthropic(api_key=key, timeout=_CALL_TIMEOUT_S, max_retries=1)
+            if key else None)
+
+
+def _call_llm(system: str, user: str, business_id: str) -> Optional[str]:
+    """One bespoke-section call. Hard 60s timeout + usage logging
+    (task='atelier'). Returns the raw text or None on any failure —
+    the caller treats None as 'fall back to the module section'."""
+    client = _client()
+    if client is None:
+        logger.info("[atelier] no ANTHROPIC_API_KEY — skipping bespoke")
+        return None
+    try:
+        msg = client.messages.create(
+            model=_model(), max_tokens=ATELIER_MAX_TOKENS,
+            temperature=ATELIER_TEMPERATURE,
+            system=system, messages=[{"role": "user", "content": user}],
+            timeout=_CALL_TIMEOUT_S,
+        )
+    except Exception as e:
+        logger.warning(f"[atelier] LLM call failed for {business_id[:8]}: {e}")
+        return None
+    try:
+        from api_usage_logger import log_api_usage_sync
+        u = getattr(msg, "usage", None)
+        log_api_usage_sync(
+            endpoint="/composer/atelier", model=_model(),
+            input_tokens=getattr(u, "input_tokens", 0) or 0,
+            output_tokens=getattr(u, "output_tokens", 0) or 0,
+            business_id=business_id, task_type="atelier")
+    except Exception:
+        pass
+    return "".join(b.text for b in msg.content
+                   if getattr(b, "type", None) == "text")
+
+
+# ─── Planning ─────────────────────────────────────────────────────────
+
+def _rule_break_module(dro: Optional[Dict[str, Any]]) -> Optional[str]:
+    rb = ((dro or {}).get("decisions") or {}).get("rule_break")
+    if not isinstance(rb, dict):
+        return None
+    blob = f"{rb.get('where') or ''} {rb.get('what') or ''}".lower()
+    for mid, words in _WHERE_KEYWORDS:
+        if any(w in blob for w in words):
+            return mid
+    return None
+
+
+def plan_bespoke(dro: Optional[Dict[str, Any]], spec: List[Dict[str, Any]],
+                 ctx: Dict[str, Any]) -> List[int]:
+    """Which spec sections go bespoke. Budget: 2 sections, or 3 when the
+    DRO authored a rule_break (the extra seat pays for the loud moment).
+    ALWAYS the hero (where eyes land); then the section the rule-break
+    lives in (else 'about'); never the data-dense modular sections."""
+    by_module: Dict[str, int] = {}
+    for i, s in enumerate(spec):
+        mid = s.get("module")
+        if isinstance(mid, str) and mid not in by_module:
+            by_module[mid] = i
+
+    def eligible(mid: Optional[str]) -> bool:
+        return bool(mid) and mid in by_module and mid not in _NEVER_BESPOKE
+
+    rb = ((dro or {}).get("decisions") or {}).get("rule_break")
+    budget = 3 if isinstance(rb, dict) and (rb.get("what") or rb.get("where")) else 2
+
+    picks: List[str] = []
+    if eligible("hero"):
+        picks.append("hero")
+
+    rb_mid = _rule_break_module(dro)
+    second = rb_mid if (eligible(rb_mid) and rb_mid not in picks) else None
+    if second is None:
+        for cand in ("about", "cta"):
+            if eligible(cand) and cand not in picks:
+                second = cand
+                break
+    if second:
+        picks.append(second)
+
+    if budget >= 3 and len(picks) < 3:
+        for cand in ("about", "cta", "gallery", "testimonials", "offerings"):
+            if eligible(cand) and cand not in picks:
+                picks.append(cand)
+                break
+
+    return sorted(by_module[m] for m in picks[:budget])
+
+
+# ─── Section data (the ONLY facts the LLM may render) ─────────────────
+
+def _section_data(kind: str, section_copy: Dict[str, Any],
+                  ctx: Dict[str, Any]) -> Dict[str, Any]:
+    biz = ctx.get("business") or {}
+    bundle = ctx.get("bundle") or {}
+    b = bundle.get("business") or {}
+    intel = bundle.get("practitioner_intelligence") or {}
+    booking = ctx.get("booking") or {}
+
+    data: Dict[str, Any] = {
+        "business_name": biz.get("name") or "",
+        "business_type": biz.get("type") or "",
+        "tagline": str(b.get("tagline") or "")[:200],
+        "copy": {k: v for k, v in (section_copy or {}).items()
+                 if isinstance(v, str) and v.strip()},
+    }
+    cta_href = (booking.get("url") if booking.get("enabled") and booking.get("url")
+                else "#contact")
+    if kind in ("hero", "cta", "about", "offerings"):
+        data["cta_href"] = cta_href
+    if kind == "about":
+        about = str(intel.get("about_business") or intel.get("about_me") or "")
+        if about.strip():
+            data["about"] = about.strip()[:700]
+    if kind == "offerings":
+        data["offerings"] = [
+            {"name": o.get("name") or "",
+             "price": o.get("price"),
+             "description": str(o.get("description") or "")[:200]}
+            for o in (ctx.get("offerings") or [])[:8]]
+    if kind == "testimonials":
+        quotes = []
+        for t in (ctx.get("testimonials") or [])[:4]:
+            if isinstance(t, dict):
+                q = str(t.get("quote") or t.get("text") or t.get("content") or "").strip()
+                if q:
+                    quotes.append({"quote": q[:300],
+                                   "author": str(t.get("author_name")
+                                                 or t.get("name") or "")[:80]})
+        data["testimonials"] = quotes
+    return data
+
+
+def _allowed_hrefs(data: Dict[str, Any]) -> List[str]:
+    return [h for h in [data.get("cta_href")] if isinstance(h, str)
+            and h.startswith("http")]
+
+
+# ─── The prompt (the product) ─────────────────────────────────────────
+
+_SYSTEM_PROMPT = """You are a senior creative director and master frontend craftsperson working in a design atelier. You art-direct ONE section of a production website — not a template slot, a composition. You read a design rationale the way a designer reads a brief: you feel the tension, hear the organizing concept, and then build the moment where the visitor's eyes land.
+
+You output exactly one <section> fragment plus its CSS. The platform owns the page shell, the design tokens, the fonts, and every other section — your section must sit inside that system flawlessly while feeling unmistakably art-directed. The difference between great and mediocre is specificity: great design encodes THIS business's actual character; mediocre design fills a layout with its data.
+
+WHAT GREAT LOOKS LIKE (real reference moves — inspiration vocabulary, not a checklist):
+- A display headline anchored in the lower third of the viewport, a founder's italic quote sitting beside it — authority plus intimacy in one frame.
+- A numbered offerings list (I, II, III) with prices right-aligned in a hairline column — editorial confidence instead of three cards.
+- One accent-colored italic word inside every heading — the emotional core of the line, and the visual thread of the whole page.
+- A full-bleed color-blocked band on the authority ground as punctuation between chapters — braver than any gradient.
+- A pull-quote set oversized in the display serif italic — a magazine-spread moment inside the page.
+- Floating diamond ornaments (rotated squares) at .04-.08 opacity — depth the eye discovers, never notices.
+
+WHAT MEDIOCRE LOOKS LIKE (never do these):
+- Centered "Welcome to [Business]" + generic value prop + "Get Started".
+- A three-card grid with stock icons; "Why Choose Us" / "What Clients Say" labels.
+- Copy that could belong to any business in the category.
+
+You never invent facts, prices, testimonials or credentials. You render ONLY the data you are given, in the concept's voice."""
+
+
+def _fmt_decision(name: str, block: Any, keys: Tuple[str, ...]) -> str:
+    if not isinstance(block, dict):
+        return ""
+    bits = [f"{k}={block[k]}" for k in keys if block.get(k)]
+    because = str(block.get("because") or "").strip()
+    line = f"- {name}: " + ("; ".join(bits) if bits else "(authored)")
+    if because:
+        line += f"\n    because: {because}"
+    return line
+
+
+def _dro_block(dro: Dict[str, Any]) -> str:
+    d = (dro or {}).get("decisions") or {}
+    hero = d.get("hero_concept") or {}
+    tension = d.get("tension") or {}
+    rb = d.get("rule_break") or {}
+    fi = d.get("first_impression") or {}
+    lines = [
+        "THE DESIGN RATIONALE — this brief is the law of the page:",
+        f"- ORGANIZING CONCEPT: {hero.get('concept_statement') or '(none)'}",
+        f"    hero direction: {hero.get('direction') or ''}; "
+        f"metaphor elements: {', '.join(str(m) for m in (hero.get('metaphor_elements') or [])) or '(none)'}",
+    ]
+    if isinstance(tension, dict) and tension.get("pole_a"):
+        lines.append(f"- TENSION: '{tension.get('pole_a')}' vs "
+                     f"'{tension.get('pole_b')}' — {tension.get('expression') or ''}")
+    if isinstance(rb, dict) and (rb.get("what") or rb.get("where")):
+        lines.append(f"- THE ONE RULE-BREAK: {rb.get('what') or ''} — "
+                     f"placed at: {rb.get('where') or ''}"
+                     + (f"\n    because: {rb.get('because')}" if rb.get("because") else ""))
+    if isinstance(fi, dict) and (fi.get("feel_in_3s") or fi.get("remember")):
+        lines.append(f"- FIRST 3 SECONDS: feel = {fi.get('feel_in_3s') or ''}; "
+                     f"remember = {fi.get('remember') or ''}")
+    for name, keys in (("palette", ("base", "temperature", "accent_strategy")),
+                       ("typography", ("display_personality", "scale_contrast")),
+                       ("layout", ("symmetry", "density", "hierarchy_approach")),
+                       ("motion", ("temperature", "signature_move")),
+                       ("whitespace", ("philosophy",))):
+        row = _fmt_decision(name, d.get(name), keys)
+        if row:
+            lines.append(row)
+    notes = (d.get("voice_to_visual") or {}).get("notes")
+    if isinstance(notes, list) and notes:
+        lines.append("- voice→visual: " + "; ".join(str(n) for n in notes[:4]))
+    return "\n".join(lines)
+
+
+def _token_block() -> str:
+    return "\n".join(f"  var({name})  — {role}" for name, role in TOKEN_CONTRACT)
+
+
+def build_bespoke_prompt(kind: str, variant_hint: Optional[str], uid: str,
+                         dro: Dict[str, Any], data: Dict[str, Any],
+                         allowed_slots: Tuple[str, ...],
+                         allowed_hrefs: List[str]) -> str:
+    """The user prompt for one bespoke section — the DRO fused with the
+    original creative-director voice, the real data, the full token
+    contract, and the hard output contract the validator enforces."""
+    copy_fields = sorted((data.get("copy") or {}).keys())
+    slots_line = (", ".join(f'"{s}"' for s in allowed_slots)
+                  if allowed_slots else "(none — this section uses NO images)")
+    hrefs_line = (", ".join(allowed_hrefs) if allowed_hrefs
+                  else "(none — links may only be #anchors like #contact)")
+    dom_id = _SECTION_DOM_IDS.get(kind, kind)
+    return f"""{_dro_block(dro)}
+
+YOUR SECTION
+- Kind: "{kind}" — you are replacing the platform's modular "{kind}" section (its library variant would have been "{variant_hint or 'default'}"; transcend it, don't imitate it).
+- This section must read as ART-DIRECTED, not templated: reach for compound layouts, overlapping elements, editorial asymmetry, an oversized type moment, or a quiet ornament field — whichever serves the concept. One idea, executed completely, beats three ideas gestured at.
+
+REAL DATA (the ONLY facts you may render — every price/number/claim on screen must literally appear here):
+{json.dumps(data, indent=2, ensure_ascii=False)}
+
+TOKEN CONTRACT — the page shell defines these CSS variables; they are your entire palette and type system:
+{_token_block()}
+
+CRAFT BAR (non-negotiable):
+- One accent-colored italic word per heading: wrap it as <em class="sxm-accent-word">word</em> — the emotional core of the line.
+- Vertical generosity: the section breathes at 120px+ top/bottom on desktop (var(--sx-section-pad) or more). Cramped is cheap.
+- Gradients only ever FADE — every gradient ends in transparency or the ground it sits on; never a hard-edged band of translucent color.
+- Fluid display type via clamp(); tight negative tracking (var(--sx-letter-tight)) on display sizes.
+- Transitions use var(--sx-ease); reveals may use the shared class "sxm-reveal" (the platform's IntersectionObserver picks it up).
+- CTAs may use the shared class "sxm-cta" (pill, shimmer, working styles ship with the shell).
+
+HARD OUTPUT CONTRACT — violations are rejected by a validator:
+1. Exactly ONE root element: <section id="{dom_id}" class="atl-{uid} ...">…</section>. Nothing outside it.
+2. Every CSS selector is prefixed with .atl-{uid} (e.g. ".atl-{uid} .crest"). No bare element/class/#id selectors. @media queries allowed; @keyframes names must start with atl-{uid}.
+3. Colors ONLY: var(--sx-*), transparent, currentColor, rgba(0,0,0,X), rgba(255,255,255,X). NO hex, NO rgb()/hsl(), no named colors.
+4. Fonts ONLY var(--sx-font-heading) / var(--sx-font-body).
+5. Images ONLY as <img data-slot="…" src="" alt="specific, evocative alt"> with data-slot from: {slots_line}. Each slot at most once. The platform fills src.
+6. Every text element rendering a provided copy field carries data-override-target="{kind}/<field>" (fields provided: {', '.join(copy_fields) or '(none)'} — each must appear exactly once).
+7. Links: href is a #anchor or one of: {hrefs_line}. NO other URLs anywhere (no imports, no url(), no external anything).
+8. NO <script>, NO <style> tags in the HTML, NO inline event handlers, NO position:fixed, NO id selectors in CSS.
+9. Responsive: include at least one @media (max-width: 760px) block that keeps the composition intact on a phone.
+10. Any animation respects @media (prefers-reduced-motion: reduce).
+11. Size: HTML ≤ 14KB, CSS ≤ 10KB.
+
+OUTPUT FORMAT — exactly this, nothing else:
+<!--HTML-->
+<section id="{dom_id}" class="atl-{uid} …">…</section>
+<!--CSS-->
+.atl-{uid} {{ … }}
+…"""
+
+
+# ─── Generation ───────────────────────────────────────────────────────
+
+def _split_fragment(raw: str) -> Optional[Tuple[str, str]]:
+    """Parse the <!--HTML--> / <!--CSS--> delimited response."""
+    if not raw:
+        return None
+    try:
+        from agents.composer.hero_composer import _strip_code_fence
+        raw = _strip_code_fence(raw)
+    except Exception:
+        pass
+    m = re.search(r"<!--HTML-->(.*?)<!--CSS-->(.*)$", raw, re.DOTALL)
+    if not m:
+        return None
+    html, css = m.group(1).strip(), m.group(2).strip()
+    if not html or not css:
+        return None
+    return html, css
+
+
+def generate_bespoke_section(kind: str, variant_hint: Optional[str],
+                             dro: Dict[str, Any], ctx: Dict[str, Any],
+                             section_copy: Dict[str, Any],
+                             business_id: str = "") -> Optional[Tuple[str, str]]:
+    """One bespoke section: ONE LLM call, deterministic validation, one
+    repair attempt, else None (caller keeps the module section)."""
+    import atelier_validator
+
+    uid = uuid4().hex[:8]
+    data = _section_data(kind, section_copy, ctx)
+    allowed_slots = ALLOWED_SLOTS.get(kind, ())
+    allowed_hrefs = _allowed_hrefs(data)
+    required_targets = [f for f, v in (data.get("copy") or {}).items()
+                        if str(v or "").strip()]
+    prompt = build_bespoke_prompt(kind, variant_hint, uid, dro, data,
+                                  allowed_slots, allowed_hrefs)
+
+    def _attempt(extra: str = "") -> Tuple[Optional[Tuple[str, str]], List[str]]:
+        raw = _call_llm(_SYSTEM_PROMPT, prompt + extra, business_id or "unknown")
+        if raw is None:
+            return None, ["LLM call failed"]
+        frag = _split_fragment(raw)
+        if frag is None:
+            return None, ["response missing <!--HTML--> / <!--CSS--> delimiters "
+                          "or an empty part"]
+        ok, problems = atelier_validator.validate_fragment(
+            frag[0], frag[1], uid=uid, kind=kind, data=data,
+            allowed_slots=allowed_slots, required_targets=required_targets,
+            allowed_hrefs=allowed_hrefs)
+        return (frag if ok else None), problems
+
+    frag, problems = _attempt()
+    if frag is None and problems:
+        repair = ("\n\nYOUR PREVIOUS OUTPUT FAILED VALIDATION. Problems:\n- "
+                  + "\n- ".join(problems[:12])
+                  + "\n\nFix EVERY problem. Re-read the HARD OUTPUT CONTRACT. "
+                    "Output ONLY the <!--HTML--> / <!--CSS--> fragment.")
+        frag, problems = _attempt(repair)
+    if frag is None:
+        logger.warning(f"[atelier] fell back: {kind} for "
+                       f"{(business_id or 'unknown')[:8]} — {problems[:6]}")
+        return None
+    logger.info(f"[atelier] bespoke '{kind}' accepted for "
+                f"{(business_id or 'unknown')[:8]} (uid atl-{uid}, "
+                f"html {len(frag[0])}B css {len(frag[1])}B)")
+    return frag
+
+
+# ─── Assembly: marker-based replacement ───────────────────────────────
+
+def _stamp_dom_id(fragment_html: str, kind: str) -> str:
+    """Guarantee the root <section> carries the module's stable DOM id
+    (header nav anchors + the quality gate's sections_rendered check)."""
+    dom_id = _SECTION_DOM_IDS.get(kind)
+    if not dom_id:
+        return fragment_html
+    m = re.search(r"<section\b[^>]*>", fragment_html)
+    if not m or re.search(r"\bid\s*=", m.group(0)):
+        return fragment_html
+    return (fragment_html[:m.start()]
+            + m.group(0)[:-1].rstrip() + f' id="{dom_id}">'
+            + fragment_html[m.end():])
+
+
+def replace_sections(html: str, fragments: Dict[str, Dict[str, Any]]
+                     ) -> Tuple[str, List[str]]:
+    """Swap each marked module section (<!--sx:{module}:{i}--> … end
+    marker) for its bespoke fragment. Returns (html, replaced_modules).
+    Fragments whose marker is absent are skipped silently (e.g. the
+    section was legitimately dropped this render)."""
+    replaced: List[str] = []
+    for mid, frag in fragments.items():
+        f_html = str((frag or {}).get("html") or "")
+        if not f_html.strip():
+            continue
+        stamped = _stamp_dom_id(f_html, mid)
+        pattern = re.compile(
+            rf"<!--sx:{re.escape(mid)}:(\d+)-->.*?<!--/sx:{re.escape(mid)}:\1-->",
+            re.DOTALL)
+        new_html, n = pattern.subn(
+            lambda m: f"<!--sx:{mid}:{m.group(1)}-->{stamped}<!--/sx:{mid}:{m.group(1)}-->",
+            html, count=1)
+        if n:
+            html = new_html
+            replaced.append(mid)
+    return html, replaced
+
+
+def _inject_css(html: str, css: str) -> str:
+    """Bespoke CSS rides its own <style id="sx-atelier"> appended after
+    the shell's module <style> (page_shell untouched; later rules win
+    the cascade at equal specificity, and .atl- scoping wins anyway)."""
+    block = f'<style id="sx-atelier">\n{css}\n</style>'
+    if "</head>" in html:
+        return html.replace("</head>", block + "\n</head>", 1)
+    return html + block
+
+
+def run_atelier(html: str, spec: List[Dict[str, Any]], ctx: Dict[str, Any],
+                dro: Optional[Dict[str, Any]], business_id: str, *,
+                regenerate: bool,
+                stored: Optional[Dict[str, Any]] = None,
+                precomputed: Optional[Dict[str, Any]] = None,
+                ) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """The render_and_persist hook. Three modes:
+      precomputed — the self-heal re-render reuses the fragments the
+                    first pass already generated (never pay twice);
+      regenerate  — full recompose: plan + generate + validate;
+      else        — shuffle/refresh/override re-render: reuse the
+                    fragments persisted on site_config.atelier.
+    Returns (html, atelier_meta|None). Fail-soft: any failure returns
+    the input html — exactly the Arc 7 module page."""
+    if precomputed and (precomputed.get("fragments") or {}):
+        meta = precomputed
+    elif regenerate:
+        if not dro:
+            return html, None
+        picks = plan_bespoke(dro, spec, ctx)
+        fragments: Dict[str, Dict[str, Any]] = {}
+        for i in picks:
+            sec = spec[i] if 0 <= i < len(spec) else {}
+            mid = sec.get("module")
+            if not mid:
+                continue
+            out = generate_bespoke_section(
+                mid, sec.get("variant"), dro, ctx,
+                sec.get("content") or {}, business_id=business_id)
+            if out:
+                fragments[mid] = {"html": out[0], "css": out[1],
+                                  "index": i, "variant": sec.get("variant")}
+        if not fragments:
+            return html, None
+        meta = {
+            "sections": [{"index": f["index"], "module": m}
+                         for m, f in fragments.items()],
+            "model": _model(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "fragments": fragments,
+        }
+    else:
+        meta = stored if isinstance(stored, dict) else {}
+        if not (meta.get("fragments") or {}):
+            return html, None
+
+    fragments = {m: f for m, f in (meta.get("fragments") or {}).items()
+                 if isinstance(f, dict)}
+    new_html, replaced = replace_sections(html, fragments)
+    if not replaced:
+        return html, None
+    css = "\n\n".join(str(fragments[m].get("css") or "") for m in replaced)
+    new_html = _inject_css(new_html, css)
+    logger.info(f"[atelier] {'generated' if regenerate else 'reused'} "
+                f"{len(replaced)} bespoke section(s) for {business_id[:8]}: "
+                f"{replaced}")
+    return new_html, meta

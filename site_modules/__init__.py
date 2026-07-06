@@ -142,14 +142,20 @@ MODULES: Dict[str, Dict[str, Any]] = {
 
 
 def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
-                title: str) -> str:
+                title: str, fragment_markers: bool = False) -> str:
     """sections = [{module, variant, content}] → full HTML document.
     Unknown modules/variants soft-fail to defaults; CSS is emitted once
     per module id regardless of how often it appears.
 
     The header/nav is STRUCTURAL chrome (Arc 1 'Wear the Brand'): it is
     not in MODULES (never LLM-choosable) and always renders first, built
-    from the sections that actually produced HTML."""
+    from the sections that actually produced HTML.
+
+    fragment_markers (Arc 8 "The Atelier"): wrap each rendered section
+    in <!--sx:{module}:{i}--> … <!--/sx:{module}:{i}--> comments so the
+    bespoke-section engine (atelier.py) can replace individual sections
+    post-assembly. Default OFF — the emitted document is byte-identical
+    to before when the atelier is disabled."""
     body_parts: List[str] = []
     css_parts: List[str] = []
     seen_css = set()
@@ -165,6 +171,9 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
         html, css = spec["render"](variant, sec.get("content") or {}, ctx)
         if not html:
             continue
+        if fragment_markers:
+            i = len(body_parts)
+            html = f"<!--sx:{mid}:{i}-->{html}<!--/sx:{mid}:{i}-->"
         body_parts.append(html)
         rendered_ids.append(mid)
         key = f"{mid}:{variant}"
