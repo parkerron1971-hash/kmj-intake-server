@@ -96,6 +96,18 @@ CONTINUITY_HOURS = 72
 
 # ─── Outbound (single seam for auto-replies + broadcast) ──────────────
 
+# The canonical web-form opt-in confirmation. This exact text appears in
+# THREE places that must always match: here, the /sms page bubble
+# (legal_content.render_sms_page_html), and the A2P campaign
+# registration's "opt-in message" field. Change one → change all three.
+WEB_OPTIN_CONFIRMATION = (
+    "Solutionist System: You're signed up for texts — booking "
+    "confirmations, reminders, account updates & support replies. "
+    "Msg frequency varies. Msg & data rates may apply. "
+    "Reply HELP for help, STOP to opt out."
+)
+
+
 async def _send_platform_sms(to_number: str, body: str) -> str:
     """Send one SMS as the platform brand. Returns provider message id
     ('' on providers without one). Twilio Messaging Service when
@@ -358,6 +370,17 @@ async def sms_opt_in(body: OptInBody):
             logger.warning("[ROUTE] consent insert failed — sms-consents migration applied?")
             return JSONResponse({"error": "Could not save right now — please try again later."}, 502)
     logger.info(f"[ROUTE] web-form consent recorded for {phone}")
+    # Send the opt-in confirmation the A2P campaign promises. Verbatim
+    # match with (a) the /sms page's "What you'll receive" bubble and
+    # (b) the campaign registration's "opt-in message" field — a
+    # reviewer WILL sign up with a test number and expect this text.
+    # Best-effort: consent is already recorded; a send failure must not
+    # fail the signup.
+    try:
+        await _send_platform_sms(phone, WEB_OPTIN_CONFIRMATION)
+        logger.info(f"[ROUTE] web opt-in confirmation sent to {phone}")
+    except Exception as e:
+        logger.warning(f"[ROUTE] web opt-in confirmation send failed for {phone}: {e}")
     return {"ok": True}
 
 

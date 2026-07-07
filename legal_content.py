@@ -651,7 +651,8 @@ business&rsquo;s keyword to our number.</p>
     <input id="sms-consent" name="consent" type="checkbox" style="margin-top:3px;flex-shrink:0;">
     <span>By checking this box, I agree to receive recurring SMS messages from
     <strong style="color:var(--text-primary);">The Solutionist System</strong> (booking confirmations,
-    appointment reminders, account notifications, and support replies). Consent is not a
+    appointment reminders, account notifications, support replies, and occasional updates or
+    offers from businesses I&rsquo;m connected with). Consent is not a
     condition of any purchase. Message frequency varies. Message and data rates may apply.
     Reply <strong>STOP</strong> to opt out at any time, or <strong>HELP</strong> for help.
     See our <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Service</a>.</span>
@@ -666,8 +667,9 @@ business&rsquo;s keyword to our number.</p>
 <h2>What you&rsquo;ll receive when you sign up</h2>
 <p>After you opt in, we send one confirmation message. It looks exactly like this:</p>
 <div style="margin:10px 0 4px;padding:13px 16px;border-radius:14px;border:1px solid var(--line);background:var(--panel);font-size:13.5px;line-height:1.55;max-width:430px;">
-  Solutionist System: You&rsquo;re now connected with [Business Name]. Msg frequency varies.
-  Msg &amp; data rates may apply. Reply HELP for help, STOP to opt out.
+  Solutionist System: You&rsquo;re signed up for texts &mdash; booking confirmations, reminders,
+  account updates &amp; support replies. Msg frequency varies. Msg &amp; data rates may apply.
+  Reply HELP for help, STOP to opt out.
 </div>
 <p style="font-size:12.5px;">Ongoing messages are things like booking confirmations, appointment
 reminders, account notifications, and replies to your questions. Reply <strong>STOP</strong> at any
@@ -676,7 +678,7 @@ time and messaging ends immediately; reply <strong>HELP</strong> for help.</p>
 <h2>Or text a keyword</h2>
 <p>Each business on our platform has its own keyword. Text that keyword to our number and
 you&rsquo;ll be connected with them &mdash; texting the keyword is your opt-in, and we&rsquo;ll
-confirm with the same message shown above.</p>
+confirm with a message naming that business, with the same HELP and STOP options.</p>
 
 <h2>The fine print</h2>
 <ul>
