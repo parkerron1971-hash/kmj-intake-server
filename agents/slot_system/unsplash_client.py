@@ -43,6 +43,7 @@ def query_unsplash(
     min_width: int = 1200,
     min_relevance_score: float = 0.5,
     result_index: int = 0,
+    palette: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Query Unsplash for the most relevant photo matching the query.
 
@@ -60,6 +61,14 @@ def query_unsplash(
     list across rerolls (per_page=10 lets us reroll up to 9 times on
     the same query before paginating). When result_index exceeds the
     qualifying-results length, the function returns None.
+
+    `palette` (site Arc 9) — the EMITTED site palette ({bg, accent} hex).
+    When given, each of the top _CLASH_TOP_N qualifying results is
+    checked against Unsplash's per-photo dominant `color`: a saturated
+    photo whose hue sits far from BOTH the bg and the accent hue is a
+    palette clash and is skipped in favor of the next result. When every
+    top candidate clashes, the original ordering is kept (a clashing
+    photo beats no photo) and the all-clash is logged.
 
     Returns None when:
       - UNSPLASH_ACCESS_KEY is not set
@@ -122,17 +131,33 @@ def query_unsplash(
         )
         return None
 
+    # Site Arc 9 — palette-clash rejection: drop top-N candidates whose
+    # dominant color fights the emitted palette (the live autopsy's
+    # warm-sunlit airplane on a dark/green site). Soft: if EVERY top
+    # candidate clashes, keep the original ordering.
+    pool = qualified
+    if palette:
+        keep = [r for r in qualified[:_CLASH_TOP_N]
+                if not _clashes_with_palette(r.get("color"), palette)]
+        if keep:
+            pool = keep + qualified[_CLASH_TOP_N:]
+        else:
+            logger.info(
+                f"[unsplash] all top-{min(_CLASH_TOP_N, len(qualified))} "
+                f"results clash with the palette for query={q!r}; keeping "
+                "relevance order")
+
     # Honor result_index for reroll variety. Clamp to non-negative;
     # return None when the index runs past the qualifying list (caller
     # interprets as 'no more variety on this query').
     idx = max(0, int(result_index or 0))
-    if idx >= len(qualified):
+    if idx >= len(pool):
         logger.info(
             f"[unsplash] result_index={idx} exceeds qualifying count "
-            f"{len(qualified)} for query={q!r}"
+            f"{len(pool)} for query={q!r}"
         )
         return None
-    top = qualified[idx]
+    top = pool[idx]
     rank = results.index(top) if top in results else idx
     # Synthetic relevance score: rank-derived, in [0, 1]. 1.0 means top
     # of the unfiltered list. Lets future code threshold on it without
@@ -160,6 +185,52 @@ def query_unsplash(
         "relevance_score": synthetic_relevance,
         "unsplash_id": top.get("id"),
     }
+
+
+# ─── Palette-clash math (site Arc 9) ─────────────────────────────────
+
+_CLASH_TOP_N = 6          # candidates examined for a non-clashing pick
+_CLASH_HUE_DEG = 75.0     # min hue distance (deg) from BOTH anchors = clash
+_CLASH_SAT_MIN = 0.35     # photos below this HSV saturation never clash
+_ANCHOR_SAT_MIN = 0.15    # near-neutral palette anchors constrain nothing
+
+
+def _hue_sat(hex_color: Any) -> Optional[tuple]:
+    """(hue degrees 0-360, HSV saturation) or None if unparseable."""
+    import colorsys
+    s = str(hex_color or "").strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join(c * 2 for c in s)
+    if len(s) != 6:
+        return None
+    try:
+        r, g, b = (int(s[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    except ValueError:
+        return None
+    h, sat, _v = colorsys.rgb_to_hsv(r, g, b)
+    return h * 360.0, sat
+
+
+def _hue_dist(a: float, b: float) -> float:
+    d = abs(a - b) % 360.0
+    return min(d, 360.0 - d)
+
+
+def _clashes_with_palette(candidate_hex: Any,
+                          palette: Optional[Dict[str, Any]]) -> bool:
+    """True when the photo's dominant color is saturated AND its hue is
+    far (> _CLASH_HUE_DEG) from every saturated palette anchor (bg +
+    accent). Neutral photos never clash; neutral anchors (a near-black
+    bg has no meaningful hue) don't constrain."""
+    cand = _hue_sat(candidate_hex)
+    if not cand or cand[1] < _CLASH_SAT_MIN:
+        return False
+    dists = []
+    for key in ("bg", "accent"):
+        anchor = _hue_sat((palette or {}).get(key))
+        if anchor and anchor[1] >= _ANCHOR_SAT_MIN:
+            dists.append(_hue_dist(cand[0], anchor[0]))
+    return bool(dists) and all(d > _CLASH_HUE_DEG for d in dists)
 
 
 # ─── Query composition ───────────────────────────────────────────────
@@ -347,6 +418,77 @@ def _clean_concept_keywords(raw: Any) -> list:
     return out
 
 
+# ─── Metaphor guard (site Arc 9) ─────────────────────────────────────
+# DRO metaphor keywords are DESIGN language, not photo subjects — the
+# live autopsy's hero was an AIRPLANE fetched by 'ascending planes'.
+# Concrete-safe nouns (things a stock photo of IS the intended image)
+# pass through; everything else gets an 'abstract ' prefix so Unsplash
+# reads it as a treatment, not a subject. Polysemy landmines (metaphor
+# words whose top Unsplash hit is a vehicle/animal) are NEVER
+# concrete-safe — the prefix is forced.
+
+_CONCRETE_SAFE = frozenset({
+    "chair", "plant", "plants", "coffee", "tools", "hands", "storefront",
+    "desk", "book", "books", "window", "door", "table", "kitchen",
+    "garden", "flower", "flowers", "leaf", "leaves", "wood", "stone",
+    "brick", "fabric", "thread", "scissors", "mirror", "candle", "lamp",
+    "clock", "map", "camera", "guitar", "piano", "paint", "brush",
+    "canvas", "clay", "pottery", "bread", "fruit", "tea", "cup", "glass",
+    "bottle", "paper", "pen", "ink", "mountain", "ocean", "forest",
+    "river", "street", "skyline", "sunrise", "sunset", "workshop",
+})
+
+_POLYSEMY_LANDMINES = frozenset({
+    "plane", "planes", "jet", "jets", "crane", "cranes", "ram", "rams",
+    "jaguar", "jaguars", "puma", "pumas", "mustang", "mustangs",
+    "beetle", "beetles", "cricket", "crickets", "hawk", "hawks",
+    "bat", "bats",
+})
+
+
+def _guard_concept_keyword(term: str) -> str:
+    """'ascending planes' → 'abstract ascending planes'; 'coffee' →
+    'coffee'. Empty stays empty."""
+    words = [w for w in str(term or "").split() if w]
+    if not words:
+        return ""
+    if (all(w in _CONCRETE_SAFE for w in words)
+            and not any(w in _POLYSEMY_LANDMINES for w in words)):
+        return " ".join(words)
+    return "abstract " + " ".join(words)
+
+
+def _palette_mood(palette: Optional[Dict[str, Any]]) -> str:
+    """Mood term from the EMITTED palette (bg luminance + accent hue) —
+    the page's actual atmosphere, not the DRO's adjectives (the live
+    autopsy fetched 'warm sunlit' imagery for a dark/green site).
+    Returns '' when no usable palette is present (caller falls back to
+    the DRO-word mood)."""
+    pal = palette if isinstance(palette, dict) else {}
+    bg = _hue_sat(pal.get("bg"))
+    if bg is None:
+        return ""
+    mode = str(pal.get("mode") or "").lower()
+    try:
+        from brand_dna import _luminance
+        dark = _luminance(str(pal.get("bg"))) < 0.35
+    except Exception:
+        dark = mode == "dark" if mode in ("dark", "light") else None
+    if dark is None:
+        return ""
+    accent = _hue_sat(pal.get("accent"))
+    deg, sat = accent if accent else (0.0, 0.0)
+    if dark:
+        if sat >= 0.25 and 10.0 <= deg <= 70.0:
+            return "warm candlelit"
+        return "moody dark"
+    if sat >= 0.25 and 80.0 <= deg <= 170.0:
+        return "fresh mint"
+    if sat >= 0.25 and deg <= 60.0:
+        return "warm sunlit"
+    return "bright airy"
+
+
 def build_unsplash_query(
     slot_name: str,
     enriched_brief: Optional[Dict[str, Any]],
@@ -384,13 +526,17 @@ def build_unsplash_query(
     archetype = str(enriched_brief.get("content_archetype") or "")
 
     subject = _extract_subject(business_name, description, archetype)
-    mood = _extract_mood(enriched_brief, designer_pick)
+    # Site Arc 9: mood follows the EMITTED palette when the brief carries
+    # one; the DRO-adjective mood is the fallback only.
+    mood = (_palette_mood(enriched_brief.get("palette"))
+            or _extract_mood(enriched_brief, designer_pick))
 
     concept_kws = _clean_concept_keywords(enriched_brief.get("concept_keywords"))
     if concept_kws and slot_name in _CONCEPT_SLOT_ROTATION:
-        kw = concept_kws[_CONCEPT_SLOT_ROTATION[slot_name] % len(concept_kws)]
+        kw = _guard_concept_keyword(
+            concept_kws[_CONCEPT_SLOT_ROTATION[slot_name] % len(concept_kws)])
         # Keep the total at 3–6 words (Unsplash relevance sweet spot):
-        # subject (1–2) + concept keyword (1–2) + mood (1–2).
+        # subject (1–2) + guarded concept keyword (1–3) + mood (1–2).
         words = f"{subject} {kw} {mood}".split()
         return " ".join(dict.fromkeys(words))[:100].strip()
 

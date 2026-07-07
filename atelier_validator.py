@@ -347,7 +347,13 @@ def validate_fragment(html: str, css: str, *, uid: str, kind: str,
     if p.headings < 1:
         problems.append("no heading (h1-h3) in the section")
 
-    # 12 — DATA FIDELITY: every rendered digit-run must exist in the data
+    # 12 — DATA FIDELITY: every rendered digit-run must exist in the data.
+    # Site Arc 9 DATA DIGNITY note: the rule is one-directional (rendered
+    # digits ⊆ data), so the literal string "Free" standing in for a
+    # data price of 0 is PERMITTED by construction — "Free" carries no
+    # digit run, and prompt clause DATA DIGNITY requires it. Do not
+    # tighten this into a bidirectional check without exempting
+    # Free-for-0.
     data_digits = set(_DIGIT_RUN_RE.findall(
         json.dumps(data or {}, ensure_ascii=False)))
     for run in _visible_digit_runs(p.text_parts):

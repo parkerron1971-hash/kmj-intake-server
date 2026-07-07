@@ -201,6 +201,16 @@ def populate_slots_for_site(
                             orientation = "portrait"
                     except (ValueError, AttributeError):
                         pass
+                # Site Arc 9: hero_main follows the RENDERED hero variant,
+                # not the generic 16:9 slot definition — editorial/split
+                # crop the image 4:5 (a landscape retrieval loses its
+                # subject), cinematic/banner are true full-bleeds.
+                if slot_name == "hero_main":
+                    hv = str(enriched_brief.get("hero_variant") or "")
+                    if hv in ("editorial", "split"):
+                        orientation = "portrait"
+                    elif hv in ("cinematic", "banner"):
+                        orientation = "landscape"
                 min_w = (defn.get("min_dimensions") or {}).get("width", 1200)
                 query = build_unsplash_query(
                     slot_name=slot_name,
@@ -212,6 +222,9 @@ def populate_slots_for_site(
                     query=query,
                     orientation=orientation,
                     min_width=min_w,
+                    # Site Arc 9: emitted palette → dominant-color clash
+                    # rejection inside query_unsplash.
+                    palette=enriched_brief.get("palette"),
                 )
             except Exception as e:
                 warnings.append(

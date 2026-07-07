@@ -1,14 +1,50 @@
 """Store module — features up to 3 REAL sellable offerings (from ctx,
 never invented) with a CTA to the hosted store page. Renders nothing
 when the business has no sellable products. Content: eyebrow, headline,
-intro, cta_label."""
+intro, cta_label.
+
+Site Arc 9 (data dignity): the whole section is SUPPRESSED until at
+least _MIN_REAL_PRODUCTS products carry a real image AND a real price
+(>= $_MIN_REAL_PRICE) — a one-test-product store destroys trust."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Tuple
 
 from ._base import safe, safe_url, ov, eyebrow, heading_accent, accent_headline
 
+logger = logging.getLogger(__name__)
+
 VARIANTS = ("featured",)
+
+_MIN_REAL_PRODUCTS = 2
+_MIN_REAL_PRICE = 5.0
+
+
+def _real_items(store: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Products with a real image AND a real (>= $5) price — the trust
+    threshold the section suppression counts."""
+    out: List[Dict[str, Any]] = []
+    for o in (store.get("items") or []):
+        if not isinstance(o, dict):
+            continue
+        has_img = str(o.get("image_url") or "").startswith("http")
+        try:
+            price = float(o.get("current_price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        if has_img and price >= _MIN_REAL_PRICE:
+            out.append(o)
+    return out
+
+
+def store_would_render(ctx: Dict[str, Any]) -> bool:
+    """Would the store section actually render for this ctx? Public so
+    offerings can decide whether store-catalog items should be excluded
+    from its own list (only when BOTH would show the same item)."""
+    store = ctx.get("store") or {}
+    return bool(store.get("enabled") and store.get("url")
+                and len(_real_items(store)) >= _MIN_REAL_PRODUCTS)
 
 
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
@@ -17,6 +53,13 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     items: List[Dict[str, Any]] = (store.get("items") or [])[:3]
     url = store.get("url") or ""
     if not store.get("enabled") or not items or not url:
+        return "", ""
+    real = _real_items(store)
+    if len(real) < _MIN_REAL_PRODUCTS:
+        logger.info(
+            f"[store] section suppressed: {len(real)} product(s) with a real "
+            f"image + real price (>= ${_MIN_REAL_PRICE:.0f}); need "
+            f"{_MIN_REAL_PRODUCTS}")
         return "", ""
 
     eb = eyebrow("store", content.get("eyebrow") or "The shop")
@@ -63,7 +106,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-store-card { display: block; background: var(--sx-surface); border: 1px solid var(--sx-border);
   border-radius: var(--sx-radius-card); overflow: hidden; color: var(--sx-text); }
 .sxm-store-img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; }
-.sxm-store-img-ph { background: linear-gradient(135deg, var(--sx-accent-soft), var(--sx-surface-2)); }
+.sxm-store-img-ph { background: linear-gradient(135deg, var(--sx-surface-2), var(--sx-surface)); }
 .sxm-store-meta { display: flex; justify-content: space-between; gap: 10px; padding: 14px 16px; font-weight: 600; }
 .sxm-store-price { color: var(--sx-accent); font-weight: 700; white-space: nowrap; }
 .sxm-store-cta { margin-top: 30px; }"""

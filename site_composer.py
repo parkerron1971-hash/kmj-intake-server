@@ -423,6 +423,34 @@ def gather_context(business_id: str) -> Dict[str, Any]:
 
 # ─── Spec validation ─────────────────────────────────────────────────
 
+# Site Arc 9 — LLM markdown leaking into HTML: the live h1 rendered
+# literal asterisks ('amplify your *impact*'). Spec copy is plain text;
+# emphasis is the renderer's job (accent_headline). Strip *em*, **bold**,
+# _em_, __bold__ and `code` wrappers everywhere, keeping the inner text.
+_MD_STAR_RE = re.compile(r"\*{1,3}([^*\n]+)\*{1,3}")
+_MD_UNDER_RE = re.compile(r"(?<![A-Za-z0-9])_{1,2}([^_\n]+)_{1,2}(?![A-Za-z0-9])")
+_MD_TICK_RE = re.compile(r"`+([^`\n]+)`+")
+
+
+def _strip_markdown_text(s: str) -> str:
+    out = _MD_STAR_RE.sub(r"\1", s)
+    out = _MD_UNDER_RE.sub(r"\1", out)
+    out = _MD_TICK_RE.sub(r"\1", out)
+    return out
+
+
+def _strip_markdown_deep(value: Any) -> Any:
+    """Recursively strip markdown emphasis from every string in a spec
+    payload (dicts/lists walked; non-strings untouched)."""
+    if isinstance(value, str):
+        return _strip_markdown_text(value)
+    if isinstance(value, list):
+        return [_strip_markdown_deep(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _strip_markdown_deep(v) for k, v in value.items()}
+    return value
+
+
 def sanitize_spec(raw: Any, ctx: Dict[str, Any],
                   mark_defaults: bool = False) -> List[Dict[str, Any]]:
     """Clamp an LLM (or stored) spec to the module registry: known
@@ -436,6 +464,9 @@ def sanitize_spec(raw: Any, ctx: Dict[str, Any],
     anything is persisted. Stored-spec re-sanitizes (shuffle/refresh)
     keep the default False and are byte-identical to before."""
     sections_in = (raw or {}).get("sections") if isinstance(raw, dict) else raw
+    # Site Arc 9 — markdown emphasis never reaches the HTML (recursive,
+    # every string field in the spec).
+    sections_in = _strip_markdown_deep(sections_in)
     out: List[Dict[str, Any]] = []
     seen = set()
     for sec in (sections_in or []):
@@ -841,11 +872,18 @@ _CONCEPT_STOP = {"the", "a", "an", "and", "or", "of", "for", "with", "that",
                  "feels", "feel", "where", "when", "every", "into"}
 
 
-def _dro_slot_brief(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _dro_slot_brief(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]],
+                    spec: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Distill the DRO (+ business specifics) into the enriched_brief shape
     the slot pipeline's query/prompt composers already consume — so hero/
     atmosphere/gallery imagery derives from the DESIGN CONCEPT instead of
-    a generic '{subject} interior {mood}' stock query. Pure composition."""
+    a generic '{subject} interior {mood}' stock query. Pure composition.
+
+    Site Arc 9: also carries the EMITTED palette (bg/accent/mode — mood +
+    clash-rejection derive from the page's actual atmosphere, not DRO
+    adjectives) and the rendered hero variant from `spec` (hero_main
+    orientation follows the rendered crop, not the generic 16:9 slot).
+    Neither key participates in _slot_concept_fingerprint."""
     biz = ctx.get("business") or {}
     d = ((dro or {}).get("decisions") or {})
     hero = d.get("hero_concept") or {}
@@ -869,12 +907,22 @@ def _dro_slot_brief(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]]) -> Dict[
         str((d.get("whitespace") or {}).get("philosophy") or ""),
         str((ctx.get("dna") or {}).get("vibe") or ""),
     ]
-    return {
+    brief: Dict[str, Any] = {
         "inferred_vibe": " ".join(b for b in vibe_bits if b).strip(),
         "brand_metaphor": concept,
         "content_archetype": str(biz.get("type") or ""),
         "concept_keywords": keywords,
     }
+    pal = (ctx.get("dna") or {}).get("palette") or {}
+    if pal.get("bg"):
+        brief["palette"] = {"bg": pal.get("bg"), "accent": pal.get("accent"),
+                            "mode": pal.get("mode")}
+    hero_variant = next((s.get("variant") for s in (spec or [])
+                         if isinstance(s, dict) and s.get("module") == "hero"),
+                        None)
+    if hero_variant:
+        brief["hero_variant"] = str(hero_variant)
+    return brief
 
 
 def _slot_concept_fingerprint(slot_brief: Optional[Dict[str, Any]]) -> str:
@@ -1380,7 +1428,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     # budget caps still apply inside the pipeline, and the self-heal
     # recursion never re-rolls twice (slots persisted on the first pass).
     slots_meta: Dict[str, Any] = {}
-    slot_brief = _dro_slot_brief(ctx, dro)
+    slot_brief = _dro_slot_brief(ctx, dro, spec)
     new_concept_fp = _slot_concept_fingerprint(slot_brief)
     stored_concept_fp = str((((site or {}).get("site_config")) or {})
                             .get("slot_concept") or "")

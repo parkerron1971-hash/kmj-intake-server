@@ -1,9 +1,15 @@
 """Offerings module — renders REAL offerings rows from ctx (never
 invented by the LLM). Content: eyebrow, headline, intro. Variants:
 cards, list. Prices honor show_price_to_customer; the per-offering Book
-CTA appears only when booking is actually enabled — function first."""
+CTA appears only when booking is actually enabled — function first.
+
+Site Arc 9 (data dignity): $0 renders 'Free'; sub-$5 prices (test /
+placeholder-grade data) render NO price line; rows deduped by
+normalized title; items the store section already shows are excluded;
+the featured card's foot is never empty."""
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Tuple
 
 from ._base import safe, safe_url, ov, eyebrow, heading_accent, accent_headline
@@ -11,6 +17,11 @@ from ._base import safe, safe_url, ov, eyebrow, heading_accent, accent_headline
 VARIANTS = ("cards", "list", "featured")
 
 _MAX_ITEMS = 9
+_MIN_DIGNIFIED_PRICE = 5.0    # under this, the price line is test-data noise
+
+
+def _norm_title(name: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(name or "").lower()).strip()
 
 
 def _price(o: Dict[str, Any]) -> str:
@@ -23,6 +34,11 @@ def _price(o: Dict[str, Any]) -> str:
         val = float(p)
     except (TypeError, ValueError):
         return ""
+    if val == 0:
+        # A deliberate free offering reads as generosity, not $0.
+        return '<div class="sxm-off-price">Free</div>'
+    if 0 < val < _MIN_DIGNIFIED_PRICE:
+        return ""  # placeholder-grade price — no price line at all
     cur = (o.get("currency") or "usd").upper()
     sym = "$" if cur == "USD" else f"{cur} "
     txt = f"{sym}{val:,.0f}" if val == int(val) else f"{sym}{val:,.2f}"
@@ -38,7 +54,30 @@ def _duration(o: Dict[str, Any]) -> str:
 
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
     dna = ctx["dna"]
-    rows: List[Dict[str, Any]] = [o for o in (ctx.get("offerings") or []) if o.get("name")][:_MAX_ITEMS]
+    # Site Arc 9: dedupe by normalized title (the live page listed the
+    # featured item again as row 02) and exclude items the STORE section
+    # will already show — but only when the store actually renders, so an
+    # item never vanishes from both sections.
+    store_names: set = set()
+    try:
+        from .store import store_would_render
+        if store_would_render(ctx):
+            store_names = {_norm_title(i.get("name"))
+                           for i in ((ctx.get("store") or {}).get("items") or [])
+                           if isinstance(i, dict) and i.get("name")}
+    except Exception:
+        pass
+    rows: List[Dict[str, Any]] = []
+    seen_titles: set = set()
+    for o in (ctx.get("offerings") or []):
+        if not o.get("name"):
+            continue
+        key = _norm_title(o["name"])
+        if not key or key in seen_titles or key in store_names:
+            continue
+        seen_titles.add(key)
+        rows.append(o)
+    rows = rows[:_MAX_ITEMS]
     if not rows:
         return "", ""  # no real offerings → no section; nothing is invented
 
@@ -61,6 +100,12 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
         # invented data.
         feature, rest = rows[0], rows[1:]
         f_cta = (f'<a class="sxm-off-book" href="{book_href}">Book</a>' if book_href else "")
+        # Site Arc 9: the flagship card's foot is never empty — when no
+        # booking CTA exists and the price line was suppressed, fall back
+        # to the contact anchor (a premium layout with a blank action
+        # area reads as broken).
+        if not f_cta and not _price(feature):
+            f_cta = '<a class="sxm-off-book" href="#contact">Get in touch</a>'
         f_desc = safe(feature.get("description") or "")
         f_desc_html = f'<p class="sxm-off-desc sxm-muted">{f_desc}</p>' if f_desc else ""
         rows_html = []
