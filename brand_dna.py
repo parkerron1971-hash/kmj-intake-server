@@ -327,17 +327,59 @@ def derive_palette(design: Dict[str, Any], vibe: str, business_id: str,
     text = text or ("#f2f0ea" if dark_mode else "#181614")
     text = _ensure_contrast(text, bg, 7.0)
     muted = _ensure_contrast(_shift_l(text, -0.22 if dark_mode else 0.22), bg, 4.5)
+    border = _shift_l(bg, 0.10 if dark_mode else -0.10)
+
+    palette = {
+        "bg": bg,
+        "surface": surface,
+        "surface2": surface_2,
+        "text": text,
+        "muted": muted,
+        "accent": accent,
+        "primary": primary,
+        # secondary intentionally raw here (may be None) — the accent-family
+        # derivation seeds authority from the REAL brand secondary only;
+        # the neutral surface_2 default is applied after.
+        "secondary": secondary,
+        "border": border,
+    }
+    palette = rederive_accent_family(palette)
+    palette["secondary"] = secondary or surface_2
+    return palette
+
+
+def rederive_accent_family(palette: Dict[str, Any]) -> Dict[str, Any]:
+    """Arc 9 boundary fix — derive (or RE-derive) every accent-family +
+    authority color against the palette's CURRENT ground.
+
+    Root cause of the live-site autopsy's worst finding: apply_dro_palette
+    / apply_owner_ground swap the neutral ground (bg/surface/text/…) but
+    used to keep the accent family derived against the ORIGINAL brand-kit
+    ground — a light-kit accent_soft (#dff6e7 pale mint) survived onto a
+    deep_dark page, accent_strong sat DARKER than the accent (backwards
+    hover), and authority carried a maroon derived against a light bg.
+
+    This is the single accent-family derivation both derive_palette and
+    the ground-swap paths share. Every output is keyed on the CURRENT bg
+    luminance; contrast enforcement is unchanged. Returns a new dict —
+    input untouched."""
+    p = dict(palette)
+    bg = p.get("bg") if _parse_hex(p.get("bg")) else "#111111"
+    accent = p.get("accent") if _parse_hex(p.get("accent")) else "#d99a4e"
+    text = p.get("text") if _parse_hex(p.get("text")) else None
+    dark_mode = _luminance(bg) < 0.35
 
     # Accent derivations — soft wash for chips/rules, strong for hovers.
+    # Dark grounds: soft is a DARK tint, strong is LIGHTER than the accent
+    # (hover moves toward the light); light grounds mirror.
     h, l, s = _hls(accent)
-    accent_soft = _from_hls(h, (0.16 if dark_mode else 0.92), min(s, 0.55))
-    accent_strong = _from_hls(h, l + (0.08 if dark_mode else -0.08), s)
-    border = _shift_l(bg, 0.10 if dark_mode else -0.10)
+    p["accent_soft"] = _from_hls(h, (0.16 if dark_mode else 0.92), min(s, 0.55))
+    p["accent_strong"] = _from_hls(h, l + (0.08 if dark_mode else -0.08), s)
 
     # Quality-floor arc 7 — the full-bleed accent band made --sx-on-accent
     # a body-text surface, so its contrast is now ENFORCED (4.5), not just
     # best-of-two.
-    on_accent = _ensure_contrast(_on_color(accent), accent, 4.5)
+    p["on_accent"] = _ensure_contrast(_on_color(accent), accent, 4.5)
 
     # AUTHORITY band (quality-floor arc 7): the deep chapter-break surface —
     # the role navy played in the original bar. Light grounds: the darkest
@@ -346,37 +388,48 @@ def derive_palette(design: Dict[str, Any], vibe: str, business_id: str,
     # chapter. Inks are contrast-enforced like every other pair; the accent
     # gets its own on-authority variant (3:1 — headings/marks scale).
     if dark_mode:
-        ah, _al, asat = _hls(accent)
         bg_l = _hls(bg)[1]
-        authority = _from_hls(ah, min(max(bg_l - 0.04, 0.03), 0.10),
-                              min(asat * 0.5, 0.32))
+        authority = _from_hls(h, min(max(bg_l - 0.04, 0.03), 0.10),
+                              min(s * 0.5, 0.32))
     else:
-        cands = [c for c in (primary, secondary, accent) if c and _parse_hex(c)]
-        seed_color = min(cands, key=_luminance) if cands else text
+        cands = [c for c in (p.get("primary"), p.get("secondary"), accent)
+                 if c and _parse_hex(c)]
+        seed_color = min(cands, key=_luminance) if cands else (text or "#15130e")
         hh, _ll, ss = _hls(seed_color)
         authority = _from_hls(hh, 0.13, max(min(ss, 0.75), 0.25))
-    on_authority = _ensure_contrast(
+    p["authority"] = authority
+    p["on_authority"] = _ensure_contrast(
         "#f4f0e8" if _luminance(authority) < 0.5 else "#15130e", authority, 4.5)
-    accent_on_authority = _ensure_contrast(accent, authority, 3.0)
+    p["accent_on_authority"] = _ensure_contrast(accent, authority, 3.0)
 
-    return {
-        "mode": "dark" if dark_mode else "light",
-        "bg": bg,
-        "surface": surface,
-        "surface2": surface_2,
-        "text": text,
-        "muted": muted,
-        "accent": accent,
-        "accent_soft": accent_soft,
-        "accent_strong": accent_strong,
-        "on_accent": on_accent,
-        "primary": primary,
-        "secondary": secondary or surface_2,
-        "border": border,
-        "authority": authority,
-        "on_authority": on_authority,
-        "accent_on_authority": accent_on_authority,
-    }
+    # Arc 9 fix 8 — ACCENT CHROMA GOVERNOR: a large-area variant of the
+    # accent for full-bleed fills (cta_band / statband grounds). A raw
+    # S=1.0 neon accent is a fine 18px CTA pill and a blinding 300px band.
+    p["accent_ground"] = _govern_accent(accent, bg)
+    p["on_accent_ground"] = _ensure_contrast(
+        _on_color(p["accent_ground"]), p["accent_ground"], 4.5)
+
+    p["mode"] = "dark" if dark_mode else "light"
+    return p
+
+
+_ACCENT_GROUND_SAT_CAP = 0.72     # HSV saturation ceiling for large fills
+_ACCENT_GROUND_PULL = 0.35        # how far lightness moves toward comfort
+
+
+def _govern_accent(accent: str, bg: str) -> str:
+    """Large-area accent: HLS lightness pulled part-way toward the
+    ground's comfort zone (dark grounds want a deeper band, light
+    grounds a calmer mid), THEN HSV saturation capped at
+    _ACCENT_GROUND_SAT_CAP — cap last, because a lightness move
+    re-inflates HSV saturation. Small ink keeps the raw --sx-accent;
+    only full-bleed fills use this."""
+    h, l, s = _hls(accent if _parse_hex(accent) else "#d99a4e")
+    target_l = 0.42 if _luminance(bg) < 0.35 else 0.52
+    pulled = _from_hls(h, l + (target_l - l) * _ACCENT_GROUND_PULL, s)
+    rgb = _parse_hex(pulled) or (0.5, 0.5, 0.5)
+    hh, ss, vv = colorsys.rgb_to_hsv(*rgb)
+    return _to_hex(colorsys.hsv_to_rgb(hh, min(ss, _ACCENT_GROUND_SAT_CAP), vv))
 
 
 def derive_typography(design: Dict[str, Any], vibe: str, intensity: str) -> Dict[str, Any]:
@@ -551,7 +604,10 @@ def apply_dro_palette(dna: Dict[str, Any], dro_palette: Optional[Dict[str, Any]]
     if not ground:
         return dna
     out = dict(dna)
-    out["palette"] = {**dna.get("palette", {}), **ground}
+    # Arc 9 boundary fix: the accent FAMILY (soft/strong/on/authority/…)
+    # must be re-derived against the NEW ground — a light-kit accent_soft
+    # on a deep_dark page was the live autopsy's worst finding.
+    out["palette"] = rederive_accent_family({**dna.get("palette", {}), **ground})
     return out
 
 
@@ -565,7 +621,9 @@ def apply_owner_ground(dna: Dict[str, Any], direction: Optional[str]) -> Dict[st
     if not ground:
         return dna
     out = dict(dna)
-    out["palette"] = {**dna.get("palette", {}), **ground}
+    # Arc 9 boundary fix: re-derive the accent family against the owner's
+    # ground (same discipline as apply_dro_palette).
+    out["palette"] = rederive_accent_family({**dna.get("palette", {}), **ground})
     return out
 
 
@@ -719,13 +777,11 @@ def css_variables(dna: Dict[str, Any]) -> str:
         break_vars = (f"\n  --sx-accent-break: {p['accent_break']};"
                       f"\n  --sx-on-accent-break: {p.get('on_accent_break') or '#101010'};")
     # Quality-floor arc 7 — h2 weight rides one step below h1 (900/800 at
-    # confident) but never above the face's clamped heading weight (the
-    # wmax clamp in apply_dro_style already capped heading_weight).
-    try:
-        h2w: Any = min(int(t.get("h2_weight") or t["heading_weight"]),
-                       int(t["heading_weight"]))
-    except (TypeError, ValueError):
-        h2w = t["heading_weight"]
+    # confident) but never above the face's clamped heading weight. Arc 9:
+    # both weights come from emitted_heading_weights, the shared helper
+    # google_fonts_url also reads — the CSS never demands a weight the
+    # fonts <link> didn't load (the live faux-bold-900 bug).
+    hw, h2w = emitted_heading_weights(dna)
     return f""":root {{{break_vars}
   --sx-bg: {p['bg']};
   --sx-surface: {p['surface']};
@@ -736,6 +792,8 @@ def css_variables(dna: Dict[str, Any]) -> str:
   --sx-accent-soft: {p['accent_soft']};
   --sx-accent-strong: {p['accent_strong']};
   --sx-on-accent: {p['on_accent']};
+  --sx-accent-ground: {p.get('accent_ground') or p['accent']};
+  --sx-on-accent-ground: {p.get('on_accent_ground') or p['on_accent']};
   --sx-border: {p['border']};
   --sx-authority: {p.get('authority') or p['surface2']};
   --sx-on-authority: {p.get('on_authority') or p['text']};
@@ -744,7 +802,7 @@ def css_variables(dna: Dict[str, Any]) -> str:
   --sx-font-body: '{t['body']}', -apple-system, sans-serif;
   --sx-h1: {t['h1']};
   --sx-h2: {t['h2']};
-  --sx-heading-weight: {t['heading_weight']};
+  --sx-heading-weight: {hw};
   --sx-h2-weight: {h2w};
   --sx-letter-tight: {t['letter_tight']};
   --sx-section-pad: {r['section_pad']};
@@ -784,19 +842,89 @@ _GOOGLE_AXES: Dict[str, Optional[str]] = {
     "Barlow": "ital,wght@0,400;0,500;0,600;0,700;1,400",
     "Syne": "wght@400..800",
     "Manrope": "wght@300..800",
+    # Arc 9 boundary fix — common brand-kit picks (the BrandHub font menu
+    # faces): pinned brand fonts used to fall to the generic 400;700
+    # request, so a 900-weight heading faux-bolded (the live Montserrat
+    # bug). Variable families get their real ranges; static-only families
+    # get their real instance lists.
+    "Montserrat": "ital,wght@0,100..900;1,100..900",
+    "Open Sans": "ital,wght@0,300..800;1,300..800",
+    "Lato": "ital,wght@0,100;0,300;0,400;0,700;0,900;1,400;1,700",
+    "Raleway": "ital,wght@0,100..900;1,100..900",
+    "Roboto": "ital,wght@0,300;0,400;0,500;0,700;0,900;1,400",
+    "Poppins": "ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,400",
+    "Playfair Display": "ital,wght@0,400..900;1,400..900",
+    "Merriweather": "ital,wght@0,300;0,400;0,700;0,900;1,400",
+    "Nunito": "ital,wght@0,200..1000;1,200..1000",
+    "Oswald": "wght@200..700",
 }
+
+# Unknown (practitioner-pinned, off-registry) families: never DEMAND a
+# weight above this tier — 400/700/800 are the widely-shipped instances;
+# 900 on an unknown face is a faux-bold gamble.
+_UNKNOWN_FAMILY_WMAX = 800
+
+
+def _family_wmax(family: str) -> int:
+    """Heaviest weight a family can actually deliver: parsed from its
+    _GOOGLE_AXES spec (registry families), _UNKNOWN_FAMILY_WMAX for
+    off-registry families, 400 for bare single-weight faces (Anton)."""
+    if family not in _GOOGLE_AXES:
+        return _UNKNOWN_FAMILY_WMAX
+    axes = _GOOGLE_AXES[family]
+    if not axes:
+        return 400
+    weights = [int(n) for n in re.findall(r"\d+", axes) if 100 <= int(n) <= 1000]
+    return max(weights) if weights else 400
+
+
+def emitted_heading_weights(dna: Dict[str, Any]) -> Tuple[int, int]:
+    """The (h1, h2) weights the page's CSS actually emits — the single
+    source css_variables AND google_fonts_url read, so the stylesheet
+    never demands a weight the fonts <link> doesn't request (Arc 9:
+    'the css asks for nothing the link doesn't load').
+
+    h2 never exceeds h1; the heading weight clamps to what the face can
+    deliver — the registry max for known families, the 700/800 tier
+    (_UNKNOWN_FAMILY_WMAX) for unknown ones."""
+    t = dna.get("typography") or {}
+    try:
+        hw = int(t.get("heading_weight") or 700)
+    except (TypeError, ValueError):
+        hw = 700
+    try:
+        h2w = int(t.get("h2_weight") or hw)
+    except (TypeError, ValueError):
+        h2w = hw
+    hw = min(hw, _family_wmax(t.get("heading") or ""))
+    return hw, min(h2w, hw)
 
 
 def google_fonts_url(dna: Dict[str, Any]) -> str:
-    """<link> URL loading exactly the chosen pairing. Unknown families
-    (practitioner-pinned) request the near-universal 400;700."""
+    """<link> URL loading exactly the chosen pairing.
+
+    THE RULE (Arc 9): the css asks for nothing the link doesn't load.
+    Known families load their registry axes (real shipped weights/ranges).
+    Unknown families (practitioner-pinned, off-registry) request exactly
+    the weights the page emits — 400/700 plus the clamped heading weights
+    from emitted_heading_weights — instead of a blind 400;700 that left
+    heavier headings faux-bolding."""
+    heading = dna["typography"]["heading"]
+    body = dna["typography"]["body"]
+    hw, h2w = emitted_heading_weights(dna)
     fams: List[str] = []
-    for name in (dna["typography"]["heading"], dna["typography"]["body"]):
+    for name in (heading, body):
         if name and name not in fams:
             fams.append(name)
     parts: List[str] = []
     for f in fams:
-        axes = _GOOGLE_AXES.get(f, "wght@400;700")
+        if f in _GOOGLE_AXES:
+            axes = _GOOGLE_AXES[f]
+        else:
+            weights = {400, 700}
+            if f == heading:
+                weights.update((hw, h2w))
+            axes = "wght@" + ";".join(str(w) for w in sorted(weights))
         fam = f.replace(" ", "+")
         parts.append(f"family={fam}:{axes}" if axes else f"family={fam}")
     return "https://fonts.googleapis.com/css2?" + "&".join(parts) + "&display=swap"

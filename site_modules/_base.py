@@ -347,16 +347,19 @@ body.sx-sig-soft.sx-sig-underline .sxm-reveal h2::after { width: 64px; height: 2
 # All motion here is killed by prefers-reduced-motion (below) and the
 # looping pieces also stop on motion=subtle (base_css branch).
 _QUALITY_CSS = """
-/* Card depth + hover (bar: resting 22/60 shadow, hover -8px + accent border) */
-.sxm-card { box-shadow: 0 22px 60px color-mix(in srgb, var(--sx-text) 8%, transparent);
+/* Card depth + hover (bar: resting 22/60 shadow, hover -8px + accent border).
+   Site Arc 9: shadow ink branches by palette mode — light grounds keep the
+   ink-tinted color-mix, dark grounds get TRUE BLACK (a text-tinted shadow
+   on a dark ground is a white haze, not depth). */
+.sxm-card { box-shadow: 0 22px 60px {SHADOW_REST};
   transition: transform .5s var(--sx-ease), box-shadow .5s var(--sx-ease),
     border-color .5s var(--sx-ease); }
 .sxm-card:hover { transform: translateY(-8px); border-color: var(--sx-accent);
-  box-shadow: 0 40px 80px color-mix(in srgb, var(--sx-text) 12%, transparent); }
-.sxm-card-lite { box-shadow: 0 22px 60px color-mix(in srgb, var(--sx-text) 8%, transparent);
+  box-shadow: 0 40px 80px {SHADOW_HOVER}; }
+.sxm-card-lite { box-shadow: 0 22px 60px {SHADOW_REST};
   transition: transform .5s var(--sx-ease), box-shadow .5s var(--sx-ease); }
 .sxm-card-lite:hover { transform: translateY(-4px);
-  box-shadow: 0 30px 64px color-mix(in srgb, var(--sx-text) 11%, transparent); }
+  box-shadow: 0 30px 64px {SHADOW_HOVER_LITE}; }
 /* TRUE RHYTHM — the AUTHORITY band: ONE mid-page section on the deep
    authority ground (render_page marks it). Custom-property overrides
    re-ink everything inside (text, muted, borders, cards, accent) with
@@ -402,6 +405,27 @@ _GRAIN_CSS = (
     " pointer-events: none; background-image: " + GRAIN_DATA_URI + ";"
     " background-size: 160px 160px; opacity: .02; }"
 )
+
+
+_SHADOWS_LIGHT = {
+    "{SHADOW_REST}": "color-mix(in srgb, var(--sx-text) 8%, transparent)",
+    "{SHADOW_HOVER}": "color-mix(in srgb, var(--sx-text) 12%, transparent)",
+    "{SHADOW_HOVER_LITE}": "color-mix(in srgb, var(--sx-text) 11%, transparent)",
+}
+_SHADOWS_DARK = {
+    "{SHADOW_REST}": "rgba(0, 0, 0, .45)",
+    "{SHADOW_HOVER}": "rgba(0, 0, 0, .55)",
+    "{SHADOW_HOVER_LITE}": "rgba(0, 0, 0, .50)",
+}
+
+
+def _quality_css(dna: Dict[str, Any]) -> str:
+    """_QUALITY_CSS with the card shadows toned for the palette mode."""
+    dark = ((dna.get("palette") or {}).get("mode") == "dark")
+    css = _QUALITY_CSS
+    for k, v in (_SHADOWS_DARK if dark else _SHADOWS_LIGHT).items():
+        css = css.replace(k, v)
+    return css
 
 
 def base_css(dna: Dict[str, Any]) -> str:
@@ -463,7 +487,7 @@ body.sx-scarce-accent .sxm-mark-thin,
 body.sx-scarce-accent .sxm-mark-block {{ background: var(--sx-border); }}
 body.sx-scarce-accent .sxm-mark-soft {{ background: color-mix(in srgb, var(--sx-muted) 45%, transparent); }}
 {reveal_css}
-{_QUALITY_CSS}{loop_kill}
+{_quality_css(dna)}{loop_kill}
 {_TREATMENT_CSS}
 {_RULE_BREAK_CSS}
 {_GRAIN_CSS}

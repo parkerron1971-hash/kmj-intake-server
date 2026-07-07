@@ -103,6 +103,10 @@ TOKEN_CONTRACT: Tuple[Tuple[str, str], ...] = (
     ("--sx-accent-soft", "soft wash of the accent (tints, soft rules, gradient tails)"),
     ("--sx-accent-strong", "deeper accent for hover/pressed states"),
     ("--sx-on-accent", "text/icons ON an accent-filled surface"),
+    ("--sx-accent-ground", "GOVERNED accent for LARGE fills (full-bleed bands) — "
+                           "chroma-capped; never use raw --sx-accent as a "
+                           "section ground"),
+    ("--sx-on-accent-ground", "text/icons on an accent-ground fill"),
     ("--sx-border", "hairlines and card borders"),
     ("--sx-authority", "the deep authority ground (the navy chapter-break) — "
                        "full-bleed color-block moments"),
@@ -357,10 +361,56 @@ def _token_block() -> str:
     return "\n".join(f"  var({name})  — {role}" for name, role in TOKEN_CONTRACT)
 
 
+def _accent_scarcity_line(dro: Dict[str, Any]) -> str:
+    """Site Arc 9 — when the DRO rules accent scarcity, the atelier gets
+    the same discipline the module renderer enforces via body class."""
+    strategy = str((((dro or {}).get("decisions") or {}).get("palette") or {})
+                   .get("accent_strategy") or "").lower()
+    if not any(w in strategy for w in ("single_semantic", "scarce", "scarcity")):
+        return ""
+    return ("\n- ACCENT SCARCITY (from the rationale): the accent is "
+            "semantic — CTAs and one italic word per heading; never "
+            "grounds, frames, or large fills.")
+
+
+def _photo_reality_block(allowed_slots: Tuple[str, ...],
+                         slot_records: Optional[Dict[str, Any]]) -> str:
+    """Site Arc 9 — describe the ACTUAL photographs already assigned to
+    the section's allowed slots (subject/search, source, credit), so the
+    composition is built around the real image, not an imagined one."""
+    lines: List[str] = []
+    for s in allowed_slots:
+        r = (slot_records or {}).get(s)
+        if not isinstance(r, dict):
+            continue
+        url = r.get("custom_url") or r.get("default_url")
+        if not url:
+            continue
+        source = ("owner upload" if r.get("custom_url")
+                  else str(r.get("default_source") or "stock"))
+        subject = str(r.get("default_query")
+                      or r.get("default_dalle_prompt") or "").strip()[:120]
+        credit = str(((r.get("default_credit") or {}) or {}).get("name") or "")
+        bits = [f'"{s}" — {source}']
+        if subject:
+            bits.append(f"subject: {subject}")
+        if credit:
+            bits.append(f"photographer: {credit}")
+        lines.append("  - " + "; ".join(bits))
+    if not lines:
+        return ""
+    return ("\n\nPHOTO REALITY — the actual photographs already assigned to "
+            "your allowed slots:\n" + "\n".join(lines)
+            + "\nCompose around the actual photograph, or choose a "
+              "constructed ornament-field treatment instead when the "
+              "subject is weak or off-concept.")
+
+
 def build_bespoke_prompt(kind: str, variant_hint: Optional[str], uid: str,
                          dro: Dict[str, Any], data: Dict[str, Any],
                          allowed_slots: Tuple[str, ...],
-                         allowed_hrefs: List[str]) -> str:
+                         allowed_hrefs: List[str],
+                         slot_records: Optional[Dict[str, Any]] = None) -> str:
     """The user prompt for one bespoke section — the DRO fused with the
     original creative-director voice, the real data, the full token
     contract, and the hard output contract the validator enforces."""
@@ -370,7 +420,7 @@ def build_bespoke_prompt(kind: str, variant_hint: Optional[str], uid: str,
     hrefs_line = (", ".join(allowed_hrefs) if allowed_hrefs
                   else "(none — links may only be #anchors like #contact)")
     dom_id = _SECTION_DOM_IDS.get(kind, kind)
-    return f"""{_dro_block(dro)}
+    return f"""{_dro_block(dro)}{_photo_reality_block(allowed_slots, slot_records)}
 
 YOUR SECTION
 - Kind: "{kind}" — you are replacing the platform's modular "{kind}" section (its library variant would have been "{variant_hint or 'default'}"; transcend it, don't imitate it).
@@ -385,6 +435,8 @@ TOKEN CONTRACT — the page shell defines these CSS variables; they are your ent
 CRAFT BAR (non-negotiable):
 - One accent-colored italic word per heading: wrap it as <em class="sxm-accent-word">word</em> — the emotional core of the line.
 - Vertical generosity: the section breathes at 120px+ top/bottom on desktop (var(--sx-section-pad) or more). Cramped is cheap.
+- CHAPTER RHYTHM: the section may claim var(--sx-surface) or var(--sx-authority) as a deliberate chapter break — the page must never read as one continuous ground.
+- DATA DIGNITY: a price of 0 renders as the word "Free" (never "$0"); omit the price line entirely for placeholder-grade prices under $5; never render an empty action area — every card foot ends in a working CTA or a real fact.{_accent_scarcity_line(dro)}
 - Gradients only ever FADE — every gradient ends in transparency or the ground it sits on; never a hard-edged band of translucent color.
 - Fluid display type via clamp(); tight negative tracking (var(--sx-letter-tight)) on display sizes.
 - Transitions use var(--sx-ease); reveals may use the shared class "sxm-reveal" (the platform's IntersectionObserver picks it up).
@@ -445,8 +497,19 @@ def generate_bespoke_section(kind: str, variant_hint: Optional[str],
     allowed_hrefs = _allowed_hrefs(data)
     required_targets = [f for f, v in (data.get("copy") or {}).items()
                         if str(v or "").strip()]
+    # Site Arc 9 (PHOTO REALITY): the stored slot records describe the
+    # actual photographs the section will receive. Fail-soft — a missing
+    # row / offline test context just omits the block.
+    slot_records: Optional[Dict[str, Any]] = None
+    if allowed_slots and business_id:
+        try:
+            from agents.slot_system import slot_storage
+            slot_records = slot_storage.get_all_slots(business_id) or {}
+        except Exception:
+            slot_records = None
     prompt = build_bespoke_prompt(kind, variant_hint, uid, dro, data,
-                                  allowed_slots, allowed_hrefs)
+                                  allowed_slots, allowed_hrefs,
+                                  slot_records=slot_records)
 
     def _attempt(extra: str = "") -> Tuple[Optional[Tuple[str, str]], List[str]]:
         raw = _call_llm(_SYSTEM_PROMPT, prompt + extra, business_id or "unknown")
