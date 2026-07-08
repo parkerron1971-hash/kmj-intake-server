@@ -1397,6 +1397,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        defaulted_modules: Optional[List[str]] = None,
                        full_recompose: bool = False,
                        progress_cb=None,
+                       dro_failure: Optional[Dict[str, Any]] = None,
                        _heal_attempted: bool = False,
                        _recon: Optional[Dict[str, Any]] = None,
                        _atelier: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1608,6 +1609,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                     dro_status=dro_status, dro_summary=dro_summary,
                     defaulted_modules=defaulted_modules,
                     full_recompose=full_recompose,
+                    dro_failure=dro_failure,
                     # progress_cb rides the recursion; the chief_jobs
                     # reporter is monotonic, so re-hit stages never walk
                     # the bar backwards.
@@ -1671,6 +1673,19 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
             cfg["dro_summary"] = dro_summary
         else:
             cfg.pop("dro_summary", None)   # never show a stale summary on fallback
+        # Failure forensics (never lose the reason again): fallback persists
+        # WHY — {stage: signals|authoring|validation|exception|skipped,
+        # detail, at} — served by GET /composer/spec; an applied compose
+        # clears it (stale blame must never outlive a successful rationale).
+        if dro_status in ("applied", "applied_thin"):
+            cfg.pop("dro_failure", None)
+        else:
+            df = dro_failure if isinstance(dro_failure, dict) else {}
+            cfg["dro_failure"] = {
+                "stage": str(df.get("stage") or "authoring"),
+                "detail": str(df.get("detail") or "unknown")[:300],
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
     sb_clients.sb_patch_as_service(
         f"/business_sites?id=eq.{site['id']}",
         {"html_content": final_html, "site_config": cfg, "status": "published"})
@@ -2058,28 +2073,34 @@ def compose_site(business_id: str, brief_notes: str = "",
                 if isinstance((ctx.get("site_prefs") or {}).get("creative"), dict)
                 else None)
 
+    dro_failure: Optional[Dict[str, Any]] = None   # forensics → site_config.dro_failure
     if use_llm:
         # 1) Author the rationale from the practitioner's own words.
         _report_progress(progress_cb, 30, "Authoring the design brief")
         try:
             from agents.composer.drl.passes import produce_dro
             intake = _assemble_intake_text(ctx)
-            dro = produce_dro(business_id, intake, reference_analysis=ref_analysis,
-                              creative=creative)
+            dro, dro_failure = produce_dro(
+                business_id, intake, reference_analysis=ref_analysis,
+                creative=creative)
             if dro is None:
                 # One retry — cheap insurance against a transient LLM/parse
                 # hiccup before accepting a rationale-less compose.
                 logger.info(f"[composer] DRO production returned None for "
                             f"{business_id[:8]} — retrying once")
-                dro = produce_dro(business_id, intake,
-                                  reference_analysis=ref_analysis,
-                                  creative=creative)
+                dro, dro_failure = produce_dro(
+                    business_id, intake, reference_analysis=ref_analysis,
+                    creative=creative)
             if dro:
                 dro_id = dro.get("id")
+                dro_failure = None
             else:
-                dro_fail_reason = "produce_dro returned None after retry"
+                dro_fail_reason = ((dro_failure or {}).get("detail")
+                                   or "produce_dro returned None after retry")
         except Exception as e:
             dro_fail_reason = f"DRO production raised: {e}"
+            dro_failure = {"stage": "exception",
+                           "detail": str(dro_fail_reason)[:300]}
             logger.warning(f"[composer] DRO production failed (non-fatal): {e}")
         # 1b) DRO-driven DESIGN: the palette base (dark stage / light room) +
         # accent scarcity flow into the render via ctx; copy obeys it next.
@@ -2100,6 +2121,9 @@ def compose_site(business_id: str, brief_notes: str = "",
     else:
         spec, source = _default_spec(ctx), "default"
         dro_fail_reason = "use_llm=False (deterministic compose requested)"
+        # 'skipped' (not one of the failure stages): a deliberate
+        # deterministic compose, not a DRL breakage.
+        dro_failure = {"stage": "skipped", "detail": dro_fail_reason}
 
     # Arc 2: surface the DRO outcome — no more silent skips. "applied" means
     # this compose's design + copy were driven by a fresh rationale;
@@ -2121,6 +2145,14 @@ def compose_site(business_id: str, brief_notes: str = "",
                     f"[composer] thin-brief compose for {business_id[:8]}: "
                     f"only {_n_consumable} consumable signal(s) drove the "
                     f"rationale (threshold {THIN_BRIEF_MIN_SIGNALS})")
+            # Resilience ladder: a minimal-mode DRO is honest 'applied_thin'
+            # REGARDLESS of signal count — a bland-but-valid rationale ran,
+            # not the full creative engine.
+            if (dro.get("meta") or {}).get("authored_minimal"):
+                dro_status = "applied_thin"
+                logger.info(
+                    f"[composer] minimal-mode rationale for {business_id[:8]} "
+                    "— reporting applied_thin")
         except Exception as e:
             logger.info(f"[composer] thin-brief status check skipped: {e}")
     dro_summary: Optional[str] = None
@@ -2162,7 +2194,8 @@ def compose_site(business_id: str, brief_notes: str = "",
     result = render_and_persist(business_id, spec, ctx, dro_id=dro_id, dro=dro,
                                 dro_status=dro_status, dro_summary=dro_summary,
                                 defaulted_modules=defaulted_modules,
-                                full_recompose=True, progress_cb=progress_cb)
+                                full_recompose=True, progress_cb=progress_cb,
+                                dro_failure=dro_failure)
     _report_progress(progress_cb, 100, "Done")
     return {"composition_source": source, "design_rationale_id": dro_id,
             "dro_status": dro_status, "dro_summary": dro_summary, **result}
@@ -2500,6 +2533,7 @@ def get_rationale(business_id: str,
             }
     return {"dro_status": cfg.get("dro_status"),
             "dro_summary": cfg.get("dro_summary"),
+            "dro_failure": cfg.get("dro_failure"),
             "rationale": rationale}
 
 
@@ -2626,11 +2660,92 @@ def get_spec(business_id: str,
             # Arc 4 trust surfaces: rationale status + conformance report.
             "dro_status": cfg.get("dro_status"),
             "dro_summary": cfg.get("dro_summary"),
+            # Failure forensics — {stage, detail, at} for the last fallback
+            # compose; absent/None once a rationale applies again.
+            "dro_failure": cfg.get("dro_failure"),
             "quality_report": cfg.get("quality_report"),
             "stale_overrides": stale_overrides,
             "dna": {k: ctx["dna"][k] for k in ("vibe", "intensity", "accent_style", "palette")},
             "modules": {mid: {"variants": list(s["variants"]), "fields": list(s["fields"])}
                         for mid, s in site_modules.MODULES.items()}}
+
+
+class DroSelftestBody(BaseModel):
+    business_id: str
+
+
+@router.post("/dro-selftest")
+def dro_selftest(body: DroSelftestBody,
+                 session: UserSession = Depends(sb_clients.authed_request)
+                 ) -> Dict[str, Any]:
+    """DRO resilience — owner-only production diagnostic. Runs the two
+    live DRL passes (detect_signals + author_dro) against the business's
+    REAL intake, with NO compose and NO persistence (author_dro never
+    writes; persist happens only inside produce_dro, which this endpoint
+    deliberately does not call). One authenticated call answers 'why is
+    my compose running dro_status=fallback?' with the stage, the specific
+    reason, and per-stage timings. Costs ~2 Sonnet calls."""
+    _require_owner(body.business_id, session.user.id)
+    from agents.composer.drl import passes as drl_passes
+    from agents.composer.drl import signals as drl_signals
+
+    t_start = time.monotonic()
+    ctx = gather_context(body.business_id)
+    intake = _assemble_intake_text(ctx)
+    creative = ((ctx.get("site_prefs") or {}).get("creative")
+                if isinstance((ctx.get("site_prefs") or {}).get("creative"), dict)
+                else None)
+
+    sig_fail: Dict[str, str] = {}
+    t0 = time.monotonic()
+    signals = drl_passes.detect_signals(body.business_id, intake,
+                                        failure_out=sig_fail)
+    t1 = time.monotonic()
+    consumable = sum(
+        1 for s in signals
+        if isinstance(s.get("confidence"), (int, float))
+        and drl_signals.is_consumable(s["confidence"]))
+
+    recent = drl_passes.fetch_recent_dros(body.business_id)
+    auth_fail: Dict[str, str] = {}
+    t2 = time.monotonic()
+    dro = drl_passes.author_dro(body.business_id, signals, recent,
+                                creative=creative, failure_out=auth_fail)
+    t3 = time.monotonic()
+
+    # failure_reason: the decisive one when the DRO failed outright;
+    # otherwise whatever degraded along the way (signals starved / full
+    # authoring mode failed but minimal mode rescued it) — or None.
+    failure_reason: Optional[Dict[str, str]] = None
+    if dro is None:
+        failure_reason = {"stage": auth_fail.get("stage") or "authoring",
+                          "detail": auth_fail.get("detail") or "author_dro returned None"}
+        if sig_fail.get("detail"):
+            failure_reason["detail"] = (f"signals: {sig_fail['detail']} | "
+                                        f"{failure_reason['detail']}")[:300]
+    elif auth_fail or sig_fail:
+        degraded = auth_fail or sig_fail
+        failure_reason = {"stage": degraded.get("stage") or "signals",
+                          "detail": ("degraded (DRO still produced): "
+                                     + str(degraded.get("detail") or ""))[:300]}
+
+    return {
+        "ok": True,
+        "business_id": body.business_id,
+        "intake_chars": len(intake),
+        "signals_count": len(signals),
+        "consumable": consumable,
+        "dro_ok": dro is not None,
+        "authored_minimal": bool(((dro or {}).get("meta") or {})
+                                 .get("authored_minimal")),
+        "failure_reason": failure_reason,
+        "elapsed_ms": {
+            "context": int((t0 - t_start) * 1000),
+            "signals": int((t1 - t0) * 1000),
+            "author": int((t3 - t2) * 1000),
+            "total": int((t3 - t_start) * 1000),
+        },
+    }
 
 
 # ─── Arc 6 — directions endpoints ─────────────────────────────────────
