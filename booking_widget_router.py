@@ -674,6 +674,12 @@ async def book_anon(
     if body.sms_consent:
         _record_booking_sms_consent(business_id, entry_data, body.name)
 
+    # A2P alert #1 — booking-confirmation text (2026-07-07, campaign
+    # approved). Fire-and-forget: sms_alerts owns the consent rule +
+    # kill-switch + per-business toggle and never raises; a text
+    # failure must never fail the booking.
+    _schedule_confirmation_sms(biz, entry_data, body.name, str(appt_iso or ""))
+
     return {
         "ok": True,
         "appointment_id": entry["id"],
@@ -751,6 +757,13 @@ async def book(
         _record_booking_sms_consent(
             business_id, entry_data, ctx.customer_row.get("name") or "")
 
+    # A2P alert #1 — booking-confirmation text, same contract as the
+    # walk-in path. (biz may be unset if the email block failed; fetch
+    # independently so the two best-effort paths can't couple.)
+    _schedule_confirmation_sms(
+        _business_basics(business_id), entry_data,
+        ctx.customer_row.get("name") or "", str(appt_iso or ""))
+
     return {"ok": True, "appointment_id": entry["id"]}
 
 
@@ -811,6 +824,31 @@ def _record_booking_sms_consent(business_id: str, entry_data: Dict[str, Any],
         logger.info(f"[consent] booking SMS consent recorded {phone} biz={business_id[:8]}")
     except Exception as e:
         logger.warning(f"[consent] booking consent record failed: {e}")
+
+
+def _schedule_confirmation_sms(biz: Optional[Dict[str, Any]],
+                               entry_data: Dict[str, Any],
+                               customer_name: str,
+                               appointment_iso: str) -> None:
+    """A2P alert #1 hook (2026-07-07). Schedules the booking-confirmation
+    text as a background task so the booking response never waits on a
+    carrier. All policy (SMS_ALERTS_ENABLED kill-switch, per-business
+    settings.sms_alerts.confirmations toggle, the consent rule, opt-outs)
+    lives in sms_alerts.send_booking_confirmation, which never raises.
+    Best-effort by contract — mirrors the confirmation-email pattern."""
+    if not biz:
+        return
+    try:
+        import asyncio
+        from sms_alerts import send_booking_confirmation
+        asyncio.create_task(send_booking_confirmation(
+            business=biz,
+            entry_data=entry_data,
+            customer_name=customer_name,
+            appointment_iso=appointment_iso,
+        ))
+    except Exception as e:
+        logger.warning(f"confirmation sms scheduling failed: {e}")
 
 
 def _find_or_create_contact(business_id: str, name: str, email_lower: str) -> str:

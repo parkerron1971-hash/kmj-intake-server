@@ -708,6 +708,16 @@ async def startup():
                               id="hermes_tick")
     except Exception as e:
         print(f"   [warn] GL sync jobs not scheduled: {e}")
+    # A2P automated alerts (2026-07-07, campaign approved) — hourly
+    # appointment-reminder sweep over sessions 22-26h out. Quiet hours,
+    # consent rule, event-based dedupe + per-business toggle all live in
+    # sms_alerts. Kill switch: SMS_ALERTS_ENABLED=0.
+    try:
+        import sms_alerts as _sms_alerts
+        scheduler.add_job(g("sms_reminder_sweep", _sms_alerts.reminder_sweep),
+                          "interval", hours=1, id="sms_reminder_sweep")
+    except Exception as e:
+        print(f"   [warn] sms reminder sweep not scheduled: {e}")
     scheduler.start()
     print(f"🚀 KMJ Intake Automation running")
     print(f"   Owner: {OWNER_NAME} | {BUSINESS_NAME}")
