@@ -81,6 +81,7 @@ _TENSION_POLE_CAP = 80
 # Chief asks in the interview; when answered, the site must make it
 # unmistakable).
 _OFFER_CAP = 600
+_STORY_FIELD_CAP = 500  # Arc 12 — per-answer cap, story walkthrough
 # Site Arc 11 — explicit CONNECTIONS: the owner's yes/no answers to "what
 # should this site plug into?". Every key optional; True forces the
 # surface on (subject to real data), False forces it off, absent = the
@@ -152,6 +153,18 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
     offer = raw.get("offer")
     if isinstance(offer, str) and offer.strip():
         out["offer"] = offer.strip()[:_OFFER_CAP]
+
+    # Arc 12 — the STORY walkthrough (the material creativity feeds on):
+    # five optional free-text answers from Chief's story interview.
+    story_raw = raw.get("story")
+    if isinstance(story_raw, dict):
+        story: Dict[str, str] = {}
+        for k in ("origin", "craft", "proof", "voice", "atmosphere"):
+            v = story_raw.get(k)
+            if isinstance(v, str) and v.strip():
+                story[k] = v.strip()[:_STORY_FIELD_CAP]
+        if story:
+            out["story"] = story
 
     # v2 — inspiration_urls (validated; bad entries silently dropped)
     iu = raw.get("inspiration_urls")
@@ -794,6 +807,24 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
         segments.append("WHAT THE BUSINESS OFFERS (the owner's own words — "
                         "the site MUST make this unmistakably clear): "
                         + offer_stmt)
+
+    # Arc 12 — the STORY walkthrough: the richest signal material there
+    # is. Verbatim, labeled, right after the offer so the DRL reads the
+    # owner's story before any derived/base facts. Absent → byte-identical.
+    story = prefs.get("story") if isinstance(prefs.get("story"), dict) else {}
+    if story:
+        _labels = (("origin", "How it started"),
+                   ("craft", "What people never guess it takes"),
+                   ("proof", "Proudest work"),
+                   ("voice", "What clients say"),
+                   ("atmosphere", "What walking in feels like"))
+        lines = [f"{label}: {str(story[k]).strip()}"
+                 for k, label in _labels if str(story.get(k) or "").strip()]
+        if lines:
+            segments.append(
+                "THE OWNER'S STORY (their own words — mine it for copy, "
+                "metaphor, and evidence; quote it as signal evidence):\n"
+                + "\n".join(lines))
 
     # Arc 5 — the platform's deterministic study of the reference sites the
     # owner named. DIRECTION EVIDENCE (mood/type-class/density), never a
