@@ -14,6 +14,25 @@ Contract every module follows:
 - Images carry data-slot="<name>" with src="" so the existing slot
   population (Pass 4.0b.5) fills them (user upload > Unsplash > DALL-E).
 
+TOTAL EDITABILITY (Site Arc 11) — the targeting rule every module obeys:
+  * EVERY visible PRESENTATION-text node — headlines, eyebrows, subheads,
+    body paragraphs, taglines, CTA/button labels, statement-bar lines,
+    footer lines — carries a data-override-target path. If a module adds
+    a new visible presentation string, it gets a target.
+  * BUSINESS-DATA text stays UN-targeted BY DESIGN: prices, offering
+    names/descriptions, testimonial quotes/attributions, stat numbers,
+    showcase module titles/entries, contact logistics (hours/address/
+    phone/email), social handles, store product cards, marquee tone
+    words. These are edited at the SOURCE (offerings, testimonials,
+    settings…) and re-render live — an override here would mask the
+    record and go stale.
+  * COMPLIANCE COPY (the SMS consent disclosure) and PLATFORM CHROME
+    ("Powered by Solutionist", header nav anchor labels) are also
+    un-targeted — the first is legally fixed wording, the second is
+    structural.
+  The composer's quality gate reports 'editability_coverage' (count of
+  visible presentation-text nodes lacking a target) on every render.
+
 ctx keys: dna (brand_dna tokens), business {name, type, tagline, slug},
 booking {enabled, url}, offerings [rows], assets {logo_url, ...}.
 """
@@ -166,12 +185,21 @@ def cta_button(ctx: Dict[str, Any], label: str, section: str,
     the destination deterministically — buy → the store page (when it
     exists), contact → the contact anchor. book/follow keep the default
     ladder (booking page > #contact; socials live in the contact
-    section). Function-first: a goal never produces a dead href."""
+    section). Function-first: a goal never produces a dead href.
+
+    Site Arc 11 (connections): an EXPLICIT owner connections.booking=True
+    outranks the goal steering — the booking URL leads the ladder on the
+    hero + cta band. connections.booking=False is handled upstream
+    (gather_context disables ctx.booking), so the ladder falls to
+    #contact naturally. Absent connections → byte-identical ladder."""
     booking = ctx.get("booking") or {}
     store = ctx.get("store") or {}
+    conn = ctx.get("connections") if isinstance(ctx.get("connections"), dict) else {}
     goal = str(ctx.get("cta_goal") or "")
     href = ""
-    if goal == "buy" and store.get("enabled") and store.get("url"):
+    if conn.get("booking") and booking.get("enabled") and booking.get("url"):
+        href = safe_url(booking["url"])
+    elif goal == "buy" and store.get("enabled") and store.get("url"):
         href = safe_url(store["url"])
     elif goal == "contact":
         href = "#contact"
@@ -529,6 +557,9 @@ h2 {{ font-size: var(--sx-h2); font-weight: var(--sx-h2-weight, var(--sx-heading
 p {{ margin: 0 0 1.15em; max-width: 62ch; }}
 a {{ color: var(--sx-accent); text-decoration: none; }}
 .sxm-section {{ padding: var(--sx-section-pad) var(--sx-gutter); }}
+/* Site Arc 11b — dead-band fix: a section straight after a ceremony seam
+   trims its top pad ~45% (the interstitial already carries the pause). */
+.sxm-section.sxm-after-seam {{ padding-top: calc(var(--sx-section-pad) * 0.55); }}
 .sxm-inner {{ max-width: var(--sx-content-max); margin: 0 auto; }}
 .sxm-eyebrow {{
   font-size: .76rem; letter-spacing: .26em; text-transform: uppercase;

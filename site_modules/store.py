@@ -21,6 +21,25 @@ _MIN_REAL_PRODUCTS = 2
 _MIN_REAL_PRICE = 5.0
 
 
+def _min_real_products(ctx: Dict[str, Any]) -> int:
+    """Site Arc 11 (connections): the owner's explicit connections.store
+    = True relaxes the arc-9 two-product trust threshold to a 1-real-
+    product floor — explicit intent outranks the heuristic. Absent/False
+    keeps the default (False suppresses entirely; see render)."""
+    conn = (ctx.get("connections")
+            if isinstance(ctx.get("connections"), dict) else {})
+    return 1 if conn.get("store") is True else _MIN_REAL_PRODUCTS
+
+
+def _store_forced_off(ctx: Dict[str, Any]) -> bool:
+    """connections.store=False → the section never renders, products or
+    not (gather_context also disables ctx.store; this is self-defense
+    for directly-constructed contexts)."""
+    conn = (ctx.get("connections")
+            if isinstance(ctx.get("connections"), dict) else {})
+    return conn.get("store") is False
+
+
 def _real_items(store: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Products with a real image AND a real (>= $5) price — the trust
     threshold the section suppression counts."""
@@ -43,8 +62,10 @@ def store_would_render(ctx: Dict[str, Any]) -> bool:
     offerings can decide whether store-catalog items should be excluded
     from its own list (only when BOTH would show the same item)."""
     store = ctx.get("store") or {}
+    if _store_forced_off(ctx):
+        return False
     return bool(store.get("enabled") and store.get("url")
-                and len(_real_items(store)) >= _MIN_REAL_PRODUCTS)
+                and len(_real_items(store)) >= _min_real_products(ctx))
 
 
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
@@ -52,14 +73,18 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     store = ctx.get("store") or {}
     items: List[Dict[str, Any]] = (store.get("items") or [])[:3]
     url = store.get("url") or ""
+    if _store_forced_off(ctx):
+        logger.info("[store] section suppressed: owner connections.store=False")
+        return "", ""
     if not store.get("enabled") or not items or not url:
         return "", ""
     real = _real_items(store)
-    if len(real) < _MIN_REAL_PRODUCTS:
+    min_real = _min_real_products(ctx)
+    if len(real) < min_real:
         logger.info(
             f"[store] section suppressed: {len(real)} product(s) with a real "
             f"image + real price (>= ${_MIN_REAL_PRICE:.0f}); need "
-            f"{_MIN_REAL_PRODUCTS}")
+            f"{min_real}")
         return "", ""
 
     eb = eyebrow("store", content.get("eyebrow") or "The shop")

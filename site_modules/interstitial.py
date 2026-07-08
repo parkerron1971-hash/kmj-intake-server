@@ -39,7 +39,9 @@ from ._base import safe, ov, accent_headline
 VARIANTS = ("silence", "thread", "statement", "marquee")
 
 _WORD_SPLIT_RE = re.compile(r"[•|,/·]+")
-_MIN_MARQUEE_WORDS = 3
+# Site Arc 11b: 3 words loop too visibly (the seam reads as a glitch,
+# not a ribbon) — under 4 real words the marquee declines to render.
+_MIN_MARQUEE_WORDS = 4
 _MAX_MARQUEE_WORDS = 6
 
 

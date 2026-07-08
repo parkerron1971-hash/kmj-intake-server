@@ -39,10 +39,16 @@ from uuid import uuid4
 
 logger = logging.getLogger("atelier")
 
-ATELIER_MODEL_DEFAULT = "claude-sonnet-4-5-20250929"
+# Site Arc 11 — THE QUALITY LEVER: bespoke sections (and refines) author
+# on Opus by default. Cost is ~2-3x Sonnet per section (Kevin approved
+# quality-first, 2026-07); ATELIER_MODEL env still overrides either way.
+ATELIER_MODEL_DEFAULT = "claude-opus-4-8"
 ATELIER_TEMPERATURE = 0.8          # creative latitude — the point of the atelier
 ATELIER_MAX_TOKENS = 8000
-_CALL_TIMEOUT_S = 60.0
+# 120s (was 60): Opus generates slower than Sonnet; a bespoke section at
+# ~8k output tokens needs the headroom. Still inside the background
+# job's budget (2-3 calls per compose; jobs sweep stale at 10 min).
+_CALL_TIMEOUT_S = 120.0
 
 # Sections that must stay modular: their value is DATA RENDERED RIGHT
 # (live records, working forms, real product cards) — bespoke rewriting
@@ -164,6 +170,10 @@ def _call_llm(system: str, user: str, business_id: str) -> Optional[str]:
     if client is None:
         logger.info("[atelier] no ANTHROPIC_API_KEY — skipping bespoke")
         return None
+    # Site Arc 11 — log the model per call (the quality lever is
+    # observable: Opus default vs an ATELIER_MODEL env override).
+    logger.info(f"[atelier] authoring with model={_model()} for "
+                f"{(business_id or 'unknown')[:8]}")
     try:
         msg = client.messages.create(
             model=_model(), max_tokens=ATELIER_MAX_TOKENS,
@@ -425,6 +435,32 @@ def _photo_reality_block(allowed_slots: Tuple[str, ...],
               "subject is weak or off-concept.")
 
 
+def _contract_block(kind: str, uid: str, dom_id: str, slots_line: str,
+                    hrefs_line: str, copy_fields: List[str]) -> str:
+    """The HARD OUTPUT CONTRACT + OUTPUT FORMAT tail shared by the
+    bespoke prompt and the refine prompt (Site Arc 11) — one text, one
+    validator, no drift."""
+    return f"""HARD OUTPUT CONTRACT — violations are rejected by a validator:
+1. Exactly ONE root element: <section id="{dom_id}" class="atl-{uid} ...">…</section>. Nothing outside it.
+2. Every CSS selector is prefixed with .atl-{uid} (e.g. ".atl-{uid} .crest"). No bare element/class/#id selectors. @media queries allowed; @keyframes names must start with atl-{uid}.
+3. Colors ONLY: var(--sx-*), transparent, currentColor, rgba(0,0,0,X), rgba(255,255,255,X). NO hex, NO rgb()/hsl(), no named colors.
+4. Fonts ONLY var(--sx-font-heading) / var(--sx-font-body).
+5. Images ONLY as <img data-slot="…" src="" alt="specific, evocative alt"> with data-slot from: {slots_line}. Each slot at most once. The platform fills src.
+6. Every text element rendering a provided copy field carries data-override-target="{kind}/<field>" (fields provided: {', '.join(copy_fields) or '(none)'} — each must appear exactly once). TOTAL EDITABILITY: any ADDITIONAL display text you invent (a label, a kicker, a closing line) must carry its own data-override-target="{kind}/custom_1", "{kind}/custom_2", … numbered sequentially — every visible word on the page must be editable. Business facts you were given (prices, names) are rendered verbatim and need no extra target beyond the provided fields.
+7. Links: href is a #anchor or one of: {hrefs_line}. NO other URLs anywhere (no imports, no url(), no external anything).
+8. NO <script>, NO <style> tags in the HTML, NO inline event handlers, NO position:fixed, NO id selectors in CSS.
+9. Responsive: include at least one @media (max-width: 760px) block that keeps the composition intact on a phone.
+10. Any animation respects @media (prefers-reduced-motion: reduce).
+11. Size: HTML ≤ 14KB, CSS ≤ 10KB.
+
+OUTPUT FORMAT — exactly this, nothing else:
+<!--HTML-->
+<section id="{dom_id}" class="atl-{uid} …">…</section>
+<!--CSS-->
+.atl-{uid} {{ … }}
+…"""
+
+
 def build_bespoke_prompt(kind: str, variant_hint: Optional[str], uid: str,
                          dro: Dict[str, Any], data: Dict[str, Any],
                          allowed_slots: Tuple[str, ...],
@@ -466,25 +502,7 @@ CRAFT BAR (non-negotiable):
 - Transitions use var(--sx-ease); reveals may use the shared class "sxm-reveal" (the platform's IntersectionObserver picks it up).
 - CTAs may use the shared class "sxm-cta" (pill, shimmer, working styles ship with the shell).
 
-HARD OUTPUT CONTRACT — violations are rejected by a validator:
-1. Exactly ONE root element: <section id="{dom_id}" class="atl-{uid} ...">…</section>. Nothing outside it.
-2. Every CSS selector is prefixed with .atl-{uid} (e.g. ".atl-{uid} .crest"). No bare element/class/#id selectors. @media queries allowed; @keyframes names must start with atl-{uid}.
-3. Colors ONLY: var(--sx-*), transparent, currentColor, rgba(0,0,0,X), rgba(255,255,255,X). NO hex, NO rgb()/hsl(), no named colors.
-4. Fonts ONLY var(--sx-font-heading) / var(--sx-font-body).
-5. Images ONLY as <img data-slot="…" src="" alt="specific, evocative alt"> with data-slot from: {slots_line}. Each slot at most once. The platform fills src.
-6. Every text element rendering a provided copy field carries data-override-target="{kind}/<field>" (fields provided: {', '.join(copy_fields) or '(none)'} — each must appear exactly once).
-7. Links: href is a #anchor or one of: {hrefs_line}. NO other URLs anywhere (no imports, no url(), no external anything).
-8. NO <script>, NO <style> tags in the HTML, NO inline event handlers, NO position:fixed, NO id selectors in CSS.
-9. Responsive: include at least one @media (max-width: 760px) block that keeps the composition intact on a phone.
-10. Any animation respects @media (prefers-reduced-motion: reduce).
-11. Size: HTML ≤ 14KB, CSS ≤ 10KB.
-
-OUTPUT FORMAT — exactly this, nothing else:
-<!--HTML-->
-<section id="{dom_id}" class="atl-{uid} …">…</section>
-<!--CSS-->
-.atl-{uid} {{ … }}
-…"""
+{_contract_block(kind, uid, dom_id, slots_line, hrefs_line, copy_fields)}"""
 
 
 # ─── Generation ───────────────────────────────────────────────────────
@@ -521,6 +539,7 @@ def generate_bespoke_section(kind: str, variant_hint: Optional[str],
     allowed_hrefs = _allowed_hrefs(data)
     required_targets = [f for f, v in (data.get("copy") or {}).items()
                         if str(v or "").strip()]
+    allowed_fields = _module_fields(kind)
     # Site Arc 9 (PHOTO REALITY): the stored slot records describe the
     # actual photographs the section will receive. Fail-soft — a missing
     # row / offline test context just omits the block.
@@ -546,7 +565,7 @@ def generate_bespoke_section(kind: str, variant_hint: Optional[str],
         ok, problems = atelier_validator.validate_fragment(
             frag[0], frag[1], uid=uid, kind=kind, data=data,
             allowed_slots=allowed_slots, required_targets=required_targets,
-            allowed_hrefs=allowed_hrefs)
+            allowed_hrefs=allowed_hrefs, allowed_fields=allowed_fields)
         return (frag if ok else None), problems
 
     frag, problems = _attempt()
@@ -561,6 +580,119 @@ def generate_bespoke_section(kind: str, variant_hint: Optional[str],
                        f"{(business_id or 'unknown')[:8]} — {problems[:6]}")
         return None
     logger.info(f"[atelier] bespoke '{kind}' accepted for "
+                f"{(business_id or 'unknown')[:8]} (uid atl-{uid}, "
+                f"html {len(frag[0])}B css {len(frag[1])}B)")
+    return frag
+
+
+def _module_fields(kind: str) -> Tuple[str, ...]:
+    """The module's declared copy fields (site_modules registry) — the
+    validator accepts these as override-target suffixes alongside the
+    provided fields and custom_N. Fail-soft to () offline."""
+    try:
+        import site_modules
+        return tuple((site_modules.MODULES.get(kind) or {}).get("fields") or ())
+    except Exception:
+        return ()
+
+
+# ─── Site Arc 11 — THE RESIDENT CREATOR: refine one section ──────────
+
+_REFINE_SYSTEM_PROMPT = _SYSTEM_PROMPT + """
+
+REFINE MODE: this session you are not starting from a blank brief — you are REVISING one existing section of a live page at its owner's request. You receive the section's current HTML+CSS and one plain-words instruction ('make it moodier', 'more space', 'bolder type'). Honor the instruction decisively — the owner must SEE the change — while keeping everything that already works: the real data, the working links, the copy's override targets, the design system's discipline. You re-author the section fresh under a NEW scope uid; never echo the old atl- classes."""
+
+
+def build_refine_prompt(kind: str, uid: str, dro: Dict[str, Any],
+                        data: Dict[str, Any], current_html: str,
+                        current_css: str, instruction: str,
+                        allowed_slots: Tuple[str, ...],
+                        allowed_hrefs: List[str]) -> str:
+    """The refine-mode user prompt: the DRO brief, the CURRENT section
+    (html+css), the owner's instruction, the real data, the token
+    contract, and the SAME hard output contract the validator enforces
+    (shared _contract_block — one contract, no drift)."""
+    copy_fields = sorted((data.get("copy") or {}).keys())
+    slots_line = (", ".join(f'"{s}"' for s in allowed_slots)
+                  if allowed_slots else "(none — this section uses NO images)")
+    hrefs_line = (", ".join(allowed_hrefs) if allowed_hrefs
+                  else "(none — links may only be #anchors like #contact)")
+    dom_id = _SECTION_DOM_IDS.get(kind, kind)
+    return f"""{_dro_block(dro)}
+
+THE OWNER'S INSTRUCTION (the reason for this revision — honor it visibly):
+"{instruction.strip()}"
+
+THE CURRENT "{kind}" SECTION — revise THIS, don't start over blindly. Keep its facts, links and copy targets; change what the instruction asks for (and whatever craft the change demands):
+<!--CURRENT HTML-->
+{current_html.strip()}
+<!--CURRENT CSS-->
+{current_css.strip()}
+
+REAL DATA (the ONLY facts you may render — every price/number/claim on screen must literally appear here):
+{json.dumps(data, indent=2, ensure_ascii=False)}
+
+TOKEN CONTRACT — the page shell defines these CSS variables; they are your entire palette and type system:
+{_token_block()}
+
+REVISION BAR (non-negotiable):
+- The instruction must be VISIBLE in the result — a side-by-side look shows the change immediately.
+- Everything the current section says stays sayable: keep every provided copy field (same data-override-target paths) unless the instruction explicitly asks for different wording of platform framing.
+- Keep the craft bar of the house: one accent-italic word per heading, whisper-voice micro-caps for small labels, directional scrims, gradients that fade, hovers that draw, generous vertical air, reduced-motion respect.
+- Your output is scoped under the NEW uid atl-{uid} — do not reuse the old section's atl- classes or ids.
+
+{_contract_block(kind, uid, dom_id, slots_line, hrefs_line, copy_fields)}"""
+
+
+def generate_refined_section(kind: str, current_html: str, current_css: str,
+                             instruction: str, dro: Dict[str, Any],
+                             ctx: Dict[str, Any],
+                             section_copy: Dict[str, Any],
+                             business_id: str = "") -> Optional[Tuple[str, str]]:
+    """One refined section (Site Arc 11 'resident creator'): ONE
+    atelier-style call revising the CURRENT section under the owner's
+    instruction, same validator, one repair attempt, else None (the
+    caller reports an honest 'couldn't refine')."""
+    import atelier_validator
+
+    uid = uuid4().hex[:8]
+    data = _section_data(kind, section_copy, ctx)
+    allowed_slots = ALLOWED_SLOTS.get(kind, ())
+    allowed_hrefs = _allowed_hrefs(data)
+    required_targets = [f for f, v in (data.get("copy") or {}).items()
+                        if str(v or "").strip()]
+    allowed_fields = _module_fields(kind)
+    prompt = build_refine_prompt(kind, uid, dro or {}, data, current_html,
+                                 current_css, instruction, allowed_slots,
+                                 allowed_hrefs)
+
+    def _attempt(extra: str = "") -> Tuple[Optional[Tuple[str, str]], List[str]]:
+        raw = _call_llm(_REFINE_SYSTEM_PROMPT, prompt + extra,
+                        business_id or "unknown")
+        if raw is None:
+            return None, ["LLM call failed"]
+        frag = _split_fragment(raw)
+        if frag is None:
+            return None, ["response missing <!--HTML--> / <!--CSS--> delimiters "
+                          "or an empty part"]
+        ok, problems = atelier_validator.validate_fragment(
+            frag[0], frag[1], uid=uid, kind=kind, data=data,
+            allowed_slots=allowed_slots, required_targets=required_targets,
+            allowed_hrefs=allowed_hrefs, allowed_fields=allowed_fields)
+        return (frag if ok else None), problems
+
+    frag, problems = _attempt()
+    if frag is None and problems:
+        repair = ("\n\nYOUR PREVIOUS OUTPUT FAILED VALIDATION. Problems:\n- "
+                  + "\n- ".join(problems[:12])
+                  + "\n\nFix EVERY problem. Re-read the HARD OUTPUT CONTRACT. "
+                    "Output ONLY the <!--HTML--> / <!--CSS--> fragment.")
+        frag, problems = _attempt(repair)
+    if frag is None:
+        logger.warning(f"[atelier] refine fell back: {kind} for "
+                       f"{(business_id or 'unknown')[:8]} — {problems[:6]}")
+        return None
+    logger.info(f"[atelier] refined '{kind}' accepted for "
                 f"{(business_id or 'unknown')[:8]} (uid atl-{uid}, "
                 f"html {len(frag[0])}B css {len(frag[1])}B)")
     return frag
