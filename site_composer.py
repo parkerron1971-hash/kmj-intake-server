@@ -81,6 +81,7 @@ _TENSION_POLE_CAP = 80
 # Chief asks in the interview; when answered, the site must make it
 # unmistakable).
 _OFFER_CAP = 600
+_STORY_FIELD_CAP = 500  # Arc 12 — per-answer cap, story walkthrough
 # Site Arc 11 — explicit CONNECTIONS: the owner's yes/no answers to "what
 # should this site plug into?". Every key optional; True forces the
 # surface on (subject to real data), False forces it off, absent = the
@@ -152,6 +153,18 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
     offer = raw.get("offer")
     if isinstance(offer, str) and offer.strip():
         out["offer"] = offer.strip()[:_OFFER_CAP]
+
+    # Arc 12 — the STORY walkthrough (the material creativity feeds on):
+    # five optional free-text answers from Chief's story interview.
+    story_raw = raw.get("story")
+    if isinstance(story_raw, dict):
+        story: Dict[str, str] = {}
+        for k in ("origin", "craft", "proof", "voice", "atmosphere"):
+            v = story_raw.get(k)
+            if isinstance(v, str) and v.strip():
+                story[k] = v.strip()[:_STORY_FIELD_CAP]
+        if story:
+            out["story"] = story
 
     # v2 — inspiration_urls (validated; bad entries silently dropped)
     iu = raw.get("inspiration_urls")
@@ -794,6 +807,24 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
         segments.append("WHAT THE BUSINESS OFFERS (the owner's own words — "
                         "the site MUST make this unmistakably clear): "
                         + offer_stmt)
+
+    # Arc 12 — the STORY walkthrough: the richest signal material there
+    # is. Verbatim, labeled, right after the offer so the DRL reads the
+    # owner's story before any derived/base facts. Absent → byte-identical.
+    story = prefs.get("story") if isinstance(prefs.get("story"), dict) else {}
+    if story:
+        _labels = (("origin", "How it started"),
+                   ("craft", "What people never guess it takes"),
+                   ("proof", "Proudest work"),
+                   ("voice", "What clients say"),
+                   ("atmosphere", "What walking in feels like"))
+        lines = [f"{label}: {str(story[k]).strip()}"
+                 for k, label in _labels if str(story.get(k) or "").strip()]
+        if lines:
+            segments.append(
+                "THE OWNER'S STORY (their own words — mine it for copy, "
+                "metaphor, and evidence; quote it as signal evidence):\n"
+                + "\n".join(lines))
 
     # Arc 5 — the platform's deterministic study of the reference sites the
     # owner named. DIRECTION EVIDENCE (mood/type-class/density), never a
@@ -2196,6 +2227,34 @@ def _ceremony_statement_line(spec: List[Dict[str, Any]],
 def _apply_ceremony_pass(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
                          dro: Optional[Dict[str, Any]],
                          seed: Optional[str] = None) -> List[Dict[str, Any]]:
+    """FAIL-SOFT shell (Site Arc 12): seams are an enhancement, never
+    fatal — if the ceremony pass raises for any reason, the compose
+    proceeds with the un-seamed spec and the error is logged LOUD.
+    Previously both call sites (compose_site + _direction_pipeline) ran
+    this bare, so a ceremony bug would have killed the whole compose.
+
+    NOTE the DRO gate below: no DRO → no seams. This is the ONE switch
+    that silences the ceremony AND the atelier together (run_atelier's
+    regenerate mode is also DRO-gated) — a page missing BOTH layers
+    means dro_status=fallback, not two independent failures. The
+    atelier failing on its own can never suppress ceremony seams:
+    seams are inserted into the spec BEFORE render, and interstitial
+    is in atelier._NEVER_BESPOKE."""
+    try:
+        return _apply_ceremony_pass_inner(spec, ctx, dro, seed=seed)
+    except Exception as e:
+        logger.error(f"[composer.ceremony] ceremony pass crashed "
+                     f"(fail-soft — composing without seams) for "
+                     f"{str((ctx.get('business') or {}).get('id') or '')[:8]}: "
+                     f"{type(e).__name__}: {e}")
+        return spec
+
+
+def _apply_ceremony_pass_inner(spec: List[Dict[str, Any]],
+                               ctx: Dict[str, Any],
+                               dro: Optional[Dict[str, Any]],
+                               seed: Optional[str] = None
+                               ) -> List[Dict[str, Any]]:
     """Insert the ceremony seams. Rules (all deterministic):
       - no DRO or fewer than 4 sections → no seams (a short page has no
         chapters to pause between);
@@ -2666,9 +2725,17 @@ def compose_directions(business_id: str,
     recent = drl_passes.fetch_recent_dros(business_id)
 
     import copy as _copy
+    import time as _time
     items: List[Dict[str, Any]] = []
     errors: List[str] = []
     _n_stances = max(len(DIRECTION_STANCES), 1)
+    # Site Arc 12 — candidate authoring stays on the DRL model (Opus by
+    # default: the 3 candidate DROs ARE the creative reasoning being
+    # chosen between; ~20k output tokens ≈ +$0.40/run at Opus rates vs
+    # Sonnet — Kevin ruled quality-first). Opus streams ~2-3x slower, so
+    # log cumulative elapsed per candidate: the 10-min chief_jobs stale
+    # sweep is the hard wall, and this is the early-warning line.
+    _t0 = _time.monotonic()
     for _idx, (stance_key, stance_text) in enumerate(DIRECTION_STANCES.items()):
         # 20 → 70 stepped across the candidates (20/45/70 for three).
         _report_progress(progress_cb,
@@ -2709,11 +2776,14 @@ def compose_directions(business_id: str,
                 "tagline": tagline,
             })
             logger.info(f"[composer.directions] '{stance_key}' authored for "
-                        f"{business_id[:8]}: {label}")
+                        f"{business_id[:8]}: {label} "
+                        f"(cumulative {_time.monotonic() - _t0:.0f}s "
+                        f"after {_idx + 1}/{_n_stances} candidates)")
         except Exception as e:
             errors.append(f"{stance_key}: {e}")
             logger.warning(f"[composer.directions] '{stance_key}' failed for "
-                           f"{business_id[:8]} (continuing): {e}")
+                           f"{business_id[:8]} (continuing, cumulative "
+                           f"{_time.monotonic() - _t0:.0f}s): {e}")
 
     if len(items) < 2:
         raise HTTPException(502, "could not author enough directions "

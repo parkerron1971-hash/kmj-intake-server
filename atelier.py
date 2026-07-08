@@ -42,12 +42,23 @@ logger = logging.getLogger("atelier")
 # Site Arc 11 — THE QUALITY LEVER: bespoke sections (and refines) author
 # on Opus by default. Cost is ~2-3x Sonnet per section (Kevin approved
 # quality-first, 2026-07); ATELIER_MODEL env still overrides either way.
+#
+# Site Arc 12 — the model LADDER (model_ladder.py) now protects every
+# call: a model-identity error (404/403/invalid-model 400) triggers ONE
+# loud (logger.error) + breadcrumbed (site_config.model_fallbacks) retry
+# on Sonnet; a timeout gets one same-model retry at -35% max_tokens
+# before the sonnet rung. temperature is dropped automatically on the
+# families that reject sampling params (Opus 4.7/4.8 400s on it — the
+# post-#62 silent-atelier killer: every bespoke call failed identically
+# and fell back to the module section with only a per-section warning).
 ATELIER_MODEL_DEFAULT = "claude-opus-4-8"
 ATELIER_TEMPERATURE = 0.8          # creative latitude — the point of the atelier
+                                   # (auto-omitted where the model rejects it)
 ATELIER_MAX_TOKENS = 8000
-# 120s (was 60): Opus generates slower than Sonnet; a bespoke section at
-# ~8k output tokens needs the headroom. Still inside the background
-# job's budget (2-3 calls per compose; jobs sweep stale at 10 min).
+# Constructor default only — every real call passes the family-scaled
+# ceiling from model_ladder.timeout_for('atelier', model): 240s on Opus
+# (streams ~2-3x slower), 120s on Sonnet. Background job budget holds
+# (2-3 calls per compose; jobs sweep stale at 10 min).
 _CALL_TIMEOUT_S = 120.0
 
 # Sections that must stay modular: their value is DATA RENDERED RIGHT
@@ -163,9 +174,15 @@ def _client():
 
 
 def _call_llm(system: str, user: str, business_id: str) -> Optional[str]:
-    """One bespoke-section call. Hard 60s timeout + usage logging
-    (task='atelier'). Returns the raw text or None on any failure —
-    the caller treats None as 'fall back to the module section'."""
+    """One bespoke-section call under the model ladder (Site Arc 12):
+    family-scaled timeout, loud+breadcrumbed sonnet fallback on a
+    model-identity error, same-model reduced-tokens retry on a timeout.
+    Returns the raw text or None on total failure — the caller treats
+    None as 'fall back to the module section', but that failure is now
+    IMPOSSIBLE to be silent: logger.error + a site_config.model_fallbacks
+    breadcrumb fire before None is returned."""
+    import model_ladder
+
     client = _client()
     if client is None:
         logger.info("[atelier] no ANTHROPIC_API_KEY — skipping bespoke")
@@ -174,21 +191,37 @@ def _call_llm(system: str, user: str, business_id: str) -> Optional[str]:
     # observable: Opus default vs an ATELIER_MODEL env override).
     logger.info(f"[atelier] authoring with model={_model()} for "
                 f"{(business_id or 'unknown')[:8]}")
-    try:
-        msg = client.messages.create(
-            model=_model(), max_tokens=ATELIER_MAX_TOKENS,
-            temperature=ATELIER_TEMPERATURE,
+
+    def _do(model: str, max_tokens: int, timeout: float):
+        return client.messages.create(
+            model=model, max_tokens=max_tokens,
             system=system, messages=[{"role": "user", "content": user}],
-            timeout=_CALL_TIMEOUT_S,
+            timeout=timeout,
+            # Opus 4.7/4.8 / Sonnet 5 / Fable 400 on temperature —
+            # omitted there, kept on Sonnet 4.x.
+            **model_ladder.sampling_kwargs(model, ATELIER_TEMPERATURE),
         )
+
+    try:
+        msg, used_model = model_ladder.call_with_ladder(
+            _do, model=_model(), task="atelier",
+            business_id=business_id or "", max_tokens=ATELIER_MAX_TOKENS)
     except Exception as e:
-        logger.warning(f"[atelier] LLM call failed for {business_id[:8]}: {e}")
+        # Every rung failed. LOUD + breadcrumbed (to_model=None records
+        # 'no rung succeeded') — a bare module-only page is never a
+        # mystery again.
+        logger.error(f"[atelier] LLM call failed on EVERY ladder rung for "
+                     f"{(business_id or 'unknown')[:8]} "
+                     f"(model={_model()}): {type(e).__name__}: {e}")
+        model_ladder.record_model_fallback(
+            business_id or "", task="atelier", from_model=_model(),
+            to_model=None, reason=f"{type(e).__name__}: {e}")
         return None
     try:
         from api_usage_logger import log_api_usage_sync
         u = getattr(msg, "usage", None)
         log_api_usage_sync(
-            endpoint="/composer/atelier", model=_model(),
+            endpoint="/composer/atelier", model=used_model,
             input_tokens=getattr(u, "input_tokens", 0) or 0,
             output_tokens=getattr(u, "output_tokens", 0) or 0,
             business_id=business_id, task_type="atelier")
@@ -775,6 +808,15 @@ def run_atelier(html: str, spec: List[Dict[str, Any]], ctx: Dict[str, Any],
                     fragments persisted on site_config.atelier.
     Returns (html, atelier_meta|None). Fail-soft: any failure returns
     the input html — exactly the Arc 7 module page."""
+    # Site Arc 12 — startup model probe (once per process; covers the
+    # directions→choose publish path, which never calls produce_dro).
+    try:
+        import model_ladder
+        from agents.composer.drl.passes import _drl_model
+        model_ladder.probe_models_once([_model(), _drl_model()])
+    except Exception:
+        pass
+
     if precomputed and (precomputed.get("fragments") or {}):
         meta = precomputed
     elif regenerate:
