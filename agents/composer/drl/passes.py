@@ -25,7 +25,8 @@
 import json
 import os
 import logging
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from anthropic import Anthropic
 
@@ -68,6 +69,15 @@ DRO_TEMPERATURE = 0.4                          # reasoning with creative latitud
 # for 10+ minutes ("12 min producing nothing"). DRO authoring is best-effort:
 # a timeout just means we compose without the DRO, never a hung build.
 _CALL_TIMEOUT_S = 50.0
+# DRO-resilience fix: the flat 50s cap was mathematically incoherent with
+# the output budgets above. A DRO near DRO_MAX_TOKENS=6000 streams for
+# 80-120s at Sonnet speed (~50-80 tok/s); even a realistic 2500-token DRO
+# (decisions + the echoed evidence-quoted signals) sits AT the 50s line —
+# and Arc 10's richer intake (offer block + more owner language) pushed
+# real composes past it, so BOTH attempts timed out and every compose ran
+# dro_status=fallback. Per-task ceilings sized to the output budgets:
+_SIGNAL_TIMEOUT_S = 75.0    # SIGNAL_MAX_TOKENS=3200 ≈ up to ~60s of streaming
+_DRO_TIMEOUT_S = 120.0      # DRO_MAX_TOKENS=6000 ≈ up to ~110s of streaming
 
 
 def _client() -> Optional[Anthropic]:
@@ -75,12 +85,23 @@ def _client() -> Optional[Anthropic]:
     return Anthropic(api_key=key, timeout=_CALL_TIMEOUT_S, max_retries=1) if key else None
 
 
+def _set_fail(out: Optional[Dict[str, str]], stage: str, detail: str) -> None:
+    """Record a machine-readable failure reason on the caller's mutable
+    out-param (forensics: site_composer persists it as site_config.dro_failure
+    so a fallback compose is never a mystery again). stage ∈
+    signals|authoring|validation|exception."""
+    if isinstance(out, dict):
+        out["stage"] = stage
+        out["detail"] = str(detail)[:300]
+
+
 def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
-          temperature: float, business_id: str, task: str) -> str:
+          temperature: float, business_id: str, task: str,
+          timeout: Optional[float] = None) -> str:
     msg = client.messages.create(
         model=DRL_MODEL, max_tokens=max_tokens, temperature=temperature,
         system=system, messages=[{"role": "user", "content": user}],
-        timeout=_CALL_TIMEOUT_S,
+        timeout=timeout or _CALL_TIMEOUT_S,
     )
     try:
         from api_usage_logger import log_api_usage_sync
@@ -178,31 +199,53 @@ def _signal_system_prompt() -> str:
     return "\n".join(lines)
 
 
-def detect_signals(business_id: str, transcript: str) -> List[Dict[str, Any]]:
+def detect_signals(business_id: str, transcript: str,
+                   failure_out: Optional[Dict[str, str]] = None,
+                   ) -> List[Dict[str, Any]]:
     """Transcript/context → signals[]. Soft-fails to [] (the authoring pass
     can still proceed conservatively). One clean retry on a call/parse
     failure — mirrors author_dro's discipline; previously a single
-    truncated response silently starved the whole DRO of evidence."""
+    truncated response silently starved the whole DRO of evidence.
+    `failure_out` (forensics): mutable dict that receives {stage, detail}
+    when BOTH attempts fail — the reason is never lost again."""
     client = _client()
-    if not client or not (transcript or "").strip():
+    if not client:
+        logger.warning(f"[drl] signal detection skipped for {business_id}: "
+                       "no ANTHROPIC_API_KEY — DRL client unavailable")
+        _set_fail(failure_out, "signals",
+                  "no ANTHROPIC_API_KEY — DRL client unavailable")
+        return []
+    if not (transcript or "").strip():
+        logger.warning(f"[drl] signal detection skipped for {business_id}: "
+                       "empty intake transcript")
+        _set_fail(failure_out, "signals", "empty intake transcript")
         return []
     system = _signal_system_prompt()
     user = (f"Practitioner intake material for business {business_id}:\n\n"
             f"{transcript.strip()[:SIGNAL_TRANSCRIPT_CAP]}")
+    last: Dict[str, str] = {}
 
     def _attempt(extra: str = "") -> Optional[List[Any]]:
+        t0 = time.monotonic()
         try:
             raw = _call(client, system, user + extra,
                         max_tokens=SIGNAL_MAX_TOKENS, temperature=SIGNAL_TEMPERATURE,
-                        business_id=business_id, task="signals")
+                        business_id=business_id, task="signals",
+                        timeout=_SIGNAL_TIMEOUT_S)
         except Exception as e:
-            logger.warning(f"[drl] signal detection call failed for {business_id}: {e}")
+            last["detail"] = (f"signal call failed after "
+                              f"{time.monotonic() - t0:.0f}s "
+                              f"({type(e).__name__}): {e}")
+            logger.warning(f"[drl] signal detection call failed for "
+                           f"{business_id}: {last['detail']}")
             return None
         parsed = _parse_json(raw)
         if not isinstance(parsed, dict) or not isinstance(parsed.get("signals"), list):
             # Diagnose, don't guess: truncation = long raw w/ no closing
             # brace in the tail; refusal/preamble shows in the head.
             r = raw or ""
+            last["detail"] = (f"signal parse failed: len={len(r)} "
+                              f"head={r[:60]!r} tail={r[-60:]!r}")
             logger.warning(f"[drl] signal parse failed for {business_id}: "
                            f"len={len(r)} head={r[:60]!r} tail={r[-60:]!r}")
             return None
@@ -215,6 +258,8 @@ def detect_signals(business_id: str, transcript: str) -> List[Dict[str, Any]]:
             "the complete JSON object — no prose, no code fences — and make "
             "sure the JSON is fully closed.")
     if out is None:
+        _set_fail(failure_out, "signals",
+                  last.get("detail") or "both signal attempts failed")
         return []
     valid_ids = set(sig.signal_ids())
     return [s for s in out if isinstance(s, dict) and s.get("signal_id") in valid_ids]
@@ -390,6 +435,22 @@ def _creative_brief_block(creative: Optional[Dict[str, Any]]) -> str:
             "it is unusable):\n" + "\n".join(lines) + "\n\n")
 
 
+# Shared by the full authoring prompt AND the minimal-mode fallback —
+# the output contract is identical in both modes.
+_DRO_OUTPUT_SHAPE = (
+    "OUTPUT ONLY the DRO as JSON: "
+    '{"dro_version":1,"business_id":"...","signals":[...echo the consumed signals...],'
+    '"decisions":{"palette":{...},"typography":{...},"layout":{...},"motion":{...},'
+    '"hero_concept":{...},"whitespace":{...},"voice_to_visual":{...},'
+    '"rule_break":{"what":"...","where":"...","because":"..."},'
+    '"tension":{"pole_a":"...","pole_b":"...","expression":"how the design holds both","because":"..."},'
+    '"first_impression":{"feel_in_3s":"...","remember":"...","because":"..."}},'
+    '"anti_convergence":{"distinctiveness_check":{}},'
+    '"summary_for_practitioner":"plain-language why-your-site-looks-this-way",'
+    '"exemplars_consulted":[{"exemplar_id":"..","borrowed":"the move, named"}]}'
+)
+
+
 def _dro_user_prompt(business_id: str, signals: List[Dict[str, Any]],
                      exemplars: List[Dict[str, Any]],
                      recent_signatures: List[List[Any]],
@@ -413,17 +474,121 @@ def _dro_user_prompt(business_id: str, signals: List[Dict[str, Any]],
         f"{json.dumps([_exemplar_for_prompt(e) for e in exemplars], indent=2)}\n\n"
         f"RECENTLY-USED 8-AXIS SIGNATURES (justify any repetition from signals; "
         f"axes order = {sig.DISTINCTIVENESS_AXES}):\n{json.dumps(recent_signatures, indent=2)}\n\n"
-        "OUTPUT ONLY the DRO as JSON: "
-        '{"dro_version":1,"business_id":"...","signals":[...echo the consumed signals...],'
-        '"decisions":{"palette":{...},"typography":{...},"layout":{...},"motion":{...},'
-        '"hero_concept":{...},"whitespace":{...},"voice_to_visual":{...},'
-        '"rule_break":{"what":"...","where":"...","because":"..."},'
-        '"tension":{"pole_a":"...","pole_b":"...","expression":"how the design holds both","because":"..."},'
-        '"first_impression":{"feel_in_3s":"...","remember":"...","because":"..."}},'
-        '"anti_convergence":{"distinctiveness_check":{}},'
-        '"summary_for_practitioner":"plain-language why-your-site-looks-this-way",'
-        '"exemplars_consulted":[{"exemplar_id":"..","borrowed":"the move, named"}]}'
+        + _DRO_OUTPUT_SHAPE
     )
+
+
+# ─── Minimal-mode fallback (the resilience ladder's last rung) ──────────
+# A bland-but-valid DRO beats NO DRO: a fallback compose loses the atelier,
+# the ceremony seams, the anchored hero and every DRO-driven design lever
+# at once. When the full prompt fails call+parse-retry+validation-retry,
+# one stripped attempt runs: signals + a principles summary + the output
+# schema ONLY — no exemplars, no reference analysis, no creative brief,
+# no stance. Such DROs carry meta.authored_minimal=true and always report
+# dro_status='applied_thin' (site_composer), regardless of signal count.
+_MINIMAL_PRINCIPLES_CAP = 1500
+
+
+def _minimal_dro_system_prompt() -> str:
+    lines = [
+        "You author a Design Rationale Object (DRO) — the reasoning for a "
+        "website's design — as ONE JSON object. MINIMAL MODE: a plain, "
+        "conservative, VALID DRO is the goal; no flourish required.",
+        "You decide DIRECTION, never concrete assets: no hex codes, no "
+        "font names.",
+        "Every decision object MUST include `because` (one line) and "
+        "`from_signals` (a list of signal_ids; [] when inferred).",
+        f"decisions MUST include ALL of: {REQUIRED_DECISIONS} "
+        "plus rule_break, tension and first_impression.",
+        "",
+        "For the fields below use ONLY these values:",
+    ]
+    for dec, fields in _decision_enums().items():
+        for fname, allowed in fields.items():
+            lines.append(f"- decisions.{dec}.{fname}: {allowed}")
+    try:
+        principles = str(drl.load_principles() or "")[:_MINIMAL_PRINCIPLES_CAP]
+    except Exception:
+        principles = ""
+    if principles:
+        lines += ["", "TRANSLATION PRINCIPLES (summary):", principles]
+    return "\n".join(lines)
+
+
+def _author_dro_minimal(client: Anthropic, business_id: str,
+                        signals: List[Dict[str, Any]],
+                        recent: List[Dict[str, Any]],
+                        failure_out: Optional[Dict[str, str]] = None,
+                        ) -> Optional[Dict[str, Any]]:
+    """The FINAL rung: stripped prompt, one attempt + one corrective retry.
+    Returns a validated, minimal-tagged DRO or None (failure_out then
+    carries the combined reason)."""
+    consumable = [s for s in signals
+                  if isinstance(s.get("confidence"), (int, float))
+                  and sig.is_consumable(s["confidence"])]
+    system = _minimal_dro_system_prompt()
+    user = (f"BUSINESS: {business_id}\n\n"
+            f"DETECTED SIGNALS (drive the decisions where they can):\n"
+            f"{json.dumps(consumable, indent=2)}\n\n" + _DRO_OUTPUT_SHAPE)
+    last: Dict[str, str] = {}
+
+    def _attempt(extra: str = "") -> Optional[Dict[str, Any]]:
+        t0 = time.monotonic()
+        try:
+            raw = _call(client, system, user + extra, max_tokens=DRO_MAX_TOKENS,
+                        temperature=DRO_TEMPERATURE, business_id=business_id,
+                        task="dro_minimal", timeout=_DRO_TIMEOUT_S)
+        except Exception as e:
+            last["detail"] = (f"minimal call failed after "
+                              f"{time.monotonic() - t0:.0f}s "
+                              f"({type(e).__name__}): {e}")
+            logger.warning(f"[drl] minimal-mode call failed for "
+                           f"{business_id}: {last['detail']}")
+            return None
+        parsed = _parse_json(raw)
+        if not isinstance(parsed, dict):
+            r = raw or ""
+            last["detail"] = (f"minimal parse failed: len={len(r)} "
+                              f"head={r[:60]!r} tail={r[-60:]!r}")
+            logger.warning(f"[drl] minimal-mode parse failed for "
+                           f"{business_id}: {last['detail']}")
+            return None
+        return parsed
+
+    dro = _attempt()
+    if dro is None:
+        dro = _attempt(
+            "\n\nYour previous response was not parseable JSON. Output ONLY "
+            "the complete JSON object — no prose, no code fences — and make "
+            "sure the JSON is fully closed.")
+    if dro is not None:
+        problems = _validate_dro(dro)
+        if problems:
+            last["detail"] = f"minimal validation problems: {problems}"
+            dro = _attempt(
+                f"\n\nYour previous DRO had these problems: {problems}. "
+                "Fix them. Use only the allowed enum values; include because "
+                "+ from_signals on every decision. Output ONLY the JSON.")
+    if dro is None or _validate_dro(dro):
+        prior = (failure_out or {}).get("detail") or ""
+        _set_fail(failure_out,
+                  (failure_out or {}).get("stage") or "authoring",
+                  (prior + " | minimal-mode also failed: "
+                   + (last.get("detail") or "invalid after retry")).strip(" |"))
+        logger.warning(f"[drl] minimal-mode DRO failed for {business_id}: "
+                       f"{last.get('detail') or 'invalid after retry'}")
+        return None
+    dro["dro_version"] = 1
+    dro["business_id"] = business_id
+    meta = dro.get("meta") if isinstance(dro.get("meta"), dict) else {}
+    meta["authored_minimal"] = True
+    dro["meta"] = meta
+    # No collision regen at this rung (last resort) — but the check block
+    # still records honestly how close to the cohort it landed.
+    dro["anti_convergence"] = {"distinctiveness_check": run_distinctiveness(dro, recent)}
+    logger.warning(f"[drl] minimal-mode DRO authored for {business_id} — "
+                   "bland-but-valid fallback (dro_status will be applied_thin)")
+    return dro
 
 
 def author_dro(business_id: str, signals: List[Dict[str, Any]],
@@ -432,6 +597,7 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
                creative: Optional[Dict[str, Any]] = None,
                stance: Optional[str] = None,
                extra_instruction: Optional[str] = None,
+               failure_out: Optional[Dict[str, str]] = None,
                ) -> Optional[Dict[str, Any]]:
     """signals + principles + exemplars + recent signatures (+ Arc 5
     reference-site analysis, + Arc 6 owner creative brief / directions
@@ -440,10 +606,21 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
     sibling candidate DROs of a directions run — the same collision check
     then enforces distinctiveness ACROSS the three candidates.
     `extra_instruction` (Arc 7) appends a caller-supplied directive to the
-    authoring prompt — used by the same-business freshness regen. Returns
-    None on hard failure (caller decides fallback)."""
+    authoring prompt — used by the same-business freshness regen.
+
+    RESILIENCE LADDER: attempt → parse-retry → validation-retry → one
+    MINIMAL-MODE attempt (stripped prompt; the result is tagged
+    meta.authored_minimal). Returns None only when every rung failed —
+    `failure_out` then carries {stage, detail} (never lose the reason).
+    NOTE: failure_out may hold the FULL-mode failure even when minimal
+    mode rescued the DRO — callers must key off the return value, not
+    the presence of a reason."""
     client = _client()
     if not client:
+        logger.warning(f"[drl] DRO authoring skipped for {business_id}: "
+                       "no ANTHROPIC_API_KEY — DRL client unavailable")
+        _set_fail(failure_out, "authoring",
+                  "no ANTHROPIC_API_KEY — DRL client unavailable")
         return None
     exemplars = _select_exemplars(signals)
     recent_sigs = [distinctiveness_signature(r) for r in recent]
@@ -453,19 +630,28 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
                             creative=creative, stance=stance)
     if extra_instruction:
         user += "\n\n" + str(extra_instruction)
+    last: Dict[str, str] = {}
 
     def _attempt(extra: str = "") -> Optional[Dict[str, Any]]:
+        t0 = time.monotonic()
         try:
             raw = _call(client, system, user + extra, max_tokens=DRO_MAX_TOKENS,
-                        temperature=DRO_TEMPERATURE, business_id=business_id, task="dro")
+                        temperature=DRO_TEMPERATURE, business_id=business_id,
+                        task="dro", timeout=_DRO_TIMEOUT_S)
         except Exception as e:
-            logger.warning(f"[drl] DRO authoring call failed for {business_id}: {e}")
+            last["detail"] = (f"DRO call failed after "
+                              f"{time.monotonic() - t0:.0f}s "
+                              f"({type(e).__name__}): {e}")
+            logger.warning(f"[drl] DRO authoring call failed for "
+                           f"{business_id}: {last['detail']}")
             return None
         parsed = _parse_json(raw)
         if not isinstance(parsed, dict):
             # Diagnose, don't guess: truncation = long raw w/ no closing
             # brace in the tail; refusal/preamble shows in the head.
             r = raw or ""
+            last["detail"] = (f"DRO parse failed: len={len(r)} "
+                              f"head={r[:60]!r} tail={r[-60:]!r}")
             logger.warning(f"[drl] DRO parse failed for {business_id}: "
                            f"len={len(r)} head={r[:60]!r} tail={r[-60:]!r}")
             return None
@@ -483,13 +669,25 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
     if dro is not None:
         problems = _validate_dro(dro)
         if problems:
+            last["detail"] = f"validation problems: {problems}"
             dro = _attempt(
                 f"\n\nYour previous DRO had these problems: {problems}. "
                 "Fix them. Use only schema enum values; include because + "
                 "from_signals on every decision. Output ONLY the JSON.")
-    if dro is None or _validate_dro(dro):
-        logger.warning(f"[drl] DRO invalid after retry for {business_id}")
-        return None
+    final_problems = _validate_dro(dro) if dro is not None else None
+    if dro is None or final_problems:
+        if dro is None:
+            _set_fail(failure_out, "authoring",
+                      last.get("detail") or "call/parse failed on both attempts")
+        else:
+            _set_fail(failure_out, "validation",
+                      f"invalid after retry: {final_problems}")
+        logger.warning(
+            f"[drl] DRO invalid after retry for {business_id} "
+            f"({(failure_out or last).get('detail', 'unknown')}) — "
+            "attempting minimal mode")
+        return _author_dro_minimal(client, business_id, signals, recent,
+                                   failure_out=failure_out)
 
     # Stamp identity + run distinctiveness; regenerate once on collision.
     dro["dro_version"] = 1
@@ -506,6 +704,12 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
             regen["anti_convergence"] = {"distinctiveness_check": {
                 **run_distinctiveness(regen, recent), "verdict": "regenerated_once"}}
             return regen
+        # Collision-regen chain: NOT fatal (the valid original ships), but
+        # the forensics must show the chain was attempted and why it bent.
+        logger.warning(
+            f"[drl] collision regen failed for {business_id} "
+            f"({last.get('detail') or 'invalid regen'}) — keeping the "
+            "original (collision-flagged) DRO")
 
     dro["anti_convergence"] = {"distinctiveness_check": run_distinctiveness(dro, recent)}
     return dro
@@ -572,9 +776,12 @@ def persist_dro(business_id: str, dro: Dict[str, Any]) -> Optional[str]:
 def produce_dro(business_id: str, transcript: str,
                 reference_analysis: Optional[List[Dict[str, Any]]] = None,
                 creative: Optional[Dict[str, Any]] = None,
-                ) -> Optional[Dict[str, Any]]:
+                ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
     """Full pass: detect signals → fetch recent → author DRO (with
-    distinctiveness) → persist. Returns the DRO (with `id` stamped) or None.
+    distinctiveness) → persist. Returns (dro, failure): the DRO (with `id`
+    stamped) and None, or None and {"stage": "signals|authoring|validation|
+    exception", "detail": str} — failure forensics so a fallback compose is
+    never a mystery (site_composer persists it as site_config.dro_failure).
     Best-effort: never raises into the caller (PR3 wires this ahead of compose).
     `reference_analysis` (Arc 5) = reference_analyzer results for the sites
     the owner admires — rides into the authoring prompt as direction evidence.
@@ -593,7 +800,9 @@ def produce_dro(business_id: str, transcript: str,
         stamped AFTER persist) so compose_site can report 'applied_thin'
         when the rationale ran on a thin brief."""
     try:
-        signals = detect_signals(business_id, transcript)
+        sig_fail: Dict[str, str] = {}
+        auth_fail: Dict[str, str] = {}
+        signals = detect_signals(business_id, transcript, failure_out=sig_fail)
         consumable_n = sum(
             1 for s in signals
             if isinstance(s.get("confidence"), (int, float))
@@ -601,9 +810,20 @@ def produce_dro(business_id: str, transcript: str,
         recent = fetch_recent_dros(business_id)
         dro = author_dro(business_id, signals, recent,
                          reference_analysis=reference_analysis,
-                         creative=creative)
+                         creative=creative, failure_out=auth_fail)
         if dro is None:
-            return None
+            failure = {
+                "stage": auth_fail.get("stage") or "authoring",
+                "detail": (auth_fail.get("detail")
+                           or "author_dro returned None")}
+            if sig_fail.get("detail"):
+                # Signal failure alone never causes fallback (authoring
+                # proceeds on []), but it belongs in the forensics.
+                failure["detail"] = (f"signals: {sig_fail['detail']} | "
+                                     f"{failure['detail']}")[:300]
+            logger.warning(f"[drl] produce_dro fallback for {business_id}: "
+                           f"stage={failure['stage']} {failure['detail']}")
+            return None, failure
 
         # Same-business freshness (runs BEFORE persist, so own-last is
         # genuinely the previous compose). Deterministic palette/ground/
@@ -651,7 +871,9 @@ def produce_dro(business_id: str, transcript: str,
         # Runtime-only metadata (never persisted): feeds the honest
         # thin-brief status in compose_site.
         dro["consumable_signal_count"] = consumable_n
-        return dro
+        return dro, None
     except Exception as e:
-        logger.warning(f"[drl] produce_dro failed for {business_id}: {e}")
-        return None
+        logger.warning(f"[drl] produce_dro failed for {business_id}: "
+                       f"({type(e).__name__}) {e}")
+        return None, {"stage": "exception",
+                      "detail": f"{type(e).__name__}: {e}"[:300]}
