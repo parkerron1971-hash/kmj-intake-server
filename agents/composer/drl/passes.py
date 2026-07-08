@@ -31,13 +31,28 @@ from typing import Any, Dict, List, Optional, Tuple
 from anthropic import Anthropic
 
 import sb_clients
+import model_ladder
 from agents.composer.hero_composer import _strip_code_fence
 from agents.composer import drl
 from agents.composer.drl import signals as sig
 
 logger = logging.getLogger("drl.passes")
 
-DRL_MODEL = "claude-sonnet-4-5-20250929"     # same tier as the composer
+# Site Arc 12 — REASONING UPGRADE: the DRO is the creative brain of every
+# compose (signal detection + rationale authoring), so this is the
+# surgical place to spend Opus. Env-driven (DRL_MODEL) with the full
+# model-ladder protecting it: an unavailable model 404/403/400s → ONE
+# loud, breadcrumbed retry on model_ladder.FALLBACK_MODEL (Sonnet 4.5);
+# a timeout → one same-model retry at -35% max_tokens → the sonnet rung
+# → minimal mode. COST NOTE: Opus 4.8 is ~$5/$25 per MTok vs Sonnet
+# $3/$15; a single compose is 1 signal pass + 1 DRO (~10k out) ≈ +$0.15,
+# a directions run authors 3 candidate DROs on this model (~20k out)
+# ≈ +$0.40 — Kevin ruled quality-first (2026-07).
+DRL_MODEL_DEFAULT = "claude-opus-4-8"
+
+
+def _drl_model() -> str:
+    return (os.environ.get("DRL_MODEL") or "").strip() or DRL_MODEL_DEFAULT
 # Arc 7 quality floor: 1800 truncated the signal JSON on rich intakes —
 # a parse failure silently returned [] and the DRO authored blind while
 # still reporting dro_status='applied'. Roomy cap + parse-retry below.
@@ -64,25 +79,21 @@ DRO_TEMPERATURE = 0.4                          # reasoning with creative latitud
 
 
 # ─── LLM plumbing ──────────────────────────────────────────────────────
-# Hard per-call timeout + a single retry. WITHOUT this the SDK default is
-# 600s/call with 2 retries, so one slow API call could stall a whole build
-# for 10+ minutes ("12 min producing nothing"). DRO authoring is best-effort:
-# a timeout just means we compose without the DRO, never a hung build.
-_CALL_TIMEOUT_S = 50.0
-# DRO-resilience fix: the flat 50s cap was mathematically incoherent with
-# the output budgets above. A DRO near DRO_MAX_TOKENS=6000 streams for
-# 80-120s at Sonnet speed (~50-80 tok/s); even a realistic 2500-token DRO
-# (decisions + the echoed evidence-quoted signals) sits AT the 50s line —
-# and Arc 10's richer intake (offer block + more owner language) pushed
-# real composes past it, so BOTH attempts timed out and every compose ran
-# dro_status=fallback. Per-task ceilings sized to the output budgets:
-_SIGNAL_TIMEOUT_S = 75.0    # SIGNAL_MAX_TOKENS=3200 ≈ up to ~60s of streaming
-_DRO_TIMEOUT_S = 120.0      # DRO_MAX_TOKENS=6000 ≈ up to ~110s of streaming
+# Per-call ceilings now live in model_ladder.timeout_for(task, model):
+# they scale with the model FAMILY (Opus streams ~2-3x slower than
+# Sonnet — signals 120s / DRO 240s on Opus vs 75/120 on Sonnet). WITHOUT
+# an explicit ceiling the SDK default is 600s/call with 2 retries, so
+# one slow call could stall a build for 10+ minutes. The compose runs
+# as a chief_jobs background job, so the long Opus ceilings are safe.
+# _CLIENT_DEFAULT_TIMEOUT_S is only the constructor default — every real
+# call passes its own timeout.
+_CLIENT_DEFAULT_TIMEOUT_S = 120.0
 
 
 def _client() -> Optional[Anthropic]:
     key = os.environ.get("ANTHROPIC_API_KEY")
-    return Anthropic(api_key=key, timeout=_CALL_TIMEOUT_S, max_retries=1) if key else None
+    return (Anthropic(api_key=key, timeout=_CLIENT_DEFAULT_TIMEOUT_S,
+                      max_retries=1) if key else None)
 
 
 def _set_fail(out: Optional[Dict[str, str]], stage: str, detail: str) -> None:
@@ -95,19 +106,37 @@ def _set_fail(out: Optional[Dict[str, str]], stage: str, detail: str) -> None:
         out["detail"] = str(detail)[:300]
 
 
+# task → the ladder's timeout family ('signals' streams less than a DRO).
+_TASK_FAMILY = {"signals": "signals"}   # everything else = "dro"
+
+
 def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
-          temperature: float, business_id: str, task: str,
-          timeout: Optional[float] = None) -> str:
-    msg = client.messages.create(
-        model=DRL_MODEL, max_tokens=max_tokens, temperature=temperature,
-        system=system, messages=[{"role": "user", "content": user}],
-        timeout=timeout or _CALL_TIMEOUT_S,
-    )
+          temperature: float, business_id: str, task: str) -> str:
+    """One DRL call under the model ladder (Site Arc 12): family-scaled
+    timeout, loud+breadcrumbed sonnet fallback on a model-identity error,
+    same-model reduced-tokens retry on a timeout. Raises only when every
+    rung failed — the callers' attempt/parse-retry + minimal-mode
+    machinery stays the outer safety net. NOTE: temperature is dropped
+    automatically for model families that 400 on sampling params
+    (Opus 4.7/4.8 / Sonnet 5 / Fable)."""
+    family = _TASK_FAMILY.get(task, "dro")
+
+    def _do(model: str, max_tokens: int, timeout: float):
+        return client.messages.create(
+            model=model, max_tokens=max_tokens,
+            system=system, messages=[{"role": "user", "content": user}],
+            timeout=timeout,
+            **model_ladder.sampling_kwargs(model, temperature),
+        )
+
+    msg, used_model = model_ladder.call_with_ladder(
+        _do, model=_drl_model(), task=family,
+        business_id=business_id, max_tokens=max_tokens)
     try:
         from api_usage_logger import log_api_usage_sync
         u = getattr(msg, "usage", None)
         log_api_usage_sync(
-            endpoint=f"/composer/drl/{task}", model=DRL_MODEL,
+            endpoint=f"/composer/drl/{task}", model=used_model,
             input_tokens=getattr(u, "input_tokens", 0) or 0,
             output_tokens=getattr(u, "output_tokens", 0) or 0,
             business_id=business_id, task_type="composer")
@@ -230,8 +259,7 @@ def detect_signals(business_id: str, transcript: str,
         try:
             raw = _call(client, system, user + extra,
                         max_tokens=SIGNAL_MAX_TOKENS, temperature=SIGNAL_TEMPERATURE,
-                        business_id=business_id, task="signals",
-                        timeout=_SIGNAL_TIMEOUT_S)
+                        business_id=business_id, task="signals")
         except Exception as e:
             last["detail"] = (f"signal call failed after "
                               f"{time.monotonic() - t0:.0f}s "
@@ -537,7 +565,7 @@ def _author_dro_minimal(client: Anthropic, business_id: str,
         try:
             raw = _call(client, system, user + extra, max_tokens=DRO_MAX_TOKENS,
                         temperature=DRO_TEMPERATURE, business_id=business_id,
-                        task="dro_minimal", timeout=_DRO_TIMEOUT_S)
+                        task="dro_minimal")
         except Exception as e:
             last["detail"] = (f"minimal call failed after "
                               f"{time.monotonic() - t0:.0f}s "
@@ -637,7 +665,7 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
         try:
             raw = _call(client, system, user + extra, max_tokens=DRO_MAX_TOKENS,
                         temperature=DRO_TEMPERATURE, business_id=business_id,
-                        task="dro", timeout=_DRO_TIMEOUT_S)
+                        task="dro")
         except Exception as e:
             last["detail"] = (f"DRO call failed after "
                               f"{time.monotonic() - t0:.0f}s "
@@ -800,6 +828,16 @@ def produce_dro(business_id: str, transcript: str,
         stamped AFTER persist) so compose_site can report 'applied_thin'
         when the rationale ran on a thin brief."""
     try:
+        # Site Arc 12 — startup model probe (once per process): a
+        # misconfigured DRL/atelier model shows up in the logs as
+        # '[model-probe] … unreachable' before the first silent fallback.
+        try:
+            import atelier as _atelier_mod
+            model_ladder.probe_models_once(
+                [_drl_model(), _atelier_mod._model()])
+        except Exception:
+            model_ladder.probe_models_once([_drl_model()])
+
         sig_fail: Dict[str, str] = {}
         auth_fail: Dict[str, str] = {}
         signals = detect_signals(business_id, transcript, failure_out=sig_fail)
