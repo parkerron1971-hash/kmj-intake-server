@@ -557,6 +557,9 @@ h2 {{ font-size: var(--sx-h2); font-weight: var(--sx-h2-weight, var(--sx-heading
 p {{ margin: 0 0 1.15em; max-width: 62ch; }}
 a {{ color: var(--sx-accent); text-decoration: none; }}
 .sxm-section {{ padding: var(--sx-section-pad) var(--sx-gutter); }}
+/* Site Arc 11b — dead-band fix: a section straight after a ceremony seam
+   trims its top pad ~45% (the interstitial already carries the pause). */
+.sxm-section.sxm-after-seam {{ padding-top: calc(var(--sx-section-pad) * 0.55); }}
 .sxm-inner {{ max-width: var(--sx-content-max); margin: 0 auto; }}
 .sxm-eyebrow {{
   font-size: .76rem; letter-spacing: .26em; text-transform: uppercase;

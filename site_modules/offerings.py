@@ -3,8 +3,11 @@ invented by the LLM). Content: eyebrow, headline, intro. Variants:
 cards, list. Prices honor show_price_to_customer; the per-offering Book
 CTA appears only when booking is actually enabled — function first.
 
-Site Arc 9 (data dignity): $0 renders 'Free'; sub-$5 prices (test /
-placeholder-grade data) render NO price line; rows deduped by
+Site Arc 9 (data dignity), tightened Site Arc 11b: $0 renders 'Free'
+(a deliberate free offering is generosity, not noise); items priced
+>0 and <$5 are placeholder-grade data and are EXCLUDED from the list
+entirely — unless they are ALL there is, in which case they keep their
+rows price-suppressed so the section isn't empty. Rows deduped by
 normalized title; items the store section already shows are excluded;
 the featured card's foot is never empty."""
 from __future__ import annotations
@@ -41,11 +44,29 @@ def _price(o: Dict[str, Any]) -> str:
         # against the display face is the luxury signal.
         return '<div class="sxm-off-price sxm-whisper">Free</div>'
     if 0 < val < _MIN_DIGNIFIED_PRICE:
-        return ""  # placeholder-grade price — no price line at all
+        # Placeholder-grade price — no price line. Normally these rows
+        # are excluded entirely (Site Arc 11b, render()); this branch
+        # still guards the keep-when-only-offering fallback.
+        return ""
     cur = (o.get("currency") or "usd").upper()
     sym = "$" if cur == "USD" else f"{cur} "
     txt = f"{sym}{val:,.0f}" if val == int(val) else f"{sym}{val:,.2f}"
     return f'<div class="sxm-off-price sxm-whisper">{safe(txt)}</div>'
+
+
+def _placeholder_priced(o: Dict[str, Any]) -> bool:
+    """True when the offering carries a >$0-but-sub-$5 price — the
+    signature of test / placeholder-grade rows (Site Arc 11b: these are
+    dropped from the list, not just price-suppressed). $0 is NOT
+    placeholder (Free is a legitimate offer); unpriced rows pass."""
+    p = o.get("current_price")
+    if p in (None, ""):
+        return False
+    try:
+        val = float(p)
+    except (TypeError, ValueError):
+        return False
+    return 0 < val < _MIN_DIGNIFIED_PRICE
 
 
 def _duration(o: Dict[str, Any]) -> str:
@@ -80,6 +101,14 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
             continue
         seen_titles.add(key)
         rows.append(o)
+    # Site Arc 11b (data dignity, tightened): placeholder-priced rows
+    # (>0 and <$5 — e.g. a $2 'Hot Combs' test row) leave the list
+    # entirely; hiding just the price still gave test data a whole row
+    # on a cinematic page. EXCEPTION: when they are all there is, keep
+    # them (price-suppressed by _price) so the section isn't empty.
+    dignified = [o for o in rows if not _placeholder_priced(o)]
+    if dignified:
+        rows = dignified
     rows = rows[:_MAX_ITEMS]
     if not rows:
         return "", ""  # no real offerings → no section; nothing is invented

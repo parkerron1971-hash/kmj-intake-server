@@ -36,7 +36,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -2092,7 +2092,9 @@ _CEREMONY_MAX = 3
 _GENEROUS_WHITESPACE = ("editorial_rhythm", "confidence_air")
 _STATEMENT_COPY_SOURCES = (("about", "pull_quote"), ("hero", "subheadline"),
                            ("offerings", "intro"), ("cta", "subheadline"))
-_MARQUEE_MIN_WORDS = 3
+# Site Arc 11b: with exactly 3 tone words the marquee's repeat is visibly
+# obvious (the live-page thin-loop defect) — 4+ real words or no marquee.
+_MARQUEE_MIN_WORDS = 4
 
 
 def _ceremony_tone_words(ctx: Dict[str, Any]) -> List[str]:
@@ -2118,20 +2120,77 @@ def _ceremony_tone_words(ctx: Dict[str, Any]) -> List[str]:
     return out[:6]
 
 
-def _ceremony_statement_line(spec: List[Dict[str, Any]]) -> str:
-    """One tension-voiced sentence for the statement bar, pulled from
-    the copy the composer ALREADY wrote (spec fields, best-first) —
-    the title card quotes the page, it never invents a line."""
+def _norm_copy_line(v: Any) -> str:
+    """Normalize a copy line for verbatim-duplication checks: collapse
+    whitespace, lowercase, strip wrapping quotes/terminal punctuation."""
+    return " ".join(str(v or "").split()).lower().strip(" .!?……\"'“”‘’")
+
+
+def _spec_copy_corpus(spec: List[Dict[str, Any]]) -> List[str]:
+    """Every normalized copy string the page's SECTIONS carry (all spec
+    content fields, interstitials excluded) — the rendered-copy proxy
+    the statement dedupe filters against."""
+    out: List[str] = []
+    for s in spec:
+        if s.get("module") == "interstitial":
+            continue
+        for v in (s.get("content") or {}).values():
+            n = _norm_copy_line(v)
+            if n:
+                out.append(n)
+    return out
+
+
+def _ceremony_statement_line(spec: List[Dict[str, Any]],
+                             dro: Optional[Dict[str, Any]] = None,
+                             ) -> Tuple[str, bool]:
+    """(line, had_candidates) for the statement bar.
+
+    Site Arc 11b (dedupe): the title card must never REPEAT the page —
+    the live defect was the about pull-quote rendered twice, once in
+    the section and again on the adjacent statement bar. A candidate
+    whose normalized text appears verbatim inside (or containing) ANY
+    section's copy field is filtered out; when candidates existed but
+    none survive, the caller renders a quiet 'thread' seam instead of
+    a statement (the pause stays, the words don't repeat).
+
+    Candidate order matters: the DRO's OWN lines come first — the
+    concept statement and the first-impression 'remember' line are
+    the page's thesis and are normally NOT rendered by any section,
+    so they survive the dedupe naturally. Spec copy fields are the
+    fallback. (Without this, every spec-sourced candidate is by
+    definition already on the page and statements would always fall
+    back to threads.)"""
     by_module: Dict[str, Dict[str, Any]] = {}
     for s in spec:
         mid = s.get("module")
         if isinstance(mid, str) and mid not in by_module:
             by_module[mid] = s.get("content") or {}
+    corpus = _spec_copy_corpus(spec)
+    had_candidates = False
+
+    candidates: List[str] = []
+    d = (dro or {}).get("decisions") or {}
+    for raw in (
+        ((d.get("hero_concept") or {}).get("concept_statement")),
+        ((d.get("first_impression") or {}).get("remember")),
+        ((d.get("tension") or {}).get("expression")),
+    ):
+        if isinstance(raw, str) and raw.strip():
+            candidates.append(raw)
     for mod, field in _STATEMENT_COPY_SOURCES:
-        v = " ".join(str((by_module.get(mod) or {}).get(field) or "").split())
-        if 12 <= len(v) <= 200:
-            return v
-    return ""
+        candidates.append(str((by_module.get(mod) or {}).get(field) or ""))
+
+    for raw in candidates:
+        v = " ".join(str(raw).split())
+        if not (12 <= len(v) <= 200):
+            continue
+        had_candidates = True
+        n = _norm_copy_line(v)
+        if any(n in c or c in n for c in corpus):
+            continue  # the page already says this line — never repeat it
+        return v, True
+    return "", had_candidates
 
 
 def _apply_ceremony_pass(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
@@ -2143,9 +2202,10 @@ def _apply_ceremony_pass(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
       - whitespace philosophy generous (editorial_rhythm/confidence_air,
         or airy density) → silences earn a second seat; otherwise the
         filler seam is the transition thread;
-      - tension authored → ONE statement bar voicing a line the page
-        already says (spec copy, data-override-target);
-      - marquee only when the brand has >=3 real tone words AND the page
+      - tension authored → ONE statement bar quoting the page's copy —
+        but (Site Arc 11b) never a line the sections already render
+        verbatim; all candidates duplicated → a thread seam instead;
+      - marquee only when the brand has >=4 real tone words AND the page
         isn't stilled (dna motion != subtle) — the one loud accent spend,
         on values rather than services;
       - seats capped at 3 and by the available gaps (never directly
@@ -2167,7 +2227,13 @@ def _apply_ceremony_pass(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
                 or density == "airy")
     tn = d.get("tension") if isinstance(d.get("tension"), dict) else {}
     tension_present = bool(tn.get("pole_a") and tn.get("pole_b"))
-    statement_line = _ceremony_statement_line(spec) if tension_present else ""
+    statement_line, statement_had_candidates = ("", False)
+    if tension_present:
+        statement_line, statement_had_candidates = _ceremony_statement_line(spec, dro)
+    # Site Arc 11b: a warranted statement whose every candidate line
+    # already appears in the page's copy falls back to a THREAD seam —
+    # never a duplicated title card.
+    statement_dup_fallback = (not statement_line) and statement_had_candidates
     tone_words = _ceremony_tone_words(ctx)
     dna_motion = (ctx.get("dna") or {}).get("motion", "standard")
     marquee_ok = (len(tone_words) >= _MARQUEE_MIN_WORDS
@@ -2179,6 +2245,11 @@ def _apply_ceremony_pass(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
     if statement_line:
         wishes.append({"module": "interstitial", "variant": "statement",
                        "content": {"text": statement_line}})
+    elif statement_dup_fallback:
+        # The statement's seat stays, its voice changes: a thread seam
+        # (Site Arc 11b dedupe — smoke: dup line → thread fallback).
+        wishes.append({"module": "interstitial", "variant": "thread",
+                       "content": {}})
     if marquee_ok:
         wishes.append({"module": "interstitial", "variant": "marquee",
                        "content": {"words": " • ".join(tone_words)}})
@@ -2187,11 +2258,14 @@ def _apply_ceremony_pass(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
         wishes.append({"module": "interstitial", "variant": filler,
                        "content": {}})
 
-    n_want = 1 + (1 if generous else 0) + (1 if (statement_line or marquee_ok) else 0)
+    n_want = 1 + (1 if generous else 0) + (1 if (statement_line or statement_dup_fallback
+                                                 or marquee_ok) else 0)
     n_want = min(n_want, _CEREMONY_MAX)
 
     # Gaps: after spec[i] for i in 1..len-3 — a seam never lands directly
-    # after the hero or directly before the contact exit.
+    # after the hero or directly before the contact exit. Chosen gaps are
+    # DISTINCT spec indices, so two seams are always separated by at
+    # least one section — interstitials can never abut each other.
     gaps = list(range(1, len(spec) - 2))
     if not gaps:
         return spec

@@ -98,17 +98,44 @@ _GHOST_NUMERAL_IDS = ("about", "offerings", "gallery", "testimonials",
                       "showcase", "store")
 
 
+def _mark_after_seam(body_parts: List[str], rendered_ids: List[str]) -> None:
+    """Site Arc 11b — dead-band fix: a section that directly follows an
+    interstitial gets class sxm-after-seam (base CSS trims its top
+    padding ~45%) so the seam's own breathing room and the section pad
+    don't stack into a void. Interstitials never abut each other (the
+    ceremony pass inserts at distinct spec gaps), so only section
+    modules ever follow a seam. In place."""
+    for i in range(1, len(body_parts)):
+        if rendered_ids[i - 1] != "interstitial" or rendered_ids[i] == "interstitial":
+            continue
+        part = body_parts[i]
+        marked, n = _re.subn(r'(<section\b[^>]*class=")', r"\1sxm-after-seam ",
+                             part, count=1)
+        if not n:  # a section tag without a class attribute
+            marked, n = _re.subn(r"<section\b",
+                                 '<section class="sxm-after-seam"',
+                                 part, count=1)
+        if n:
+            body_parts[i] = marked
+
+
 def _inject_ghost_numerals(body_parts: List[str], rendered_ids: List[str],
                            ctx: Dict[str, Any]) -> None:
     """Stamp each major section with its chapter numeral (01, 02, …) —
     shell-owned ornament (CSS in _base._WOW_CSS), injected right after
     the section's opening tag; corners alternate. Skipped for the brut
     identity (their language is color-blocks, not ornament) and when
-    fewer than two chapters exist (a lone '01' is noise). In place."""
+    fewer than two chapters exist (a lone '01' is noise). Site Arc 11b:
+    a section directly after a STATEMENT interstitial skips its numeral
+    (the title-card bar already provides the pause — a ghost digit
+    floating beside it read as debris on the live page); numbering
+    stays contiguous across the skip. In place."""
     if is_brut(ctx.get("dna") or {}):
         return
     idxs = [i for i, mid in enumerate(rendered_ids)
-            if mid in _GHOST_NUMERAL_IDS]
+            if mid in _GHOST_NUMERAL_IDS
+            and not (i > 0 and rendered_ids[i - 1] == "interstitial"
+                     and "sxm-int-statement" in body_parts[i - 1])]
     if len(idxs) < 2:
         return
     for n, i in enumerate(idxs, start=1):
@@ -240,6 +267,9 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
     # Quality-floor arc 7 — the authority band lands AFTER silence marking
     # (it never claims the silence target's ground).
     _mark_authority_band(body_parts, rendered_ids, ctx)
+    # Site Arc 11b — sections directly after a ceremony seam trim their
+    # top padding (dead-band fix; the class never collides with the marks).
+    _mark_after_seam(body_parts, rendered_ids)
     # Site Arc 10 — ghost chapter numerals land last (they read the final
     # section set; the classes they add never collide with the marks above).
     _inject_ghost_numerals(body_parts, rendered_ids, ctx)
