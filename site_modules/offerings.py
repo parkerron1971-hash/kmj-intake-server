@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Tuple
 
 from ._base import safe, safe_url, ov, eyebrow, heading_accent, accent_headline
 
-VARIANTS = ("cards", "list", "featured")
+VARIANTS = ("cards", "list", "featured", "menu")
 
 _MAX_ITEMS = 9
 _MIN_DIGNIFIED_PRICE = 5.0    # under this, the price line is test-data noise
@@ -36,13 +36,16 @@ def _price(o: Dict[str, Any]) -> str:
         return ""
     if val == 0:
         # A deliberate free offering reads as generosity, not $0.
-        return '<div class="sxm-off-price">Free</div>'
+        # Site Arc 10: prices speak in the WHISPER voice (the third
+        # type voice) — tiny, wide-tracked, muted; the scale gap
+        # against the display face is the luxury signal.
+        return '<div class="sxm-off-price sxm-whisper">Free</div>'
     if 0 < val < _MIN_DIGNIFIED_PRICE:
         return ""  # placeholder-grade price — no price line at all
     cur = (o.get("currency") or "usd").upper()
     sym = "$" if cur == "USD" else f"{cur} "
     txt = f"{sym}{val:,.0f}" if val == int(val) else f"{sym}{val:,.2f}"
-    return f'<div class="sxm-off-price">{safe(txt)}</div>'
+    return f'<div class="sxm-off-price sxm-whisper">{safe(txt)}</div>'
 
 
 def _duration(o: Dict[str, Any]) -> str:
@@ -175,6 +178,78 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   .sxm-offf-img img { min-height: 0; }
   .sxm-offf-row { grid-template-columns: auto 1fr; }
   .sxm-offf-rowend { grid-column: 2; justify-content: flex-start; }
+}"""
+        return html, css
+
+    if variant == "menu":
+        # Site Arc 10 — the ENGRAVED MENU (exemplar e5 "K Luxury"): the
+        # offerings as a menu OBJECT — hairline-ruled rows (row rules
+        # are the menu's own linework, not page chrome), italic serif
+        # names, whisper-caps prices right-aligned. Hovering a row
+        # indents it 1rem and draws a hairline accent line across its
+        # top (scaleX 0→1, origin left — the page's micro-signature:
+        # hovers DRAW, they don't glow). Data dignity (Arc 9) rides
+        # _price unchanged: Free / sub-$5 suppression.
+        rows_html = []
+        for o in rows:
+            r_cta = (f'<a class="sxm-off-book sxm-offmenu-book" href="{book_href}">Book</a>'
+                     if book_href else "")
+            desc = safe(o.get("description") or "")
+            desc_html = (f'<p class="sxm-off-desc sxm-muted">{desc}</p>'
+                         if desc else "")
+            rows_html.append(f"""
+      <div class="sxm-offmenu-row">
+        <div class="sxm-offmenu-main">
+          <div class="sxm-offmenu-head"><h3 class="sxm-offmenu-name">{safe(o['name'])}</h3>{_duration(o)}</div>
+          {desc_html}
+        </div>
+        <div class="sxm-offmenu-end">{_price(o)}{r_cta}</div>
+      </div>""")
+        html = f"""
+<section class="sxm-section sxm-offerings sxm-off-menu sxm-reveal" id="offerings">
+  <div class="sxm-inner">
+    {heading_accent(dna)}
+    {eb}
+    <h2 {ov('offerings', 'headline')}>{accent_headline(headline)}</h2>
+    {intro_html}
+    <div class="sxm-offmenu">{''.join(rows_html)}
+    </div>
+  </div>
+</section>"""
+        css = """
+.sxm-offerings h2 { margin-bottom: 16px; }
+.sxm-off-intro { font-size: 1.05rem; margin-bottom: 12px; }
+.sxm-off-desc { font-size: .96rem; margin: 8px 0 0; max-width: 52ch; }
+.sxm-off-dur { font-size: .8rem; white-space: nowrap; color: var(--sx-muted); }
+.sxm-offmenu { margin-top: 38px; border-top: 1px solid var(--sx-border); }
+.sxm-offmenu-row { position: relative; display: flex; justify-content: space-between;
+  align-items: baseline; gap: clamp(18px, 4vw, 44px); padding: 26px 4px;
+  border-bottom: 1px solid var(--sx-border);
+  transition: padding-left .45s var(--sx-ease); }
+.sxm-offmenu-row::before { content: ""; position: absolute; top: -1px; left: 0;
+  height: 1px; width: 100%; background: var(--sx-accent);
+  transform: scaleX(0); transform-origin: left;
+  transition: transform .6s var(--sx-ease); }
+.sxm-offmenu-row:hover { padding-left: 1rem; }
+.sxm-offmenu-row:hover::before { transform: scaleX(1); }
+.sxm-offmenu-head { display: flex; align-items: baseline; gap: 16px; }
+.sxm-offmenu-name { font-family: var(--sx-font-heading); font-style: italic;
+  font-weight: var(--sx-h2-weight, var(--sx-heading-weight));
+  font-size: 1.45rem; letter-spacing: var(--sx-letter-tight); }
+.sxm-offmenu-end { display: flex; align-items: baseline; gap: 20px; flex-shrink: 0;
+  text-align: right; }
+.sxm-offmenu-end .sxm-off-price { white-space: nowrap; }
+.sxm-offmenu-book { font-weight: 700; font-size: .78rem; letter-spacing: .08em;
+  padding: 7px 15px; border: 1px solid var(--sx-accent);
+  border-radius: var(--sx-radius-button); transition: background .15s, color .15s; }
+.sxm-offmenu-book:hover { background: var(--sx-accent); color: var(--sx-on-accent); }
+@media (max-width: 700px) {
+  .sxm-offmenu-row { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .sxm-offmenu-end { text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sxm-offmenu-row, .sxm-offmenu-row::before { transition: none; }
+  .sxm-offmenu-row:hover { padding-left: 4px; }
 }"""
         return html, css
 

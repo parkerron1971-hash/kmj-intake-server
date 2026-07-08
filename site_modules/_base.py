@@ -212,6 +212,29 @@ def signature_move_class(dna: Dict[str, Any],
     return ("sx-sig-cascade", "sx-sig-drift", "sx-sig-underline")[pick]
 
 
+def reveal_focus_class(dna: Dict[str, Any],
+                       design: Optional[Dict[str, Any]]) -> str:
+    """Site Arc 10 "wow" — the blur-to-focus ARRIVAL (exemplar e5:
+    'sections arrive by coming into focus — sharper is the entrance,
+    not higher'). An ALTERNATIVE reveal the DRO's motion energy selects:
+    expressive/cinematic energy → focus reveals (blur 8px→0 + a .98→1
+    settle); calm pages keep the classic fade-up. Wired as a body class
+    (sx-reveal-focus) exactly like the signature moves; empty string =
+    no change. Rides the same .sxm-reveal observer, so motion=subtle
+    (no reveal script) never gets it."""
+    if (dna or {}).get("motion", "standard") == "subtle":
+        return ""
+    motion = (design or {}).get("motion") or {}
+    temp = str(motion.get("temperature") or "").lower()
+    move = str(motion.get("signature_move") or "").lower()
+    if "expressive" in temp:
+        return "sx-reveal-focus"
+    if any(w in move for w in ("focus", "blur", "cinema", "lens", "sharpen",
+                               "resolve", "develop")):
+        return "sx-reveal-focus"
+    return ""
+
+
 # Arc 6 "Creative Engine" — rule-break treatment → body class. The
 # treatment vocabulary + free-text mapping live in brand_dna
 # (resolve_rule_break); this is the render-side registry.
@@ -398,6 +421,49 @@ _QUALITY_CSS = """
   .sxm-cta:hover, .sxm-card:hover, .sxm-card-lite:hover { transform: none; }
 }"""
 
+# Site Arc 10 "wow" — the depth layers the shell OWNS (the atelier
+# validator bans url()/fixed positioning in bespoke css; shell css is
+# ours): the WHISPER VOICE (the third type voice — micro-caps at
+# 9-11px, wide tracking, muted — the ~40:1 scale gap against the
+# display face is what makes the display feel monumental), ghost
+# chapter numerals (huge serif indexes at ~5% ink, injected by
+# render_page onto major sections), and the dark-ground accent orb
+# (blur(120px) at 6-8%, slow 9s pulse; markup emitted by page_shell on
+# dark palettes only, hidden on mobile + reduced-motion). All
+# sub-perceptual — depth the eye discovers, never notices.
+_WOW_CSS = """
+/* The whisper voice — the third type voice (Site Arc 10). */
+.sxm-whisper { font-family: var(--sx-font-body); font-size: .68rem; font-weight: 600;
+  letter-spacing: .22em; text-transform: uppercase; color: var(--sx-muted);
+  font-style: normal; }
+/* Double-class boosts: the utility must win over the module rules that
+   style these elements (module css is emitted after base_css). */
+.sxm-off-price.sxm-whisper { font-family: var(--sx-font-body); font-size: .7rem;
+  font-weight: 650; letter-spacing: .22em; color: var(--sx-muted); }
+.sxm-eyebrow.sxm-whisper { font-size: .66rem; letter-spacing: .3em; font-weight: 600;
+  color: var(--sx-muted); }
+.sxm-footer-inner.sxm-whisper { font-size: .66rem; letter-spacing: .18em; }
+.sxm-contact-social a.sxm-whisper { font-size: .68rem; font-weight: 600;
+  letter-spacing: .2em; }
+/* Ghost chapter numerals — sub-perceptual section indexes (~5% ink). */
+.sxm-ghostnum-host { position: relative; }
+.sxm-ghostnum-host > .sxm-inner { position: relative; z-index: 1; }
+.sxm-ghostnum { position: absolute; top: clamp(10px, 3vw, 30px); right: clamp(8px, 4vw, 48px);
+  font-family: var(--sx-font-heading); font-weight: var(--sx-heading-weight);
+  font-size: clamp(4rem, 9vw, 7rem); line-height: 1; letter-spacing: var(--sx-letter-tight);
+  color: var(--sx-text); opacity: .05; pointer-events: none; user-select: none; z-index: 0; }
+.sxm-ghostnum.sxm-gn-left { right: auto; left: clamp(8px, 4vw, 48px); }
+/* The dark-ground accent orb — one blurred pool of brand light. */
+.sxm-depth-orb { position: fixed; top: -12vw; right: -14vw; width: 46vw; height: 46vw;
+  border-radius: 50%; background: var(--sx-accent); filter: blur(120px); opacity: .07;
+  z-index: -1; pointer-events: none;
+  animation: sxm-orb-pulse 9s ease-in-out infinite alternate; }
+@keyframes sxm-orb-pulse {
+  from { opacity: .055; transform: scale(1); }
+  to { opacity: .08; transform: scale(1.06); } }
+@media (max-width: 768px) { .sxm-depth-orb { display: none; } }
+@media (prefers-reduced-motion: reduce) { .sxm-depth-orb { display: none; } }"""
+
 # Film-grain finish (Arc 3, quality-bar signature): ultra-subtle static
 # noise over the whole page. pointer-events: none — purely atmospheric.
 _GRAIN_CSS = (
@@ -435,10 +501,18 @@ def base_css(dna: Dict[str, Any]) -> str:
     reveal_css = "" if motion == "subtle" else """
 .sxm-reveal { opacity: 0; transform: translateY(48px); transition: opacity .9s var(--sx-ease), transform .9s var(--sx-ease); }
 .sxm-reveal.sxm-in { opacity: 1; transform: none; }
-@media (prefers-reduced-motion: reduce) { .sxm-reveal { opacity: 1; transform: none; transition: none; } }""" + _SIG_CSS
-    # motion=subtle stills the LOOPING pieces (CTA shimmer, diamond float)
-    # — a stilled page keeps the premium statics, drops the perpetual motion.
-    loop_kill = ("\n.sxm-cta::before, .sxm-diamond { animation: none; }"
+/* Site Arc 10 — blur-to-focus arrival (body.sx-reveal-focus, selected by
+   the DRO's motion energy): sections come into FOCUS — blur 8px→0 with a
+   .98→1 settle — instead of rising. Sharper is the entrance, not higher. */
+body.sx-reveal-focus .sxm-reveal { transform: scale(.98); filter: blur(8px);
+  transition: opacity .9s var(--sx-ease), transform .9s var(--sx-ease), filter .9s var(--sx-ease); }
+body.sx-reveal-focus .sxm-reveal.sxm-in { transform: none; filter: blur(0); }
+@media (prefers-reduced-motion: reduce) { .sxm-reveal { opacity: 1; transform: none; transition: none; }
+  body.sx-reveal-focus .sxm-reveal { filter: none; } }""" + _SIG_CSS
+    # motion=subtle stills the LOOPING pieces (CTA shimmer, diamond float,
+    # depth orb) — a stilled page keeps the premium statics, drops the
+    # perpetual motion.
+    loop_kill = ("\n.sxm-cta::before, .sxm-diamond, .sxm-depth-orb { animation: none; }"
                  if motion == "subtle" else "")
     return f"""
 *, *::before, *::after {{ box-sizing: border-box; }}
@@ -490,6 +564,7 @@ body.sx-scarce-accent .sxm-mark-soft {{ background: color-mix(in srgb, var(--sx-
 {_quality_css(dna)}{loop_kill}
 {_TREATMENT_CSS}
 {_RULE_BREAK_CSS}
+{_WOW_CSS}
 {_GRAIN_CSS}
 @media (max-width: 768px) {{ body {{ font-size: 15.5px; }} }}
 """
@@ -629,6 +704,11 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
     treat = image_treatment_class(dna, design)
     if treat:
         classes.append(treat)
+    # Site Arc 10 — the DRO's motion energy may swap the reveal grammar
+    # to blur-to-focus (body class, same wiring as the signature moves).
+    focus = reveal_focus_class(dna, design)
+    if focus:
+        classes.append(focus)
     # Arc 6 — rule-break treatment + the RESTRAINT BUDGET. When BOTH a
     # signature move and a rule-break exist, exactly ONE applies at loud
     # strength: the owner's loud_where='motion' (design_prefs v3, stamped
@@ -647,6 +727,12 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
             else:
                 classes.append("sx-sig-soft")    # break is loud, motion quiet
     body_class = " ".join(classes)
+    # Site Arc 10 — the dark-ground depth orb: ONE blurred pool of brand
+    # light behind everything (markup on dark palettes only; the CSS
+    # hides it on mobile + reduced-motion, motion=subtle stills it).
+    dark = ((dna.get("palette") or {}).get("mode") == "dark")
+    orb = ('<div class="sxm-depth-orb" aria-hidden="true"></div>\n'
+           if dark else "")
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -664,7 +750,7 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
 </style>
 </head>
 <body class="{body_class}">
-{body}
+{orb}{body}
 {reveal_script(dna)}
 </body>
 </html>"""

@@ -34,7 +34,9 @@ def _social_links(social: Dict[str, Any]) -> str:
         if not url:
             continue
         label = _SOCIAL_NAMES.get((plat or "").lower(), str(plat).strip().title() or "Profile")
-        out.append(f'<a class="sxm-social" href="{safe_url(url)}" target="_blank" '
+        # Site Arc 10: social labels speak in the whisper voice — the
+        # third type voice on the contact chapter's small labels.
+        out.append(f'<a class="sxm-social sxm-whisper" href="{safe_url(url)}" target="_blank" '
                    f'rel="noopener" aria-label="{safe(label)}">{safe(label)}</a>')
     return f'<div class="sxm-contact-social">{"".join(out)}</div>' if out else ""
 
@@ -143,7 +145,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   </div>
 </section>
 <footer class="sxm-footer">
-  <div class="sxm-inner sxm-footer-inner">
+  <div class="sxm-inner sxm-footer-inner sxm-whisper">
     <span class="sxm-footer-brand">{diamond_mark(dna)}{footer_line}</span>
     <a href="https://mysolutionist.app/" target="_blank" rel="noopener" class="sxm-footer-power">Powered by Solutionist</a>
   </div>

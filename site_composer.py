@@ -76,6 +76,24 @@ _MAX_INSPIRATION_URLS = 3
 _LOUD_WHERE = ("motion", "type", "imagery", "layout")
 _CREATIVE_CAPS = {"metaphor": 200, "surprise": 200, "remember": 160}
 _TENSION_POLE_CAP = 80
+# Arc 10 "offer clarity" — the owner's plain-words answer to "What exactly
+# do you offer, and for whom?" (Kevin's rule: if the offer isn't clear,
+# Chief asks in the interview; when answered, the site must make it
+# unmistakable).
+_OFFER_CAP = 600
+
+
+def _report_progress(cb, pct: int, stage: str) -> None:
+    """Arc 10 — fail-soft progress ping for the compose loading bar.
+    cb is the chief_jobs per-job reporter (or None on every non-job path:
+    sync /compose, shuffle, refresh — those stay byte-identical). A cb
+    error must NEVER break a compose."""
+    if cb is None:
+        return
+    try:
+        cb(pct, stage)
+    except Exception as e:
+        logger.debug(f"[composer] progress cb error (ignored): {e}")
 
 
 def _sanitize_pref_url(u: Any) -> Optional[str]:
@@ -121,6 +139,13 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
         v = raw.get(key)
         if isinstance(v, str) and v.strip():
             out[key] = v.strip()[:_PREF_STR_CAP]
+
+    # Arc 10 "offer clarity" — the owner's own words on what they offer
+    # and for whom. Same leniency as the other free-text prefs, its own
+    # (larger) cap; persisted with site_prefs like everything else.
+    offer = raw.get("offer")
+    if isinstance(offer, str) and offer.strip():
+        out["offer"] = offer.strip()[:_OFFER_CAP]
 
     # v2 — inspiration_urls (validated; bad entries silently dropped)
     iu = raw.get("inspiration_urls")
@@ -474,7 +499,10 @@ def sanitize_spec(raw: Any, ctx: Dict[str, Any],
             continue
         mid = sec.get("module")
         spec = site_modules.MODULES.get(mid)
-        if not spec or mid in seen:
+        # Site Arc 10: interstitials (the ceremony seams) legitimately
+        # appear 1-3 times per page — exempt from the module dedupe so
+        # stored-spec re-sanitizes (shuffle/refresh/choose) keep them.
+        if not spec or (mid in seen and mid != "interstitial"):
             continue
         seen.add(mid)
         variant = sec.get("variant")
@@ -551,6 +579,11 @@ def _default_spec(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _module_menu() -> str:
     lines = []
     for mid, spec in site_modules.MODULES.items():
+        # Site Arc 10: internal modules (interstitial ceremony seams) are
+        # never offered to the composer LLM — the deterministic ceremony
+        # pass owns their placement.
+        if spec.get("internal"):
+            continue
         lines.append(f'- "{mid}": variants {list(spec["variants"])}, '
                      f'content fields {list(spec["fields"])}')
     return "\n".join(lines)
@@ -704,6 +737,15 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
                         "(verbatim, highest priority evidence):\n"
                         + "\n".join(pref_lines))
 
+    # Arc 10 "offer clarity" — the owner's offer statement leads right
+    # after the style words: the single most important fact the page
+    # must communicate. Absent → byte-identical to before.
+    offer_stmt = str(prefs.get("offer") or "").strip()
+    if offer_stmt:
+        segments.append("WHAT THE BUSINESS OFFERS (the owner's own words — "
+                        "the site MUST make this unmistakably clear): "
+                        + offer_stmt)
+
     # Arc 5 — the platform's deterministic study of the reference sites the
     # owner named. DIRECTION EVIDENCE (mood/type-class/density), never a
     # copy source; the analyzer extracted these with no LLM involved.
@@ -784,6 +826,15 @@ def compose_spec_llm(ctx: Dict[str, Any], brief_notes: str = "",
     off_names = ", ".join(o.get("name") or "" for o in (ctx.get("offerings") or [])[:8])
     n_testi = len(ctx.get("testimonials") or [])
 
+    # Arc 10 "offer clarity" — the owner's own offer statement (site_prefs
+    # rides ctx via gather_context) feeds the prompt directly + hardens
+    # the 5-second rule below.
+    _prefs = (ctx.get("site_prefs")
+              if isinstance(ctx.get("site_prefs"), dict) else {})
+    offer_stmt = str(_prefs.get("offer") or "").strip()
+    offer_line = (f"\n- WHAT THE BUSINESS OFFERS (the owner's own words): {offer_stmt}"
+                  if offer_stmt else "")
+
     dro_block = ("\n\n" + _dro_directive(dro) + "\n") if dro else ""
 
     prompt = f"""You are a creative director composing a one-page website. You do NOT write HTML or CSS — the platform renders everything. Your job: choose section modules + expression variants, and write the copy in the practitioner's voice.
@@ -791,7 +842,7 @@ def compose_spec_llm(ctx: Dict[str, Any], brief_notes: str = "",
 BUSINESS
 - Name: {biz['name']}
 - Type: {biz['type']}
-- Tagline: {(bundle.get('business') or {}).get('tagline') or '(none)'}
+- Tagline: {(bundle.get('business') or {}).get('tagline') or '(none)'}{offer_line}
 - About (real, from the practitioner): {str(intel.get('about_business') or intel.get('about_me') or '')[:600] or '(none provided)'}
 - Voice/tone: {voice.get('brand_voice') or ''} {voice.get('tone_words') or ''}
 - Design vibe: {ctx['dna']['vibe']}, intensity: {ctx['dna']['intensity']}
@@ -807,6 +858,8 @@ AVAILABLE MODULES (use each at most once; order is yours except hero first, cont
 VARIANT GUIDE (when to reach for the expressive variants):
 - hero "editorial": asymmetric offset split, oversized display type, one accent-italic word — personality-forward, editorial brands.
 - hero "constructed": typographic statement over a generated ornament field, NO photo — when the concept is abstract/metaphorical or imagery is weak.
+- hero "anchored": bottom-gravity film title — the headline rests on the FLOOR of a full-bleed photo under a baseline-deepening scrim and lands word by word — grounded, ceremonial, sanctuary-feel brands.
+- offerings "menu": the engraved menu — hairline-ruled rows, italic serif names, whisper-caps prices right-aligned — when the price list itself is the craft object (salons, studios, ateliers).
 - about "pullquote": magazine spread — one strong line pulled large + narrative column + framed portrait. Pick when the about copy has a quotable line.
 - offerings "featured": the first offering as a flagship feature card (with image), the rest as numbered compact rows — when one offering clearly leads.
 - "statband": 3-4 big real numbers (years in business, offerings, testimonials). Include for established businesses; it renders nothing when the numbers aren't there, so never lean copy on it.
@@ -816,6 +869,8 @@ VARIANT GUIDE (when to reach for the expressive variants):
 RULES
 - If a DESIGN RATIONALE block appears above, it OVERRIDES generic instincts: concept-voice copy (in-concept headline/eyebrows/CTAs) and the section order it specifies are REQUIRED, not optional.
 - Copy must sound like THIS practitioner, not a template. Specific beats generic.
+- A stranger must know within 5 seconds what is offered and for whom — the hero
+  subheadline and the offerings section carry this burden.{" Use the owner's offer statement verbatim-adjacent." if offer_stmt else ""}
 - NEVER invent facts, testimonials, credentials, or offerings. The offerings and
   testimonials modules render the real records automatically — you only write the
   section framing (eyebrow/headline/intro).
@@ -1038,6 +1093,11 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
         mid = s.get("module")
         mspec = site_modules.MODULES.get(mid)
         if not mspec:
+            continue
+        if mid == "interstitial":
+            # Site Arc 10 — ceremony seams are chrome-like: no stable DOM
+            # id, several per page, silence/thread render near-empty by
+            # design. The gate treats them like the header (not checked).
             continue
         if s.get("variant") not in mspec["variants"]:
             needs_resanitize = True
@@ -1336,6 +1396,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        dro_summary: Optional[str] = None,
                        defaulted_modules: Optional[List[str]] = None,
                        full_recompose: bool = False,
+                       progress_cb=None,
                        _heal_attempted: bool = False,
                        _recon: Optional[Dict[str, Any]] = None,
                        _atelier: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1401,6 +1462,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     html = _mark(site_modules.render_page(spec, ctx, title,
                                           fragment_markers=atelier_active))
     if atelier_active:
+        _report_progress(progress_cb, 55, "Drafting bespoke sections")
         try:
             html, atelier_meta = _atelier_mod.run_atelier(
                 html, spec, ctx, dro, business_id,
@@ -1411,7 +1473,8 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                 # composition) — only the heal recursion's precomputed
                 # set or a fresh generation apply here.
                 stored=({} if full_recompose else _stored_atelier),
-                precomputed=_atelier)
+                precomputed=_atelier,
+                progress_cb=progress_cb)
         except Exception as e:
             logger.warning(f"[composer] atelier failed (non-fatal): {e}")
             atelier_meta = None
@@ -1435,6 +1498,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     reroll_defaults = bool(full_recompose and not _heal_attempted
                            and new_concept_fp
                            and new_concept_fp != stored_concept_fp)
+    _report_progress(progress_cb, 85, "Choosing photography")
     try:
         from agents.slot_system.builder_post_process import populate_slots_for_site
         slots_meta = populate_slots_for_site(
@@ -1527,6 +1591,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
             prev_html = _prev if _prev.strip() else None
         except Exception as e:
             logger.info(f"[composer] previous-html read skipped: {e}")
+    _report_progress(progress_cb, 93, "Inspecting quality")
     try:
         quality_report, fixes = _run_quality_gate(
             business_id, spec, ctx, final_html, dro=dro,
@@ -1543,6 +1608,10 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                     dro_status=dro_status, dro_summary=dro_summary,
                     defaulted_modules=defaulted_modules,
                     full_recompose=full_recompose,
+                    # progress_cb rides the recursion; the chief_jobs
+                    # reporter is monotonic, so re-hit stages never walk
+                    # the bar backwards.
+                    progress_cb=progress_cb,
                     _heal_attempted=True, _recon=overrides_reconciled,
                     _atelier=atelier_meta)
         quality_report["self_healed"] = _heal_attempted
@@ -1626,7 +1695,11 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
 # for typographic concepts; constructed (Arc 3) for visual metaphors — a
 # generated ornament field built FROM the concept words, no stock photo.
 _HERO_DIRECTION_VARIANT = {
-    "environment_mood": "cinematic",
+    # Site Arc 10: environment_mood → "anchored" (exemplar e5 — the
+    # environment IS the subject; bottom-gravity words defer to it under
+    # a baseline-deepening scrim). Was "cinematic", which stays the home
+    # of the art-directed low-left crop for artifact/portrait concepts.
+    "environment_mood": "anchored",
     "artifact_showcase": "cinematic",
     "portrait_presence": "cinematic",
     "visual_metaphor": "constructed",
@@ -1805,9 +1878,150 @@ def _apply_cta_goal(spec: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dic
     return spec
 
 
+# ─── Site Arc 10 "wow" — the CEREMONY PASS ────────────────────────────
+#
+# "The page is a ceremony, not a stack" (exemplars e5/e6): two chapters
+# never simply abut — the seam between them carries something deliberate.
+# This pass deterministically inserts 1-3 interstitial seams (module
+# "interstitial": silence / thread / statement / marquee) between major
+# sections, driven by the DRO and seeded by design_rationale_id so a
+# recompose varies its seams. NEVER LLM-picked; runs after sanitize/
+# symmetry/hero-direction, before render — inside the existing 45-55%
+# progress window (no new stage). No DRO or <4 sections → no seams.
+
+_CEREMONY_MIN_SECTIONS = 4
+_CEREMONY_MAX = 3
+_GENEROUS_WHITESPACE = ("editorial_rhythm", "confidence_air")
+_STATEMENT_COPY_SOURCES = (("about", "pull_quote"), ("hero", "subheadline"),
+                           ("offerings", "intro"), ("cta", "subheadline"))
+_MARQUEE_MIN_WORDS = 3
+
+
+def _ceremony_tone_words(ctx: Dict[str, Any]) -> List[str]:
+    """The brand's REAL tone/value words from the ctx bundle (voice.
+    tone_words — list or free string; the owner's feel_words already
+    ride this via gather_context). Never invented; empty when absent."""
+    voice = ((ctx.get("bundle") or {}).get("voice")
+             if isinstance((ctx.get("bundle") or {}).get("voice"), dict) else {})
+    raw = voice.get("tone_words")
+    if isinstance(raw, (list, tuple)):
+        words = [str(w) for w in raw]
+    elif isinstance(raw, str):
+        words = re.split(r"[,/|•·]+|\s+", raw)
+    else:
+        words = []
+    out: List[str] = []
+    seen = set()
+    for w in words:
+        w = " ".join(w.split()).strip(".,;:")
+        if 2 <= len(w) <= 24 and w.lower() not in seen and w.isascii():
+            seen.add(w.lower())
+            out.append(w[:1].upper() + w[1:])
+    return out[:6]
+
+
+def _ceremony_statement_line(spec: List[Dict[str, Any]]) -> str:
+    """One tension-voiced sentence for the statement bar, pulled from
+    the copy the composer ALREADY wrote (spec fields, best-first) —
+    the title card quotes the page, it never invents a line."""
+    by_module: Dict[str, Dict[str, Any]] = {}
+    for s in spec:
+        mid = s.get("module")
+        if isinstance(mid, str) and mid not in by_module:
+            by_module[mid] = s.get("content") or {}
+    for mod, field in _STATEMENT_COPY_SOURCES:
+        v = " ".join(str((by_module.get(mod) or {}).get(field) or "").split())
+        if 12 <= len(v) <= 200:
+            return v
+    return ""
+
+
+def _apply_ceremony_pass(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
+                         dro: Optional[Dict[str, Any]],
+                         seed: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Insert the ceremony seams. Rules (all deterministic):
+      - no DRO or fewer than 4 sections → no seams (a short page has no
+        chapters to pause between);
+      - whitespace philosophy generous (editorial_rhythm/confidence_air,
+        or airy density) → silences earn a second seat; otherwise the
+        filler seam is the transition thread;
+      - tension authored → ONE statement bar voicing a line the page
+        already says (spec copy, data-override-target);
+      - marquee only when the brand has >=3 real tone words AND the page
+        isn't stilled (dna motion != subtle) — the one loud accent spend,
+        on values rather than services;
+      - seats capped at 3 and by the available gaps (never directly
+        after the hero, never directly before contact);
+      - placement + order seeded by design_rationale_id so recomposes
+        vary their seams while any single rationale renders stably."""
+    if not dro or len(spec) < _CEREMONY_MIN_SECTIONS:
+        return spec
+    d = (dro.get("decisions") or {})
+
+    seed_src = str(seed or dro.get("id")
+                   or ((d.get("hero_concept") or {}).get("concept_statement"))
+                   or (ctx.get("business") or {}).get("id") or "ceremony")
+    h = int(hashlib.sha256(seed_src.encode("utf-8")).hexdigest()[:12], 16)
+
+    ws = str((d.get("whitespace") or {}).get("philosophy") or "").lower()
+    density = str((d.get("layout") or {}).get("density") or "").lower()
+    generous = (ws in _GENEROUS_WHITESPACE or "generous" in ws
+                or density == "airy")
+    tn = d.get("tension") if isinstance(d.get("tension"), dict) else {}
+    tension_present = bool(tn.get("pole_a") and tn.get("pole_b"))
+    statement_line = _ceremony_statement_line(spec) if tension_present else ""
+    tone_words = _ceremony_tone_words(ctx)
+    dna_motion = (ctx.get("dna") or {}).get("motion", "standard")
+    marquee_ok = (len(tone_words) >= _MARQUEE_MIN_WORDS
+                  and dna_motion != "subtle")
+
+    # The wish-list, priority-ordered: the statement bar (the loud
+    # moment's title card), the values marquee, then quiet fillers.
+    wishes: List[Dict[str, Any]] = []
+    if statement_line:
+        wishes.append({"module": "interstitial", "variant": "statement",
+                       "content": {"text": statement_line}})
+    if marquee_ok:
+        wishes.append({"module": "interstitial", "variant": "marquee",
+                       "content": {"words": " • ".join(tone_words)}})
+    filler = "silence" if generous else "thread"
+    while len(wishes) < _CEREMONY_MAX:
+        wishes.append({"module": "interstitial", "variant": filler,
+                       "content": {}})
+
+    n_want = 1 + (1 if generous else 0) + (1 if (statement_line or marquee_ok) else 0)
+    n_want = min(n_want, _CEREMONY_MAX)
+
+    # Gaps: after spec[i] for i in 1..len-3 — a seam never lands directly
+    # after the hero or directly before the contact exit.
+    gaps = list(range(1, len(spec) - 2))
+    if not gaps:
+        return spec
+    n = min(n_want, len(gaps))
+    start = h % len(gaps)
+    rotated = gaps[start:] + gaps[:start]
+    chosen = sorted(rotated[:n])
+    # A seeded rotation of the wish order varies WHICH seam lands where
+    # across recomposes (statement/marquee still always make the cut).
+    picks = wishes[:n]
+    if len(picks) > 1:
+        r = (h >> 12) % len(picks)
+        picks = picks[r:] + picks[:r]
+
+    out = list(spec)
+    for pos, seam in sorted(zip(chosen, picks), reverse=True):
+        out.insert(pos + 1, seam)
+    logger.info(f"[composer.ceremony] inserted {n} seam(s) "
+                f"({[p['variant'] for p in picks]}) for "
+                f"{str((ctx.get('business') or {}).get('id') or '')[:8]} "
+                f"(seed {seed_src[:24]!r})")
+    return out
+
+
 def compose_site(business_id: str, brief_notes: str = "",
                  use_llm: bool = True,
-                 design_prefs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                 design_prefs: Optional[Dict[str, Any]] = None,
+                 progress_cb=None) -> Dict[str, Any]:
     """Canonical site-compose entry (DRL PR3). Produces a Design Rationale
     Object first (best-effort), composes concept-threaded copy that obeys it,
     then renders + persists. Shared by the /compose endpoint and the
@@ -1823,6 +2037,9 @@ def compose_site(business_id: str, brief_notes: str = "",
     if prefs:
         _persist_site_prefs(business_id, prefs)
 
+    # Arc 10 — progress_cb (chief_jobs loading bar) pings at real stage
+    # boundaries with honest labels; None on every non-job path.
+    _report_progress(progress_cb, 5, "Reading your business")
     ctx = gather_context(business_id)
     dro: Optional[Dict[str, Any]] = None
     dro_id: Optional[str] = None
@@ -1832,6 +2049,7 @@ def compose_site(business_id: str, brief_notes: str = "",
     # Arc 5 — ACTUALLY STUDY the reference sites the owner named (cached
     # by URL set; ≤20s budget; fail-soft). Runs before intake assembly so
     # both the DRL signal pass and the DRO author see the evidence.
+    _report_progress(progress_cb, 15, "Listening to your style words")
     ref_analysis = _maybe_analyze_references(business_id, ctx)
 
     # Arc 6 — the owner's creative brief flows into DRO authoring on the
@@ -1842,6 +2060,7 @@ def compose_site(business_id: str, brief_notes: str = "",
 
     if use_llm:
         # 1) Author the rationale from the practitioner's own words.
+        _report_progress(progress_cb, 30, "Authoring the design brief")
         try:
             from agents.composer.drl.passes import produce_dro
             intake = _assemble_intake_text(ctx)
@@ -1867,6 +2086,7 @@ def compose_site(business_id: str, brief_notes: str = "",
         if dro:
             _apply_dro_design(ctx, dro, business_id)
         # 2) Compose copy that obeys the rationale.
+        _report_progress(progress_cb, 45, "Writing your copy")
         try:
             spec = compose_spec_llm(ctx, brief_notes or "", dro=dro)
         except Exception as e:
@@ -1934,10 +2154,16 @@ def compose_site(business_id: str, brief_notes: str = "",
     if dro:
         _apply_hero_direction(spec, decisions.get("hero_concept"))
 
+    # Site Arc 10 — the ceremony pass: deterministic interstitial seams
+    # between the chapters (after sanitize/symmetry, before render;
+    # inside the existing 45-55% progress window — no new stage).
+    spec = _apply_ceremony_pass(spec, ctx, dro, seed=dro_id)
+
     result = render_and_persist(business_id, spec, ctx, dro_id=dro_id, dro=dro,
                                 dro_status=dro_status, dro_summary=dro_summary,
                                 defaulted_modules=defaulted_modules,
-                                full_recompose=True)
+                                full_recompose=True, progress_cb=progress_cb)
+    _report_progress(progress_cb, 100, "Done")
     return {"composition_source": source, "design_rationale_id": dro_id,
             "dro_status": dro_status, "dro_summary": dro_summary, **result}
 
@@ -2108,11 +2334,17 @@ def _direction_pipeline(business_id: str, ctx: Dict[str, Any],
     decisions = dro.get("decisions") or {}
     spec = _apply_symmetry_preference(spec, decisions.get("layout"))
     _apply_hero_direction(spec, decisions.get("hero_concept"))
+    # Site Arc 10 — candidate DROs have no persisted id yet; the ceremony
+    # seeds off the concept statement instead (stable per draft, distinct
+    # across the three stances). Draft specs carry their seams through
+    # choose_direction (sanitize_spec keeps interstitials).
+    spec = _apply_ceremony_pass(spec, ctx, dro)
     return spec
 
 
 def compose_directions(business_id: str,
-                       design_prefs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       design_prefs: Optional[Dict[str, Any]] = None,
+                       progress_cb=None) -> Dict[str, Any]:
     """Author THREE candidate directions (distinct stances), compose copy
     for each, deterministically render each as a smoke check, and store
     the drafts. Runs SEQUENTIALLY with a per-direction try — one failed
@@ -2127,6 +2359,9 @@ def compose_directions(business_id: str,
     if prefs:
         _persist_site_prefs(business_id, prefs)
 
+    # Arc 10 — progress pings for the directions loading bar (per-candidate
+    # steps below); None everywhere but the chief_jobs runner.
+    _report_progress(progress_cb, 5, "Reading your business")
     ctx = gather_context(business_id)
     ref_analysis = _maybe_analyze_references(business_id, ctx)
     intake = _assemble_intake_text(ctx)
@@ -2136,13 +2371,19 @@ def compose_directions(business_id: str,
 
     from agents.composer.drl import passes as drl_passes
     # ONE signal pass shared by all three candidates (same intake).
+    _report_progress(progress_cb, 15, "Listening to your style words")
     signals = drl_passes.detect_signals(business_id, intake)
     recent = drl_passes.fetch_recent_dros(business_id)
 
     import copy as _copy
     items: List[Dict[str, Any]] = []
     errors: List[str] = []
-    for stance_key, stance_text in DIRECTION_STANCES.items():
+    _n_stances = max(len(DIRECTION_STANCES), 1)
+    for _idx, (stance_key, stance_text) in enumerate(DIRECTION_STANCES.items()):
+        # 20 → 70 stepped across the candidates (20/45/70 for three).
+        _report_progress(progress_cb,
+                         20 + int(50 * _idx / max(_n_stances - 1, 1)),
+                         f"Designing direction {_idx + 1} of {_n_stances}")
         try:
             sibling_dros = [it["dro"] for it in items]
             dro = drl_passes.author_dro(
@@ -2189,7 +2430,9 @@ def compose_directions(business_id: str,
                                  f"({len(items)}/3 succeeded): "
                                  + ("; ".join(errors) or "unknown"))
 
+    _report_progress(progress_cb, 95, "Saving your directions")
     _store_direction_drafts(business_id, ctx, items)
+    _report_progress(progress_cb, 100, "Done")
     return {"ok": True, "count": len(items),
             "directions": [{k: it[k] for k in
                             ("draft_id", "stance", "label", "dro_summary",
@@ -2302,11 +2545,28 @@ def prefill_signals(business_id: str,
     audience_known = bool(str(voice.get("audience") or "").strip()
                           or str((strategy or {}).get("target_audience") or "").strip())
 
+    # Arc 10 "offer clarity" (Kevin's rule: what is being offered must be
+    # clear — if it isn't, Chief asks in the interview). Same source
+    # gather_context composes from: active offerings rows. Clear = at
+    # least one offering with a name AND a price AND a real description
+    # (>= 40 chars).
+    offerings = sb_clients.sb_get_as_service(
+        f"/offerings?business_id=eq.{business_id}&is_active=eq.true"
+        "&select=id,name,price,description&limit=50") or []
+    offerings = [o for o in offerings if isinstance(o, dict)]
+    offer_clear = any(
+        str(o.get("name") or "").strip()
+        and o.get("price") is not None and str(o.get("price")).strip() != ""
+        and len(str(o.get("description") or "").strip()) >= 40
+        for o in offerings)
+
     return {"has_about": has_about,
             "has_brand_colors": has_brand_colors,
             "has_voice": bool(known_feel_words),
             "known_feel_words": known_feel_words,
-            "audience_known": audience_known}
+            "audience_known": audience_known,
+            "offer_clear": offer_clear,
+            "offer_count": len(offerings)}
 
 
 class ShuffleBody(BaseModel):

@@ -209,7 +209,9 @@ def populate_slots_for_site(
                     hv = str(enriched_brief.get("hero_variant") or "")
                     if hv in ("editorial", "split"):
                         orientation = "portrait"
-                    elif hv in ("cinematic", "banner"):
+                    elif hv in ("cinematic", "banner", "anchored"):
+                        # Site Arc 10: "anchored" is a true full-bleed
+                        # (bottom-gravity film title) — landscape crop.
                         orientation = "landscape"
                 min_w = (defn.get("min_dimensions") or {}).get("width", 1200)
                 query = build_unsplash_query(

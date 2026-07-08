@@ -47,8 +47,11 @@ _CALL_TIMEOUT_S = 60.0
 # Sections that must stay modular: their value is DATA RENDERED RIGHT
 # (live records, working forms, real product cards) — bespoke rewriting
 # risks fidelity for no aesthetic win. contact/store per the Arc 8 brief;
-# statband/showcase by the same data-dense principle.
-_NEVER_BESPOKE = frozenset({"contact", "store", "statband", "showcase"})
+# statband/showcase by the same data-dense principle. interstitial
+# (Site Arc 10): the ceremony seams are deterministic chrome — no slots,
+# no seat at the atelier.
+_NEVER_BESPOKE = frozenset({"contact", "store", "statband", "showcase",
+                            "interstitial"})
 
 # module id → the stable DOM id its <section> must carry (mirror of
 # site_composer._SECTION_DOM_IDS — kept local to avoid an import cycle;
@@ -256,6 +259,14 @@ def _section_data(kind: str, section_copy: Dict[str, Any],
         "copy": {k: v for k, v in (section_copy or {}).items()
                  if isinstance(v, str) and v.strip()},
     }
+    # Arc 10 "offer clarity" — the owner's own offer statement (from
+    # site_prefs, sanitized upstream) rides the REAL DATA block so every
+    # bespoke section makes the offer unmistakable.
+    _prefs = (ctx.get("site_prefs")
+              if isinstance(ctx.get("site_prefs"), dict) else {})
+    _offer = str((_prefs or {}).get("offer") or "").strip()
+    if _offer:
+        data["what_the_business_offers"] = _offer[:600]
     cta_href = (booking.get("url") if booking.get("enabled") and booking.get("url")
                 else "#contact")
     if kind in ("hero", "cta", "about", "offerings"):
@@ -301,6 +312,14 @@ WHAT GREAT LOOKS LIKE (real reference moves — inspiration vocabulary, not a ch
 - A full-bleed color-blocked band on the authority ground as punctuation between chapters — braver than any gradient.
 - A pull-quote set oversized in the display serif italic — a magazine-spread moment inside the page.
 - Floating diamond ornaments (rotated squares) at .04-.08 opacity — depth the eye discovers, never notices.
+- A full-bleed hero where the headline rests on the FLOOR of the viewport (align-items:flex-end), under a scrim that deepens only toward the words (15% at the top → 85% at the baseline) — a film title, not a centered caption.
+- A headline that lands word by word — each word rises on its own delay (0.15s apart, ~0.6s each), and exactly one word shifts to italic in the accent color mid-sentence.
+- A third type voice: micro-caps at 9-11px with 0.18-0.34em tracking carrying every eyebrow, label, price and button — the whisper that makes the display feel monumental (a ~40:1 size gap on one page).
+- Designed silence between chapters: a 60-80px band holding nothing but a centered 48px hairline, or a full-width gradient thread at 20% opacity — the page pauses on purpose.
+- A statement bar as an interstitial title card: one italic display sentence, centered, on a full-width band washed with var(--sx-accent-soft).
+- An offerings list set as an engraved menu: 0.5px rules, italic serif names, whisper-caps prices right-aligned; hovering a row indents it 1rem and draws a hairline across its top (scaleX(0)→scaleX(1), transform-origin left).
+- Ghost chapter numerals — clamp(4rem, 9vw, 7rem) display digits at rgba(255,255,255,.04) on dark grounds (rgba(0,0,0,.05) on light), absolutely positioned into a section corner, behind the content.
+- Miniature evidence dioramas instead of icons: a postage-stamp mock-UI built from pure CSS (26px browser-chrome bar, 6px traffic-light dots, 3-8px skeleton lines, a tiny tinted focal block) showing the actual kind of work.
 
 WHAT MEDIOCRE LOOKS LIKE (never do these):
 - Centered "Welcome to [Business]" + generic value prop + "Get Started".
@@ -438,6 +457,11 @@ CRAFT BAR (non-negotiable):
 - CHAPTER RHYTHM: the section may claim var(--sx-surface) or var(--sx-authority) as a deliberate chapter break — the page must never read as one continuous ground.
 - DATA DIGNITY: a price of 0 renders as the word "Free" (never "$0"); omit the price line entirely for placeholder-grade prices under $5; never render an empty action area — every card foot ends in a working CTA or a real fact.{_accent_scarcity_line(dro)}
 - Gradients only ever FADE — every gradient ends in transparency or the ground it sits on; never a hard-edged band of translucent color.
+- THREE VOICES, NOT TWO: any label, eyebrow, price or button smaller than body size is set as micro-caps (11px or less, tracking 0.16em or more, never bold display weight) — the whisper voice is what makes the display voice monumental.
+- SEAMS ARE DESIGNED: your section never simply abuts its neighbors — its top or bottom boundary carries something deliberate (a quiet band of air, a fading hairline thread, or a ground change).
+- ORNAMENTS STAY SUB-PERCEPTUAL: watermarks/crests at 0.04-0.05 opacity, symbols and dividers at 0.08 or less, ghost numerals at 0.04-0.06 — depth the eye discovers on the second look, never the first.
+- SCRIMS ARE DIRECTIONAL: a gradient over a photograph always deepens toward the text edge and stays at 30% or less at the photo's far edge — the image must keep breathing.
+- HOVERS DRAW, THEY DON'T GLOW: hover feedback is a line drawing itself (scaleX from an origin), a lift of 2px or less, or a gap widening — never a box-shadow bloom or a color flood.
 - Fluid display type via clamp(); tight negative tracking (var(--sx-letter-tight)) on display sizes.
 - Transitions use var(--sx-ease); reveals may use the shared class "sxm-reveal" (the platform's IntersectionObserver picks it up).
 - CTAs may use the shared class "sxm-cta" (pill, shimmer, working styles ship with the shell).
@@ -592,11 +616,24 @@ def _inject_css(html: str, css: str) -> str:
     return html + block
 
 
+def _report(cb, pct: int, stage: str) -> None:
+    """Arc 10 — fail-soft progress ping (chief_jobs loading bar). Local
+    twin of site_composer._report_progress: atelier must not import
+    site_composer (cycle), and a cb error must never break a compose."""
+    if cb is None:
+        return
+    try:
+        cb(pct, stage)
+    except Exception as e:
+        logger.debug(f"[atelier] progress cb error (ignored): {e}")
+
+
 def run_atelier(html: str, spec: List[Dict[str, Any]], ctx: Dict[str, Any],
                 dro: Optional[Dict[str, Any]], business_id: str, *,
                 regenerate: bool,
                 stored: Optional[Dict[str, Any]] = None,
                 precomputed: Optional[Dict[str, Any]] = None,
+                progress_cb=None,
                 ) -> Tuple[str, Optional[Dict[str, Any]]]:
     """The render_and_persist hook. Three modes:
       precomputed — the self-heal re-render reuses the fragments the
@@ -613,7 +650,8 @@ def run_atelier(html: str, spec: List[Dict[str, Any]], ctx: Dict[str, Any],
             return html, None
         picks = plan_bespoke(dro, spec, ctx)
         fragments: Dict[str, Dict[str, Any]] = {}
-        for i in picks:
+        _n = max(len(picks), 1)
+        for _step, i in enumerate(picks, start=1):
             sec = spec[i] if 0 <= i < len(spec) else {}
             mid = sec.get("module")
             if not mid:
@@ -624,6 +662,10 @@ def run_atelier(html: str, spec: List[Dict[str, Any]], ctx: Dict[str, Any],
             if out:
                 fragments[mid] = {"html": out[0], "css": out[1],
                                   "index": i, "variant": sec.get("variant")}
+            # Arc 10 — 55→80 stepped per bespoke section (55 was reported
+            # by render_and_persist before this call).
+            _report(progress_cb, 55 + int(25 * _step / _n),
+                    f"Drafting bespoke sections ({_step} of {_n})")
         if not fragments:
             return html, None
         meta = {

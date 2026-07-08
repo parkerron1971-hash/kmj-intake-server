@@ -18,9 +18,10 @@ import re as _re
 from typing import Any, Dict, List, Tuple
 
 from . import (hero, about, offerings, testimonials, gallery, cta_band,
-               contact_footer, store, showcase, header, statband)
+               contact_footer, store, showcase, header, statband,
+               interstitial)
 from ._base import (page_shell, build_page_meta, rule_break_treatment,
-                    diamond_field)
+                    diamond_field, is_brut)
 
 _TAG_RE = _re.compile(r"<[^>]+>")
 
@@ -32,7 +33,9 @@ def _mark_silence_target(body_parts: List[str], rendered_ids: List[str]) -> None
     no-ornament CSS (base_css) has a single deterministic home. In place."""
     best_i, best_len = -1, None
     for i, (mid, html) in enumerate(zip(rendered_ids, body_parts)):
-        if mid in ("hero", "contact"):
+        # Interstitials (Site Arc 10 ceremony seams) are chrome-like:
+        # they are near-empty by design and never carry the rule-break.
+        if mid in ("hero", "contact", "interstitial"):
             continue
         text_len = len(" ".join(_TAG_RE.sub(" ", html).split()))
         if best_len is None or text_len < best_len:
@@ -87,6 +90,45 @@ def _mark_authority_band(body_parts: List[str], rendered_ids: List[str],
     body_parts[target] = marked
 
 
+# Site Arc 10 "wow" — sections that carry a GHOST CHAPTER NUMERAL (the
+# sub-perceptual depth layer from exemplars e5/e6: huge display digits
+# at ~5% ink in a section corner). Hero and contact never (entry/exit);
+# interstitials are the seams between chapters, not chapters.
+_GHOST_NUMERAL_IDS = ("about", "offerings", "gallery", "testimonials",
+                      "showcase", "store")
+
+
+def _inject_ghost_numerals(body_parts: List[str], rendered_ids: List[str],
+                           ctx: Dict[str, Any]) -> None:
+    """Stamp each major section with its chapter numeral (01, 02, …) —
+    shell-owned ornament (CSS in _base._WOW_CSS), injected right after
+    the section's opening tag; corners alternate. Skipped for the brut
+    identity (their language is color-blocks, not ornament) and when
+    fewer than two chapters exist (a lone '01' is noise). In place."""
+    if is_brut(ctx.get("dna") or {}):
+        return
+    idxs = [i for i, mid in enumerate(rendered_ids)
+            if mid in _GHOST_NUMERAL_IDS]
+    if len(idxs) < 2:
+        return
+    for n, i in enumerate(idxs, start=1):
+        part = body_parts[i]
+        side = " sxm-gn-left" if n % 2 == 0 else ""
+        numeral = (f'<span class="sxm-ghostnum{side}" '
+                   f'aria-hidden="true">{n:02d}</span>')
+        marked, cnt = _re.subn(r'(<section\b[^>]*class=")',
+                               r"\1sxm-ghostnum-host ", part, count=1)
+        if not cnt:  # a section tag without a class attribute
+            marked, cnt = _re.subn(
+                r"<section\b", '<section class="sxm-ghostnum-host"',
+                part, count=1)
+        if not cnt:
+            continue
+        marked = _re.sub(r"(<section\b[^>]*>)",
+                         lambda m: m.group(1) + numeral, marked, count=1)
+        body_parts[i] = marked
+
+
 MODULES: Dict[str, Dict[str, Any]] = {
     "hero": {
         "variants": hero.VARIANTS,
@@ -138,6 +180,16 @@ MODULES: Dict[str, Dict[str, Any]] = {
         "render": contact_footer.render,
         "fields": ("headline", "note", "cta_label"),
     },
+    # Site Arc 10 — the ceremony seams. INTERNAL: never offered to the
+    # composer LLM (site_composer._module_menu skips internal entries);
+    # placed only by the deterministic ceremony pass. May appear more
+    # than once per page (sanitize_spec exempts it from module dedupe).
+    "interstitial": {
+        "variants": interstitial.VARIANTS,
+        "render": interstitial.render,
+        "fields": ("text", "words"),
+        "internal": True,
+    },
 }
 
 
@@ -188,6 +240,9 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
     # Quality-floor arc 7 — the authority band lands AFTER silence marking
     # (it never claims the silence target's ground).
     _mark_authority_band(body_parts, rendered_ids, ctx)
+    # Site Arc 10 — ghost chapter numerals land last (they read the final
+    # section set; the classes they add never collide with the marks above).
+    _inject_ghost_numerals(body_parts, rendered_ids, ctx)
     header_html, header_css = header.render_header(rendered_ids, ctx)
     body_parts.insert(0, header_html)
     css_parts.insert(0, header_css)

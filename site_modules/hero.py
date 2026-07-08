@@ -10,12 +10,40 @@ from typing import Any, Dict, Tuple
 from ._base import (safe, ov, cta_button, eyebrow, heading_accent,
                     accent_headline, diamond_field, GRAIN_DATA_URI)
 
-VARIANTS = ("split", "statement", "banner", "cinematic", "editorial", "constructed")
+VARIANTS = ("split", "statement", "banner", "cinematic", "editorial",
+            "constructed", "anchored")
 
 # Quality-floor arc 7: the accent-word idiom was promoted to _base
 # (accent_headline) and now marks EVERY hero variant's h1; its CSS
 # (.sxm-accent-word) ships in base_css. Alias kept for older callers.
 _accent_headline = accent_headline
+
+# Site Arc 10 — the anchored hero's word-by-word landing reuses the
+# accent-word picker so exactly ONE word stays italic-accent.
+from ._base import _ALPHA_RE as _WORD_ALPHA_RE  # noqa: E402
+
+
+def _word_spans(headline: str) -> str:
+    """The word-by-word landing (exemplar e5: 'the headline lands word
+    by word'): each word in its own span carrying a --wi index for the
+    staggered CSS delay; the longest word (accent_headline's exact pick)
+    keeps the italic accent idiom. Deterministic, fully escaped;
+    single-word headlines still land as one span."""
+    words = str(headline or "").split()
+    if not words:
+        return ""
+
+    def _alpha_len(w: str) -> int:
+        return sum(len(m) for m in _WORD_ALPHA_RE.findall(w))
+
+    target = (max(range(len(words)), key=lambda i: _alpha_len(words[i]))
+              if len(words) > 1 else -1)
+    out = []
+    for i, w in enumerate(words):
+        inner = (f'<em class="sxm-accent-word">{safe(w)}</em>'
+                 if i == target else safe(w))
+        out.append(f'<span class="sxm-hw" style="--wi:{i}">{inner}</span>')
+    return " ".join(out)
 
 
 def _constructed_recipe(ctx: Dict[str, Any]) -> Tuple[str, str]:
@@ -53,6 +81,61 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     # Deterministic, meaningful alt for the hero image (Arc 1).
     img_alt = safe(f"{biz_name} — {headline}" if biz_name and biz_name != headline
                    else headline)
+
+    if variant == "anchored":
+        # Site Arc 10 — BOTTOM GRAVITY (exemplar e5 "K Luxury": the
+        # headline rests on the FLOOR of the photograph like a film
+        # title, not a centered caption). Content anchored flex-end
+        # under a DIRECTIONAL scrim that deepens only toward the
+        # baseline (15% at the top → 85% at the words — the image
+        # keeps breathing). The display line lands word by word
+        # (staggered spans; reduced-motion/stilled pages land it
+        # instantly), one word tips italic-accent, and the eyebrow
+        # speaks in the whisper voice.
+        eb_anch = ""
+        if content.get("eyebrow"):
+            eb_anch = (f'<div class="sxm-eyebrow sxm-whisper" '
+                       f'{ov("hero", "eyebrow")}>{safe(content["eyebrow"])}</div>')
+        html = f"""
+<section class="sxm-hero-anch" id="top">
+  <img data-slot="hero_main" src="" alt="{img_alt}" class="sxm-hero-bgimg">
+  <div class="sxm-anch-scrim"></div>
+  <div class="sxm-inner sxm-anch-inner">
+    {eb_anch}
+    <h1 {ov('hero', 'headline')}>{_word_spans(headline)}</h1>
+    <p class="sxm-anch-sub" {ov('hero', 'subheadline')}>{safe(sub)}</p>
+    {cta}
+  </div>
+</section>"""
+        css = """
+.sxm-hero-anch { position: relative; min-height: 100vh; min-height: 100svh; display: flex;
+  align-items: flex-end; padding: var(--sx-section-pad) var(--sx-gutter) clamp(48px, 8vh, 96px);
+  overflow: hidden; isolation: isolate; }
+.sxm-hero-anch .sxm-hero-bgimg { position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; z-index: -2; transform: scale(1.03); }
+.sxm-anch-scrim { position: absolute; inset: 0; z-index: -1; background:
+  linear-gradient(to bottom,
+    color-mix(in srgb, var(--sx-bg) 15%, transparent) 0%,
+    color-mix(in srgb, var(--sx-bg) 32%, transparent) 55%,
+    color-mix(in srgb, var(--sx-bg) 85%, transparent) 100%); }
+.sxm-anch-inner { position: relative; width: 100%; }
+.sxm-hero-anch h1 { font-size: clamp(3.4rem, 8vw, 6.8rem); line-height: 1.02;
+  max-width: 16ch; margin-bottom: 22px; }
+.sxm-hero-anch .sxm-anch-sub { font-size: 1.16rem; max-width: 46ch; margin-bottom: 34px;
+  color: var(--sx-text); opacity: .92; }
+.sxm-hero-anch .sxm-eyebrow { margin-bottom: 18px; }
+.sxm-hero-anch h1 .sxm-hw { display: inline-block; }
+@media (max-width: 768px) { .sxm-hero-anch { min-height: 92vh; } }"""
+        if dna.get("motion", "standard") != "subtle":
+            css += """
+.sxm-hero-anch h1 .sxm-hw { opacity: 0; transform: translateY(.45em);
+  animation: sxm-word-land .6s var(--sx-ease) forwards;
+  animation-delay: calc(.25s + var(--wi, 0) * .15s); }
+@keyframes sxm-word-land { to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .sxm-hero-anch h1 .sxm-hw { animation: none; opacity: 1; transform: none; }
+}"""
+        return html, css
 
     if variant == "cinematic":
         # Full-bleed, art-directed: tall viewport, image graded by a layered

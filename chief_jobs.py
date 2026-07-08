@@ -19,6 +19,7 @@
 
 import os
 import json
+import time
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -92,9 +93,51 @@ KIND_META: Dict[str, Dict[str, Any]] = {
 }
 
 
-def _execute_kind(kind: str, business_id: str, params: dict) -> dict:
+# ─── Progress reporting (Arc 10 "wow" — the loading bar) ──────────────
+# While a job is `running`, stage boundaries PATCH the job row's `result`
+# field with {"progress": {"pct": N, "stage": "..."}} — no migration:
+# `result` is unused until the completion PATCH overwrites it, and the
+# existing frontend pollers already fetch the row (they read
+# job.result.progress while status == 'running').
+_PROGRESS_MIN_INTERVAL_S = 1.5   # throttle: skip pings closer than this…
+_PROGRESS_MIN_JUMP = 15          # …unless the pct jumped at least this much
+
+
+def _make_progress_cb(job_id: str):
+    """Build the synchronous progress(pct, stage) reporter for one job.
+
+    Runs INSIDE the worker thread, so it uses the sync service-role
+    client (sb_clients.sb_patch_as_service), never the async _sb.
+    Fail-soft by construction: any error is swallowed — a progress ping
+    must never break the compose. pct is clamped 0..100 and kept
+    monotonic (a self-heal re-render never walks the bar backwards)."""
+    state = {"t": 0.0, "pct": -1}
+
+    def progress(pct: Any, stage: Any) -> None:
+        try:
+            p = max(0, min(100, int(pct)))
+            p = max(p, state["pct"])          # monotonic — never backwards
+            now = time.monotonic()
+            if (p < 100
+                    and (now - state["t"]) < _PROGRESS_MIN_INTERVAL_S
+                    and (p - state["pct"]) < _PROGRESS_MIN_JUMP):
+                return                        # throttled
+            state["t"] = now
+            state["pct"] = p
+            sb_clients.sb_patch_as_service(
+                f"/chief_jobs?id=eq.{job_id}",
+                {"result": {"progress": {"pct": p, "stage": str(stage)[:140]}}})
+        except Exception as e:
+            logger.debug(f"[chief_jobs] progress ping skipped for {job_id}: {e}")
+
+    return progress
+
+
+def _execute_kind(kind: str, business_id: str, params: dict,
+                  job_id: Optional[str] = None) -> dict:
     """SYNC heavy work, run in a worker thread so the event loop stays free.
     Returns a JSON-serializable result dict. Raises on failure."""
+    progress = _make_progress_cb(job_id) if job_id else None
     if kind == "rebuild_site":
         # Lazy import — avoids any import-time cost/cycles at module load.
         # compose_site (DRL PR3) authors the Design Rationale Object first,
@@ -105,7 +148,8 @@ def _execute_kind(kind: str, business_id: str, params: dict) -> dict:
         # to businesses.settings.site_prefs before composing; when absent it
         # reuses the stored site_prefs automatically.
         result = compose_site(business_id, brief_notes=notes, use_llm=True,
-                              design_prefs=(params or {}).get("design_prefs"))
+                              design_prefs=(params or {}).get("design_prefs"),
+                              progress_cb=progress)
         return result if isinstance(result, dict) else {}
     if kind == "compose_directions":
         # Arc 6 — authors + stores the three direction drafts; the result
@@ -114,7 +158,8 @@ def _execute_kind(kind: str, business_id: str, params: dict) -> dict:
         # preview tokens.
         from site_composer import compose_directions
         result = compose_directions(
-            business_id, design_prefs=(params or {}).get("design_prefs"))
+            business_id, design_prefs=(params or {}).get("design_prefs"),
+            progress_cb=progress)
         return result if isinstance(result, dict) else {}
     raise ValueError(f"unknown job kind: {kind}")
 
@@ -129,7 +174,8 @@ async def _run(job_id: str, user_id: str, business_id: str, kind: str, params: d
         await _sb(client, "PATCH", f"/chief_jobs?id=eq.{job_id}",
                   {"status": "running", "started_at": _now()})
         try:
-            result = await asyncio.to_thread(_execute_kind, kind, business_id, params)
+            result = await asyncio.to_thread(_execute_kind, kind, business_id,
+                                             params, job_id)
             await _sb(client, "PATCH", f"/chief_jobs?id=eq.{job_id}",
                       {"status": "done", "result": result, "finished_at": _now()})
             await _sb(client, "POST", "/chief_activity", [{
