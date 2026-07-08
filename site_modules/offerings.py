@@ -102,18 +102,24 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
         # the rest read as a dense index. Numbers are positional, never
         # invented data.
         feature, rest = rows[0], rows[1:]
-        f_cta = (f'<a class="sxm-off-book" href="{book_href}">Book</a>' if book_href else "")
+        # Site Arc 11 (total editability): the per-row Book label is
+        # PRESENTATION text — one shared target (offerings/book_label)
+        # edits every row's label at once.
+        f_cta = (f'<a class="sxm-off-book" href="{book_href}" {ov("offerings", "book_label")}>Book</a>'
+                 if book_href else "")
         # Site Arc 9: the flagship card's foot is never empty — when no
         # booking CTA exists and the price line was suppressed, fall back
         # to the contact anchor (a premium layout with a blank action
         # area reads as broken).
         if not f_cta and not _price(feature):
-            f_cta = '<a class="sxm-off-book" href="#contact">Get in touch</a>'
+            f_cta = (f'<a class="sxm-off-book" href="#contact" '
+                     f'{ov("offerings", "book_label")}>Get in touch</a>')
         f_desc = safe(feature.get("description") or "")
         f_desc_html = f'<p class="sxm-off-desc sxm-muted">{f_desc}</p>' if f_desc else ""
         rows_html = []
         for i, o in enumerate(rest, start=2):
-            r_cta = (f'<a class="sxm-off-book" href="{book_href}">Book</a>' if book_href else "")
+            r_cta = (f'<a class="sxm-off-book" href="{book_href}" {ov("offerings", "book_label")}>Book</a>'
+                     if book_href else "")
             r_desc = safe(o.get("description") or "")
             r_desc_html = f'<p class="sxm-off-desc sxm-muted">{r_desc}</p>' if r_desc else ""
             rows_html.append(f"""
@@ -192,7 +198,8 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
         # _price unchanged: Free / sub-$5 suppression.
         rows_html = []
         for o in rows:
-            r_cta = (f'<a class="sxm-off-book sxm-offmenu-book" href="{book_href}">Book</a>'
+            r_cta = (f'<a class="sxm-off-book sxm-offmenu-book" href="{book_href}" '
+                     f'{ov("offerings", "book_label")}>Book</a>'
                      if book_href else "")
             desc = safe(o.get("description") or "")
             desc_html = (f'<p class="sxm-off-desc sxm-muted">{desc}</p>'
@@ -257,7 +264,8 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     item_class = "sxm-off-item" if variant == "list" else "sxm-off-item sxm-card"
     items = []
     for o in rows:
-        cta = (f'<a class="sxm-off-book" href="{book_href}">Book</a>' if book_href else "")
+        cta = (f'<a class="sxm-off-book" href="{book_href}" {ov("offerings", "book_label")}>Book</a>'
+               if book_href else "")
         desc = safe(o.get("description") or "")
         desc_html = f'<p class="sxm-off-desc sxm-muted">{desc}</p>' if desc else ""
         items.append(f"""

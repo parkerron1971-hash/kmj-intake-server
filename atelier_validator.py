@@ -22,7 +22,9 @@ OUTPUT CONTRACT):
   5. imagery — <img> only with data-slot from the allowed list (each
      at most once), src empty, alt non-empty
   6. copy paths — one data-override-target="{kind}/{field}" per
-     provided copy field
+     provided copy field; ADDITIONAL display text the author invents
+     must carry {kind}/custom_N (Site Arc 11 total editability — the
+     module's own declared fields are also accepted)
   7. links — #anchors or the explicitly allowed hrefs; no external
      URLs / @import / url() anywhere
   8. no <script>/<style>/<iframe>/inline handlers/position:fixed
@@ -61,6 +63,10 @@ _EXTERNAL_RE = re.compile(r"https?://|(?<!:)//(?![*/])|url\s*\(|@import|data:",
                           re.IGNORECASE)
 _MEDIA_MAXW_RE = re.compile(r"max-width\s*:\s*(\d+(?:\.\d+)?)px", re.IGNORECASE)
 _DIGIT_RUN_RE = re.compile(r"\d+")
+# Site Arc 11 — invented-display-text override targets: {kind}/custom_1,
+# custom_2, … (sequential numbering is the prompt's ask; the validator
+# only requires the FORM so a re-numbered repair never fails on it).
+_CUSTOM_TARGET_RE = re.compile(r"custom_\d+$")
 
 
 class _FragmentParser(HTMLParser):
@@ -226,6 +232,7 @@ def validate_fragment(html: str, css: str, *, uid: str, kind: str,
                       allowed_slots: Sequence[str] = (),
                       required_targets: Sequence[str] = (),
                       allowed_hrefs: Sequence[str] = (),
+                      allowed_fields: Sequence[str] = (),
                       ) -> Tuple[bool, List[str]]:
     """Full contract inspection. Returns (ok, problems); problems are
     written to be pasted straight into the repair prompt."""
@@ -318,9 +325,21 @@ def validate_fragment(html: str, css: str, *, uid: str, kind: str,
         elif n > 1:
             problems.append(f'data-override-target="{want}" appears {n} times '
                             "(must be unique)")
+    # Site Arc 11 (total editability): every target lives under {kind}/;
+    # the field half must be a provided copy field, one of the module's
+    # declared fields (allowed_fields), or custom_N — the path the author
+    # gives any ADDITIONAL display text it invents.
+    known_fields = set(required_targets) | set(allowed_fields)
     for t in p.targets:
         if not t.startswith(f"{kind}/"):
             problems.append(f'override target "{t}" must live under "{kind}/"')
+            continue
+        field = t[len(kind) + 1:]
+        if field in known_fields or _CUSTOM_TARGET_RE.fullmatch(field):
+            continue
+        problems.append(
+            f'override target "{t}" not recognized — invented display text '
+            f'must use data-override-target="{kind}/custom_N" (N = 1, 2, …)')
 
     # 2 — CSS scoping
     _check_css_scoping(css, uid, problems)

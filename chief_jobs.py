@@ -90,6 +90,16 @@ KIND_META: Dict[str, Dict[str, Any]] = {
         "done": "three design directions are ready — pick one",
         "nav": "build:mysite",
     },
+    # Site Arc 11 — the resident creator: revise ONE section of the
+    # composed site under the owner's instruction (one atelier call +
+    # deterministic re-render ≈ 30-90s). An unrefinable ask completes
+    # with result {ok: false, error} — honest, never a crashed job.
+    "refine_section": {
+        "label": "Section refine",
+        "working": "reworking that section",
+        "done": "your section rework is ready",
+        "nav": "build:mysite",
+    },
 }
 
 
@@ -161,6 +171,18 @@ def _execute_kind(kind: str, business_id: str, params: dict,
             business_id, design_prefs=(params or {}).get("design_prefs"),
             progress_cb=progress)
         return result if isinstance(result, dict) else {}
+    if kind == "refine_section":
+        # Site Arc 11 — refine ONE section under the owner's instruction.
+        # refine_section returns {ok: false, error} on an unrefinable ask
+        # (validator failure, unknown section, no composed page) — that is
+        # a COMPLETED job with an honest result, not an exception.
+        from site_composer import refine_section
+        result = refine_section(
+            business_id,
+            section=str((params or {}).get("section") or ""),
+            instruction=str((params or {}).get("instruction") or ""),
+            progress_cb=progress)
+        return result if isinstance(result, dict) else {}
     raise ValueError(f"unknown job kind: {kind}")
 
 
@@ -178,10 +200,18 @@ async def _run(job_id: str, user_id: str, business_id: str, kind: str, params: d
                                              params, job_id)
             await _sb(client, "PATCH", f"/chief_jobs?id=eq.{job_id}",
                       {"status": "done", "result": result, "finished_at": _now()})
+            # Honest recap (Site Arc 11): a job that COMPLETED with an
+            # ok:false result (e.g. an unrefinable refine ask) announces
+            # its error, not the success line. Kinds without an "ok" key
+            # keep the success summary unchanged.
+            _done_summary = meta.get("done", "done")
+            if isinstance(result, dict) and result.get("ok") is False:
+                _done_summary = str(result.get("error")
+                                    or "couldn't finish — try again")[:140]
             await _sb(client, "POST", "/chief_activity", [{
                 "user_id": user_id, "business_id": business_id, "source": "system",
                 "action_type": f"job:{kind}", "label": meta["label"],
-                "summary": meta.get("done", "done"), "nav": meta.get("nav"),
+                "summary": _done_summary, "nav": meta.get("nav"),
             }])
         except Exception as e:
             logger.exception(f"[chief_jobs] job {job_id} ({kind}) failed")

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from ._base import safe, safe_url, diamond_mark
+from ._base import safe, safe_url, diamond_mark, ov
 
 # Rendered-module id → (anchor, label). Order here is only a fallback;
 # links are emitted in the order the sections rendered on the page.
@@ -77,7 +77,7 @@ def render_header(rendered_ids: List[str], ctx: Dict[str, Any]) -> Tuple[str, st
   <div class="sxm-header-inner">
     <a class="sxm-header-brand" href="#top" aria-label="{safe(name)} — home">{brand_inner}</a>
     {nav_html}
-    <a class="sxm-cta sxm-header-cta" href="{cta_href}">{cta_label}</a>
+    <a class="sxm-cta sxm-header-cta" href="{cta_href}"><span {ov('header', 'cta_label')}>{cta_label}</span></a>
   </div>
 </header>"""
 

@@ -81,6 +81,12 @@ _TENSION_POLE_CAP = 80
 # Chief asks in the interview; when answered, the site must make it
 # unmistakable).
 _OFFER_CAP = 600
+# Site Arc 11 — explicit CONNECTIONS: the owner's yes/no answers to "what
+# should this site plug into?". Every key optional; True forces the
+# surface on (subject to real data), False forces it off, absent = the
+# current auto behavior (byte-identical when the object is absent).
+_CONNECTION_KEYS = ("booking", "store", "contact_form", "sms_updates",
+                    "socials")
 
 
 def _report_progress(cb, pct: int, stage: str) -> None:
@@ -186,6 +192,17 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
     goal = raw.get("cta_goal")
     if isinstance(goal, str) and goal.strip().lower() in _CTA_GOALS:
         out["cta_goal"] = goal.strip().lower()
+
+    # Site Arc 11 — connections {booking, store, contact_form,
+    # sms_updates, socials}: strict bools only (a truthy string is NOT
+    # owner intent); unknown keys dropped; empty → omitted entirely so
+    # absent stays byte-identical to the auto behavior.
+    cn = raw.get("connections")
+    if isinstance(cn, dict):
+        cnout = {k: cn[k] for k in _CONNECTION_KEYS
+                 if isinstance(cn.get(k), bool)}
+        if cnout:
+            out["connections"] = cnout
 
     ip = raw.get("imagery_priority")
     if isinstance(ip, str) and ip.strip().lower() in _IMAGERY_PRIORITIES:
@@ -425,9 +442,41 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         dna = brand_dna.apply_owner_ground(dna, color_prefs["direction"])
     cta_goal = (site_prefs.get("cta_goal")
                 if site_prefs.get("cta_goal") in _CTA_GOALS else None)
+
+    # Site Arc 11 — explicit CONNECTIONS (sanitized at the door, persisted
+    # with site_prefs). Hard OFF switches apply here at the choke point so
+    # every downstream consumer (modules, cta ladders, header, specs)
+    # honors them without local checks:
+    #   booking=False → ctx.booking disabled (CTAs fall to #contact)
+    #   store=False   → ctx.store disabled (section + buy-goal href gone)
+    # ON switches are honored by the modules/_ensure_connections (they
+    # need real data to act on). Absent object → connections is None and
+    # every behavior is byte-identical to before.
+    connections = (site_prefs.get("connections")
+                   if isinstance(site_prefs.get("connections"), dict) else None)
+    if connections:
+        if connections.get("booking") is False:
+            booking = {"enabled": False, "url": ""}
+        if connections.get("store") is False:
+            store = {**store, "enabled": False}
+        # sms_updates=True → the footer's "Text {keyword} to connect"
+        # line needs the practitioner's routing keyword (sms_keywords
+        # table, OPERATE → Text/SMS). Fetched only when asked for;
+        # fail-soft — no keyword, no line.
+        if connections.get("sms_updates") is True:
+            try:
+                kw_rows = sb_clients.sb_get_as_service(
+                    f"/sms_keywords?business_id=eq.{business_id}"
+                    "&select=keyword&limit=1") or []
+                if kw_rows and kw_rows[0].get("keyword"):
+                    contact["sms_keyword"] = str(kw_rows[0]["keyword"])
+            except Exception as e:
+                logger.info(f"[composer] sms keyword lookup skipped: {e}")
+
     return {
         "site_prefs": site_prefs,
         "cta_goal": cta_goal,
+        "connections": connections,
         "store": store,
         "dna": dna,
         "bundle": bundle,
@@ -1055,6 +1104,115 @@ def _visible_text(fragment: str) -> str:
     return " ".join(_h.unescape(_TAG_STRIP_RE.sub(" ", str(fragment or ""))).split())
 
 
+# ─── Site Arc 11 — TOTAL EDITABILITY coverage (report-only) ──────────
+#
+# Heuristic census of visible PRESENTATION-text nodes lacking a
+# data-override-target: h1-h4/p/blockquote/figcaption elements with real
+# innerText, no target on themselves or an ancestor, outside the known
+# DATA-DRIVEN surfaces (business data is edited at the source — see the
+# rule in site_modules/_base.py) and outside platform chrome. Pure
+# stdlib parse; the gate reports the count, it never blocks publish.
+
+_EDITABILITY_TAGS = frozenset({"h1", "h2", "h3", "h4", "p", "blockquote",
+                               "figcaption"})
+_EDITABILITY_VOID = frozenset({"img", "br", "hr", "input", "meta", "link",
+                               "source", "wbr", "area", "base", "col",
+                               "embed", "track"})
+# Class PREFIXES whose subtree is data-driven or chrome (un-targeted by
+# design — the _base.py editability rule): offering/product/testimonial/
+# showcase records, contact logistics, SMS compliance copy, marquee tone
+# words, header/footer chrome, runtime-only states.
+_EDITABILITY_EXEMPT_PREFIXES = (
+    "sxm-header", "sxm-footer",                       # structural chrome
+    "sxm-testi", "sxm-mq",                            # testimonial records
+    "sxm-sc-",                                        # showcase records
+    "sxm-store",                                      # product records
+    "sxm-off-desc", "sxm-off-head", "sxm-off-price",  # offering records
+    "sxm-offmenu",
+    "sxm-contact-logistics", "sxm-contact-social", "sxm-contact-mail",
+    "sxm-sms-consent",                                # compliance copy
+    "sxm-sent",                                       # runtime-only state
+    "sxm-int-mq",                                     # marquee tone words
+)
+
+
+from html.parser import HTMLParser as _HTMLParserBase
+
+
+class _EditabilityParser(_HTMLParserBase):
+    """Tiny stack walk counting un-targeted presentation-text nodes.
+    Exclusion (data-driven class prefix / aria-hidden) and targeting
+    (data-override-target) both INHERIT down the subtree."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: List[list] = []   # rows: [tag, excluded, targeted, node|None]
+        self.count = 0
+        self.samples: List[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _EDITABILITY_VOID:
+            return
+        a = {k.lower(): (v or "") for k, v in attrs}
+        parent = self.stack[-1] if self.stack else None
+        excluded = bool(parent and parent[1])
+        targeted = bool(parent and parent[2])
+        if a.get("aria-hidden") == "true":
+            excluded = True
+        cls = a.get("class", "")
+        if any(c.startswith(_EDITABILITY_EXEMPT_PREFIXES)
+               for c in cls.split()):
+            excluded = True
+        if "data-override-target" in a:
+            targeted = True
+        node = None
+        if tag in _EDITABILITY_TAGS and not excluded and not targeted:
+            node = {"tag": tag, "class": cls, "text": []}
+        self.stack.append([tag, excluded, targeted, node])
+
+    def handle_endtag(self, tag):
+        if tag in _EDITABILITY_VOID:
+            return
+        while self.stack:                 # tolerant unwind to the open tag
+            row = self.stack.pop()
+            node = row[3]
+            if node is not None:
+                text = " ".join(" ".join(node["text"]).split())
+                if text:
+                    self.count += 1
+                    label = node["tag"] + ("." + node["class"].split()[0]
+                                           if node["class"] else "")
+                    self.samples.append(f"{label}: {text[:60]}")
+            if row[0] == tag:
+                break
+
+    def handle_data(self, data):
+        if not data.strip():
+            return
+        for row in reversed(self.stack):
+            if row[3] is not None:
+                row[3]["text"].append(data)
+                break
+
+
+def _editability_coverage(html: str) -> tuple:
+    """(count, samples) of visible presentation-text nodes lacking a
+    data-override-target in the document body. Fail-soft: a parse error
+    reports (0, ['parse skipped: …']) rather than failing the gate."""
+    body = html
+    m = re.search(r"<body\b[^>]*>(.*)</body>", str(html or ""),
+                  re.IGNORECASE | re.DOTALL)
+    if m:
+        body = m.group(1)
+    try:
+        p = _EditabilityParser()
+        p.feed(body)
+        p.close()
+        return p.count, p.samples[:8]
+    except Exception as e:
+        return 0, [f"parse skipped: {e}"]
+
+
 def _heal_headline_default(module: str, ctx: Dict[str, Any]) -> str:
     if module == "hero":
         b = (ctx.get("bundle") or {}).get("business") or {}
@@ -1164,6 +1322,17 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
     checks.append({"name": "image_alts", "ok": not bad_alts,
                    "detail": (f'alt="" on slots: {bad_alts}' if bad_alts
                               else "all slot images carry alt text")})
+
+    # (d2) Site Arc 11 — TOTAL EDITABILITY (report-only, adds no fixes):
+    # count visible presentation-text nodes lacking data-override-target
+    # (heuristic: h1-h4/p/blockquote/figcaption innerText outside the
+    # data-driven exclusion classes — see _EDITABILITY_EXEMPT_PREFIXES).
+    ed_count, ed_samples = _editability_coverage(html)
+    checks.append({
+        "name": "editability_coverage", "ok": ed_count == 0,
+        "detail": (f"{ed_count} visible text node(s) lack an override "
+                   f"target: {ed_samples}" if ed_count
+                   else "every presentation-text node carries a target")})
 
     # (f) headline/eyebrow text non-empty for rendered sections. An
     # element that RENDERED but carries no visible text is a real defect
@@ -1785,7 +1954,17 @@ def _ensure_connections(spec: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List
     business actually uses — never left to the LLM (the cause of missing
     modules/sections). Adds any missing connected section: showcase (public
     custom modules), offerings, store. Contact + hero are guaranteed by
-    sanitize_spec. Sections insert before contact so it stays last."""
+    sanitize_spec. Sections insert before contact so it stays last.
+
+    Site Arc 11 — the owner's EXPLICIT connections outrank the data
+    heuristics: connections.booking=True forces the offerings section
+    (the thing a booking CTA sells); connections.store=True forces the
+    store section (the module render applies the relaxed 1-real-product
+    floor). Hard OFF switches were already applied by gather_context
+    (ctx.booking/ctx.store disabled), so the conditions below naturally
+    skip forced-off surfaces. Absent connections → identical to before."""
+    conn = (ctx.get("connections")
+            if isinstance(ctx.get("connections"), dict) else {})
     present = {s.get("module") for s in spec}
     additions: List[Dict[str, Any]] = []
     # Additions are by definition not an explicit LLM pick — mark them so
@@ -1794,9 +1973,13 @@ def _ensure_connections(spec: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List
     if ctx.get("public_modules") and "showcase" not in present:
         additions.append({"module": "showcase", "variant": "cards", "content": {},
                           "_variant_defaulted": True})
-    if (ctx.get("offerings")) and "offerings" not in present:
+    if ((ctx.get("offerings") or conn.get("booking") is True)
+            and "offerings" not in present):
         additions.append({"module": "offerings", "variant": "cards", "content": {},
                           "_variant_defaulted": True})
+    # store: gather_context already disabled ctx.store on an explicit
+    # False, so enabled-here means auto or forced-on; forced-on ALSO gets
+    # the relaxed 1-real-product floor inside the store module render.
     if (ctx.get("store") or {}).get("enabled") and "store" not in present:
         additions.append({"module": "store", "variant": "featured", "content": {},
                           "_variant_defaulted": True})
@@ -2594,13 +2777,40 @@ def prefill_signals(business_id: str,
         and len(str(o.get("description") or "").strip()) >= 40
         for o in offerings)
 
+    # Site Arc 11 — DETECTED connections: what the business ACTUALLY has
+    # wired today, so the interview can pre-check the connections toggles
+    # instead of asking cold (never re-ask what the platform knows).
+    settings_rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
+    b_settings = (settings_rows[0].get("settings") or {}) if settings_rows else {}
+    booking_cfg = (b_settings.get("booking")
+                   if isinstance(b_settings.get("booking"), dict) else {})
+    hours_cfg = (booking_cfg.get("hours")
+                 if isinstance(booking_cfg.get("hours"), dict) else {})
+    booking_configured = bool(booking_cfg.get("enabled")
+                              or (hours_cfg.get("start") and hours_cfg.get("end")))
+    try:
+        from store_router import _sellable_offerings
+        store_has_products = len(_sellable_offerings(business_id) or []) > 0
+    except Exception:
+        store_has_products = False
+    link_page = (b_settings.get("link_page")
+                 if isinstance(b_settings.get("link_page"), dict) else {})
+    socials_connected = any(
+        str(v or "").strip()
+        for v in (link_page.get("social_profiles") or {}).values())
+
     return {"has_about": has_about,
             "has_brand_colors": has_brand_colors,
             "has_voice": bool(known_feel_words),
             "known_feel_words": known_feel_words,
             "audience_known": audience_known,
             "offer_clear": offer_clear,
-            "offer_count": len(offerings)}
+            "offer_count": len(offerings),
+            "detected": {"booking_configured": booking_configured,
+                         "store_has_products": store_has_products,
+                         "sms_capable": _platform_sms_capable(),
+                         "socials_connected": socials_connected}}
 
 
 class ShuffleBody(BaseModel):
@@ -2935,3 +3145,188 @@ def refresh_if_composed_async(business_id: str) -> None:
             logger.warning(f"[composer] background refresh failed (non-fatal): {e}")
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+# ─── Site Arc 11 — REFINE-SECTION (the resident creator, v1) ─────────
+#
+# "Creator-quality iteration on demand": the owner points at ONE section
+# and says how it should change ('make it moodier', 'more space',
+# 'bolder type'). One atelier-style authoring call revises that section
+# — the CURRENT html+css (bespoke fragment if one exists, else the
+# module render), the DRO brief, the section's real data, and the
+# owner's instruction — under the exact bespoke contract (validator,
+# one repair). On success the revised fragment replaces (or creates)
+# that section's entry in site_config.atelier.fragments — module
+# sections BECOME bespoke fragments here — and the page re-renders via
+# the stored-fragment path (slots + overrides + quality gate).
+# Runs as a 'refine_section' chief_jobs background job (one Opus call).
+
+_REFINE_INSTRUCTION_CAP = 300
+_REFINE_FAIL_MSG = "couldn't refine — try different words"
+
+
+def refine_section(business_id: str, section: str, instruction: str,
+                   progress_cb=None) -> Dict[str, Any]:
+    """The refine job body (sync; runs in the chief_jobs worker thread).
+    Returns {ok: True, section, url, ...} or {ok: False, error} — an
+    unrefinable ask is an HONEST result, never a crashed job."""
+    import atelier as _atl
+
+    instruction = str(instruction or "").strip()[:_REFINE_INSTRUCTION_CAP]
+    if not instruction:
+        return {"ok": False, "error": "tell me how the section should change"}
+    if not _atl.atelier_enabled():
+        return {"ok": False, "error": "refine is disabled on this server "
+                                      "(ATELIER_ENABLED=0)"}
+
+    _report_progress(progress_cb, 10, "Reading the section")
+    ctx = gather_context(business_id)
+    site = ctx.get("site")
+    cfg = ((site or {}).get("site_config") or {})
+    spec_raw = cfg.get("page_spec")
+    if not spec_raw:
+        return {"ok": False, "error": "no composed page yet — compose first"}
+    spec = sanitize_spec(spec_raw, ctx)
+
+    # Resolve the target: a module key from the page spec ('hero',
+    # 'about', …) or a section index.
+    sec_key = str(section or "").strip().lower()
+    idx: Optional[int] = None
+    if sec_key.isdigit():
+        i = int(sec_key)
+        if 0 <= i < len(spec):
+            idx = i
+    else:
+        idx = next((i for i, s in enumerate(spec)
+                    if s.get("module") == sec_key), None)
+    if idx is None:
+        return {"ok": False,
+                "error": f"section '{section}' isn't on the page"}
+    sec = spec[idx]
+    mid = str(sec.get("module") or "")
+    # Data-dense sections stay modular (live records, working forms) —
+    # same _NEVER_BESPOKE principle the atelier planner enforces.
+    if mid in _atl._NEVER_BESPOKE:
+        return {"ok": False,
+                "error": f"the {mid} section renders live data and can't be "
+                         "restyled this way — try the hero, about, "
+                         "offerings, gallery, testimonials or cta section"}
+
+    # Stored DRO (design law of the page) — same load as re-render paths.
+    dro: Optional[Dict[str, Any]] = None
+    stored_id = cfg.get("design_rationale_id")
+    if stored_id:
+        try:
+            rows = sb_clients.sb_get_as_service(
+                f"/design_rationales?id=eq.{stored_id}&select=dro&limit=1") or []
+            dro = (rows[0] or {}).get("dro") if rows else None
+        except Exception as e:
+            logger.info(f"[composer.refine] stored DRO fetch skipped: {e}")
+    if dro and not ctx.get("design"):
+        _apply_dro_design(ctx, dro, business_id)
+
+    # The CURRENT section: the stored bespoke fragment when one exists,
+    # else this render's module output — what the owner is looking at.
+    stored_atl = (cfg.get("atelier")
+                  if isinstance(cfg.get("atelier"), dict) else {})
+    fragments: Dict[str, Any] = {
+        m: f for m, f in (stored_atl.get("fragments") or {}).items()
+        if isinstance(f, dict)}
+    cur = fragments.get(mid)
+    if cur and str(cur.get("html") or "").strip():
+        cur_html, cur_css = str(cur.get("html") or ""), str(cur.get("css") or "")
+    else:
+        mspec = site_modules.MODULES.get(mid)
+        if not mspec:
+            return {"ok": False, "error": f"unknown section '{mid}'"}
+        variant = (sec.get("variant") if sec.get("variant") in mspec["variants"]
+                   else mspec["variants"][0])
+        cur_html, cur_css = mspec["render"](variant, sec.get("content") or {},
+                                            ctx)
+        if not str(cur_html or "").strip():
+            return {"ok": False,
+                    "error": f"the {mid} section isn't rendering right now "
+                             "(no real data behind it)"}
+
+    _report_progress(progress_cb, 40, "Reworking it")
+    out = _atl.generate_refined_section(
+        mid, cur_html, cur_css, instruction, dro or {}, ctx,
+        sec.get("content") or {}, business_id=business_id)
+    if out is None:
+        return {"ok": False, "error": _REFINE_FAIL_MSG}
+
+    _report_progress(progress_cb, 80, "Inspecting")
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    fragments[mid] = {"html": out[0], "css": out[1], "index": idx,
+                      "variant": sec.get("variant"),
+                      "refined_at": now, "instruction": instruction}
+    atelier_meta = dict(stored_atl)
+    atelier_meta["fragments"] = fragments
+    atelier_meta["sections"] = [
+        {"index": f.get("index"), "module": m}
+        for m, f in fragments.items() if isinstance(f, dict)]
+    atelier_meta["model"] = _atl._model()
+    atelier_meta["refined_at"] = now
+
+    # Re-render through the stored-fragment path: precomputed fragments
+    # (never a second LLM call), slot resolution, override re-stamp,
+    # quality gate, persist — render_and_persist persists the updated
+    # fragment set onto site_config.atelier. The refine job owns the
+    # 10/40/80 stages; render's early full-compose pings (e.g. 55
+    # "Drafting bespoke sections" — it's REUSING here, not drafting)
+    # are dropped below the 80 floor so the bar stays honest.
+    def _render_cb(pct: Any, stage: Any) -> None:
+        try:
+            if int(pct) >= 80:
+                _report_progress(progress_cb, int(pct), stage)
+        except (TypeError, ValueError):
+            pass
+
+    result = render_and_persist(business_id, spec, ctx,
+                                _atelier=atelier_meta,
+                                progress_cb=_render_cb)
+    _report_progress(progress_cb, 100, "Done")
+    return {"ok": True, "section": mid, "instruction": instruction,
+            "site_id": result.get("site_id"), "slug": result.get("slug"),
+            "url": result.get("url"),
+            "quality_report": result.get("quality_report")}
+
+
+class RefineSectionBody(BaseModel):
+    business_id: str
+    section: str
+    instruction: str
+
+
+@router.post("/refine-section")
+async def start_refine_section(body: RefineSectionBody,
+                               session: UserSession = Depends(sb_clients.authed_request)
+                               ) -> Dict[str, Any]:
+    """Enqueue a 'refine_section' job (ONE atelier call ≈ 30-90s — never
+    sync). Owner-gated; returns {ok, job_id}. The frontend polls
+    /agents/chief/jobs; the job result carries ok/error per the honest-
+    failure contract (a failed refine is a DONE job with ok:false)."""
+    import asyncio
+    import httpx
+    import chief_jobs
+    uid = session.user.id
+    await asyncio.to_thread(_require_owner, body.business_id, uid)
+    section = str(body.section or "").strip()[:40]
+    instruction = str(body.instruction or "").strip()[:_REFINE_INSTRUCTION_CAP]
+    if not section:
+        raise HTTPException(400, "section required")
+    if not instruction:
+        raise HTTPException(400, "instruction required")
+    async with httpx.AsyncClient() as client:
+        job = await chief_jobs.enqueue(
+            client, user_id=uid, business_id=body.business_id,
+            kind="refine_section",
+            params={"section": section, "instruction": instruction},
+            source="desktop")
+    if not job:
+        raise HTTPException(500, "could not enqueue refine job")
+    out = {"ok": True, "job_id": job.get("id")}
+    if job.get("deduped"):
+        out["deduped"] = True
+    return out

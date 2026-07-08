@@ -60,7 +60,16 @@ def _sms_consent_block(ctx: Dict[str, Any]) -> str:
     ONLY when the platform can actually text (contact.sms_capable) and
     only inside a real form. UNCHECKED by default; wording mirrors the
     booking-widget / /sms opt-in disclosure. Includes an optional phone
-    field — consent without a number is unrecordable."""
+    field — consent without a number is unrecordable.
+
+    Site Arc 11 (connections): an explicit owner connections.sms_updates
+    = False hides the affordance even on an SMS-capable platform; True
+    (or absent) keeps the capability-gated default. The disclosure
+    wording is COMPLIANCE COPY — deliberately un-targeted (see _base)."""
+    conn = (ctx.get("connections")
+            if isinstance(ctx.get("connections"), dict) else {})
+    if conn.get("sms_updates") is False:
+        return ""
     if not (ctx.get("contact") or {}).get("sms_capable"):
         return ""
     biz_name = safe((ctx.get("business") or {}).get("name") or "this business")
@@ -81,6 +90,10 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     biz = ctx.get("business") or {}
     booking = ctx.get("booking") or {}
     contact = ctx.get("contact") or {}
+    # Site Arc 11 — explicit owner connections (absent dict → every
+    # behavior below is byte-identical to the pre-Arc-11 auto defaults).
+    conn = (ctx.get("connections")
+            if isinstance(ctx.get("connections"), dict) else {})
 
     headline = content.get("headline") or "Get in touch"
     note = content.get("note") or ""
@@ -93,17 +106,20 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
                     f'<span {ov("contact", "cta_label")}>{safe(content.get("cta_label") or "Book now")}</span></a>')
 
     # Real contact form → the live submit endpoint. mailto is the fallback.
+    # Site Arc 11: connections.contact_form=False renders the channels
+    # (mailto / logistics / socials) WITHOUT the form — explicit owner
+    # intent; absent/True keeps the endpoint-gated default.
     email = (contact.get("email") or "").strip()
     submit_url = contact.get("submit_url") or ""
     form_html = ""
     script_html = ""
-    if submit_url:
+    if submit_url and conn.get("contact_form") is not False:
         form_html = f"""
     <form id="sxm-contact-form" class="sxm-contact-form" data-endpoint="{safe_url(submit_url)}">
       <input name="name" type="text" placeholder="Your name" required>
       <input name="email" type="email" placeholder="Your email" required>
       <textarea name="message" rows="4" placeholder="How can we help?" required></textarea>{_sms_consent_block(ctx)}
-      <button type="submit" class="sxm-cta">Send message</button>
+      <button type="submit" class="sxm-cta" {ov('contact', 'send_label')}>Send message</button>
     </form>"""
         script_html = """
 <script>
@@ -111,7 +127,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   var f=document.getElementById('sxm-contact-form'); if(!f) return;
   f.addEventListener('submit', function(ev){
     ev.preventDefault();
-    var fd=new FormData(f), b=f.querySelector('button');
+    var fd=new FormData(f), b=f.querySelector('button'), orig=b.textContent;
     b.disabled=true; b.textContent='Sending…';
     var payload={name:fd.get('name'),email:fd.get('email'),message:fd.get('message')};
     var ph=fd.get('phone'); if(ph){ payload.phone=ph; }
@@ -121,15 +137,33 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
       body:JSON.stringify(payload)})
       .then(function(r){return r.json();})
       .then(function(){ f.innerHTML='<p class="sxm-sent">Thanks — your message is on its way.</p>'; })
-      .catch(function(){ b.disabled=false; b.textContent='Send message'; });
+      .catch(function(){ b.disabled=false; b.textContent=orig; });
   });
 })();
 </script>"""
     mail_html = (f'<a class="sxm-contact-mail" href="mailto:{safe_url(email)}">{safe(email)}</a>'
                  if email and "@" in email else "")
 
+    # Site Arc 11: connections.socials=False suppresses the social links
+    # even when handles exist; True/absent keeps the data-gated default
+    # (links only ever render from REAL handles — never invented).
+    social_html = ("" if conn.get("socials") is False
+                   else _social_links(contact.get("social") or {}))
+
+    # Footer line is presentation text → targeted (total editability).
+    # "Powered by Solutionist" is platform chrome → un-targeted by design.
     footer_line = safe((ctx.get("footer") or {}).get("copyright_line")
                        or f"© {biz.get('name') or ''}")
+
+    # Site Arc 11: the SMS invitation line — only with the owner's
+    # explicit sms_updates connection AND a real routing keyword on file
+    # (gather_context fetches it). Whisper voice, targeted.
+    sms_keyword = str(contact.get("sms_keyword") or "").strip()
+    sms_line_html = ""
+    if conn.get("sms_updates") and sms_keyword and contact.get("sms_capable"):
+        sms_line_html = (f'\n    <span class="sxm-footer-sms" '
+                         f'{ov("contact", "sms_line")}>Text {safe(sms_keyword)} '
+                         f'to connect</span>')
 
     html = f"""
 <section class="sxm-section sxm-contact sxm-reveal" id="contact">
@@ -141,12 +175,12 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     {form_html}
     {_logistics(contact)}
     {mail_html}
-    {_social_links(contact.get("social") or {})}
+    {social_html}
   </div>
 </section>
 <footer class="sxm-footer">
   <div class="sxm-inner sxm-footer-inner sxm-whisper">
-    <span class="sxm-footer-brand">{diamond_mark(dna)}{footer_line}</span>
+    <span class="sxm-footer-brand">{diamond_mark(dna)}<span {ov('contact', 'footer_line')}>{footer_line}</span></span>{sms_line_html}
     <a href="https://mysolutionist.app/" target="_blank" rel="noopener" class="sxm-footer-power">Powered by Solutionist</a>
   </div>
 </footer>{script_html}"""
@@ -155,13 +189,25 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-contact .sxm-mark { margin-left: auto; margin-right: auto; }
 .sxm-contact h2 { margin-bottom: 14px; }
 .sxm-contact-actions { display: flex; gap: 22px; justify-content: center; align-items: center; flex-wrap: wrap; margin: 24px 0; }
-.sxm-contact-form { display: flex; flex-direction: column; gap: 12px; max-width: 460px; margin: 26px auto 8px; text-align: left; }
+/* FORM ALIGNMENT CONTRACT (Site Arc 11): the section centers as a whole,
+   but INSIDE the form every control shares ONE left edge — inputs,
+   textarea, consent row and submit all start at the form's left edge,
+   full form width, left-aligned text. Nothing inside the form may
+   inherit the section's text-align:center. */
+.sxm-contact-form { display: flex; flex-direction: column; align-items: stretch; gap: 12px;
+  width: 100%; max-width: 460px; margin: 26px auto 8px; text-align: left; }
 .sxm-contact-form input, .sxm-contact-form textarea { padding: 13px 15px; font: inherit; color: var(--sx-text);
-  background: var(--sx-surface); border: 1px solid var(--sx-border); border-radius: var(--sx-radius-card); width: 100%; box-sizing: border-box; }
-.sxm-contact-form button { margin-top: 4px; cursor: pointer; }
-.sxm-sms-consent { display: flex; gap: 10px; align-items: flex-start; font-size: .82rem;
-  line-height: 1.55; color: var(--sx-muted); cursor: pointer; }
-.sxm-sms-consent input { margin-top: 3px; flex-shrink: 0; accent-color: var(--sx-accent); }
+  background: var(--sx-surface); border: 1px solid var(--sx-border); border-radius: var(--sx-radius-card); width: 100%; box-sizing: border-box;
+  text-align: left; }
+.sxm-contact-form button { margin-top: 4px; cursor: pointer; }  /* stretches to the form width — same left edge */
+/* SMS consent row — a proper left-aligned flex row: checkbox top-aligned
+   with the first text line, disclosure text explicitly LEFT-aligned (a
+   centered ancestor can never recenter it), readable measure, muted. */
+.sxm-sms-consent { display: flex; flex-direction: row; gap: 10px; align-items: flex-start;
+  justify-content: flex-start; text-align: left; max-width: 52ch; width: 100%;
+  margin: 0; font-size: .8rem; line-height: 1.6; color: var(--sx-muted); cursor: pointer; }
+.sxm-sms-consent input { margin: 4px 0 0; flex-shrink: 0; accent-color: var(--sx-accent); }
+.sxm-sms-consent span { flex: 1 1 auto; min-width: 0; text-align: left; display: block; }
 .sxm-sent { font-size: 1.05rem; font-weight: 600; color: var(--sx-accent); text-align: center; }
 .sxm-contact-logistics { display: flex; gap: 22px; justify-content: center; flex-wrap: wrap; margin-top: 22px; font-size: .92rem; }
 .sxm-contact-mail { display: inline-block; margin-top: 16px; font-size: 1rem; font-weight: 600; border-bottom: 1.5px solid var(--sx-accent); padding-bottom: 2px; }
@@ -173,5 +219,6 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-footer-brand { display: inline-flex; align-items: center; }
 .sxm-footer-inner { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; font-size: .82rem; color: var(--sx-muted); }
 .sxm-footer-power { color: var(--sx-muted); }
-.sxm-footer-power:hover { color: var(--sx-accent); }"""
+.sxm-footer-power:hover { color: var(--sx-accent); }
+.sxm-footer-sms { color: var(--sx-accent); white-space: nowrap; }"""
     return html, css
