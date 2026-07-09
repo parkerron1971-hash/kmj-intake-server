@@ -5014,6 +5014,48 @@ async def handle_advance_phase(client, biz, action) -> Dict:
     }
 
 
+async def handle_analyze_trends(client, biz, action) -> Dict:
+    """Chief Layers arc — on-demand longitudinal analysis ("how's my
+    business trending?"). Runs the weekly insight engine now, bypassing
+    the cadence but never the eligibility gate. Per-business data only;
+    writes insight memories + an activity row; nothing external sends."""
+    import chief_insights
+    try:
+        res = await asyncio.to_thread(
+            chief_insights.run_for_business, biz["id"], True)
+    except Exception as e:
+        return _fail("analyze_trends", f"analysis failed: {e}")
+    if not isinstance(res, dict) or not res.get("ok"):
+        return _fail("analyze_trends",
+                     (res or {}).get("error") or "analysis failed")
+    if res.get("skipped") == "not_enough_history":
+        return {
+            "type": "analyze_trends",
+            "result": ("not enough history yet — the analysis needs a few "
+                       "weeks of sessions or paid invoices to find real patterns"),
+            "label": "Trend analysis: not enough history yet",
+            "nav": None,
+        }
+    insights = res.get("insights") or []
+    if not insights:
+        return {
+            "type": "analyze_trends",
+            "result": ("analysis ran across the last 12 weeks — no significant "
+                       "NEW patterns beyond the longitudinal insights already "
+                       "in your context"),
+            "label": "Trend analysis: no new patterns",
+            "nav": None,
+        }
+    summary = " | ".join(
+        f"{i.get('pattern')} Move: {i.get('move')}" for i in insights)
+    return {
+        "type": "analyze_trends",
+        "result": f"{len(insights)} new insight(s): {summary}",
+        "label": f"Analyzed 12 weeks of trends — {len(insights)} new insight(s)",
+        "nav": None,
+    }
+
+
 async def handle_run_market_research(client, biz, action) -> Dict:
     """v1: synthesize market analysis from an AI plan. v2 will integrate
     real web search. The Chief passes queries it would run; we use them
@@ -9157,6 +9199,7 @@ ACTION_HANDLERS = {
     "save_phase":                 handle_save_phase,
     "advance_phase":              handle_advance_phase,
     "run_market_research":        handle_run_market_research,
+    "analyze_trends":             handle_analyze_trends,
     "save_business_model":        handle_save_business_model,
     "save_pricing":               handle_save_pricing,
     "save_packages":              handle_save_packages,
@@ -10938,7 +10981,17 @@ def _build_catchup_routing_block() -> str:
         "The system will return a summary of payments, new contacts, auto-handled items, and "
         "completed sessions since the practitioner was last active. Open with one warm sentence "
         "framing the gap, then deliver the summary like a verbal briefing.\n\n"
-        "If the catch-up returns nothing notable: \"All quiet since you were last here. Nothing new to report.\""
+        "If the catch-up returns nothing notable: \"All quiet since you were last here. Nothing new to report.\"\n\n"
+        "TREND ANALYSIS:\n"
+        "When the practitioner asks how the business is trending, wants a deeper look at "
+        "patterns over time, or says things like \"analyze my trends\" / \"how are we doing "
+        "lately\" / \"what patterns do you see\":\n"
+        "Emit [ACTION:{\"type\":\"analyze_trends\"}]. The system digests the last 12 weeks of "
+        "sessions, revenue, and clients and returns fresh longitudinal insights (pattern + "
+        "recommended move). Narrate them conversationally — cite the actual numbers and weeks, "
+        "then propose the moves. If it returns no NEW patterns, walk through the existing "
+        "LONGITUDINAL INSIGHTS section instead. For quick single-number questions (\"revenue "
+        "this month?\"), just answer from context — don't run the analysis."
     )
 
 
