@@ -69,11 +69,14 @@ from voice_depth_agent import chief_voice_context_block as voice_chief_context_b
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
-# Kevin's ruling (2026-07-03): Chief dialogue runs on the newest Sonnet
-# so spoken/typed conversation quality is as good as it gets at chat
-# latency. Drafts ride the same tier.
-CHIEF_MODEL = "claude-sonnet-5"
-DRAFT_MODEL = "claude-sonnet-5"
+# Chief Layers arc (2026-07-09): model choice per lane lives in
+# chief_models.py — chat/voice on Sonnet 5 (shared prompt cache),
+# Strategy Coach + weekly insights on Opus 4.8, mechanical background
+# work on Haiku. Kevin's 2026-07-03 ruling (drafts ride the
+# conversational tier) is preserved as the draft-lane default.
+import chief_models
+CHIEF_MODEL = chief_models.model_for("chat")
+DRAFT_MODEL = chief_models.model_for("draft")
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
 # Loopback base for run_agent actions. Prefer localhost + PORT (no TLS, no DNS);
@@ -387,10 +390,14 @@ WEB_SEARCH_TOOL = {
 async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Dict],
                        max_tokens: int = 1600,
                        enable_web_search: bool = True,
-                       business_id: Optional[str] = None) -> str:
+                       business_id: Optional[str] = None,
+                       model: Optional[str] = None) -> str:
     key = _anthropic_key()
     if not key:
         return ""
+    # Chief Layers arc — callers pick a lane (chat/voice/deep) via
+    # chief_models.model_for; no explicit model keeps the chat default.
+    model = model or CHIEF_MODEL
     # Arc 20B Part 1 (+ char-core split) — the prompt splits into up to three
     # cache segments, ordered most-stable → most-volatile:
     #   1. UNIVERSAL core (identity + shared character + machinery) — before
@@ -425,7 +432,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                 {"type": "text", "text": dynamic.strip()},
             ]
     payload: Dict[str, Any] = {
-        "model": CHIEF_MODEL, "max_tokens": max_tokens, "system": sys_payload,
+        "model": model, "max_tokens": max_tokens, "system": sys_payload,
         "messages": messages,
     }
     if enable_web_search and CHIEF_WEB_SEARCH_ENABLED:
@@ -437,13 +444,13 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         }, json=payload, timeout=HTTP_TIMEOUT)
     except httpx.HTTPError as e:
         logger.warning(f"Claude request failed: {e}")
-        await log_api_usage(endpoint="/chief/backend", model=CHIEF_MODEL,
+        await log_api_usage(endpoint="/chief/backend", model=model,
             input_tokens=0, output_tokens=0, business_id=business_id,
             duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=str(e))
         return ""
     if resp.status_code >= 400:
         logger.warning(f"Claude error: {resp.status_code} {resp.text[:300]}")
-        await log_api_usage(endpoint="/chief/backend", model=CHIEF_MODEL,
+        await log_api_usage(endpoint="/chief/backend", model=model,
             input_tokens=0, output_tokens=0, business_id=business_id,
             duration_ms=int(time.time() * 1000) - started_ms, ok=False,
             error=f"{resp.status_code}")
@@ -462,7 +469,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         pass
     await log_api_usage(
         endpoint="/chief/backend",
-        model=data.get("model") if isinstance(data, dict) else CHIEF_MODEL,
+        model=data.get("model") if isinstance(data, dict) else model,
         input_tokens=int(usage.get("input_tokens") or 0),
         output_tokens=int(usage.get("output_tokens") or 0),
         business_id=business_id,
@@ -542,6 +549,44 @@ def _days_since(iso_str: Optional[str]) -> Optional[int]:
         return None
 
 
+def _blend_memories(memories: List[Dict], keep: int = 50) -> List[Dict]:
+    """Chief Layers arc — recency-blended memory selection.
+
+    The DB query orders by importance alone, so a stale ★6 from four
+    months ago could crowd out a ★5 the practitioner touched this week.
+    Blend a recency bonus (last_referenced_at, falling back to
+    created_at) into the score and keep the top `keep`. Weekly
+    longitudinal insights (category="insight") are always kept — the
+    insight engine caps how many stay active."""
+    if len(memories) <= keep:
+        return memories
+    insights = [m for m in memories if (m.get("category") or "").lower() == "insight"]
+    rest = [m for m in memories if (m.get("category") or "").lower() != "insight"]
+
+    def _score(m: Dict) -> float:
+        try:
+            imp = float(m.get("importance") or 5)
+        except (TypeError, ValueError):
+            imp = 5.0
+        days = _days_since(m.get("last_referenced_at") or m.get("created_at"))
+        if days is None:
+            bonus = 0.0
+        elif days <= 7:
+            bonus = 3.0
+        elif days <= 30:
+            bonus = 1.5
+        elif days <= 90:
+            bonus = 0.0
+        elif days <= 180:
+            bonus = -1.0
+        else:
+            bonus = -2.0
+        return imp + bonus
+
+    rest.sort(key=_score, reverse=True)
+    return insights + rest[: max(0, keep - len(insights))]
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # CONTEXT GATHERING
 # ═══════════════════════════════════════════════════════════════════════
@@ -577,8 +622,10 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
             # FIELD NAMES — create/update_module_entry stops guessing keys.
             f"&select=id,name,slug,description,schema&limit=50"),
         _sb(client, "GET",
+            # Chief Layers arc — over-fetch to 100 so _blend_memories can
+            # re-rank with recency before keeping the top 50.
             f"/chief_memories?business_id=eq.{biz_id}&is_active=eq.true"
-            f"&order=importance.desc,created_at.desc&limit=50"
+            f"&order=importance.desc,created_at.desc&limit=100"
             f"&select=id,category,content,importance,source,created_at,last_referenced_at"),
         _sb(client, "GET",
             f"/chief_notifications?business_id=eq.{biz_id}&status=eq.unread"
@@ -732,7 +779,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "insights": insights or [],
         "modules": modules or [],
         "module_counts": module_counts,
-        "memories": memories or [],
+        "memories": _blend_memories(memories or []),
         "notifications": notifications or [],
         "recent_queue_24h": recent_queue or [],
         "auto_recent": auto_recent,
@@ -1335,11 +1382,20 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         for c in ctx["contacts_lookup"][:60]
     ]
 
-    # Practitioner memories — sorted desc by importance (already sorted in query)
+    # Practitioner memories — sorted desc by importance (already sorted in query).
+    # Longitudinal insights (category=insight, written weekly by
+    # chief_insights.py) get their own section below so the Chief treats
+    # them as analysis to act on, not just facts to honor.
     memory_lines = [
         f"  - [{(m.get('category') or 'other').upper()} ★{m.get('importance', 5)}] {m.get('content')}"
         for m in (ctx.get("memories") or [])
+        if (m.get("category") or "").lower() != "insight"
     ]
+    longitudinal_lines = [
+        f"  - {m.get('content')}"
+        for m in (ctx.get("memories") or [])
+        if (m.get("category") or "").lower() == "insight"
+    ][:6]
 
     # Recent agent activity (last 24h queue items, grouped by agent)
     recent_q = ctx.get("recent_queue_24h") or []
@@ -1482,6 +1538,9 @@ RECENT EVENTS:
 
 PRACTITIONER MEMORIES (ALWAYS honor these — they override defaults):
 {chr(10).join(memory_lines) if memory_lines else '  (none stored yet)'}
+
+LONGITUDINAL INSIGHTS (your own weekly analysis of this business's trends — bring these up proactively when relevant, cite the pattern, and propose the move; a generic assistant could not know these):
+{chr(10).join(longitudinal_lines) if longitudinal_lines else '  (none yet — the weekly analysis runs once enough history accumulates)'}
 
 RECENT AGENT ACTIVITY (last 24 hours):
 {chr(10).join(activity_lines) if activity_lines else '  (no agent activity)'}
@@ -2721,7 +2780,9 @@ async def handle_navigate(client, biz, action) -> Dict:
     }
 
 
-VALID_MEMORY_CATEGORIES = {"preference", "pattern", "context", "decision", "boundary", "goal", "standing_instruction", "other", "jit_asked"}
+# "insight" (Chief Layers arc) = weekly longitudinal findings written by
+# chief_insights.py — rendered in their own prompt section, never by hand.
+VALID_MEMORY_CATEGORIES = {"preference", "pattern", "context", "decision", "boundary", "goal", "standing_instruction", "other", "jit_asked", "insight"}
 VALID_MEMORY_SOURCES = {"user_stated", "ai_inferred", "manual_added"}
 
 # Stop words excluded from memory dedup signature
@@ -12538,10 +12599,20 @@ async def chief_chat(
 
             api_messages.append({"role": "user", "content": augmented_message})
 
-            # Coach mode gets a bigger token budget — responses are conversational
-            # but deliverables (save_packages, save_launch_plan) can be large.
-            coach_tokens = 2400 if req.mode == "strategy_coach" else 1600
-            raw = await _call_claude(client, system, api_messages, max_tokens=coach_tokens)
+            # Chief Layers arc — pick the lane for this turn:
+            #   strategy_coach → "deep" (Opus 4.8, 2400 tokens — coach
+            #     deliverables like save_packages can be large);
+            #   voice surface → "voice" (same Sonnet 5 as chat so the
+            #     prompt cache is shared, but a tight spoken budget +
+            #     a TTS delivery block in the uncached dynamic tail);
+            #   everything else → "chat".
+            lane = chief_models.lane_for_chat(req.mode or "", req.client_surface or "")
+            if lane == "voice":
+                system = system + chief_models.VOICE_DELIVERY_BLOCK
+            turn_tokens = chief_models.max_tokens_for(lane, default=1600)
+            raw = await _call_claude(client, system, api_messages,
+                                     max_tokens=turn_tokens,
+                                     model=chief_models.model_for(lane))
             if not raw:
                 return {
                     "response": "I can't reach the language model right now — try again in a moment.",
@@ -12601,7 +12672,8 @@ async def chief_chat(
                 # No history — that's what was poisoning the pattern.
                 retry_messages = [{"role": "user", "content": correction}]
                 retry_raw = await _call_claude(
-                    client, system, retry_messages, max_tokens=coach_tokens,
+                    client, system, retry_messages, max_tokens=turn_tokens,
+                    model=chief_models.model_for(lane),
                 )
                 if retry_raw:
                     retry_actions, retry_clean = _extract_actions_and_clean(retry_raw)
@@ -12818,6 +12890,25 @@ async def chief_activity_seen(
         sb_clients.reset_user_jwt(_jwt_token)
 
 
+@router.post("/agents/chief/insights/run")
+async def chief_insights_run(
+    business_id: str,
+    force: bool = False,
+    user_session: UserSession = Depends(require_user_session),
+):
+    """Chief Layers arc — run the weekly longitudinal analysis for one
+    business on demand (testing / "analyze my trends now"). Owner-gated;
+    `force` bypasses the weekly cadence but never the eligibility gate."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=id,owner_id&limit=1") or []
+    if not rows or str(rows[0].get("owner_id")) != str(user_session.user.id):
+        raise HTTPException(403, "not your business")
+    import chief_insights
+    result = await asyncio.to_thread(
+        chief_insights.run_for_business, business_id, force)
+    return result
+
+
 @router.get("/agents/chief/health")
 async def chief_health():
     return {
@@ -12826,6 +12917,10 @@ async def chief_health():
         "anthropic_configured": bool(_anthropic_key()),
         "self_base": SELF_BASE,
         "model": CHIEF_MODEL,
+        "model_lanes": {
+            lane: chief_models.model_for(lane)
+            for lane in ("chat", "voice", "deep", "draft", "insight", "background")
+        },
         "max_history": MAX_HISTORY,
         "max_actions_per_turn": MAX_ACTIONS_PER_TURN,
         "action_handlers": list(ACTION_HANDLERS.keys()),
