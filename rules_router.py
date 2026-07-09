@@ -300,13 +300,23 @@ def analyze_ops(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str,
     return {"ok": True, "created": created}
 
 
-@proposals_router.get("/trust-track")
-def trust_track(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    """Arc 20B Part 5 — graduation transparency: per proposal-category
-    approval ratios across BOTH proposal tables. Categories at >=80%
-    approval over >=20 resolved are flagged as GRADUATION CANDIDATES —
-    pure transparency; autonomous action is a Phase C decision."""
-    _owner(biz, user)
+GRADUATION_MIN_RESOLVED = 20
+GRADUATION_MIN_RATIO = 0.8
+
+# Proposal types _execute_proposal knows how to run. Trust grants are
+# limited to this set — bookkeeping proposals have their own approval
+# machinery and are NOT grantable here (v1).
+EXECUTABLE_PROPOSAL_TYPES = {
+    "propose_followup_email", "propose_task",
+    "propose_schedule_followup", "propose_contact_tag",
+    "propose_content_draft",
+}
+
+
+def _trust_stats(biz: str) -> Dict[str, Dict[str, Any]]:
+    """Per proposal-type approval tallies across BOTH proposal tables,
+    with the graduation flag computed. Shared by the trust-track view,
+    the grant endpoint, and the trusted sweep's safety recheck."""
     cats: Dict[str, Dict[str, int]] = {}
 
     def _tally(rows):
@@ -323,21 +333,107 @@ def trust_track(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str,
         f"/chief_bookkeeping_proposals?business_id=eq.{biz}"
         f"&select=proposal_type,status&limit=2000") or [])
 
-    out = []
-    for t, c in sorted(cats.items()):
+    out: Dict[str, Dict[str, Any]] = {}
+    for t, c in cats.items():
         resolved = c["approved"] + c["rejected"]
         ratio = round(c["approved"] / resolved, 3) if resolved else None
-        out.append({
-            "proposal_type": t, **c, "resolved": resolved,
-            "approval_ratio": ratio,
-            "graduation_candidate": bool(resolved >= 20 and ratio is not None
-                                         and ratio >= 0.8),
-        })
+        out[t] = {
+            **c, "resolved": resolved, "approval_ratio": ratio,
+            "graduation_candidate": bool(
+                resolved >= GRADUATION_MIN_RESOLVED and ratio is not None
+                and ratio >= GRADUATION_MIN_RATIO),
+        }
+    return out
+
+
+def _trusted_types(biz_row: Dict[str, Any]) -> List[str]:
+    ap = ((biz_row.get("settings") or {}).get("autopilot") or {})
+    lst = ap.get("trusted_proposal_types")
+    return [str(t) for t in lst] if isinstance(lst, list) else []
+
+
+@proposals_router.get("/trust-track")
+def trust_track(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Arc 20B Part 5 + Chief Layers arc (Phase C): per proposal-category
+    approval ratios across BOTH proposal tables. Categories at >=80%
+    approval over >=20 resolved are GRADUATION CANDIDATES; the
+    practitioner can now GRANT trust per category (POST
+    /trust-track/grant), after which the trusted sweep executes that
+    category's pending proposals autonomously — with an audit trail and
+    one-click revoke."""
+    biz_row = _owner(biz, user)
+    trusted = set(_trusted_types(biz_row))
+    stats = _trust_stats(biz)
+    out = [{"proposal_type": t, **s, "trusted": t in trusted,
+            "grantable": bool(s["graduation_candidate"]
+                              and t in EXECUTABLE_PROPOSAL_TYPES)}
+           for t, s in sorted(stats.items())]
     return {"ok": True, "categories": out,
-            "graduation_rule": ">=80% approval over >=20 resolved proposals",
-            "note": "Transparency only — autonomous action per category is a "
-                    "Phase C decision and would still require your explicit "
-                    "scope grant."}
+            "graduation_rule": (f">={int(GRADUATION_MIN_RATIO * 100)}% approval "
+                                f"over >={GRADUATION_MIN_RESOLVED} resolved proposals"),
+            "note": "Graduated categories can be granted trust — Chief then "
+                    "executes those proposals autonomously, every action is "
+                    "logged to your activity rail, and you can revoke at any "
+                    "time. Nothing acts without your explicit grant."}
+
+
+class TrustGrantBody(BaseModel):
+    business_id: str
+    proposal_type: str
+
+
+@proposals_router.post("/trust-track/grant")
+def trust_grant(body: TrustGrantBody,
+                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Grant Chief autonomy for ONE earned proposal category.
+
+    Trust-layer discipline: the grant is explicit (never inferred),
+    only available once the category has actually graduated on this
+    business's own approval history, limited to executor-known types,
+    audited (chief_activity), and instantly revocable."""
+    biz_row = _owner(body.business_id, user)
+    ptype = (body.proposal_type or "").strip()
+    if ptype not in EXECUTABLE_PROPOSAL_TYPES:
+        raise HTTPException(400, f"'{ptype}' cannot be granted — no autonomous executor")
+    stats = _trust_stats(body.business_id).get(ptype)
+    if not stats or not stats["graduation_candidate"]:
+        raise HTTPException(409, "category has not graduated yet — keep approving/rejecting "
+                                 "proposals and it will earn trust")
+    settings = dict(biz_row.get("settings") or {})
+    ap = dict(settings.get("autopilot") or {})
+    trusted = set(_trusted_types(biz_row))
+    trusted.add(ptype)
+    ap["trusted_proposal_types"] = sorted(trusted)
+    settings["autopilot"] = ap
+    sb_clients.sb_patch_as_service(
+        f"/businesses?id=eq.{body.business_id}", {"settings": settings})
+    try:
+        sb_clients.sb_post_as_service("/chief_activity", {
+            "user_id": str(user.id), "business_id": body.business_id,
+            "source": "system", "action_type": "trust_granted",
+            "label": f"Trust granted: {ptype}",
+            "summary": (f"Chief will now handle {ptype} proposals autonomously "
+                        f"(earned at {stats['approval_ratio']:.0%} approval over "
+                        f"{stats['resolved']} decisions). Revoke anytime."),
+        })
+    except Exception as e:
+        logger.warning(f"[trust] grant activity log failed: {e}")
+    return {"ok": True, "trusted": sorted(trusted)}
+
+
+@proposals_router.post("/trust-track/revoke")
+def trust_revoke(body: TrustGrantBody,
+                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    biz_row = _owner(body.business_id, user)
+    settings = dict(biz_row.get("settings") or {})
+    ap = dict(settings.get("autopilot") or {})
+    trusted = set(_trusted_types(biz_row))
+    trusted.discard((body.proposal_type or "").strip())
+    ap["trusted_proposal_types"] = sorted(trusted)
+    settings["autopilot"] = ap
+    sb_clients.sb_patch_as_service(
+        f"/businesses?id=eq.{body.business_id}", {"settings": settings})
+    return {"ok": True, "trusted": sorted(trusted)}
 
 
 class ResolveBody(BaseModel):
@@ -385,3 +481,89 @@ def reject(proposal_id: str, body: ResolveBody,
         f"/chief_proposals?id=eq.{proposal_id}",
         {"status": "rejected", "resolved_at": _now_iso()})
     return {"ok": True}
+
+
+# ═════════════════════════════════════════════════════════════════════
+# Trusted autonomy sweep (Chief Layers arc — the Phase C execution leg)
+# ═════════════════════════════════════════════════════════════════════
+
+TRUSTED_SWEEP_CAP = 10  # max autonomous executions per business per sweep
+
+
+def _run_trusted_sweep_sync() -> None:
+    import os as _os
+    if (_os.environ.get("TRUSTED_AUTONOMY") or "on").lower() == "off":
+        return
+    businesses = sb_clients.sb_get_as_service(
+        "/businesses?select=id,name,owner_id,settings&limit=500") or []
+    for biz_row in businesses:
+        trusted = _trusted_types(biz_row)
+        if not trusted:
+            continue
+        if rules_engine.business_paused(biz_row):
+            continue  # the business-level kill switch pauses trust too
+        biz = biz_row["id"]
+        # Safety recheck at execution time: if a category's live approval
+        # ratio slips below the graduation bar (recent rejects), the sweep
+        # stands down for it — the grant stays, only execution pauses.
+        stats = _trust_stats(biz)
+        executed_labels: List[str] = []
+        budget = TRUSTED_SWEEP_CAP
+        for ptype in trusted:
+            if budget <= 0:
+                break
+            if ptype not in EXECUTABLE_PROPOSAL_TYPES:
+                continue
+            s = stats.get(ptype)
+            if not s or (s["approval_ratio"] or 0) < GRADUATION_MIN_RATIO:
+                logger.info(f"[trusted] {biz} {ptype}: ratio below bar — standing down")
+                continue
+            pending = sb_clients.sb_get_as_service(
+                f"/chief_proposals?business_id=eq.{biz}&status=eq.pending"
+                f"&proposal_type=eq.{ptype}&order=created_at.asc"
+                f"&select=*&limit={budget}") or []
+            for p in pending:
+                try:
+                    _execute_proposal(biz, p)
+                except Exception as e:
+                    # Leaves the proposal pending for manual review —
+                    # autonomy never force-fails work through.
+                    logger.warning(f"[trusted] execute failed {biz}/{ptype}: {e}")
+                    continue
+                sb_clients.sb_patch_as_service(
+                    f"/chief_proposals?id=eq.{p['id']}",
+                    {"status": "approved", "resolved_at": _now_iso(),
+                     "approved_by": "chief:trusted-autonomy"})
+                _capture_signal(biz, ptype, p.get("proposed") or {}, None, "approved")
+                budget -= 1
+                label = ((p.get("proposed") or {}).get("subject")
+                         or (p.get("proposed") or {}).get("title") or ptype)
+                executed_labels.append(str(label)[:80])
+                if biz_row.get("owner_id"):
+                    try:
+                        sb_clients.sb_post_as_service("/chief_activity", {
+                            "user_id": str(biz_row["owner_id"]),
+                            "business_id": biz,
+                            "source": "system",
+                            "action_type": f"trusted_{ptype}",
+                            "label": f"Handled autonomously: {str(label)[:90]}",
+                            "summary": (f"Executed under your standing trust grant "
+                                        f"for {ptype}. Revoke anytime in Trust Track."),
+                        })
+                    except Exception as e:
+                        logger.warning(f"[trusted] activity log failed: {e}")
+        if executed_labels:
+            print(f"[Trusted sweep] {biz_row.get('name') or biz}: "
+                  f"executed {len(executed_labels)} — {', '.join(executed_labels[:3])}",
+                  flush=True)
+
+
+async def trusted_sweep_tick() -> None:
+    """Scheduler tick (leader-gated, every 10 min): execute pending
+    proposals in categories the practitioner has explicitly granted.
+    Kill switch: TRUSTED_AUTONOMY=off."""
+    import asyncio
+    try:
+        await asyncio.to_thread(_run_trusted_sweep_sync)
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"[trusted] sweep tick failed: {e}")

@@ -718,6 +718,24 @@ async def startup():
                           "interval", hours=1, id="sms_reminder_sweep")
     except Exception as e:
         print(f"   [warn] sms reminder sweep not scheduled: {e}")
+    # Chief Layers arc (2026-07-09) — the weekly longitudinal insight
+    # engine (Opus lane; eligibility + cadence + per-tick cap inside).
+    # Kill switch: CHIEF_INSIGHTS=off.
+    try:
+        import chief_insights as _chief_insights
+        scheduler.add_job(g("chief_insights", _chief_insights.insights_tick),
+                          "interval", hours=6, id="chief_insights")
+    except Exception as e:
+        print(f"   [warn] chief insights job not scheduled: {e}")
+    # Chief Layers arc — trusted-autonomy sweep: executes pending
+    # proposals ONLY in categories the practitioner explicitly granted
+    # after graduation (Trust Track). Kill switch: TRUSTED_AUTONOMY=off.
+    try:
+        from rules_router import trusted_sweep_tick as _trusted_tick
+        scheduler.add_job(g("trusted_proposals", _trusted_tick),
+                          "interval", minutes=10, id="trusted_proposals")
+    except Exception as e:
+        print(f"   [warn] trusted autonomy sweep not scheduled: {e}")
     scheduler.start()
     print(f"🚀 KMJ Intake Automation running")
     print(f"   Owner: {OWNER_NAME} | {BUSINESS_NAME}")

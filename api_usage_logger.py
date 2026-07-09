@@ -67,6 +67,9 @@ HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
 MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     # Opus 4.x — premium tier
     "claude-opus-4":     (1500.0, 7500.0),   # $15/MTok input, $75/MTok output
+    # Sonnet 5 — Chief chat/voice lanes (Chief Layers arc). Priced at the
+    # Sonnet tier; update if anthropic.com/pricing says otherwise.
+    "claude-sonnet-5":   (300.0, 1500.0),
     # Sonnet 4.x — balanced
     "claude-sonnet-4":   (300.0, 1500.0),    # $3/MTok input, $15/MTok output
     # Haiku 4.x — fast / cheap
