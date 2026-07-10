@@ -150,7 +150,10 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     # ghost word (one of the page's own tone words, fed by the ceremony)
     # drifting behind a breathing hairline. Empty of words on purpose;
     # never empty of design. Stilled pages keep the static ghost.
-    ghost = str(content.get("ghost") or "").strip()
+    # Single word, always — a two-word ghost wrapped into a stacked
+    # block on the live page (screenshot fix, 2026-07-10).
+    ghost = str(content.get("ghost") or "").strip().split()[0] if str(
+        content.get("ghost") or "").strip() else ""
     ghost_html = (f'\n  <span class="sxm-int-ghostword">{safe(ghost)}</span>'
                   if ghost else "")
     html = f"""
@@ -164,9 +167,9 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   background: linear-gradient(90deg, transparent, var(--sx-accent), transparent); }
 .sxm-int-ghostword { position: absolute; inset: 0; display: flex; align-items: center;
   justify-content: center; font-family: var(--sx-font-heading);
-  font-weight: var(--sx-heading-weight); font-size: clamp(3.4rem, 11vw, 7.5rem);
+  font-weight: var(--sx-heading-weight); font-size: clamp(3rem, 9vw, 6.5rem);
   letter-spacing: .04em; text-transform: uppercase; color: var(--sx-text);
-  opacity: .045; white-space: nowrap; user-select: none; }"""
+  opacity: .03; white-space: nowrap; user-select: none; }"""
     if (ctx.get("dna") or {}).get("motion", "standard") != "subtle":
         css += """
 .sxm-int-silence-hairline { animation: sxm-int-breathe 8s ease-in-out infinite alternate; }
