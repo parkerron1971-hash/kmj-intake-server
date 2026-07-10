@@ -54,17 +54,30 @@ DEFAULT_LOOKAHEAD_DAYS = 30
 MAX_LOOKAHEAD_DAYS = 90
 
 
+def resolved_tz_name(av: BusinessAvailability,
+                     practitioner_tz: Optional[str]) -> str:
+    """The ONE timezone chain (2026-07-10, the 9-to-5-as-UTC bug):
+       1. availability.timezone (stamped by the editor on save)
+       2. practitioner_profiles.timezone (onboarding)
+       3. PLATFORM_DEFAULT_TZ env — the platform backstop: every
+          un-stamped config used to fall to UTC, serving a 9am-5pm
+          schedule as 5am-1pm Eastern. Set to e.g. America/New_York
+          on Railway while the beta is single-region.
+       4. UTC (last resort).
+    Routers use this for the response's timezone label too — one chain,
+    no drift."""
+    import os as _os
+    return ((av.timezone or practitioner_tz
+             or _os.environ.get("PLATFORM_DEFAULT_TZ", "").strip()
+             or "UTC").strip() or "UTC")
+
+
 def _resolve_tz(av: BusinessAvailability, practitioner_tz: Optional[str]) -> Any:
-    """Pick the business timezone in priority order:
-       1. availability.timezone (practitioner explicitly set on the
-          availability config)
-       2. practitioner_profiles.timezone (set during onboarding)
-       3. UTC fallback
-    Returns a ZoneInfo instance (or None when zoneinfo unavailable —
-    callers then treat the times as naive in business-tz semantics,
-    which is correct enough for slot math but doesn't survive DST).
-    """
-    tz_name = (av.timezone or practitioner_tz or "UTC").strip() or "UTC"
+    """resolved_tz_name → ZoneInfo instance (or None when zoneinfo is
+    unavailable — callers then treat the times as naive in business-tz
+    semantics, which is correct enough for slot math but doesn't
+    survive DST)."""
+    tz_name = resolved_tz_name(av, practitioner_tz)
     if ZoneInfo is None:
         return None
     try:
