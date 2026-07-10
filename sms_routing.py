@@ -53,7 +53,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from sms_service import (
-    _sb_get, _sb_post, _sb_patch, _store_sms, _log_event,
+    _sb_get, _sb_post, _sb_patch, _sb_headers, _store_sms, _log_event,
     _find_contact_by_phone, normalize_phone, record_inbound_sms,
     _twilio_configured, is_opted_out,
 )
@@ -208,10 +208,10 @@ async def route_inbound(
                 await client.delete(
                     f"{os.environ.get('SUPABASE_URL', '').rstrip('/')}/rest/v1"
                     f"/sms_opt_outs?phone=eq.{phone}",
-                    headers={
-                        "apikey": os.environ.get("SUPABASE_ANON", ""),
-                        "Authorization": f"Bearer {os.environ.get('SUPABASE_ANON', '')}",
-                    },
+                    # Same identity as every other SMS write (service
+                    # role via sms_service._sb_headers) — this was the
+                    # one inline anon-header holdout.
+                    headers=_sb_headers(),
                 )
             except Exception as e:
                 logger.warning(f"[ROUTE] opt-out clear failed: {e}")
