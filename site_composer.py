@@ -1496,6 +1496,30 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
                    if _n_sil and _n_ghost < _n_sil
                    else f"{_n_sil} silence seam(s), every one carries its occupant")})
 
+    # g2e: CTA LINK COHERENCE (Kevin's ruling, 2026-07-10) — creative
+    # button copy is welcome, but a button that TALKS like contact must
+    # not route to booking, and a booking-worded button must not
+    # dead-end at #contact. Covers module AND atelier CTAs (both emit
+    # class sxm-cta) plus offering Book buttons.
+    from site_modules._base import _cta_label_intent
+    _cta_mismatch: List[str] = []
+    for am in re.finditer(
+            r'<a[^>]*class="[^"]*(?:sxm-cta|sxm-off-book)[^"]*"[^>]*'
+            r'href="([^"]+)"[^>]*>([\s\S]*?)</a>', html):
+        _href, _label = am.group(1), _visible_text(am.group(2))
+        _intent = _cta_label_intent(_label)
+        _to_booking = ("/book" in _href or "/public/booking/" in _href)
+        if _intent == "contact" and _to_booking:
+            _cta_mismatch.append(f'"{_label[:40]}" → booking page')
+        elif _intent == "booking" and _href.startswith("#contact"):
+            _cta_mismatch.append(f'"{_label[:40]}" → #contact')
+    checks.append({
+        "name": "cta_link_coherence",
+        "ok": not _cta_mismatch,
+        "detail": (f"label/destination mismatch: {_cta_mismatch}"
+                   if _cta_mismatch
+                   else "every CTA's destination matches its label's intent")})
+
     # (h) Arc 8 — atelier scoping check (REPORT-ONLY, adds no fixes):
     # every bespoke fragment that claims to be in the document has its
     # scoped .atl-{uid} CSS present and its root class in the body.
