@@ -2526,10 +2526,33 @@ def _apply_ceremony_pass_inner(spec: List[Dict[str, Any]],
     return out
 
 
+def _load_stored_dro(business_id: str) -> Optional[Dict[str, Any]]:
+    """Refine mode's memory: the persisted rationale behind the CURRENT
+    page (site_config.design_rationale_id → design_rationales.dro).
+    None when the page has no stored rationale."""
+    rows = sb_clients.sb_get_as_service(
+        f"/business_sites?business_id=eq.{business_id}"
+        "&select=site_config&limit=1") or []
+    rid = (((rows[0].get("site_config") or {}).get("design_rationale_id"))
+           if rows else None)
+    if not rid:
+        return None
+    dr = sb_clients.sb_get_as_service(
+        f"/design_rationales?id=eq.{rid}&select=id,dro&limit=1") or []
+    if not dr:
+        return None
+    dro = dict(dr[0].get("dro") or {})
+    if not dro.get("decisions"):
+        return None
+    dro.setdefault("id", dr[0].get("id"))
+    return dro
+
+
 def compose_site(business_id: str, brief_notes: str = "",
                  use_llm: bool = True,
                  design_prefs: Optional[Dict[str, Any]] = None,
-                 progress_cb=None) -> Dict[str, Any]:
+                 progress_cb=None,
+                 refine: bool = False) -> Dict[str, Any]:
     """Canonical site-compose entry (DRL PR3). Produces a Design Rationale
     Object first (best-effort), composes concept-threaded copy that obeys it,
     then renders + persists. Shared by the /compose endpoint and the
@@ -2568,33 +2591,54 @@ def compose_site(business_id: str, brief_notes: str = "",
 
     dro_failure: Optional[Dict[str, Any]] = None   # forensics → site_config.dro_failure
     if use_llm:
+        # REFINE MODE (2026-07-10, the roulette cure): "polish this
+        # direction, don't reinvent." Reloads the stored rationale
+        # behind the current page and SKIPS authoring — fonts, palette,
+        # concept, and the imagery fingerprint all stay put, while copy
+        # and atelier fragments regenerate as fresh takes on the SAME
+        # direction (brief_notes still steer the polish). The Arc 7
+        # anti-convergence machinery lives inside produce_dro, so a
+        # refine is naturally exempt from the forced-difference roll.
+        # No stored rationale → falls through to a normal authoring
+        # compose (a refine can never fail harder than a redesign).
+        if refine:
+            _report_progress(progress_cb, 30, "Reloading your design direction")
+            dro = _load_stored_dro(business_id)
+            if dro:
+                dro_id = dro.get("id")
+                logger.info(f"[composer] REFINE — reusing stored rationale "
+                            f"{str(dro_id)[:8]} for {business_id[:8]}")
+            else:
+                logger.info(f"[composer] refine requested but no stored "
+                            f"rationale for {business_id[:8]} — authoring fresh")
         # 1) Author the rationale from the practitioner's own words.
-        _report_progress(progress_cb, 30, "Authoring the design brief")
-        try:
-            from agents.composer.drl.passes import produce_dro
-            intake = _assemble_intake_text(ctx)
-            dro, dro_failure = produce_dro(
-                business_id, intake, reference_analysis=ref_analysis,
-                creative=creative)
-            if dro is None:
-                # One retry — cheap insurance against a transient LLM/parse
-                # hiccup before accepting a rationale-less compose.
-                logger.info(f"[composer] DRO production returned None for "
-                            f"{business_id[:8]} — retrying once")
+        if dro is None:
+            _report_progress(progress_cb, 30, "Authoring the design brief")
+            try:
+                from agents.composer.drl.passes import produce_dro
+                intake = _assemble_intake_text(ctx)
                 dro, dro_failure = produce_dro(
                     business_id, intake, reference_analysis=ref_analysis,
                     creative=creative)
-            if dro:
-                dro_id = dro.get("id")
-                dro_failure = None
-            else:
-                dro_fail_reason = ((dro_failure or {}).get("detail")
-                                   or "produce_dro returned None after retry")
-        except Exception as e:
-            dro_fail_reason = f"DRO production raised: {e}"
-            dro_failure = {"stage": "exception",
-                           "detail": str(dro_fail_reason)[:300]}
-            logger.warning(f"[composer] DRO production failed (non-fatal): {e}")
+                if dro is None:
+                    # One retry — cheap insurance against a transient LLM/parse
+                    # hiccup before accepting a rationale-less compose.
+                    logger.info(f"[composer] DRO production returned None for "
+                                f"{business_id[:8]} — retrying once")
+                    dro, dro_failure = produce_dro(
+                        business_id, intake, reference_analysis=ref_analysis,
+                        creative=creative)
+                if dro:
+                    dro_id = dro.get("id")
+                    dro_failure = None
+                else:
+                    dro_fail_reason = ((dro_failure or {}).get("detail")
+                                       or "produce_dro returned None after retry")
+            except Exception as e:
+                dro_fail_reason = f"DRO production raised: {e}"
+                dro_failure = {"stage": "exception",
+                               "detail": str(dro_fail_reason)[:300]}
+                logger.warning(f"[composer] DRO production failed (non-fatal): {e}")
         # 1b) DRO-driven DESIGN: the palette base (dark stage / light room) +
         # accent scarcity flow into the render via ctx; copy obeys it next.
         if dro:
@@ -2997,6 +3041,9 @@ class ComposeBody(BaseModel):
     brief_notes: Optional[str] = None
     use_llm: bool = True
     design_prefs: Optional[Dict[str, Any]] = None   # Arc 2 "Ask the Owner"
+    # Refine mode: reuse the stored rationale (polish the current
+    # direction) instead of authoring a fresh one (rolling a new one).
+    refine: bool = False
 
 
 @router.post("/compose")
@@ -3004,7 +3051,7 @@ def compose(body: ComposeBody,
             session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
     _require_owner(body.business_id, session.user.id)
     result = compose_site(body.business_id, body.brief_notes or "", body.use_llm,
-                          design_prefs=body.design_prefs)
+                          design_prefs=body.design_prefs, refine=body.refine)
     return {"ok": True, **result}
 
 
