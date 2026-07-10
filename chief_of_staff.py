@@ -8151,6 +8151,45 @@ async def handle_mark_reply_read(client, biz, action) -> Dict:
     return _fail("mark_reply_read", "Need reply_id, contact_id, or contact_name.")
 
 
+async def handle_mark_sms_read(client, biz, action) -> Dict:
+    """SMS arc (2026-07-10) — flip sms_messages.read to true, the text
+    twin of mark_reply_read. Until now NOTHING could clear an unread
+    text server-side, so 'anything new?' kept re-surfacing the same
+    messages. Resolution: sms_id → that row; contact_id/contact_name →
+    all unread inbound from that contact; neither → ALL unread inbound
+    for the business ("mark my texts read")."""
+    sms_id = (action.get("sms_id") or "").strip()
+    contact_name = (action.get("contact_name") or "").strip()
+    contact_id = (action.get("contact_id") or "").strip()
+
+    if sms_id:
+        await _sb(client, "PATCH",
+            f"/sms_messages?id=eq.{sms_id}&business_id=eq.{biz['id']}",
+            {"read": True})
+        return {"type": "mark_sms_read", "result": "marked_read",
+                "label": "💬 Text marked as read", "sms_id": sms_id}
+
+    if not contact_id and contact_name:
+        safe = contact_name.replace("%", "")
+        rows = await _sb(client, "GET",
+            f"/contacts?business_id=eq.{biz['id']}&name=ilike.*{safe}*"
+            f"&select=id,name&limit=2") or []
+        if rows:
+            contact_id = rows[0].get("id") or ""
+        else:
+            return _fail("mark_sms_read", f"no contact matching '{contact_name}'")
+
+    scope = f"&contact_id=eq.{contact_id}" if contact_id else ""
+    await _sb(client, "PATCH",
+        f"/sms_messages?business_id=eq.{biz['id']}&direction=eq.inbound"
+        f"&read=eq.false{scope}",
+        {"read": True})
+    return {"type": "mark_sms_read", "result": "marked_read",
+            "label": ("💬 Texts from this contact marked as read"
+                      if contact_id else "💬 All unread texts marked as read"),
+            "contact_id": contact_id or None}
+
+
 async def handle_remove_testimonial(client, biz, action) -> Dict:
     """Remove a testimonial by id, name, or quote substring. The Chief
     can call this when the practitioner says 'remove the testimonial
@@ -9322,6 +9361,7 @@ ACTION_HANDLERS = {
     "add_testimonial":            handle_add_testimonial,
     "save_email_template":        handle_save_email_template,
     "mark_reply_read":            handle_mark_reply_read,
+    "mark_sms_read":              handle_mark_sms_read,
     "send_sms":                   handle_send_sms,
     "remove_testimonial":         handle_remove_testimonial,
     # Timers & alarms
@@ -11610,14 +11650,16 @@ ACTIONS — DRAFTS:
   [ACTION:{{"type":"mark_reply_read","reply_id":"<uuid>"}}]
   [ACTION:{{"type":"mark_reply_read","contact_name":"Marcus"}}]  — flips ALL unread replies from that contact
 
-ACTIONS — TEXT MESSAGES (Telnyx-backed SMS — see TEXT MESSAGES context block above):
+ACTIONS — TEXT MESSAGES (see TEXT MESSAGES context block above):
   [ACTION:{{"type":"send_sms","contact_name":"Marcus Thompson","message":"Hey Marcus! Reminder: your session is tomorrow at 2pm. Reply Y to confirm."}}]
   [ACTION:{{"type":"send_sms","contact_id":"<uuid>","message":"..."}}]   — direct id form
   [ACTION:{{"type":"send_sms","to":"+15551234567","message":"..."}}]      — raw phone (skip contact lookup)
+  [ACTION:{{"type":"mark_sms_read","contact_name":"Marcus"}}]  — flips that contact's unread texts; omit contact entirely to clear ALL unread texts
     — Texts must be SHORT: under 160 chars ideal, never over 320. Warm tone, first-name only, no links in the first text.
     — When the practitioner says "text Marcus" / "send a text to X" / "shoot X a text" → send_sms.
     — When asked "did anyone text me?" / "any new texts?" → summarize unread inbound from the TEXT MESSAGES block.
     — When asked "what did X text?" → quote their message verbatim from the block.
+    — After you relay or reply to a text, you MAY mark_sms_read so the badge clears — same etiquette as email replies.
     — Session-reminder pattern: "Hi {{first_name}}! Reminder: your {{session_type}} with {{biz_name}} is {{day}} at {{time}}. Reply Y to confirm or let me know if you need to reschedule."
     — If a contact has no phone on file the action returns an error — tell the practitioner and offer to add the number.
 
