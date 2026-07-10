@@ -30,6 +30,7 @@ from availability_engine import (
     DEFAULT_LOOKAHEAD_DAYS,
     MAX_LOOKAHEAD_DAYS,
     compute_slots,
+    resolved_tz_name,
 )
 
 logger = logging.getLogger("availability_router")
@@ -202,7 +203,7 @@ def get_available_slots(
         "business_id": business_id,
         "offering_id": offering_id,
         "duration_min": int(duration_min),
-        "timezone": av.timezone or practitioner_tz or "UTC",
+        "timezone": resolved_tz_name(av, practitioner_tz),
         "open_default": _is_open_default_dict(settings.get("availability")),
         "from": fd.isoformat(),
         "to": td.isoformat(),
