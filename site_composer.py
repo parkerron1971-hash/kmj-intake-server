@@ -1435,6 +1435,20 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
         "name": "headline_slop_grammar", "ok": not _sloppy,
         "detail": (f"vague-marketing headline(s): {_sloppy}" if _sloppy
                    else "no banned headline grammar")})
+    # g2c: dressed silence (report-only) — every quiet seam must carry
+    # its ghost occupant; a bare hairline band on a solid ground reads
+    # as "the creative part forgot to create something" (Kevin,
+    # 2026-07-10). Ghost words come from the ceremony's tone words, so
+    # a bare silence means the feed broke, not that quiet was chosen.
+    _n_sil = html.count('sxm-int-silence"')
+    _n_ghost = html.count("sxm-int-ghostword")
+    checks.append({
+        "name": "silences_dressed",
+        "ok": _n_sil == 0 or _n_ghost >= _n_sil,
+        "detail": (f"{_n_sil} silence seam(s) but only {_n_ghost} ghost "
+                   f"occupant(s) — bare silence reads as a forgotten gap"
+                   if _n_sil and _n_ghost < _n_sil
+                   else f"{_n_sil} silence seam(s), every one carries its occupant")})
 
     # (h) Arc 8 — atelier scoping check (REPORT-ONLY, adds no fixes):
     # every bespoke fragment that claims to be in the document has its
@@ -2368,9 +2382,15 @@ def _apply_ceremony_pass_inner(spec: List[Dict[str, Any]],
         wishes.append({"module": "interstitial", "variant": "marquee",
                        "content": {"words": " • ".join(tone_words)}})
     filler = "silence" if generous else "thread"
+    gi = 0
     while len(wishes) < _CEREMONY_MAX:
+        # Dressed silence (2026-07-10): every quiet seam carries one of
+        # the page's own tone words as its ghost occupant (seeded
+        # rotation — different silences whisper different words).
+        ghost = tone_words[(h + gi) % len(tone_words)] if tone_words else ""
+        gi += 1
         wishes.append({"module": "interstitial", "variant": filler,
-                       "content": {}})
+                       "content": ({"ghost": ghost} if ghost else {})})
 
     n_want = 1 + (1 if generous else 0) + (1 if (statement_line or statement_dup_fallback
                                                  or marquee_ok) else 0)
