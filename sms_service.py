@@ -46,9 +46,16 @@ def _sb_url() -> str:
 
 
 def _sb_anon() -> str:
-    # Match the rest of the codebase — Supabase calls go through the
-    # anon key. Permissive RLS handles authorization.
-    return os.environ.get("SUPABASE_ANON", "")
+    # 2026-07-10 root-cause fix: this module (and sms_routing, which
+    # imports these helpers) ran on the ANON key under the assumption
+    # of permissive RLS — but sms_messages/sms_consents now ship with
+    # owner-scoped RLS (text content must NOT be readable with the
+    # public browser key). Server-initiated SMS writes are webhook- or
+    # signature-validated, so the service role is the correct identity.
+    # Anon fallback keeps a partially-configured env limping visibly
+    # (warnings) instead of failing dark.
+    return (os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+            or os.environ.get("SUPABASE_ANON", ""))
 
 
 def _sb_headers() -> Dict[str, str]:
