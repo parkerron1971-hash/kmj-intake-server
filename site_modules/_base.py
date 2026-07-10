@@ -591,6 +591,10 @@ body.sx-reveal-focus .sxm-reveal.sxm-in { transform: none; filter: blur(0); }
     return f"""
 *, *::before, *::after {{ box-sizing: border-box; }}
 html {{ scroll-behavior: smooth; }}
+/* Anchor-entry fix (2026-07-10, reproduced live at #cta): deep links
+   landed section tops UNDER the sticky header — heading text sliced
+   by the header band. Every anchor target clears the header. */
+[id] {{ scroll-margin-top: 96px; }}
 body {{
   margin: 0; background: var(--sx-bg); color: var(--sx-text);
   font-family: var(--sx-font-body); font-size: 16.5px; line-height: 1.65;
@@ -670,13 +674,20 @@ def reveal_script(dna: Dict[str, Any]) -> str:
     # reveals appear instantly — no wave of sections sliding at the 6s
     # mark. Scroll reveals also pre-trigger slightly (rootMargin) so the
     # rise starts as a section ENTERS view rather than after it's there.
+    # ANCHOR-ENTRY fix (same day, REPRODUCED live via headless Chrome at
+    # /#cta): deep links left in-view sections stuck at opacity 0 — a
+    # viewport of black, Kevin's "crash in parts of the site". A page
+    # entered via ANY hash reveals everything instantly: a deep-linked
+    # visitor came for the content, not the choreography.
     return ("<script>(function(){try{var els=document.querySelectorAll('.sxm-reveal');"
             "var all=function(){els.forEach(function(e){"
             "if(!e.classList.contains('sxm-in')){e.classList.add('sxm-in-snap');e.classList.add('sxm-in')}})};"
+            "if(location.hash){all();return}"
             "if(!('IntersectionObserver'in window)){all();return}"
             "var io=new IntersectionObserver(function(entries){entries.forEach(function(en){"
             "if(en.isIntersecting){en.target.classList.add('sxm-in');io.unobserve(en.target)}})},"
             "{threshold:.08,rootMargin:'0px 0px 12% 0px'});els.forEach(function(e){io.observe(e)});"
+            "window.addEventListener('hashchange',all,{once:true});"
             "setTimeout(all,6000)}catch(e){}})();</script>")
 
 
