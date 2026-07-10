@@ -5086,6 +5086,27 @@ async def handle_advance_phase(client, biz, action) -> Dict:
     }
 
 
+async def handle_restore_previous_site(client, biz, action) -> Dict:
+    """Compose safety net (2026-07-10) — swap the live site back to the
+    previous full-compose design. Trust discipline: owner-scoped, no
+    external effects, fully reversible (the swap is symmetric — asking
+    again switches back). The undo for a redesign roll the owner hates."""
+    import site_composer
+    try:
+        res = await asyncio.to_thread(
+            site_composer.restore_previous_compose, biz["id"])
+    except Exception as e:
+        return _fail("restore_previous_site", f"restore failed: {e}")
+    if not isinstance(res, dict) or not res.get("ok"):
+        return _fail("restore_previous_site",
+                     (res or {}).get("error") or "restore failed")
+    return {"type": "restore_previous_site",
+            "result": ("previous design restored and live — ask me again "
+                       "any time to swap back"),
+            "label": "⏪ Previous site design restored",
+            "nav": _nav("build")}
+
+
 async def handle_analyze_trends(client, biz, action) -> Dict:
     """Chief Layers arc — on-demand longitudinal analysis ("how's my
     business trending?"). Runs the weekly insight engine now, bypassing
@@ -9311,6 +9332,7 @@ ACTION_HANDLERS = {
     "advance_phase":              handle_advance_phase,
     "run_market_research":        handle_run_market_research,
     "analyze_trends":             handle_analyze_trends,
+    "restore_previous_site":      handle_restore_previous_site,
     "save_business_model":        handle_save_business_model,
     "save_pricing":               handle_save_pricing,
     "save_packages":              handle_save_packages,
@@ -11613,6 +11635,7 @@ ACTIONS — QUEUE MANAGEMENT:
 
 ACTIONS — LONG TASKS (heavy work that runs in the background, lands on the desktop):
   [ACTION:{{"type":"enqueue_job","kind":"rebuild_site"}}]  — Rebuild / recompose / REDESIGN the practitioner's website. This is SLOW, so it runs as a queued job: it finishes server-side and the result is waiting on their desktop. Use it whenever they ask to rebuild / recompose / refresh / redo / REDESIGN / change the design of / make over their site, ESPECIALLY from their phone. To pass specific design requests, include "params":{{"brief_notes":"<their request, e.g. darker, more editorial, bigger hero>"}}. After emitting it, tell them you've STARTED it and you'll let them know on their desktop when it's ready — do NOT claim the site is already rebuilt or describe the finished result, because it hasn't run yet. NEVER hand-write HTML or describe a finished design yourself.
+  [ACTION:{{"type":"restore_previous_site"}}]  — INSTANT undo for a redesign: swaps the live site back to the previous full-compose design (each recompose banks the outgoing page). Use when they say the new design is worse / "go back" / "restore the old site" / "undo that redesign". The swap is symmetric — asking again switches back, so nothing is ever lost. Fast and free (no rebuild).
 
 ACTIONS — CONTACTS:
   [ACTION:{{"type":"create_contact","name":"...","email":"...","phone":"...","status":"lead"}}]
