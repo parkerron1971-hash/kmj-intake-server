@@ -65,6 +65,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from sms_service import (
+    _pq,
     _sb_get, _store_sms, _log_event, _find_contact_by_phone,
     normalize_phone, is_opted_out,
 )
@@ -114,7 +115,7 @@ async def _positive_consent(client: httpx.AsyncClient, business_id: str,
     platform web-form consent OR a keyword binding to this business."""
     rows = await _sb_get(
         client,
-        f"/sms_consents?phone=eq.{phone}"
+        f"/sms_consents?phone=eq.{_pq(phone)}"
         f"&or=(business_id.eq.{business_id},source.eq.web_form)"
         f"&select=id&limit=1",
     ) or []
@@ -122,7 +123,7 @@ async def _positive_consent(client: httpx.AsyncClient, business_id: str,
         return True
     rows = await _sb_get(
         client,
-        f"/sms_bindings?customer_phone=eq.{phone}"
+        f"/sms_bindings?customer_phone=eq.{_pq(phone)}"
         f"&business_id=eq.{business_id}&select=id&limit=1",
     ) or []
     return bool(rows)
