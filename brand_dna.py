@@ -150,6 +150,23 @@ _PAIRING_FUZZY = (
 )
 
 
+# Arc M (2026-07-10) — the field study's #1 tell: generic faces used as
+# DISPLAY type. These are fine as body faces; as headings they read as
+# template output. When a brand kit carries one of these as the heading
+# font WITHOUT fonts_locked, the composer demotes the pin and lets the
+# pairing system (above) dress the page instead.
+GENERIC_DISPLAY_FACES = {
+    "inter", "open sans", "roboto", "lato", "montserrat", "arial",
+    "helvetica", "helvetica neue", "verdana", "tahoma", "segoe ui",
+    "system-ui", "sans-serif",
+}
+
+
+def is_generic_display(font_name: Any) -> bool:
+    """True when `font_name` is too generic to serve as a display face."""
+    return str(font_name or "").strip().lower() in GENERIC_DISPLAY_FACES
+
+
 def resolve_font_pairing(display_personality: Any) -> Optional[str]:
     """DRO typography.display_personality (schema enum OR prose-ish
     label) → FONT_PAIRINGS key, or None when nothing matches."""

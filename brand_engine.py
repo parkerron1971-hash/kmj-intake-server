@@ -245,6 +245,13 @@ def _compose_design(business: Dict[str, Any]) -> Dict[str, Any]:
         "text_color": colors.get("text") or DEFAULT_DESIGN["text_color"],
         "font_heading": font_pair.get("heading") or brand_kit.get("font_heading") or DEFAULT_DESIGN["font_heading"],
         "font_body": font_pair.get("body") or brand_kit.get("font_body") or DEFAULT_DESIGN["font_body"],
+        # Arc M (2026-07-10): consumers could never tell an owner-chosen
+        # font from this function's DEFAULT_DESIGN fallback — the value
+        # is always non-empty, so the composer treated EVERY business as
+        # having pinned fonts and the typography pairing system never
+        # ran. These flags carry the distinction.
+        "fonts_owner_set": bool(font_pair.get("heading") or brand_kit.get("font_heading")),
+        "fonts_locked": bool(brand_kit.get("fonts_locked")),
     }
 
 
