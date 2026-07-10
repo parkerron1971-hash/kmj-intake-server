@@ -41,6 +41,20 @@ HTTP_TIMEOUT = 15.0
 
 # ─── Supabase helpers (anon key, same pattern as the rest of railway/) ──
 
+def _pq(value) -> str:
+    """Percent-encode a value for a PostgREST query-string filter.
+
+    E.164 phones start with '+', which URL query parsing decodes as a
+    SPACE - so every `phone=eq.+1...` filter silently matched NOTHING
+    (proven against prod: raw '+' -> 0 rows, '%2B' -> 1 row). That one
+    character broke binding routing ("keeps asking for the keyword"),
+    opt-out checks, consent checks, and exact contact matching. Route
+    every phone value through this before it enters a URL.
+    """
+    import urllib.parse
+    return urllib.parse.quote(str(value or ""), safe="")
+
+
 def _sb_url() -> str:
     return os.environ.get("SUPABASE_URL", "").rstrip("/")
 
@@ -231,7 +245,7 @@ async def is_opted_out(client: httpx.AsyncClient, phone: str,
     try:
         rows = await _sb_get(
             client,
-            f"/sms_opt_outs?phone=eq.{phone}&business_id=is.null&select=id&limit=1",
+            f"/sms_opt_outs?phone=eq.{_pq(phone)}&business_id=is.null&select=id&limit=1",
         ) or []
         return bool(rows)
     except Exception:
@@ -339,7 +353,7 @@ async def _find_contact_by_phone(
     if not phone:
         return None
     rows = await _sb_get(client,
-        f"/contacts?business_id=eq.{business_id}&phone=eq.{phone}"
+        f"/contacts?business_id=eq.{business_id}&phone=eq.{_pq(phone)}"
         f"&select=id,name,phone,health_score,status&limit=1")
     if rows:
         return rows[0]
@@ -362,7 +376,7 @@ async def _find_contact_global(
     if not phone:
         return None
     rows = await _sb_get(client,
-        f"/contacts?phone=eq.{phone}"
+        f"/contacts?phone=eq.{_pq(phone)}"
         f"&select=id,name,phone,business_id,health_score,status&limit=1")
     if rows:
         return rows[0]
@@ -446,7 +460,7 @@ async def receive_sms(request: Request):
         if first_word in _routing.START_WORDS:
             try:
                 await client.delete(
-                    f"{_sb_url()}/rest/v1/sms_opt_outs?phone=eq.{from_number}",
+                    f"{_sb_url()}/rest/v1/sms_opt_outs?phone=eq.{_pq(from_number)}",
                     headers=_sb_headers(), timeout=HTTP_TIMEOUT)
                 logger.info(f"[SMS] START via Telnyx path from {from_number} — opt-out cleared")
             except httpx.HTTPError as e:

@@ -53,7 +53,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from sms_service import (
-    _sb_get, _sb_post, _sb_patch, _sb_headers, _store_sms, _log_event,
+    _pq, _sb_get, _sb_post, _sb_patch, _sb_headers, _store_sms, _log_event,
     _find_contact_by_phone, normalize_phone, record_inbound_sms,
     _twilio_configured, is_opted_out,
 )
@@ -123,7 +123,7 @@ async def _keyword_lookup(client: httpx.AsyncClient, word: str) -> Optional[Dict
 async def _bindings_for(client: httpx.AsyncClient, phone: str) -> List[Dict[str, Any]]:
     return await _sb_get(
         client,
-        f"/sms_bindings?customer_phone=eq.{phone}"
+        f"/sms_bindings?customer_phone=eq.{_pq(phone)}"
         f"&select=id,business_id,bound_at,last_routed_at&order=bound_at.asc",
     ) or []
 
@@ -140,7 +140,7 @@ async def _bind(client: httpx.AsyncClient, phone: str, business_id: str) -> None
         # Conflict path on older PostgREST — refresh the timestamp.
         await _sb_patch(
             client,
-            f"/sms_bindings?customer_phone=eq.{phone}&business_id=eq.{business_id}",
+            f"/sms_bindings?customer_phone=eq.{_pq(phone)}&business_id=eq.{business_id}",
             {"last_routed_at": now},
         )
 
@@ -148,7 +148,7 @@ async def _bind(client: httpx.AsyncClient, phone: str, business_id: str) -> None
 async def _touch_binding(client: httpx.AsyncClient, phone: str, business_id: str) -> None:
     await _sb_patch(
         client,
-        f"/sms_bindings?customer_phone=eq.{phone}&business_id=eq.{business_id}",
+        f"/sms_bindings?customer_phone=eq.{_pq(phone)}&business_id=eq.{business_id}",
         {"last_routed_at": datetime.now(timezone.utc).isoformat()},
     )
 
@@ -207,7 +207,7 @@ async def route_inbound(
             try:
                 await client.delete(
                     f"{os.environ.get('SUPABASE_URL', '').rstrip('/')}/rest/v1"
-                    f"/sms_opt_outs?phone=eq.{phone}",
+                    f"/sms_opt_outs?phone=eq.{_pq(phone)}",
                     # Same identity as every other SMS write (service
                     # role via sms_service._sb_headers) — this was the
                     # one inline anon-header holdout.
