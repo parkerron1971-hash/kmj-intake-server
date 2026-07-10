@@ -386,6 +386,34 @@ def gather_context(business_id: str) -> Dict[str, Any]:
     testimonials = [t for t in _testi_raw
                     if isinstance(t, dict) and t.get("show_on_website", True)]
 
+    # Arc S "Business Picture" (2026-07-10, Kevin's insight: "they have
+    # to have rules of engagement for their business") — policies + FAQ
+    # gathered by Chief (set_business_policy / add_faq) into
+    # settings.business_picture. Policies become their natural questions;
+    # explicit Q&As follow. The faq module renders these records
+    # directly; nothing is ever invented.
+    business_picture = settings.get("business_picture") or {}
+    _POLICY_QUESTIONS = (
+        ("cancellation", "What is your cancellation policy?"),
+        ("deposit", "Do you require a deposit?"),
+        ("lateness", "What if I'm running late?"),
+        ("refunds", "What is your refund policy?"),
+        ("no_show", "What happens if I miss my appointment?"),
+    )
+    faq_rows: List[Dict[str, str]] = []
+    _pol = (business_picture.get("policies")
+            if isinstance(business_picture.get("policies"), dict) else {})
+    for _k, _q in _POLICY_QUESTIONS:
+        _a = str(_pol.get(_k) or "").strip()
+        if _a:
+            faq_rows.append({"q": _q, "a": _a[:600]})
+    for _r in (business_picture.get("faq") or []):
+        if (isinstance(_r, dict) and str(_r.get("q") or "").strip()
+                and str(_r.get("a") or "").strip()):
+            faq_rows.append({"q": str(_r["q"]).strip()[:200],
+                             "a": str(_r["a"]).strip()[:600]})
+    faq_rows = faq_rows[:10]
+
     # Arc 27 — sellable products feed the store module + hosted store page.
     try:
         from store_router import _sellable_offerings
@@ -501,6 +529,8 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "site": site,
         "offerings": offerings,
         "testimonials": testimonials,
+        "faq": faq_rows,
+        "business_picture": business_picture,
         "booking": booking,
         "public_modules": _fetch_public_modules(business_id),
         "contact": contact,
@@ -633,6 +663,10 @@ def _default_spec(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         spec.insert(3, {"module": "gallery", "variant": "grid", "content": {}})
     if (ctx.get("store") or {}).get("enabled"):
         spec.insert(-2, {"module": "store", "variant": "featured", "content": {}})
+    # Arc S — the rules-of-engagement ledger, when the business has one.
+    if ctx.get("faq"):
+        spec.insert(-2, {"module": "faq", "variant": "ledger",
+                         "content": {"headline": "Good to know"}})
     return spec
 
 
@@ -956,6 +990,7 @@ RULES
   section framing (eyebrow/headline/intro).
 - Include "offerings" only if offerings exist; "testimonials" only if testimonials exist;
   "store" only if sellable products exist ({(ctx.get('store') or {}).get('enabled') and len((ctx.get('store') or {}).get('items') or []) or 0} on file).
+- Include "faq" only when the business has policies/Q&As on file ({len(ctx.get('faq') or [])} on file) — it renders the real records automatically; you only write eyebrow/headline. Place it late (before or after the CTA, never before the offer is made).
 - Include "showcase" whenever public custom modules exist (listed above) — it surfaces the real tools/programs the business runs; frame its eyebrow/headline/intro in-concept.
 - headline ≤ 9 words. subheadline/intro: 1-2 sentences. about body: 2-4 sentences,
   first person where natural.
@@ -1164,6 +1199,7 @@ _EDITABILITY_EXEMPT_PREFIXES = (
     "sxm-sms-consent",                                # compliance copy
     "sxm-sent",                                       # runtime-only state
     "sxm-int-mq",                                     # marquee tone words
+    "sxm-faq-rows",                                   # Arc S: policy/FAQ records (edited via Chief)
 )
 
 

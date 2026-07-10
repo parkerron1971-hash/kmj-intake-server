@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Tuple
 
 from . import (hero, about, offerings, testimonials, gallery, cta_band,
                contact_footer, store, showcase, header, statband,
-               interstitial)
+               interstitial, faq)
 from ._base import (page_shell, build_page_meta, rule_break_treatment,
                     diamond_field, is_brut)
 
@@ -185,6 +185,11 @@ MODULES: Dict[str, Dict[str, Any]] = {
     "gallery": {
         "variants": gallery.VARIANTS,
         "render": gallery.render,
+        "fields": ("eyebrow", "headline"),
+    },
+    "faq": {
+        "variants": faq.VARIANTS,
+        "render": faq.render,
         "fields": ("eyebrow", "headline"),
     },
     "cta": {
