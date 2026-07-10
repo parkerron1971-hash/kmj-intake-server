@@ -197,11 +197,23 @@ def cta_button(ctx: Dict[str, Any], label: str, section: str,
     conn = ctx.get("connections") if isinstance(ctx.get("connections"), dict) else {}
     goal = str(ctx.get("cta_goal") or "")
     href = ""
-    if conn.get("booking") and booking.get("enabled") and booking.get("url"):
+    # Kevin's second ruling (2026-07-10): creative button copy is
+    # welcome, but the LABEL'S INTENT governs the destination — a button
+    # that TALKS like contact ("get in touch", "send a message") must
+    # never route to booking, and a button that talks like booking
+    # ("book", "schedule", "reserve") must never dead-end at the contact
+    # form while booking exists. Ambiguous/creative labels ("Bring me
+    # the pieces") keep the primary-action ladder (booking first).
+    label_intent = _cta_label_intent(label)
+    if label_intent == "contact":
+        href = "#contact"
+    elif label_intent == "booking" and booking.get("enabled") and booking.get("url"):
+        href = safe_url(booking["url"])
+    elif conn.get("booking") and booking.get("enabled") and booking.get("url"):
         href = safe_url(booking["url"])
     elif goal == "buy" and store.get("enabled") and store.get("url"):
         href = safe_url(store["url"])
-    # Kevin's ruling (2026-07-10): when booking exists, the PRIMARY
+    # Kevin's first ruling (2026-07-10): when booking exists, the PRIMARY
     # action is booking — "the connect part is if they want information,
     # not a booking itself." A stored cta_goal of "contact" (often set
     # before booking was connected) no longer hijacks primaries to the
@@ -218,6 +230,26 @@ def cta_button(ctx: Dict[str, Any], label: str, section: str,
             href = "#contact"
     return (f'<a class="sxm-cta" href="{href}">'
             f'<span {ov(section, field)}>{safe(label or "Get in touch")}</span></a>')
+
+
+# Label-intent vocabulary for _cta_label_intent + the gate's
+# cta_link_coherence check — one list, no drift.
+CTA_CONTACT_WORDS = ("touch", "contact", "message", "talk", "chat",
+                     "write", "email", "reach", "question", "hello",
+                     "say hi", "connect with", "conversation")
+CTA_BOOKING_WORDS = ("book", "schedule", "appointment", "session",
+                     "reserve", "slot", "availability", "calendar")
+
+
+def _cta_label_intent(label: str) -> str:
+    """'contact' | 'booking' | '' (ambiguous/creative) from the label's
+    own words. Booking wins ties ('book a chat' is a booking ask)."""
+    s = f" {str(label or '').lower()} "
+    if any(w in s for w in CTA_BOOKING_WORDS):
+        return "booking"
+    if any(w in s for w in CTA_CONTACT_WORDS):
+        return "contact"
+    return ""
 
 
 # ─── DRO → body-class mappers (Arc 3 "Expressive Range") ─────────────
@@ -535,13 +567,19 @@ def base_css(dna: Dict[str, Any]) -> str:
     # Quality-floor arc 7: reveal travels 48px over .9s — the bar's
     # "things don't rush in, they arrive" (was 18px/.7s).
     reveal_css = "" if motion == "subtle" else """
-.sxm-reveal { opacity: 0; transform: translateY(48px); transition: opacity .9s var(--sx-ease), transform .9s var(--sx-ease); }
+.sxm-reveal { opacity: 0; transform: translateY(32px); transition: opacity .8s var(--sx-ease), transform .8s var(--sx-ease); }
 .sxm-reveal.sxm-in { opacity: 1; transform: none; }
+/* Slide cleanup (2026-07-10): late reveals — the 6s failsafe, or any
+   section revealed while off-screen — SNAP instead of sliding, so the
+   failsafe never plays a wave of drifting sections and off-screen
+   arrivals don't animate to nobody. */
+.sxm-reveal.sxm-in-snap { transition: none !important; }
+.sxm-reveal.sxm-in-snap .sxm-inner > * { transition: none !important; }
 /* Site Arc 10 — blur-to-focus arrival (body.sx-reveal-focus, selected by
    the DRO's motion energy): sections come into FOCUS — blur 8px→0 with a
    .98→1 settle — instead of rising. Sharper is the entrance, not higher. */
 body.sx-reveal-focus .sxm-reveal { transform: scale(.98); filter: blur(8px);
-  transition: opacity .9s var(--sx-ease), transform .9s var(--sx-ease), filter .9s var(--sx-ease); }
+  transition: opacity .8s var(--sx-ease), transform .8s var(--sx-ease), filter .8s var(--sx-ease); }
 body.sx-reveal-focus .sxm-reveal.sxm-in { transform: none; filter: blur(0); }
 @media (prefers-reduced-motion: reduce) { .sxm-reveal { opacity: 1; transform: none; transition: none; }
   body.sx-reveal-focus .sxm-reveal { filter: none; } }""" + _SIG_CSS
@@ -628,12 +666,17 @@ def reveal_script(dna: Dict[str, Any]) -> str:
     # crashed page. After 6s everything reveals unconditionally: real
     # visitors keep the scroll choreography for the opening screens, and
     # nothing can stay invisible forever.
+    # Slide cleanup (2026-07-10): the failsafe adds sxm-in-snap so late
+    # reveals appear instantly — no wave of sections sliding at the 6s
+    # mark. Scroll reveals also pre-trigger slightly (rootMargin) so the
+    # rise starts as a section ENTERS view rather than after it's there.
     return ("<script>(function(){try{var els=document.querySelectorAll('.sxm-reveal');"
-            "var all=function(){els.forEach(function(e){e.classList.add('sxm-in')})};"
+            "var all=function(){els.forEach(function(e){"
+            "if(!e.classList.contains('sxm-in')){e.classList.add('sxm-in-snap');e.classList.add('sxm-in')}})};"
             "if(!('IntersectionObserver'in window)){all();return}"
             "var io=new IntersectionObserver(function(entries){entries.forEach(function(en){"
             "if(en.isIntersecting){en.target.classList.add('sxm-in');io.unobserve(en.target)}})},"
-            "{threshold:.12});els.forEach(function(e){io.observe(e)});"
+            "{threshold:.08,rootMargin:'0px 0px 12% 0px'});els.forEach(function(e){io.observe(e)});"
             "setTimeout(all,6000)}catch(e){}})();</script>")
 
 

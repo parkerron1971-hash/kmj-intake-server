@@ -5314,6 +5314,65 @@ async def handle_add_faq(client, biz, action) -> Dict:
             "nav": None}
 
 
+async def handle_site_health(client, biz, action) -> Dict:
+    """Site self-heal (Kevin's directive, 2026-07-10: "make sure Chief
+    can fix the things practitioners run into"): one sweep over
+    everything that commonly goes wrong with a composed site, each
+    issue named WITH its fix. Read-only — the fixes ride existing verbs
+    (refine rebuild, restore_previous_site, availability save)."""
+    def _read():
+        return sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{biz['id']}"
+            "&select=site_config,html_content,status&limit=1") or []
+    rows = await asyncio.to_thread(_read)
+    if not rows:
+        return _fail("site_health", "no site yet — compose one first")
+    site = rows[0]
+    cfg = site.get("site_config") or {}
+    htmlc = site.get("html_content") or ""
+    issues: List[str] = []
+    healthy: List[str] = []
+
+    for c in ((cfg.get("quality_report") or {}).get("checks") or []):
+        if not c.get("ok"):
+            issues.append(f"gate '{c.get('name')}': {str(c.get('detail'))[:110]}")
+    if not any(i.startswith("gate") for i in issues):
+        healthy.append("quality gate clean")
+
+    if cfg.get("dro_failure"):
+        issues.append("last compose ran WITHOUT its design brief "
+                      f"({str((cfg.get('dro_failure') or {}).get('detail'))[:80]}) "
+                      "— fix: run a recompose (refine keeps the current look)")
+    if "/public/booking/" in htmlc:
+        issues.append("the site carries the OLD booking link — fix: a "
+                      "refine recompose re-stamps the current /book link")
+    try:
+        from booking_widget_router import booking_is_live
+        _settings = biz.get("settings") or {}
+        _av = (_settings.get("availability")
+               if isinstance(_settings.get("availability"), dict) else {})
+        if booking_is_live(biz["id"], _settings) and not _av.get("timezone"):
+            issues.append("booking hours carry no timezone (slots can show "
+                          "shifted times) — fix: open Availability and Save once")
+    except Exception:
+        pass
+    if cfg.get("previous_compose"):
+        healthy.append("a previous design is banked (\"go back\" works)")
+    if site.get("status") != "published":
+        issues.append(f"site status is '{site.get('status')}' — not published")
+
+    if not issues:
+        return {"type": "site_health",
+                "result": "site healthy — " + "; ".join(healthy or ["no known issues"]),
+                "label": "✅ Site health: clean", "nav": _nav("build")}
+    listing = " | ".join(issues[:6]) + (f" (+{len(issues) - 6} more)"
+                                        if len(issues) > 6 else "")
+    return {"type": "site_health",
+            "result": f"{len(issues)} issue(s) found: {listing}",
+            "label": f"🩺 Site health: {len(issues)} issue(s)",
+            "nav": _nav("build")}
+
+
 async def handle_restore_previous_site(client, biz, action) -> Dict:
     """Compose safety net (2026-07-10) — swap the live site back to the
     previous full-compose design. Trust discipline: owner-scoped, no
@@ -9561,6 +9620,7 @@ ACTION_HANDLERS = {
     "run_market_research":        handle_run_market_research,
     "analyze_trends":             handle_analyze_trends,
     "restore_previous_site":      handle_restore_previous_site,
+    "site_health":                handle_site_health,
     "set_business_policy":        handle_set_business_policy,
     "add_faq":                    handle_add_faq,
     "notify_practitioner":        handle_notify_practitioner,
@@ -11870,6 +11930,7 @@ ACTIONS — QUEUE MANAGEMENT:
 ACTIONS — LONG TASKS (heavy work that runs in the background, lands on the desktop):
   [ACTION:{{"type":"enqueue_job","kind":"rebuild_site"}}]  — Rebuild / recompose / REDESIGN the practitioner's website. This is SLOW, so it runs as a queued job: it finishes server-side and the result is waiting on their desktop. Use it whenever they ask to rebuild / recompose / refresh / redo / REDESIGN / change the design of / make over their site, ESPECIALLY from their phone. To pass specific design requests, include "params":{{"brief_notes":"<their request, e.g. darker, more editorial, bigger hero>"}}. After emitting it, tell them you've STARTED it and you'll let them know on their desktop when it's ready — do NOT claim the site is already rebuilt or describe the finished result, because it hasn't run yet. NEVER hand-write HTML or describe a finished design yourself.
   [ACTION:{{"type":"restore_previous_site"}}]  — INSTANT undo for a redesign: swaps the live site back to the previous full-compose design (each recompose banks the outgoing page). Use when they say the new design is worse / "go back" / "restore the old site" / "undo that redesign". The swap is symmetric — asking again switches back, so nothing is ever lost. Fast and free (no rebuild).
+  [ACTION:{{"type":"site_health"}}]  — the site DIAGNOSTIC: one sweep over the composed site's quality gate, design-brief status, stale booking links, timezone gaps, and publish state — each issue reported WITH its fix. RUN THIS FIRST whenever the practitioner reports ANY site problem ("my site looks broken", "the link is wrong", "something's off") — diagnose, then fix with the named remedy (refine rebuild / restore_previous_site / availability save), then confirm. Never guess at a site problem you can check.
     — REFINE vs REDESIGN (critical distinction): when they LIKE the current direction and want it improved ("keep this style but tighten it", "refine my site", "polish this version", "make this better without changing the look"), use enqueue_job rebuild_site with "params":{{"refine":true,"brief_notes":"<what to improve>"}} — the design direction (fonts, colors, concept, imagery) is REUSED and only the execution is redone. A plain rebuild_site (no refine) rolls a completely NEW direction — only do that when they want a different look.
 
 ACTIONS — BUSINESS PICTURE (rules of engagement; see the BUSINESS PICTURE context block):
