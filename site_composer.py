@@ -373,8 +373,12 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "&order=created_at.asc&select=*&limit=24") or []
 
     booking_cfg = settings.get("booking") or {}
+    # Booking detection fix (2026-07-10): recognize the REAL system —
+    # active booking_calendar module + published booking page — not
+    # just the legacy settings.booking.enabled flag nothing writes.
+    from booking_widget_router import booking_is_live
     booking = {
-        "enabled": bool(booking_cfg.get("enabled")) and bool(slug),
+        "enabled": booking_is_live(business_id, settings) and bool(slug),
         "url": f"{RAILWAY_BASE}/public/booking/{slug}" if slug else "",
     }
 
@@ -3191,7 +3195,11 @@ def prefill_signals(business_id: str,
                    if isinstance(b_settings.get("booking"), dict) else {})
     hours_cfg = (booking_cfg.get("hours")
                  if isinstance(booking_cfg.get("hours"), dict) else {})
-    booking_configured = bool(booking_cfg.get("enabled")
+    # Booking detection fix (2026-07-10): the interview's connect chip
+    # read only the legacy flag — a published booking module showed
+    # "Set up later". booking_is_live sees the real system.
+    from booking_widget_router import booking_is_live
+    booking_configured = bool(booking_is_live(business_id, b_settings)
                               or (hours_cfg.get("start") and hours_cfg.get("end")))
     try:
         from store_router import _sellable_offerings

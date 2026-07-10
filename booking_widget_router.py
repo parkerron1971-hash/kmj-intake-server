@@ -143,6 +143,27 @@ def _bookings_module(business_id: str) -> Optional[Dict[str, Any]]:
     return rows[0] if rows else None
 
 
+def booking_is_live(business_id: str,
+                    settings: Optional[Dict[str, Any]] = None) -> bool:
+    """THE booking-detection truth (2026-07-10, Kevin's 'booking says
+    set up later' bug): the modern system is an ACTIVE booking_calendar
+    module + settings.booking_page.published (the Embed tab's Publish
+    toggle). The composer, the interview's connect chips, and offering
+    readiness were all reading settings.booking.enabled — a legacy key
+    NOTHING in the current flow writes — so a fully published booking
+    setup was invisible to every one of them. Legacy flag still counts
+    for old configurations."""
+    s = settings if isinstance(settings, dict) else {}
+    legacy = (s.get("booking") if isinstance(s.get("booking"), dict) else {})
+    if legacy.get("enabled"):
+        return True
+    page = (s.get("booking_page")
+            if isinstance(s.get("booking_page"), dict) else {})
+    if not page.get("published"):
+        return False
+    return _bookings_module(business_id) is not None
+
+
 def _theme_tokens(business: Dict[str, Any]) -> Dict[str, str]:
     """Extract the brand-kit CSS variables the widget shadow-root needs.
     Read order matches existing app convention: settings.brand_kit (the
