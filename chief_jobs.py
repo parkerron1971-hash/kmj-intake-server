@@ -159,7 +159,10 @@ def _execute_kind(kind: str, business_id: str, params: dict,
         # reuses the stored site_prefs automatically.
         result = compose_site(business_id, brief_notes=notes, use_llm=True,
                               design_prefs=(params or {}).get("design_prefs"),
-                              progress_cb=progress)
+                              progress_cb=progress,
+                              # Refine mode: keep the current design
+                              # direction, regenerate the execution.
+                              refine=bool((params or {}).get("refine")))
         return result if isinstance(result, dict) else {}
     if kind == "compose_directions":
         # Arc 6 — authors + stores the three direction drafts; the result
