@@ -1160,6 +1160,17 @@ a.btn:hover {{ opacity: 0.9; }}
     return HTMLResponse(content=html, status_code=200, media_type="text/html")
 
 
+@router.post("/sites/{business_id}/restore-previous")
+def restore_previous(business_id: str,
+                     user: AuthedUser = Depends(require_user)):
+    """Compose safety net (2026-07-10): swap the live page back to the
+    previous full compose. Symmetric — call again to switch back. No
+    LLM, no cost; the slot fills automatically on every full recompose."""
+    _require_business_owner(business_id, user)
+    import site_composer
+    return site_composer.restore_previous_compose(business_id)
+
+
 @router.post("/sites/{business_id}/invalidate")
 async def invalidate_site_cache(business_id: str):
     """Bump business_sites.updated_at so consumers see a fresh

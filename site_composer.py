@@ -1657,6 +1657,53 @@ def _ensure_site_row(business_id: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
     return site
 
 
+# Everything a restore must swap alongside html_content — the page and
+# its self-description travel together (spec, bespoke fragments, the
+# rationale pointer, concept fingerprint, gate report).
+_RESTORE_KEYS = ("page_spec", "atelier", "design_rationale_id", "dro_status",
+                 "dro_summary", "dro_failure", "slot_concept",
+                 "quality_report", "generated_html", "html_generated_at")
+
+
+def restore_previous_compose(business_id: str) -> Dict[str, Any]:
+    """Swap the live page with the previous_compose slot (a full
+    recompose banks exactly one). The swap is SYMMETRIC — the page you
+    were on lands in the slot, so restoring twice returns you to where
+    you started. No LLM calls, no cost, instant."""
+    from datetime import datetime, timezone
+    rows = sb_clients.sb_get_as_service(
+        f"/business_sites?business_id=eq.{business_id}"
+        "&select=id,site_config,html_content&limit=1") or []
+    if not rows:
+        return {"ok": False, "error": "no site found for this business"}
+    site = rows[0]
+    cfg = dict(site.get("site_config") or {})
+    prev = cfg.get("previous_compose")
+    if not isinstance(prev, dict) or not str(prev.get("html_content") or "").strip():
+        return {"ok": False,
+                "error": ("no previous design banked yet — the restore slot "
+                          "fills automatically on the next full recompose")}
+    cur_snapshot = {
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "html_content": site.get("html_content") or "",
+        "keys": {k: cfg.get(k) for k in _RESTORE_KEYS if k in cfg},
+    }
+    for k in _RESTORE_KEYS:
+        cfg.pop(k, None)
+    for k, v in (prev.get("keys") or {}).items():
+        if k in _RESTORE_KEYS:
+            cfg[k] = v
+    cfg["previous_compose"] = cur_snapshot
+    sb_clients.sb_patch_as_service(
+        f"/business_sites?id=eq.{site['id']}",
+        {"html_content": prev.get("html_content"), "site_config": cfg,
+         "status": "published"})
+    logger.info(f"[composer] restore-previous swap for {business_id[:8]} "
+                f"(banked page from {prev.get('saved_at')})")
+    return {"ok": True, "restored_from": prev.get("saved_at"),
+            "note": "swap is symmetric — restore again to switch back"}
+
+
 def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        ctx: Optional[Dict[str, Any]] = None,
                        dro_id: Optional[str] = None,
@@ -1900,9 +1947,24 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
 
     # Persist: html_content serves live; site_config carries the spec.
     fresh = sb_clients.sb_get_as_service(
-        f"/business_sites?id=eq.{site['id']}&select=site_config&limit=1") or []
+        f"/business_sites?id=eq.{site['id']}&select=site_config,html_content&limit=1") or []
     cfg = dict((fresh[0].get("site_config") or {}) if fresh else {})
     from datetime import datetime, timezone
+    # Compose safety net (2026-07-10, Kevin's bad roll): a full recompose
+    # used to OVERWRITE the only copy of a page the owner may have loved
+    # — and the variance machinery deliberately rolls each compose away
+    # from the last, so a worse roll destroyed a better one with no way
+    # back. One restore slot: the outgoing page + its restore-critical
+    # config, swapped back by restore_previous_compose(). Never nests
+    # (previous_compose is not in _RESTORE_KEYS).
+    if full_recompose:
+        _out_html = ((fresh[0].get("html_content") if fresh else "") or "")
+        if _out_html.strip():
+            cfg["previous_compose"] = {
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "html_content": _out_html,
+                "keys": {k: cfg.get(k) for k in _RESTORE_KEYS if k in cfg},
+            }
     cfg.update({
         "page_spec": {"sections": spec},
         "generated_html": final_html,
