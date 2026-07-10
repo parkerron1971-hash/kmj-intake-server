@@ -52,7 +52,10 @@ def business_state(business_id: str) -> Dict[str, Any]:
         "&select=settings,stripe_account_id&limit=1") or []
     settings = (rows[0].get("settings") if rows else {}) or {}
     stripe_connected = bool(rows[0].get("stripe_account_id")) if rows else False
-    booking_enabled = bool((settings.get("booking") or {}).get("enabled"))
+    # Booking detection fix (2026-07-10): readiness chips read the real
+    # system (published booking module), not just the legacy flag.
+    from booking_widget_router import booking_is_live
+    booking_enabled = booking_is_live(business_id, settings)
 
     sites = sb_clients.sb_get_as_service(
         f"/business_sites?business_id=eq.{business_id}&select=slug&limit=1") or []
