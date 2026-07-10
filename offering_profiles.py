@@ -61,11 +61,20 @@ def business_state(business_id: str) -> Dict[str, Any]:
         f"/business_sites?business_id=eq.{business_id}&select=slug&limit=1") or []
     slug = (sites[0].get("slug") if sites else "") or ""
 
+    # One-calendar pass (2026-07-10): canonical hosted booking URL
+    # (subdomain /book), not the legacy Railway path.
+    booking_url = ""
+    if slug:
+        try:
+            from business_sites_helpers import booking_url_for_site
+            booking_url = booking_url_for_site(sites[0])
+        except Exception:
+            booking_url = f"{RAILWAY_BASE}/public/booking/{slug}"
     return {
         "booking_enabled": booking_enabled,
         "stripe_connected": stripe_connected,
         "site_slug": slug,
-        "booking_url": f"{RAILWAY_BASE}/public/booking/{slug}" if slug else "",
+        "booking_url": booking_url,
         "store_url": f"{RAILWAY_BASE}/public/store/{slug}/page" if slug else "",
     }
 

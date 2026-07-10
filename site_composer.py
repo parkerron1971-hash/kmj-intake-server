@@ -376,10 +376,16 @@ def gather_context(business_id: str) -> Dict[str, Any]:
     # Booking detection fix (2026-07-10): recognize the REAL system —
     # active booking_calendar module + published booking page — not
     # just the legacy settings.booking.enabled flag nothing writes.
+    # One-calendar pass (same day): the URL now uses the CANONICAL
+    # hosted page (https://{slug}.<domain>/book — the D.2 resolver the
+    # Embed tab advertises). The old /public/booking/{slug} Railway
+    # path is the LEGACY page and 404s for module-based businesses —
+    # every composed CTA was pointing visitors at it.
     from booking_widget_router import booking_is_live
+    from business_sites_helpers import booking_url_for_site
     booking = {
         "enabled": booking_is_live(business_id, settings) and bool(slug),
-        "url": f"{RAILWAY_BASE}/public/booking/{slug}" if slug else "",
+        "url": booking_url_for_site(site) if (site and slug) else "",
     }
 
     # Only real dict rows the owner left visible reach composed sites —

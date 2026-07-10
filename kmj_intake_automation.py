@@ -727,6 +727,15 @@ async def startup():
                           "interval", hours=6, id="chief_insights")
     except Exception as e:
         print(f"   [warn] chief insights job not scheduled: {e}")
+    # One calendar (2026-07-10) — mirror bookings into sessions so the
+    # calendar, Chief's context, and SMS reminders all see them.
+    # Kill switch: BOOKING_SESSION_SYNC=off.
+    try:
+        from booking_widget_router import booking_session_sync_tick as _bsync
+        scheduler.add_job(g("booking_session_sync", _bsync),
+                          "interval", minutes=10, id="booking_session_sync")
+    except Exception as e:
+        print(f"   [warn] booking-session sync not scheduled: {e}")
     # "Schedule anything" (2026-07-10) — Chief's deferred actions:
     # every minute, execute due chief_scheduled_actions rows through
     # the same ACTION_HANDLERS registry. Kill switch: CHIEF_SCHEDULER=off.

@@ -1028,6 +1028,97 @@ def _check_slot_available(
     return True
 
 
+def _mirror_booking_session(business_id: str, entry: Dict[str, Any]) -> None:
+    """ONE CALENDAR (Kevin's ruling, 2026-07-10): every booking mirrors
+    into sessions — the calendar spine that CalendarView, Chief's
+    upcoming-sessions context, AND the SMS reminder sweep all read.
+    Before this, widget bookings lived only in module_entries: invisible
+    on the calendar, never SMS-reminded (the Arc 11 'sessions linkage'
+    queue item, finally built). A [booking:{entry_id}] marker in notes
+    links the pair — idempotent, and the sync tick uses it to cancel
+    the session when the booking is cancelled. Fail-soft: a mirror
+    hiccup never breaks the booking itself."""
+    try:
+        d = entry.get("data") if isinstance(entry.get("data"), dict) else {}
+        appt = (entry.get("appointment_at") or d.get("appointment_at")
+                or d.get("starts_at") or d.get("scheduled_for"))
+        eid = entry.get("id")
+        if not appt or not eid:
+            return
+        marker = f"[booking:{eid}]"
+        dupes = sb_clients.sb_get_as_service(
+            f"/sessions?business_id=eq.{business_id}"
+            f"&notes=like.*{marker}*&select=id&limit=1")
+        if dupes:
+            return
+        title = str(d.get("offering_name") or d.get("offering")
+                    or d.get("service") or "Booking").strip()[:80]
+        dur_raw = (entry.get("duration_min_at_booking")
+                   or entry.get("duration_min")
+                   or d.get("duration_minutes") or 60)
+        try:
+            dur = max(5, int(dur_raw))
+        except (TypeError, ValueError):
+            dur = 60
+        sb_clients.sb_post_as_service("/sessions", {
+            "business_id": business_id,
+            "contact_id": d.get("contact_id"),
+            "title": title,
+            "session_type": "booking",
+            "status": "scheduled",
+            "scheduled_for": appt,
+            "duration_minutes": dur,
+            "notes": f"Booked online. {marker}",
+        })
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"booking->session mirror failed soft: {e}")
+
+
+async def booking_session_sync_tick() -> None:
+    """One-calendar reconciler (leader-gated, every 10 min; kill switch
+    BOOKING_SESSION_SYNC=off). Backstops every booking-creation path the
+    inline mirror doesn't see (Chief's create_module_entry, the module
+    UI, imports): future active bookings get their session; cancelled
+    bookings cancel their mirrored session by marker."""
+    import asyncio as _asyncio
+    import os as _os
+    if (_os.environ.get("BOOKING_SESSION_SYNC") or "on").lower() == "off":
+        return
+
+    def _sync() -> None:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        mods = sb_clients.sb_get_as_service(
+            "/custom_modules?archetype=eq.booking_calendar&is_active=eq.true"
+            "&select=id,business_id&limit=500") or []
+        for m in mods:
+            mid, biz_id = m.get("id"), m.get("business_id")
+            if not mid or not biz_id:
+                continue
+            # Forward mirror: future active bookings.
+            rows = sb_clients.sb_get_as_service(
+                f"/module_entries?module_id=eq.{mid}&status=eq.active"
+                f"&appointment_at=gte.{now}&select=*&limit=100") or []
+            for entry in rows:
+                _mirror_booking_session(biz_id, entry)
+            # Cancel sync: non-active future bookings whose mirrored
+            # session is still scheduled.
+            gone = sb_clients.sb_get_as_service(
+                f"/module_entries?module_id=eq.{mid}&status=neq.active"
+                f"&appointment_at=gte.{now}&select=id&limit=100") or []
+            for entry in gone:
+                marker = f"[booking:{entry.get('id')}]"
+                sb_clients.sb_patch_as_service(
+                    f"/sessions?business_id=eq.{biz_id}"
+                    f"&notes=like.*{marker}*&status=eq.scheduled",
+                    {"status": "cancelled"})
+
+    try:
+        await _asyncio.to_thread(_sync)
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"[booking-sync] tick failed: {e}")
+
+
 def _create_appointment(
     business_id: str,
     module_id: str,
@@ -1041,6 +1132,10 @@ def _create_appointment(
         "created_by": "booking_widget",
     })
     if isinstance(created, list) and created:
+        # One calendar — mirror immediately so the booking hits the
+        # practitioner's calendar (and becomes reminder-eligible) in the
+        # same request; the sync tick backstops every other path.
+        _mirror_booking_session(business_id, created[0])
         # Arc 20B — Tier 1 rules: booking_created event (fail-soft; the
         # booking itself must never depend on the rules engine).
         try:
