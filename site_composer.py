@@ -1402,6 +1402,40 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
                        if identical
                        else "document differs from the previous compose")})
 
+    # (g2) Arc M — slop-lint pack (report-only; the field study's finding
+    # is that explicit ban-lists shift LLM output while adjectives don't,
+    # so the same bans live in prompts AND get verified here on the
+    # rendered page).
+    # g2a: the emitted DISPLAY face must not be a generic tell
+    # (Montserrat/Open Sans/Roboto/... as heading = the #1 AI-generated
+    # marker). Owner-locked kits legitimately fail this check — the
+    # detail says so rather than hiding it.
+    m_face = re.search(r"--sx-font-heading:\s*'([^']+)'", html)
+    _face = m_face.group(1) if m_face else ""
+    _face_generic = brand_dna.is_generic_display(_face)
+    checks.append({
+        "name": "display_font_not_generic", "ok": not _face_generic,
+        "detail": (f"heading face '{_face}' is a generic-display tell "
+                   f"(acceptable ONLY if the owner locked it)" if _face_generic
+                   else f"heading face '{_face or 'unknown'}' passes")})
+    # g2b: vague-aspirational headline grammar (banned openers +
+    # abstract-two-noun clichés). Regexes from the published slop
+    # checklists; the atelier/DRO voice rules should make this never
+    # fire — this catches regressions.
+    _slop_re = re.compile(
+        r"^(?:empower|unlock|transform|elevate|discover|revolutioniz)"
+        r"|seamless(?:ly)?\b|world-class|cutting-edge|next-level"
+        r"|welcome to our website", re.IGNORECASE)
+    _sloppy: List[str] = []
+    for hm in re.finditer(r"<h[12][^>]*>([\s\S]*?)</h[12]>", html):
+        txt = _visible_text(hm.group(1))
+        if txt and _slop_re.search(txt.strip()):
+            _sloppy.append(txt.strip()[:60])
+    checks.append({
+        "name": "headline_slop_grammar", "ok": not _sloppy,
+        "detail": (f"vague-marketing headline(s): {_sloppy}" if _sloppy
+                   else "no banned headline grammar")})
+
     # (h) Arc 8 — atelier scoping check (REPORT-ONLY, adds no fixes):
     # every bespoke fragment that claims to be in the document has its
     # scoped .atl-{uid} CSS present and its root class in the body.
@@ -1545,8 +1579,29 @@ def _apply_dro_design(ctx: Dict[str, Any], dro: Dict[str, Any],
     # motion temperature. Practitioner-pinned fonts stay supreme.
     _design_cfg = ((ctx.get("bundle") or {}).get("design") or {})
     _expr = (_design_cfg.get("creative_expression") or {})
-    _fonts_pinned = bool((_design_cfg.get("font_heading") or "").strip()
-                         or (_expr.get("hero_font") or "").strip())
+    # Arc M (2026-07-10) — THE typography bug: brand_engine._compose_design
+    # ALWAYS fills font_heading (kit value or DEFAULT_DESIGN fallback), so
+    # the old truthiness test made _fonts_pinned permanently True and the
+    # 11-pairing type system (Arc 3) never ran on ANY compose — every site
+    # shipped in its brand-kit default faces (the live page's
+    # Montserrat/Open Sans). A pin now requires OWNER INTENT:
+    #   1. the kit actually stores fonts (fonts_owner_set), AND
+    #   2. the heading face isn't a generic-display tell — unless the kit
+    #      says fonts_locked (the explicit "yes, I really want Montserrat"
+    #      escape hatch). Generic faces in kits are seeded defaults far
+    #      more often than choices, and they're the field study's #1
+    #      AI-slop marker.
+    # An explicit hero_font creative expression still pins, as before.
+    _owner_fonts = bool(_design_cfg.get("fonts_owner_set"))
+    _heading_face = str(_design_cfg.get("font_heading") or "")
+    if (_owner_fonts and not _design_cfg.get("fonts_locked")
+            and brand_dna.is_generic_display(_heading_face)):
+        logger.info(
+            f"[composer] generic display face '{_heading_face}' demoted for "
+            f"{business_id[:8]} — type director takes over (brand kit "
+            f"fonts_locked=true keeps it)")
+        _owner_fonts = False
+    _fonts_pinned = _owner_fonts or bool((_expr.get("hero_font") or "").strip())
     ctx["dna"] = brand_dna.apply_dro_style(
         ctx["dna"], decisions, fonts_pinned=_fonts_pinned)
     # Arc 5 — the OWNER's color direction is a HARD preference:
