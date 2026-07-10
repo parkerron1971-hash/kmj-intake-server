@@ -606,6 +606,12 @@ body.sx-scarce-accent .sxm-mark-soft {{ background: color-mix(in srgb, var(--sx-
 {_WOW_CSS}
 {_GRAIN_CSS}
 @media (max-width: 768px) {{ body {{ font-size: 15.5px; }} }}
+/* Print + capture tools get the full page — reveal states forced on. */
+@media print {{
+  .sxm-reveal, .sxm-reveal .sxm-inner > * {{
+    opacity: 1 !important; transform: none !important; filter: none !important;
+  }}
+}}
 """
 
 
@@ -615,11 +621,20 @@ def reveal_script(dna: Dict[str, Any]) -> str:
     motion-module injections), never LLM-written."""
     if dna.get("motion", "standard") == "subtle":
         return ""
+    # Reveal FAILSAFE (2026-07-10, Kevin's "crash" screenshot): full-page
+    # capture tools (and any environment where the observer never fires)
+    # snapshot below-the-fold sections at opacity 0 — thousands of pixels
+    # of void with only aria-hidden decorations visible, which reads as a
+    # crashed page. After 6s everything reveals unconditionally: real
+    # visitors keep the scroll choreography for the opening screens, and
+    # nothing can stay invisible forever.
     return ("<script>(function(){try{var els=document.querySelectorAll('.sxm-reveal');"
-            "if(!('IntersectionObserver'in window)){els.forEach(function(e){e.classList.add('sxm-in')});return}"
+            "var all=function(){els.forEach(function(e){e.classList.add('sxm-in')})};"
+            "if(!('IntersectionObserver'in window)){all();return}"
             "var io=new IntersectionObserver(function(entries){entries.forEach(function(en){"
             "if(en.isIntersecting){en.target.classList.add('sxm-in');io.unobserve(en.target)}})},"
-            "{threshold:.12});els.forEach(function(e){io.observe(e)})}catch(e){}})();</script>")
+            "{threshold:.12});els.forEach(function(e){io.observe(e)});"
+            "setTimeout(all,6000)}catch(e){}})();</script>")
 
 
 def _trim_words(text: str, limit: int) -> str:

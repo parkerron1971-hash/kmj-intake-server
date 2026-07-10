@@ -2382,12 +2382,52 @@ def _apply_ceremony_pass_inner(spec: List[Dict[str, Any]],
         wishes.append({"module": "interstitial", "variant": "marquee",
                        "content": {"words": " • ".join(tone_words)}})
     filler = "silence" if generous else "thread"
+    # Ghost pool (2026-07-10 screenshot fix): the first cut fed brand
+    # tone_words straight to the ghosts, and KMJ's live page whispered
+    # "MODERN QUIET-LUXURY" — style-system vocabulary leaking onto the
+    # page as if the designer's notes were left on the wall. Ladder:
+    #   1. the CONCEPT's own nouns (from hero_concept.concept_statement —
+    #      "scattered points of light … lit path" → Light / Path / Idea),
+    #   2. tone words with aesthetic jargon filtered out,
+    #   3. the business name's lead word.
+    # Always a SINGLE word (multi-word ghosts wrapped into a stack).
+    _GHOST_JARGON = {
+        "modern", "luxury", "quiet-luxury", "quiet", "minimal", "minimalist",
+        "clean", "premium", "elegant", "editorial", "bold", "classic",
+        "timeless", "aesthetic", "sleek", "sophisticated", "professional",
+        "luxurious", "refined", "upscale", "contemporary", "stylish",
+    }
+    _GHOST_STOP = {
+        "that", "with", "into", "from", "your", "their", "this", "them",
+        "then", "than", "when", "where", "will", "have", "been", "they",
+        "what", "each", "every", "single", "toward", "towards", "forward",
+        "about", "which", "while", "through",
+    }
+    concept_txt = str(((d.get("hero_concept") or {})
+                       .get("concept_statement")) or "")
+    ghost_pool: List[str] = []
+    seen_g = set()
+    for w in re.findall(r"[A-Za-z]{4,12}", concept_txt):
+        lw = w.lower()
+        if lw in _GHOST_STOP or lw in _GHOST_JARGON or lw in seen_g:
+            continue
+        seen_g.add(lw)
+        ghost_pool.append(w[:1].upper() + w[1:].lower())
+    for w in tone_words:
+        first = w.split()[0] if w.split() else ""
+        lw = first.lower()
+        if first and lw not in _GHOST_JARGON and lw not in seen_g and len(first) >= 3:
+            seen_g.add(lw)
+            ghost_pool.append(first)
+    if not ghost_pool:
+        bn = str((ctx.get("business") or {}).get("name") or "").split()
+        if bn and len(bn[0]) >= 3:
+            ghost_pool.append(bn[0])
+    ghost_pool = ghost_pool[:6]
+
     gi = 0
     while len(wishes) < _CEREMONY_MAX:
-        # Dressed silence (2026-07-10): every quiet seam carries one of
-        # the page's own tone words as its ghost occupant (seeded
-        # rotation — different silences whisper different words).
-        ghost = tone_words[(h + gi) % len(tone_words)] if tone_words else ""
+        ghost = ghost_pool[(h + gi) % len(ghost_pool)] if ghost_pool else ""
         gi += 1
         wishes.append({"module": "interstitial", "variant": filler,
                        "content": ({"ghost": ghost} if ghost else {})})
