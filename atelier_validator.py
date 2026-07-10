@@ -405,4 +405,34 @@ def validate_fragment(html: str, css: str, *, uid: str, kind: str,
                 "headline words across hidden spans (HEADLINE INTEGRITY)")
             break
 
+    # 15 — STYLESHEET PURITY (2026-07-10, the junk-in-CSS bug): the CSS
+    # part of the response runs to end-of-output, and a live page shipped
+    # with a stray '</section>' and a leaked '</invoke>' inside the
+    # stylesheet. CSS error recovery discards such junk PLUS the entire
+    # next rule — which in the assembled page was the next fragment's
+    # base rule (positioning/overflow gone, decorations painting over
+    # the whole page). '</' is never valid CSS; '<' alone stays legal
+    # (modern range media queries use it).
+    css_body = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    jm = re.search(r"</[^\n]{0,30}", css_body)
+    if jm:
+        problems.append(
+            f"markup junk inside CSS: '{jm.group(0)}' — after the final "
+            "closing brace output nothing; no closing tags ever belong "
+            "in the stylesheet")
+
+    # 16 — SCOPE CLASS DISCIPLINE (2026-07-10, the stamped-children bug):
+    # a live hero carried atl-{uid} on EVERY element, so the root base
+    # rule (min-height:88vh, display:flex, section padding) cascaded onto
+    # each child — the h1 became a viewport-tall flex box and the layout
+    # detonated. The scope class belongs to the root <section> alone;
+    # descendant selectors work without repeating it.
+    stamps = len(re.findall(rf"\batl-{re.escape(uid)}\b", html))
+    if stamps > 1:
+        problems.append(
+            f"the scope class atl-{uid} appears on {stamps} elements — it "
+            "belongs ONLY on the root <section>; child elements use plain "
+            "role classes targeted via descendant selectors "
+            f"(.atl-{uid} .crest)")
+
     return (not problems), problems

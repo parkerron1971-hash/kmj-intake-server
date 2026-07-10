@@ -475,7 +475,7 @@ def _contract_block(kind: str, uid: str, dom_id: str, slots_line: str,
     validator, no drift."""
     return f"""HARD OUTPUT CONTRACT — violations are rejected by a validator:
 1. Exactly ONE root element: <section id="{dom_id}" class="atl-{uid} ...">…</section>. Nothing outside it.
-2. Every CSS selector is prefixed with .atl-{uid} (e.g. ".atl-{uid} .crest"). No bare element/class/#id selectors. @media queries allowed; @keyframes names must start with atl-{uid}.
+2. Every CSS selector is prefixed with .atl-{uid} (e.g. ".atl-{uid} .crest"). No bare element/class/#id selectors. @media queries allowed; @keyframes names must start with atl-{uid}. The atl-{uid} class itself appears ONLY on the root <section> — child elements get plain role classes (class="crest", never class="atl-{uid} crest"): repeating the scope class makes the root's base rule (min-height, flex, section padding) cascade onto every child and destroys the layout.
 3. Colors ONLY: var(--sx-*), transparent, currentColor, rgba(0,0,0,X), rgba(255,255,255,X). NO hex, NO rgb()/hsl(), no named colors.
 4. Fonts ONLY var(--sx-font-heading) / var(--sx-font-body).
 5. Images ONLY as <img data-slot="…" src="" alt="specific, evocative alt"> with data-slot from: {slots_line}. Each slot at most once. The platform fills src.
@@ -491,7 +491,9 @@ OUTPUT FORMAT — exactly this, nothing else:
 <section id="{dom_id}" class="atl-{uid} …">…</section>
 <!--CSS-->
 .atl-{uid} {{ … }}
-…"""
+…
+
+After the final closing brace of your last CSS rule, output NOTHING — no closing tags, no commentary, no code fences."""
 
 
 def build_bespoke_prompt(kind: str, variant_hint: Optional[str], uid: str,
@@ -541,8 +543,48 @@ CRAFT BAR (non-negotiable):
 
 # ─── Generation ───────────────────────────────────────────────────────
 
-def _split_fragment(raw: str) -> Optional[Tuple[str, str]]:
-    """Parse the <!--HTML--> / <!--CSS--> delimited response."""
+def _strip_css_tail_junk(css: str) -> str:
+    """The CSS part is everything after <!--CSS--> to end-of-response, so
+    any trailing artifact the model emits lands in the stylesheet verbatim.
+    A single stray token like '</section>' makes the browser's CSS parser
+    discard the junk AND the entire next rule — which in an assembled page
+    is the NEXT fragment's base rule (this took down two sections of a
+    live page). Strip code fences and trailing closing tags."""
+    css = css.strip()
+    css = re.sub(r"^```[a-zA-Z]*\s*", "", css)
+    css = re.sub(r"```+\s*$", "", css)
+    # Trailing closing tags ('</section>', '</style>', leaked tool syntax…)
+    css = re.sub(r"(?:\s*</[A-Za-z][^>]*>)+\s*$", "", css)
+    return css.strip()
+
+
+def _descope_child_uids(html: str, uid: str) -> str:
+    """Keep the atl-{uid} scope class ONLY on the root <section>.
+
+    Some rolls stamp the uid class on EVERY element. Descendant selectors
+    still work either way, but the fragment's base rule '.atl-{uid} {…}'
+    (min-height, flex, section padding) then cascades onto every child —
+    an h1 with min-height:88vh, divs turned into flex rows — and the
+    layout detonates. Deterministic heal: strip the token from every
+    element after the root tag."""
+    token = f"atl-{uid}"
+    m = re.search(r"<section\b[^>]*>", html)
+    root_end = m.end() if m else 0
+
+    def _clean(mm: "re.Match[str]") -> str:
+        classes = [c for c in mm.group(2).split() if c != token]
+        return mm.group(1) + " ".join(classes) + mm.group(3)
+
+    head, tail = html[:root_end], html[root_end:]
+    tail = re.sub(r'(class\s*=\s*")([^"]*)(")', _clean, tail)
+    tail = re.sub(r"(class\s*=\s*')([^']*)(')", _clean, tail)
+    return head + tail
+
+
+def _split_fragment(raw: str, uid: str = "") -> Optional[Tuple[str, str]]:
+    """Parse the <!--HTML--> / <!--CSS--> delimited response, then
+    sanitize both parts (tail junk out of the CSS, uid scope class off
+    child elements)."""
     if not raw:
         return None
     try:
@@ -553,9 +595,11 @@ def _split_fragment(raw: str) -> Optional[Tuple[str, str]]:
     m = re.search(r"<!--HTML-->(.*?)<!--CSS-->(.*)$", raw, re.DOTALL)
     if not m:
         return None
-    html, css = m.group(1).strip(), m.group(2).strip()
+    html, css = m.group(1).strip(), _strip_css_tail_junk(m.group(2))
     if not html or not css:
         return None
+    if uid:
+        html = _descope_child_uids(html, uid)
     return html, css
 
 
@@ -592,7 +636,7 @@ def generate_bespoke_section(kind: str, variant_hint: Optional[str],
         raw = _call_llm(_SYSTEM_PROMPT, prompt + extra, business_id or "unknown")
         if raw is None:
             return None, ["LLM call failed"]
-        frag = _split_fragment(raw)
+        frag = _split_fragment(raw, uid)
         if frag is None:
             return None, ["response missing <!--HTML--> / <!--CSS--> delimiters "
                           "or an empty part"]
@@ -705,7 +749,7 @@ def generate_refined_section(kind: str, current_html: str, current_css: str,
                         business_id or "unknown")
         if raw is None:
             return None, ["LLM call failed"]
-        frag = _split_fragment(raw)
+        frag = _split_fragment(raw, uid)
         if frag is None:
             return None, ["response missing <!--HTML--> / <!--CSS--> delimiters "
                           "or an empty part"]
