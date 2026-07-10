@@ -324,6 +324,9 @@ class _RebuildReq(BaseModel):
     business_id: str
     brief_notes: Optional[str] = None
     design_prefs: Optional[Dict[str, Any]] = None   # Arc 2 "Ask the Owner"
+    # Refine mode: reuse the stored design rationale (keep the current
+    # direction, redo the execution) instead of rolling a new one.
+    refine: bool = False
 
 
 @router.post("/jobs/rebuild")
@@ -342,6 +345,8 @@ async def rebuild_site_endpoint(req: _RebuildReq,
         if not owned:
             raise HTTPException(403, "not your business")
         params: Dict[str, Any] = {}
+        if req.refine:
+            params["refine"] = True
         if (req.brief_notes or "").strip():
             params["brief_notes"] = req.brief_notes
         if req.design_prefs is not None:
