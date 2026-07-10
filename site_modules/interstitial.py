@@ -120,6 +120,11 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
         return html, css
 
     if variant == "thread":
+        # Dressed silence (2026-07-10, Kevin's note): the thread now
+        # TRAVELS — the accent point sweeps the line slowly, so the seam
+        # reads as a living transition instead of a stray hairline.
+        # Stilled pages (motion=subtle / reduced-motion) keep the static
+        # line: an occupant without motion still holds the gap.
         html = """
 <div class="sxm-interstitial sxm-int-thread" aria-hidden="true">
   <span class="sxm-int-thread-line"></span>
@@ -128,18 +133,47 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-int-thread { padding: clamp(30px, 5vh, 48px) var(--sx-gutter); }
 .sxm-int-thread-line { display: block; height: 1px; max-width: var(--sx-content-max);
   margin: 0 auto; opacity: .2;
-  background: linear-gradient(90deg, transparent, var(--sx-accent) 50%, transparent);
+  background: linear-gradient(90deg, transparent, var(--sx-accent) 50%, transparent)
+    0 0 / 200% 100%;
   box-shadow: 0 0 16px 1px var(--sx-accent-soft); }"""
+        if (ctx.get("dna") or {}).get("motion", "standard") != "subtle":
+            css += """
+.sxm-int-thread-line { animation: sxm-int-sweep 14s linear infinite; }
+@keyframes sxm-int-sweep { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .sxm-int-thread-line { animation: none; } }"""
         return html, css
 
     # default: silence — the loudest way to say "no rush here".
-    html = """
-<div class="sxm-interstitial sxm-int-silence" aria-hidden="true">
+    # Dressed silence (2026-07-10): a bare 48px hairline on a dark ground
+    # read as "the creative part forgot to create something" (Kevin's
+    # words). The quiet band now carries an OCCUPANT — a faint oversized
+    # ghost word (one of the page's own tone words, fed by the ceremony)
+    # drifting behind a breathing hairline. Empty of words on purpose;
+    # never empty of design. Stilled pages keep the static ghost.
+    ghost = str(content.get("ghost") or "").strip()
+    ghost_html = (f'\n  <span class="sxm-int-ghostword">{safe(ghost)}</span>'
+                  if ghost else "")
+    html = f"""
+<div class="sxm-interstitial sxm-int-silence" aria-hidden="true">{ghost_html}
   <span class="sxm-int-silence-hairline"></span>
 </div>"""
     css = """
-.sxm-int-silence { height: clamp(64px, 10vh, 88px); display: flex;
-  align-items: center; justify-content: center; }
-.sxm-int-silence-hairline { width: 48px; height: 1px; opacity: .55;
-  background: linear-gradient(90deg, transparent, var(--sx-accent), transparent); }"""
+.sxm-int-silence { position: relative; height: clamp(96px, 14vh, 150px); display: flex;
+  align-items: center; justify-content: center; overflow: hidden; }
+.sxm-int-silence-hairline { width: 48px; height: 1px; opacity: .55; position: relative; z-index: 1;
+  background: linear-gradient(90deg, transparent, var(--sx-accent), transparent); }
+.sxm-int-ghostword { position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; font-family: var(--sx-font-heading);
+  font-weight: var(--sx-heading-weight); font-size: clamp(3.4rem, 11vw, 7.5rem);
+  letter-spacing: .04em; text-transform: uppercase; color: var(--sx-text);
+  opacity: .045; white-space: nowrap; user-select: none; }"""
+    if (ctx.get("dna") or {}).get("motion", "standard") != "subtle":
+        css += """
+.sxm-int-silence-hairline { animation: sxm-int-breathe 8s ease-in-out infinite alternate; }
+.sxm-int-ghostword { animation: sxm-int-drift 22s ease-in-out infinite alternate; }
+@keyframes sxm-int-breathe { from { width: 48px; opacity: .4; } to { width: 128px; opacity: .8; } }
+@keyframes sxm-int-drift { from { transform: translateX(-1.5%); } to { transform: translateX(1.5%); } }
+@media (prefers-reduced-motion: reduce) {
+  .sxm-int-silence-hairline, .sxm-int-ghostword { animation: none; }
+}"""
     return html, css
