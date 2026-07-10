@@ -1482,6 +1482,17 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         parts = ", ".join(f"{cnt} {st}" for st, cnt in sorted(statuses.items()))
         activity_lines.append(f"  - {ag}: {parts}")
 
+    # Arc S — the Business Picture (rules of engagement + FAQ) the
+    # practitioner has captured. Chief ANSWERS clients from these
+    # (including by text) and knows what's still missing.
+    _bp = (biz.get("settings") or {}).get("business_picture") or {}
+    bp_lines: List[str] = []
+    for _pk, _pv in ((_bp.get("policies") or {}) if isinstance(_bp.get("policies"), dict) else {}).items():
+        bp_lines.append(f"  - {str(_pk).replace('_', ' ')}: {_pv}")
+    for _fr in (_bp.get("faq") or [])[:12]:
+        if isinstance(_fr, dict) and _fr.get("q"):
+            bp_lines.append(f"  - Q: {_fr.get('q')} — A: {_fr.get('a')}")
+
     # Standing instructions (from memories)
     standing = [m for m in (ctx.get("memories") or []) if (m.get("category") or "").lower() == "standing_instruction"]
     standing_lines = [
@@ -1616,6 +1627,9 @@ LONGITUDINAL INSIGHTS (your own weekly analysis of this business's trends — br
 
 RECENT AGENT ACTIVITY (last 24 hours):
 {chr(10).join(activity_lines) if activity_lines else '  (no agent activity)'}
+
+BUSINESS PICTURE — rules of engagement + FAQ (answer client questions with EXACTLY these; gathered via set_business_policy / add_faq):
+{chr(10).join(bp_lines) if bp_lines else '  (none captured yet — capture policies conversationally when they come up)'}
 
 STANDING INSTRUCTIONS (execute when triggered):
 {chr(10).join(standing_lines) if standing_lines else '  (none set)'}
@@ -5084,6 +5098,83 @@ async def handle_advance_phase(client, biz, action) -> Dict:
         "label": f"Now on: {to_phase.replace('_', ' ').title()}",
         "nav": {"tab": "build", "page": "strategy-track"},
     }
+
+
+_VALID_POLICY_KEYS = {"cancellation", "deposit", "lateness", "refunds", "no_show"}
+
+
+async def _save_business_picture(client, biz, mutate) -> Dict[str, Any]:
+    """Read-modify-write settings.business_picture (Arc S). `mutate`
+    receives the picture dict and edits in place. Updates biz in-memory
+    so same-turn reads see the change."""
+    settings = dict(biz.get("settings") or {})
+    bp = dict(settings.get("business_picture") or {})
+    mutate(bp)
+    settings["business_picture"] = bp
+    await _sb(client, "PATCH", f"/businesses?id=eq.{biz['id']}",
+              {"settings": settings})
+    biz["settings"] = settings
+    return bp
+
+
+async def handle_set_business_policy(client, biz, action) -> Dict:
+    """Arc S Business Picture — capture a rule of engagement. Feeds the
+    website FAQ automatically AND becomes what Chief answers when a
+    client asks (including by text)."""
+    key = (str(action.get("policy") or "").strip().lower()
+           .replace("-", "_").replace(" ", "_"))
+    text = str(action.get("text") or action.get("value") or "").strip()
+    if key not in _VALID_POLICY_KEYS:
+        return _fail("set_business_policy",
+                     f"policy must be one of {sorted(_VALID_POLICY_KEYS)}")
+    if not text:
+        return _fail("set_business_policy", "policy text required")
+
+    def _mut(bp):
+        pol = dict(bp.get("policies") or {})
+        pol[key] = text[:600]
+        bp["policies"] = pol
+
+    await _save_business_picture(client, biz, _mut)
+    label_key = key.replace("_", "-")
+    return {"type": "set_business_policy",
+            "result": (f"{label_key} policy saved — it now appears in the "
+                       f"website FAQ and I'll answer clients with it"),
+            "label": f"📋 {label_key.title()} policy saved",
+            "nav": None}
+
+
+async def handle_add_faq(client, biz, action) -> Dict:
+    """Arc S Business Picture — add an owner-authored Q&A. Renders on
+    the website FAQ; Chief answers clients with it."""
+    q = str(action.get("question") or "").strip()
+    a = str(action.get("answer") or "").strip()
+    if not q or not a:
+        return _fail("add_faq", "both question and answer are required")
+
+    def _norm(s):
+        return " ".join(s.lower().split()).strip("?.! ")
+
+    replaced = {"v": False}
+
+    def _mut(bp):
+        rows = [r for r in (bp.get("faq") or []) if isinstance(r, dict)]
+        kept = []
+        for r in rows:
+            if _norm(str(r.get("q") or "")) == _norm(q):
+                replaced["v"] = True
+                continue   # same question → the new answer replaces it
+            kept.append(r)
+        kept.append({"q": q[:200], "a": a[:600]})
+        bp["faq"] = kept[-12:]   # newest 12 keep their seats
+
+    await _save_business_picture(client, biz, _mut)
+    verb = "updated" if replaced["v"] else "added"
+    return {"type": "add_faq",
+            "result": f"FAQ {verb}: \"{q[:80]}\" — live on the website FAQ "
+                      f"and in my answers to clients",
+            "label": f"❓ FAQ {verb}: {q[:60]}",
+            "nav": None}
 
 
 async def handle_restore_previous_site(client, biz, action) -> Dict:
@@ -9333,6 +9424,8 @@ ACTION_HANDLERS = {
     "run_market_research":        handle_run_market_research,
     "analyze_trends":             handle_analyze_trends,
     "restore_previous_site":      handle_restore_previous_site,
+    "set_business_policy":        handle_set_business_policy,
+    "add_faq":                    handle_add_faq,
     "save_business_model":        handle_save_business_model,
     "save_pricing":               handle_save_pricing,
     "save_packages":              handle_save_packages,
@@ -11637,6 +11730,14 @@ ACTIONS — LONG TASKS (heavy work that runs in the background, lands on the des
   [ACTION:{{"type":"enqueue_job","kind":"rebuild_site"}}]  — Rebuild / recompose / REDESIGN the practitioner's website. This is SLOW, so it runs as a queued job: it finishes server-side and the result is waiting on their desktop. Use it whenever they ask to rebuild / recompose / refresh / redo / REDESIGN / change the design of / make over their site, ESPECIALLY from their phone. To pass specific design requests, include "params":{{"brief_notes":"<their request, e.g. darker, more editorial, bigger hero>"}}. After emitting it, tell them you've STARTED it and you'll let them know on their desktop when it's ready — do NOT claim the site is already rebuilt or describe the finished result, because it hasn't run yet. NEVER hand-write HTML or describe a finished design yourself.
   [ACTION:{{"type":"restore_previous_site"}}]  — INSTANT undo for a redesign: swaps the live site back to the previous full-compose design (each recompose banks the outgoing page). Use when they say the new design is worse / "go back" / "restore the old site" / "undo that redesign". The swap is symmetric — asking again switches back, so nothing is ever lost. Fast and free (no rebuild).
     — REFINE vs REDESIGN (critical distinction): when they LIKE the current direction and want it improved ("keep this style but tighten it", "refine my site", "polish this version", "make this better without changing the look"), use enqueue_job rebuild_site with "params":{{"refine":true,"brief_notes":"<what to improve>"}} — the design direction (fonts, colors, concept, imagery) is REUSED and only the execution is redone. A plain rebuild_site (no refine) rolls a completely NEW direction — only do that when they want a different look.
+
+ACTIONS — BUSINESS PICTURE (rules of engagement; see the BUSINESS PICTURE context block):
+  [ACTION:{{"type":"set_business_policy","policy":"cancellation|deposit|lateness|refunds|no_show","text":"24 hours notice or the deposit is kept"}}]
+  [ACTION:{{"type":"add_faq","question":"Do you take walk-ins?","answer":"Weekdays after 3pm, first come first served."}}]
+    — CAPTURE CONVERSATIONALLY: whenever the practitioner STATES a rule in passing ("I always ask for 24 hours notice"), save it with set_business_policy — don't make them repeat it in a form. Confirm in one short clause.
+    — When they ask to "set up my FAQ" or the website FAQ is empty, interview them briefly (2-3 questions at a time, their vertical's most-asked ones first) and save each answer with add_faq.
+    — These do double duty automatically: they render as the website's "Good to know" section AND they're your source of truth when a client asks a question — including by TEXT (answer from the BUSINESS PICTURE block verbatim; if a client asks something not covered, answer from context if safe, then suggest the practitioner add it as a policy/FAQ).
+    — PHOTO-DRIVEN VERTICALS (salon, barber, tattoo, detailing, photography, food): if the business has no gallery/work photos, nudge once — "your kind of business sells with photos of the work; upload 4-6 of your best and the site builds a gallery around them." Never nag consultants/coaches about galleries.
 
 ACTIONS — CONTACTS:
   [ACTION:{{"type":"create_contact","name":"...","email":"...","phone":"...","status":"lead"}}]
