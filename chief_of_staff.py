@@ -30,6 +30,7 @@ Action format (JSON inside brackets, not pipe-delimited):
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -41,7 +42,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 # RLS-readiness migration (Pass RLS): chief_chat now requires a verified
@@ -87,6 +89,15 @@ FALLBACK_BASE = os.environ.get(
 )
 
 MAX_HISTORY = 30
+
+# Voice streaming arc — when /agents/chief/chat/stream drives a turn, it
+# plants a delta sink here before invoking the regular chief_chat handler
+# (contextvars propagate into the task). _call_claude's MAIN call reads it
+# and streams text deltas through; the retry/post-action inner calls do
+# not. Default None = the plain non-streaming path, byte-for-byte.
+_STREAM_SINK: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
+    "chief_stream_sink", default=None)
+
 OPENING_SENTINEL_PREFIX = "[SYSTEM:opening_greeting"  # may have :morning/:afternoon/:evening suffix
 COACH_OPEN_SENTINEL = "[SYSTEM:strategy_coach_open]"
 COACH_PAUSE_SENTINEL = "[SYSTEM:strategy_coach_pause]"
@@ -391,7 +402,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                        max_tokens: int = 1600,
                        enable_web_search: bool = True,
                        business_id: Optional[str] = None,
-                       model: Optional[str] = None) -> str:
+                       model: Optional[str] = None,
+                       stream_sink=None) -> str:
     key = _anthropic_key()
     if not key:
         return ""
@@ -438,6 +450,66 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     if enable_web_search and CHIEF_WEB_SEARCH_ENABLED:
         payload["tools"] = [WEB_SEARCH_TOOL]
     started_ms = int(time.time() * 1000)
+
+    # Voice streaming arc — SSE from Anthropic, text deltas forwarded to
+    # the sink as they arrive. Non-text stream events (server tool use,
+    # web_search results) are skipped; only text_delta reaches the sink.
+    # The full text still returns to the caller, so everything downstream
+    # (action parsing, retries, two-pass replies) is unchanged.
+    if stream_sink is not None:
+        payload["stream"] = True
+        full_parts: List[str] = []
+        in_tok = out_tok = 0
+        try:
+            async with client.stream("POST", ANTHROPIC_API_URL, headers={
+                "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION,
+                "content-type": "application/json",
+            }, json=payload, timeout=HTTP_TIMEOUT) as resp:
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    logger.warning(f"Claude stream error: {resp.status_code} {body[:300]}")
+                    await log_api_usage(endpoint="/chief/backend", model=model,
+                        input_tokens=0, output_tokens=0, business_id=business_id,
+                        duration_ms=int(time.time() * 1000) - started_ms, ok=False,
+                        error=f"{resp.status_code}")
+                    return ""
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    try:
+                        evt = json.loads(line[5:].strip())
+                    except ValueError:
+                        continue
+                    et = evt.get("type")
+                    if et == "content_block_delta":
+                        d = evt.get("delta") or {}
+                        piece = d.get("text") if d.get("type") == "text_delta" else None
+                        if piece:
+                            full_parts.append(piece)
+                            try:
+                                stream_sink(piece)
+                            except Exception:  # sink must never kill the turn
+                                pass
+                    elif et == "message_start":
+                        u = ((evt.get("message") or {}).get("usage")) or {}
+                        in_tok = int(u.get("input_tokens") or 0)
+                    elif et == "message_delta":
+                        u = evt.get("usage") or {}
+                        out_tok = int(u.get("output_tokens") or out_tok)
+        except httpx.HTTPError as e:
+            # Mid-stream drop: whatever text arrived is still a usable
+            # reply — return it rather than blanking the turn.
+            logger.warning(f"Claude stream failed: {e}")
+            await log_api_usage(endpoint="/chief/backend", model=model,
+                input_tokens=in_tok, output_tokens=out_tok, business_id=business_id,
+                duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=str(e))
+            return "".join(full_parts).strip()
+        await log_api_usage(
+            endpoint="/chief/backend", model=model,
+            input_tokens=in_tok, output_tokens=out_tok, business_id=business_id,
+            duration_ms=int(time.time() * 1000) - started_ms)
+        return "".join(full_parts).strip()
+
     try:
         resp = await client.post(ANTHROPIC_API_URL, headers={
             "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json",
@@ -12665,7 +12737,10 @@ async def chief_chat(
             turn_tokens = chief_models.max_tokens_for(lane, default=1600)
             raw = await _call_claude(client, system, api_messages,
                                      max_tokens=turn_tokens,
-                                     model=chief_models.model_for(lane))
+                                     model=chief_models.model_for(lane),
+                                     # Voice streaming arc — set only when
+                                     # /chat/stream drives this turn.
+                                     stream_sink=_STREAM_SINK.get())
             if not raw:
                 return {
                     "response": "I can't reach the language model right now — try again in a moment.",
@@ -12875,6 +12950,166 @@ async def chief_chat(
         # even if set_user_jwt's prior call raised after binding (token
         # captured before the try block).
         sb_clients.reset_user_jwt(_jwt_token)
+
+
+class _ActionTagFilter:
+    """Voice streaming arc — incremental [ACTION:{...}] suppressor.
+
+    Streamed deltas may split an action tag across arbitrary boundaries.
+    This filter emits text immediately EXCEPT when it might be inside a
+    tag: from any '[' it holds back until the text either diverges from
+    the '[ACTION:' prefix (released as normal text) or completes the tag
+    (dropped — the final SSE event carries the executed actions). Brace
+    depth is tracked naively (braces inside JSON string values could in
+    principle confuse it); the final payload's clean text corrects any
+    cosmetic glitch on the client."""
+
+    _P = "[ACTION:"
+
+    def __init__(self) -> None:
+        self._held = ""
+
+    def feed(self, piece: str) -> str:
+        buf = self._held + piece
+        self._held = ""
+        out: List[str] = []
+        while buf:
+            i = buf.find("[")
+            if i < 0:
+                out.append(buf)
+                buf = ""
+                break
+            out.append(buf[:i])
+            buf = buf[i:]
+            if len(buf) < len(self._P):
+                if self._P.startswith(buf):
+                    self._held = buf   # ambiguous prefix — wait for more
+                    buf = ""
+                else:
+                    out.append(buf[0])
+                    buf = buf[1:]
+                continue
+            if not buf.startswith(self._P):
+                out.append(buf[0])
+                buf = buf[1:]
+                continue
+            end = self._tag_end(buf)
+            if end < 0:
+                self._held = buf       # inside a tag — wait for its end
+                buf = ""
+            else:
+                buf = buf[end:]        # drop the completed tag
+        return "".join(out)
+
+    def _tag_end(self, buf: str) -> int:
+        depth = 0
+        started = False
+        for j in range(len(self._P), len(buf)):
+            c = buf[j]
+            if c == "{":
+                depth += 1
+                started = True
+            elif c == "}":
+                depth -= 1
+            elif c == "]" and started and depth <= 0:
+                return j + 1
+        return -1
+
+    def flush(self) -> str:
+        held, self._held = self._held, ""
+        if not held:
+            return ""
+        # A confirmed or near-certain tag fragment at end-of-stream is
+        # dropped; a lone '[' is real text.
+        if held.startswith(self._P) or (self._P.startswith(held) and len(held) > 1):
+            return ""
+        return held
+
+
+@router.post("/agents/chief/chat/stream")
+async def chief_chat_stream(
+    req: ChatRequest,
+    user_session: UserSession = Depends(require_user_session),
+):
+    """Voice streaming arc — the streaming twin of /agents/chief/chat.
+
+    Runs the EXACT SAME handler (chief_chat, unchanged) in a task with a
+    delta sink planted in a contextvar; text streams out as SSE 'delta'
+    events while the model is still talking, action tags held back by
+    _ActionTagFilter. When the turn completes — actions executed, retries
+    and two-pass replies included — the full normal response payload
+    arrives as the 'final' event. On any failure an 'error' event tells
+    the client to fall back to the non-streaming endpoint, so this path
+    can never be worse than the old one.
+
+    Wire protocol (SSE, POST-driven — consumed via fetch reader):
+      data: {"type":"delta","text":"..."}
+      data: {"type":"final","payload":{...same JSON as /chat...}}
+      data: {"type":"error","detail":"...","status":4xx}
+    """
+    q: "asyncio.Queue[str]" = asyncio.Queue()
+
+    def _sink(piece: str) -> None:
+        try:
+            q.put_nowait(piece)
+        except Exception:
+            pass
+
+    token = _STREAM_SINK.set(_sink)
+    try:
+        # create_task snapshots the current context, so the sink rides
+        # into the turn; resetting immediately keeps THIS request's
+        # context clean for anything that runs after.
+        turn = asyncio.create_task(chief_chat(req, user_session))
+    finally:
+        _STREAM_SINK.reset(token)
+
+    def _evt(obj: Dict[str, Any]) -> str:
+        return "data: " + json.dumps(jsonable_encoder(obj)) + "\n\n"
+
+    async def _events():
+        filt = _ActionTagFilter()
+        try:
+            while True:
+                getter = asyncio.ensure_future(q.get())
+                done, _ = await asyncio.wait(
+                    {getter, turn}, return_when=asyncio.FIRST_COMPLETED)
+                if getter in done:
+                    txt = filt.feed(getter.result())
+                    if txt:
+                        yield _evt({"type": "delta", "text": txt})
+                    continue
+                getter.cancel()
+                # Turn finished — drain any deltas that raced the finish.
+                while not q.empty():
+                    txt = filt.feed(q.get_nowait())
+                    if txt:
+                        yield _evt({"type": "delta", "text": txt})
+                tail = filt.flush()
+                if tail:
+                    yield _evt({"type": "delta", "text": tail})
+                try:
+                    payload = turn.result()
+                except HTTPException as e:
+                    yield _evt({"type": "error", "status": e.status_code,
+                                "detail": str(e.detail)})
+                    return
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"[chat/stream] turn failed: {e}")
+                    yield _evt({"type": "error", "detail": "turn failed"})
+                    return
+                yield _evt({"type": "final", "payload": payload})
+                return
+        finally:
+            if not turn.done():
+                turn.cancel()
+
+    return StreamingResponse(_events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        # Disable proxy buffering so deltas reach the client immediately.
+        "X-Accel-Buffering": "no",
+    })
 
 
 @router.get("/agents/chief/activity")
