@@ -423,6 +423,29 @@ async def receive_sms(request: Request):
             logger.info(f"[SMS] dropped inbound — from={from_number_raw} text_len={len(text)}")
             return {"status": "ignored", "reason": "missing_from_or_text"}
 
+        # Consent keywords (compliance fix, 2026-07-10): the Twilio
+        # webhook routes STOP/START through sms_routing.route_inbound,
+        # but this legacy Telnyx path stored a STOP as a plain inbound
+        # message WITHOUT recording the opt-out. Telnyx is currently
+        # unconfigured in prod, but the path must be compliant if it
+        # ever carries traffic again.
+        import sms_routing as _routing
+        first_word = text.split()[0].upper() if text.split() else ""
+        if first_word in _routing.STOP_WORDS:
+            await _sb_post(client, "/sms_opt_outs?on_conflict=phone,business_id",
+                           {"phone": from_number, "business_id": None})
+            logger.info(f"[SMS] STOP via Telnyx path from {from_number} — opt-out recorded")
+            return {"status": "ok", "action": "opt_out"}
+        if first_word in _routing.START_WORDS:
+            try:
+                await client.delete(
+                    f"{_sb_url()}/rest/v1/sms_opt_outs?phone=eq.{from_number}",
+                    headers=_sb_headers(), timeout=HTTP_TIMEOUT)
+                logger.info(f"[SMS] START via Telnyx path from {from_number} — opt-out cleared")
+            except httpx.HTTPError as e:
+                logger.warning(f"[SMS] opt-out clear failed: {e}")
+            return {"status": "ok", "action": "opt_in"}
+
         return await record_inbound_sms(
             client, from_number=from_number, text=text,
             provider_id=telnyx_id, media=media,
