@@ -201,6 +201,14 @@ def cta_button(ctx: Dict[str, Any], label: str, section: str,
         href = safe_url(booking["url"])
     elif goal == "buy" and store.get("enabled") and store.get("url"):
         href = safe_url(store["url"])
+    # Kevin's ruling (2026-07-10): when booking exists, the PRIMARY
+    # action is booking — "the connect part is if they want information,
+    # not a booking itself." A stored cta_goal of "contact" (often set
+    # before booking was connected) no longer hijacks primaries to the
+    # contact anchor; it only steers when there's nothing to book. The
+    # contact section stays one scroll away for information seekers.
+    elif booking.get("enabled") and booking.get("url"):
+        href = safe_url(booking["url"])
     elif goal == "contact":
         href = "#contact"
     if not href:
