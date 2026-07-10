@@ -411,15 +411,33 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         ("no_show", "What happens if I miss my appointment?"),
     )
     faq_rows: List[Dict[str, str]] = []
+    _seen_q: set = set()
+
+    def _norm_q(q: str) -> str:
+        return " ".join(str(q or "").lower().split()).strip("?.! ")
+
     _pol = (business_picture.get("policies")
             if isinstance(business_picture.get("policies"), dict) else {})
     for _k, _q in _POLICY_QUESTIONS:
         _a = str(_pol.get(_k) or "").strip()
         if _a:
             faq_rows.append({"q": _q, "a": _a[:600]})
+            _seen_q.add(_norm_q(_q))
+    # Dedupe fix (2026-07-10, Kevin's screenshot): an explicit FAQ entry
+    # matching a policy-derived question (or an earlier entry) rendered
+    # the same question twice — the explicit entry's ANSWER wins when it
+    # collides with a policy question (the owner wrote it deliberately).
     for _r in (business_picture.get("faq") or []):
         if (isinstance(_r, dict) and str(_r.get("q") or "").strip()
                 and str(_r.get("a") or "").strip()):
+            _nq = _norm_q(_r["q"])
+            if _nq in _seen_q:
+                for _row in faq_rows:
+                    if _norm_q(_row["q"]) == _nq:
+                        _row["a"] = str(_r["a"]).strip()[:600]
+                        break
+                continue
+            _seen_q.add(_nq)
             faq_rows.append({"q": str(_r["q"]).strip()[:200],
                              "a": str(_r["a"]).strip()[:600]})
     faq_rows = faq_rows[:10]
