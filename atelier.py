@@ -531,6 +531,7 @@ CRAFT BAR (non-negotiable):
 - ORNAMENTS STAY SUB-PERCEPTUAL: watermarks/crests at 0.04-0.05 opacity, symbols and dividers at 0.08 or less, ghost numerals at 0.04-0.06 — depth the eye discovers on the second look, never the first.
 - SCRIMS ARE DIRECTIONAL: a gradient over a photograph always deepens toward the text edge and stays at 30% or less at the photo's far edge — the image must keep breathing.
 - HOVERS DRAW, THEY DON'T GLOW: hover feedback is a line drawing itself (scaleX from an origin), a lift of 2px or less, or a gap widening — never a box-shadow bloom or a color flood.
+- HEADLINE INTEGRITY: the h1/h2 must read as a complete, correct sentence as PLAIN TEXT (CSS off) — that text is what screen readers speak, search engines index, and copy-paste yields. NEVER split a headline across hidden/aria-hidden/sr-only spans, never word-morph one word into another, never echo headline words in duplicate spans. Animate the whole heading or whole visible words landing; the markup itself contains each word exactly once, in reading order.
 - Fluid display type via clamp(); tight negative tracking (var(--sx-letter-tight)) on display sizes.
 - Transitions use var(--sx-ease); reveals may use the shared class "sxm-reveal" (the platform's IntersectionObserver picks it up).
 - CTAs may use the shared class "sxm-cta" (pill, shimmer, working styles ship with the shell).

@@ -381,4 +381,28 @@ def validate_fragment(html: str, css: str, *, uid: str, kind: str,
                 f"number '{run}' rendered but not present in the provided "
                 "data — never invent prices/figures")
 
+    # 14 — HEADLINE PLAIN-TEXT INTEGRITY (2026-07-10, the morph-headline
+    # bug): a live hero shipped an h1 whose tag-stripped text read "From
+    # tangled launched tangled to launched." — a word-morph split across
+    # aria-hidden spans plus an sr echo. Pixels looked fine mid-animation;
+    # the TEXT (screen readers, search indexing, copy-paste) was garbled,
+    # and the reduced-motion fallback dropped the subject entirely.
+    # Rule: no aria-hidden subtree inside an h1/h2 may carry words, and
+    # a heading's words must not repeat as duplicated spans.
+    for hm in re.finditer(r"<h[12][^>]*>([\s\S]*?)</h[12]>", html, re.IGNORECASE):
+        inner = hm.group(1)
+        hidden_words = []
+        for ah in re.finditer(
+                r"<[^>]+aria-hidden=[\"']true[\"'][^>]*>([\s\S]*?)</[^>]+>",
+                inner, re.IGNORECASE):
+            hidden_words += re.findall(r"[A-Za-z']{2,}",
+                                       re.sub(r"<[^>]+>", " ", ah.group(1)))
+        if hidden_words:
+            problems.append(
+                "headline contains aria-hidden WORDS "
+                f"({', '.join(hidden_words[:4])}) — headings must read as "
+                "clean plain text with CSS off; never split/morph/echo "
+                "headline words across hidden spans (HEADLINE INTEGRITY)")
+            break
+
     return (not problems), problems
