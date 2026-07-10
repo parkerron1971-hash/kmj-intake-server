@@ -727,6 +727,15 @@ async def startup():
                           "interval", hours=6, id="chief_insights")
     except Exception as e:
         print(f"   [warn] chief insights job not scheduled: {e}")
+    # "Schedule anything" (2026-07-10) — Chief's deferred actions:
+    # every minute, execute due chief_scheduled_actions rows through
+    # the same ACTION_HANDLERS registry. Kill switch: CHIEF_SCHEDULER=off.
+    try:
+        import chief_scheduler as _chief_sched
+        scheduler.add_job(g("chief_scheduled", _chief_sched.due_tick),
+                          "interval", minutes=1, id="chief_scheduled")
+    except Exception as e:
+        print(f"   [warn] chief scheduled-actions job not scheduled: {e}")
     # Chief Layers arc — trusted-autonomy sweep: executes pending
     # proposals ONLY in categories the practitioner explicitly granted
     # after graduation (Trust Track). Kill switch: TRUSTED_AUTONOMY=off.

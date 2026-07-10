@@ -5100,6 +5100,143 @@ async def handle_advance_phase(client, biz, action) -> Dict:
     }
 
 
+async def handle_notify_practitioner(client, biz, action) -> Dict:
+    """Adaptive-Chief primitive (2026-07-10): a message to the OWNER —
+    in-app notification + push. The 'remind me' verb, and the delivery
+    leg of any scheduled action that just needs to say something."""
+    title = str(action.get("title") or action.get("message") or "").strip()
+    body = str(action.get("body") or "").strip()
+    if not title:
+        return _fail("notify_practitioner", "title (or message) required")
+    await _sb(client, "POST", "/chief_notifications", {
+        "business_id": biz["id"], "type": "reminder",
+        "title": title[:120], "body": body[:300] or title[:300],
+        "priority": "normal",
+    })
+    owner = biz.get("owner_id")
+    if owner:
+        try:
+            import push_notifications
+            await asyncio.to_thread(
+                push_notifications.send_to_user, str(owner),
+                title=title[:80], body=(body or title)[:160], nav="home")
+        except Exception as e:  # push is best-effort
+            logger.warning(f"notify push failed (non-fatal): {e}")
+    return {"type": "notify_practitioner",
+            "result": f"notification sent: {title[:80]}",
+            "label": f"🔔 {title[:80]}", "nav": None}
+
+
+# Verbs that cannot run server-side later (live-client-only) or would
+# nest the scheduler into itself.
+_UNSCHEDULABLE = {"navigate", "set_timer", "schedule_action",
+                  "cancel_scheduled", "list_scheduled"}
+
+
+async def handle_schedule_action(client, biz, action) -> Dict:
+    """Adaptive-Chief meta-verb (2026-07-10, Kevin's directive: "Chief
+    should do anything within the system, even things never built"):
+    schedule ANY toolkit action for later — one-shot or recurring. One
+    primitive × the whole verb set = 'remind me tomorrow', 'text Marcus
+    Friday 9am', 'send the report every Monday' with zero new code."""
+    inner = action.get("action") if isinstance(action.get("action"), dict) else None
+    if not inner or not str(inner.get("type") or "").strip():
+        return _fail("schedule_action", "an inner action {type: ...} is required")
+    itype = str(inner.get("type")).strip()
+    if itype in _UNSCHEDULABLE:
+        return _fail("schedule_action", f"'{itype}' can't be scheduled "
+                     f"(client-only or self-nesting)")
+    if itype not in ACTION_HANDLERS:
+        return _fail("schedule_action", f"unknown action '{itype}'")
+
+    run_at_raw = str(action.get("run_at") or "").strip()
+    run_at: Optional[datetime] = None
+    if run_at_raw:
+        try:
+            run_at = datetime.fromisoformat(run_at_raw.replace("Z", "+00:00"))
+            if run_at.tzinfo is None:
+                run_at = run_at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return _fail("schedule_action", f"run_at not ISO-8601: {run_at_raw}")
+    elif action.get("in_minutes") is not None:
+        try:
+            mins = max(1, int(action["in_minutes"]))
+        except (TypeError, ValueError):
+            return _fail("schedule_action", "in_minutes must be a number")
+        run_at = datetime.now(timezone.utc) + timedelta(minutes=mins)
+    if not run_at:
+        return _fail("schedule_action", "need run_at (ISO) or in_minutes")
+    if run_at <= datetime.now(timezone.utc) - timedelta(minutes=1):
+        return _fail("schedule_action", "run_at is in the past")
+
+    recurrence = str(action.get("recurrence") or "").strip().lower() or None
+    if recurrence and recurrence not in ("daily", "weekdays", "weekly"):
+        return _fail("schedule_action",
+                     "recurrence must be daily, weekdays, or weekly")
+    label = str(action.get("label") or "").strip() or f"Scheduled: {itype}"
+
+    row = await asyncio.to_thread(sb_clients.sb_post_as_service,
+        "/chief_scheduled_actions", {
+            "business_id": biz["id"], "owner_id": biz.get("owner_id"),
+            "label": label[:120], "action": inner,
+            "run_at": run_at.isoformat(), "recurrence": recurrence,
+        })
+    if not row:
+        return _fail("schedule_action", "could not save the schedule")
+    when = run_at.strftime("%Y-%m-%d %H:%M UTC")
+    rec = f", repeating {recurrence}" if recurrence else ""
+    return {"type": "schedule_action",
+            "result": f"scheduled '{label}' for {when}{rec} — I'll notify "
+                      f"you with the outcome when it runs",
+            "label": f"⏰ Scheduled: {label[:70]} ({when}{rec})",
+            "nav": None}
+
+
+async def handle_cancel_scheduled(client, biz, action) -> Dict:
+    """Cancel a queued scheduled action by id or label match."""
+    sid = str(action.get("schedule_id") or "").strip()
+    label = str(action.get("label") or "").strip()
+    if not sid and not label:
+        return _fail("cancel_scheduled", "need schedule_id or label")
+    q = f"/chief_scheduled_actions?business_id=eq.{biz['id']}&status=eq.queued"
+    if sid:
+        q += f"&id=eq.{sid}"
+    else:
+        safe = label.replace("%", "").replace("*", "")
+        q += f"&label=ilike.*{safe}*"
+    rows = await asyncio.to_thread(sb_clients.sb_get_as_service,
+                                   q + "&select=id,label&limit=5") or []
+    if not rows:
+        return _fail("cancel_scheduled", "no matching queued schedule")
+    for r in rows:
+        await asyncio.to_thread(sb_clients.sb_patch_as_service,
+            f"/chief_scheduled_actions?id=eq.{r['id']}",
+            {"status": "cancelled"})
+    names = ", ".join(str(r.get("label") or "")[:40] for r in rows)
+    return {"type": "cancel_scheduled",
+            "result": f"cancelled {len(rows)} schedule(s): {names}",
+            "label": f"🗑 Cancelled: {names[:80]}", "nav": None}
+
+
+async def handle_list_scheduled(client, biz, action) -> Dict:
+    """What's on Chief's calendar for this business."""
+    rows = await asyncio.to_thread(sb_clients.sb_get_as_service,
+        f"/chief_scheduled_actions?business_id=eq.{biz['id']}"
+        "&status=eq.queued&order=run_at.asc&limit=20"
+        "&select=id,label,run_at,recurrence") or []
+    if not rows:
+        return {"type": "list_scheduled", "result": "nothing scheduled",
+                "label": "📅 No scheduled actions", "nav": None}
+    lines = "; ".join(
+        f"{str(r.get('label') or '')[:50]} @ {str(r.get('run_at') or '')[:16]}"
+        + (f" ({r['recurrence']})" if r.get("recurrence") else "")
+        + f" [id={str(r.get('id'))[:8]}]"
+        for r in rows)
+    return {"type": "list_scheduled",
+            "result": f"{len(rows)} scheduled: {lines}",
+            "label": f"📅 {len(rows)} scheduled action(s)", "nav": None}
+
+
 _VALID_POLICY_KEYS = {"cancellation", "deposit", "lateness", "refunds", "no_show"}
 
 
@@ -9426,6 +9563,10 @@ ACTION_HANDLERS = {
     "restore_previous_site":      handle_restore_previous_site,
     "set_business_policy":        handle_set_business_policy,
     "add_faq":                    handle_add_faq,
+    "notify_practitioner":        handle_notify_practitioner,
+    "schedule_action":            handle_schedule_action,
+    "cancel_scheduled":           handle_cancel_scheduled,
+    "list_scheduled":             handle_list_scheduled,
     "save_business_model":        handle_save_business_model,
     "save_pricing":               handle_save_pricing,
     "save_packages":              handle_save_packages,
@@ -11738,6 +11879,25 @@ ACTIONS — BUSINESS PICTURE (rules of engagement; see the BUSINESS PICTURE cont
     — When they ask to "set up my FAQ" or the website FAQ is empty, interview them briefly (2-3 questions at a time, their vertical's most-asked ones first) and save each answer with add_faq.
     — These do double duty automatically: they render as the website's "Good to know" section AND they're your source of truth when a client asks a question — including by TEXT (answer from the BUSINESS PICTURE block verbatim; if a client asks something not covered, answer from context if safe, then suggest the practitioner add it as a policy/FAQ).
     — PHOTO-DRIVEN VERTICALS (salon, barber, tattoo, detailing, photography, food): if the business has no gallery/work photos, nudge once — "your kind of business sells with photos of the work; upload 4-6 of your best and the site builds a gallery around them." Never nag consultants/coaches about galleries.
+
+ACTIONS — SCHEDULING (defer ANY toolkit action to later; this is your calendar):
+  [ACTION:{{"type":"notify_practitioner","title":"Follow up with Marcus","body":"You asked me to remind you about the proposal."}}]  — a message to the OWNER (in-app + phone push). The "remind me" verb.
+  [ACTION:{{"type":"schedule_action","run_at":"2026-07-11T14:00:00Z","label":"Remind: send the invoice","action":{{"type":"notify_practitioner","title":"Send the invoice to Sandra"}}}}]
+  [ACTION:{{"type":"schedule_action","in_minutes":90,"label":"Text Marcus his slot","action":{{"type":"send_sms","contact_name":"Marcus","message":"Reminder: your session is at 4pm today. Reply Y to confirm."}}}}]
+  [ACTION:{{"type":"schedule_action","run_at":"2026-07-14T13:00:00Z","recurrence":"weekly","label":"Monday revenue pulse","action":{{"type":"notify_practitioner","title":"Monday pulse","body":"Check this week's numbers on GROW."}}}}]
+  [ACTION:{{"type":"list_scheduled"}}]   [ACTION:{{"type":"cancel_scheduled","label":"Monday revenue pulse"}}]
+    — ANY action you can do now, you can schedule for later (except navigate/set_timer — those live in the client — and scheduling itself). recurrence: daily | weekdays | weekly.
+    — Compute run_at yourself from the TIME CONTEXT block (it has the current time and timezone). "Tomorrow morning" → 9am their local time as UTC ISO. Prefer run_at; use in_minutes for "in an hour" asks.
+    — When it runs, the practitioner is notified with the outcome automatically — never promise to "keep an eye on it" yourself; schedule it.
+
+ADAPTIVE EXECUTION (doctrine — read before ever declining a request):
+  The practitioner will ask for things no single action covers. A real assistant composes. BEFORE saying you can't do something, walk this ladder:
+    1. Is there a direct action? Use it.
+    2. Can a CHAIN of actions do it this turn? You may emit up to your per-turn cap.
+    3. Is it a LATER or RECURRING thing? schedule_action wraps any verb — reminders, scheduled texts, weekly pulses.
+    4. Is it a BEHAVIOR they want from you going forward? remember it as a standing_instruction and honor it.
+    5. Only if all four genuinely fail: say precisely which capability is missing ("I can't X yet — I've noted it"), and remember the gap so it can be built.
+  Never respond with a generic "I can't do that" when a composition exists. The deflection boundaries (money/legal judgment calls, out-of-scope) still apply — this doctrine is about capability, not permission.
 
 ACTIONS — CONTACTS:
   [ACTION:{{"type":"create_contact","name":"...","email":"...","phone":"...","status":"lead"}}]
