@@ -125,6 +125,13 @@ app.add_middleware(
 import cors_error_handlers
 cors_error_handlers.install(app)
 app.include_router(ai_proxy_router)
+# Watchdog arc (2026-07-11) — client-error intake + error ring buffer.
+try:
+    from platform_watchdog import telemetry_router, attach_error_buffer
+    app.include_router(telemetry_router)
+    attach_error_buffer()
+except Exception as _e:
+    print(f"   [warn] telemetry router not mounted: {_e}")
 app.include_router(intake_router)
 app.include_router(nurture_router)
 app.include_router(session_router)
@@ -748,6 +755,16 @@ async def startup():
     # Chief Layers arc — trusted-autonomy sweep: executes pending
     # proposals ONLY in categories the practitioner explicitly granted
     # after graduation (Trust Track). Kill switch: TRUSTED_AUTONOMY=off.
+    # Watchdog arc (2026-07-11) — the system watches itself hourly:
+    # services, DB latency, webhook backlog, ticket/build load, error
+    # pressure; criticals push to the platform owner's phone (deduped).
+    # Kill switch: PLATFORM_WATCHDOG=off.
+    try:
+        import platform_watchdog as _watchdog
+        scheduler.add_job(g("platform_watchdog", _watchdog.watchdog_tick),
+                          "interval", hours=1, id="platform_watchdog")
+    except Exception as e:
+        print(f"   [warn] platform watchdog not scheduled: {e}")
     try:
         from rules_router import trusted_sweep_tick as _trusted_tick
         scheduler.add_job(g("trusted_proposals", _trusted_tick),
