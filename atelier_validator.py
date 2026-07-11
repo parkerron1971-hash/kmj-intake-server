@@ -227,6 +227,117 @@ def _visible_digit_runs(text_parts: Sequence[str]) -> List[str]:
     return _DIGIT_RUN_RE.findall(" ".join(text_parts))
 
 
+# Motion System (2026-07-10) — properties that force re-layout every
+# animated frame. Everything else (transform/opacity/SVG stroke/paint)
+# stays legal; this is a ban list, not an allow list, to avoid false
+# positives on exotic-but-cheap properties.
+_LAYOUT_PROPS = {
+    "width", "height", "min-width", "min-height", "max-width", "max-height",
+    "top", "left", "right", "bottom", "inset",
+    "margin", "margin-top", "margin-left", "margin-right", "margin-bottom",
+    "padding", "padding-top", "padding-left", "padding-right",
+    "padding-bottom", "font-size", "line-height", "letter-spacing",
+    "word-spacing", "gap", "row-gap", "column-gap", "flex-basis",
+    "border-width", "grid-template-columns", "grid-template-rows",
+}
+
+_TIME_RE = re.compile(r"(-?\d*\.?\d+)\s*(ms|s)\b", re.IGNORECASE)
+_MAX_DELAY_S = 4.5
+
+
+def _keyframe_prop_names(css: str) -> List[str]:
+    """Property names declared inside @keyframes frame blocks (brace walk:
+    @keyframes body is one nesting level, frames the next)."""
+    props: List[str] = []
+    for m in re.finditer(r"@(?:-webkit-)?keyframes\b[^{]*\{", css,
+                         re.IGNORECASE):
+        depth = 1
+        i = m.end()
+        start = i
+        while i < len(css) and depth:
+            if css[i] == "{":
+                depth += 1
+            elif css[i] == "}":
+                depth -= 1
+            i += 1
+        body = css[start:i]
+        for fm in re.finditer(r"\{([^{}]*)\}", body):
+            props += re.findall(r"(?:^|;)\s*([-a-zA-Z]+)\s*:", fm.group(1))
+    return props
+
+
+def _check_motion(css: str, uid: str, problems: List[str]) -> None:
+    """Motion System rules 17-19 (2026-07-10, the motion-precision arc):
+
+    17 CONTAINMENT — a fragment that animates position or places elements
+       absolutely must clip its own bounds (root rule carries
+       overflow:hidden or clip-path), so motion can never paint over a
+       neighboring section.
+    18 COMPOSITOR-ONLY — @keyframes and transitions may not touch layout
+       properties (width/top/margin/…): they re-layout every frame and
+       stutter on phones. transform/opacity/SVG stroke/paint stay legal.
+    19 ARRIVAL BUDGET — entrances play when the visitor arrives (the
+       platform stages them), so a delay past 4.5s fires after the
+       section has already been read. Reject it."""
+    body = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    kf_props = {p.lower() for p in _keyframe_prop_names(body)}
+
+    # 17 — containment
+    needs_containment = bool(
+        re.search(r"position\s*:\s*absolute", body, re.IGNORECASE)
+        or kf_props & {"transform", "translate", "scale", "rotate"})
+    if needs_containment:
+        root_decls = " ".join(
+            m.group(1) for m in re.finditer(
+                rf"(?:^|[}}{{])\s*\.atl-{re.escape(uid)}\s*{{([^{{}}]*)}}",
+                body))
+        if not re.search(r"(?:overflow(?:-x|-y)?\s*:\s*(?:hidden|clip)"
+                         r"|clip-path\s*:)", root_decls, re.IGNORECASE):
+            problems.append(
+                "MOTION STAYS HOME: the section animates/absolutely places "
+                f"elements but the root rule .atl-{uid} {{…}} declares no "
+                "overflow:hidden (or clip-path) — moving decorations must "
+                "never escape onto neighboring sections")
+
+    # 18 — compositor-only animation
+    bad_kf = sorted(kf_props & _LAYOUT_PROPS)
+    if bad_kf:
+        problems.append(
+            f"@keyframes animates layout property '{bad_kf[0]}' — animate "
+            "only transform/opacity (plus SVG stroke/filter/paint); "
+            "layout properties re-flow every frame and stutter on phones")
+    for tm in re.finditer(r"transition(?:-property)?\s*:\s*([^;{}]*)", body,
+                          re.IGNORECASE):
+        listed = {p.strip().lower().split(" ")[0]
+                  for p in tm.group(1).split(",") if p.strip()}
+        bad = sorted(listed & _LAYOUT_PROPS)
+        if bad:
+            problems.append(
+                f"transition on layout property '{bad[0]}' — transition "
+                "only transform/opacity/paint (background, color, filter)")
+            break
+
+    # 19 — arrival budget
+    worst = 0.0
+    for dm in re.finditer(r"animation(-delay)?\s*:\s*([^;{}]*)", body,
+                          re.IGNORECASE):
+        is_delay_prop = bool(dm.group(1))
+        for segment in dm.group(2).split(","):
+            times = [float(v) / (1000.0 if u.lower() == "ms" else 1.0)
+                     for v, u in _TIME_RE.findall(segment)]
+            if is_delay_prop and times:
+                worst = max(worst, *times)
+            elif len(times) >= 2:
+                # shorthand: first time = duration, second = delay
+                worst = max(worst, times[1])
+    if worst > _MAX_DELAY_S:
+        problems.append(
+            f"animation-delay of {worst:g}s — the platform releases your "
+            "chain when the visitor ARRIVES at the section, and anything "
+            f"past {_MAX_DELAY_S:g}s fires after they've already read it; "
+            "keep the full entrance settled within ~2.5s")
+
+
 def validate_fragment(html: str, css: str, *, uid: str, kind: str,
                       data: Dict[str, Any],
                       allowed_slots: Sequence[str] = (),
@@ -434,5 +545,8 @@ def validate_fragment(html: str, css: str, *, uid: str, kind: str,
             "belongs ONLY on the root <section>; child elements use plain "
             "role classes targeted via descendant selectors "
             f"(.atl-{uid} .crest)")
+
+    # 17/18/19 — Motion System (containment, compositor-only, arrival budget)
+    _check_motion(css, uid, problems)
 
     return (not problems), problems

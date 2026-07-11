@@ -575,6 +575,14 @@ def base_css(dna: Dict[str, Any]) -> str:
    arrivals don't animate to nobody. */
 .sxm-reveal.sxm-in-snap { transition: none !important; }
 .sxm-reveal.sxm-in-snap .sxm-inner > * { transition: none !important; }
+/* Motion System (2026-07-10): choreography is staged on ARRIVAL, not on
+   page load — the reveal SCRIPT injects a holding rule (animation-name:
+   none on everything inside un-arrived .sxm-stage/.sxm-reveal sections)
+   and the observer's .sxm-in releases it, so authored entrance chains
+   START FRESH the moment the visitor reaches the section instead of
+   finishing invisibly at load. The holding rule lives in the script, not
+   here: no JS → no holding → animations run natively (never a page held
+   invisible). See reveal_script(). */
 /* Site Arc 10 — blur-to-focus arrival (body.sx-reveal-focus, selected by
    the DRO's motion energy): sections come into FOCUS — blur 8px→0 with a
    .98→1 settle — instead of rising. Sharper is the entrance, not higher. */
@@ -653,6 +661,14 @@ body.sx-scarce-accent .sxm-mark-soft {{ background: color-mix(in srgb, var(--sx-
   .sxm-reveal, .sxm-reveal .sxm-inner > * {{
     opacity: 1 !important; transform: none !important; filter: none !important;
   }}
+  /* Motion System: print never advances animations — jump every staged
+     entrance to its end state (0s duration + fill lands the to-frame). */
+  .sxm-stage, .sxm-stage *, .sxm-stage *::before, .sxm-stage *::after {{
+    animation-play-state: running !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-fill-mode: forwards !important;
+  }}
 }}
 """
 
@@ -679,7 +695,25 @@ def reveal_script(dna: Dict[str, Any]) -> str:
     # viewport of black, Kevin's "crash in parts of the site". A page
     # entered via ANY hash reveals everything instantly: a deep-linked
     # visitor came for the content, not the choreography.
-    return ("<script>(function(){try{var els=document.querySelectorAll('.sxm-reveal');"
+    # Motion System (2026-07-10): .sxm-stage roots (bespoke sections) ride
+    # the same observer. The script INJECTS the holding rule (animations
+    # inside un-arrived sections don't exist yet — animation-name:none),
+    # so .sxm-in makes each section's authored entrance chain start fresh
+    # on arrival. Injection-from-script means JS-off degrades to native
+    # load-time animation, never to a held-invisible page. The end-of-body
+    # script runs before first paint, so nothing flashes.
+    # NOSCRIPT: reveals would sit at opacity 0 forever without the
+    # observer — force them visible (pre-existing hole, now closed).
+    return ("<noscript><style>.sxm-reveal{opacity:1 !important;transform:none !important;filter:none !important}"
+            "</style></noscript>"
+            "<script>(function(){try{"
+            "var hold=document.createElement('style');"
+            "hold.textContent='.sxm-stage:not(.sxm-in),.sxm-stage:not(.sxm-in) *,"
+            ".sxm-stage:not(.sxm-in) *::before,.sxm-stage:not(.sxm-in) *::after,"
+            ".sxm-reveal:not(.sxm-in) *,.sxm-reveal:not(.sxm-in) *::before,"
+            ".sxm-reveal:not(.sxm-in) *::after{animation-name:none !important}';"
+            "document.head.appendChild(hold);"
+            "var els=document.querySelectorAll('.sxm-reveal,.sxm-stage');"
             "var all=function(){els.forEach(function(e){"
             "if(!e.classList.contains('sxm-in')){e.classList.add('sxm-in-snap');e.classList.add('sxm-in')}})};"
             "if(location.hash){all();return}"

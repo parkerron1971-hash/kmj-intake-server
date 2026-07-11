@@ -829,6 +829,10 @@ def css_variables(dna: Dict[str, Any]) -> str:
   --sx-radius-button: {rad['button']};
   --sx-radius-image: {rad['image']};
   --sx-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --sx-dur-quick: .45s;
+  --sx-dur-scene: .9s;
+  --sx-dur-grand: 1.6s;
+  --sx-stagger: .12s;
 }}"""
 
 
