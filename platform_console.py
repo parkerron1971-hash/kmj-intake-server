@@ -76,6 +76,56 @@ HEALTH_ROW_COUNT_TABLES = [
 
 # Things the platform currently has zero visibility on. Surfaced on
 # the health panel so the operator knows where they're blind.
+# ─── The API registry (beta-readiness arc, 2026-07-11) ────────────────
+# Every external service the platform talks to: which env vars wire it
+# (NAMES only — values never leave the process), what it powers, and
+# where the code touches it. /platform/health reports configured-or-not
+# per service so Mission Control shows the whole dependency surface.
+API_REGISTRY: List[Dict[str, Any]] = [
+    {"id": "supabase",  "name": "Supabase",       "envs": ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_JWT_SECRET"],
+     "powers": "Database, auth, RLS, storage, realtime — the system of record",
+     "touchpoints": "sb_clients.py, every router"},
+    {"id": "anthropic", "name": "Anthropic (Claude)", "envs": ["ANTHROPIC_API_KEY"],
+     "powers": "Chief chat + reasoning lanes, site composer, atelier, DRL, module composer",
+     "touchpoints": "chief_llm.py, chief_models.py, site_composer.py, atelier.py"},
+    {"id": "openai",    "name": "OpenAI",          "envs": ["OPENAI_API_KEY"],
+     "powers": "Chief voice (TTS), Whisper transcription, inference-gate embeddings",
+     "touchpoints": "whisper_proxy.py (/ai/tts/speak, /ai/whisper), inference gate"},
+    {"id": "twilio",    "name": "Twilio",          "envs": ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"],
+     "powers": "SMS rail — keywords, two-way texting, booking reminders",
+     "touchpoints": "sms_service.py, sms_routing.py, sms_alerts.py"},
+    {"id": "resend",    "name": "Resend",          "envs": ["RESEND_API_KEY"],
+     "powers": "Transactional + nurture email, ticket replies, reports",
+     "touchpoints": "email senders in chief_of_staff.py / agents"},
+    {"id": "stripe",    "name": "Stripe",          "envs": ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"],
+     "powers": "Subscriptions, payment links, PAYG billing (dormant until enforcement)",
+     "touchpoints": "billing routers, stripe_webhook_events"},
+    {"id": "meta",      "name": "Meta (FB/IG)",    "envs": ["META_APP_ID", "META_APP_SECRET"],
+     "powers": "Facebook + Instagram OAuth and post publishing",
+     "touchpoints": "meta integration router"},
+    {"id": "webpush",   "name": "Web Push (VAPID)", "envs": ["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY"],
+     "powers": "Chief notifications to phones (PWA push)",
+     "touchpoints": "push sender"},
+    {"id": "googlefonts", "name": "Google Fonts",  "envs": [],
+     "powers": "Font pairings on composed sites (css2 endpoint, no key)",
+     "touchpoints": "brand_dna.py"},
+]
+
+
+def _api_registry_status() -> List[Dict[str, Any]]:
+    """Registry + configured flag per service (env NAMES only)."""
+    out: List[Dict[str, Any]] = []
+    for svc in API_REGISTRY:
+        envs = svc.get("envs", [])
+        missing = [e for e in envs if not (os.environ.get(e) or "").strip()]
+        out.append({
+            **svc,
+            "configured": not missing,
+            "missing_envs": missing,
+        })
+    return out
+
+
 BLIND_SPOTS = [
     "Anthropic token usage per practitioner (needs api_usage table + AI proxy logging)",
     "Backend error stream (Railway logs are the only source today)",
@@ -222,6 +272,7 @@ async def platform_health(_owner=Depends(require_owner)):
         "supabase_ok": supabase_ok,
         "row_counts": row_counts,
         "recent_webhook_failures": recent_webhook_failures,
+        "services": _api_registry_status(),
         "blind_spots": BLIND_SPOTS,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }

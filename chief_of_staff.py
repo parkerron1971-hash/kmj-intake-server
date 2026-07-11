@@ -2955,6 +2955,56 @@ async def handle_remember(client, biz, action) -> Dict:
     return {"type": "remember", "result": "stored", "label": label, "nav": None}
 
 
+async def handle_queue_build_request(client, biz, action) -> Dict:
+    """BUILDER BRIDGE (beta-readiness arc, 2026-07-11): queue a build /
+    feature / fix request for the developer (Claude Code picks these up
+    from Mission Control -> Support Tickets, or any support-ticket read).
+
+    Kevin's use case: talking to Chief on his phone away from home —
+    "queue a build: the booking page needs a cancel button" — and the
+    complete brief is waiting when a build session opens. Stored as a
+    support_ticket (category 'feature'): no new table, RLS already
+    tenant-safe, and Mission Control already renders the queue.
+
+    Action shape:
+      {
+        "type": "queue_build_request",
+        "title": "Booking page cancel button",        # required
+        "details": "Full context: what, where, why, any constraints",
+        "area": "booking"                              # optional surface hint
+      }
+    """
+    title = (action.get("title") or "").strip()
+    if not title:
+        return _fail("queue_build_request", "title is required")
+    details = (action.get("details") or "").strip()
+    area = (action.get("area") or "").strip()
+
+    body = details or title
+    if area:
+        body = f"[area: {area}]\n{body}"
+    inserted = await _sb(client, "POST", "/support_tickets", {
+        "business_id": biz["id"],
+        "category": "feature",
+        "subject": f"BUILD: {title[:180]}",
+        "message": body[:5000],
+        "context": {
+            "queued_by": "chief",
+            "kind": "build_request",
+            "area": area or None,
+        },
+    })
+    if not inserted:
+        return _fail("queue_build_request", "could not queue the request")
+    return {
+        "type": "queue_build_request",
+        "result": "queued",
+        "label": f"Build request queued: {title[:80]}",
+        "nav": None,
+        "toast": {"message": f"Queued for the builder: {title[:60]}", "kind": "success"},
+    }
+
+
 async def handle_forget(client, biz, action) -> Dict:
     """Deactivate a memory whose content matches the supplied phrase."""
     target = (action.get("memory_content") or action.get("content") or "").strip()
@@ -9607,6 +9657,7 @@ ACTION_HANDLERS = {
     "generate_insights":     handle_generate_insights,
     "navigate":              handle_navigate,
     "remember":              handle_remember,
+    "queue_build_request":   handle_queue_build_request,
     "forget":                handle_forget,
     "approve_draft":         handle_approve_draft,
     "dismiss_draft":         handle_dismiss_draft,
@@ -11959,8 +12010,23 @@ ADAPTIVE EXECUTION (doctrine — read before ever declining a request):
     2. Can a CHAIN of actions do it this turn? You may emit up to your per-turn cap.
     3. Is it a LATER or RECURRING thing? schedule_action wraps any verb — reminders, scheduled texts, weekly pulses.
     4. Is it a BEHAVIOR they want from you going forward? remember it as a standing_instruction and honor it.
-    5. Only if all four genuinely fail: say precisely which capability is missing ("I can't X yet — I've noted it"), and remember the gap so it can be built.
+    5. Only if all four genuinely fail: say precisely which capability is missing ("I can't X yet"), and OFFER to queue it for the developer with queue_build_request — the gap becomes a build brief instead of a dead end.
   Never respond with a generic "I can't do that" when a composition exists. The deflection boundaries (money/legal judgment calls, out-of-scope) still apply — this doctrine is about capability, not permission.
+
+ACTIONS — BUILDER BRIDGE (your direct line to the system's developer):
+  [ACTION:{{"type":"queue_build_request","title":"Cancel button on the booking page","details":"What: a cancel link on confirmed bookings. Where: the /book page confirmation view and the reminder SMS. Why: clients text asking to cancel and it becomes manual work. Constraints: must free the slot for rebooking.","area":"booking"}}]
+    — Use when the practitioner says "queue a build", "send this to the developer / to Claude Code", or asks for a feature or fix the system can't do yet. YOU write the complete brief from the conversation — what, where it lives, why it matters, constraints, and what done looks like — they just talk.
+    — The brief lands in Mission Control → Support Tickets prefixed "BUILD:", where the developer (Claude Code) picks it up. Confirm to the practitioner that it's queued; never promise a delivery date.
+
+ACTIONS — BOOKING SETUP (availability — the hours the booking widget offers):
+  [ACTION:{{"type":"set_availability_day","day":"monday","hours":[["09:00","17:00"]]}}]  — set a day's open hours (24h clock, list of ranges; empty list = closed).
+  [ACTION:{{"type":"set_availability_override","date":"2026-07-18","hours":[]}}]  — one-date exception (closed, or special hours).
+  [ACTION:{{"type":"add_block_range","start":"2026-08-01","end":"2026-08-07","reason":"vacation"}}]   [ACTION:{{"type":"remove_block_range","start":"2026-08-01"}}]
+  [ACTION:{{"type":"set_slot_granularity","minutes":30}}]   [ACTION:{{"type":"set_lead_time","hours":24}}]
+  [ACTION:{{"type":"set_business_timezone","timezone":"America/New_York"}}]  — the timezone ALL hours are interpreted in. If slots ever show at wrong times (e.g. 5am), this is the first fix.
+  [ACTION:{{"type":"list_availability"}}]  — read back the full config before changing it.
+    — "I'm off next week" → add_block_range. "Open Saturdays from 10 to 2" → set_availability_day. "My slots show at 5am" → set_business_timezone, then list_availability to confirm.
+  [ACTION:{{"type":"remove_testimonial","quote_fragment":"<a few words from the quote>"}}]  — takes a testimonial off the site.
 
 ACTIONS — CONTACTS:
   [ACTION:{{"type":"create_contact","name":"...","email":"...","phone":"...","status":"lead"}}]
@@ -12057,6 +12123,9 @@ ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MOD
        6. "go to / open [module name]" → navigate with page=module:<id>.
        7. "what modules do I have?" → just list them from the CUSTOM MODULES context block (no action needed).
     — When in doubt between propose_module_from_intake and ensure_module: PREFER propose. The proposal flow is reversible (the practitioner sees a card and can reject/revise) and produces better schemas via the generator; ensure_module is a one-shot direct write that can't be previewed.
+  [ACTION:{{"type":"accept_module_spec","spec_id":"<from the PENDING MODULE PROPOSALS context block>"}}]  — BUILDS the proposed module. When the practitioner says "yes", "build it", "looks good" about a pending proposal, THIS completes the build — the card UI is optional, their word is enough.
+  [ACTION:{{"type":"reject_module_spec","spec_id":"<id>","reason":"<their words>"}}]  — declines a pending proposal ("no", "not like that", "skip the rewards part").
+    — The build chain is: intake → propose_module_from_intake → practitioner's yes/no → accept_module_spec or reject_module_spec. You OWN the whole chain in conversation; never leave a proposal hanging after they've answered.
 
 ACTIONS — TASKS + NOTES + ACTIVITY:
   [ACTION:{{"type":"create_task","title":"Call Deacon Harris back","due_date":"2026-04-24","priority":"high","contact_id":"<uuid-optional>"}}]
