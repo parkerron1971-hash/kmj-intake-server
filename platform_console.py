@@ -278,6 +278,26 @@ async def platform_health(_owner=Depends(require_owner)):
     }
 
 
+# ─── Watchdog + error stream (beta-readiness arc) ───────────────────────
+
+@router.get("/watchdog")
+async def platform_watchdog_view(run: int = 0, _owner=Depends(require_owner)):
+    """Latest autonomous sweep; ?run=1 forces a fresh pass now."""
+    import platform_watchdog as wd
+    if run:
+        snap = await wd.watchdog_sweep()
+    else:
+        snap = wd.LAST_SWEEP or await wd.watchdog_sweep()
+    return {"enabled": wd.watchdog_enabled(), **snap}
+
+
+@router.get("/errors")
+async def platform_errors(limit: int = 100, _owner=Depends(require_owner)):
+    """The in-process error ring buffer (server + [client]-tagged)."""
+    import platform_watchdog as wd
+    return {"errors": wd.recent_errors(limit)}
+
+
 # ─── Subscriptions ──────────────────────────────────────────────────────
 
 @router.get("/subscriptions/summary")
