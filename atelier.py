@@ -150,6 +150,10 @@ TOKEN_CONTRACT: Tuple[Tuple[str, str], ...] = (
     ("--sx-radius-button", "button radius (pill)"),
     ("--sx-radius-image", "image frame radius"),
     ("--sx-ease", "the house easing curve — use it on every transition"),
+    ("--sx-dur-quick", "content landing (~.45s) — text, buttons arriving"),
+    ("--sx-dur-scene", "ornament pace (~.9s) — lines drawing, marks settling"),
+    ("--sx-dur-grand", "ground pace (~1.6s) — backgrounds breathing in"),
+    ("--sx-stagger", "the beat between siblings (~.12s) — delay steps"),
 )
 
 
@@ -533,6 +537,11 @@ CRAFT BAR (non-negotiable):
 - ORNAMENTS STAY SUB-PERCEPTUAL: watermarks/crests at 0.04-0.05 opacity, symbols and dividers at 0.08 or less, ghost numerals at 0.04-0.06 — depth the eye discovers on the second look, never the first.
 - SCRIMS ARE DIRECTIONAL: a gradient over a photograph always deepens toward the text edge and stays at 30% or less at the photo's far edge — the image must keep breathing.
 - HOVERS DRAW, THEY DON'T GLOW: hover feedback is a line drawing itself (scaleX from an origin), a lift of 2px or less, or a gap widening — never a box-shadow bloom or a color flood.
+- MOTION IS STAGED ON ARRIVAL: the platform holds every animation in your section PAUSED until the visitor scrolls to it, then releases the whole chain. Author your entrance with animation-delays from 0s exactly as if the section is already on screen — it will play at the perfect moment. Full entrance settled within ~2.5s (delays past 4s are rejected).
+- MOTION DEPTH LADDER: three planes moving at three speeds is what reads as depth — the ground breathes in slowest (var(--sx-dur-grand)), ornaments draw at mid pace (var(--sx-dur-scene)), content lands crisp and last (var(--sx-dur-quick)), siblings stepping in var(--sx-stagger) apart.
+- MOTION STAYS HOME: everything that moves lives INSIDE the section — the root keeps overflow:hidden whenever anything animates position or is absolutely placed; moving decorations sit on a layer BEHIND content (content wrapper position:relative with the higher z-index); nothing animated ever crosses a neighboring section or slides under running text.
+- ANIMATE ONLY transform/opacity (plus SVG stroke-dashoffset/filter): never width, height, top, left, or margins — those re-layout every frame and stutter on phones.
+- AMBIENT LOOPS: at most one infinite loop per section, sub-perceptual (an opacity or scale drift of 3% or less), never beneath body text.
 - HEADLINE INTEGRITY: the h1/h2 must read as a complete, correct sentence as PLAIN TEXT (CSS off) — that text is what screen readers speak, search engines index, and copy-paste yields. NEVER split a headline across hidden/aria-hidden/sr-only spans, never word-morph one word into another, never echo headline words in duplicate spans. Animate the whole heading or whole visible words landing; the markup itself contains each word exactly once, in reading order.
 - Fluid display type via clamp(); tight negative tracking (var(--sx-letter-tight)) on display sizes.
 - Transitions use var(--sx-ease); reveals may use the shared class "sxm-reveal" (the platform's IntersectionObserver picks it up).
@@ -792,6 +801,26 @@ def _stamp_dom_id(fragment_html: str, kind: str) -> str:
             + fragment_html[m.end():])
 
 
+def _stamp_stage(fragment_html: str) -> str:
+    """Motion System (2026-07-10): add sxm-stage to the bespoke root so
+    the page's IntersectionObserver releases the section's paused
+    entrance animations on arrival (.sxm-in). Deterministic assembly
+    step — the model never writes this class itself. Unlike sxm-reveal,
+    sxm-stage carries NO opacity/transform of its own: the fragment's
+    authored choreography IS the entrance, staged instead of doubled."""
+    m = re.search(r"<section\b[^>]*>", fragment_html)
+    if not m or "sxm-stage" in m.group(0):
+        return fragment_html
+    tag = m.group(0)
+    cm = re.search(r'(class\s*=\s*")([^"]*)(")', tag) or \
+         re.search(r"(class\s*=\s*')([^']*)(')", tag)
+    if cm:
+        new_tag = tag[:cm.start(2)] + cm.group(2).rstrip() + " sxm-stage" + tag[cm.end(2):]
+    else:
+        new_tag = tag[:-1].rstrip() + ' class="sxm-stage">'
+    return fragment_html[:m.start()] + new_tag + fragment_html[m.end():]
+
+
 def replace_sections(html: str, fragments: Dict[str, Dict[str, Any]]
                      ) -> Tuple[str, List[str]]:
     """Swap each marked module section (<!--sx:{module}:{i}--> … end
@@ -803,7 +832,7 @@ def replace_sections(html: str, fragments: Dict[str, Dict[str, Any]]
         f_html = str((frag or {}).get("html") or "")
         if not f_html.strip():
             continue
-        stamped = _stamp_dom_id(f_html, mid)
+        stamped = _stamp_stage(_stamp_dom_id(f_html, mid))
         pattern = re.compile(
             rf"<!--sx:{re.escape(mid)}:(\d+)-->.*?<!--/sx:{re.escape(mid)}:\1-->",
             re.DOTALL)
