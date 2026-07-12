@@ -9,11 +9,12 @@ THE UNIT: one "Chief interaction" — a weighted count over api_usage rows:
 Weights key on the logged endpoint (no schema change; aggregation-time
 lookup). Everything else on the platform is unmetered by design.
 
-THE PROMISE: total monthly bill ≤ 2× plan price. Overage is per-tier flat
-($0.40 / $0.30 / $0.25); the cap converts to a max-unit ceiling
-(allotment + tier_price / overage_rate). Past the cap — or past the
-allotment when the practitioner set their own hard cap — AI interactions
-soft-block; bookings, invoices, bookkeeping NEVER stop.
+THE MODEL (Pricing v2, 2026-07-12 — docs/pricing_model_v2.md): PREPAID.
+Draw-down is monthly plan allowance first, then purchased/granted
+credits (credit_ledger). There is NO postpaid overage and NO surprise
+bill — running dry soft-blocks AI interactions only, with a friendly
+top-up prompt; bookings, invoices, bookkeeping NEVER stop. The old
+postpaid rates/caps below are retained only for legacy field shape.
 
 GRANDFATHER: pre-launch accounts (user_profiles.is_grandfathered) get
 unlimited usage + all features, forever, regardless of subscription.
@@ -30,6 +31,7 @@ from typing import Any, Dict, List, Optional
 
 import sb_clients
 import feature_gates
+import credit_ledger
 
 logger = logging.getLogger("usage_metering")
 
@@ -116,9 +118,12 @@ def is_grandfathered_business(business_id: str,
 
 def usage_summary(business_id: str,
                   biz_row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Everything the UI + enforcement need in one read. Allotment/overage
+    """Everything the UI + enforcement need in one read. Allotment/credit
     numbers show from the PLAN even while enforcement is dormant (the UI
-    is honest early); `blocked` only ever true when enforcing."""
+    is honest early); `blocked` only ever true when enforcing.
+
+    Prepaid semantics (Pricing v2): allowance first, then credits.
+    Reading the summary also reconciles this month's credit burn."""
     row = biz_row or _biz_row(business_id)
     used = weighted_usage_this_month(business_id)
     grandfathered = is_grandfathered_business(business_id, row)
@@ -126,30 +131,23 @@ def usage_summary(business_id: str,
     enforce = feature_gates.enforcement_on()
 
     allotment = None
-    overage_cents_rate = None
-    cap_units = None
     if plan:
         allotment = (feature_gates.PLAN_LIMITS.get(plan) or {}).get("chief_messages_monthly")
-        overage_cents_rate = OVERAGE_CENTS.get(plan)
-        if allotment is not None and overage_cents_rate:
-            # 2×-bill promise: overage spend ≤ tier price → max extra units.
-            cap_units = allotment + TIER_PRICE_CENTS[plan] // overage_cents_rate
 
-    # Launch-ops: owner-granted bonus units top up the plan allotment
-    # (and lift the cap by the same amount, so grants never trigger the
-    # bill-cap early). Grants without a plan do nothing — plan-less
-    # businesses are already unlimited while unenforced.
+    # Launch-ops monthly bonus grants (usage_grants) top up the plan
+    # allotment. (Distinct from credit_ledger grants, which never expire.)
     if allotment is not None:
         bonus = grant_units_this_month(business_id)
         if bonus > 0:
             allotment += bonus
-            if cap_units is not None:
-                cap_units += bonus
 
-    overage_units = max(0, used - allotment) if allotment is not None else 0
-    if cap_units is not None:
-        overage_units = min(overage_units, cap_units - (allotment or 0))
-    overage_cents = overage_units * (overage_cents_rate or 0)
+    # Prepaid draw-down: usage beyond the allowance burns credits.
+    # Grandfathered accounts are unlimited — never touch their ledger.
+    beyond_allowance = max(0, used - allotment) if allotment is not None else 0
+    burned_this_month = 0
+    if allotment is not None and not grandfathered:
+        burned_this_month = credit_ledger.sync_burn(business_id, beyond_allowance)
+    credits_balance = credit_ledger.balance(business_id)
 
     hard_cap = bool(((row or {}).get("settings") or {}).get("usage_hard_cap"))
 
@@ -157,9 +155,10 @@ def usage_summary(business_id: str,
     reason = None
     if enforce and not grandfathered and allotment is not None:
         if hard_cap and used >= allotment:
+            # Practitioner chose "stop at my plan" — don't spend credits.
             blocked, reason = True, "hard_cap"
-        elif cap_units is not None and used >= cap_units:
-            blocked, reason = True, "bill_cap"
+        elif used >= allotment and credits_balance <= 0:
+            blocked, reason = True, "out_of_units"
 
     return {
         "ok": True,
@@ -168,10 +167,15 @@ def usage_summary(business_id: str,
         "allotment": None if grandfathered else allotment,
         "remaining": (None if (grandfathered or allotment is None)
                       else max(0, allotment - used)),
-        "overage_units": 0 if grandfathered else overage_units,
-        "overage_cents": 0 if grandfathered else overage_cents,
-        "overage_rate_cents": overage_cents_rate,
-        "cap_units": None if grandfathered else cap_units,
+        # Prepaid credit fields (Pricing v2).
+        "credits_balance": credits_balance,
+        "credits_burned_month": burned_this_month,
+        # Legacy postpaid fields, kept for older UI readers: nothing is
+        # ever billed as overage anymore.
+        "overage_units": 0 if grandfathered else beyond_allowance,
+        "overage_cents": 0,
+        "overage_rate_cents": None,
+        "cap_units": None,
         "hard_cap": hard_cap,
         "blocked": blocked,
         "blocked_reason": reason,
@@ -184,9 +188,9 @@ def usage_summary(business_id: str,
 
 def can_interact(business_id: str) -> bool:
     """The single AI-gate every Chief surface asks. True unless enforcement
-    is on AND (bill cap reached OR practitioner hard cap reached).
-    Failure of the metering read fails OPEN — metering must never brick
-    Chief."""
+    is on AND (allowance + credits exhausted, OR the practitioner's own
+    hard cap reached). Failure of the metering read fails OPEN — metering
+    must never brick Chief."""
     try:
         if not feature_gates.enforcement_on():
             return True
@@ -266,10 +270,13 @@ def _send_threshold_email(to_email: str, threshold: int, s: Dict[str, Any]) -> N
 # ─── Stripe metered-usage reporting (daily incremental) ──────────────
 
 def report_overage_to_stripe() -> Dict[str, Any]:
-    """Daily job: for every enforcing, subscribed, non-grandfathered
-    business, report NEW overage units (delta vs usage_stripe_reports)
-    to the subscription's metered overage item. Allotment + cap logic
-    stays OURS — Stripe only ever sees billable overage quantity."""
+    """RETIRED by Pricing v2 (2026-07-12): there is no postpaid overage.
+    Usage beyond the allowance draws down PREPAID credits instead
+    (credit_ledger), so nothing must ever reach a Stripe metered item —
+    that would double-charge. Permanent no-op kept so the daily job and
+    any callers stay wired."""
+    return {"ok": True, "skipped": "prepaid_model_v2"}
+    # ── unreachable legacy body below (postpaid era) ──
     if not feature_gates.enforcement_on():
         return {"ok": True, "skipped": "enforcement_off"}
     api_key = os.environ.get("STRIPE_SECRET_KEY")

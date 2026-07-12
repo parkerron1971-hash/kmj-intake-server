@@ -13294,9 +13294,16 @@ async def chief_chat(
             if lane == "voice":
                 system = system + chief_models.VOICE_DELIVERY_BLOCK
             turn_tokens = chief_models.max_tokens_for(lane, default=1600)
+            # Pricing v2 model ladder: heavy lanes scale with the plan
+            # tier (Starter=Sonnet 5, Pro=Opus 4.8, Practice=Fable 5).
+            try:
+                import feature_gates as _fg
+                _plan = _fg.plan_of(biz) if isinstance(biz, dict) else None
+            except Exception:
+                _plan = None
             raw = await _call_claude(client, system, api_messages,
                                      max_tokens=turn_tokens,
-                                     model=chief_models.model_for(lane),
+                                     model=chief_models.model_for(lane, _plan),
                                      # Voice streaming arc — set only when
                                      # /chat/stream drives this turn.
                                      stream_sink=_STREAM_SINK.get())
@@ -13360,7 +13367,7 @@ async def chief_chat(
                 retry_messages = [{"role": "user", "content": correction}]
                 retry_raw = await _call_claude(
                     client, system, retry_messages, max_tokens=turn_tokens,
-                    model=chief_models.model_for(lane),
+                    model=chief_models.model_for(lane, _plan),
                 )
                 if retry_raw:
                     retry_actions, retry_clean = _extract_actions_and_clean(retry_raw)

@@ -57,13 +57,36 @@ _LANE_MAX_TOKENS = {
 }
 
 
-def model_for(lane: str) -> str:
-    """Model ID for a lane; unknown lanes fall back to chat."""
+# Pricing v2 model ladder (Kevin's ruling 2026-07-12, spec §4): the
+# HEAVY lanes (deep/insight) scale with the plan tier — Starter thinks
+# on Sonnet 5, Professional on Opus 4.8, Practice/Elite on Fable 5.
+# chat/voice/draft stay Sonnet 5 for EVERY tier on purpose: latency,
+# and the shared per-model prompt cache (splitting would cold-start
+# every conversation). Env overrides (CHIEF_MODEL_<LANE>) still win —
+# they're the platform kill switch, not a per-tier setting.
+_TIER_LADDER = {
+    "starter":      "claude-sonnet-5",
+    "professional": "claude-opus-4-8",
+    "practice":     "claude-fable-5",
+}
+_LADDER_LANES = ("deep", "insight")
+
+
+def model_for(lane: str, plan: str | None = None) -> str:
+    """Model ID for a lane; unknown lanes fall back to chat. Pass the
+    business's plan to apply the tier ladder on heavy lanes — no plan
+    (beta, grandfathered, plan-less) keeps the lane default."""
     key = (lane or "chat").strip().lower()
     if key not in _LANE_DEFAULTS:
         key = "chat"
     env = (os.environ.get(f"CHIEF_MODEL_{key.upper()}") or "").strip()
-    return env or _LANE_DEFAULTS[key]
+    if env:
+        return env
+    if key in _LADDER_LANES and plan:
+        tiered = _TIER_LADDER.get((plan or "").strip().lower())
+        if tiered:
+            return tiered
+    return _LANE_DEFAULTS[key]
 
 
 def lane_for_chat(mode: str = "", client_surface: str = "") -> str:
