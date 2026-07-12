@@ -54,7 +54,8 @@ jobs:
           # compile-check its work and open its own pull request.
           claude_env: |
             GH_TOKEN: ${{ github.token }}
-          allowed_tools: "Bash(python -m py_compile:*),Bash(python -c:*),Bash(gh pr create:*),Bash(gh pr view:*)"
+            AUTO_MERGE: ${{ vars.CLAUDE_AUTO_MERGE || 'on' }}
+          allowed_tools: "Bash(python -m py_compile:*),Bash(python -c:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh pr merge:*)"
           custom_instructions: |
             MANDATORY FINISHING SEQUENCE (in order):
             1. SELF-CHECK before pushing: run
@@ -66,5 +67,14 @@ jobs:
                with a body that explains the change and includes
                "Closes #<issue number>". Post the PR URL in your final
                comment. Never finish with only a create-PR link.
+            3. AUTO-MERGE (Kevin's standing order): if the AUTO_MERGE env
+               var is 'on' AND your self-check in step 1 passed cleanly
+               (py_compile passed on every changed file), merge your own PR:
+               `gh pr merge <PR URL> --squash --delete-branch`
+               and state in your final comment that it merged and will
+               auto-deploy. If the self-check did NOT pass cleanly, or
+               AUTO_MERGE is not 'on', leave the PR open and say exactly
+               why you didn't merge. NEVER merge a PR whose verification
+               you could not run or that failed in any way.
         env:
           GH_TOKEN: ${{ github.token }} 
