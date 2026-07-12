@@ -281,6 +281,84 @@ async def platform_health(_owner=Depends(require_owner)):
     }
 
 
+# ─── Builder model control (Mission Control -> System Health) ──────────
+# The cloud-build workflows read the repo variable CLAUDE_BUILD_MODEL;
+# these endpoints let Kevin flip it live. Requires the Railway
+# GITHUB_TOKEN to carry "Variables: read and write" on both repos.
+
+BUILD_MODEL_REPOS = [
+    "parkerron1971-hash/solutionist-studio",
+    "parkerron1971-hash/kmj-intake-server",
+]
+BUILD_MODELS_ALLOWED = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"]
+BUILD_MODEL_DEFAULT = "claude-fable-5"
+_BUILD_VAR = "CLAUDE_BUILD_MODEL"
+
+
+def _gh_headers() -> Dict[str, str]:
+    token = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    } if token else {}
+
+
+@router.get("/build-model")
+async def get_build_model(_owner=Depends(require_owner)):
+    """Current cloud-build model per repo (repo variable, default Fable 5)."""
+    headers = _gh_headers()
+    out: Dict[str, Any] = {"allowed": BUILD_MODELS_ALLOWED,
+                           "default": BUILD_MODEL_DEFAULT,
+                           "configured": bool(headers), "repos": {}}
+    if not headers:
+        return out
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        for repo in BUILD_MODEL_REPOS:
+            model = BUILD_MODEL_DEFAULT
+            try:
+                r = await c.get(
+                    f"https://api.github.com/repos/{repo}/actions/variables/{_BUILD_VAR}",
+                    headers=headers)
+                if r.status_code == 200:
+                    model = r.json().get("value") or BUILD_MODEL_DEFAULT
+            except Exception:
+                pass
+            out["repos"][repo] = model
+    return out
+
+
+class BuildModelBody(BaseModel):
+    model: str
+
+
+@router.post("/build-model")
+async def set_build_model(body: BuildModelBody, _owner=Depends(require_owner)):
+    """Set the cloud-build model on BOTH repos (upsert the variable)."""
+    model = (body.model or "").strip()
+    if model not in BUILD_MODELS_ALLOWED:
+        raise HTTPException(400, f"model must be one of {BUILD_MODELS_ALLOWED}")
+    headers = _gh_headers()
+    if not headers:
+        raise HTTPException(503, "GITHUB_TOKEN not configured on the backend")
+    results: Dict[str, str] = {}
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        for repo in BUILD_MODEL_REPOS:
+            try:
+                # PATCH updates an existing variable; 404 means create it.
+                r = await c.patch(
+                    f"https://api.github.com/repos/{repo}/actions/variables/{_BUILD_VAR}",
+                    headers=headers, json={"name": _BUILD_VAR, "value": model})
+                if r.status_code == 404:
+                    r = await c.post(
+                        f"https://api.github.com/repos/{repo}/actions/variables",
+                        headers=headers, json={"name": _BUILD_VAR, "value": model})
+                ok = r.status_code in (201, 204)
+                results[repo] = "ok" if ok else f"failed ({r.status_code} — token may need Variables read/write)"
+            except Exception as e:
+                results[repo] = f"failed ({e})"
+    return {"model": model, "results": results}
+
+
 # ─── Watchdog + error stream (beta-readiness arc) ───────────────────────
 
 @router.get("/watchdog")
