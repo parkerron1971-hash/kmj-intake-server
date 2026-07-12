@@ -2955,6 +2955,51 @@ async def handle_remember(client, biz, action) -> Dict:
     return {"type": "remember", "result": "stored", "label": label, "nav": None}
 
 
+# ─── Chief → Claude Code bridge (2026-07-11) ─────────────────────────
+# When GITHUB_TOKEN is configured, a queued build request ALSO opens a
+# GitHub issue tagged @claude in the target repo. With the Claude Code
+# GitHub App installed on the repo, that mention triggers an autonomous
+# cloud build session that implements the brief and opens a PR — Kevin's
+# merge remains the only human step. Fail-soft: no token / API failure
+# just means the ticket alone is the record (the manual pickup path).
+
+_BUILD_REPOS = {
+    "frontend": "parkerron1971-hash/solutionist-studio",
+    "backend": "parkerron1971-hash/kmj-intake-server",
+}
+
+
+async def _fire_build_issue(client, title: str, body: str, repo_key: str) -> Optional[str]:
+    token = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    if not token:
+        return None
+    repo = _BUILD_REPOS.get(repo_key or "frontend", _BUILD_REPOS["frontend"])
+    try:
+        r = await client.post(
+            f"https://api.github.com/repos/{repo}/issues",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+            json={
+                "title": f"BUILD: {title[:180]}",
+                "body": (
+                    f"{body[:4000]}\n\n---\n"
+                    "Queued by Chief on the practitioner's behalf.\n\n"
+                    "@claude please implement this. Work on a fresh branch, "
+                    "follow the repo's existing patterns, and open a PR."
+                ),
+                "labels": ["chief-build"],
+            },
+        )
+        if r.status_code in (200, 201):
+            return r.json().get("html_url")
+        logger.warning(f"build issue failed: {r.status_code} {r.text[:150]}")
+    except Exception as e:
+        logger.warning(f"build issue exception: {e}")
+    return None
+
+
 async def handle_queue_build_request(client, biz, action) -> Dict:
     """BUILDER BRIDGE (beta-readiness arc, 2026-07-11): queue a build /
     feature / fix request for the developer (Claude Code picks these up
@@ -2996,12 +3041,21 @@ async def handle_queue_build_request(client, biz, action) -> Dict:
     })
     if not inserted:
         return _fail("queue_build_request", "could not queue the request")
+
+    # The autonomous hop: Chief -> GitHub issue -> @claude cloud build.
+    issue_url = await _fire_build_issue(
+        client, title, body, (action.get("repo") or "").strip().lower())
+
+    result = "queued and dispatched to the builder" if issue_url else "queued"
     return {
         "type": "queue_build_request",
-        "result": "queued",
-        "label": f"Build request queued: {title[:80]}",
+        "result": result,
+        "label": f"Build request {result}: {title[:70]}",
         "nav": None,
-        "toast": {"message": f"Queued for the builder: {title[:60]}", "kind": "success"},
+        "issue_url": issue_url,
+        "toast": {"message": (
+            f"Dispatched to Claude Code: {title[:50]}" if issue_url
+            else f"Queued for the builder: {title[:60]}"), "kind": "success"},
     }
 
 
@@ -12016,7 +12070,8 @@ ADAPTIVE EXECUTION (doctrine — read before ever declining a request):
 ACTIONS — BUILDER BRIDGE (your direct line to the system's developer):
   [ACTION:{{"type":"queue_build_request","title":"Cancel button on the booking page","details":"What: a cancel link on confirmed bookings. Where: the /book page confirmation view and the reminder SMS. Why: clients text asking to cancel and it becomes manual work. Constraints: must free the slot for rebooking.","area":"booking"}}]
     — Use when the practitioner says "queue a build", "send this to the developer / to Claude Code", or asks for a feature or fix the system can't do yet. YOU write the complete brief from the conversation — what, where it lives, why it matters, constraints, and what done looks like — they just talk.
-    — The brief lands in Mission Control → Support Tickets prefixed "BUILD:", where the developer (Claude Code) picks it up. Confirm to the practitioner that it's queued; never promise a delivery date.
+    — Optional "repo": "frontend" (the app UI — default) or "backend" (Chief, sites, bookings, SMS, billing machinery). Choose by where the change lives.
+    — The brief lands in Mission Control → Support Tickets prefixed "BUILD:"; when the GitHub bridge is configured it is ALSO dispatched directly to Claude Code, which builds it and opens a pull request for the owner to review. Confirm it's queued (and dispatched, when the result says so); never promise a delivery date — the owner reviews and merges every build.
 
 ACTIONS — BOOKING SETUP (availability — the hours the booking widget offers):
   [ACTION:{{"type":"set_availability_day","day":"monday","hours":[["09:00","17:00"]]}}]  — set a day's open hours (24h clock, list of ranges; empty list = closed).
