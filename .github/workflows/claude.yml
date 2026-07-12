@@ -1,0 +1,44 @@
+# Chief → Claude Code bridge (2026-07-11).
+# When Chief queues a build request, the backend opens an issue here
+# tagged @claude. This workflow hands that issue to Claude Code running
+# in GitHub's cloud: it implements the brief on a fresh branch and opens
+# a PR. The owner's merge remains the only human step.
+#
+# Setup (one time, both repos):
+#   1. Install the Claude GitHub App on this repo (github.com/apps/claude
+#      — or run /install-github-app inside Claude Code).
+#   2. Add repo secret ANTHROPIC_API_KEY.
+# Manual use also works: comment "@claude <ask>" on any issue or PR.
+name: Claude Code
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  claude:
+    if: >-
+      (github.event_name == 'issues' && contains(github.event.issue.body, '@claude')) ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
