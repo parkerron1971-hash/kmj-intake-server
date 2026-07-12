@@ -324,21 +324,10 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
         await _patch_business(biz["id"], {"stripe_customer_id": customer_id})
         logger.info(f"Created Stripe customer {customer_id} for business {biz['id']}")
 
-    # Mint the Checkout Session.
-    # PAYG (launch-ops 2026-07-03): attach the tier's METERED overage
-    # price as a second line item when configured — this was the one
-    # missing wire between "reports overage" (usage_metering) and
-    # "actually bills overage". Metered items take no quantity.
+    # Mint the Checkout Session. (Pricing v2, 2026-07-12: the metered
+    # PAYG overage line item is GONE — usage beyond the allowance draws
+    # down prepaid credit packs instead. See /billing/credits/checkout.)
     line_items: list = [{"price": price_id, "quantity": 1}]
-    try:
-        import feature_gates as _fg
-        _plan_name = _fg.price_to_plan().get(price_id)
-        if _plan_name:
-            _ov = (os.environ.get(f"STRIPE_PRICE_ID_{_plan_name.upper()}_OVERAGE") or "").strip()
-            if _ov:
-                line_items.append({"price": _ov})
-    except Exception:
-        pass  # overage attach is best-effort; base plan must never fail
     session = await _stripe_post("/checkout/sessions", {
         "mode": "subscription",
         "customer": customer_id,
@@ -354,6 +343,82 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
         },
     })
     return {"url": session.get("url"), "id": session.get("id")}
+
+
+# ─── Prepaid credit packs (Pricing v2 Phase C, 2026-07-12) ────────────
+# One-time payments via inline price_data — no dashboard products to
+# configure. The webhook (checkout.session.completed with
+# metadata.kind=credit_pack) grants the units; credit_ledger's UNIQUE
+# stripe_payment_id makes retries harmless.
+
+class CreditCheckoutBody(BaseModel):
+    business_id: str
+    pack: str  # 'small' | 'medium' | 'large'
+
+
+@router.post("/credits/checkout")
+async def create_credit_checkout(body: CreditCheckoutBody,
+                                 user: AuthedUser = Depends(require_user)):
+    """Mint a one-time-payment Checkout Session for a credit pack."""
+    import credit_ledger
+    p = credit_ledger.CREDIT_PACKS.get((body.pack or "").strip().lower())
+    if not p:
+        raise HTTPException(400, f"pack must be one of {sorted(credit_ledger.CREDIT_PACKS)}")
+    if not os.environ.get("STRIPE_SECRET_KEY", "").strip():
+        raise HTTPException(409, "Payments aren't configured yet — credits can't be "
+                                 "purchased until Stripe is connected.")
+
+    biz = await _load_business(body.business_id)
+    _require_owner_of(user, biz)
+
+    pack = (body.pack or "").strip().lower()
+    payload: Dict[str, Any] = {
+        "mode": "payment",
+        "line_items": [{
+            "quantity": 1,
+            "price_data": {
+                "currency": "usd",
+                "unit_amount": p["cents"],
+                "product_data": {
+                    "name": f"Solutionist credits — {p['units']} units",
+                    "description": ("Prepaid AI-action credits. They never expire; "
+                                    "your monthly plan allowance is always used first."),
+                },
+            },
+        }],
+        "success_url": _success_url() + "?credits=1&session_id={CHECKOUT_SESSION_ID}",
+        "cancel_url":  _cancel_url(),
+        "metadata": {
+            "kind":         "credit_pack",
+            "credit_pack":  pack,
+            "credit_units": str(p["units"]),
+            "business_id":  biz["id"],
+            "auth_user_id": user.id,
+        },
+    }
+    # Attach the existing Stripe customer when there is one (unified
+    # billing history); packs work fine without a customer too.
+    if biz.get("stripe_customer_id"):
+        payload["customer"] = biz["stripe_customer_id"]
+    else:
+        payload["customer_email"] = user.email
+
+    session = await _stripe_post("/checkout/sessions", payload)
+    return {"url": session.get("url"), "id": session.get("id")}
+
+
+@router.get("/usage")
+async def billing_usage(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """The Plan & Usage meter's one read: weighted usage vs allowance,
+    prepaid credit balance, and the pack catalog."""
+    import credit_ledger
+    import usage_metering
+    biz_row = await _load_business(biz)
+    _require_owner_of(user, biz_row)
+    s = usage_metering.usage_summary(biz, biz_row)
+    s["credits"] = credit_ledger.summary(biz)
+    s["packs"] = credit_ledger.CREDIT_PACKS
+    return s
 
 
 def _subscription_data(biz, user):
@@ -598,9 +663,33 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
             if business_id:
                 await _patch_business(business_id, {"subscription_status": "active"})
         elif event_type == "checkout.session.completed":
-            # The subsequent customer.subscription.created carries the
-            # real state — we just log this one for audit.
-            pass
+            meta = obj.get("metadata") or {}
+            if meta.get("kind") == "credit_pack":
+                # Prepaid credit pack (Pricing v2): grant the units.
+                # Guard on paid status — async payment methods complete
+                # the session before money moves.
+                if obj.get("payment_status") == "paid" and business_id:
+                    import credit_ledger
+                    ok = credit_ledger.grant_pack(
+                        business_id, meta.get("credit_pack") or "",
+                        obj.get("payment_intent") or obj.get("id") or "")
+                    if not ok:
+                        error_msg = f"credit grant failed for session {obj.get('id')}"
+                elif not business_id:
+                    error_msg = "credit_pack session missing business_id"
+            # Subscription checkouts: the subsequent
+            # customer.subscription.created carries the real state —
+            # this event is audit-only for those.
+        elif event_type == "checkout.session.async_payment_succeeded":
+            # Delayed payment methods (bank debits) land here instead.
+            meta = obj.get("metadata") or {}
+            if meta.get("kind") == "credit_pack" and business_id:
+                import credit_ledger
+                ok = credit_ledger.grant_pack(
+                    business_id, meta.get("credit_pack") or "",
+                    obj.get("payment_intent") or obj.get("id") or "")
+                if not ok:
+                    error_msg = f"credit grant failed for session {obj.get('id')}"
         else:
             logger.info(f"Ignoring unhandled event type: {event_type}")
     except HTTPException as e:

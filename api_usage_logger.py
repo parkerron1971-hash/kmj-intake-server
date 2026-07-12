@@ -61,19 +61,29 @@ HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
 
 
 # Per-million-token prices in USD cents. Input first, then output.
-# Source: anthropic.com/pricing as of 2026-05-25.
-# Keys are matched by prefix so e.g. "claude-sonnet-4-5-20250929" matches
-# the "claude-sonnet-4" entry.
+# Source: platform.claude.com/docs/en/about-claude/pricing — VERIFIED
+# 2026-07-12 (Pricing v2 Phase C; was 2026-05-25 and had gone stale:
+# Opus 4.8 is $5/$25, not the old Opus-4 $15/$75, and Haiku 4.5 is
+# $1/$5). Keys are matched LONGEST-PREFIX-FIRST so
+# "claude-opus-4-8-..." hits its own entry, not "claude-opus-4".
 MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
-    # Opus 4.x — premium tier
-    "claude-opus-4":     (1500.0, 7500.0),   # $15/MTok input, $75/MTok output
-    # Sonnet 5 — Chief chat/voice lanes (Chief Layers arc). Priced at the
-    # Sonnet tier; update if anthropic.com/pricing says otherwise.
+    # Fable 5 — Mythos-class flagship: $10/MTok in, $50/MTok out.
+    # (Elite-tier deep/insight lanes — the launch-gate entry.)
+    "claude-fable-5":    (1000.0, 5000.0),
+    # Opus 4.5–4.8 — $5/MTok in, $25/MTok out
+    "claude-opus-4-8":   (500.0, 2500.0),
+    "claude-opus-4-7":   (500.0, 2500.0),
+    "claude-opus-4-6":   (500.0, 2500.0),
+    "claude-opus-4-5":   (500.0, 2500.0),
+    # Opus 4.0/4.1 (retired/deprecated) — $15/MTok in, $75/MTok out
+    "claude-opus-4":     (1500.0, 7500.0),
+    # Sonnet 5 — intro $2/$10 through 2026-08-31, then $3/$15; we book
+    # at the standard rate so margins are computed conservatively.
     "claude-sonnet-5":   (300.0, 1500.0),
-    # Sonnet 4.x — balanced
-    "claude-sonnet-4":   (300.0, 1500.0),    # $3/MTok input, $15/MTok output
-    # Haiku 4.x — fast / cheap
-    "claude-haiku-4":    (80.0, 400.0),      # $0.80/MTok input, $4/MTok output
+    # Sonnet 4.x — $3/MTok in, $15/MTok out
+    "claude-sonnet-4":   (300.0, 1500.0),
+    # Haiku 4.5 — $1/MTok in, $5/MTok out
+    "claude-haiku-4":    (100.0, 500.0),
     # Legacy fallbacks for any old model strings still in flight
     "claude-3-5-sonnet": (300.0, 1500.0),
     "claude-3-5-haiku":  (80.0, 400.0),
@@ -83,14 +93,18 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
 
 def _price_for_model(model: str) -> tuple[float, float]:
     """Return (input_cents_per_MTok, output_cents_per_MTok). Falls back
-    to Sonnet pricing if no prefix matches (safe middle estimate)."""
+    to Sonnet pricing if no prefix matches (safe middle estimate).
+    Longest prefix wins, so specific entries beat family entries no
+    matter their dict order."""
     if not model:
         return (300.0, 1500.0)
     m = model.lower()
+    best: tuple[float, float] | None = None
+    best_len = -1
     for prefix, prices in MODEL_PRICING_CENTS.items():
-        if m.startswith(prefix):
-            return prices
-    return (300.0, 1500.0)
+        if m.startswith(prefix) and len(prefix) > best_len:
+            best, best_len = prices, len(prefix)
+    return best or (300.0, 1500.0)
 
 
 def _compute_cost_cents(model: str, input_tokens: int, output_tokens: int) -> float:

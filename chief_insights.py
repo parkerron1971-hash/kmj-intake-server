@@ -190,7 +190,13 @@ def _synthesize(biz: Dict[str, Any], digest: Dict[str, Any],
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         return []
-    model = chief_models.model_for("insight")
+    # Pricing v2 model ladder: insight quality scales with the tier.
+    try:
+        import feature_gates as _fg
+        _plan = _fg.plan_of(biz) if isinstance(biz, dict) else None
+    except Exception:
+        _plan = None
+    model = chief_models.model_for("insight", _plan)
 
     mem_lines = "\n".join(
         f"- [{m.get('category')}] {m.get('content')}" for m in memories[:30]
