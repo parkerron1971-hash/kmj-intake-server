@@ -2969,6 +2969,38 @@ _BUILD_REPOS = {
 }
 
 
+_PLATFORM_OWNER_ID: Optional[str] = None
+
+
+async def _is_platform_owner_biz(client, biz) -> bool:
+    """Owner gate (2026-07-11, Kevin's ruling): the Claude Code dispatch
+    is PLATFORM ENGINEERING — it changes the app for every tenant and
+    spends the owner's API budget, so only a business owned by the
+    platform owner may fire it. Practitioners' custom building lives in
+    the module composer (their own tenant), untouched by this gate.
+    Fail-CLOSED: any doubt means not-owner."""
+    global _PLATFORM_OWNER_ID
+    try:
+        if not _PLATFORM_OWNER_ID:
+            from lead_admin import _service_headers
+            owner_email = (os.environ.get("PLATFORM_OWNER_EMAIL")
+                           or "kmjcreativesolution@gmail.com").lower()
+            r = await client.get(
+                f"{os.environ.get('SUPABASE_URL', '').rstrip('/')}/auth/v1/admin/users",
+                headers=_service_headers(), params={"per_page": "200"},
+            )
+            if r.status_code == 200:
+                data = r.json()
+                users = data.get("users", data) or []
+                for u in users:
+                    if (u.get("email") or "").lower() == owner_email:
+                        _PLATFORM_OWNER_ID = u.get("id")
+                        break
+        return bool(_PLATFORM_OWNER_ID) and str(biz.get("owner_id")) == str(_PLATFORM_OWNER_ID)
+    except Exception:
+        return False
+
+
 async def _fire_build_issue(client, title: str, body: str, repo_key: str) -> Optional[str]:
     token = (os.environ.get("GITHUB_TOKEN") or "").strip()
     if not token:
@@ -3042,7 +3074,20 @@ async def handle_queue_build_request(client, biz, action) -> Dict:
     if not inserted:
         return _fail("queue_build_request", "could not queue the request")
 
-    # The autonomous hop: Chief -> GitHub issue -> @claude cloud build.
+    # OWNER GATE: only the platform owner's own businesses dispatch to
+    # the builder. Every other practitioner's ask is a FEATURE REQUEST
+    # ticket the owner reviews in Mission Control — never a build run.
+    is_owner = await _is_platform_owner_biz(client, biz)
+    if not is_owner:
+        return {
+            "type": "queue_build_request",
+            "result": "feature request sent to the team",
+            "label": f"Feature request filed: {title[:70]}",
+            "nav": None,
+            "toast": {"message": f"Sent to the team: {title[:60]}", "kind": "success"},
+        }
+
+    # The autonomous hop (owner only): Chief -> GitHub issue -> @claude.
     issue_url = await _fire_build_issue(
         client, title, body, (action.get("repo") or "").strip().lower())
 
@@ -12071,7 +12116,7 @@ ACTIONS — BUILDER BRIDGE (your direct line to the system's developer):
   [ACTION:{{"type":"queue_build_request","title":"Cancel button on the booking page","details":"What: a cancel link on confirmed bookings. Where: the /book page confirmation view and the reminder SMS. Why: clients text asking to cancel and it becomes manual work. Constraints: must free the slot for rebooking.","area":"booking"}}]
     — Use when the practitioner says "queue a build", "send this to the developer / to Claude Code", or asks for a feature or fix the system can't do yet. YOU write the complete brief from the conversation — what, where it lives, why it matters, constraints, and what done looks like — they just talk.
     — Optional "repo": "frontend" (the app UI — default) or "backend" (Chief, sites, bookings, SMS, billing machinery). Choose by where the change lives.
-    — The brief lands in Mission Control → Support Tickets prefixed "BUILD:"; when the GitHub bridge is configured it is ALSO dispatched directly to Claude Code, which builds it and opens a pull request for the owner to review. Confirm it's queued (and dispatched, when the result says so); never promise a delivery date — the owner reviews and merges every build.
+    — What happens depends on who's asking, and the action RESULT tells you which occurred: for the PLATFORM OWNER it is dispatched to the builder (Claude Code opens a pull request); for every other practitioner it is filed as a feature request the team reviews. Mirror the result's language exactly — never mention the builder, GitHub, or Claude Code to a practitioner whose result says "feature request", and never promise a delivery date to anyone.
 
 ACTIONS — BOOKING SETUP (availability — the hours the booking widget offers):
   [ACTION:{{"type":"set_availability_day","day":"monday","hours":[["09:00","17:00"]]}}]  — set a day's open hours (24h clock, list of ranges; empty list = closed).
