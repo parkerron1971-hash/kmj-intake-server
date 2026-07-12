@@ -425,6 +425,44 @@ async def _handler_resolve_platform_note(action: Dict[str, Any]) -> Dict[str, An
     return {"ok": True, "label": f"Marked entry #{note_id} done"}
 
 
+async def _handler_queue_build(action: Dict[str, Any]) -> Dict[str, Any]:
+    """Chief -> Claude Code bridge, platform side (2026-07-11): Kevin
+    tells the Platform Chief to queue a build and it dispatches straight
+    to the builder — a GitHub issue tagged @claude (which the Claude
+    Code workflow turns into a PR), plus an operator-log entry as the
+    record. No support ticket here: Mission Control IS the operator
+    surface."""
+    title = (action.get("title") or "").strip()
+    if not title:
+        return {"ok": False, "label": "queue_build: title required"}
+    details = (action.get("details") or "").strip() or title
+    repo_key = (action.get("repo") or "frontend").strip().lower()
+
+    issue_url = None
+    try:
+        import httpx as _hx
+        from chief_of_staff import _fire_build_issue
+        async with _hx.AsyncClient(timeout=_hx.Timeout(20.0)) as c:
+            issue_url = await _fire_build_issue(c, title, details, repo_key)
+    except Exception as e:
+        logger.warning(f"queue_build dispatch failed: {e}")
+
+    # Operator-log record either way.
+    try:
+        await _handler_log_platform_note({
+            "category": "pending",
+            "title": f"BUILD: {title[:120]}",
+            "detail": (details[:1500] + (f"\n\nissue: {issue_url}" if issue_url
+                                         else "\n\n(dispatch unavailable — GITHUB_TOKEN?)")),
+        })
+    except Exception:
+        pass
+
+    if issue_url:
+        return {"ok": True, "label": f"Dispatched to Claude Code: {title[:70]}", "issue_url": issue_url}
+    return {"ok": True, "label": f"Logged (dispatch unavailable — check GITHUB_TOKEN): {title[:60]}"}
+
+
 # ─── Dispatcher ────────────────────────────────────────────────────────
 
 HANDLERS = {
@@ -434,6 +472,7 @@ HANDLERS = {
     "mark_lead_status":        _handler_mark_lead_status,
     "log_platform_note":       _handler_log_platform_note,
     "resolve_platform_note":   _handler_resolve_platform_note,
+    "queue_build":             _handler_queue_build,
 }
 
 
