@@ -45,8 +45,8 @@ jobs:
           # (claude setup-token -> CLAUDE_CODE_OAUTH_TOKEN secret)
           # instead of metered API billing.
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # The beta action's default model id is retired (404s) — pin a
-          # current one. Kevin's pick: the top of the line for build
-          # quality (his Max subscription covers it; swap to
-          # "claude-sonnet-5" anytime for lighter rate-limit draw).
-          model: "claude-fable-5" 
+          # Model comes from the repo variable CLAUDE_BUILD_MODEL —
+          # settable live from Mission Control -> System Health ->
+          # Builder (no code change to switch). Defaults to the top of
+          # the line; the action's own beta default is retired (404s).
+          model: ${{ vars.CLAUDE_BUILD_MODEL || 'claude-fable-5' }} 
