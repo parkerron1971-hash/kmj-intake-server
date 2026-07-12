@@ -293,6 +293,36 @@ BUILD_MODEL_REPOS = [
 BUILD_MODELS_ALLOWED = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"]
 BUILD_MODEL_DEFAULT = "claude-fable-5"
 _BUILD_VAR = "CLAUDE_BUILD_MODEL"
+_AUTOMERGE_VAR = "CLAUDE_AUTO_MERGE"   # absent = 'on' (workflow default)
+
+
+async def _get_repo_var(c: "httpx.AsyncClient", headers: Dict[str, str],
+                        repo: str, name: str, default: str) -> str:
+    try:
+        r = await c.get(
+            f"https://api.github.com/repos/{repo}/actions/variables/{name}",
+            headers=headers)
+        if r.status_code == 200:
+            return r.json().get("value") or default
+    except Exception:
+        pass
+    return default
+
+
+async def _set_repo_var(c: "httpx.AsyncClient", headers: Dict[str, str],
+                        repo: str, name: str, value: str) -> str:
+    try:
+        r = await c.patch(
+            f"https://api.github.com/repos/{repo}/actions/variables/{name}",
+            headers=headers, json={"name": name, "value": value})
+        if r.status_code == 404:
+            r = await c.post(
+                f"https://api.github.com/repos/{repo}/actions/variables",
+                headers=headers, json={"name": name, "value": value})
+        return "ok" if r.status_code in (201, 204) else (
+            f"failed ({r.status_code} — token may need Variables read/write)")
+    except Exception as e:
+        return f"failed ({e})"
 
 
 def _gh_headers() -> Dict[str, str]:
@@ -310,53 +340,48 @@ async def get_build_model(_owner=Depends(require_owner)):
     out: Dict[str, Any] = {"allowed": BUILD_MODELS_ALLOWED,
                            "default": BUILD_MODEL_DEFAULT,
                            "configured": bool(headers), "repos": {}}
+    out["auto_merge"] = {}
     if not headers:
         return out
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         for repo in BUILD_MODEL_REPOS:
-            model = BUILD_MODEL_DEFAULT
-            try:
-                r = await c.get(
-                    f"https://api.github.com/repos/{repo}/actions/variables/{_BUILD_VAR}",
-                    headers=headers)
-                if r.status_code == 200:
-                    model = r.json().get("value") or BUILD_MODEL_DEFAULT
-            except Exception:
-                pass
-            out["repos"][repo] = model
+            out["repos"][repo] = await _get_repo_var(
+                c, headers, repo, _BUILD_VAR, BUILD_MODEL_DEFAULT)
+            out["auto_merge"][repo] = await _get_repo_var(
+                c, headers, repo, _AUTOMERGE_VAR, "on")
     return out
 
 
 class BuildModelBody(BaseModel):
-    model: str
+    model: Optional[str] = None
+    auto_merge: Optional[str] = None   # 'on' | 'off'
 
 
 @router.post("/build-model")
 async def set_build_model(body: BuildModelBody, _owner=Depends(require_owner)):
-    """Set the cloud-build model on BOTH repos (upsert the variable)."""
+    """Set builder controls on BOTH repos (upsert repo variables):
+    model (CLAUDE_BUILD_MODEL) and/or auto_merge (CLAUDE_AUTO_MERGE)."""
     model = (body.model or "").strip()
-    if model not in BUILD_MODELS_ALLOWED:
+    auto = (body.auto_merge or "").strip().lower()
+    if not model and not auto:
+        raise HTTPException(400, "provide model and/or auto_merge")
+    if model and model not in BUILD_MODELS_ALLOWED:
         raise HTTPException(400, f"model must be one of {BUILD_MODELS_ALLOWED}")
+    if auto and auto not in ("on", "off"):
+        raise HTTPException(400, "auto_merge must be 'on' or 'off'")
     headers = _gh_headers()
     if not headers:
         raise HTTPException(503, "GITHUB_TOKEN not configured on the backend")
     results: Dict[str, str] = {}
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         for repo in BUILD_MODEL_REPOS:
-            try:
-                # PATCH updates an existing variable; 404 means create it.
-                r = await c.patch(
-                    f"https://api.github.com/repos/{repo}/actions/variables/{_BUILD_VAR}",
-                    headers=headers, json={"name": _BUILD_VAR, "value": model})
-                if r.status_code == 404:
-                    r = await c.post(
-                        f"https://api.github.com/repos/{repo}/actions/variables",
-                        headers=headers, json={"name": _BUILD_VAR, "value": model})
-                ok = r.status_code in (201, 204)
-                results[repo] = "ok" if ok else f"failed ({r.status_code} — token may need Variables read/write)"
-            except Exception as e:
-                results[repo] = f"failed ({e})"
-    return {"model": model, "results": results}
+            parts = []
+            if model:
+                parts.append(f"model {await _set_repo_var(c, headers, repo, _BUILD_VAR, model)}")
+            if auto:
+                parts.append(f"auto-merge {await _set_repo_var(c, headers, repo, _AUTOMERGE_VAR, auto)}")
+            results[repo] = "; ".join(parts)
+    return {"model": model or None, "auto_merge": auto or None, "results": results}
 
 
 # ─── Watchdog + error stream (beta-readiness arc) ───────────────────────
