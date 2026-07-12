@@ -140,11 +140,20 @@ At scale, assuming a 60/30/10 tier mix (blended $147/customer, ~$13 AI):
 **Kevin-side:** create the Stripe products; verify Sonnet 5 / Opus 4.8 /
 Fable 5 pricing at anthropic.com/pricing; fund the beta budgets.
 
-## 7. Open questions for Kevin
+## 7. Rulings on the open questions (2026-07-12)
 
-1. Credit pack sizes/prices OK at $10/$25/$50 (~8–10¢/unit effective)?
-2. Do granted/promo credits (e.g., referral rewards) live in the same ledger?
-   (Recommended: yes, kind='grant' — one balance, simple mental model.)
-3. Annual plans (2 months free is the classic) — v2.1 decision, not a blocker.
-4. Does Elite also get priority site-build queueing / other non-AI perks, or
-   is the model ladder + allowance the whole differentiation at launch?
+1. **Pack sizes RULED:** $10 → 100 units · $25 → 275 units · $50 → 600 units
+   (10¢ / 9.1¢ / 8.3¢ effective — bigger packs visibly better value, all
+   3–5× the weighted unit cost). Upgrade-cannibalization checked: a Starter
+   user buying ~700 extra units/mo pays ~$139 total vs $199 Professional,
+   and Professional still wins on the Opus ladder + 1,000 included units.
+2. **Promo/referral credits RULED: same ledger.** kind='grant' with a source
+   tag (referral | comp | goodwill) for analytics; ONE balance in the UI;
+   grants never expire (same trust rule as purchases).
+3. **Annual plans RULED: not at launch.** Monthly-only until allowances are
+   calibrated and churn is understood (30–60 days of paid data); then
+   introduce annual = 2 months free as an acquisition-phase cash-flow lever.
+4. **Elite perks RULED:** model ladder + 3,000 units, PLUS priority support
+   (Elite tickets answered first) and early feature access — both zero-cost
+   at current scale. Priority build queueing deferred until a real queue
+   exists (never promise a perk that can't be felt).
