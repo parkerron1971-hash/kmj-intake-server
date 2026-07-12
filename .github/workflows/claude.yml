@@ -49,4 +49,22 @@ jobs:
           # settable live from Mission Control -> System Health ->
           # Builder (no code change to switch). Defaults to the top of
           # the line; the action's own beta default is retired (404s).
-          model: ${{ vars.CLAUDE_BUILD_MODEL || 'claude-fable-5' }} 
+          model: ${{ vars.CLAUDE_BUILD_MODEL || 'claude-fable-5' }}
+          # Self-verify + self-PR (2026-07-12, Kevin): the builder can
+          # compile-check its work and open its own pull request.
+          claude_env: |
+            GH_TOKEN: ${{ github.token }}
+          allowed_tools: "Bash(python -m py_compile:*),Bash(python -c:*),Bash(gh pr create:*),Bash(gh pr view:*)"
+          custom_instructions: |
+            MANDATORY FINISHING SEQUENCE (in order):
+            1. SELF-CHECK before pushing: run
+               `python -m py_compile <every .py file you changed>` and fix
+               any syntax error before proceeding. Report the result in
+               your comment.
+            2. OPEN THE PULL REQUEST YOURSELF after pushing:
+               `gh pr create --base main --title "..." --body "..."`
+               with a body that explains the change and includes
+               "Closes #<issue number>". Post the PR URL in your final
+               comment. Never finish with only a create-PR link.
+        env:
+          GH_TOKEN: ${{ github.token }} 
