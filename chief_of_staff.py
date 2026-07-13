@@ -1983,6 +1983,13 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
 
     system = (f"You are drafting a short, warm check-in from {practitioner} to {contact.get('name')}. "
               f"Voice: {tone}. Under 4 sentences. Sign off as {practitioner}.")
+    # Draft→template residue: if a past check-in for a similar situation
+    # was good enough to send, use it as a voice exemplar. Fail-open.
+    try:
+        import chief_templates
+        system += chief_templates.exemplar_block(biz["id"], "check_in", reason)
+    except Exception:
+        pass
     user = f"Reason for the check-in: {reason}\n\nDraft the message body only (no subject)."
     body = await _draft_short(client, biz, system, user, voice_payload=voice_payload)
     if not body:
@@ -2011,6 +2018,8 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
         ap_result = await _process_autopilot_for_draft(client, biz, draft_row, contact)
         if ap_result and ap_result.get("ok"):
             auto_label_suffix = " (auto-sent)" if ap_result.get("sent") else " (auto-approved)"
+            # (Template capture on send is centralized in _do_approve_one,
+            # which the autopilot path funnels through — no save here.)
 
     return {
         "type": "draft_nurture",
@@ -2041,6 +2050,14 @@ async def handle_draft_email(client, biz, action) -> Dict:
         voice_payload = voice_depth_agent.voice_depth_payload_for_inner_call(biz.get("owner_id"))
         system = (f"Draft a short email from {practitioner} to {name}. Voice: {tone}. "
                   f"Under 5 sentences. Sign off as {practitioner}.")
+        # Draft→template residue: reuse a past sent email for a similar
+        # situation as a voice exemplar. Fail-open.
+        _email_situation = action.get('reason') or 'general outreach'
+        try:
+            import chief_templates
+            system += chief_templates.exemplar_block(biz["id"], "email", _email_situation)
+        except Exception:
+            pass
         user = f"Subject: {subject}\nContext: {action.get('reason') or body_hint or 'general outreach'}"
         body = await _draft_short(client, biz, system, user, voice_payload=voice_payload)
         if not body:
@@ -3775,6 +3792,18 @@ async def _do_approve_one(client, biz: Dict[str, Any], item: Dict) -> Dict[str, 
     if delivery.get("sent"):
         patch: Dict[str, Any] = {"status": "sent", "sent_at": now_iso}
         await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", patch)
+        # Draft→template residue: a message that was approved AND sent is
+        # the quality signal — keep it as a reusable template keyed to its
+        # situation. Catches manual approvals, draft_and_send, and
+        # autopilot alike (they all funnel through here). Fail-open.
+        try:
+            import chief_templates
+            _kind = (item.get("action_type") or item.get("agent") or "email")
+            _situation = (item.get("ai_reasoning") or item.get("subject") or "")
+            if item.get("body") and _situation:
+                chief_templates.save_from_sent(biz_id, _kind, _situation, item.get("body"))
+        except Exception:
+            pass
 
     # Step 4: emit event (agent_message_sent when delivered, agent_message_approved otherwise)
     await _sb(client, "POST", "/events", {
