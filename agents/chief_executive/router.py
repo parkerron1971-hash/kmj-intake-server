@@ -17,15 +17,30 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from agents.chief_executive.dispatcher import compose_response, dispatch
 from agents.chief_executive.intent_classifier import classify_intent
 
+import sb_clients
+from auth_supabase import AuthedUser, require_user
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chief", tags=["chief_executive"])
+
+
+def _require_owner(business_id: str, user: AuthedUser) -> None:
+    # Beta-readiness audit (adversarial): /chief/message was
+    # unauthenticated + dispatches to service-role site writes + LLM
+    # spend. Verify the caller owns the business.
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="business not found")
+    if str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(status_code=403, detail="not authorized for this business")
 
 
 class ChiefMessageRequest(BaseModel):
@@ -42,7 +57,8 @@ class ClassifyDiagRequest(BaseModel):
 
 
 @router.post("/message")
-def chief_message(req: ChiefMessageRequest) -> Dict[str, Any]:
+def chief_message(req: ChiefMessageRequest,
+                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """Single conversational entry point.
 
     Classify the practitioner's message with Sonnet, dispatch each
@@ -57,6 +73,7 @@ def chief_message(req: ChiefMessageRequest) -> Dict[str, Any]:
     The frontend renders the same UI for every status and reads
     next_actions to know what to suggest the user do next.
     """
+    _require_owner(req.business_id, user)
     classification = classify_intent(
         user_text=req.user_text,
         current_view=req.current_view,
