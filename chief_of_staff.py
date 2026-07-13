@@ -406,6 +406,16 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                        business_id: Optional[str] = None,
                        model: Optional[str] = None,
                        stream_sink=None) -> str:
+    # Spend circuit breaker (beta-readiness audit): soft-block new AI
+    # turns once the account crosses its daily-dollar ceiling. Fail-open —
+    # a bookkeeping hiccup must never brick Chief.
+    try:
+        import spend_guard
+        if spend_guard.over_budget():
+            logger.warning("[chief] daily spend cap hit — turn soft-blocked")
+            return spend_guard.block_message()
+    except Exception:
+        pass
     key = _anthropic_key()
     if not key:
         return ""

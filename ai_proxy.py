@@ -103,6 +103,15 @@ TASK_MODEL_MAP: Dict[str, str] = {
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 
 DEFAULT_MAX_TOKENS = 4096
+# Beta-readiness audit (adversarial + AI-spend): /ai/proxy honored a
+# client-supplied model_override and max_tokens with no ceiling, so a
+# caller could force Opus/Fable at 32k+ tokens. Clamp both. Overrides
+# are only honored if they name a model the server already uses.
+MAX_PROXY_TOKENS = 8192
+_ALLOWED_OVERRIDE_MODELS = set(TASK_MODEL_MAP.values()) | {
+    DEFAULT_MODEL, "claude-opus-4-8", "claude-sonnet-5",
+    "claude-haiku-4-5-20251001",
+}
 DEFAULT_TEMPERATURE = 1.0
 
 # Generous timeout — Opus completions can take 60+ seconds.
@@ -145,9 +154,13 @@ router = APIRouter(tags=["ai_proxy"])
 
 
 def _select_model(task_type: Optional[str], override: Optional[str]) -> str:
-    """Pick the model: override > task_type lookup > default."""
-    if override:
+    """Pick the model: override > task_type lookup > default. An override
+    is only honored when it names a model the server already uses —
+    otherwise a caller could force an arbitrary/expensive model."""
+    if override and override in _ALLOWED_OVERRIDE_MODELS:
         return override
+    if override:
+        logger.warning(f"[ai_proxy] ignoring disallowed model_override={override!r}")
     if task_type and task_type in TASK_MODEL_MAP:
         return TASK_MODEL_MAP[task_type]
     return DEFAULT_MODEL
@@ -173,6 +186,19 @@ def _join_text_blocks(content: Any) -> str:
 @router.post("/ai/proxy")
 async def ai_proxy(req: ProxyRequest):
     """Proxy a Claude Messages API call. The API key never leaves Railway."""
+
+    # Spend circuit breaker (beta-readiness audit): soft-block once the
+    # account crosses its daily-dollar ceiling. Fail-open.
+    try:
+        import spend_guard
+        if spend_guard.over_budget():
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "daily_spend_cap", "message": spend_guard.block_message()})
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
     # Phase E v1.1 — Chief message cap (dormant until BILLING_ENFORCE=on).
     _cap_biz = (req.metadata or {}).get("business_id") if hasattr(req, "metadata") else None
@@ -204,7 +230,7 @@ async def ai_proxy(req: ProxyRequest):
     # Build the Anthropic payload. Only include fields Anthropic expects.
     anthropic_payload: Dict[str, Any] = {
         "model": model,
-        "max_tokens": req.max_tokens or DEFAULT_MAX_TOKENS,
+        "max_tokens": min(int(req.max_tokens or DEFAULT_MAX_TOKENS), MAX_PROXY_TOKENS),
         "temperature": req.temperature if req.temperature is not None else DEFAULT_TEMPERATURE,
         "messages": [m.model_dump() for m in req.messages],
     }
