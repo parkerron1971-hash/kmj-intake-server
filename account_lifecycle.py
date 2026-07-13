@@ -61,31 +61,69 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "chief_conversations",
     "chief_activity",
     "chief_proposals",
+    "chief_jobs",             # beta-readiness audit: was surviving deletion
+    "chief_scheduled_actions",
+    "chief_insights",
     "notifications",
     "sessions",
     "tasks",
+    # Message content — MUST precede the thread/parent tables below so
+    # their NO-ACTION foreign keys don't 409 the delete mid-way.
+    "sms_messages",
+    "sms_consents",
+    "sms_keywords",
+    "sms_bindings",
+    "sms_opt_outs",
+    "email_replies",
     "invoices",
     "bills",
+    "orders",
+    "order_items",
+    "credit_ledger",
+    "offerings",
     "documents",
+    "foundation_documents",
     "projects",
     "products",
     "intake_forms",
     "custom_modules",
     "module_records",
+    "module_entries",
+    "module_specs",
     "business_sites",
+    "business_profiles",
     "business_customers",
     "social_accounts",
     "social_posts",
+    "design_rationales",
+    "design_feedback",
     "goals",
     "support_tickets",
+    "workflows",
+    "workflow_definitions",
     "bank_accounts",
     "bank_transactions",
+    "plaid_items",
+    "plaid_transactions",
+    "reconciliations",
     "journal_entries",
+    "ledger_entries",
     "ledger_accounts",
     "email_threads",
     "sms_threads",
     "contacts",          # after the tables that reference contacts
 ]
+
+# User-scoped tables (keyed by user_id, not business_id) — cleaned up in
+# delete_account only, since they belong to the person, not a business.
+USER_CHILD_TABLES: List[str] = [
+    "push_subscriptions",
+    "user_profiles",
+]
+
+# Supabase Storage buckets holding business-scoped files (logos, brand,
+# site assets). Objects are stored under a "{business_id}/…" prefix.
+STORAGE_BUCKETS: List[str] = ["business-assets"]
 
 
 def _service_headers() -> Dict[str, str]:
@@ -164,12 +202,45 @@ async def export_account(user: AuthedUser = Depends(require_user)):
 
 # ─── Deletion ───────────────────────────────────────────────────────────
 
+async def _delete_storage_objects(client: httpx.AsyncClient, business_id: str) -> int:
+    """Delete every uploaded file under the business's prefix in each
+    storage bucket (beta-readiness audit: these survived account deletion
+    before). Best-effort — never blocks the row deletion."""
+    removed = 0
+    for bucket in STORAGE_BUCKETS:
+        try:
+            lr = await client.post(
+                f"{SUPABASE_URL}/storage/v1/object/list/{bucket}",
+                headers={**_service_headers(), "Content-Type": "application/json"},
+                json={"prefix": f"{business_id}/", "limit": 1000},
+            )
+            if lr.status_code >= 400:
+                continue
+            names = [f"{business_id}/{o['name']}" for o in (lr.json() or []) if o.get("name")]
+            if not names:
+                continue
+            dr = await client.request(
+                "DELETE",
+                f"{SUPABASE_URL}/storage/v1/object/{bucket}",
+                headers={**_service_headers(), "Content-Type": "application/json"},
+                json={"prefixes": names},
+            )
+            if dr.status_code < 400:
+                removed += len(names)
+        except Exception as e:
+            logger.warning(f"storage cleanup {bucket} for {business_id} failed (non-fatal): {e}")
+    return removed
+
+
 async def _delete_business(client: httpx.AsyncClient, biz: Dict[str, Any]) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for table in BUSINESS_CHILD_TABLES:
         n = await _delete_table_rows(client, table, biz["id"])
         if n:
             counts[table] = n
+    storage_removed = await _delete_storage_objects(client, biz["id"])
+    if storage_removed:
+        counts["_storage_files"] = storage_removed
     r = await client.delete(
         f"{SUPABASE_URL}/rest/v1/businesses",
         headers=_service_headers(),
@@ -177,6 +248,24 @@ async def _delete_business(client: httpx.AsyncClient, biz: Dict[str, Any]) -> Di
     )
     if r.status_code >= 400:
         raise HTTPException(502, f"Business row delete failed: {r.text[:300]}")
+    return counts
+
+
+async def _delete_user_rows(client: httpx.AsyncClient, user_id: str) -> Dict[str, int]:
+    """Delete the person-scoped rows (keyed by user_id). Missing tables
+    and missing user_id columns skip silently."""
+    counts: Dict[str, int] = {}
+    for table in USER_CHILD_TABLES:
+        try:
+            r = await client.delete(
+                f"{SUPABASE_URL}/rest/v1/{table}",
+                headers={**_service_headers(), "Prefer": "return=representation"},
+                params={"user_id": f"eq.{user_id}", "select": "user_id"},
+            )
+            if r.status_code < 400:
+                counts[table] = len(r.json() or [])
+        except Exception:
+            pass
     return counts
 
 
@@ -204,6 +293,9 @@ async def delete_account(user: AuthedUser = Depends(require_user)):
         for biz in businesses:
             await _delete_business(client, biz)
             removed.append(biz["id"])
+        # Person-scoped rows (push subscriptions, profile) — keyed by
+        # user_id, so they'd survive the per-business sweep otherwise.
+        await _delete_user_rows(client, user.id)
         # Finally, the auth user itself (Supabase admin API).
         r = await client.delete(
             f"{SUPABASE_URL}/auth/v1/admin/users/{user.id}",
