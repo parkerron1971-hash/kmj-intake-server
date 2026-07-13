@@ -37,11 +37,21 @@ import os
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from api_usage_logger import log_api_usage
+import rate_limit
+
+
+def _voice_rate_guard(request: Request) -> None:
+    """Per-IP throttle on the voice endpoints (beta-readiness audit).
+    Fail-open inside rate_limit.allow."""
+    if not rate_limit.allow("voice", rate_limit.client_ip(request)):
+        raise HTTPException(status_code=429,
+            detail="Too many voice requests — give it a moment.",
+            headers={"Retry-After": str(rate_limit.retry_after("voice"))})
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -79,10 +89,12 @@ router = APIRouter(tags=["whisper_proxy"])
 
 @router.post("/ai/whisper/transcribe")
 async def transcribe(
+    request: Request,
     audio: UploadFile = File(...),
     language: Optional[str] = Form(None),
 ):
     """Transcribe an uploaded audio blob via OpenAI Whisper."""
+    _voice_rate_guard(request)
     key = _openai_key()
     if not key:
         logger.error("OPENAI_API_KEY not configured")
@@ -156,9 +168,10 @@ class TTSRequest(BaseModel):
 
 
 @router.post("/ai/tts/speak")
-async def text_to_speech(req: TTSRequest):
+async def text_to_speech(req: TTSRequest, request: Request):
     """Proxy OpenAI TTS. Streams raw mp3 audio back to the client for
     faster time-to-first-byte playback."""
+    _voice_rate_guard(request)
     key = _openai_key()
     if not key:
         raise HTTPException(500, "OPENAI_API_KEY not configured on server")
