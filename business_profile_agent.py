@@ -190,7 +190,7 @@ def _sb_url() -> str:
 
 
 def _sb_anon() -> str:
-    return os.environ.get("SUPABASE_ANON", "")
+    return os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
 def _sb_headers() -> Dict[str, str]:

@@ -348,7 +348,14 @@ SUPABASE_URL_DEFAULT = "https://brqjgbpzackdihgjsorf.supabase.co"
 
 
 def _sb_headers() -> Dict[str, str]:
-    key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON", "")
+    # Beta-readiness audit (RLS tighten): these paths write /invoices from
+    # the Stripe webhook (no user JWT) and MUST use the service role — the
+    # canonical env name is SUPABASE_SERVICE_ROLE_KEY (the whole rest of
+    # the codebase uses it; this file was the lone SUPABASE_SERVICE_KEY
+    # holdout with an anon fallback that would break once the permissive
+    # invoices policy is dropped).
+    key = (os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+           or os.environ.get("SUPABASE_SERVICE_KEY", ""))
     return {
         "apikey": key,
         "Authorization": f"Bearer {key}",
@@ -793,7 +800,8 @@ async def stripe_webhook(request: Request):
 SUPPORTED_PROVIDERS = ("stripe", "square", "paypal")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://brqjgbpzackdihgjsorf.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY", "")
+SUPABASE_KEY = (os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+                or os.environ.get("SUPABASE_SERVICE_KEY", ""))
 
 
 def _validate_provider(provider: str) -> str:

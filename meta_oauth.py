@@ -175,8 +175,8 @@ def _parse_state(token: str) -> Dict[str, Any]:
 async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None) -> Any:
     url = f"{os.environ.get('SUPABASE_URL', '')}/rest/v1{path}"
     headers = {
-        "apikey": os.environ.get("SUPABASE_ANON", ""),
-        "Authorization": f"Bearer {os.environ.get('SUPABASE_ANON', '')}",
+        "apikey": os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""),
+        "Authorization": f"Bearer {os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')}",
         "Content-Type": "application/json",
         "Prefer": "return=representation,resolution=merge-duplicates",
     }
