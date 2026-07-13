@@ -90,7 +90,17 @@ def _embed(text: str) -> Optional[list]:
         if r.status_code != 200:
             logger.warning(f"[gate] embed {r.status_code}: {r.text[:120]}")
             return None
-        return r.json()["data"][0]["embedding"]
+        data = r.json()
+        # Metering (beta-readiness audit): the gate's embedding call runs
+        # on every cacheable Chief-bookkeeping lookup and was dark.
+        try:
+            from api_usage_logger import log_api_usage_sync
+            toks = int((data.get("usage") or {}).get("prompt_tokens") or 0)
+            log_api_usage_sync(endpoint="/gate/embed", model=EMBED_MODEL,
+                               input_tokens=toks, output_tokens=0)
+        except Exception:
+            pass
+        return data["data"][0]["embedding"]
     except Exception as e:
         logger.warning(f"[gate] embed failed: {e}")
         return None

@@ -462,6 +462,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         payload["stream"] = True
         full_parts: List[str] = []
         in_tok = out_tok = 0
+        cache_read_tok = cache_write_tok = 0
         try:
             async with client.stream("POST", ANTHROPIC_API_URL, headers={
                 "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION,
@@ -495,6 +496,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                     elif et == "message_start":
                         u = ((evt.get("message") or {}).get("usage")) or {}
                         in_tok = int(u.get("input_tokens") or 0)
+                        cache_read_tok = int(u.get("cache_read_input_tokens") or 0)
+                        cache_write_tok = int(u.get("cache_creation_input_tokens") or 0)
                     elif et == "message_delta":
                         u = evt.get("usage") or {}
                         out_tok = int(u.get("output_tokens") or out_tok)
@@ -508,7 +511,9 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
             return "".join(full_parts).strip()
         await log_api_usage(
             endpoint="/chief/backend", model=model,
-            input_tokens=in_tok, output_tokens=out_tok, business_id=business_id,
+            input_tokens=in_tok, output_tokens=out_tok,
+            cache_read_tokens=cache_read_tok, cache_creation_tokens=cache_write_tok,
+            business_id=business_id,
             duration_ms=int(time.time() * 1000) - started_ms)
         return "".join(full_parts).strip()
 
@@ -546,6 +551,10 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         model=data.get("model") if isinstance(data, dict) else model,
         input_tokens=int(usage.get("input_tokens") or 0),
         output_tokens=int(usage.get("output_tokens") or 0),
+        # Metering fix (beta-readiness audit): cache tokens were dropped,
+        # understating every cached turn. Fold them into the cost.
+        cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
+        cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
         business_id=business_id,
         duration_ms=int(time.time() * 1000) - started_ms,
     )

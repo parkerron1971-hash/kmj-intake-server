@@ -88,7 +88,25 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     "claude-3-5-sonnet": (300.0, 1500.0),
     "claude-3-5-haiku":  (80.0, 400.0),
     "claude-3-opus":     (1500.0, 7500.0),
+    # ── OpenAI (voice + embeddings + fallback brain) — metering coverage
+    #    (beta-readiness audit): these paths were completely dark. For the
+    #    non-token-priced ones (tts = per character, whisper = per minute)
+    #    the caller computes the cost and passes cost_cents_override; the
+    #    table entry here is a documented reference, priced so that passing
+    #    char-count as input_tokens also yields the right number.
+    "text-embedding-3-small": (2.0, 0.0),    # $0.02/MTok input
+    "text-embedding-3-large": (13.0, 0.0),   # $0.13/MTok input
+    "tts-1":             (1500.0, 0.0),      # $15 / 1M characters
+    "tts-1-hd":          (3000.0, 0.0),      # $30 / 1M characters
+    "whisper-1":         (0.0, 0.0),         # $0.006/min — via cost_cents_override
+    "gpt-4o-mini":       (15.0, 60.0),       # $0.15/$0.60 (fallback brain)
+    "gpt-4o":            (250.0, 1000.0),    # $2.50/$10 (fallback brain)
 }
+
+# Anthropic prompt-cache multipliers (relative to base input rate):
+# cache READ = 0.10×, cache WRITE/creation = 1.25×.
+_CACHE_READ_MULT = 0.10
+_CACHE_WRITE_MULT = 1.25
 
 
 def _price_for_model(model: str) -> tuple[float, float]:
@@ -107,11 +125,18 @@ def _price_for_model(model: str) -> tuple[float, float]:
     return best or (300.0, 1500.0)
 
 
-def _compute_cost_cents(model: str, input_tokens: int, output_tokens: int) -> float:
+def _compute_cost_cents(model: str, input_tokens: int, output_tokens: int,
+                        cache_read_tokens: int = 0,
+                        cache_creation_tokens: int = 0) -> float:
     in_cents_per_mtok, out_cents_per_mtok = _price_for_model(model)
+    # Anthropic reports input_tokens as FRESH (uncached) input only; cache
+    # reads (0.10×) and cache writes (1.25×) are separate and were being
+    # dropped — understating every cached Chief turn. Fold them in.
     cost = (
         (input_tokens  / 1_000_000.0) * in_cents_per_mtok +
-        (output_tokens / 1_000_000.0) * out_cents_per_mtok
+        (output_tokens / 1_000_000.0) * out_cents_per_mtok +
+        (cache_read_tokens     / 1_000_000.0) * in_cents_per_mtok * _CACHE_READ_MULT +
+        (cache_creation_tokens / 1_000_000.0) * in_cents_per_mtok * _CACHE_WRITE_MULT
     )
     return round(cost, 4)
 
@@ -125,16 +150,22 @@ def log_api_usage_sync(
     business_id: Optional[str] = None,
     task_type: Optional[str] = None,
     ok: bool = True,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+    cost_cents_override: Optional[float] = None,
 ) -> None:
     """Synchronous variant for sync call sites (composer/director). Same
     row shape; never raises. Arc 19 — site builds must meter (weight 5/25)."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         return
+    cost = (round(cost_cents_override, 4) if cost_cents_override is not None
+            else _compute_cost_cents(model, input_tokens or 0, output_tokens or 0,
+                                     cache_read_tokens, cache_creation_tokens))
     body: Dict[str, Any] = {
         "endpoint": endpoint, "model": model,
         "input_tokens": int(input_tokens or 0),
         "output_tokens": int(output_tokens or 0),
-        "cost_cents": _compute_cost_cents(model, input_tokens or 0, output_tokens or 0),
+        "cost_cents": cost,
         "ok": ok,
     }
     if business_id: body["business_id"] = business_id
@@ -166,13 +197,18 @@ async def log_api_usage(
     duration_ms: Optional[int] = None,
     ok: bool = True,
     error: Optional[str] = None,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+    cost_cents_override: Optional[float] = None,
 ) -> None:
     """Append one row to api_usage. Never raises."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         logger.warning("api_usage: Supabase not configured; skipping log")
         return
 
-    cost_cents = _compute_cost_cents(model, input_tokens, output_tokens)
+    cost_cents = (round(cost_cents_override, 4) if cost_cents_override is not None
+                  else _compute_cost_cents(model, input_tokens, output_tokens,
+                                           cache_read_tokens, cache_creation_tokens))
     body: Dict[str, Any] = {
         "endpoint":      endpoint,
         "model":         model,
