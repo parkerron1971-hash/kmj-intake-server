@@ -88,6 +88,9 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     "claude-3-5-sonnet": (300.0, 1500.0),
     "claude-3-5-haiku":  (80.0, 400.0),
     "claude-3-opus":     (1500.0, 7500.0),
+    # Fallback brain (OpenAI) — engaged only when Anthropic fails.
+    "gpt-4o-mini":       (15.0, 60.0),      # $0.15/MTok in, $0.60/MTok out
+    "gpt-4o":            (250.0, 1000.0),   # $2.50/MTok in, $10/MTok out
 }
 
 
