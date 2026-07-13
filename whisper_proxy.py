@@ -41,6 +41,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
+from api_usage_logger import log_api_usage
+
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════
@@ -129,6 +131,17 @@ async def transcribe(
         f"Whisper ok: bytes={len(audio_bytes)} "
         f"text_len={len(result.get('text', ''))} content_type={content_type}"
     )
+    # Metering (beta-readiness audit): voice input was completely dark.
+    # Whisper is $0.006/min; estimate minutes from the byte size of the
+    # (opus/webm voice) blob — ~2.5 KB/sec is a reasonable voice rate.
+    try:
+        est_minutes = max(len(audio_bytes) / 2500.0 / 60.0, 1 / 60.0)
+        await log_api_usage(
+            endpoint="/ai/whisper", model=WHISPER_MODEL,
+            input_tokens=0, output_tokens=0,
+            cost_cents_override=round(est_minutes * 0.6, 4))  # $0.006/min = 0.6c/min
+    except Exception:
+        pass
     return result
 
 
@@ -203,6 +216,15 @@ async def text_to_speech(req: TTSRequest):
         raise HTTPException(upstream.status_code, f"TTS error: {body}")
 
     logger.info(f"TTS streaming: chars={len(text)} voice={voice} model={model}")
+    # Metering (beta-readiness audit): every spoken reply was dark. TTS is
+    # priced per character — pass the char count as input_tokens; the
+    # tts-1 / tts-1-hd table entries are per-1M-char so the cost is exact.
+    try:
+        await log_api_usage(
+            endpoint="/ai/tts", model=model,
+            input_tokens=len(text), output_tokens=0)
+    except Exception:
+        pass
 
     async def _stream():
         try:
