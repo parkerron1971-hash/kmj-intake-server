@@ -26,6 +26,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+import pii_mask
 
 router = APIRouter(tags=["sms"])
 logger = logging.getLogger("sms_service")
@@ -441,7 +442,7 @@ async def receive_sms(request: Request):
         media = msg_payload.get("media") or []
 
         if not from_number or not text:
-            logger.info(f"[SMS] dropped inbound — from={from_number_raw} text_len={len(text)}")
+            logger.info(f"[SMS] dropped inbound — from={pii_mask.mask_phone(from_number_raw)} text_len={len(text)}")
             return {"status": "ignored", "reason": "missing_from_or_text"}
 
         # Consent keywords (compliance fix, 2026-07-10): the Twilio
@@ -455,14 +456,14 @@ async def receive_sms(request: Request):
         if first_word in _routing.STOP_WORDS:
             await _sb_post(client, "/sms_opt_outs?on_conflict=phone,business_id",
                            {"phone": from_number, "business_id": None})
-            logger.info(f"[SMS] STOP via Telnyx path from {from_number} — opt-out recorded")
+            logger.info(f"[SMS] STOP via Telnyx path from {pii_mask.mask_phone(from_number)} — opt-out recorded")
             return {"status": "ok", "action": "opt_out"}
         if first_word in _routing.START_WORDS:
             try:
                 await client.delete(
                     f"{_sb_url()}/rest/v1/sms_opt_outs?phone=eq.{_pq(from_number)}",
                     headers=_sb_headers(), timeout=HTTP_TIMEOUT)
-                logger.info(f"[SMS] START via Telnyx path from {from_number} — opt-out cleared")
+                logger.info(f"[SMS] START via Telnyx path from {pii_mask.mask_phone(from_number)} — opt-out cleared")
             except httpx.HTTPError as e:
                 logger.warning(f"[SMS] opt-out clear failed: {e}")
             return {"status": "ok", "action": "opt_in"}
@@ -523,7 +524,7 @@ async def record_inbound_sms(
                 business_id = biz_rows[0]["id"]
 
     if not business_id:
-        logger.info(f"[SMS] no business found for inbound from {from_number}")
+        logger.info(f"[SMS] no business found for inbound from {pii_mask.mask_phone(from_number)}")
         return {"status": "unresolved", "from": from_number}
 
     # Persist

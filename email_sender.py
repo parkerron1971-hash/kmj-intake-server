@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+import pii_mask
 
 RESEND_URL = "https://api.resend.com/emails"
 DEFAULT_FROM_EMAIL = "noreply@mysolutionist.app"
@@ -184,7 +185,7 @@ async def send_via_resend(
     sup = await is_suppressed(to_email)
     if sup:
         why = "marked a previous email as spam" if sup.get("reason") == "complained" else "hard-bounced"
-        logger.warning(f"send BLOCKED — {to_email} is suppressed ({sup.get('reason')})")
+        logger.warning(f"send BLOCKED — {pii_mask.mask_email(to_email)} is suppressed ({sup.get('reason')})")
         raise RuntimeError(
             f"Not sent: {to_email} {why} previously. Verify the address is right; "
             f"a platform admin can clear it from email_suppressions if it was a mistake."
@@ -544,14 +545,14 @@ async def _fetch_inbound_body(client: httpx.AsyncClient, email_id: str) -> Dict[
             if not text and not html:
                 # Surface the full payload (capped) so an unfamiliar
                 # field name shows up in Railway logs and we can adapt.
-                logger.warning(f"[INBOUND] no text/html on receiving response: {str(body)[:500]}")
+                logger.warning(f"[INBOUND] no text/html on receiving response (keys={list(body.keys()) if isinstance(body, dict) else type(body).__name__})")
             else:
                 logger.info(
                     f"[INBOUND] fetched body via receiving API: "
                     f"text_len={len(text)} html_len={len(html)}"
                 )
             return {"text": text, "html": html}
-        logger.warning(f"[INBOUND] receiving API non-dict body: {str(body)[:200]}")
+        logger.warning(f"[INBOUND] receiving API non-dict body (type={type(body).__name__})")
         return {"text": "", "html": ""}
     except httpx.HTTPError as e:
         logger.warning(f"[INBOUND] body fetch error: {e}")
@@ -733,7 +734,7 @@ async def inbound_email(request: Request):
             current_health = int(contact.get("health_score") or 50)
 
         if not business_id:
-            logger.info(f"[INBOUND] could not resolve business: from={from_email} to={parsed['to_addresses']}")
+            logger.info(f"[INBOUND] could not resolve business: from={pii_mask.mask_email(from_email)}")
             return {"status": "unresolved", "from": from_email}
 
         # Cleaned reply body (quoted-text stripped)
@@ -881,7 +882,7 @@ async def resend_webhook(request: Request):
         if evt["to_email"]:
             reason = "complained" if evt["type"] == "email.complained" else "bounced"
             await add_suppression(evt["to_email"], reason, evt["type"])
-            logger.warning(f"[SUPPRESS] {evt['to_email']} → {reason}")
+            logger.warning(f"[SUPPRESS] {pii_mask.mask_email(evt['to_email'])} → {reason}")
             return {"status": "suppressed", "to": evt["to_email"], "reason": reason}
         return {"status": "ignored", "reason": "bounce event without recipient"}
 
@@ -896,7 +897,7 @@ async def resend_webhook(request: Request):
     async with httpx.AsyncClient() as client:
         rows = await _sb_get(client, f"/contacts?email=eq.{to_email}&select=id,name,business_id&limit=1")
         if not rows:
-            logger.info(f"[OPEN] unknown recipient: {to_email}")
+            logger.info(f"[OPEN] unknown recipient: {pii_mask.mask_email(to_email)}")
             return {"status": "unknown_recipient", "to": to_email}
         contact = rows[0]
         contact_id = contact.get("id")
@@ -915,7 +916,7 @@ async def resend_webhook(request: Request):
         )
         if not invoices:
             # Maybe already-viewed: skip silently
-            logger.info(f"[OPEN] no matching sent invoice for {to_email}")
+            logger.info(f"[OPEN] no matching sent invoice for {pii_mask.mask_email(to_email)}")
             return {"status": "no_match"}
 
         inv = invoices[0]

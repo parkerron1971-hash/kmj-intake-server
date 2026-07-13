@@ -48,6 +48,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from lead_admin import require_owner
+import pii_mask
 
 logger = logging.getLogger("twilio_sms")
 if not logger.handlers:
@@ -157,7 +158,7 @@ async def twilio_inbound_sms(request: Request):
 
     from_number = params.get("From", "")
     body = params.get("Body", "")
-    logger.info(f"inbound SMS from={from_number} body={body[:500]}")
+    logger.info(f"inbound SMS from={pii_mask.mask_phone(from_number)} len={len(body)}")
 
     # Routing (2026-07-04, Kevin's architecture): ONE platform number —
     # Chief routes every inbound BINDING FIRST, KEYWORD SECOND
