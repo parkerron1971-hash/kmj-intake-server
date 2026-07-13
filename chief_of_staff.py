@@ -13100,6 +13100,19 @@ async def chief_chat(
         if not req.message:
             raise HTTPException(400, "message is required")
 
+        # Per-user rate limit (beta-readiness audit) — one tester can't
+        # fire thousands of Chief turns. Fail-open.
+        try:
+            import rate_limit
+            if not rate_limit.allow("chief", str(user_session.user.id)):
+                raise HTTPException(status_code=429,
+                    detail="You're sending messages very fast — give Chief a moment.",
+                    headers={"Retry-After": str(rate_limit.retry_after("chief"))})
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
         async with httpx.AsyncClient() as client:
             # Recurrence "cron" — generate any due invoice instances
             # before we load context so they show up this turn. Cheap
