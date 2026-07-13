@@ -636,29 +636,52 @@ async def _match_invoice_for_payment(
 async def stripe_webhook(request: Request):
     """Handle Stripe webhook payloads (payment links / invoice matching).
 
-    Signature verification: enabled the moment STRIPE_PAYMENTS_WEBHOOK_SECRET
-    (or STRIPE_WEBHOOK_SECRET as a fallback) is set in env — uses the same
-    HMAC check as the subscription webhook in stripe_billing.py. Until the
-    secret is provisioned we accept unsigned POSTs (previous behavior) and
-    log a warning so the gap stays visible in Railway logs."""
+    Signature verification is now MANDATORY (beta-readiness audit,
+    adversarial): this handler flips invoices to paid and can trigger
+    digital-product delivery, matching an invoice by amount when there's
+    no link id. Processing unsigned POSTs let a forged
+    checkout.session.completed mark any invoice paid with no money moved.
+    Fail-closed like the subscription webhook in stripe_billing.py — set
+    STRIPE_PAYMENTS_WEBHOOK_SECRET (or STRIPE_WEBHOOK_SECRET) on Railway."""
     body = await request.body()
     _wh_secret = (
         os.environ.get("STRIPE_PAYMENTS_WEBHOOK_SECRET")
         or os.environ.get("STRIPE_WEBHOOK_SECRET")
         or ""
     ).strip()
-    if _wh_secret:
-        from stripe_billing import _verify_stripe_signature
-        _verify_stripe_signature(body, request.headers.get("stripe-signature", ""), _wh_secret)
-    else:
-        logger.warning(
-            "stripe webhook: UNSIGNED (set STRIPE_PAYMENTS_WEBHOOK_SECRET to enable verification)"
+    if not _wh_secret:
+        logger.error(
+            "stripe webhook REJECTED: no STRIPE_PAYMENTS_WEBHOOK_SECRET / "
+            "STRIPE_WEBHOOK_SECRET configured — refusing to process unsigned events"
         )
+        raise HTTPException(500, "Stripe payments webhook not configured")
+    from stripe_billing import _verify_stripe_signature
+    _verify_stripe_signature(body, request.headers.get("stripe-signature", ""), _wh_secret)
     try:
         event = json.loads(body)
     except Exception:
         logger.warning("stripe webhook: invalid JSON payload")
         return {"status": "invalid"}
+
+    # Idempotency: a signed event can still be replayed. Record-first
+    # into stripe_webhook_events (id = Stripe event.id is the PK); a
+    # replay collides on the UNIQUE PK and we skip before any state
+    # mutation (notably digital-product re-delivery). Best-effort — a
+    # bookkeeping hiccup never blocks a genuine first-delivery event.
+    _evt_id = (event.get("id") or "").strip()
+    if _evt_id:
+        try:
+            async with httpx.AsyncClient() as _c:
+                _seen = await _sb_get(_c, f"/stripe_webhook_events?id=eq.{_evt_id}&select=id&limit=1")
+                if _seen:
+                    logger.info(f"stripe webhook: {_evt_id} already processed (dedupe)")
+                    return {"status": "duplicate", "id": _evt_id}
+                await _sb_post(_c, "/stripe_webhook_events", {
+                    "id": _evt_id, "type": (event.get("type") or ""), "raw": event,
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                })
+        except Exception as _e:
+            logger.warning(f"stripe webhook dedup skipped: {_e}")
 
     evt_type = (event.get("type") or "").strip()
     if evt_type != "checkout.session.completed":
