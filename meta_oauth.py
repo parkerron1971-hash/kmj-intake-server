@@ -73,9 +73,25 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
+
+import sb_clients
+from auth_supabase import AuthedUser, require_user
+
+
+def _require_owner(business_id: str, user: AuthedUser) -> None:
+    """Beta-readiness audit (adversarial): these endpoints were fully
+    unauthenticated — anyone could list/disconnect/publish to any
+    tenant's connected social pages. Verify the caller owns the business
+    (service-role read of owner_id; independent of RLS)."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="business not found")
+    if str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(status_code=403, detail="not authorized for this business")
 
 FB_GRAPH = "https://graph.facebook.com/v21.0"
 FB_OAUTH = "https://www.facebook.com/v21.0/dialog/oauth"
@@ -450,10 +466,11 @@ async def meta_callback(code: Optional[str] = None, state: Optional[str] = None,
 
 
 @router.get("/connect/meta/pages")
-async def meta_list_pages(business_id: str):
+async def meta_list_pages(business_id: str, user: AuthedUser = Depends(require_user)):
     """Return the connected Pages for a business — no tokens leak."""
     if not business_id:
         raise HTTPException(400, "business_id required")
+    _require_owner(business_id, user)
     async with httpx.AsyncClient() as client:
         rows = await _sb(client, "GET",
             f"/social_accounts?business_id=eq.{business_id}&provider=eq.meta"
@@ -463,10 +480,11 @@ async def meta_list_pages(business_id: str):
 
 
 @router.delete("/connect/meta/disconnect")
-async def meta_disconnect(business_id: str, page_id: str):
+async def meta_disconnect(business_id: str, page_id: str, user: AuthedUser = Depends(require_user)):
     """Remove a single Page connection."""
     if not business_id or not page_id:
         raise HTTPException(400, "business_id and page_id required")
+    _require_owner(business_id, user)
     async with httpx.AsyncClient() as client:
         await _sb(client, "DELETE",
             f"/social_accounts?business_id=eq.{business_id}&provider=eq.meta&page_id=eq.{page_id}")
@@ -492,9 +510,10 @@ class PublishResponse(BaseModel):
 
 
 @router.post("/publish", response_model=PublishResponse)
-async def meta_publish(req: PublishRequest):
+async def meta_publish(req: PublishRequest, user: AuthedUser = Depends(require_user)):
     if not req.message or not req.message.strip():
         raise HTTPException(400, "message required")
+    _require_owner(req.business_id, user)
 
     async with httpx.AsyncClient() as client:
         # Look up the connection (with token) for this tenant + page.

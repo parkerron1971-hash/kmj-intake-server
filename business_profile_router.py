@@ -11,11 +11,25 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import business_profile_agent as bp
+import sb_clients
+from auth_supabase import AuthedUser, require_user
+
+
+def _require_owner(business_id: str, user: AuthedUser) -> None:
+    # Beta-readiness audit (adversarial): this router was fully
+    # unauthenticated + service-role (RLS-bypassed). Verify the caller
+    # owns the business before any read/write.
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="business not found")
+    if str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(status_code=403, detail="not authorized for this business")
 
 router = APIRouter(prefix="/business-profile", tags=["business-profile"])
 logger = logging.getLogger("business_profile_router")
@@ -60,13 +74,15 @@ def archetype(business_type: str) -> JSONResponse:
 
 
 @router.get("/profile/{business_id}")
-def profile(business_id: str) -> JSONResponse:
+def profile(business_id: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    _require_owner(business_id, user)
     row = bp.get_profile(business_id)
     return JSONResponse({"ok": True, "profile": row})
 
 
 @router.post("/profile/{business_id}")
-def save_profile(business_id: str, data: Dict[str, Any]) -> JSONResponse:
+def save_profile(business_id: str, data: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    _require_owner(business_id, user)
     row = bp.upsert_profile(business_id, data or {})
     if row is None:
         return JSONResponse({"ok": False, "error": "save failed"}, status_code=500)
@@ -74,7 +90,8 @@ def save_profile(business_id: str, data: Dict[str, Any]) -> JSONResponse:
 
 
 @router.post("/profile/{business_id}/seed-from-archetype")
-def seed_from_archetype(business_id: str, body: SeedBody) -> JSONResponse:
+def seed_from_archetype(business_id: str, body: SeedBody, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    _require_owner(business_id, user)
     row = bp.apply_archetype_defaults(business_id, body.business_type)
     if row is None:
         return JSONResponse({"ok": False, "error": "unknown archetype"}, status_code=400)
@@ -82,13 +99,14 @@ def seed_from_archetype(business_id: str, body: SeedBody) -> JSONResponse:
 
 
 @router.post("/profile/seed-from-onboarding")
-def seed_from_onboarding(body: SeedFromOnboardingBody) -> JSONResponse:
+def seed_from_onboarding(body: SeedFromOnboardingBody, user: AuthedUser = Depends(require_user)) -> JSONResponse:
     """
     Called from OnboardingFlow.handleLaunch after the businesses row is
     inserted. Idempotent: maps tones -> brand_voice, applies archetype
     defaults, and only fills NULL fields if a profile already exists.
     Failure is non-fatal on the client side.
     """
+    _require_owner(body.business_id, user)
     row = bp.seed_from_onboarding(
         business_id=body.business_id,
         business_type=body.business_type,
@@ -111,12 +129,14 @@ def seed_from_onboarding(body: SeedFromOnboardingBody) -> JSONResponse:
 
 
 @router.get("/profile/{business_id}/required-disclaimers")
-def required_disclaimers(business_id: str) -> JSONResponse:
+def required_disclaimers(business_id: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    _require_owner(business_id, user)
     return JSONResponse({"ok": True, "disclaimers": bp.get_required_disclaimers(business_id)})
 
 
 @router.get("/profile/{business_id}/is-complete")
-def complete(business_id: str) -> JSONResponse:
+def complete(business_id: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    _require_owner(business_id, user)
     return JSONResponse({"ok": True, "complete": bp.is_complete(business_id)})
 
 
@@ -125,7 +145,7 @@ class ProactiveModeBody(BaseModel):
 
 
 @router.post("/profile/{business_id}/proactive-mode")
-def set_proactive_mode(business_id: str, body: ProactiveModeBody) -> JSONResponse:
+def set_proactive_mode(business_id: str, body: ProactiveModeBody, user: AuthedUser = Depends(require_user)) -> JSONResponse:
     """
     Toggle the user-controlled proactive JIT capture flag. When enabled,
     the Chief may bring up one missing profile field at natural pauses
@@ -133,6 +153,7 @@ def set_proactive_mode(business_id: str, body: ProactiveModeBody) -> JSONRespons
     """
     if not business_id:
         return JSONResponse({"ok": False, "error": "business_id required"}, status_code=400)
+    _require_owner(business_id, user)
     row = bp.upsert_profile(business_id, {"proactive_capture_enabled": bool(body.enabled)})
     if row is None:
         return JSONResponse({"ok": False, "error": "save failed"}, status_code=500)
