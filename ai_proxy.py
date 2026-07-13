@@ -77,8 +77,10 @@ import time
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+
+import rate_limit
 
 from api_usage_logger import log_api_usage
 
@@ -171,8 +173,17 @@ def _join_text_blocks(content: Any) -> str:
 
 
 @router.post("/ai/proxy")
-async def ai_proxy(req: ProxyRequest):
+async def ai_proxy(req: ProxyRequest, request: Request):
     """Proxy a Claude Messages API call. The API key never leaves Railway."""
+
+    # Per-caller rate limit (beta-readiness audit) — stop one source from
+    # firing thousands of paid calls. Keyed by business (when supplied)
+    # else client IP. Fail-open.
+    _rl_key = str((req.metadata or {}).get("business_id") or "") or rate_limit.client_ip(request)
+    if not rate_limit.allow("proxy", _rl_key):
+        raise HTTPException(status_code=429, detail={"error": "rate_limited",
+            "message": "Too many requests — give it a moment and try again."},
+            headers={"Retry-After": str(rate_limit.retry_after("proxy"))})
 
     # Phase E v1.1 — Chief message cap (dormant until BILLING_ENFORCE=on).
     _cap_biz = (req.metadata or {}).get("business_id") if hasattr(req, "metadata") else None
