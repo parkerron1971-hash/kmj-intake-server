@@ -322,6 +322,14 @@ def _store(biz: Dict[str, Any], insights: List[Dict[str, str]]) -> int:
                 res = None
         if res:
             stored += 1
+            # Semantic memory: embed the insight at write time. Best-effort.
+            try:
+                import chief_memory_semantic
+                _mid = res[0].get("id") if isinstance(res, list) and res else None
+                if _mid:
+                    chief_memory_semantic.store_embedding(_mid, row["content"])
+            except Exception:
+                pass
 
     if stored and biz.get("owner_id"):
         try:
@@ -424,5 +432,12 @@ async def insights_tick() -> None:
         if len(due) > MAX_PER_TICK:
             print(f"[Insights tick] {len(due) - MAX_PER_TICK} business(es) "
                   f"deferred to the next tick (cap {MAX_PER_TICK})", flush=True)
+        # Semantic memory: embed any memories still missing an embedding
+        # (frontend-created rows + the pre-upgrade backlog). Cheap + capped.
+        try:
+            import chief_memory_semantic
+            chief_memory_semantic.backfill_tick(limit=100)
+        except Exception:
+            pass
 
     await asyncio.to_thread(_tick_sync)

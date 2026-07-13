@@ -684,8 +684,14 @@ def _blend_memories(memories: List[Dict], keep: int = 50) -> List[Dict]:
 # CONTEXT GATHERING
 # ═══════════════════════════════════════════════════════════════════════
 
-async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, Any]:
-    """Pull a fresh snapshot of the business state in parallel."""
+async def _gather_context(client: httpx.AsyncClient, biz_id: str,
+                          query_text: Optional[str] = None) -> Dict[str, Any]:
+    """Pull a fresh snapshot of the business state in parallel.
+
+    query_text (the incoming message) enables SEMANTIC memory recall:
+    the memories most related in MEANING to what was just said are
+    unioned into the candidate pool before the importance/recency blend,
+    so an old low-importance-but-relevant memory still surfaces."""
     now = datetime.now(timezone.utc)
     in_7d = (now + timedelta(days=7)).isoformat()
 
@@ -860,6 +866,32 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
     # by the Chief to give the practitioner a "while you were away" recap.
     auto_recent = [ev for ev in (events or []) if ev.get("event_type") == "chief_auto_approved"]
 
+    # Semantic memory recall (2026-07-13): union the meaning-matched
+    # memories into the pool so _blend_memories ranks them alongside the
+    # importance/recency set. Fail-open — no matches just means today's
+    # behavior. Dedup by id.
+    mem_pool = list(memories or [])
+    if query_text:
+        try:
+            import chief_memory_semantic
+            have = {str(m.get("id")) for m in mem_pool}
+            for hit in chief_memory_semantic.match(biz_id, query_text):
+                hid = str(hit.get("id"))
+                if hid and hid not in have:
+                    have.add(hid)
+                    mem_pool.append({
+                        "id": hit.get("id"),
+                        "category": hit.get("category"),
+                        "content": hit.get("content"),
+                        "importance": hit.get("importance") or 5,
+                        "source": "ai_inferred",
+                        "created_at": now.isoformat(),
+                        "last_referenced_at": None,
+                        "_semantic": round(float(hit.get("similarity") or 0), 3),
+                    })
+        except Exception:
+            pass
+
     return {
         "business": biz,
         "contacts_total": len(contacts),
@@ -872,7 +904,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str) -> Dict[str, A
         "insights": insights or [],
         "modules": modules or [],
         "module_counts": module_counts,
-        "memories": _blend_memories(memories or []),
+        "memories": _blend_memories(mem_pool),
         "notifications": notifications or [],
         "recent_queue_24h": recent_queue or [],
         "auto_recent": auto_recent,
@@ -2992,6 +3024,16 @@ async def handle_remember(client, biz, action) -> Dict:
     })
     if not inserted:
         return _fail("remember", "insert failed")
+
+    # Semantic memory (2026-07-13): embed at write time so retrieval can
+    # find this by MEANING later. Best-effort, never blocks the store.
+    try:
+        import chief_memory_semantic
+        _mid = inserted[0].get("id") if isinstance(inserted, list) and inserted else None
+        if _mid:
+            chief_memory_semantic.store_embedding(_mid, content[:2000])
+    except Exception:
+        pass
 
     label = f"Remembered ({category}): {content[:80]}"
     return {"type": "remember", "result": "stored", "label": label, "nav": None}
@@ -13164,7 +13206,7 @@ async def chief_chat(
                 print(f"[Chief] autopilot/escalation sweep error: {e}", flush=True)
 
             # Gather global context + view-specific detail in parallel
-            ctx_task = _gather_context(client, req.business_id)
+            ctx_task = _gather_context(client, req.business_id, query_text=req.message)
             view_task = _fetch_view_detail(client, req.business_id, req.current_context)
             ctx, view_detail = await asyncio.gather(ctx_task, view_task)
 
