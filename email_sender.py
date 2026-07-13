@@ -313,8 +313,8 @@ async def email_health():
 async def _sb_get(client: httpx.AsyncClient, path: str):
     url = f"{os.environ.get('SUPABASE_URL', '')}/rest/v1{path}"
     headers = {
-        "apikey": os.environ.get("SUPABASE_ANON", ""),
-        "Authorization": f"Bearer {os.environ.get('SUPABASE_ANON', '')}",
+        "apikey": os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""),
+        "Authorization": f"Bearer {os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')}",
         "Content-Type": "application/json",
     }
     try:
@@ -331,8 +331,8 @@ async def _sb_get(client: httpx.AsyncClient, path: str):
 async def _sb_post(client: httpx.AsyncClient, path: str, body: Dict[str, Any]):
     url = f"{os.environ.get('SUPABASE_URL', '')}/rest/v1{path}"
     headers = {
-        "apikey": os.environ.get("SUPABASE_ANON", ""),
-        "Authorization": f"Bearer {os.environ.get('SUPABASE_ANON', '')}",
+        "apikey": os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""),
+        "Authorization": f"Bearer {os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
@@ -350,8 +350,8 @@ async def _sb_post(client: httpx.AsyncClient, path: str, body: Dict[str, Any]):
 async def _sb_patch(client: httpx.AsyncClient, path: str, body: Dict[str, Any]):
     url = f"{os.environ.get('SUPABASE_URL', '')}/rest/v1{path}"
     headers = {
-        "apikey": os.environ.get("SUPABASE_ANON", ""),
-        "Authorization": f"Bearer {os.environ.get('SUPABASE_ANON', '')}",
+        "apikey": os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""),
+        "Authorization": f"Bearer {os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')}",
         "Content-Type": "application/json",
     }
     try:
