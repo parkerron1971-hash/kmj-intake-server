@@ -859,8 +859,17 @@ def _extract_open_event(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.post("/email/webhook")
 async def resend_webhook(request: Request):
+    # Beta-readiness audit (adversarial): this handler drives the
+    # deliverability suppression list — a forged email.bounced /
+    # email.complained could silently suppress a competitor's clients.
+    # Verify the Resend (Svix) signature exactly like /email/inbound does;
+    # unverified payloads are dropped (200 so a misconfigured-but-real
+    # sender doesn't hammer retries).
+    raw_body = await request.body()
+    if not _verify_resend_signature(raw_body, request.headers):
+        return {"status": "ignored", "reason": "unverified_signature"}
     try:
-        payload = await request.json()
+        payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
         return {"status": "ignored", "reason": "non-json payload"}
 
