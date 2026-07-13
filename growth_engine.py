@@ -360,8 +360,8 @@ Voice: "{tone}". Keep it under 4 sentences. Don't be aggressive or guilt-inducin
     if not body:
         return None
 
-    subject = (f"Following up — {name}" if kind == "at-risk"
-               else f"Thinking of you, {name}")
+    subject = ("Checking in" if kind == "at-risk"
+               else "Thinking of you")
     reasoning = (f"{kind} nurture: health={health}, last_interaction={days_str}. "
                  f"Drafted by Growth Engine during weekly briefing.")
     return {"subject": subject, "body": body, "reasoning": reasoning}

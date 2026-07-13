@@ -1896,9 +1896,32 @@ async def _validate_module(client, biz_id: str, module_id: str) -> Optional[Dict
     return rows[0] if rows else None
 
 
+# Internal/technical phrases that must never reach a practitioner's card
+# or Chief's narration — the full detail stays in the log.
+_TECHNICAL_FAIL_MARKERS = (
+    "insert failed", "patch failed", "delete failed", "update failed",
+    "no queue_id", "unparseable", "iso-8601", "non-empty object",
+    "_id required", "required)", "invalid json", "42p", "500", "502",
+    "supabase", "postgrest", "exception", "traceback", "nonetype",
+    "keyerror", "{e}", "http", "select=", "eq.",
+)
+
+
 def _fail(action_type: str, msg: str) -> Dict:
-    logger.info(f"Action {action_type} failed: {msg}")
-    return {"type": action_type, "result": f"Failed: {msg}", "label": action_type, "nav": None}
+    logger.info(f"Action {action_type} failed: {msg}")  # full detail → logs only
+    # Never surface raw exceptions / DB errors / field paths to the user.
+    # Genericize anything that looks technical; pass human-written
+    # messages through (they're already presentable).
+    m = (msg or "").lower()
+    if any(marker in m for marker in _TECHNICAL_FAIL_MARKERS):
+        friendly = "I couldn't complete that just now — try again in a moment."
+    elif "not found" in m or "no such" in m or "doesn't exist" in m:
+        friendly = "I couldn't find that — double-check the details and try again."
+    else:
+        # Assume the caller wrote something presentable; still drop a bare
+        # "Failed:" prefix so cards read as sentences.
+        friendly = (msg or "I couldn't complete that just now — try again in a moment.").strip()
+    return {"type": action_type, "result": friendly, "label": action_type, "nav": None}
 
 
 def _nav(tab: str, sub: Optional[str] = None, contact_id: Optional[str] = None) -> Dict:
@@ -1933,7 +1956,7 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
     if not body:
         body = f"Hi {contact.get('name')}, just thinking of you. Wanted to check in. — {practitioner}"
 
-    subject = f"Check-in for {contact.get('name')}"
+    subject = "Checking in"   # client-facing subject — not the internal "Check-in for X" label
     inserted = await _sb(client, "POST", "/agent_queue", {
         "business_id": biz["id"], "contact_id": contact["id"],
         "agent": "nurture", "action_type": "check_in",
@@ -1970,7 +1993,7 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
 async def handle_draft_email(client, biz, action) -> Dict:
     contact_id = action.get("contact_id")
     contact = await _validate_contact(client, biz["id"], contact_id) if contact_id else None
-    subject = action.get("subject") or "Message from your Chief of Staff"
+    subject = action.get("subject") or f"A note from {biz.get('name') or 'us'}"
     body_hint = action.get("body") or action.get("message")
 
     if body_hint and len(body_hint) > 20:
@@ -11383,8 +11406,8 @@ def _build_sentiment_block(sentiment: str) -> str:
             "- Acknowledge briefly: \"Let me fix that.\"\n"
             "- Be extra careful with actions. Double-check before executing.\n"
             "- No personality / observations / mentor tips this turn. Just solve it.\n"
-            "- If something failed earlier, acknowledge it: \"Sorry about that. "
-            "Here's what happened and what I'm doing differently.\""
+            "- If something failed earlier, own it without groveling: \"That's on me — "
+            "here's what happened and what I'm changing.\""
         )
     return (
         "SENTIMENT: normal pace. Respond naturally with your usual warmth and personality."
@@ -11681,7 +11704,8 @@ def _build_testimonial_collection_block() -> str:
         "  'Hey Marcus, I'm updating my website and would love to include a quick word from "
         "you about our coaching work together. Would you mind sharing 1-2 sentences about "
         "your experience? Something like what you'd tell a friend who was considering "
-        "coaching. No pressure at all — and thanks for being great to work with. Kevin'\n\n"
+        "coaching. No pressure at all — and thanks for being great to work with.' "
+        "(Sign it as the practitioner, never as \"Chief\" or any assistant name.)\n\n"
         "When the contact replies with a quote, surface it: 'Marcus sent his testimonial. "
         "Want me to add it to your website?' If yes → add_testimonial."
     )
@@ -13341,7 +13365,7 @@ async def chief_chat(
                                      stream_sink=_STREAM_SINK.get())
             if not raw:
                 return {
-                    "response": "I can't reach the language model right now — try again in a moment.",
+                    "response": "I'm having trouble connecting right now — give me a moment and try again.",
                     "actions_taken": [],
                 }
 
@@ -13418,8 +13442,8 @@ async def chief_chat(
                             flush=True,
                         )
                         clean = (clean or "").rstrip() + (
-                            "\n\n⚠️ I described performing actions but they may not have "
-                            "executed. Please verify in the relevant tab."
+                            "\n\nHeads up — that may not have gone through on my end. "
+                            "Check the Queue and let me know if it's missing; I'll redo it."
                         )
                 else:
                     print("[Chief] RETRY model call returned empty", flush=True)
