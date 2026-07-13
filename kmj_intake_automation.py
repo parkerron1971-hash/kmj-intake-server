@@ -15,7 +15,7 @@ import json
 import httpx
 import asyncio
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -343,7 +343,28 @@ app.include_router(_health_router)
 # catch-alls that would otherwise shadow every specific API route.
 app.include_router(public_site_router)
 
-client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+# Lazy Anthropic client (beta-readiness audit 2026-07-13). This was the
+# ONLY module-level API client in the repo — constructing it at import
+# meant a missing/rotated ANTHROPIC_API_KEY took the ENTIRE backend down
+# on boot (all ~60 routers, auth, booking, everything), not just the AI
+# features. Now it's built on first use, so a key problem degrades the
+# three legacy intake endpoints below and nothing else.
+_anthropic_client: Optional["Anthropic"] = None
+
+
+def client_messages_create(**kwargs):
+    """Lazy accessor mirroring the old `client.messages.create(...)`
+    call sites. Raises a clear error (caught by each endpoint) instead
+    of failing at import."""
+    global _anthropic_client
+    if _anthropic_client is None:
+        key = os.getenv("ANTHROPIC_API_KEY")
+        if not key:
+            raise RuntimeError("ANTHROPIC_API_KEY not configured")
+        _anthropic_client = Anthropic(api_key=key)
+    return _anthropic_client.messages.create(**kwargs)
+
+
 OWNER_EMAIL = os.getenv("OWNER_EMAIL", "kevin@kmjcreative.com")
 OWNER_NAME = os.getenv("OWNER_NAME", "Kevin McCloud Jr.")
 BUSINESS_NAME = os.getenv("BUSINESS_NAME", "KMJ Creative Solutions")
@@ -392,7 +413,7 @@ RESPOND ONLY IN VALID JSON:
   "nextAction": "Kevin's single most important next action"
 }}"""
 
-    response = client.messages.create(
+    response = client_messages_create(
         model="claude-sonnet-4-20250514",
         max_tokens=1500,
         system=system,
@@ -590,7 +611,7 @@ Package delivered: {project['packageDelivered']}
 Days since delivery: {followup_type}
 Type: {followup_type}"""
 
-    response = client.messages.create(
+    response = client_messages_create(
         model="claude-sonnet-4-20250514",
         max_tokens=500,
         system=system,
@@ -989,7 +1010,7 @@ OBSERVER FLAGS (what the system noticed since last briefing):
 Now search the 5 topics, factor in the observer flags, and generate the full briefing."""
 
     try:
-        response = client.messages.create(
+        response = client_messages_create(
             model="claude-sonnet-4-20250514",
             max_tokens=4000,
             system=system,
