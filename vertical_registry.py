@@ -62,12 +62,9 @@ KNOWN_GAPS: Dict[str, Dict[str, str]] = {
     # lawyer CLOSED 2026-07-14 (Leg 3): added to onboarding picker + a
     # matter/engagement/trust module blueprint (APPLY-2026-07-14-lawyer-
     # blueprint.sql) + smart-sites touch. Now first-class end-to-end.
-    # nonprofit intel profile CLOSED 2026-07-14 (Leg 1). Onboarding +
-    # blueprint still open (secular nonprofits pick ministry/custom today).
-    "nonprofit": {
-        "onboarding": "secular nonprofits pick ministry/custom today — follow-on to ministry Leg 4",
-        "blueprint":  "no nonprofit module blueprint yet — follow-on",
-    },
+    # nonprofit CLOSED 2026-07-14: intel (Leg 1), then onboarding picker +
+    # module blueprint (APPLY-2026-07-14-nonprofit-blueprint.sql) + smart-
+    # sites touch + type_steer. Now first-class end-to-end.
     "personal_services": {
         "onboarding": "reachable via admin/custom today",
         "blueprint":  "no dedicated blueprint — uses generic",
