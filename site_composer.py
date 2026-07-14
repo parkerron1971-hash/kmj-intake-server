@@ -3475,17 +3475,31 @@ def verify_domain(body: DomainVerifyBody,
     import cloudflare_saas
     if cloudflare_saas.enabled():
         st = cloudflare_saas.hostname_status(domain) or {}
+        hs, ss = st.get("hostname_status"), st.get("ssl_status")
         if st.get("active"):
             cfg["custom_domain_status"] = "verified"
             sb_clients.sb_patch_as_service(
                 f"/business_sites?business_id=eq.{body.business_id}", {"site_config": cfg})
-            return {"ok": True, "status": "verified", "domain": domain}
+            return {"ok": True, "status": "verified", "domain": domain,
+                    "domain_ok": True, "cert_ok": True,
+                    "message": "Your domain is live over HTTPS. 🎉"}
+        domain_ok = (hs == "active")
+        cert_ok = (ss == "active")
+        if not domain_ok:
+            message = ("Waiting on your domain's DNS. Add the CNAME record above at your "
+                       "domain provider — DNS can take a few minutes to a few hours to "
+                       "point here, then check back.")
+        elif not cert_ok:
+            message = ("Your domain is connected — now the HTTPS certificate is being "
+                       "issued. Make sure the SSL validation record (the TXT whose name "
+                       "starts with '_acme-challenge') is added at your domain provider, "
+                       "then check back in a few minutes.")
+        else:
+            message = "Almost there — finishing setup. Check back in a moment."
         return {"ok": False, "status": "pending", "domain": domain,
                 "dns": st.get("dns") or [],
-                "message": ("Still setting up — add the records above, then try again. "
-                            f"(domain: {st.get('hostname_status') or 'pending'}, "
-                            f"certificate: {st.get('ssl_status') or 'pending'}). DNS + "
-                            "certificate issuance can take a few minutes to a few hours.")}
+                "domain_ok": domain_ok, "cert_ok": cert_ok,
+                "hostname_status": hs, "ssl_status": ss, "message": message}
     # Manual fallback (no Cloudflare configured): ownership TXT check.
     token = cfg.get("custom_domain_token")
     if not token:
