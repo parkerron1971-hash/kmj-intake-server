@@ -825,7 +825,7 @@ def _csv_rows(report: str, data: Dict[str, Any]) -> list:
             rows.append([a.get("date"), a.get("description"), a.get("type"),
                          a.get("amount"), a.get("client")])
     elif report == "donors":
-        rows.append(["Donor", "Gifts", "Total", "Restricted"])
+        rows.append([data.get("donor_label") or "Donor", "Gifts", "Total", "Restricted"])
         for d2 in data.get("donors", []):
             rows.append([d2.get("donor"), d2.get("gifts"), d2.get("total"),
                          d2.get("restricted")])

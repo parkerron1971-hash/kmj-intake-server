@@ -855,8 +855,9 @@ def _donors_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, 
                       ("Restricted", d.get("restricted_gifts")),
                       ("Unrestricted", d.get("unrestricted_gifts"))],
                      s, money_cell, stripe, rule, colors, Table, TableStyle, Paragraph, inch),
-           Spacer(1, 0.12 * inch), Paragraph("BY DONOR", s["section"])]
-    head = [Paragraph("Donor", s["th"])] + \
+           Spacer(1, 0.12 * inch),
+           Paragraph(f"BY {str(d.get('donor_label') or 'Donor').upper()}", s["section"])]
+    head = [Paragraph(str(d.get("donor_label") or "Donor"), s["th"])] + \
            [Paragraph(h, s["thr"]) for h in ("Gifts", "Total", "Restricted")]
     rows = [head]
     for dn in d.get("donors") or []:
