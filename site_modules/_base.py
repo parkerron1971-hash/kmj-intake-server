@@ -616,7 +616,14 @@ img {{ max-width: 100%; display: block; }}
 h1, h2, h3 {{ font-family: var(--sx-font-heading); line-height: 1.08; margin: 0; }}
 h1 {{ font-size: var(--sx-h1); font-weight: var(--sx-heading-weight); letter-spacing: var(--sx-letter-tight); }}
 h2 {{ font-size: var(--sx-h2); font-weight: var(--sx-h2-weight, var(--sx-heading-weight)); letter-spacing: var(--sx-letter-tight); }}
+/* Site quality (2026-07-14): h3 gets a real scale rung (was un-sized, jumping
+   straight from a huge h2 to flat body). Modules that style h3 still win. */
+h3 {{ font-size: var(--sx-h3, 1.6rem); font-weight: var(--sx-h3-weight, 700);
+  line-height: 1.2; letter-spacing: var(--sx-letter-tight); }}
 p {{ margin: 0 0 1.15em; max-width: 62ch; }}
+/* Lead / caption steps — the intro-paragraph and fine-print rungs. */
+.sxm-lead {{ font-size: var(--sx-lead, 1.2rem); line-height: 1.5; max-width: 60ch; }}
+.sxm-small {{ font-size: var(--sx-small, .82rem); }}
 a {{ color: var(--sx-accent); text-decoration: none; }}
 .sxm-section {{ padding: var(--sx-section-pad) var(--sx-gutter); }}
 /* Site Arc 11b — dead-band fix: a section straight after a ceremony seam
