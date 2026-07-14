@@ -49,24 +49,37 @@ def _headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"}
 
 
-def _dcv_records(ssl: Dict[str, Any]) -> List[Dict[str, str]]:
-    """The SSL-validation records the practitioner must add, parsed
-    defensively (Cloudflare returns TXT, HTTP, or a delegation CNAME)."""
+def _short_host(name: str, domain: str) -> str:
+    """The record NAME as most DNS providers want it — just the part BEFORE
+    the domain (Namecheap/GoDaddy/etc. append the domain automatically). The
+    apex is '@'."""
+    n = str(name or "").rstrip(".")
+    d = str(domain or "").rstrip(".").lower()
+    if d and n.lower().endswith("." + d):
+        return n[:-(len(d) + 1)]
+    if n.lower() == d:
+        return "@"
+    return n or "@"
+
+
+def _dcv_records(ssl: Dict[str, Any], domain: str) -> List[Dict[str, str]]:
+    """The ONE SSL-validation record the practitioner adds. We create the
+    hostname with the TXT method, so we surface only the TXT record (never
+    both TXT + a delegation CNAME — a CNAME can't coexist with a TXT at the
+    same name, which silently breaks validation)."""
     out: List[Dict[str, str]] = []
     for rec in (ssl.get("validation_records") or []):
         if rec.get("txt_name"):
-            out.append({"type": "TXT", "host": str(rec.get("txt_name")),
+            out.append({"type": "TXT", "host": _short_host(str(rec.get("txt_name")), domain),
                         "value": str(rec.get("txt_value") or ""),
-                        "note": "Validates your SSL certificate."})
-        elif rec.get("http_url"):
+                        "note": ("Validates your SSL certificate. Enter the Name exactly "
+                                 "as shown — your provider adds your domain automatically.")})
+            break
+        if rec.get("http_url"):
             out.append({"type": "HTTP file", "host": str(rec.get("http_url")),
                         "value": str(rec.get("http_body") or ""),
                         "note": "SSL validation file."})
-    for rec in (ssl.get("dcv_delegation_records") or []):
-        if rec.get("cname") and rec.get("cname_target"):
-            out.append({"type": "CNAME", "host": str(rec.get("cname")),
-                        "value": str(rec.get("cname_target")),
-                        "note": "One-time SSL delegation — renews automatically after this."})
+            break
     return out
 
 
@@ -85,12 +98,14 @@ def _find(hostname: str) -> Optional[Dict[str, Any]]:
 
 def _shape(ch: Dict[str, Any]) -> Dict[str, Any]:
     ssl = ch.get("ssl") or {}
+    hostname = str(ch.get("hostname") or "")
     dns: List[Dict[str, str]] = []
     tgt = cname_target()
     if tgt:
-        dns.append({"type": "CNAME", "host": "@ (and www)", "value": tgt,
-                    "note": "Points your domain at your site (through Cloudflare)."})
-    dns += _dcv_records(ssl)
+        dns.append({"type": "CNAME", "host": "@", "value": tgt,
+                    "note": "Points your domain at your site. Add a second CNAME with "
+                            "Name 'www' and the same value."})
+    dns += _dcv_records(ssl, hostname)
     active = ch.get("status") == "active" and ssl.get("status") == "active"
     return {
         "id": ch.get("id"),
