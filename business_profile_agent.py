@@ -677,6 +677,12 @@ def chief_context_block(business_id: str) -> str:
         "service_provider":
             "When advising, frame in terms of scope-of-work, cancellation policies, and "
             "general liability. Recurring service contracts are common.",
+        "lawyer":
+            "Frame around matters, engagement letters, and jurisdiction. CRITICAL: run a "
+            "conflict check before engagement; the attorney-client relationship begins only "
+            "with a signed engagement letter. Client trust funds (IOLTA) stay in the trust "
+            "account, never commingled with operating funds. Never give legal advice — you "
+            "help run the practice, you don't practice law.",
         "personal_services":
             "Frame around the calendar, repeat clients, and recorded formulas/preferences. Protect "
             "chair time: deposits/no-show fees apply to longer services. The service menu has "

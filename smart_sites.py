@@ -47,6 +47,7 @@ ARCHETYPE_TOUCHES = (
     "fitness_wellness",
     "course_creator",
     "service_provider",
+    "lawyer",
     "custom",
 )
 
@@ -830,6 +831,30 @@ def _render_service_provider_booking_cta(bundle: Dict[str, Any], vibe: str) -> s
     )
 
 
+def _render_lawyer_consult_cta(bundle: Dict[str, Any], vibe: str) -> str:
+    slug = (bundle.get("business") or {}).get("slug")
+    if slug:
+        href = f"/public/booking/{slug}"
+        return _archetype_box(
+            f'<strong>Request a consultation.</strong> Discuss your matter with the firm. '
+            f'<a href="{href}">Book a consultation →</a>'
+        )
+    return _archetype_box(
+        "<strong>Request a consultation.</strong> Reach out to discuss your matter."
+    )
+
+
+def _render_lawyer_disclaimer(bundle: Dict[str, Any], vibe: str) -> str:
+    # The load-bearing legal touch: no attorney-client relationship is formed
+    # by contact alone, and website content is not legal advice.
+    return _archetype_box(
+        "<strong>Not legal advice.</strong> The information on this site is general and "
+        "is not legal advice. Contacting the firm does not create an attorney-client "
+        "relationship — that begins only with a signed engagement letter. Prior results "
+        "do not guarantee a similar outcome."
+    )
+
+
 def _archetype_touches(archetype: str, vibe: str, bundle: Dict[str, Any]) -> Dict[str, str]:
     """Return HTML fragments to inject at named positions based on archetype."""
     touches = {"before_about": "", "after_services": "", "footer_addendum": ""}
@@ -847,6 +872,10 @@ def _archetype_touches(archetype: str, vibe: str, bundle: Dict[str, Any]) -> Dic
         touches["after_services"] = _render_course_creator_curriculum_callout(bundle, vibe)
     elif archetype == "service_provider":
         touches["after_services"] = _render_service_provider_booking_cta(bundle, vibe)
+    elif archetype == "lawyer":
+        # Consultation CTA where services are, disclaimer in the footer.
+        touches["after_services"] = _render_lawyer_consult_cta(bundle, vibe)
+        touches["footer_addendum"] = _render_lawyer_disclaimer(bundle, vibe)
     # custom: no touches — vibe family alone
     return touches
 

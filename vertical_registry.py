@@ -59,10 +59,9 @@ SUBSYSTEMS = ("onboarding", "constraint", "intel", "terminology", "blueprint")
 # test treats these as allowed absences; everything else must be present.
 # Keep this list SHRINKING — each closed gap is deleted here.
 KNOWN_GAPS: Dict[str, Dict[str, str]] = {
-    "lawyer": {
-        "onboarding": "not in signup picker — vertical-completion Leg 3 (finish lawyer)",
-        "blueprint":  "no matter/case module blueprint yet — Leg 3",
-    },
+    # lawyer CLOSED 2026-07-14 (Leg 3): added to onboarding picker + a
+    # matter/engagement/trust module blueprint (APPLY-2026-07-14-lawyer-
+    # blueprint.sql) + smart-sites touch. Now first-class end-to-end.
     # nonprofit intel profile CLOSED 2026-07-14 (Leg 1). Onboarding +
     # blueprint still open (secular nonprofits pick ministry/custom today).
     "nonprofit": {
