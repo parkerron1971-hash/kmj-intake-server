@@ -26,6 +26,8 @@ from typing import Any, Dict, Optional
 from vertical_intelligence import (
     get_profile,
     get_voice,
+    get_offering_suggestions,
+    get_invoice_line_templates,
     list_known_verticals,
 )
 from vertical_terminology import VERTICAL_TERMS, BASE_TERMS
@@ -77,6 +79,29 @@ def build_vertical_context_block(business: Optional[Dict[str, Any]]) -> str:
     reminders = _vertical_specific_reminders(bt, profile)
     if reminders:
         lines.append("Reminders: " + " · ".join(reminders))
+
+    # Offering + invoice shapes typical for this vertical. These are
+    # STARTING POINTS for when the practitioner asks Chief to create an
+    # offering or draft an invoice — so Chief's create/adjust output fits
+    # the vertical instead of inventing generic line items. The business's
+    # OWN products/services catalog (elsewhere in the prompt) is always
+    # authoritative; adapt these, never blind-copy.
+    offerings = get_offering_suggestions(bt) or []
+    if offerings:
+        parts = []
+        for o in offerings[:6]:
+            price = o.get("price")
+            plabel = f"${price:,}" if isinstance(price, (int, float)) and price else "free"
+            parts.append(f"{o.get('name')} ({plabel})")
+        lines.append(
+            "Typical offerings for this vertical (starting points when creating one — "
+            "adapt to the business; its own catalog is authoritative): "
+            + " · ".join(parts))
+    invoice_lines = get_invoice_line_templates(bt) or []
+    if invoice_lines:
+        parts = [t.get("description") for t in invoice_lines[:6] if t.get("description")]
+        if parts:
+            lines.append("Typical invoice lines for this vertical: " + " · ".join(parts))
 
     lines.append("Apply this voice in every practitioner-facing reply.")
     return "\n".join(lines)
