@@ -2825,11 +2825,48 @@ def compose_site(business_id: str, brief_notes: str = "",
     # inside the existing 45-55% progress window — no new stage).
     spec = _apply_ceremony_pass(spec, ctx, dro, seed=dro_id)
 
+    # Multi-page (site_multipage): when the site opts in, give the HOME header
+    # its cross-page nav BEFORE it renders (idempotent site-row ensure to
+    # learn the slug + read the flag). Additive — single-page is untouched.
+    _mp_slug = ""
+    try:
+        import site_multipage
+        _site0 = _ensure_site_row(business_id, ctx)
+        _cfg0 = (_site0 or {}).get("site_config") or {}
+        if site_multipage.is_multi_page(_cfg0) and (_site0 or {}).get("slug"):
+            _mp_slug = _site0["slug"]
+            ctx["page_nav"] = site_multipage.build_page_nav(_mp_slug, "home")
+    except Exception as _e:
+        logger.info(f"[composer] multi-page home-nav skipped: {_e}")
+
     result = render_and_persist(business_id, spec, ctx, dro_id=dro_id, dro=dro,
                                 dro_status=dro_status, dro_summary=dro_summary,
                                 defaulted_modules=defaulted_modules,
                                 full_recompose=True, progress_cb=progress_cb,
                                 dro_failure=dro_failure)
+
+    # Multi-page: render the secondary pages (sharing the home's design) and
+    # persist generated_pages. Best-effort — a failure never blocks the home.
+    if _mp_slug:
+        try:
+            import site_multipage
+            _title_mp = (ctx.get("business") or {}).get("name") or "Welcome"
+            _pages = site_multipage.build_secondary_pages(ctx, _mp_slug, _title_mp)
+            if _pages:
+                _rows = sb_clients.sb_get_as_service(
+                    f"/business_sites?business_id=eq.{business_id}"
+                    f"&select=site_config&order=updated_at.desc&limit=1") or []
+                _cfg = (_rows[0].get("site_config") if _rows else {}) or {}
+                _cfg["generated_pages"] = _pages
+                _cfg["site_pages"] = ["home"] + list(site_multipage.SECONDARY_PAGES)
+                sb_clients.sb_patch_as_service(
+                    f"/business_sites?business_id=eq.{business_id}",
+                    {"site_config": _cfg})
+                logger.info(f"[composer] multi-page: persisted "
+                            f"{len(_pages)} secondary page(s) for {business_id[:8]}")
+        except Exception as _e:
+            logger.warning(f"[composer] multi-page build skipped (non-fatal): {_e}")
+
     _report_progress(progress_cb, 100, "Done")
     return {"composition_source": source, "design_rationale_id": dro_id,
             "dro_status": dro_status, "dro_summary": dro_summary, **result}

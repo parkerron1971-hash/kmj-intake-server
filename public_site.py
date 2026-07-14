@@ -1070,6 +1070,33 @@ async def get_site_data(slug: str):
         }
 
 
+@router.get("/public/site/{slug}/{page_path}")
+async def get_site_page_html(slug: str, page_path: str):
+    """Serve a secondary page of a multi-page site (About/Services/Contact)
+    from site_config.generated_pages. Registered AFTER /data so it never
+    shadows it. Unknown sub-paths or single-page sites fall back to home."""
+    if not _check_rate(slug):
+        raise HTTPException(429, "Rate limit exceeded")
+    import studio_page_types
+    async with httpx.AsyncClient() as client:
+        sites = await _sb(client,
+            f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
+            f"&select=business_id,site_config")
+        if not sites:
+            raise HTTPException(404, "Site not found")
+        cfg = sites[0].get("site_config") or {}
+        pages = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
+        page_id = studio_page_types.slug_to_page_id(page_path)
+        html = (pages or {}).get(page_id) or ""
+        if not html:
+            # Home, unknown page, or a single-page site → serve the main page.
+            return await get_site_html(slug)
+        html = _inject_canonical(html, slug)
+        html = _inject_brand_meta(html, sites[0].get("business_id"))
+        return HTMLResponse(content=html, status_code=200, media_type="text/html",
+                            headers={"X-Solutionist-Source": "module-composer-multipage"})
+
+
 @router.get("/public/{slug}/thank-you")
 async def thank_you_page(slug: str):
     """Branded thank-you page shown after a Stripe checkout completes.
