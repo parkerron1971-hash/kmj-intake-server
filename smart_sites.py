@@ -49,6 +49,7 @@ ARCHETYPE_TOUCHES = (
     "service_provider",
     "lawyer",
     "ministry",
+    "nonprofit",
     "custom",
 )
 
@@ -874,6 +875,23 @@ def _render_ministry_giving_note(bundle: Dict[str, Any], vibe: str) -> str:
     )
 
 
+def _render_nonprofit_support_cta(bundle: Dict[str, Any], vibe: str) -> str:
+    slug = (bundle.get("business") or {}).get("slug")
+    cta = f' <a href="/public/booking/{slug}">Support this work →</a>' if slug else ""
+    return _archetype_box(
+        "<strong>Your support drives the mission.</strong> Every gift funds the programs "
+        "and the people they serve." + cta
+    )
+
+
+def _render_nonprofit_transparency(bundle: Dict[str, Any], vibe: str) -> str:
+    return _archetype_box(
+        "<strong>Accountability.</strong> Gifts are stewarded toward the mission, and "
+        "restricted gifts are honored for their designated purpose. Contributions may be "
+        "tax-deductible as allowed by law — consult your tax advisor."
+    )
+
+
 def _archetype_touches(archetype: str, vibe: str, bundle: Dict[str, Any]) -> Dict[str, str]:
     """Return HTML fragments to inject at named positions based on archetype."""
     touches = {"before_about": "", "after_services": "", "footer_addendum": ""}
@@ -900,6 +918,11 @@ def _archetype_touches(archetype: str, vibe: str, bundle: Dict[str, Any]) -> Dic
         # giving note in the footer.
         touches["after_services"] = _render_ministry_welcome(bundle, vibe)
         touches["footer_addendum"] = _render_ministry_giving_note(bundle, vibe)
+    elif archetype == "nonprofit":
+        # Secular nonprofit: a clear support/donate CTA (unlike ministry's
+        # invitation) + a stewardship/tax-deductibility footer.
+        touches["after_services"] = _render_nonprofit_support_cta(bundle, vibe)
+        touches["footer_addendum"] = _render_nonprofit_transparency(bundle, vibe)
     # custom: no touches — vibe family alone
     return touches
 

@@ -692,6 +692,11 @@ def chief_context_block(business_id: str) -> str:
             "Be pastoral, never transactional. Frame around members, families, spiritual journey, "
             "services, and pastoral care. CRITICAL: a member's giving is access-isolated — never "
             "surface giving, and never let it factor into pastoral or leadership context.",
+        "nonprofit":
+            "Frame around donors, programs, grants, and impact — a gift supports the mission, never "
+            "buys a service or influence. Restricted gifts MUST be honored for their designated "
+            "purpose (they book to restricted net assets). Acknowledge gifts promptly for tax "
+            "receipts. Secular mission org — not faith-framed like a ministry.",
         "custom":
             "No preset fits this business. Run an interactive discovery conversation — ask what they "
             "track and how they work, then PROPOSE modules conversationally from their profile and "
