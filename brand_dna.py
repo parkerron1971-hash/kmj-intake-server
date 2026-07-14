@@ -430,8 +430,13 @@ def rederive_accent_family(palette: Dict[str, Any]) -> Dict[str, Any]:
     return p
 
 
-_ACCENT_GROUND_SAT_CAP = 0.72     # HSV saturation ceiling for large fills
-_ACCENT_GROUND_PULL = 0.35        # how far lightness moves toward comfort
+# Brand fidelity (2026-07-14, Kevin): the practitioner's brand color should
+# be the color the site builds from. The large-fill governor now barely
+# touches it — a light guard against pure S=1.0 neon on a 300px band, not a
+# mute. (Small ink already uses the exact brand accent; this brings the big
+# color bands close to it too.)
+_ACCENT_GROUND_SAT_CAP = 0.88     # HSV saturation ceiling for large fills (was .72)
+_ACCENT_GROUND_PULL = 0.18        # how far lightness moves toward comfort (was .35)
 
 
 def _govern_accent(accent: str, bg: str) -> str:
