@@ -3429,23 +3429,29 @@ def connect_domain(body: DomainConnectBody,
     cfg["custom_domain"] = domain
     cfg["custom_domain_status"] = "pending"
     cfg["custom_domain_token"] = token
+    # Cloudflare for SaaS: register the custom hostname so Cloudflare issues +
+    # auto-renews the TLS cert and fronts the domain (scales past Railway's
+    # per-service cap). Fail-open to plain ownership verification.
+    import cloudflare_saas
+    cf = cloudflare_saas.create_custom_hostname(domain) if cloudflare_saas.enabled() else None
+    if cf:
+        cfg["custom_domain_cf_id"] = cf.get("id")
     sb_clients.sb_patch_as_service(
         f"/business_sites?business_id=eq.{body.business_id}", {"site_config": cfg})
+    if cf:
+        return {"ok": True, "domain": domain, "status": "pending",
+                "cert": "cloudflare", "dns": cf["dns"]}
     return {
-        "ok": True, "domain": domain, "status": "pending",
-        "dns": {
-            "verify": {"type": "TXT", "host": f"_solutionist-verify.{domain}",
-                       "value": token,
-                       "note": "Proves you own the domain."},
-            "point_www": {"type": "CNAME", "host": "www",
-                          "value": f"{slug}.{_PLATFORM_DOMAIN}",
-                          "note": f"Points www.{domain} at your site."},
-            "point_root": {"type": "ALIAS/ANAME (or A)", "host": "@",
-                           "value": f"{slug}.{_PLATFORM_DOMAIN}",
-                           "note": ("Points the bare domain at your site. If your "
-                                    "registrar has no ALIAS/ANAME, use their "
-                                    "'forward root to www' option instead.")},
-        },
+        "ok": True, "domain": domain, "status": "pending", "cert": "manual",
+        "dns": [
+            {"type": "TXT", "host": f"_solutionist-verify.{domain}", "value": token,
+             "note": "Proves you own the domain."},
+            {"type": "CNAME", "host": "www", "value": f"{slug}.{_PLATFORM_DOMAIN}",
+             "note": f"Points www.{domain} at your site."},
+            {"type": "ALIAS/ANAME (or A)", "host": "@", "value": f"{slug}.{_PLATFORM_DOMAIN}",
+             "note": ("Points the bare domain at your site. If your registrar has no "
+                      "ALIAS/ANAME, use its 'forward root to www' option instead.")},
+        ],
     }
 
 
@@ -3462,8 +3468,27 @@ def verify_domain(body: DomainVerifyBody,
     if cfg is None:
         raise HTTPException(404, "No site found.")
     domain = cfg.get("custom_domain")
+    if not domain:
+        raise HTTPException(400, "No domain connected yet.")
+    # Cloudflare path: the domain is verified once BOTH the hostname and the
+    # SSL cert are active on Cloudflare's edge.
+    import cloudflare_saas
+    if cloudflare_saas.enabled():
+        st = cloudflare_saas.hostname_status(domain) or {}
+        if st.get("active"):
+            cfg["custom_domain_status"] = "verified"
+            sb_clients.sb_patch_as_service(
+                f"/business_sites?business_id=eq.{body.business_id}", {"site_config": cfg})
+            return {"ok": True, "status": "verified", "domain": domain}
+        return {"ok": False, "status": "pending", "domain": domain,
+                "dns": st.get("dns") or [],
+                "message": ("Still setting up — add the records above, then try again. "
+                            f"(domain: {st.get('hostname_status') or 'pending'}, "
+                            f"certificate: {st.get('ssl_status') or 'pending'}). DNS + "
+                            "certificate issuance can take a few minutes to a few hours.")}
+    # Manual fallback (no Cloudflare configured): ownership TXT check.
     token = cfg.get("custom_domain_token")
-    if not domain or not token:
+    if not token:
         raise HTTPException(400, "No domain connected yet.")
     if _dns_txt_contains(f"_solutionist-verify.{domain}", token):
         cfg["custom_domain_status"] = "verified"
@@ -3484,7 +3509,14 @@ def disconnect_domain(body: DomainVerifyBody,
     _slug, cfg, _row = _load_site_cfg(body.business_id)
     if cfg is None:
         raise HTTPException(404, "No site found.")
-    for k in ("custom_domain", "custom_domain_status", "custom_domain_token"):
+    domain = cfg.get("custom_domain")
+    if domain:
+        try:
+            import cloudflare_saas
+            cloudflare_saas.delete_custom_hostname(domain)
+        except Exception:
+            pass
+    for k in ("custom_domain", "custom_domain_status", "custom_domain_token", "custom_domain_cf_id"):
         cfg.pop(k, None)
     sb_clients.sb_patch_as_service(
         f"/business_sites?business_id=eq.{body.business_id}", {"site_config": cfg})
