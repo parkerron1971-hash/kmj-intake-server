@@ -480,6 +480,33 @@ def gather_context(business_id: str) -> Dict[str, Any]:
             design_cfg["creative_expression"] = expr
             bundle["design"] = design_cfg
 
+    # "Teach the rubric, not the cases": REASON the owner's style words into
+    # the best-fit vibe instead of keyword-matching a table — so a descriptor
+    # nobody coded ("trustworthy", "serene", "modern law firm") still lands
+    # sensibly. Decided ONCE here at compose time and persisted onto
+    # design.vibe_family, so the deterministic pipeline (build_brand_dna /
+    # _infer_vibe) just consumes it and the render path never calls a model.
+    # Precedence: an explicit vibe_family enum always wins; fail-open →
+    # the downstream keyword matcher still runs. See design_intent.py.
+    try:
+        import design_intent
+        _dcfg = bundle.get("design") if isinstance(bundle.get("design"), dict) else {}
+        if (_dcfg.get("vibe_family") or "").strip().lower() not in design_intent.VIBE_FAMILIES:
+            _voice = bundle.get("voice") if isinstance(bundle.get("voice"), dict) else {}
+            _read = design_intent.interpret(
+                _voice.get("tone_words"),
+                business_type=(bundle.get("business") or {}).get("type"))
+            if _read:
+                _dcfg["vibe_family"] = _read["vibe"]
+                _dcfg["vibe_rationale"] = _read.get("rationale")  # inspectable
+                _expr = (_dcfg.get("creative_expression")
+                         if isinstance(_dcfg.get("creative_expression"), dict) else {})
+                _expr.setdefault("intensity", _read["intensity"])
+                _dcfg["creative_expression"] = _expr
+                bundle["design"] = _dcfg
+    except Exception:
+        pass
+
     # Arc 5 "Design Depth": the owner's color language steers derivation
     # deterministically — colors.love/avoid/use_brand nudge the accent in
     # derive_palette; colors.direction is a HARD ground preference applied
