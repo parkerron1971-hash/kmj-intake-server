@@ -838,6 +838,14 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     except Exception as _e:
         voice_block = ""
 
+    # Standing playbook (2026-07-13) — the distilled per-business brief
+    # (chief_playbook.py). Sync httpx read, off the event loop. Fail-open.
+    try:
+        import chief_playbook
+        playbook_block = await asyncio.to_thread(chief_playbook.context_block, biz_id)
+    except Exception as _e:
+        playbook_block = ""
+
     # Module entry counts — one query per module (parallel)
     module_entries_tasks = [
         _sb(client, "GET",
@@ -920,6 +928,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "practitioner_profile_raw": practitioner_profile_raw or {},
         "brand_block": brand_block or "",
         "voice_block": voice_block or "",
+        "playbook_block": playbook_block or "",
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
@@ -933,6 +942,14 @@ def _format_foundation_block(ctx: Dict[str, Any]) -> str:
     The agent populates this in _gather_context. Empty string when there's
     nothing to show."""
     block = (ctx.get("foundation_block") or "").strip()
+    return block + "\n" if block else ""
+
+
+def _format_playbook_block(ctx: Dict[str, Any]) -> str:
+    """Render the standing playbook (chief_playbook.py) for the system
+    prompt. Populated in _gather_context; empty string when there's no
+    distilled brief yet."""
+    block = (ctx.get("playbook_block") or "").strip()
     return block + "\n" if block else ""
 
 
@@ -1672,7 +1689,7 @@ CUSTOM MODULES:
 RECENT EVENTS:
 {chr(10).join(event_lines) if event_lines else '  (none)'}
 
-PRACTITIONER MEMORIES (ALWAYS honor these — they override defaults):
+{_format_playbook_block(ctx)}PRACTITIONER MEMORIES (ALWAYS honor these — they override defaults):
 {chr(10).join(memory_lines) if memory_lines else '  (none stored yet)'}
 
 LONGITUDINAL INSIGHTS (your own weekly analysis of this business's trends — bring these up proactively when relevant, cite the pattern, and propose the move; a generic assistant could not know these):
