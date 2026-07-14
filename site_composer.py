@@ -3298,13 +3298,17 @@ def prefill_signals(business_id: str,
 class ShuffleBody(BaseModel):
     business_id: str
     section_index: int
+    # None → cycle to the NEXT variant (the old "Shuffle look").
+    # Set → PICK this exact variant (the layout picker). Validated below.
+    variant: Optional[str] = None
 
 
 @router.post("/shuffle")
 def shuffle(body: ShuffleBody,
             session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
-    """Cycle one section to its next expression variant and re-render.
-    Deterministic + instant — no LLM call."""
+    """Change one section's expression variant and re-render. Deterministic +
+    instant — no LLM call. `variant` picks a specific layout; omitting it
+    cycles to the next (back-compat)."""
     _require_owner(body.business_id, session.user.id)
     ctx = gather_context(body.business_id)
     site = ctx.get("site")
@@ -3319,11 +3323,38 @@ def shuffle(body: ShuffleBody,
     if len(variants) < 2:
         return {"ok": True, "unchanged": True,
                 "reason": f"{sec['module']} has a single expression"}
-    sec["variant"] = variants[(variants.index(sec["variant"]) + 1) % len(variants)]
+    if body.variant is not None:
+        # Direct pick (layout picker). Validate against the module's real
+        # variants so a bad value can't corrupt the spec.
+        if body.variant not in variants:
+            raise HTTPException(
+                400, f"'{body.variant}' is not a layout of {sec['module']} "
+                     f"(choices: {list(variants)})")
+        sec["variant"] = body.variant
+    else:
+        cur = sec.get("variant")
+        idx = variants.index(cur) if cur in variants else -1
+        sec["variant"] = variants[(idx + 1) % len(variants)]
     result = render_and_persist(body.business_id, spec, ctx)
     return {"ok": True, "shuffled": {"index": body.section_index,
                                      "module": sec["module"],
                                      "variant": sec["variant"]}, **result}
+
+
+class RefreshBody(BaseModel):
+    business_id: str
+
+
+@router.post("/refresh")
+def refresh_composed(body: RefreshBody,
+                     session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    """Re-render a composed site from its stored spec (no LLM) so changes made
+    OUTSIDE the site editor — new/edited/reordered gallery photos in the Media
+    Library, etc. — appear without a full recompose. Owner-gated,
+    fire-and-forget (the re-render runs in the background)."""
+    _require_owner(body.business_id, session.user.id)
+    refresh_if_composed_async(body.business_id)
+    return {"ok": True, "refreshing": True}
 
 
 @router.get("/spec/{business_id}")
