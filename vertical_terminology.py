@@ -194,6 +194,13 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "booking":      "Meeting",
         "bookings":     "Meetings",
         "member":       "Member",
+        # Giving language — a church says "givers/giving", not
+        # "donors/donations" (nonprofit) or "customers" (BASE).
+        "donor":            "Giver",
+        "donors":           "Givers",
+        "donation":         "Gift",
+        "donations":        "Giving",
+        "restricted_fund":  "Designated fund",
     },
     "personal_services": {
         # Closest-to-generic vertical (barbers, salons). Keep BASE as-is.
