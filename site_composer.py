@@ -396,6 +396,18 @@ def gather_context(business_id: str) -> Dict[str, Any]:
     testimonials = [t for t in _testi_raw
                     if isinstance(t, dict) and t.get("show_on_website", True)]
 
+    # Real gallery/portfolio photos (settings.media_library.gallery) — the
+    # practitioner's OWN pictures of products / finished work / results. Only
+    # visible ones, in their chosen order. THIS is what the gallery module
+    # renders now (composed sites used to show stock-only galleries and never
+    # touched these). Empty → the gallery self-drops.
+    _gal_raw = ((settings.get("media_library") or {}).get("gallery")) or []
+    gallery_imgs = sorted(
+        [g for g in _gal_raw
+         if isinstance(g, dict) and str(g.get("url") or "").strip()
+         and g.get("show_on_website", True)],
+        key=lambda g: g.get("sort_order", 0))
+
     # Arc S "Business Picture" (2026-07-10, Kevin's insight: "they have
     # to have rules of engagement for their business") — policies + FAQ
     # gathered by Chief (set_business_policy / add_faq) into
@@ -566,6 +578,7 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "site": site,
         "offerings": offerings,
         "testimonials": testimonials,
+        "gallery": gallery_imgs,
         "faq": faq_rows,
         "business_picture": business_picture,
         "booking": booking,
@@ -696,8 +709,15 @@ def _default_spec(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         {"module": "cta", "variant": "band", "content": {"headline": "Ready when you are."}},
         {"module": "contact", "variant": "standard", "content": {"headline": "Get in touch"}},
     ]
-    if dna["vibe"] == "bold" or "creative" in (biz.get("type") or ""):
-        spec.insert(3, {"module": "gallery", "variant": "grid", "content": {}})
+    # Gallery: ANY business that uploaded real photos gets one now (their
+    # products / finished work / results) — not just bold/creative vibes.
+    # The module self-drops if there are none, so this is safe either way.
+    # Image-forward businesses lead with the editorial mosaic; others get the
+    # clean uniform grid.
+    if ctx.get("gallery"):
+        _gal_variant = ("mosaic" if (dna["vibe"] == "bold"
+                                     or "creative" in (biz.get("type") or "")) else "grid")
+        spec.insert(3, {"module": "gallery", "variant": _gal_variant, "content": {}})
     if (ctx.get("store") or {}).get("enabled"):
         spec.insert(-2, {"module": "store", "variant": "featured", "content": {}})
     # Arc S — the rules-of-engagement ledger, when the business has one.
@@ -2766,6 +2786,15 @@ def compose_site(business_id: str, brief_notes: str = "",
     spec = _apply_symmetry_preference(spec, decisions.get("layout"))
     if dro:
         _apply_hero_direction(spec, decisions.get("hero_concept"))
+
+    # Gallery guarantee (2026-07-14): a business that uploaded real photos of
+    # its products / work / results ALWAYS gets its gallery, even if the LLM's
+    # spec omitted it. Inserted before contact so real work always shows.
+    if ctx.get("gallery") and not any(s.get("module") == "gallery" for s in spec):
+        _gv = "mosaic" if (ctx.get("dna") or {}).get("vibe") == "bold" else "grid"
+        _pos = next((i for i, s in enumerate(spec)
+                     if s.get("module") == "contact"), len(spec))
+        spec.insert(max(1, _pos), {"module": "gallery", "variant": _gv, "content": {}})
 
     # Site Arc 10 — the ceremony pass: deterministic interstitial seams
     # between the chapters (after sanitize/symmetry, before render;
