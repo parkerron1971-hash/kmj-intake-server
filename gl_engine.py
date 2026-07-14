@@ -96,11 +96,14 @@ def _d(s: Optional[str]) -> Optional[_date]:
 
 
 def _coa_for(business_type: Optional[str]) -> List[Tuple]:
+    # Canonical vertical FAMILY (vertical_family.py) — so a church/ministry
+    # gets the same restricted-fund scaffold as a "nonprofit", instead of
+    # falling through to the plain operating book.
+    import vertical_family
     seed = list(COA_SEED)
-    bt = (business_type or "").lower().strip().replace("-", "_").replace(" ", "_")
-    if bt == "lawyer":
+    if vertical_family.is_legal_like(business_type):
         seed += COA_LAWYER_EXTRA
-    if bt in ("nonprofit", "non_profit", "not_for_profit"):
+    if vertical_family.is_nonprofit_like(business_type):
         seed += COA_NONPROFIT_EXTRA
     return seed
 
@@ -219,10 +222,11 @@ _RESTRICTED_HINTS = ("restricted", "restricted_gift", "restricted_donation")
 
 def _income_code_for_invoice(inv: Dict[str, Any], business_type: Optional[str]) -> str:
     """I.10 — nonprofit restricted gifts → 4200 Restricted Contributions.
-    Routing requires BOTH the nonprofit business type and an explicitly
-    restricted invoice category, so other verticals can never trip it."""
-    bt = (business_type or "").lower().strip().replace("-", "_").replace(" ", "_")
-    if bt in ("nonprofit", "non_profit", "not_for_profit") \
+    Routing requires BOTH a nonprofit-family business (nonprofit, church,
+    ministry, …) and an explicitly restricted invoice category, so other
+    verticals can never trip it."""
+    import vertical_family
+    if vertical_family.is_nonprofit_like(business_type) \
             and (inv.get("category") or "").lower().strip() in _RESTRICTED_HINTS:
         return "4200"
     return "4000"
