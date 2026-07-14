@@ -3357,6 +3357,140 @@ def refresh_composed(body: RefreshBody,
     return {"ok": True, "refreshing": True}
 
 
+# ─── Custom domain (Tier 1 — "connect a domain you own") ─────────────
+# A practitioner points a domain they bought elsewhere at their site. Flow:
+#   connect → we store it pending + a TXT ownership token + DNS instructions
+#   verify  → we DNS-check the TXT token; on match the domain is verified
+# HTTPS/cert issuance for the domain is an INFRA step (the domain must be
+# added to the hosting platform) — tracked separately.
+_PLATFORM_DOMAIN = "mysolutionist.app"
+_DOMAIN_RE = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)(\.[a-z0-9-]{1,63})+$")
+
+
+def _normalize_domain(raw: str) -> str:
+    d = str(raw or "").strip().lower()
+    d = re.sub(r"^https?://", "", d)
+    d = d.split("/")[0].split("?")[0].strip().strip(".")
+    if d.startswith("www."):
+        d = d[4:]
+    return d
+
+
+def _dns_txt_contains(name: str, token: str) -> bool:
+    """DNS-over-HTTPS TXT lookup (dependency-free). True if `token` appears in
+    any TXT record for `name`."""
+    try:
+        r = httpx.get("https://dns.google/resolve",
+                      params={"name": name, "type": "TXT"}, timeout=8.0)
+        if r.status_code >= 400:
+            return False
+        for ans in (r.json().get("Answer") or []):
+            if token in str(ans.get("data") or "").replace('"', ""):
+                return True
+    except Exception as e:
+        logger.info(f"[domain] TXT lookup failed for {name}: {e}")
+    return False
+
+
+def _load_site_cfg(business_id: str):
+    rows = sb_clients.sb_get_as_service(
+        f"/business_sites?business_id=eq.{business_id}"
+        f"&select=slug,site_config&order=updated_at.desc&limit=1") or []
+    if not rows:
+        return None, None, None
+    return rows[0].get("slug") or "", dict(rows[0].get("site_config") or {}), rows[0]
+
+
+class DomainConnectBody(BaseModel):
+    business_id: str
+    domain: str
+
+
+@router.post("/domain/connect")
+def connect_domain(body: DomainConnectBody,
+                   session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    """Save a custom domain the practitioner owns as PENDING + return the DNS
+    records they must add (an ownership TXT token + how to point the domain)."""
+    _require_owner(body.business_id, session.user.id)
+    domain = _normalize_domain(body.domain)
+    if not domain or not _DOMAIN_RE.match(domain) or domain.endswith(_PLATFORM_DOMAIN):
+        raise HTTPException(400, "Enter a valid domain you own, like yourbusiness.com")
+    # Uniqueness — a domain can't be claimed by two sites.
+    claimed = sb_clients.sb_get_as_service(
+        f"/business_sites?site_config->>custom_domain=eq.{domain}"
+        f"&select=business_id&limit=1") or []
+    if claimed and claimed[0].get("business_id") != body.business_id:
+        raise HTTPException(409, "That domain is already connected to another site.")
+    slug, cfg, _row = _load_site_cfg(body.business_id)
+    if cfg is None:
+        raise HTTPException(404, "No site yet — compose your site first.")
+    import secrets
+    token = cfg.get("custom_domain_token") or ("sol-verify-" + secrets.token_hex(12))
+    cfg["custom_domain"] = domain
+    cfg["custom_domain_status"] = "pending"
+    cfg["custom_domain_token"] = token
+    sb_clients.sb_patch_as_service(
+        f"/business_sites?business_id=eq.{body.business_id}", {"site_config": cfg})
+    return {
+        "ok": True, "domain": domain, "status": "pending",
+        "dns": {
+            "verify": {"type": "TXT", "host": f"_solutionist-verify.{domain}",
+                       "value": token,
+                       "note": "Proves you own the domain."},
+            "point_www": {"type": "CNAME", "host": "www",
+                          "value": f"{slug}.{_PLATFORM_DOMAIN}",
+                          "note": f"Points www.{domain} at your site."},
+            "point_root": {"type": "ALIAS/ANAME (or A)", "host": "@",
+                           "value": f"{slug}.{_PLATFORM_DOMAIN}",
+                           "note": ("Points the bare domain at your site. If your "
+                                    "registrar has no ALIAS/ANAME, use their "
+                                    "'forward root to www' option instead.")},
+        },
+    }
+
+
+class DomainVerifyBody(BaseModel):
+    business_id: str
+
+
+@router.post("/domain/verify")
+def verify_domain(body: DomainVerifyBody,
+                  session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    """Check the ownership TXT record; mark the domain verified on match."""
+    _require_owner(body.business_id, session.user.id)
+    _slug, cfg, _row = _load_site_cfg(body.business_id)
+    if cfg is None:
+        raise HTTPException(404, "No site found.")
+    domain = cfg.get("custom_domain")
+    token = cfg.get("custom_domain_token")
+    if not domain or not token:
+        raise HTTPException(400, "No domain connected yet.")
+    if _dns_txt_contains(f"_solutionist-verify.{domain}", token):
+        cfg["custom_domain_status"] = "verified"
+        sb_clients.sb_patch_as_service(
+            f"/business_sites?business_id=eq.{body.business_id}", {"site_config": cfg})
+        return {"ok": True, "status": "verified", "domain": domain}
+    return {"ok": False, "status": "pending", "domain": domain,
+            "message": ("We couldn't find the verification record yet. DNS changes "
+                        "can take a few minutes to a few hours — add the TXT record, "
+                        "then try again.")}
+
+
+@router.post("/domain/disconnect")
+def disconnect_domain(body: DomainVerifyBody,
+                      session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    """Remove the custom domain; the site keeps its free subdomain."""
+    _require_owner(body.business_id, session.user.id)
+    _slug, cfg, _row = _load_site_cfg(body.business_id)
+    if cfg is None:
+        raise HTTPException(404, "No site found.")
+    for k in ("custom_domain", "custom_domain_status", "custom_domain_token"):
+        cfg.pop(k, None)
+    sb_clients.sb_patch_as_service(
+        f"/business_sites?business_id=eq.{body.business_id}", {"site_config": cfg})
+    return {"ok": True, "disconnected": True}
+
+
 @router.get("/spec/{business_id}")
 def get_spec(business_id: str,
              session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
