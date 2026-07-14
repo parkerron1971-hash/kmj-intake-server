@@ -68,6 +68,12 @@ VIBE_FAMILY_MAP: Dict[str, str] = {
     "casual": "warm",
     "formal": "formal",
     "corporate": "formal",
+    # Professional synonyms all resolve to the formal (corporate) vibe, so
+    # "professional" is honored no matter which word carries the intent.
+    "professional": "formal",
+    "authoritative": "formal",
+    "executive": "formal",
+    "polished": "formal",
     "direct": "bold",
 }
 
