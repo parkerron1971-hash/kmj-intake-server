@@ -450,6 +450,67 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
              "headline": "Track RSVPs for upcoming events (childcare, dietary, accessibility)."},
         ],
     }),
+    # Secular donation-funded orgs. Distinct from ministry (faith) but the
+    # same nonprofit ACCOUNTING family (restricted funds, donor/990) — see
+    # vertical_family.py. Previously fell through to GENERIC, so a nonprofit
+    # got generic voice + generic "customer/discovery call" offerings that
+    # read wrong for a mission org.
+    "nonprofit": VerticalProfile({
+        "voice": {
+            "register": "mission-driven, warm, stewardship-minded",
+            "formality": "professional + heartfelt",
+            "hallmarks": [
+                "uses 'Donor' and 'Program'",
+                "frames gifts as mission support, never a sale",
+                "stewardship + transparency (restricted vs unrestricted)",
+                "impact-focused without over-promising outcomes",
+            ],
+            "taboo": ["treating donations as transactional revenue", "guaranteeing specific impact"],
+        },
+        "onboarding_questions": [
+            {"id": "cause_area", "prompt": "What cause or mission does the organization serve?", "kind": "text"},
+            {"id": "tax_status", "prompt": "Are you a registered 501(c)(3) (or equivalent)?", "kind": "boolean"},
+            {"id": "funding_mix", "prompt": "Where does most funding come from?", "kind": "multiselect",
+             "options": ["individual_gifts", "grants", "events", "memberships", "earned_program_fees"]},
+            {"id": "org_size", "prompt": "Roughly how many active donors/supporters?", "kind": "select",
+             "options": ["under_50", "50_500", "500_5000", "over_5000"]},
+        ],
+        "offering_suggestions": [
+            {"name": "Membership", "price": 50, "duration_min": 0,
+             "description": "Annual supporting membership."},
+            {"name": "Program Enrollment", "price": 0, "duration_min": 0,
+             "description": "Sign-up for a program or service you offer (free or fee-based)."},
+            {"name": "Event Ticket", "price": 40, "duration_min": 0,
+             "description": "Registration for a fundraiser, gala, or program event."},
+            {"name": "Sponsorship", "price": 1000, "duration_min": 0,
+             "description": "Corporate or individual sponsorship of a program or event."},
+        ],
+        "invoice_line_templates": [
+            {"description": "Membership dues", "kind": "flat"},
+            {"description": "Program fee", "kind": "flat"},
+            {"description": "Event ticket", "kind": "flat"},
+            {"description": "Sponsorship", "kind": "flat"},
+            {"description": "Restricted gift", "kind": "flat",
+             "hint": "Designate to a restricted fund — books to restricted net assets, not general operating."},
+        ],
+        "email_voice": {
+            "booking_confirmation": {
+                "tone_note": "Warm and mission-forward. Confirm time. Thank them for supporting the cause; note any event logistics (parking, dietary).",
+            },
+        },
+        "empty_state_nudges": {
+            "bookings": "No meetings scheduled. Want to open availability for donor meetings or program intake?",
+            "customers": "No donors logged here yet. They'll appear as people give or enroll.",
+            "invoices": "No invoices yet. Common: membership dues, program fees, event tickets, sponsorships.",
+            "offerings": "No offerings yet. Common: Membership + Program Enrollment + Event Ticket + Sponsorship.",
+        },
+        "module_suggestions": [
+            {"slug": "programs", "archetype": "fallback_generic",
+             "headline": "Track your programs and who's enrolled in each."},
+            {"slug": "event-rsvp", "archetype": "fallback_generic",
+             "headline": "Track event RSVPs and sponsorships."},
+        ],
+    }),
     "financial_educator": VerticalProfile({
         "voice": {
             "register": "educational, regulated-aware, careful with claims",
