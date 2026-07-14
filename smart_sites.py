@@ -241,8 +241,15 @@ def resolve_layout_and_vocabulary(
     )
 
 
+# Verticals that are professional by nature — when nothing explicit is set,
+# they should read corporate (formal), never boutique/warm. Fixes the
+# "a law firm renders in the warm/pill-button vibe" gap.
+PROFESSIONAL_VERTICALS = ("lawyer", "consultant", "financial_educator", "service_provider")
+
+
 def resolve_vibe_family(bundle: Dict[str, Any], site_config: Dict[str, Any]) -> str:
-    """Override > bundle.design.vibe_family > brand_voice mapping > 'warm'."""
+    """Override > bundle.design.vibe_family > brand_voice mapping >
+    professional-vertical default (formal) > 'warm'."""
     override = site_config.get("vibe_family_override")
     if override in VIBE_FAMILIES:
         return override
@@ -250,7 +257,14 @@ def resolve_vibe_family(bundle: Dict[str, Any], site_config: Dict[str, Any]) -> 
     if bundle_vibe in VIBE_FAMILIES:
         return bundle_vibe
     bv = (bundle.get("voice") or {}).get("brand_voice")
-    return BRAND_VOICE_TO_VIBE.get(bv, "warm")
+    if bv in BRAND_VOICE_TO_VIBE:
+        return BRAND_VOICE_TO_VIBE[bv]
+    # No explicit style chosen: a professional vertical defaults to a
+    # professional (formal) look instead of warm.
+    btype = ((bundle.get("business") or {}).get("type") or "").lower().strip()
+    if btype in PROFESSIONAL_VERTICALS:
+        return "formal"
+    return "warm"
 
 
 # ─────────────────────────────────────────────────────────────
