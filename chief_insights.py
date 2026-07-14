@@ -439,5 +439,13 @@ async def insights_tick() -> None:
             chief_memory_semantic.backfill_tick(limit=100)
         except Exception:
             pass
+        # Standing playbook: re-distill the per-business brief for any
+        # business whose facts changed since last time. Cadence + fingerprint
+        # gated, capped, fail-open — same 6h tick.
+        try:
+            import chief_playbook
+            chief_playbook.tick(limit=chief_playbook.MAX_PER_TICK)
+        except Exception:
+            pass
 
     await asyncio.to_thread(_tick_sync)
