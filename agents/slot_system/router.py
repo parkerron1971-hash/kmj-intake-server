@@ -74,6 +74,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/slots", tags=["slots"])
 
 
+def _refresh_composed(business_id: str) -> None:
+    """After a slot image change (upload / clear / reroll), re-render the
+    composed site so the new image is baked into the served HTML. Composed
+    pages have NO serve-time image injection — this deterministic, no-LLM
+    re-render is the only live-update path (the same one text overrides and
+    the Media Library gallery use). Synchronous + best-effort: the swap must
+    SHOW on the next preview reload, but a refresh failure never fails the
+    slot operation (no-op for legacy / Smart Sites pages)."""
+    try:
+        import site_composer
+        site_composer.refresh_if_composed(business_id)
+    except Exception as e:
+        logger.warning(f"[slots] composed-site refresh skipped (non-fatal): {e}")
+
+
 @router.get("/_diag/unsplash")
 def diag_unsplash(
     q: str,
@@ -533,6 +548,7 @@ async def upload_slot(
             {"error": "slot_persist_failed", "uploaded_url": public_url},
         )
 
+    _refresh_composed(business_id)   # bake the new image onto the live site
     return {
         "success": True,
         "custom_url": public_url,
@@ -566,6 +582,7 @@ def clear_slot(
                 "slot_name": slot_name,
             },
         )
+    _refresh_composed(business_id)   # re-render so the revert shows live
     return {
         "success": True,
         "slot": _slot_record_for_response(business_id, slot_name),
@@ -769,6 +786,8 @@ def reroll_slot(
     # reroll attempt doesn't burn the daily budget.
     new_count = slot_storage.increment_reroll(business_id, slot_name)
     rerolls_remaining = max(0, MAX_REROLLS_PER_DAY - new_count)
+
+    _refresh_composed(business_id)   # re-render so the rerolled image shows live
 
     response: Dict[str, Any] = {
         "success": True,
