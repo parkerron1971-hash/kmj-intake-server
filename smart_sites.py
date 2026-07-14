@@ -48,6 +48,7 @@ ARCHETYPE_TOUCHES = (
     "course_creator",
     "service_provider",
     "lawyer",
+    "ministry",
     "custom",
 )
 
@@ -855,6 +856,24 @@ def _render_lawyer_disclaimer(bundle: Dict[str, Any], vibe: str) -> str:
     )
 
 
+def _render_ministry_welcome(bundle: Dict[str, Any], vibe: str) -> str:
+    slug = (bundle.get("business") or {}).get("slug")
+    cta = f' <a href="/public/booking/{slug}">Plan a visit or connect →</a>' if slug else ""
+    return _archetype_box(
+        "<strong>You're welcome here.</strong> Whether it's your first time or you're "
+        "looking to get connected, there's a place for you in this community." + cta
+    )
+
+
+def _render_ministry_giving_note(bundle: Dict[str, Any], vibe: str) -> str:
+    # Ministry principle: giving is generosity toward the mission, never a
+    # transaction or a condition of belonging.
+    return _archetype_box(
+        "<strong>Giving.</strong> Gifts support the mission and ministries of this "
+        "community. Generosity is always an invitation, never a requirement to belong."
+    )
+
+
 def _archetype_touches(archetype: str, vibe: str, bundle: Dict[str, Any]) -> Dict[str, str]:
     """Return HTML fragments to inject at named positions based on archetype."""
     touches = {"before_about": "", "after_services": "", "footer_addendum": ""}
@@ -876,6 +895,11 @@ def _archetype_touches(archetype: str, vibe: str, bundle: Dict[str, Any]) -> Dic
         # Consultation CTA where services are, disclaimer in the footer.
         touches["after_services"] = _render_lawyer_consult_cta(bundle, vibe)
         touches["footer_addendum"] = _render_lawyer_disclaimer(bundle, vibe)
+    elif archetype == "ministry":
+        # Welcoming invitation to visit/connect; gentle (non-transactional)
+        # giving note in the footer.
+        touches["after_services"] = _render_ministry_welcome(bundle, vibe)
+        touches["footer_addendum"] = _render_ministry_giving_note(bundle, vibe)
     # custom: no touches — vibe family alone
     return touches
 

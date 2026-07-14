@@ -171,9 +171,24 @@ def donor_report(biz: str, period: str = "this_year",
             else:
                 gl_unrestricted = round(gl_unrestricted + net, 2)
 
+    # Giving vocabulary — a church exports "Giver / Giving", a nonprofit
+    # "Donor". Resolved once here so the PDF + CSV exports (which have no
+    # terminology layer) label the statement correctly too.
+    donor_label, donors_label = "Donor", "Donors"
+    try:
+        import vertical_terminology as _vt
+        _rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{biz}&select=type&limit=1") or []
+        _bt = (_rows[0].get("type") if _rows else "") or ""
+        donor_label = _vt.get_term(_bt, "donor")
+        donors_label = _vt.get_term(_bt, "donors")
+    except Exception:
+        pass
+
     return {
         "ok": True, "report": "donors", "period": period,
         "range": {"from": start.isoformat(), "to": end.isoformat()},
+        "donor_label": donor_label, "donors_label": donors_label,
         "total_gifts": total_gifts,
         "restricted_gifts": restricted_gifts,
         "unrestricted_gifts": round(total_gifts - restricted_gifts, 2),
@@ -218,8 +233,28 @@ def prep_990(biz: str, year: Optional[int] = None) -> Dict[str, Any]:
     total_income = round(sum(income_by_code.values()), 2)
     total_expense = round(sum(expense_by_bucket.values()), 2)
 
+    # 990 nuance: churches + integrated auxiliaries are generally exempt
+    # from filing Form 990 (IRC 6033). A secular nonprofit files; a church
+    # usually doesn't — so tell a ministry that up front instead of implying
+    # they must file.
+    filing_note = ""
+    try:
+        import vertical_registry as _vr
+        _rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{biz}&select=type&limit=1") or []
+        _bt = (_rows[0].get("type") if _rows else "") or ""
+        if _vr.resolve(_bt) == "ministry":
+            filing_note = (
+                "Churches and their integrated auxiliaries are generally EXEMPT "
+                "from filing Form 990 (IRC §6033) — prepare this only if your "
+                "organization is actually required to file. Either way, these "
+                "figures power your board and annual reports.")
+    except Exception:
+        pass
+
     return {
         "ok": True, "report": "prep_990", "year": y,
+        "filing_note": filing_note,
         "contributions": [{"code": c, "name": names.get(c, c), "amount": a}
                           for c, a in sorted(income_by_code.items())],
         "total_income": total_income,
