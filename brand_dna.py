@@ -470,21 +470,38 @@ def derive_typography(design: Dict[str, Any], vibe: str, intensity: str) -> Dict
           "bold": "clamp(2.6rem, 5.4vw, 3.8rem)"}[intensity]
     weight = {"restrained": 700, "confident": 900, "bold": 900}[intensity]
     h2_weight = {"restrained": 700, "confident": 800, "bold": 900}[intensity]
+    # Site quality (2026-07-14): fill the missing scale rungs. The scale
+    # used to jump h2 (huge) → body (flat 16.5px) with nothing between; h3,
+    # a lead size and a caption size give real hierarchy (a ~1.25 ratio
+    # modular feel) so sections read as designed, not just big-then-small.
+    h3 = {"restrained": "clamp(1.3rem, 2.1vw, 1.6rem)",
+          "confident": "clamp(1.4rem, 2.5vw, 1.8rem)",
+          "bold": "clamp(1.5rem, 2.7vw, 1.95rem)"}[intensity]
     return {
         "heading": heading,
         "body": body,
-        "h1": h1, "h2": h2,
+        "h1": h1, "h2": h2, "h3": h3,
+        "lead": "clamp(1.1rem, 1.6vw, 1.3rem)",   # intro / lead paragraphs
+        "small": "0.82rem",                        # captions / fine print
         "heading_weight": weight,
         "h2_weight": h2_weight,
+        "h3_weight": {"restrained": 600, "confident": 700, "bold": 800}[intensity],
         "letter_tight": "-0.03em" if intensity != "restrained" else "-0.01em",
     }
 
 
-def derive_rhythm(intensity: str) -> Dict[str, str]:
+def derive_rhythm(intensity: str) -> Dict[str, Any]:
     pad = {"restrained": "clamp(72px, 9vw, 120px)",
            "confident": "clamp(84px, 11vw, 150px)",
            "bold": "clamp(96px, 13vw, 180px)"}[intensity]
-    return {"section_pad": pad, "gutter": "clamp(20px, 4vw, 48px)", "content_max": "1180px"}
+    # Site quality (2026-07-14): an 8pt spacing scale. Modules had only
+    # section_pad + gutter and reached for ad-hoc px/clamp literals for
+    # everything smaller; these named steps give consistent internal rhythm
+    # (--sx-space-1..8) to adopt in place of magic numbers.
+    space = {"1": "4px", "2": "8px", "3": "12px", "4": "16px",
+             "5": "24px", "6": "32px", "7": "48px", "8": "64px"}
+    return {"section_pad": pad, "gutter": "clamp(20px, 4vw, 48px)",
+            "content_max": "1180px", "space": space}
 
 
 def derive_radius(vibe: str, intensity: str) -> Dict[str, str]:
@@ -819,12 +836,24 @@ def css_variables(dna: Dict[str, Any]) -> str:
   --sx-font-body: '{t['body']}', -apple-system, sans-serif;
   --sx-h1: {t['h1']};
   --sx-h2: {t['h2']};
+  --sx-h3: {t.get('h3', '1.6rem')};
+  --sx-lead: {t.get('lead', '1.2rem')};
+  --sx-small: {t.get('small', '.82rem')};
   --sx-heading-weight: {hw};
   --sx-h2-weight: {h2w};
+  --sx-h3-weight: {t.get('h3_weight', 700)};
   --sx-letter-tight: {t['letter_tight']};
   --sx-section-pad: {r['section_pad']};
   --sx-gutter: {r['gutter']};
   --sx-content-max: {r['content_max']};
+  --sx-space-1: {r.get('space', {}).get('1', '4px')};
+  --sx-space-2: {r.get('space', {}).get('2', '8px')};
+  --sx-space-3: {r.get('space', {}).get('3', '12px')};
+  --sx-space-4: {r.get('space', {}).get('4', '16px')};
+  --sx-space-5: {r.get('space', {}).get('5', '24px')};
+  --sx-space-6: {r.get('space', {}).get('6', '32px')};
+  --sx-space-7: {r.get('space', {}).get('7', '48px')};
+  --sx-space-8: {r.get('space', {}).get('8', '64px')};
   --sx-radius-card: {rad['card']};
   --sx-radius-button: {rad['button']};
   --sx-radius-image: {rad['image']};
