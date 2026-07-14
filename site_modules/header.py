@@ -57,15 +57,37 @@ def render_header(rendered_ids: List[str], ctx: Dict[str, Any]) -> Tuple[str, st
         brand_inner = (f'{diamond_mark(ctx.get("dna") or {})}'
                        f'<span class="sxm-header-wordmark">{safe(name)}</span>')
 
-    links = []
-    for mid in rendered_ids:
-        if mid in _NAV_LABELS and len(links) < _MAX_LINKS:
-            anchor, label = _NAV_LABELS[mid]
-            links.append(f'<a href="{anchor}">{label}</a>')
-    if "contact" in rendered_ids:
-        links.append('<a href="#contact">Contact</a>')
-    nav_html = (f'<nav class="sxm-header-nav" aria-label="Site sections">{"".join(links)}</nav>'
-                if links else "")
+    # Multi-page nav (site_multipage): real cross-page links with an
+    # is-active marker + a CSS-only mobile hamburger drawer. Falls back to
+    # the anchor nav (single-page) when no page context is present.
+    page_nav = ctx.get("page_nav") if isinstance(ctx.get("page_nav"), dict) else None
+    pages = (page_nav or {}).get("pages") or []
+    if pages:
+        def _page_link(p: Dict[str, Any]) -> str:
+            cls = ' class="is-active" aria-current="page"' if p.get("active") else ""
+            return (f'<a href="{safe_url(p.get("href") or "#")}"{cls}>'
+                    f'{safe(p.get("name") or "")}</a>')
+        link_items = "".join(_page_link(p) for p in pages)
+        nav_html = (f'<nav class="sxm-header-nav sxm-header-pagenav" '
+                    f'aria-label="Pages">{link_items}</nav>')
+        brand_href = next((p.get("href") for p in pages if p.get("id") == "home"), "#top")
+        drawer_html = (
+            '\n<input type="checkbox" id="sxm-nav-toggle" class="sxm-nav-toggle" aria-hidden="true">'
+            '\n<label for="sxm-nav-toggle" class="sxm-hamburger" aria-label="Open menu">'
+            '<span></span><span></span><span></span></label>'
+            f'\n<nav class="sxm-header-drawer" aria-label="Pages (mobile)">{link_items}</nav>')
+    else:
+        links = []
+        for mid in rendered_ids:
+            if mid in _NAV_LABELS and len(links) < _MAX_LINKS:
+                anchor, label = _NAV_LABELS[mid]
+                links.append(f'<a href="{anchor}">{label}</a>')
+        if "contact" in rendered_ids:
+            links.append('<a href="#contact">Contact</a>')
+        nav_html = (f'<nav class="sxm-header-nav" aria-label="Site sections">{"".join(links)}</nav>'
+                    if links else "")
+        brand_href = "#top"
+        drawer_html = ""
 
     if booking.get("enabled") and booking.get("url"):
         cta_href, cta_label = safe_url(booking["url"]), "Book now"
@@ -75,9 +97,9 @@ def render_header(rendered_ids: List[str], ctx: Dict[str, Any]) -> Tuple[str, st
     html = f"""
 <header class="sxm-header">
   <div class="sxm-header-inner">
-    <a class="sxm-header-brand" href="#top" aria-label="{safe(name)} — home">{brand_inner}</a>
+    <a class="sxm-header-brand" href="{brand_href}" aria-label="{safe(name)} — home">{brand_inner}</a>
     {nav_html}
-    <a class="sxm-cta sxm-header-cta" href="{cta_href}"><span {ov('header', 'cta_label')}>{cta_label}</span></a>
+    <a class="sxm-cta sxm-header-cta" href="{cta_href}"><span {ov('header', 'cta_label')}>{cta_label}</span></a>{drawer_html}
   </div>
 </header>"""
 
@@ -122,5 +144,36 @@ html { scroll-padding-top: 84px; }
   .sxm-header-logo { height: 32px; }
   .sxm-header-nav { gap: 16px; padding: 2px 0; }
   html { scroll-padding-top: 68px; }
+}
+/* ── Multi-page nav (site_multipage) ── */
+.sxm-header-pagenav a.is-active { opacity: 1; color: var(--sx-accent); }
+.sxm-header-pagenav a.is-active::after { transform: scaleX(1); }
+.sxm-nav-toggle, .sxm-hamburger, .sxm-header-drawer { display: none; }
+@media (max-width: 768px) {
+  .sxm-header-pagenav { display: none; }
+  .sxm-header-cta { display: none; }
+  .sxm-hamburger { display: inline-flex; flex-direction: column; gap: 5px; margin-left: auto;
+    width: 42px; height: 42px; align-items: center; justify-content: center; cursor: pointer; }
+  .sxm-hamburger span { display: block; width: 22px; height: 2px; border-radius: 2px;
+    background: var(--sx-text); transition: transform .25s ease, opacity .2s ease; }
+  .sxm-header-drawer { display: flex; position: absolute; top: 100%; left: 0; right: 0;
+    flex-direction: column; padding: 6px var(--sx-gutter) 16px;
+    background: color-mix(in srgb, var(--sx-bg) 96%, transparent);
+    -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+    border-bottom: 1px solid color-mix(in srgb, var(--sx-border) 70%, transparent);
+    max-height: 0; overflow: hidden; opacity: 0; pointer-events: none;
+    transition: max-height .3s var(--sx-ease), opacity .2s ease; }
+  .sxm-nav-toggle:checked ~ .sxm-header-drawer { max-height: 72vh; opacity: 1; pointer-events: auto; }
+  .sxm-header-drawer a { padding: 13px 2px; font-size: .98rem; font-weight: 600;
+    letter-spacing: .02em; text-transform: none; color: var(--sx-text); opacity: .9;
+    border-bottom: 1px solid color-mix(in srgb, var(--sx-border) 40%, transparent); }
+  .sxm-header-drawer a.is-active { color: var(--sx-accent); opacity: 1; }
+  .sxm-header-drawer a::after { display: none; }
+  .sxm-nav-toggle:checked ~ .sxm-hamburger span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+  .sxm-nav-toggle:checked ~ .sxm-hamburger span:nth-child(2) { opacity: 0; }
+  .sxm-nav-toggle:checked ~ .sxm-hamburger span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sxm-header-drawer, .sxm-hamburger span { transition: none; }
 }"""
     return html, css
