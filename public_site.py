@@ -228,9 +228,12 @@ def extract_slug_from_host(request: Request) -> Optional[str]:
     return None
 
 
-def _inject_canonical(html: str, slug: str) -> str:
-    """Inject canonical URL + OG tags into the HTML head section."""
-    canonical = f"https://{slug}.mysolutionist.app"
+def _inject_canonical(html: str, slug: str, custom_domain: Optional[str] = None) -> str:
+    """Inject canonical URL + OG tags into the HTML head section. When the
+    site has a custom domain configured, that is the canonical public
+    address (not the platform subdomain)."""
+    cd = str(custom_domain or "").strip().lower().lstrip("/")
+    canonical = f"https://{cd}" if cd else f"https://{slug}.mysolutionist.app"
     tags = (
         f'\n<link rel="canonical" href="{canonical}" />'
         f'\n<meta property="og:url" content="{canonical}" />'
@@ -969,7 +972,7 @@ async def get_site_html(slug: str):
                 if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
                     brand_color = bc
 
-        html = _inject_canonical(html, slug)
+        html = _inject_canonical(html, slug, (site.get("site_config") or {}).get("custom_domain"))
         # Pass 3: activate the dormant Pass 2.5a meta-tag helper.
         html = _inject_brand_meta(html, biz_id)
         html = _inject_dynamic_sections(
@@ -1091,7 +1094,7 @@ async def get_site_page_html(slug: str, page_path: str):
         if not html:
             # Home, unknown page, or a single-page site → serve the main page.
             return await get_site_html(slug)
-        html = _inject_canonical(html, slug)
+        html = _inject_canonical(html, slug, cfg.get("custom_domain"))
         html = _inject_brand_meta(html, sites[0].get("business_id"))
         return HTMLResponse(content=html, status_code=200, media_type="text/html",
                             headers={"X-Solutionist-Source": "module-composer-multipage"})
