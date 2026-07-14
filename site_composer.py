@@ -2508,19 +2508,13 @@ def _apply_ceremony_pass_inner(spec: List[Dict[str, Any]],
                    or (ctx.get("business") or {}).get("id") or "ceremony")
     h = int(hashlib.sha256(seed_src.encode("utf-8")).hexdigest()[:12], 16)
 
-    ws = str((d.get("whitespace") or {}).get("philosophy") or "").lower()
-    density = str((d.get("layout") or {}).get("density") or "").lower()
-    generous = (ws in _GENEROUS_WHITESPACE or "generous" in ws
-                or density == "airy")
     tn = d.get("tension") if isinstance(d.get("tension"), dict) else {}
     tension_present = bool(tn.get("pole_a") and tn.get("pole_b"))
-    statement_line, statement_had_candidates = ("", False)
+    statement_line = ""
     if tension_present:
-        statement_line, statement_had_candidates = _ceremony_statement_line(spec, dro)
-    # Site Arc 11b: a warranted statement whose every candidate line
-    # already appears in the page's copy falls back to a THREAD seam —
-    # never a duplicated title card.
-    statement_dup_fallback = (not statement_line) and statement_had_candidates
+        # (2nd tuple element — "had candidates" — no longer needed now that a
+        # duplicated statement just drops its seat rather than becoming a line.)
+        statement_line, _ = _ceremony_statement_line(spec, dro)
     tone_words = _ceremony_tone_words(ctx)
     dna_motion = (ctx.get("dna") or {}).get("motion", "standard")
     marquee_ok = (len(tone_words) >= _MARQUEE_MIN_WORDS
@@ -2532,68 +2526,21 @@ def _apply_ceremony_pass_inner(spec: List[Dict[str, Any]],
     if statement_line:
         wishes.append({"module": "interstitial", "variant": "statement",
                        "content": {"text": statement_line}})
-    elif statement_dup_fallback:
-        # The statement's seat stays, its voice changes: a thread seam
-        # (Site Arc 11b dedupe — smoke: dup line → thread fallback).
-        wishes.append({"module": "interstitial", "variant": "thread",
-                       "content": {}})
+    # (Site quality 2026-07-14) When a statement's candidates all duplicate
+    # the page copy, the seat is simply DROPPED — no bare thread line stands
+    # in for it.
     if marquee_ok:
         wishes.append({"module": "interstitial", "variant": "marquee",
                        "content": {"words": " • ".join(tone_words)}})
-    filler = "silence" if generous else "thread"
-    # Ghost pool (2026-07-10 screenshot fix): the first cut fed brand
-    # tone_words straight to the ghosts, and KMJ's live page whispered
-    # "MODERN QUIET-LUXURY" — style-system vocabulary leaking onto the
-    # page as if the designer's notes were left on the wall. Ladder:
-    #   1. the CONCEPT's own nouns (from hero_concept.concept_statement —
-    #      "scattered points of light … lit path" → Light / Path / Idea),
-    #   2. tone words with aesthetic jargon filtered out,
-    #   3. the business name's lead word.
-    # Always a SINGLE word (multi-word ghosts wrapped into a stack).
-    _GHOST_JARGON = {
-        "modern", "luxury", "quiet-luxury", "quiet", "minimal", "minimalist",
-        "clean", "premium", "elegant", "editorial", "bold", "classic",
-        "timeless", "aesthetic", "sleek", "sophisticated", "professional",
-        "luxurious", "refined", "upscale", "contemporary", "stylish",
-    }
-    _GHOST_STOP = {
-        "that", "with", "into", "from", "your", "their", "this", "them",
-        "then", "than", "when", "where", "will", "have", "been", "they",
-        "what", "each", "every", "single", "toward", "towards", "forward",
-        "about", "which", "while", "through",
-    }
-    concept_txt = str(((d.get("hero_concept") or {})
-                       .get("concept_statement")) or "")
-    ghost_pool: List[str] = []
-    seen_g = set()
-    for w in re.findall(r"[A-Za-z]{4,12}", concept_txt):
-        lw = w.lower()
-        if lw in _GHOST_STOP or lw in _GHOST_JARGON or lw in seen_g:
-            continue
-        seen_g.add(lw)
-        ghost_pool.append(w[:1].upper() + w[1:].lower())
-    for w in tone_words:
-        first = w.split()[0] if w.split() else ""
-        lw = first.lower()
-        if first and lw not in _GHOST_JARGON and lw not in seen_g and len(first) >= 3:
-            seen_g.add(lw)
-            ghost_pool.append(first)
-    if not ghost_pool:
-        bn = str((ctx.get("business") or {}).get("name") or "").split()
-        if bn and len(bn[0]) >= 3:
-            ghost_pool.append(bn[0])
-    ghost_pool = ghost_pool[:6]
-
-    gi = 0
-    while len(wishes) < _CEREMONY_MAX:
-        ghost = ghost_pool[(h + gi) % len(ghost_pool)] if ghost_pool else ""
-        gi += 1
-        wishes.append({"module": "interstitial", "variant": filler,
-                       "content": ({"ghost": ghost} if ghost else {})})
-
-    n_want = 1 + (1 if generous else 0) + (1 if (statement_line or statement_dup_fallback
-                                                 or marquee_ok) else 0)
-    n_want = min(n_want, _CEREMONY_MAX)
+    # Site quality (2026-07-14, Kevin): NO bare-line fillers. A seam appears
+    # ONLY when it carries real content — a statement quote or a values
+    # marquee. When there's nothing to say, insert NOTHING and let the
+    # section spacing (whitespace) do the work, the way a professional site
+    # does. The old silence/thread hairlines read as a stray animated line
+    # drifting between sections (the exact artifact being removed here).
+    if not wishes:
+        return spec
+    n_want = min(len(wishes), _CEREMONY_MAX)
 
     # Gaps: after spec[i] for i in 1..len-3 — a seam never lands directly
     # after the hero or directly before the contact exit. Chosen gaps are
