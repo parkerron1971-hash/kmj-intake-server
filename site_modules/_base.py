@@ -365,16 +365,19 @@ body.sx-sig-drift .sxm-motif { animation: sx-drift 19s ease-in-out infinite alte
 body.sx-sig-drift .sxm-cine-bg, body.sx-sig-drift .sxm-hero-bgimg {
   animation: sx-drift-pan 26s ease-in-out infinite alternate; }
 body.sx-sig-underline .sxm-reveal h2 { position: relative; padding-bottom: 14px; }
+/* Site quality (2026-07-14): FADE the heading underline in, don't WIPE it.
+   The old scaleX(0)->scaleX(1) read as a line drawing itself out of nothing
+   on every scroll; a quiet opacity fade keeps the accent without the artifact. */
 body.sx-sig-underline .sxm-reveal h2::after { content: ""; position: absolute; left: 0; bottom: 0;
-  height: 3px; width: min(150px, 55%); border-radius: 99px;
+  height: 2px; width: min(120px, 44%); border-radius: 99px;
   background: linear-gradient(90deg, var(--sx-accent), transparent);
-  transform: scaleX(0); transform-origin: left; transition: transform .9s var(--sx-ease) .2s; }
-body.sx-sig-underline .sxm-reveal.sxm-in h2::after { transform: scaleX(1); }
+  opacity: 0; transition: opacity .7s var(--sx-ease) .15s; }
+body.sx-sig-underline .sxm-reveal.sxm-in h2::after { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   body.sx-sig-cascade .sxm-reveal .sxm-inner > * { opacity: 1; transform: none; transition: none; }
   body.sx-sig-drift .sxm-orn-layer, body.sx-sig-drift .sxm-motif,
   body.sx-sig-drift .sxm-cine-bg, body.sx-sig-drift .sxm-hero-bgimg { animation: none !important; }
-  body.sx-sig-underline .sxm-reveal h2::after { transform: scaleX(1); transition: none; }
+  body.sx-sig-underline .sxm-reveal h2::after { opacity: 1; transition: none; }
 }"""
 
 # Image-treatment CSS (Arc 3): one soft grade per page via body class.
@@ -567,7 +570,10 @@ def base_css(dna: Dict[str, Any]) -> str:
     # Quality-floor arc 7: reveal travels 48px over .9s — the bar's
     # "things don't rush in, they arrive" (was 18px/.7s).
     reveal_css = "" if motion == "subtle" else """
-.sxm-reveal { opacity: 0; transform: translateY(32px); transition: opacity .8s var(--sx-ease), transform .8s var(--sx-ease); }
+/* Site quality (2026-07-14): gentler rise (32px -> 14px). A shorter travel
+   still reads as an arrival but stops the compositor-promoted edge from
+   flashing a 1px seam against the fixed grain/blur layers mid-transition. */
+.sxm-reveal { opacity: 0; transform: translateY(14px); transition: opacity .8s var(--sx-ease), transform .8s var(--sx-ease); }
 .sxm-reveal.sxm-in { opacity: 1; transform: none; }
 /* Slide cleanup (2026-07-10): late reveals — the 6s failsafe, or any
    section revealed while off-screen — SNAP instead of sliding, so the
