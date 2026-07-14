@@ -374,6 +374,9 @@ _MIME_TO_EXT = {
     "image/avif": "avif",
 }
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB
+# The only hard floor on upload size: reject a degenerate/broken image, never
+# a real photo. Slot "min_dimensions" are RECOMMENDED, not required.
+_UPLOAD_FLOOR_PX = 200
 
 
 def _aspect_ratio_to_orientation(aspect_ratio: Optional[str]) -> str:
@@ -510,21 +513,23 @@ async def upload_slot(
     if not image_bytes:
         raise HTTPException(400, {"error": "empty_file"})
 
+    # Kevin (2026-07-14): a MINIMUM size must never block an upload. We only
+    # reject a truly degenerate / unreadable image (a tiny safety floor); an
+    # image below the slot's RECOMMENDED size is accepted and simply flagged,
+    # so the UI can gently note it may look soft on a large hero.
     min_dims = defn.get("min_dimensions") or {}
+    rec_w, rec_h = int(min_dims.get("width", 0)), int(min_dims.get("height", 0))
     ok, err, dims = _validate_upload_dimensions(
-        image_bytes,
-        min_width=int(min_dims.get("width", 0)),
-        min_height=int(min_dims.get("height", 0)),
-    )
+        image_bytes, min_width=_UPLOAD_FLOOR_PX, min_height=_UPLOAD_FLOOR_PX)
     if not ok:
         raise HTTPException(
             400,
             {
                 "error": err,
-                "min_required": min_dims,
                 "received": {"width": dims[0], "height": dims[1]} if dims else None,
             },
         )
+    below_recommended = bool(dims and (dims[0] < rec_w or dims[1] < rec_h))
 
     import time as _time
     ext = _MIME_TO_EXT.get(content_type, "png")
@@ -554,6 +559,10 @@ async def upload_slot(
         "custom_url": public_url,
         "storage_path": storage_path,
         "uploaded_dimensions": {"width": dims[0], "height": dims[1]},
+        # Accepted regardless of size; below_recommended just lets the UI note
+        # the photo may look soft where the slot is large.
+        "below_recommended": below_recommended,
+        "recommended_dimensions": {"width": rec_w, "height": rec_h},
         "slot": _slot_record_for_response(business_id, slot_name),
     }
 
