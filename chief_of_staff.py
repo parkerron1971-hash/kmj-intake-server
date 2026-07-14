@@ -10393,6 +10393,35 @@ async def _execute_actions(client, biz, actions: List[Dict]) -> List[Dict]:
         atype = action.get("type")
         handler = ACTION_HANDLERS.get(atype)
         if not handler:
+            # Lookup MISS. Instead of dead-ending, REASON the intent into a
+            # plan of SAFE known primitives (chief_action_reasoner) and run
+            # THOSE through their normal validated handlers. Only ever
+            # executes allowlisted, reversible, non-sending actions; fails
+            # open to today's _fail. This is "do something it wasn't coded
+            # for" = compose known primitives in a new arrangement.
+            remapped = None
+            try:
+                import chief_action_reasoner
+                remapped = await asyncio.to_thread(
+                    chief_action_reasoner.reason_unknown_action,
+                    atype, action, (biz or {}).get("type"))
+            except Exception:
+                remapped = None
+            if remapped:
+                for mapped in remapped:
+                    mh = ACTION_HANDLERS.get(mapped.get("type"))
+                    if not mh:   # defensive — reasoner already allowlisted
+                        continue
+                    resolved = _resolve_action_references(mapped, results)
+                    try:
+                        r = await mh(client, biz, resolved)
+                        if isinstance(r, dict):
+                            r["_reasoned_from"] = atype
+                        results.append(r)
+                    except Exception as e:
+                        logger.exception(f"Reasoned action {mapped.get('type')} raised: {e}")
+                        results.append(_fail(mapped.get("type") or "unknown", str(e)[:200]))
+                continue
             results.append(_fail(atype or "unknown", f"Unknown action type '{atype}'"))
             continue
         # Substitute references from earlier results. Lets the Chief do
