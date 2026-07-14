@@ -445,15 +445,18 @@ _QUALITY_CSS = """
    Site Arc 9: shadow ink branches by palette mode — light grounds keep the
    ink-tinted color-mix, dark grounds get TRUE BLACK (a text-tinted shadow
    on a dark ground is a white haze, not depth). */
-.sxm-card { box-shadow: 0 22px 60px {SHADOW_REST};
+/* Site quality (2026-07-14): lighter, less uniform elevation. The old
+   0 22px 60px resting shadow on EVERY card was the "template drop-shadow"
+   tell; depth now sits mostly on hover, where it means something. */
+.sxm-card { box-shadow: 0 6px 22px {SHADOW_REST};
   transition: transform .5s var(--sx-ease), box-shadow .5s var(--sx-ease),
     border-color .5s var(--sx-ease); }
-.sxm-card:hover { transform: translateY(-8px); border-color: var(--sx-accent);
-  box-shadow: 0 40px 80px {SHADOW_HOVER}; }
-.sxm-card-lite { box-shadow: 0 22px 60px {SHADOW_REST};
+.sxm-card:hover { transform: translateY(-5px); border-color: var(--sx-accent);
+  box-shadow: 0 20px 48px {SHADOW_HOVER}; }
+.sxm-card-lite { box-shadow: 0 5px 16px {SHADOW_REST};
   transition: transform .5s var(--sx-ease), box-shadow .5s var(--sx-ease); }
-.sxm-card-lite:hover { transform: translateY(-4px);
-  box-shadow: 0 30px 64px {SHADOW_HOVER_LITE}; }
+.sxm-card-lite:hover { transform: translateY(-3px);
+  box-shadow: 0 16px 38px {SHADOW_HOVER_LITE}; }
 /* TRUE RHYTHM — the AUTHORITY band: ONE mid-page section on the deep
    authority ground (render_page marks it). Custom-property overrides
    re-ink everything inside (text, muted, borders, cards, accent) with
@@ -467,28 +470,23 @@ _QUALITY_CSS = """
   --sx-surface-2: color-mix(in srgb, var(--sx-on-authority) 11%, transparent);
   --sx-accent: var(--sx-accent-on-authority); }
 .sxm-section.sxm-authority h2, .sxm-section.sxm-authority h3 { color: var(--sx-on-authority); }
-/* Diamond ornament layer — the bar's brand shape (rotated square). */
+/* Diamond ornament layer — the brand shape (rotated square). Site quality
+   (2026-07-14): STATIC now. The shape stays (it's the brand mark), but the
+   three diamonds no longer float on a perpetual loop — background ornament
+   drifting forever was the biggest "always moving" tell. */
 .sxm-diamond { position: absolute; width: 110px; height: 110px; z-index: 0;
-  border: 1.5px solid currentColor; color: var(--sx-accent); opacity: .07;
-  transform: rotate(45deg); pointer-events: none;
-  animation: sxm-float 6s ease-in-out infinite; }
+  border: 1.5px solid currentColor; color: var(--sx-accent); opacity: .06;
+  transform: rotate(45deg); pointer-events: none; }
 .sxm-d1 { top: 12%; right: 7%; }
-.sxm-d2 { bottom: 16%; left: 5%; width: 64px; height: 64px; opacity: .05;
-  animation-duration: 7.2s; animation-delay: 1.1s; }
-.sxm-d3 { top: 44%; right: 26%; width: 40px; height: 40px; opacity: .04;
-  animation-duration: 5.2s; animation-delay: .5s; }
+.sxm-d2 { bottom: 16%; left: 5%; width: 64px; height: 64px; opacity: .045; }
+.sxm-d3 { top: 44%; right: 26%; width: 40px; height: 40px; opacity: .035; }
 .sxm-diamond-mark { display: inline-block; width: 9px; height: 9px;
   margin-right: 10px; background: var(--sx-accent); transform: rotate(45deg);
   flex-shrink: 0; }
 .sxm-footer .sxm-diamond-mark { width: 7px; height: 7px; margin-right: 8px; }
-@keyframes sxm-float {
-  0%, 100% { transform: rotate(45deg) translateY(0); }
-  50% { transform: rotate(45deg) translateY(-14px); } }
-@keyframes sxm-shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .sxm-cta::before, .sxm-diamond { animation: none !important; }
+  .sxm-diamond { animation: none !important; }
+  .sxm-cta::before { transition: none; }
   .sxm-cta:hover, .sxm-card:hover, .sxm-card-lite:hover { transform: none; }
 }"""
 
@@ -643,9 +641,13 @@ a {{ color: var(--sx-accent); text-decoration: none; }}
   box-shadow: 0 16px 40px color-mix(in srgb, var(--sx-accent) 25%, transparent);
   transition: transform .4s var(--sx-ease), background .4s var(--sx-ease), box-shadow .4s var(--sx-ease);
 }}
+/* Site quality (2026-07-14): the CTA shine sweeps ONCE on hover, not on a
+   perpetual 2.5s loop. Same character (the button catches the light when you
+   reach for it), without the always-shimmering "shiny button" tell. */
 .sxm-cta::before {{ content: ""; position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .35), transparent);
-  background-size: 200% 100%; animation: sxm-shimmer 2.5s linear infinite; }}
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .28), transparent);
+  transform: translateX(-120%); transition: transform .6s var(--sx-ease); }}
+.sxm-cta:hover::before {{ transform: translateX(120%); }}
 .sxm-cta:hover {{ transform: translateY(-3px); background: var(--sx-accent-strong);
   box-shadow: 0 20px 50px color-mix(in srgb, var(--sx-accent) 35%, transparent); }}
 .sxm-muted {{ color: var(--sx-muted); }}
