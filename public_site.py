@@ -4839,13 +4839,32 @@ async def _serve_booking_page(client, biz_id: Optional[str], slug: str) -> HTMLR
     )
 
 
-def _render_offline_page(cfg: Dict[str, Any]) -> HTMLResponse:
+async def _render_offline_page(client: httpx.AsyncClient,
+                               biz_id: Optional[str]) -> HTMLResponse:
     """A calm, branded 'temporarily offline' page shown while the practitioner
     has taken their public site down to work on it. Returns 503 so search
-    engines treat it as temporary and don't de-index the site."""
-    name = (cfg.get("business_name") or cfg.get("name")
-            or cfg.get("title") or "This site")
-    accent = cfg.get("brand_color") or "#D4AF37"
+    engines treat it as temporary and don't de-index the site.
+
+    Name + accent come from the business row (businesses.name +
+    settings.brand_kit.primary_color) — site_config never carried those keys.
+    Fail-open to neutral defaults; this page must never itself error."""
+    import html as _html
+    name, accent = "This site", "#D4AF37"
+    try:
+        if biz_id:
+            rows = await _sb(client,
+                f"/businesses?id=eq.{biz_id}&select=name,settings&limit=1") or []
+            if rows:
+                name = (rows[0].get("name") or "").strip() or name
+                bk = (rows[0].get("settings") or {}).get("brand_kit") or {}
+                bc = (bk.get("primary_color") or "").strip() if isinstance(bk, dict) else ""
+                if bc.startswith("#") and len(bc) in (4, 7):
+                    # Expand #abc → #aabbcc so the 8-digit alpha suffix used in
+                    # the pulse keyframes ({accent}66) stays a valid color.
+                    accent = ("#" + "".join(c * 2 for c in bc[1:])) if len(bc) == 4 else bc
+    except Exception:
+        pass
+    name = _html.escape(name)
     html = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -4900,7 +4919,7 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         # address shows the maintenance page.
         _cfg = site.get("site_config") or {}
         if _cfg.get("offline"):
-            return _render_offline_page(_cfg)
+            return await _render_offline_page(client, biz_id)
 
         # ─── Phase D.2.1 — hosted booking page routing ─────────────
         # /book always serves the booking page (overrides MySite for
@@ -4956,7 +4975,7 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
 
         _cfg = site.get("site_config") or {}
         if _cfg.get("offline"):
-            return _render_offline_page(_cfg)
+            return await _render_offline_page(client, biz_id)
 
         if _use_smart_sites(site) and biz_id:
             products = await _sb(client,
