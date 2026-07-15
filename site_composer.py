@@ -3537,6 +3537,28 @@ def disconnect_domain(body: DomainVerifyBody,
     return {"ok": True, "disconnected": True}
 
 
+class SiteVisibilityBody(BaseModel):
+    business_id: str
+    offline: bool
+
+
+@router.post("/site/visibility")
+def set_site_visibility(body: SiteVisibilityBody,
+                        session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    """Take the public site offline (a calm 'back soon' page) or bring it
+    back online. Reversible in one click. The editor preview is unaffected —
+    only the public address (subdomain + custom domain) is gated — so the
+    practitioner can keep working while visitors see the maintenance page."""
+    _require_owner(body.business_id, session.user.id)
+    _slug, cfg, _row = _load_site_cfg(body.business_id)
+    if cfg is None:
+        raise HTTPException(404, "No site yet — compose your site first.")
+    cfg["offline"] = bool(body.offline)
+    sb_clients.sb_patch_as_service(
+        f"/business_sites?business_id=eq.{body.business_id}", {"site_config": cfg})
+    return {"ok": True, "offline": bool(body.offline)}
+
+
 @router.get("/spec/{business_id}")
 def get_spec(business_id: str,
              session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
