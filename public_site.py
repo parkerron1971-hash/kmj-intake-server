@@ -206,6 +206,21 @@ def _is_api_host(host: str) -> bool:
     return False
 
 
+def public_host(request: Request) -> str:
+    """The hostname the VISITOR actually used.
+
+    Custom domains reach us through the Cloudflare-for-SaaS Worker, which
+    rewrites the Host header to the Railway origin (so Railway's host-based
+    router accepts the request) and forwards the real customer hostname in
+    X-Forwarded-Host. Prefer that; fall back to Host for direct traffic
+    (platform subdomains, local dev, the API host)."""
+    fwd = (request.headers.get("x-forwarded-host") or "").split(",")[0]
+    fwd = fwd.split(":")[0].strip().lower()
+    if fwd:
+        return fwd
+    return (request.headers.get("host") or "").split(":")[0].lower().strip()
+
+
 def extract_slug_from_host(request: Request) -> Optional[str]:
     """Extract the business slug from subdomain.
     embrace-the-shift.mysolutionist.app → 'embrace-the-shift'
@@ -213,7 +228,7 @@ def extract_slug_from_host(request: Request) -> Optional[str]:
     mysolutionist.app → None (root)
     kmj-intake-server-production.up.railway.app → None (API domain)
     """
-    host = (request.headers.get("host") or "").split(":")[0].lower().strip()
+    host = public_host(request)
     if not host:
         return None
 
@@ -4924,7 +4939,7 @@ async def subdomain_root(request: Request):
     `@app.get("/")` root defined in main.py). Do NOT serve the marketing
     page from the API domain — it was shadowing every API endpoint.
     """
-    host = (request.headers.get("host") or "").split(":")[0].lower()
+    host = public_host(request)
 
     slug = extract_slug_from_host(request)
     if slug:
@@ -5136,7 +5151,7 @@ async def subdomain_catch_all(request: Request, path: str):
     Pass 3.8g: when the host is a practitioner subdomain, the captured
     `path` is forwarded into the renderer. Multi-page sites use it to
     serve /about, /services, /contact off the same site_config."""
-    host = (request.headers.get("host") or "").split(":")[0].lower()
+    host = public_host(request)
 
     # API / local dev: bail immediately. Don't even look at the body.
     if _is_api_host(host):
