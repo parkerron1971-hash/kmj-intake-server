@@ -2980,6 +2980,31 @@ async def handle_navigate(client, biz, action) -> Dict:
     }
 
 
+async def handle_set_chat_window(client, biz, action) -> Dict:
+    """Pass-through — the frontend opens/closes the chat WINDOW. With
+    keep_talking=true the voice conversation continues while the window
+    is closed ("close the chat but let's keep talking" — the orb keeps
+    listening); with keep_talking=false the conversation ends and the
+    window closes after the spoken goodbye finishes."""
+    visible = bool(action.get("visible", True))
+    keep_talking = bool(action.get("keep_talking", True))
+    if visible:
+        label = "Chat window reopened"
+    elif keep_talking:
+        label = "Chat window closed — still listening"
+    else:
+        label = "Conversation wrapped up"
+    return {
+        "type": "set_chat_window",
+        "result": "shown" if visible else "hidden",
+        "label": label,
+        "frontend_event": {
+            "name": "solutionist-chat-window",
+            "detail": {"visible": visible, "keep_talking": keep_talking},
+        },
+    }
+
+
 # "insight" (Chief Layers arc) = weekly longitudinal findings written by
 # chief_insights.py — rendered in their own prompt section, never by hand.
 VALID_MEMORY_CATEGORIES = {"preference", "pattern", "context", "decision", "boundary", "goal", "standing_instruction", "other", "jit_asked", "insight"}
@@ -5415,7 +5440,7 @@ async def handle_notify_practitioner(client, biz, action) -> Dict:
 # Verbs that cannot run server-side later (live-client-only) or would
 # nest the scheduler into itself.
 _UNSCHEDULABLE = {"navigate", "set_timer", "schedule_action",
-                  "cancel_scheduled", "list_scheduled"}
+                  "cancel_scheduled", "list_scheduled", "set_chat_window"}
 
 
 async def handle_schedule_action(client, biz, action) -> Dict:
@@ -9889,6 +9914,7 @@ ACTION_HANDLERS = {
     "generate_briefing":     handle_generate_briefing,
     "generate_insights":     handle_generate_insights,
     "navigate":              handle_navigate,
+    "set_chat_window":       handle_set_chat_window,
     "remember":              handle_remember,
     "queue_build_request":   handle_queue_build_request,
     "forget":                handle_forget,
@@ -12578,6 +12604,10 @@ ACTIONS — NAVIGATION + MEMORY:
   — Pick the closest destination even for indirect asks ("where do I change my colors?" → build/brand; "I want to text a client" → operate/sms; "show me my website" → build/my-site).
   [ACTION:{{"type":"open_documents"}}]   — shortcut: navigate straight to the Documents tab.
   [ACTION:{{"type":"open_calendar"}}]    — shortcut: navigate straight to the Calendar tab.
+  [ACTION:{{"type":"set_chat_window","visible":false,"keep_talking":true}}]  — window control:
+    • "close the chat but let's keep talking" / "hide the chat window" / "get this window out of the way" → visible:false + keep_talking:true. The window closes but the VOICE CONVERSATION KEEPS GOING (the orb keeps listening) — reply naturally and keep the conversation flowing; nothing about your behavior changes.
+    • "bring the chat back" / "show the window again" → visible:true.
+    • When the practitioner wraps up while voice is active ("that's all for now", "we're done here") → say a short, warm goodbye in your reply FIRST, then emit visible:false + keep_talking:false — the window closes after your goodbye finishes playing.
   [ACTION:{{"type":"show_revenue"}}]     — opens GROW → Revenue (the canonical Revenue Analytics surface: Allocator, Expenses, planned-vs-actual, Export, Send to Accountant).
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
   [ACTION:{{"type":"update_business_profile_field","field_path":"governing_state|produces_deliverables|sensitive_areas.health_advice|sensitive_areas.session_recording|sensitive_areas.physical_activity","value":"<their answer>"}}]
