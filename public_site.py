@@ -4839,6 +4839,44 @@ async def _serve_booking_page(client, biz_id: Optional[str], slug: str) -> HTMLR
     )
 
 
+def _render_offline_page(cfg: Dict[str, Any]) -> HTMLResponse:
+    """A calm, branded 'temporarily offline' page shown while the practitioner
+    has taken their public site down to work on it. Returns 503 so search
+    engines treat it as temporary and don't de-index the site."""
+    name = (cfg.get("business_name") or cfg.get("name")
+            or cfg.get("title") or "This site")
+    accent = cfg.get("brand_color") or "#D4AF37"
+    html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>{name} — back soon</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:#0f1115; color:#e9ecf1; padding:24px; text-align:center; }}
+  @media (prefers-color-scheme: light) {{ body {{ background:#f7f7f5; color:#1a1c20; }} }}
+  .wrap {{ max-width:460px; }}
+  .dot {{ width:10px; height:10px; border-radius:50%; background:{accent};
+    display:inline-block; margin-bottom:24px; box-shadow:0 0 0 0 {accent};
+    animation:pulse 2.4s ease-out infinite; }}
+  @keyframes pulse {{ 0%{{box-shadow:0 0 0 0 {accent}66;}} 70%{{box-shadow:0 0 0 16px {accent}00;}}
+    100%{{box-shadow:0 0 0 0 {accent}00;}} }}
+  h1 {{ font-size:1.6rem; font-weight:650; margin:0 0 12px; letter-spacing:-0.01em; }}
+  p {{ font-size:1rem; line-height:1.6; opacity:0.72; margin:0; }}
+  @media (prefers-reduced-motion: reduce) {{ .dot {{ animation:none; }} }}
+</style></head>
+<body><div class="wrap">
+  <span class="dot"></span>
+  <h1>We'll be right back</h1>
+  <p>{name} is making a few updates. Please check back in a little while.</p>
+</div></body></html>"""
+    return HTMLResponse(content=html, status_code=503, media_type="text/html",
+                        headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+
+
 async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
     """Shared logic: look up site by slug and return HTML.
     Pass 3: when site_config.use_smart_sites is true, attempt Smart Sites
@@ -4856,6 +4894,13 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
             raise HTTPException(404, "Site not found")
         site = sites[0]
         biz_id = site.get("business_id")
+
+        # Practitioner took the public site down to work on it. Editor
+        # preview (/public/site/{slug}) is unaffected — only the public
+        # address shows the maintenance page.
+        _cfg = site.get("site_config") or {}
+        if _cfg.get("offline"):
+            return _render_offline_page(_cfg)
 
         # ─── Phase D.2.1 — hosted booking page routing ─────────────
         # /book always serves the booking page (overrides MySite for
@@ -4908,6 +4953,10 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         site = sites[0]
         biz_id = site.get("business_id")
         slug = site.get("slug") or domain
+
+        _cfg = site.get("site_config") or {}
+        if _cfg.get("offline"):
+            return _render_offline_page(_cfg)
 
         if _use_smart_sites(site) and biz_id:
             products = await _sb(client,
