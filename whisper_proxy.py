@@ -34,6 +34,7 @@ Response:
 
 import logging
 import os
+import time
 from typing import Optional
 
 import httpx
@@ -67,6 +68,16 @@ TTS_MODEL_DEFAULT = "tts-1"           # faster, good quality
 TTS_MODEL_HD = "tts-1-hd"             # slower, best quality
 TTS_VOICES = {"nova", "alloy", "echo", "fable", "onyx", "shimmer"}
 TTS_MAX_CHARS = 4096                  # OpenAI's hard limit
+
+# ── ElevenLabs (optional second TTS provider) ────────────────────────
+# Voice ids arrive from the client prefixed "el:<voice_id>" — the speak
+# endpoint routes on the prefix; everything else stays OpenAI. Enabled
+# by setting ELEVENLABS_API_KEY on Railway; without it the voices list
+# is empty and el: requests fall back to OpenAI nova (never a dead end).
+ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
+ELEVENLABS_VOICES_URL = "https://api.elevenlabs.io/v1/voices"
+ELEVENLABS_MODEL = "eleven_turbo_v2_5"   # low-latency tier — right for conversation
+ELEVENLABS_MAX_CHARS = 4096              # match the OpenAI clamp
 MAX_BYTES = 25 * 1024 * 1024          # Whisper server-side limit
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=10.0)
 TTS_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
@@ -81,6 +92,10 @@ if not logger.handlers:
 
 def _openai_key() -> str:
     return os.environ.get("OPENAI_API_KEY", "")
+
+
+def _elevenlabs_key() -> str:
+    return os.environ.get("ELEVENLABS_API_KEY", "")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -185,7 +200,18 @@ async def text_to_speech(req: TTSRequest, request: Request):
     if len(text) > TTS_MAX_CHARS:
         text = text[:TTS_MAX_CHARS]
 
-    voice = (req.voice or "nova").lower()
+    # ElevenLabs routing — "el:<voice_id>" ids go to the ElevenLabs
+    # streamer; missing key/id falls back to OpenAI nova so a stale
+    # saved voice choice never silences the Chief.
+    raw_voice = (req.voice or "nova").strip()
+    if raw_voice.startswith("el:"):
+        el_key = _elevenlabs_key()
+        el_voice_id = raw_voice[3:].strip()
+        if el_key and el_voice_id:
+            return await _elevenlabs_speak(text, el_voice_id, el_key)
+        logger.warning("ElevenLabs voice requested but key or voice id missing — falling back to OpenAI nova")
+
+    voice = raw_voice.lower()
     if voice not in TTS_VOICES:
         voice = "nova"
 
@@ -257,6 +283,112 @@ async def text_to_speech(req: TTSRequest, request: Request):
     )
 
 
+async def _elevenlabs_speak(text: str, voice_id: str, key: str) -> StreamingResponse:
+    """Stream ElevenLabs TTS back to the client — same mp3-over-HTTP
+    contract as the OpenAI path, so the frontend audio pipeline doesn't
+    know or care which provider spoke."""
+    if len(text) > ELEVENLABS_MAX_CHARS:
+        text = text[:ELEVENLABS_MAX_CHARS]
+
+    client = httpx.AsyncClient(timeout=TTS_TIMEOUT)
+    try:
+        upstream = await client.send(
+            client.build_request(
+                "POST",
+                f"{ELEVENLABS_TTS_URL}/{voice_id}/stream?output_format=mp3_44100_128",
+                headers={"xi-api-key": key, "Content-Type": "application/json"},
+                json={"text": text, "model_id": ELEVENLABS_MODEL},
+            ),
+            stream=True,
+        )
+    except httpx.TimeoutException:
+        await client.aclose()
+        logger.warning("ElevenLabs TTS timed out")
+        raise HTTPException(504, "TTS API timed out")
+    except httpx.HTTPError as e:
+        await client.aclose()
+        logger.error(f"ElevenLabs TTS failed: {e}")
+        raise HTTPException(502, f"TTS request failed: {e}")
+
+    if upstream.status_code >= 400:
+        body = (await upstream.aread()).decode("utf-8", errors="replace")[:300]
+        await upstream.aclose()
+        await client.aclose()
+        logger.warning(f"ElevenLabs TTS {upstream.status_code}: {body}")
+        raise HTTPException(upstream.status_code, f"TTS error: {body}")
+
+    logger.info(f"ElevenLabs TTS streaming: chars={len(text)} voice={voice_id}")
+    # Metering — ElevenLabs is priced per character, same convention as
+    # the OpenAI entries: char count as input_tokens.
+    try:
+        await log_api_usage(
+            endpoint="/ai/tts", model=ELEVENLABS_MODEL,
+            input_tokens=len(text), output_tokens=0)
+    except Exception:
+        pass
+
+    async def _stream():
+        try:
+            async for chunk in upstream.aiter_bytes(chunk_size=4096):
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        _stream(),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+# In-process cache — the voice list changes rarely; don't hit the
+# ElevenLabs API on every picker open.
+_EL_VOICES_CACHE: dict = {"at": 0.0, "voices": []}
+_EL_VOICES_TTL_S = 300
+
+
+@router.get("/ai/tts/voices")
+async def list_tts_voices(request: Request):
+    """ElevenLabs voices connected to this deployment's account, shaped
+    for the frontend voice picker: [{id: "el:<voice_id>", label, desc}].
+    Empty list when ELEVENLABS_API_KEY isn't configured — the picker
+    simply doesn't render the section (no dead-end)."""
+    _voice_rate_guard(request)
+    key = _elevenlabs_key()
+    if not key:
+        return {"voices": []}
+
+    now = time.time()
+    if _EL_VOICES_CACHE["voices"] and now - _EL_VOICES_CACHE["at"] < _EL_VOICES_TTL_S:
+        return {"voices": _EL_VOICES_CACHE["voices"]}
+
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            resp = await client.get(ELEVENLABS_VOICES_URL, headers={"xi-api-key": key})
+        if resp.status_code >= 400:
+            logger.warning(f"ElevenLabs voices list {resp.status_code}")
+            return {"voices": _EL_VOICES_CACHE["voices"]}
+        data = resp.json()
+        voices = []
+        for v in (data.get("voices") or []):
+            vid = v.get("voice_id")
+            if not vid:
+                continue
+            labels = v.get("labels") or {}
+            desc_bits = [labels.get(k) for k in ("gender", "accent", "description") if labels.get(k)]
+            voices.append({
+                "id": f"el:{vid}",
+                "label": v.get("name") or "Voice",
+                "desc": ", ".join(desc_bits) or "ElevenLabs voice",
+            })
+        _EL_VOICES_CACHE.update(at=now, voices=voices)
+        return {"voices": voices}
+    except Exception as e:
+        logger.warning(f"ElevenLabs voices list failed: {e}")
+        return {"voices": _EL_VOICES_CACHE["voices"]}
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # HEALTH
 # ═══════════════════════════════════════════════════════════════════════
@@ -267,6 +399,7 @@ async def health():
     return {
         "status": "ok",
         "key_present": bool(_openai_key()),
+        "elevenlabs_key_present": bool(_elevenlabs_key()),
         "whisper_model": WHISPER_MODEL,
         "tts_model": TTS_MODEL_DEFAULT,
         "tts_voices": sorted(TTS_VOICES),
