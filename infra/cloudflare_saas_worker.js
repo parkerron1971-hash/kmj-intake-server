@@ -17,8 +17,12 @@
  * ------------
  * For custom-domain traffic it rewrites the origin Host to the Railway hostname
  * (so Railway routes the request to our service) and forwards the real customer
- * hostname in `X-Forwarded-Host`. The backend reads that via `public_host()`
+ * hostname in `X-Original-Host`. The backend reads that via `public_host()`
  * (public_site.py) to pick which site to serve.
+ *
+ * We use X-Original-Host, NOT X-Forwarded-Host: Railway's edge proxy manages the
+ * X-Forwarded-* family and overwrites it before the app sees it, so the customer
+ * hostname would be lost. A custom header passes through untouched.
  *
  * Anything on our own zone (`*.mysolutionist.app` — the Vercel app, the DNS-only
  * platform subdomains, the fallback-origin record) is passed through untouched.
@@ -35,7 +39,7 @@
  * 3. Leave the SSL/TLS → Custom Hostnames fallback origin as-is; the Worker
  *    short-circuits before origin resolution for custom hostnames.
  *
- * The X-Forwarded-Host header is trusted for SITE SELECTION only (all sites are
+ * The X-Original-Host header is trusted for SITE SELECTION only (all sites are
  * public read-only), so spoofing it just selects which public site renders — no
  * auth or data exposure. Add a shared-secret header here + a check in
  * public_host() if that ever stops being true.
@@ -59,7 +63,7 @@ export default {
     // real hostname so the backend can pick the practitioner's site.
     url.hostname = RAILWAY_ORIGIN;
     const headers = new Headers(request.headers);
-    headers.set("X-Forwarded-Host", host);
+    headers.set("X-Original-Host", host); // Railway passes custom headers through
     headers.delete("Host"); // let fetch() derive Host from url.hostname
 
     return fetch(new Request(url.toString(), {

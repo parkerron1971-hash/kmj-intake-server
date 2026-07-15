@@ -212,12 +212,16 @@ def public_host(request: Request) -> str:
     Custom domains reach us through the Cloudflare-for-SaaS Worker, which
     rewrites the Host header to the Railway origin (so Railway's host-based
     router accepts the request) and forwards the real customer hostname in
-    X-Forwarded-Host. Prefer that; fall back to Host for direct traffic
-    (platform subdomains, local dev, the API host)."""
-    fwd = (request.headers.get("x-forwarded-host") or "").split(",")[0]
-    fwd = fwd.split(":")[0].strip().lower()
-    if fwd:
-        return fwd
+    X-Original-Host. We deliberately do NOT use X-Forwarded-Host here:
+    Railway's edge proxy manages the X-Forwarded-* family itself and
+    overwrites it before it reaches the app, so the customer hostname would
+    be lost. X-Original-Host is a custom header the edge passes through
+    untouched. Fall back to Host for direct traffic (platform subdomains,
+    local dev, the API host)."""
+    orig = (request.headers.get("x-original-host") or "").split(",")[0]
+    orig = orig.split(":")[0].strip().lower()
+    if orig:
+        return orig
     return (request.headers.get("host") or "").split(":")[0].lower().strip()
 
 
