@@ -38,12 +38,14 @@ import time
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from api_usage_logger import log_api_usage
+from auth_supabase import AuthedUser, optional_user
 import rate_limit
+import sb_clients
 
 
 def _voice_rate_guard(request: Request) -> None:
@@ -78,6 +80,14 @@ ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 ELEVENLABS_VOICES_URL = "https://api.elevenlabs.io/v1/voices"
 ELEVENLABS_MODEL = "eleven_turbo_v2_5"   # low-latency tier — right for conversation
 ELEVENLABS_MAX_CHARS = 4096              # match the OpenAI clamp
+
+# Per-business monthly ElevenLabs character allowance. Premium voice is
+# metered per business (rows land in api_usage with endpoint /ai/tts-el,
+# which also bills 1 unit/chunk on the plan-allowance rails); this cap is
+# the hard per-tenant backstop so one chatty business can't drain the
+# shared ElevenLabs account pool. Over the cap → graceful fallback to
+# OpenAI voices (never silence). 0 disables the cap.
+ELEVENLABS_MONTHLY_CHARS_PER_BIZ = int(os.environ.get("ELEVENLABS_MONTHLY_CHARS_PER_BIZ", "200000") or 0)
 MAX_BYTES = 25 * 1024 * 1024          # Whisper server-side limit
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=10.0)
 TTS_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
@@ -96,6 +106,77 @@ def _openai_key() -> str:
 
 def _elevenlabs_key() -> str:
     return os.environ.get("ELEVENLABS_API_KEY", "")
+
+
+# ── Per-business voice metering helpers ──────────────────────────────
+# Small in-process caches: TTS fires once per spoken sentence-group, so
+# these checks must not add a DB round-trip to every chunk. Fail-open —
+# a metering hiccup must never silence the Chief.
+
+_OWNER_CACHE: dict = {}          # business_id -> (checked_at, owner_id)
+_OWNER_CACHE_TTL_S = 300
+_EL_CHARS_CACHE: dict = {}       # business_id -> (checked_at, month_key, chars)
+_EL_CHARS_TTL_S = 120
+
+
+def _month_bounds() -> tuple:
+    now = time.gmtime()
+    month_key = f"{now.tm_year:04d}-{now.tm_mon:02d}"
+    month_start = f"{now.tm_year:04d}-{now.tm_mon:02d}-01T00:00:00+00:00"
+    return month_key, month_start
+
+
+def _owns_business(user_id: str, business_id: str) -> bool:
+    """True when the business exists and belongs to user_id. Cached."""
+    try:
+        now = time.time()
+        hit = _OWNER_CACHE.get(business_id)
+        if hit and now - hit[0] < _OWNER_CACHE_TTL_S:
+            return hit[1] == user_id
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+        owner_id = rows[0].get("owner_id") if rows else None
+        _OWNER_CACHE[business_id] = (now, owner_id)
+        return owner_id == user_id
+    except Exception as e:
+        logger.warning(f"voice metering owner check failed: {e}")
+        return False
+
+
+def _el_chars_this_month(business_id: str) -> int:
+    """ElevenLabs characters this business has spoken this month, from
+    the /ai/tts-el rows in api_usage. Cached; incremented locally by
+    _note_el_chars so the cap doesn't lag behind by a cache window."""
+    month_key, month_start = _month_bounds()
+    now = time.time()
+    hit = _EL_CHARS_CACHE.get(business_id)
+    if hit and now - hit[0] < _EL_CHARS_TTL_S and hit[1] == month_key:
+        return hit[2]
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/api_usage?business_id=eq.{business_id}&endpoint=eq./ai/tts-el"
+            f"&created_at=gte.{month_start}&select=input_tokens&limit=10000") or []
+        chars = sum(int(r.get("input_tokens") or 0) for r in rows)
+    except Exception as e:
+        logger.warning(f"voice metering usage read failed (fail-open): {e}")
+        chars = hit[2] if hit and hit[1] == month_key else 0
+    _EL_CHARS_CACHE[business_id] = (now, month_key, chars)
+    return chars
+
+
+def _note_el_chars(business_id: str, chars: int) -> None:
+    """Bump the local cache after a successful ElevenLabs call so the
+    cap tracks in real time between refreshes."""
+    month_key, _ = _month_bounds()
+    hit = _EL_CHARS_CACHE.get(business_id)
+    if hit and hit[1] == month_key:
+        _EL_CHARS_CACHE[business_id] = (hit[0], month_key, hit[2] + chars)
+
+
+def _el_allowance_ok(business_id: str) -> bool:
+    if ELEVENLABS_MONTHLY_CHARS_PER_BIZ <= 0:
+        return True
+    return _el_chars_this_month(business_id) < ELEVENLABS_MONTHLY_CHARS_PER_BIZ
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -183,12 +264,24 @@ class TTSRequest(BaseModel):
     text: str
     voice: Optional[str] = "nova"
     model: Optional[str] = TTS_MODEL_DEFAULT
+    # Active business — attributes the spoken characters to a tenant for
+    # metering. Optional: anonymous/unattributed requests still speak
+    # (OpenAI voices only).
+    business_id: Optional[str] = None
 
 
 @router.post("/ai/tts/speak")
-async def text_to_speech(req: TTSRequest, request: Request):
-    """Proxy OpenAI TTS. Streams raw mp3 audio back to the client for
-    faster time-to-first-byte playback."""
+async def text_to_speech(req: TTSRequest, request: Request,
+                         user: Optional[AuthedUser] = Depends(optional_user)):
+    """Proxy TTS (OpenAI, or ElevenLabs for 'el:' voice ids). Streams raw
+    mp3 audio back to the client for faster time-to-first-byte playback.
+
+    Auth is OPTIONAL: OpenAI voices work for any caller (rate-guarded,
+    included with every plan). ElevenLabs voices are premium — they
+    require a signed-in owner of business_id, bill 1 unit per chunk on
+    the plan-allowance rails, and are capped per business per month
+    (ELEVENLABS_MONTHLY_CHARS_PER_BIZ). Every deny falls back to OpenAI
+    — voice never goes silent."""
     _voice_rate_guard(request)
     key = _openai_key()
     if not key:
@@ -200,16 +293,30 @@ async def text_to_speech(req: TTSRequest, request: Request):
     if len(text) > TTS_MAX_CHARS:
         text = text[:TTS_MAX_CHARS]
 
+    # Metering identity — attribute characters to the business only when
+    # the signed-in caller actually owns it (these rows feed the billing
+    # rails; never trust a bare body field).
+    biz_id = (req.business_id or "").strip() or None
+    metered_biz = biz_id if (user and biz_id and _owns_business(user.id, biz_id)) else None
+
     # ElevenLabs routing — "el:<voice_id>" ids go to the ElevenLabs
-    # streamer; missing key/id falls back to OpenAI nova so a stale
-    # saved voice choice never silences the Chief.
+    # streamer when the caller qualifies. EVERY deny falls back to the
+    # OpenAI path below so a stale saved voice choice, a signed-out
+    # session, or an exhausted allowance never silences the Chief.
     raw_voice = (req.voice or "nova").strip()
     if raw_voice.startswith("el:"):
         el_key = _elevenlabs_key()
         el_voice_id = raw_voice[3:].strip()
-        if el_key and el_voice_id:
-            return await _elevenlabs_speak(text, el_voice_id, el_key)
-        logger.warning("ElevenLabs voice requested but key or voice id missing — falling back to OpenAI nova")
+        if not el_key or not el_voice_id:
+            logger.warning("ElevenLabs voice requested but key or voice id missing — falling back to OpenAI nova")
+        elif not metered_biz:
+            logger.warning("ElevenLabs voice requires a signed-in owner + business_id — falling back to OpenAI nova")
+        elif not _el_allowance_ok(metered_biz):
+            logger.info(f"ElevenLabs monthly char cap reached for business {metered_biz} — falling back to OpenAI nova")
+        else:
+            return await _elevenlabs_speak(text, el_voice_id, el_key,
+                                           business_id=metered_biz,
+                                           user_id=user.id if user else None)
 
     voice = raw_voice.lower()
     if voice not in TTS_VOICES:
@@ -261,10 +368,13 @@ async def text_to_speech(req: TTSRequest, request: Request):
     # Metering (beta-readiness audit): every spoken reply was dark. TTS is
     # priced per character — pass the char count as input_tokens; the
     # tts-1 / tts-1-hd table entries are per-1M-char so the cost is exact.
+    # business_id/user_id attribute the row for analytics; /ai/tts carries
+    # UNIT weight 0 (included with every plan — see usage_metering).
     try:
         await log_api_usage(
             endpoint="/ai/tts", model=model,
-            input_tokens=len(text), output_tokens=0)
+            input_tokens=len(text), output_tokens=0,
+            business_id=metered_biz, user_id=user.id if user else None)
     except Exception:
         pass
 
@@ -283,7 +393,9 @@ async def text_to_speech(req: TTSRequest, request: Request):
     )
 
 
-async def _elevenlabs_speak(text: str, voice_id: str, key: str) -> StreamingResponse:
+async def _elevenlabs_speak(text: str, voice_id: str, key: str,
+                            business_id: Optional[str] = None,
+                            user_id: Optional[str] = None) -> StreamingResponse:
     """Stream ElevenLabs TTS back to the client — same mp3-over-HTTP
     contract as the OpenAI path, so the frontend audio pipeline doesn't
     know or care which provider spoke."""
@@ -317,15 +429,20 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str) -> StreamingResp
         logger.warning(f"ElevenLabs TTS {upstream.status_code}: {body}")
         raise HTTPException(upstream.status_code, f"TTS error: {body}")
 
-    logger.info(f"ElevenLabs TTS streaming: chars={len(text)} voice={voice_id}")
-    # Metering — ElevenLabs is priced per character, same convention as
-    # the OpenAI entries: char count as input_tokens.
+    logger.info(f"ElevenLabs TTS streaming: chars={len(text)} voice={voice_id} biz={business_id}")
+    # Metering — per character (input_tokens), attributed to the business.
+    # Endpoint /ai/tts-el is DISTINCT from /ai/tts on purpose: it bills
+    # 1 unit per chunk on the plan-allowance rails (usage_metering
+    # UNIT_WEIGHTS) and is what the monthly char cap sums.
     try:
         await log_api_usage(
-            endpoint="/ai/tts", model=ELEVENLABS_MODEL,
-            input_tokens=len(text), output_tokens=0)
+            endpoint="/ai/tts-el", model=ELEVENLABS_MODEL,
+            input_tokens=len(text), output_tokens=0,
+            business_id=business_id, user_id=user_id)
     except Exception:
         pass
+    if business_id:
+        _note_el_chars(business_id, len(text))
 
     async def _stream():
         try:
@@ -400,6 +517,7 @@ async def health():
         "status": "ok",
         "key_present": bool(_openai_key()),
         "elevenlabs_key_present": bool(_elevenlabs_key()),
+        "elevenlabs_monthly_chars_per_biz": ELEVENLABS_MONTHLY_CHARS_PER_BIZ,
         "whisper_model": WHISPER_MODEL,
         "tts_model": TTS_MODEL_DEFAULT,
         "tts_voices": sorted(TTS_VOICES),
