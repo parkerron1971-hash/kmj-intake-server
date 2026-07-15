@@ -59,7 +59,10 @@ def _voice_rate_guard(request: Request) -> None:
 
 OPENAI_API_URL = "https://api.openai.com/v1/audio/transcriptions"
 OPENAI_TTS_URL = "https://api.openai.com/v1/audio/speech"
-WHISPER_MODEL = "whisper-1"
+# Latency arc 2026-07-15: gpt-4o-mini-transcribe is faster AND more
+# accurate than whisper-1 on the same /audio/transcriptions endpoint
+# (default json response = same {"text": ...} shape the client reads).
+WHISPER_MODEL = "gpt-4o-mini-transcribe"
 TTS_MODEL_DEFAULT = "tts-1"           # faster, good quality
 TTS_MODEL_HD = "tts-1-hd"             # slower, best quality
 TTS_VOICES = {"nova", "alloy", "echo", "fable", "onyx", "shimmer"}
