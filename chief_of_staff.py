@@ -2944,7 +2944,11 @@ async def handle_navigate(client, biz, action) -> Dict:
     """Pass-through — the frontend actually performs the navigation.
     We just validate the shape and produce a nice label + nav payload."""
     tab = (action.get("tab") or "").lower().strip()
-    if tab not in {"build", "operate", "grow"}:
+    # The frontend shell also answers to these aliases for the Home room —
+    # normalize so the model can say "take me home" any way it likes.
+    if tab in {"command_center", "my_dashboard", "mission_control"}:
+        tab = "home"
+    if tab not in {"build", "operate", "grow", "home"}:
         return _fail("navigate", f"Unknown tab '{tab}'")
 
     sub = action.get("sub")
@@ -12565,7 +12569,13 @@ ACTIONS — GROWTH OBJECTIVES (the Growth Timeline):
     — After it lands, the result label reports what was spawned — narrate that and point them to GROW → Timeline to watch it.
 
 ACTIONS — NAVIGATION + MEMORY:
-  [ACTION:{{"type":"navigate","tab":"operate|build|grow","sub":"dashboard|queue|contacts|projects|calendar|invoices|tasks|documents|agents|briefing|insights|goals|revenue|content|funnel|timeline|retention|reviews","contact_id":"<uuid-optional>","page":"<page-id-optional>"}}]
+  [ACTION:{{"type":"navigate","tab":"home|operate|grow|build","sub":"<sub-tab-optional>","contact_id":"<uuid-optional>","page":"<build-page-optional>"}}]
+  — You can take the practitioner ANYWHERE in the system. The full destination map:
+    • tab:"home" — the Home dashboard / command center (no sub). "Take me home", "back to my dashboard".
+    • tab:"operate" subs: dashboard | queue | contacts | email | sms | projects | calendar | invoices | payments | bookkeeping | tasks | documents | agents | offerings-manager
+    • tab:"grow" subs: dashboard | briefing | insights | goals | revenue | retention | reviews | content | funnel | timeline
+    • tab:"build" pages (use "page", not "sub"): strategy-track | business-profile | about-me | foundation-track | brand | media-library | print-materials | my-site | link-page | booking | intake-forms | custom-modules | module-builder | social-media | email-templates | resources | products | analytics | integrations | settings | module:<uuid>
+  — Pick the closest destination even for indirect asks ("where do I change my colors?" → build/brand; "I want to text a client" → operate/sms; "show me my website" → build/my-site).
   [ACTION:{{"type":"open_documents"}}]   — shortcut: navigate straight to the Documents tab.
   [ACTION:{{"type":"open_calendar"}}]    — shortcut: navigate straight to the Calendar tab.
   [ACTION:{{"type":"show_revenue"}}]     — opens GROW → Revenue (the canonical Revenue Analytics surface: Allocator, Expenses, planned-vs-actual, Export, Send to Accountant).
@@ -12649,7 +12659,7 @@ RULES:
 - Don't emit actions unless the practitioner asks or agrees. Emit at most {MAX_ACTIONS_PER_TURN} per turn.
 - Confirm in plain language what you're doing. The system renders a card under your message.
 
-NAVIGATION IS MANDATORY. "show me", "take me to", "open", "go to", "pull up", "let me see", or naming a contact/module/page → ALWAYS emit navigate. Don't describe — take them there. Panel stays open.
+NAVIGATION IS MANDATORY. "show me", "take me to", "open", "go to", "pull up", "let me see", or naming a contact/module/page → ALWAYS emit navigate. Don't describe — take them there. The chat gracefully tucks itself away while the page changes, then returns — so keep narrating as usual ("Here's your funnel — leads are up this week.").
 
 AGENT RESULTS — SHOW THE CONTENT:
 When you run an agent (targeted) and get a draft_preview back, ALWAYS show the subject and body to the practitioner. Don't just say "I drafted something." Show it. Then ask: "Want to approve this, or should I change something?"
