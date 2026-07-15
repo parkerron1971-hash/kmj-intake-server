@@ -39,6 +39,14 @@ logger = logging.getLogger("usage_metering")
 UNIT_WEIGHTS: Dict[str, int] = {
     "/composer/hero": 5,
     "/director/build": 25,
+    # Voice (2026-07-15): standard OpenAI TTS is included with every plan —
+    # weight 0 keeps the rows attributable for analytics without billing
+    # them (the default weight of 1 would otherwise start charging units
+    # for every spoken sentence the moment rows carry business_id).
+    # ElevenLabs premium voice bills 1 unit per spoken chunk and rides the
+    # same allowance-first, credits-next draw-down as Chief messages.
+    "/ai/tts": 0,
+    "/ai/tts-el": 1,
 }
 DEFAULT_WEIGHT = 1
 
