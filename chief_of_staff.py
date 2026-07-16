@@ -13342,6 +13342,15 @@ async def chief_chat(
             is_greeting = _is_greeting(req.message)
             tod = _parse_greeting_tod(req.message) if is_greeting else None
             is_coach_pause = _is_coach_pause(req.message)
+            # Coach-context isolation (2026-07-16, Kevin's transcript): the
+            # Strategy Coach's system prompt is clean, but several PER-TURN
+            # injectors below (operational [ACTION] reminder, JIT directive,
+            # history action-hints, draft context, action-retry correction)
+            # were not gated on mode — the coach saw Chief-of-Staff
+            # operational instructions stowing away on the user's words and
+            # called them out as an injection attempt, mid-conversation.
+            # Everything operational is skipped in coach mode.
+            is_coach_mode = (req.mode or "") == "strategy_coach"
 
             # Intelligence enrichment — voice samples, session context,
             # daily priorities, mentor cooldown, suggestion preference,
@@ -13417,7 +13426,10 @@ async def chief_chat(
             # field (or, in proactive mode, when there's a natural pause).
             # Concatenated, not f-string'd, so JSON braces stay literal.
             try:
-                jit_directive = _build_jit_directive(ctx, req.message or "")
+                # JIT profile-capture emits operational [ACTION] tags
+                # (update_business_profile_field / remember) — never into
+                # the coach's context.
+                jit_directive = "" if is_coach_mode else _build_jit_directive(ctx, req.message or "")
                 if jit_directive:
                     marker = "[[CHIEF_CACHE_SPLIT]]"
                     if marker in system:
@@ -13460,14 +13472,17 @@ async def chief_chat(
             # stripped them before the client stored history. Without this
             # hint the model sees clean prose and mimics it — responding
             # conversationally on the next turn instead of emitting new tags.
-            api_messages = _enrich_history_with_action_hints(api_messages)
+            # (Chief-of-Staff only — the coach must never see operational
+            # action framing in its history.)
+            if not is_coach_mode:
+                api_messages = _enrich_history_with_action_hints(api_messages)
 
             # Contextual draft enrichment — when the message hints at
             # drafting an email and we can resolve a target contact from
             # ctx.contacts, look up their recent history and prepend it
             # so the AI's draft references real specifics.
             draft_context = ""
-            if not is_greeting and not is_coach_pause and _looks_like_draft_request(req.message or ""):
+            if not is_greeting and not is_coach_pause and not is_coach_mode and _looks_like_draft_request(req.message or ""):
                 resolved_id = _resolve_contact_from_message(
                     req.message or "",
                     ctx.get("contacts") or [],
@@ -13482,7 +13497,7 @@ async def chief_chat(
             # Skipped for the opening greeting (the greeting clause explicitly
             # says "Do NOT emit actions in the greeting") and for strategy-
             # coach sentinels which already carry their own guidance.
-            if not is_greeting and not is_coach_pause:
+            if not is_greeting and not is_coach_pause and not is_coach_mode:
                 augmented_message = (
                     "(IMPORTANT: If you create a contact, draft an email, approve something, or perform "
                     "ANY operation, you MUST include [ACTION:{...}] tags. "
@@ -13560,6 +13575,7 @@ async def chief_chat(
                 and clean
                 and not is_greeting
                 and not is_coach_pause
+                and not is_coach_mode
                 and _looks_like_completed_action(clean)
             ):
                 print(
