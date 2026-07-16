@@ -505,6 +505,60 @@ def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
         from store_router import mark_order_paid
         mark_order_paid(source_id, payment_intent_id=pi_id, charge_id=None,
                         session=session)
+    elif source_type == "product":
+        # Academy Phase 3 — a payment-link purchase of a products row.
+        # When the product is linked to a course, the buyer becomes a
+        # contact (find-or-create on email) and is enrolled automatically.
+        _handle_product_purchase(source_id, session)
+
+
+def _handle_product_purchase(product_id: str, session: Dict[str, Any]) -> None:
+    """Academy Phase 3 — auto-enrollment on course purchase.
+
+    source_id == products.id. If one or more academy_courses rows link
+    to this product, find-or-create the buyer as a contact from the
+    checkout session's customer_details and insert enrollments. The
+    unique (course_id, contact_id) constraint makes Stripe webhook
+    retries idempotent — duplicate inserts fail cleanly and are logged
+    at info. Non-course products keep today's behavior (no-op).
+    Fail-soft throughout: a hiccup here must never 500 the webhook."""
+    try:
+        courses = sb_clients.sb_get_as_service(
+            f"/academy_courses?product_id=eq.{product_id}"
+            f"&select=id,business_id,title&limit=10"
+        ) or []
+        if not courses:
+            return
+        details = session.get("customer_details") or {}
+        email = (details.get("email") or "").strip().lower()
+        if not email:
+            logger.warning(
+                f"product purchase {product_id}: no buyer email on session — cannot enroll")
+            return
+        name = (details.get("name") or "").strip() or email.split("@")[0]
+        from booking_widget_router import _find_or_create_contact
+        for course in courses:
+            biz_id = course.get("business_id")
+            if not biz_id:
+                continue
+            try:
+                contact_id = _find_or_create_contact(str(biz_id), name, email)
+                sb_clients.sb_post_as_service("/academy_enrollments", {
+                    "course_id": course["id"],
+                    "business_id": biz_id,
+                    "contact_id": contact_id,
+                })
+                logger.info(
+                    f"academy: enrolled {email} in course '{course.get('title')}' "
+                    f"({course['id']}) via product purchase {product_id}")
+            except Exception as enroll_err:
+                # Most common cause: already enrolled (unique constraint)
+                # on a webhook retry — benign.
+                logger.info(
+                    f"academy: enrollment skipped for {email} on course "
+                    f"{course.get('id')}: {enroll_err}")
+    except Exception as e:
+        logger.warning(f"product purchase handling failed (fail-soft): {e}")
 
 
 def _handle_payment_intent_succeeded(pi: Dict[str, Any]) -> None:

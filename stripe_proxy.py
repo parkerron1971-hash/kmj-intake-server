@@ -287,11 +287,29 @@ async def create_product_payment_link(req: ProductPaymentLinkRequest):
         currency = (product.get("currency") or "USD")
         description = product.get("name") or "Product"
 
-        # Build the payment link via the existing helper.
+        # Route payouts to the practitioner's connected account when one
+        # exists (mirrors the auto-link path in handle_create_product).
+        connected_account_id = None
+        biz_rows = await _sb_get(
+            client,
+            f"/businesses?id=eq.{req.business_id}&select=stripe_account_id&limit=1",
+        )
+        if biz_rows:
+            connected_account_id = (biz_rows[0].get("stripe_account_id") or "").strip() or None
+
+        # Build the payment link via the existing helper. Source metadata
+        # is LOAD-BEARING (Academy Phase 3): the webhook identifies the
+        # purchased product from metadata[source_id] — without it,
+        # checkout.session.completed hits the no-source guard and buyer
+        # auto-enrollment (course-linked products) never fires.
         link = await _create_stripe_payment_link(
             amount=price,
             currency=currency,
             description=description,
+            source_type="product",
+            source_id=str(req.product_id),
+            business_id=str(req.business_id),
+            connected_account_id=connected_account_id,
         )
         url = link.get("url") or ""
         link_id = link.get("id") or ""
