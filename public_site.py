@@ -5038,13 +5038,15 @@ async def _academy_brand(client, biz_id) -> tuple:
                 accent = bc
     except Exception:
         pass
+    site_config: Dict[str, Any] = {}
     try:
         srows = await _sb_service(
             client,
             f"/business_sites?business_id=eq.{biz_id}"
             f"&order=updated_at.desc&limit=1&select=site_config") or []
         if srows:
-            t = (srows[0].get("site_config") or {}).get("academy_theme") or {}
+            site_config = srows[0].get("site_config") or {}
+            t = site_config.get("academy_theme") or {}
             if isinstance(t, dict):
                 theme = t
                 ta = (t.get("accent") or "").strip()
@@ -5052,7 +5054,58 @@ async def _academy_brand(client, biz_id) -> tuple:
                     accent = ta
     except Exception:
         pass
-    return name, accent, theme
+    return name, accent, theme, site_config
+
+
+def _academy_skin(biz_id, site_config: Dict[str, Any], theme: Dict[str, Any],
+                  fallback_accent: str) -> tuple:
+    """'Same generator as the main site' (Kevin's ruling): reconstruct
+    the composed site's DesignSystem from stored config — zero LLM
+    (resolve_layout_and_vocabulary is deterministic DB reads + pure
+    functions) — and bridge its tokens onto the academy stylesheet:
+    real display/body fonts (with the Google Fonts link), the site's
+    palette, surface treatment, and the AI decoration scheme when one
+    exists. Fail-open: ANY hiccup returns the base look untouched.
+    Returns (accent, head_extra_html)."""
+    try:
+        from smart_sites import resolve_layout_and_vocabulary
+        from studio_layouts.shared import (
+            apply_scheme_to_design_system, render_decoration_head)
+        (_lid, _vocab, _comp, ds, _bd, _bp, _dm) = resolve_layout_and_vocabulary(
+            str(biz_id), site_config or {})
+        if not ds:
+            return fallback_accent, ""
+        scheme = (site_config or {}).get("generated_decoration")
+        if scheme:
+            try:
+                ds = apply_scheme_to_design_system(ds, scheme)
+            except Exception:
+                pass
+        accent = ((theme or {}).get("accent") or "").strip() \
+            or (ds.get("palette_accent") or "").strip() or fallback_accent
+        if not accent.startswith("#"):
+            accent = fallback_accent
+        fonts_link = ""
+        if ds.get("google_fonts_url"):
+            fonts_link = (f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+                          f'<link rel="stylesheet" href="{_esc(ds["google_fonts_url"])}">')
+        deco = ""
+        if scheme:
+            try:
+                deco = render_decoration_head(ds, scheme) or ""
+            except Exception:
+                deco = ""
+        css = f"""
+  body {{ background: {ds['palette_bg']} !important; color: {ds['palette_text']} !important; font-family: {ds['font_body']}; }}
+  h1, h2, .eyebrow, .price {{ font-family: {ds['font_display']}; }}
+  .card, .lesson, .price-box, .hw {{ background: {ds['palette_surface']} !important; border-color: color-mix(in srgb, {ds['palette_text']} 14%, transparent) !important; }}
+  .muted {{ color: {ds['palette_muted']} !important; }}
+  .check {{ border-color: color-mix(in srgb, {ds['palette_text']} 35%, transparent); }}
+"""
+        return accent, fonts_link + "<style>" + css + "</style>" + deco
+    except Exception as e:
+        logger.warning(f"academy skin resolve failed (base look): {e}")
+        return fallback_accent, ""
 
 
 def _academy_mode_css(theme: Dict[str, Any]) -> str:
@@ -5077,7 +5130,8 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
     """Render the academy catalog or a course landing page."""
     kind, course_id = _academy_parse(path, standalone)
     catalog_href, course_href = _academy_hrefs(standalone)
-    biz_name, accent, theme = await _academy_brand(client, biz_id)
+    biz_name, accent, theme, site_config = await _academy_brand(client, biz_id)
+    accent, skin_head = _academy_skin(biz_id, site_config, theme, accent)
     mode_css = _academy_mode_css(theme)
     safe_biz = _esc(biz_name)
     main_href = "/" if not standalone else (
@@ -5138,7 +5192,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{_esc(course.get("title") or "Course")} &mdash; {safe_biz}</title>
-<style>{_ACADEMY_CSS}{mode_css}</style></head>
+<style>{_ACADEMY_CSS}</style>{skin_head}<style>{mode_css}</style></head>
 <body><div class="wrap">
   <a class="back" style="color:{accent}" href="{_esc(catalog_href)}">&larr; All courses</a>
   <div style="height:26px"></div>
@@ -5216,7 +5270,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Academy &mdash; {safe_biz}</title>
-<style>{_ACADEMY_CSS}{mode_css}</style></head>
+<style>{_ACADEMY_CSS}</style>{skin_head}<style>{mode_css}</style></head>
 <body><div class="wrap">
   {main_link}
   <div style="height:26px"></div>
@@ -5236,7 +5290,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Not found &mdash; {safe_biz}</title>
-<style>{_ACADEMY_CSS}{mode_css}</style></head>
+<style>{_ACADEMY_CSS}</style>{skin_head}<style>{mode_css}</style></head>
 <body><div class="wrap" style="text-align:center;padding-top:90px">
   <div class="eyebrow" style="color:{accent}">{safe_biz} &middot; Academy</div>
   <h1>That page isn't here</h1>
@@ -5347,8 +5401,9 @@ async def _learn_load(client, token: str):
         f"/academy_lessons?course_id=eq.{enr['course_id']}&order=sort_order.asc&limit=60"
         f"&select=id,title,content,video_url,resource_url,homework,duration_minutes,"
         f"lesson_type,drip_offset_days") or []
-    biz_name, accent, theme = await _academy_brand(client, enr["business_id"])
-    return enr, crows[0], lessons, biz_name, accent, theme
+    biz_name, accent, theme, site_config = await _academy_brand(client, enr["business_id"])
+    accent, skin_head = _academy_skin(enr["business_id"], site_config, theme, accent)
+    return enr, crows[0], lessons, biz_name, accent, theme, skin_head
 
 
 async def _serve_learner(path: str) -> HTMLResponse:
@@ -5368,7 +5423,7 @@ async def _serve_learner(path: str) -> HTMLResponse:
 </div></body></html>"""
             return HTMLResponse(content=html, status_code=404, media_type="text/html",
                                 headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
-        enr, course, lessons, biz_name, accent, theme = loaded
+        enr, course, lessons, biz_name, accent, theme, skin_head = loaded
         mode_css = _academy_mode_css(theme)
         safe_biz = _esc(biz_name)
         student = _esc(((enr.get("contacts") or {}).get("name") or "").split(" ")[0] or "there")
@@ -5425,7 +5480,7 @@ async def _serve_learner(path: str) -> HTMLResponse:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex,nofollow">
 <title>{_esc(lesson.get("title") or "Lesson")} &mdash; {safe_biz}</title>
-<style>{_LEARN_CSS}{mode_css}</style></head>
+<style>{_LEARN_CSS}</style>{skin_head}<style>{mode_css}</style></head>
 <body><div class="wrap">
   <a class="back" style="color:{accent}" href="{_esc(home_href)}">&larr; {_esc(course.get("title") or "Course")}</a>
   <div style="height:22px"></div>
@@ -5467,7 +5522,7 @@ async def _serve_learner(path: str) -> HTMLResponse:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex,nofollow">
 <title>{_esc(course.get("title") or "Course")} &mdash; {safe_biz}</title>
-<style>{_LEARN_CSS}{mode_css}</style></head>
+<style>{_LEARN_CSS}</style>{skin_head}<style>{mode_css}</style></head>
 <body><div class="wrap">
   <div class="eyebrow" style="color:{accent}">{safe_biz} &middot; Academy</div>
   <h1>{_esc(course.get("title") or "Course")}</h1>
@@ -5897,7 +5952,7 @@ async def learner_mark(token: str, request: Request):
         loaded = await _learn_load(client, token)
         if not loaded:
             raise HTTPException(404, "Link not active")
-        enr, course, lessons, _bn, _ac, _th = loaded
+        enr, course, lessons, _bn, _ac, _th, _sk = loaded
         idx = next((i for i, l in enumerate(lessons) if l["id"] == lesson_id), None)
         if idx is None:
             return RedirectResponse(url=back, status_code=303)
