@@ -2808,7 +2808,7 @@ async def handle_update_module_entry(client, biz, action) -> Dict:
     return {
         "type": "update_module_entry",
         "result": "updated",
-        "label": "📦 Module entry updated",
+        "label": "📦 Solution entry updated",
         "entry_id": entry_id,
         "nav": _nav("build"),
     }
@@ -2830,7 +2830,7 @@ async def handle_delete_module_entry(client, biz, action) -> Dict:
     return {
         "type": "delete_module_entry",
         "result": "deleted",
-        "label": "📦 Module entry removed",
+        "label": "📦 Solution entry removed",
         "entry_id": entry_id,
     }
 
@@ -12701,6 +12701,8 @@ ACTIONS — NAVIGATION + MEMORY:
     • tab:"grow" subs: dashboard | briefing | insights | goals | revenue | retention | reviews | content | funnel | timeline
     • tab:"build" pages (use "page", not "sub"): strategy-track | course-studio | business-profile | about-me | foundation-track | brand | media-library | print-materials | my-site | link-page | booking | intake-forms | custom-modules | module-builder | social-media | email-templates | resources | products | analytics | integrations | settings | module:<uuid>
   — Pick the closest destination even for indirect asks ("where do I change my colors?" → build/brand; "I want to text a client" → operate/sms; "show me my website" → build/my-site).
+  — SURFACE NAMES (terminology arc): the ids above never change, but when you TALK about these surfaces use their on-screen names: queue = "Approvals" · funnel = "Lead Flow" · intake-forms = "Client Forms" · custom-modules = "Custom Solutions" · module-builder = "Build a Solution" · link-page = "My Links" · offerings-manager = "Services & Pricing" (verticals may show Programs/Packages instead). Never say "funnel tab", "queue", "intake forms", or "modules" as surface names to the practitioner.
+  — CUSTOM SOLUTIONS, explained: that tab holds the custom tools YOU build for this practitioner — trackers, registries, request boards, order logs, anything their workflow needs that the system doesn't ship with. If they ask what it is (or seem unsure), explain it in their business's language ("your prayer-request board lives there", "your alteration tracker lives there") and remind them they can just ask you to build a new one — you design it, it appears in their sidebar.
   [ACTION:{{"type":"open_documents"}}]   — shortcut: navigate straight to the Documents tab.
   [ACTION:{{"type":"open_calendar"}}]    — shortcut: navigate straight to the Calendar tab.
   [ACTION:{{"type":"set_chat_window","visible":false,"keep_talking":true}}]  — window control:
@@ -12788,7 +12790,7 @@ RULES:
 - Don't emit actions unless the practitioner asks or agrees. Emit at most {MAX_ACTIONS_PER_TURN} per turn.
 - Confirm in plain language what you're doing. The system renders a card under your message.
 
-NAVIGATION IS MANDATORY. "show me", "take me to", "open", "go to", "pull up", "let me see", or naming a contact/module/page → ALWAYS emit navigate. Don't describe — take them there. The chat gracefully tucks itself away while the page changes, then returns — so keep narrating as usual ("Here's your funnel — leads are up this week.").
+NAVIGATION IS MANDATORY. "show me", "take me to", "open", "go to", "pull up", "let me see", or naming a contact/module/page → ALWAYS emit navigate. Don't describe — take them there. The chat gracefully tucks itself away while the page changes, then returns — so keep narrating as usual ("Here's your lead flow — leads are up this week.").
 
 AGENT RESULTS — SHOW THE CONTENT:
 When you run an agent (targeted) and get a draft_preview back, ALWAYS show the subject and body to the practitioner. Don't just say "I drafted something." Show it. Then ask: "Want to approve this, or should I change something?"
@@ -12871,7 +12873,7 @@ DOCUMENTS:
 Practitioners can upload and manage documents in OPERATE → Documents. Files can be attached to a contact (stored under contacts/{{contact_id}}/) or kept as general business documents. When a practitioner says "upload a file" or "attach a document," navigate them to the Documents tab — or, for a specific contact, the Files tab on that contact's detail page. You CANNOT upload files yourself — guide the practitioner to the UI. document_uploaded events appear on the contact timeline and you can reference them ("I see you uploaded the signed agreement on April 5").
 
 GROWTH & STRATEGY:
-The GROW tab is the practitioner's strategic intelligence center. Sub-tabs: Dashboard (4 metric cards + 6-month trend + top performers), Briefing (AI weekly briefing), Insights (AI observations grouped by category), Goals (settings.goals.active_goals), Revenue (full analytics), Content (settings.content_calendar.planned_posts), Funnel (lead→active conversion).
+The GROW tab is the practitioner's strategic intelligence center. Sub-tabs: Dashboard (4 metric cards + 6-month trend + top performers), Briefing (AI weekly briefing), Insights (AI observations grouped by category), Goals (settings.goals.active_goals), Revenue (full analytics), Content (settings.content_calendar.planned_posts), Lead Flow (sub id "funnel"; lead→active conversion).
 
 When the practitioner asks growth/strategy questions, give specific data-backed answers. Name names, cite numbers, show trends. Don't give generic advice. Quick mappings:
   • "How is my business doing?"            → Summarize from CONTEXT (contacts/queue/insights/recent events) — no need to run anything.
@@ -12880,9 +12882,9 @@ When the practitioner asks growth/strategy questions, give specific data-backed 
   • "Set a goal to reach 50 contacts by June"  → [ACTION:{{"type":"create_goal","title":"...","category":"contacts","target":50,"period":"quarterly","end":"2026-06-30"}}]
   • "Am I on track for my goals?" / "How are my goals?" → [ACTION:{{"type":"check_goals"}}] (handler computes live progress and returns a summary)
   • "What should I post about?" / "Plan a post for Thursday"  → [ACTION:{{"type":"plan_content","title":"...","platform":"...","scheduled_date":"YYYY-MM-DD"}}]
-  • "Where are my leads coming from?"      → navigate to GROW → Funnel ([ACTION:{{"type":"navigate","tab":"grow","sub":"funnel"}}])
+  • "Where are my leads coming from?"      → navigate to GROW → Lead Flow ([ACTION:{{"type":"navigate","tab":"grow","sub":"funnel"}}])
   • "Show me my revenue breakdown"         → [ACTION:{{"type":"show_revenue"}}] (or navigate to grow/revenue for the full analytics)
-  • "What's my conversion rate?"           → navigate to GROW → Funnel and narrate from data once there.
+  • "What's my conversion rate?"           → navigate to GROW → Lead Flow and narrate from data once there.
 Goals live at settings.goals.active_goals (auto-tracked from live contacts/invoices/sessions). Content posts live at settings.content_calendar.planned_posts (the practitioner posts manually; this just tracks what's planned).
 
 CALENDAR:
@@ -13751,7 +13753,7 @@ async def chief_chat(
                         )
                         clean = (clean or "").rstrip() + (
                             "\n\nHeads up — that may not have gone through on my end. "
-                            "Check the Queue and let me know if it's missing; I'll redo it."
+                            "Check Approvals and let me know if it's missing; I'll redo it."
                         )
                 else:
                     print("[Chief] RETRY model call returned empty", flush=True)
