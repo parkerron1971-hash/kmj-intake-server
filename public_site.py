@@ -765,6 +765,26 @@ async def _sb_service(client: httpx.AsyncClient, path: str):
     text = resp.text
     return json.loads(text) if text else None
 
+async def _sb_service_patch(client: httpx.AsyncClient, path: str, body: dict):
+    """Academy Phase 4B — service-role PATCH for learner-portal progress
+    writes. Same bounded-use rule as _sb_service: callers must target a
+    row already resolved from an unguessable portal token, and the only
+    fields written are the student's own progress/homework/status."""
+    key = _supabase_service()
+    url = f"{_supabase_url()}/rest/v1{path}"
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    resp = await client.patch(url, headers=headers, content=json.dumps(body), timeout=HTTP_TIMEOUT)
+    if resp.status_code >= 400:
+        logger.error(f"Supabase service PATCH {path}: {resp.status_code} {resp.text[:200]}")
+        raise HTTPException(502, "update failed")
+    return True
+
+
 async def _sb_post(client: httpx.AsyncClient, path: str, body: dict):
     url = f"{_supabase_url()}/rest/v1{path}"
     headers = {
@@ -5001,8 +5021,12 @@ _ACADEMY_CSS = """
 
 
 async def _academy_brand(client, biz_id) -> tuple:
-    """(business_name, accent) — service-role read, warm fallback."""
+    """(business_name, accent, theme) — service-role reads. accent comes
+    from the brand kit unless the practitioner overrode it in the
+    academy appearance settings (site_config.academy_theme: {headline,
+    intro, accent, mode:'auto'|'light'|'dark'})."""
     name, accent = "The Academy", "#B4762A"
+    theme: Dict[str, Any] = {}
     try:
         rows = await _sb_service(
             client, f"/businesses?id=eq.{biz_id}&select=name,settings&limit=1") or []
@@ -5014,7 +5038,38 @@ async def _academy_brand(client, biz_id) -> tuple:
                 accent = bc
     except Exception:
         pass
-    return name, accent
+    try:
+        srows = await _sb_service(
+            client,
+            f"/business_sites?business_id=eq.{biz_id}"
+            f"&order=updated_at.desc&limit=1&select=site_config") or []
+        if srows:
+            t = (srows[0].get("site_config") or {}).get("academy_theme") or {}
+            if isinstance(t, dict):
+                theme = t
+                ta = (t.get("accent") or "").strip()
+                if ta.startswith("#") and len(ta) in (4, 7):
+                    accent = ta
+    except Exception:
+        pass
+    return name, accent, theme
+
+
+def _academy_mode_css(theme: Dict[str, Any]) -> str:
+    """Forced light/dark override (mode 'auto' returns nothing — the
+    prefers-color-scheme block in _ACADEMY_CSS handles it)."""
+    mode = (theme or {}).get("mode")
+    if mode == "dark":
+        return """
+  body { background: #12121a !important; color: #eceaf2 !important; }
+  .card, .lesson, .price-box { background: #1a1a26 !important; border-color: rgba(255,255,255,0.09) !important; }
+  .muted { color: #9a97a8 !important; }"""
+    if mode == "light":
+        return """
+  body { background: #faf9f6 !important; color: #1d1b16 !important; }
+  .card, .lesson, .price-box { background: #fff !important; border-color: rgba(29,27,22,0.10) !important; }
+  .muted { color: #6d6a60 !important; }"""
+    return ""
 
 
 async def _serve_academy(client, biz_id, path: str, standalone: bool,
@@ -5022,7 +5077,8 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
     """Render the academy catalog or a course landing page."""
     kind, course_id = _academy_parse(path, standalone)
     catalog_href, course_href = _academy_hrefs(standalone)
-    biz_name, accent = await _academy_brand(client, biz_id)
+    biz_name, accent, theme = await _academy_brand(client, biz_id)
+    mode_css = _academy_mode_css(theme)
     safe_biz = _esc(biz_name)
     main_href = "/" if not standalone else (
         f"https://{main_slug}.mysolutionist.app" if main_slug else "")
@@ -5082,7 +5138,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{_esc(course.get("title") or "Course")} &mdash; {safe_biz}</title>
-<style>{_ACADEMY_CSS}</style></head>
+<style>{_ACADEMY_CSS}{mode_css}</style></head>
 <body><div class="wrap">
   <a class="back" style="color:{accent}" href="{_esc(catalog_href)}">&larr; All courses</a>
   <div style="height:26px"></div>
@@ -5152,17 +5208,21 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
         main_link = (
             f'<a class="back" style="color:{accent}" href="{_esc(main_href)}">&larr; {safe_biz}</a>'
             if main_href else "")
+        catalog_h1 = _esc((theme.get("headline") or "").strip() or "The Academy")
+        default_intro = ("Courses taught by " + biz_name
+                         + " — learn at your own pace, with real accountability.")
+        catalog_intro = _esc((theme.get("intro") or "").strip() or default_intro)
         html = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Academy &mdash; {safe_biz}</title>
-<style>{_ACADEMY_CSS}</style></head>
+<style>{_ACADEMY_CSS}{mode_css}</style></head>
 <body><div class="wrap">
   {main_link}
   <div style="height:26px"></div>
   <div class="eyebrow" style="color:{accent}">{safe_biz}</div>
-  <h1>The Academy</h1>
-  <p class="muted" style="font-size:15.5px;max-width:560px">Courses taught by {safe_biz} &mdash; learn at your own pace, with real accountability.</p>
+  <h1>{catalog_h1}</h1>
+  <p class="muted" style="font-size:15.5px;max-width:560px">{catalog_intro}</p>
   <div class="cards">{cards}</div>
   {empty}
   <div class="foot muted">Powered by The Solutionist System</div>
@@ -5176,7 +5236,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Not found &mdash; {safe_biz}</title>
-<style>{_ACADEMY_CSS}</style></head>
+<style>{_ACADEMY_CSS}{mode_css}</style></head>
 <body><div class="wrap" style="text-align:center;padding-top:90px">
   <div class="eyebrow" style="color:{accent}">{safe_biz} &middot; Academy</div>
   <h1>That page isn't here</h1>
@@ -5186,6 +5246,239 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
 </div></body></html>"""
     return HTMLResponse(content=html, status_code=404, media_type="text/html",
                         headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+
+
+# ═══ Academy Phase 4B — the learner portal ═══════════════════════════
+# Students get a magic link: /learn/<portal_token> (globally-unique
+# uuid on their enrollment — no passwords, no accounts). Course home
+# shows their progress + lesson list with drip locks; lesson pages play
+# the video, render the content + homework, and let them mark their own
+# progress — feeding the SAME enrollments.progress/homework the
+# practitioner's teaching view reads. Host-independent (token is the
+# key), so links work on subdomains, custom domains, and standalone
+# academy addresses alike.
+
+_LEARN_CSS = _ACADEMY_CSS + """
+  .prog { height: 8px; border-radius: 4px; background: rgba(127,127,127,0.18); overflow: hidden; margin: 18px 0 6px; }
+  .prog > span { display: block; height: 100%; border-radius: 4px; transition: width .4s ease; }
+  .lesson.locked { opacity: .55; }
+  .lesson a { color: inherit; text-decoration: none; display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+  .check { width: 22px; height: 22px; border-radius: 7px; border: 1.5px solid rgba(127,127,127,0.4); flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; }
+  .video { position: relative; padding-top: 56.25%; border-radius: 14px; overflow: hidden; margin: 22px 0; background: #000; }
+  .video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .content { font-size: 15.5px; margin-top: 18px; }
+  .content p { margin-bottom: 14px; }
+  .hw { margin-top: 26px; padding: 18px; border-radius: 14px; border: 1px dashed rgba(127,127,127,0.4); }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 28px; }
+  form.inline { display: inline; }
+  button.btn { border: 0; cursor: pointer; font-family: inherit; }
+  .btn.ghost { background: transparent !important; border: 1.5px solid rgba(127,127,127,0.35); color: inherit; }
+"""
+
+
+def _learn_video_embed(url: str) -> str:
+    u = (url or "").strip()
+    if not u:
+        return ""
+    def _clean(v: str) -> str:
+        return "".join(c for c in v if c.isalnum() or c in "_-")
+    try:
+        src = ""
+        if "youtube.com/watch" in u and "v=" in u:
+            src = f"https://www.youtube.com/embed/{_clean(u.split('v=')[1].split('&')[0])}"
+        elif "youtu.be/" in u:
+            src = f"https://www.youtube.com/embed/{_clean(u.split('youtu.be/')[1].split('?')[0])}"
+        elif "loom.com/share/" in u:
+            src = f"https://www.loom.com/embed/{_clean(u.split('loom.com/share/')[1].split('?')[0])}"
+        elif "vimeo.com/" in u and "player.vimeo" not in u:
+            src = f"https://player.vimeo.com/video/{_clean(u.split('vimeo.com/')[1].split('?')[0].strip('/'))}"
+        if src:
+            return (f'<div class="video"><iframe src="{_esc(src)}" allowfullscreen '
+                    f'loading="lazy" allow="autoplay; fullscreen; picture-in-picture"></iframe></div>')
+        return (f'<p style="margin-top:18px"><a class="back" href="{_esc(u)}" target="_blank" '
+                f'rel="noopener">&#9654; Watch the lesson video</a></p>')
+    except Exception:
+        return ""
+
+
+def _learn_content_html(text: str) -> str:
+    """Escape + paragraphize lesson content (plain text / light markdown
+    written in the studio — bold markers are stripped, not rendered)."""
+    clean = _esc((text or "").replace("**", "").replace("__", ""))
+    paras = [p.strip().replace("\n", "<br>") for p in clean.split("\n\n") if p.strip()]
+    return "".join(f"<p>{p}</p>" for p in paras)
+
+
+def _learn_unlock(drip_mode: str, idx: int, drip_offset_days: int, enrolled_at: str):
+    """Datetime when lesson idx unlocks, or None if already available."""
+    if drip_mode not in ("weekly", "custom"):
+        return None
+    days = idx * 7 if drip_mode == "weekly" else max(0, int(drip_offset_days or 0))
+    if days <= 0:
+        return None
+    try:
+        base = datetime.fromisoformat((enrolled_at or "").replace("Z", "+00:00"))
+    except Exception:
+        return None
+    when = base + timedelta(days=days)
+    return when if when > datetime.now(timezone.utc) else None
+
+
+async def _learn_load(client, token: str):
+    """enrollment + course + lessons + brand for a portal token, or None."""
+    if not _academy_valid_id(token):
+        return None
+    erows = await _sb_service(
+        client,
+        f"/academy_enrollments?portal_token=eq.{token}&limit=1"
+        f"&select=id,course_id,business_id,contact_id,status,progress,homework,enrolled_at,"
+        f"contacts(name)") or []
+    if not erows:
+        return None
+    enr = erows[0]
+    crows = await _sb_service(
+        client,
+        f"/academy_courses?id=eq.{enr['course_id']}&limit=1"
+        f"&select=id,title,description,drip_mode") or []
+    if not crows:
+        return None
+    lessons = await _sb_service(
+        client,
+        f"/academy_lessons?course_id=eq.{enr['course_id']}&order=sort_order.asc&limit=60"
+        f"&select=id,title,content,video_url,resource_url,homework,duration_minutes,"
+        f"lesson_type,drip_offset_days") or []
+    biz_name, accent, theme = await _academy_brand(client, enr["business_id"])
+    return enr, crows[0], lessons, biz_name, accent, theme
+
+
+async def _serve_learner(path: str) -> HTMLResponse:
+    """GET /learn/<token>[/<lesson_id>] — course home or lesson page."""
+    parts = [p for p in path.split("/") if p]  # ['learn', token, lesson?]
+    token = parts[1] if len(parts) >= 2 else ""
+    lesson_id = parts[2] if len(parts) >= 3 else ""
+    async with httpx.AsyncClient() as client:
+        loaded = await _learn_load(client, token)
+        if not loaded:
+            html = f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Link not found</title><style>{_LEARN_CSS}</style></head>
+<body><div class="wrap" style="text-align:center;padding-top:90px">
+  <h1>This link isn't active</h1>
+  <p class="muted">Your access link may have changed &mdash; reach out to your teacher for a fresh one.</p>
+</div></body></html>"""
+            return HTMLResponse(content=html, status_code=404, media_type="text/html",
+                                headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+        enr, course, lessons, biz_name, accent, theme = loaded
+        mode_css = _academy_mode_css(theme)
+        safe_biz = _esc(biz_name)
+        student = _esc(((enr.get("contacts") or {}).get("name") or "").split(" ")[0] or "there")
+        progress = enr.get("progress") or {}
+        homework = enr.get("homework") or {}
+        drip_mode = course.get("drip_mode") or "none"
+        done_n = sum(1 for l in lessons if progress.get(l["id"]))
+        pct = int(round(done_n / len(lessons) * 100)) if lessons else 0
+        home_href = f"/learn/{token}"
+
+        if lesson_id:
+            idx = next((i for i, l in enumerate(lessons) if l["id"] == lesson_id), None)
+            if idx is None:
+                return RedirectResponse(url=home_href, status_code=303)
+            lesson = lessons[idx]
+            locked = _learn_unlock(drip_mode, idx, lesson.get("drip_offset_days") or 0,
+                                   enr.get("enrolled_at") or "")
+            if locked:
+                return RedirectResponse(url=home_href, status_code=303)
+            is_done = bool(progress.get(lesson_id))
+            hw_done = bool(homework.get(lesson_id))
+            nxt = lessons[idx + 1] if idx + 1 < len(lessons) else None
+            video = _learn_video_embed(lesson.get("video_url") or "")
+            content = _learn_content_html(lesson.get("content") or "")
+            resource = ""
+            if (lesson.get("resource_url") or "").strip():
+                resource = (f'<p style="margin-top:14px"><a class="back" style="color:{accent}" '
+                            f'href="{_esc(lesson["resource_url"])}" target="_blank" rel="noopener">'
+                            f'&#128206; Lesson resource</a></p>')
+            hw_html = ""
+            if (lesson.get("homework") or "").strip():
+                hw_btn = ("<span class=\"pill\" style=\"background:" + accent + ";color:#fff\">Homework done &#10003;</span>"
+                          if hw_done else
+                          f'<form class="inline" method="post" action="/learn/{token}/mark">'
+                          f'<input type="hidden" name="lesson_id" value="{lesson_id}">'
+                          f'<input type="hidden" name="kind" value="homework">'
+                          f'<input type="hidden" name="back" value="{_esc(f"/learn/{token}/{lesson_id}")}">'
+                          f'<button class="btn" style="background:{accent};padding:10px 20px;font-size:13px">I did the homework</button></form>')
+                hw_html = (f'<div class="hw"><div class="eyebrow" style="color:{accent}">Homework</div>'
+                           f'<div class="content" style="margin-top:6px">{_learn_content_html(lesson["homework"])}</div>'
+                           f'<div style="margin-top:12px">{hw_btn}</div></div>')
+            if is_done:
+                mark_btn = (f'<a class="btn ghost" href="{_esc(home_href)}">Back to course</a>'
+                            + (f'<a class="btn" style="background:{accent}" href="/learn/{token}/{nxt["id"]}">Next lesson &rarr;</a>' if nxt else ""))
+            else:
+                nxt_href = f"/learn/{token}/{nxt['id']}" if nxt else home_href
+                mark_btn = (f'<form class="inline" method="post" action="/learn/{token}/mark">'
+                            f'<input type="hidden" name="lesson_id" value="{lesson_id}">'
+                            f'<input type="hidden" name="kind" value="lesson">'
+                            f'<input type="hidden" name="back" value="{_esc(nxt_href)}">'
+                            f'<button class="btn" style="background:{accent}">Mark complete'
+                            + (" &amp; continue &rarr;" if nxt else "") + "</button></form>")
+            html = f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow">
+<title>{_esc(lesson.get("title") or "Lesson")} &mdash; {safe_biz}</title>
+<style>{_LEARN_CSS}{mode_css}</style></head>
+<body><div class="wrap">
+  <a class="back" style="color:{accent}" href="{_esc(home_href)}">&larr; {_esc(course.get("title") or "Course")}</a>
+  <div style="height:22px"></div>
+  <div class="eyebrow" style="color:{accent}">Lesson {idx + 1} of {len(lessons)}</div>
+  <h1>{_esc(lesson.get("title") or "Lesson")}</h1>
+  {video}
+  <div class="content">{content}</div>
+  {resource}
+  {hw_html}
+  <div class="actions">{mark_btn}</div>
+  <div class="foot muted">Powered by The Solutionist System</div>
+</div></body></html>"""
+            return HTMLResponse(content=html, media_type="text/html",
+                                headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+
+        # Course home
+        rows = ""
+        for i, l in enumerate(lessons):
+            locked = _learn_unlock(drip_mode, i, l.get("drip_offset_days") or 0,
+                                   enr.get("enrolled_at") or "")
+            is_done = bool(progress.get(l["id"]))
+            check = (f'<span class="check" style="background:{accent};border-color:{accent}">&#10003;</span>'
+                     if is_done else '<span class="check"></span>')
+            dur = _academy_fmt_runtime(int(l.get("duration_minutes") or 0))
+            if locked:
+                when = locked.strftime("%b %-d") if os.name != "nt" else locked.strftime("%b %d")
+                rows += (f'<div class="lesson locked">{check}'
+                         f'<span class="t">{i + 1}. {_esc(l.get("title") or "Lesson")}</span>'
+                         f'<span class="d muted">&#128274; unlocks {when}</span></div>')
+            else:
+                rows += (f'<div class="lesson"><a href="/learn/{token}/{l["id"]}">{check}'
+                         f'<span class="t">{i + 1}. {_esc(l.get("title") or "Lesson")}</span>'
+                         f'<span class="d muted">{_esc(dur)}</span></a></div>')
+        complete = lessons and done_n == len(lessons)
+        cheer = ("You finished the whole course. Incredible work."
+                 if complete else
+                 ("Pick up where you left off." if done_n else "Your journey starts with lesson one."))
+        html = f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow">
+<title>{_esc(course.get("title") or "Course")} &mdash; {safe_biz}</title>
+<style>{_LEARN_CSS}{mode_css}</style></head>
+<body><div class="wrap">
+  <div class="eyebrow" style="color:{accent}">{safe_biz} &middot; Academy</div>
+  <h1>{_esc(course.get("title") or "Course")}</h1>
+  <p class="muted" style="font-size:15px">Welcome back, {student} &mdash; {cheer}</p>
+  <div class="prog"><span style="width:{pct}%;background:{accent}"></span></div>
+  <div class="muted" style="font-size:12px">{done_n} of {len(lessons)} lessons complete &middot; {pct}%</div>
+  <div class="lessons">{rows}</div>
+  <div class="foot muted">Powered by The Solutionist System</div>
+</div></body></html>"""
+        return HTMLResponse(content=html, media_type="text/html",
+                            headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
 
 
 async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
@@ -5563,6 +5856,12 @@ async def subdomain_catch_all(request: Request, path: str):
     # downstream renderer expects /about, /services, etc.
     request_path = "/" + (path or "")
 
+    # Academy Phase 4B — learner portal. Portal tokens are globally
+    # unique, so /learn/* is host-independent: the same link works on
+    # subdomains, custom domains, and standalone academy addresses.
+    if request_path.startswith("/learn/"):
+        return await _serve_learner(request_path)
+
     slug = extract_slug_from_host(request)
     if slug:
         if not _check_rate(slug):
@@ -5578,3 +5877,49 @@ async def subdomain_catch_all(request: Request, path: str):
 
     # Not a subdomain/custom domain — 404
     raise HTTPException(404, "Not found")
+
+
+@router.post("/learn/{token}/mark", include_in_schema=False)
+async def learner_mark(token: str, request: Request):
+    """Academy Phase 4B — a student marks a lesson (or its homework)
+    done from their portal. The portal token IS the authorization; the
+    write feeds the same enrollments.progress/homework the teaching
+    view reads. Drip locks are enforced server-side."""
+    form = await request.form()
+    lesson_id = str(form.get("lesson_id") or "")
+    kind = str(form.get("kind") or "lesson")
+    back = str(form.get("back") or f"/learn/{token}")
+    if not back.startswith("/learn/"):
+        back = f"/learn/{token}"
+    if not (_academy_valid_id(token) and _academy_valid_id(lesson_id)):
+        return RedirectResponse(url=back, status_code=303)
+    async with httpx.AsyncClient() as client:
+        loaded = await _learn_load(client, token)
+        if not loaded:
+            raise HTTPException(404, "Link not active")
+        enr, course, lessons, _bn, _ac, _th = loaded
+        idx = next((i for i, l in enumerate(lessons) if l["id"] == lesson_id), None)
+        if idx is None:
+            return RedirectResponse(url=back, status_code=303)
+        if _learn_unlock(course.get("drip_mode") or "none", idx,
+                         lessons[idx].get("drip_offset_days") or 0,
+                         enr.get("enrolled_at") or ""):
+            return RedirectResponse(url=f"/learn/{token}", status_code=303)
+        patch: Dict[str, Any] = {}
+        if kind == "homework":
+            hw = dict(enr.get("homework") or {})
+            hw[lesson_id] = True
+            patch["homework"] = hw
+        else:
+            prog = dict(enr.get("progress") or {})
+            prog[lesson_id] = True
+            patch["progress"] = prog
+            if lessons and all(prog.get(l["id"]) for l in lessons):
+                patch["status"] = "completed"
+                patch["completed_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            await _sb_service_patch(client,
+                f"/academy_enrollments?id=eq.{enr['id']}", patch)
+        except Exception as e:
+            logger.warning(f"learner mark failed (soft): {e}")
+    return RedirectResponse(url=back, status_code=303)
