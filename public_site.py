@@ -4896,6 +4896,298 @@ async def _render_offline_page(client: httpx.AsyncClient,
                         headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
 
 
+# ═══ Academy Phase 4 — public course pages ═══════════════════════════
+# /academy (catalog) + /academy/<course_id> (landing page w/ buy link)
+# on any business site — AND optionally standalone: site_config.
+# academy_slug claims a dedicated subdomain, site_config.academy_domain
+# a dedicated custom domain, where the academy IS the site root. One
+# business, two storefronts (e.g. consulting + education).
+
+
+def _academy_valid_id(cid: str) -> bool:
+    return 32 <= len(cid) <= 40 and all(c in "0123456789abcdefABCDEF-" for c in cid)
+
+
+def _academy_hrefs(standalone: bool):
+    """URL scheme per mode: embedded rides /academy/*; standalone owns
+    the root (catalog at /, courses at /course/<id>)."""
+    if standalone:
+        return "/", (lambda cid: f"/course/{cid}")
+    return "/academy", (lambda cid: f"/academy/{cid}")
+
+
+def _academy_parse(path: str, standalone: bool):
+    """→ ('catalog', None) | ('course', id) | (None, None) for a 404."""
+    p = (path or "/").rstrip("/") or "/"
+    if standalone:
+        if p == "/" or p == "/academy":
+            return "catalog", None
+        for prefix in ("/course/", "/academy/"):
+            if p.startswith(prefix):
+                cid = p[len(prefix):]
+                if _academy_valid_id(cid):
+                    return "course", cid
+        return None, None
+    if p == "/academy":
+        return "catalog", None
+    if p.startswith("/academy/"):
+        cid = p[len("/academy/"):]
+        if _academy_valid_id(cid):
+            return "course", cid
+    return None, None
+
+
+def _academy_fmt_runtime(minutes: int) -> str:
+    if minutes <= 0:
+        return ""
+    if minutes < 60:
+        return f"{minutes} min"
+    h, m = divmod(minutes, 60)
+    return f"{h}h {m}m" if m else f"{h}h"
+
+
+_ACADEMY_CSS = """
+  * { box-sizing: border-box; margin: 0; }
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: #faf9f6; color: #1d1b16; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #12121a; color: #eceaf2; }
+    .card, .lesson { background: #1a1a26 !important; border-color: rgba(255,255,255,0.09) !important; }
+    .muted { color: #9a97a8 !important; }
+    .price-box { background: #1a1a26 !important; border-color: rgba(255,255,255,0.09) !important; }
+  }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 40px 22px 80px; }
+  .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 10px; }
+  h1 { font-size: clamp(26px, 5vw, 38px); line-height: 1.15; letter-spacing: -0.01em; margin-bottom: 12px; }
+  .muted { color: #6d6a60; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; margin-top: 28px; }
+  .card {
+    display: block; text-decoration: none; color: inherit;
+    background: #fff; border: 1px solid rgba(29,27,22,0.10); border-radius: 16px;
+    padding: 20px; transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .card:hover { transform: translateY(-3px); box-shadow: 0 14px 40px rgba(0,0,0,0.10); }
+  .card h2 { font-size: 17px; margin-bottom: 6px; line-height: 1.3; }
+  .card p { font-size: 13px; margin-bottom: 12px; }
+  .meta { font-size: 11.5px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .pill { display: inline-block; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .lessons { margin-top: 26px; display: flex; flex-direction: column; gap: 8px; }
+  .lesson {
+    display: flex; align-items: center; gap: 12px;
+    background: #fff; border: 1px solid rgba(29,27,22,0.10); border-radius: 12px;
+    padding: 12px 16px; font-size: 14px;
+  }
+  .lesson .n { font-weight: 700; opacity: .45; width: 22px; text-align: center; flex-shrink: 0; }
+  .lesson .t { flex: 1; min-width: 0; }
+  .lesson .d { font-size: 11.5px; flex-shrink: 0; }
+  .btn {
+    display: inline-block; padding: 14px 30px; border-radius: 12px;
+    font-weight: 700; font-size: 15px; text-decoration: none; color: #fff;
+    text-align: center;
+  }
+  .price-box {
+    margin-top: 30px; padding: 22px; border-radius: 16px;
+    background: #fff; border: 1px solid rgba(29,27,22,0.10);
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  }
+  .price { font-size: 30px; font-weight: 800; letter-spacing: -0.01em; }
+  .back { font-size: 13px; text-decoration: none; font-weight: 600; }
+  .foot { margin-top: 54px; font-size: 11.5px; text-align: center; }
+"""
+
+
+async def _academy_brand(client, biz_id) -> tuple:
+    """(business_name, accent) — service-role read, warm fallback."""
+    name, accent = "The Academy", "#B4762A"
+    try:
+        rows = await _sb_service(
+            client, f"/businesses?id=eq.{biz_id}&select=name,settings&limit=1") or []
+        if rows:
+            name = (rows[0].get("name") or "").strip() or name
+            bk = (rows[0].get("settings") or {}).get("brand_kit") or {}
+            bc = (bk.get("primary_color") or "").strip() if isinstance(bk, dict) else ""
+            if bc.startswith("#") and len(bc) in (4, 7):
+                accent = bc
+    except Exception:
+        pass
+    return name, accent
+
+
+async def _serve_academy(client, biz_id, path: str, standalone: bool,
+                         main_slug: str = "") -> HTMLResponse:
+    """Render the academy catalog or a course landing page."""
+    kind, course_id = _academy_parse(path, standalone)
+    catalog_href, course_href = _academy_hrefs(standalone)
+    biz_name, accent = await _academy_brand(client, biz_id)
+    safe_biz = _esc(biz_name)
+    main_href = "/" if not standalone else (
+        f"https://{main_slug}.mysolutionist.app" if main_slug else "")
+
+    if kind == "course" and course_id:
+        crows = await _sb_service(
+            client,
+            f"/academy_courses?id=eq.{course_id}&business_id=eq.{biz_id}"
+            f"&status=eq.published&limit=1"
+            f"&select=id,title,description,drip_mode,product_id") or []
+        if crows:
+            course = crows[0]
+            lessons = await _sb_service(
+                client,
+                f"/academy_lessons?course_id=eq.{course_id}"
+                f"&order=sort_order.asc&limit=60"
+                f"&select=title,duration_minutes,lesson_type") or []
+            price_html = ""
+            product_id = course.get("product_id")
+            if product_id:
+                prows = await _sb_service(
+                    client,
+                    f"/products?id=eq.{product_id}&limit=1"
+                    f"&select=price,stripe_payment_url") or []
+                if prows and (prows[0].get("stripe_payment_url") or "").strip():
+                    price_val = prows[0].get("price")
+                    price_str = f"${int(round(float(price_val))):,}" if price_val else ""
+                    price_html = f"""
+  <div class="price-box">
+    <div>
+      <div class="price">{_esc(price_str)}</div>
+      <div class="muted" style="font-size:12px">one-time &middot; instant access</div>
+    </div>
+    <a class="btn" style="background:{accent}" href="{_esc(prows[0]['stripe_payment_url'])}"
+       target="_blank" rel="noopener">Enroll now</a>
+  </div>"""
+            if not price_html:
+                contact_href = main_href or catalog_href
+                price_html = f"""
+  <div class="price-box">
+    <div class="muted" style="font-size:13.5px">Enrollment is personal &mdash; reach out and {safe_biz} will get you started.</div>
+    <a class="btn" style="background:{accent}" href="{_esc(contact_href)}">Get in touch</a>
+  </div>"""
+            total_min = sum(int(l.get("duration_minutes") or 0) for l in lessons)
+            runtime = _academy_fmt_runtime(total_min)
+            drip = course.get("drip_mode") or "none"
+            drip_note = (
+                "New material unlocks each week after you join." if drip == "weekly"
+                else "Material unlocks on a guided schedule after you join." if drip == "custom"
+                else "Everything is available the moment you join.")
+            lesson_rows = "".join(
+                f'<div class="lesson"><span class="n">{i + 1}</span>'
+                f'<span class="t">{_esc(l.get("title") or "Lesson")}</span>'
+                f'<span class="d muted">{_esc(_academy_fmt_runtime(int(l.get("duration_minutes") or 0)))}</span></div>'
+                for i, l in enumerate(lessons))
+            html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{_esc(course.get("title") or "Course")} &mdash; {safe_biz}</title>
+<style>{_ACADEMY_CSS}</style></head>
+<body><div class="wrap">
+  <a class="back" style="color:{accent}" href="{_esc(catalog_href)}">&larr; All courses</a>
+  <div style="height:26px"></div>
+  <div class="eyebrow" style="color:{accent}">{safe_biz} &middot; Academy</div>
+  <h1>{_esc(course.get("title") or "Course")}</h1>
+  <p class="muted" style="font-size:15.5px;max-width:600px">{_esc(course.get("description") or "")}</p>
+  <div class="meta muted" style="margin-top:14px">
+    <span>{len(lessons)} lesson{"s" if len(lessons) != 1 else ""}</span>
+    {f'<span>&middot; {_esc(runtime)}</span>' if runtime else ''}
+    <span>&middot; {_esc(drip_note)}</span>
+  </div>
+  {price_html}
+  <div class="lessons">{lesson_rows}</div>
+  <div class="foot muted">Powered by The Solutionist System</div>
+</div></body></html>"""
+            html = _inject_brand_meta(html, biz_id)
+            return HTMLResponse(content=html, media_type="text/html",
+                                headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+        kind = None  # course missing/unpublished → styled 404 below
+
+    if kind == "catalog":
+        courses = await _sb_service(
+            client,
+            f"/academy_courses?business_id=eq.{biz_id}&status=eq.published"
+            f"&order=created_at.desc&limit=50"
+            f"&select=id,title,description,product_id") or []
+        lesson_stats: Dict[str, Dict[str, int]] = {}
+        price_by_product: Dict[str, str] = {}
+        if courses:
+            ids = ",".join(c["id"] for c in courses)
+            lrows = await _sb_service(
+                client,
+                f"/academy_lessons?course_id=in.({ids})"
+                f"&select=course_id,duration_minutes&limit=1000") or []
+            for l in lrows:
+                s = lesson_stats.setdefault(l["course_id"], {"n": 0, "min": 0})
+                s["n"] += 1
+                s["min"] += int(l.get("duration_minutes") or 0)
+            pids = [c.get("product_id") for c in courses if c.get("product_id")]
+            if pids:
+                prows = await _sb_service(
+                    client,
+                    f"/products?id=in.({','.join(pids)})&select=id,price,stripe_payment_url") or []
+                for p in prows:
+                    if (p.get("stripe_payment_url") or "").strip() and p.get("price"):
+                        price_by_product[p["id"]] = f"${int(round(float(p['price']))):,}"
+        cards = ""
+        for c in courses:
+            s = lesson_stats.get(c["id"], {"n": 0, "min": 0})
+            runtime = _academy_fmt_runtime(s["min"])
+            price = price_by_product.get(c.get("product_id") or "")
+            price_pill = (
+                f'<span class="pill" style="background:{accent}1a;color:{accent}">{_esc(price)}</span>'
+                if price else "")
+            cards += f"""
+  <a class="card" href="{_esc(course_href(c["id"]))}">
+    <h2>{_esc(c.get("title") or "Course")}</h2>
+    <p class="muted">{_esc((c.get("description") or "")[:160])}</p>
+    <div class="meta muted">
+      <span>{s["n"]} lesson{"s" if s["n"] != 1 else ""}</span>
+      {f'<span>&middot; {_esc(runtime)}</span>' if runtime else ''}
+      <span style="margin-left:auto">{price_pill}</span>
+    </div>
+  </a>"""
+        empty = "" if courses else (
+            '<p class="muted" style="margin-top:30px">New courses are on the way &mdash; check back soon.</p>')
+        main_link = (
+            f'<a class="back" style="color:{accent}" href="{_esc(main_href)}">&larr; {safe_biz}</a>'
+            if main_href else "")
+        html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Academy &mdash; {safe_biz}</title>
+<style>{_ACADEMY_CSS}</style></head>
+<body><div class="wrap">
+  {main_link}
+  <div style="height:26px"></div>
+  <div class="eyebrow" style="color:{accent}">{safe_biz}</div>
+  <h1>The Academy</h1>
+  <p class="muted" style="font-size:15.5px;max-width:560px">Courses taught by {safe_biz} &mdash; learn at your own pace, with real accountability.</p>
+  <div class="cards">{cards}</div>
+  {empty}
+  <div class="foot muted">Powered by The Solutionist System</div>
+</div></body></html>"""
+        html = _inject_brand_meta(html, biz_id)
+        return HTMLResponse(content=html, media_type="text/html",
+                            headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+
+    # Unknown academy path — a small branded 404 that offers the catalog.
+    html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Not found &mdash; {safe_biz}</title>
+<style>{_ACADEMY_CSS}</style></head>
+<body><div class="wrap" style="text-align:center;padding-top:90px">
+  <div class="eyebrow" style="color:{accent}">{safe_biz} &middot; Academy</div>
+  <h1>That page isn't here</h1>
+  <p class="muted">The course may have been unpublished or the link mistyped.</p>
+  <div style="height:22px"></div>
+  <a class="btn" style="background:{accent}" href="{_esc(catalog_href)}">See all courses</a>
+</div></body></html>"""
+    return HTMLResponse(content=html, status_code=404, media_type="text/html",
+                        headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+
+
 async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
     """Shared logic: look up site by slug and return HTML.
     Pass 3: when site_config.use_smart_sites is true, attempt Smart Sites
@@ -4910,6 +5202,21 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
             f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
             f"&select=html_content,business_id,site_config")
         if not sites:
+            # Academy Phase 4 — a dedicated academy subdomain has no row
+            # of its own; it lives in site_config.academy_slug on the
+            # business's main site row.
+            arow = await _sb(client,
+                f"/business_sites?site_config->>academy_slug=eq.{slug}"
+                f"&order=updated_at.desc&limit=1"
+                f"&select=slug,business_id,site_config")
+            if arow:
+                a_cfg = arow[0].get("site_config") or {}
+                a_biz = arow[0].get("business_id")
+                if a_cfg.get("offline"):
+                    return await _render_offline_page(client, a_biz)
+                return await _serve_academy(
+                    client, a_biz, path, standalone=True,
+                    main_slug=arow[0].get("slug") or "")
             raise HTTPException(404, "Site not found")
         site = sites[0]
         biz_id = site.get("business_id")
@@ -4928,6 +5235,9 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         normalized_path = path.rstrip("/") or "/"
         if normalized_path == "/book":
             return await _serve_booking_page(client, biz_id, slug)
+        # ─── Academy Phase 4 — /academy catalog + course pages ─────
+        if normalized_path == "/academy" or normalized_path.startswith("/academy/"):
+            return await _serve_academy(client, biz_id, normalized_path, standalone=False)
         if path == "/" and not site.get("html_content"):
             return RedirectResponse(url="/book", status_code=307)
 
@@ -4968,6 +5278,20 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
             f"&order=updated_at.desc&limit=1"
             f"&select=html_content,slug,business_id,site_config")
         if not sites:
+            # Academy Phase 4 — a domain can point at the ACADEMY as its
+            # own standalone site (site_config.academy_domain).
+            arow = await _sb(client,
+                f"/business_sites?site_config->>academy_domain=eq.{domain}"
+                f"&order=updated_at.desc&limit=1"
+                f"&select=slug,business_id,site_config")
+            if arow:
+                a_cfg = arow[0].get("site_config") or {}
+                a_biz = arow[0].get("business_id")
+                if a_cfg.get("offline"):
+                    return await _render_offline_page(client, a_biz)
+                return await _serve_academy(
+                    client, a_biz, path, standalone=True,
+                    main_slug=arow[0].get("slug") or "")
             return None  # type: ignore
         site = sites[0]
         biz_id = site.get("business_id")
@@ -4976,6 +5300,12 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         _cfg = site.get("site_config") or {}
         if _cfg.get("offline"):
             return await _render_offline_page(client, biz_id)
+
+        # Academy subpaths work on custom domains too (parity with the
+        # subdomain path).
+        _norm = path.rstrip("/") or "/"
+        if _norm == "/academy" or _norm.startswith("/academy/"):
+            return await _serve_academy(client, biz_id, _norm, standalone=False)
 
         if _use_smart_sites(site) and biz_id:
             products = await _sb(client,
