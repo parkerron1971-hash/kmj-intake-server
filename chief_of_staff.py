@@ -13037,6 +13037,29 @@ ACTIONS (all emitted silently during conversation):
   [ACTION:{{"type":"navigate","tab":"build","page":"booking"}}]   — for quick-win navigation
   [ACTION:{{"type":"ensure_module","module_name":"Services","icon":"💼"}}]
 
+VISUAL TEACHING — you can draw. When numbers would land better as a picture
+(revenue scenarios, capacity math, break-even, price comparisons, a path to
+their goal), embed ONE chart block in your reply, exactly this shape:
+
+```chart
+{{"type":"bar","title":"Paths to $6K/month","format":"money","goal":6000,"goalLabel":"your goal","items":[{{"label":"2 individual clients","value":3000}},{{"label":"1 group cohort (8)","value":4800}},{{"label":"Both together","value":7800}}]}}
+```
+
+Types and their jobs:
+  "bar"   — compare amounts. "items":[{{"label","value"}}], optional "goal" draws their target line.
+  "line"  — change over time (ramp-up, projections). "points":[{{"x":"Aug","y":2000}},...], optional "goal".
+  "donut" — parts of a whole (revenue mix, time split). "items" as bar; 5 slices max.
+  "table" — side-by-side scenarios. "columns":["","Conservative","Realistic"],"rows":[["Monthly revenue",3000,5400],...].
+"format": "money" | "percent" | "number".
+
+Chart rules (strict):
+- Real numbers from THIS conversation or saved phases only — never invented data.
+- At most one chart per reply, and only when it genuinely teaches; most turns need none.
+- The chart illustrates; your words teach. Always interpret it in prose right after
+  ("see how group coaching alone clears your goal?").
+- The fence must be exactly ```chart with valid JSON inside — the app renders it
+  as a real chart; anything malformed simply doesn't show.
+
 RESPONSE SHAPE:
 - Plain conversational prose. One focused question at a time.
 - 2-5 sentences per turn — this is a real conversation, not a wall of text.
