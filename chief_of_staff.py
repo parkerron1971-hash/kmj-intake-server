@@ -12602,7 +12602,7 @@ ACTIONS — NAVIGATION + MEMORY:
     • tab:"home" — the Home dashboard / command center (no sub). "Take me home", "back to my dashboard".
     • tab:"operate" subs: dashboard | queue | contacts | email | sms | projects | calendar | invoices | payments | bookkeeping | tasks | documents | agents | offerings-manager
     • tab:"grow" subs: dashboard | briefing | insights | goals | revenue | retention | reviews | content | funnel | timeline
-    • tab:"build" pages (use "page", not "sub"): strategy-track | business-profile | about-me | foundation-track | brand | media-library | print-materials | my-site | link-page | booking | intake-forms | custom-modules | module-builder | social-media | email-templates | resources | products | analytics | integrations | settings | module:<uuid>
+    • tab:"build" pages (use "page", not "sub"): strategy-track | course-studio | business-profile | about-me | foundation-track | brand | media-library | print-materials | my-site | link-page | booking | intake-forms | custom-modules | module-builder | social-media | email-templates | resources | products | analytics | integrations | settings | module:<uuid>
   — Pick the closest destination even for indirect asks ("where do I change my colors?" → build/brand; "I want to text a client" → operate/sms; "show me my website" → build/my-site).
   [ACTION:{{"type":"open_documents"}}]   — shortcut: navigate straight to the Documents tab.
   [ACTION:{{"type":"open_calendar"}}]    — shortcut: navigate straight to the Calendar tab.
