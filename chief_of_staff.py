@@ -1849,9 +1849,13 @@ def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
             j += 1
 
         if depth != 0 or j >= n:
-            # Unbalanced — keep literal and move on
-            out_parts.append(text[start:json_start + 1])
-            i = json_start + 1
+            # Truncated tag — generation was cut mid-JSON. The old
+            # behavior emitted the literal prefix and then re-scanned
+            # INSIDE the JSON, leaking the body into user-visible
+            # text. A tag that opens [ACTION:{ is never meant to be
+            # seen: drop the fragment through end-of-text. (2026-07-17)
+            print(f"[Chief Parser] Truncated tag at {start} — dropping fragment", flush=True)
+            i = n
             continue
 
         json_str = text[json_start:j + 1]
@@ -1874,37 +1878,27 @@ def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
             flush=True,
         )
 
-        if bracket_found:
-            parsed = _try_parse_action_json(json_str)
-            print(
-                f"[Chief Parser] Parse result: "
-                f"{'SUCCESS type=' + str(parsed.get('type')) if isinstance(parsed, dict) else 'FAILED'}",
-                flush=True,
-            )
-            if isinstance(parsed, dict) and parsed.get("type"):
-                actions.append(parsed)
-                # Swallow the entire [ACTION:{...}] and any trailing space
-                after = k + 1
-                while after < n and text[after] in (" ", "\n", "\r", "\t"):
-                    after += 1
-                i = after
-                continue
-            # Structural shape was [ACTION:{...}] but JSON was too broken
-            # to recover. Drop the tag so the malformed marker doesn't
-            # leak into the user-facing text.
-            after = k + 1
-            while after < n and text[after] in (" ", "\n", "\r", "\t"):
-                after += 1
-            i = after
-            continue
-
-        # No closing ']' located — emit the original literal and move on.
+        # Missing-']' recovery (2026-07-17, live repro): the model
+        # sometimes emits [ACTION:{...} with no closing bracket. The
+        # old code printed the RAW TAG into the chat and skipped
+        # execution. The JSON is balanced either way — parse it; the
+        # bracket is optional. Tag-shaped text NEVER reaches the
+        # practitioner: valid → execute + swallow, broken → drop.
+        parsed = _try_parse_action_json(json_str)
         print(
-            f"[Chief Parser] No closing bracket found within {k - (j + 1)} chars after }} — emitting literal",
+            f"[Chief Parser] Parse result: "
+            f"{'SUCCESS type=' + str(parsed.get('type')) if isinstance(parsed, dict) else 'FAILED'}"
+            + ("" if bracket_found else " (recovered — no closing bracket)"),
             flush=True,
         )
-        out_parts.append(text[start:k + 1 if k < n else n])
-        i = k + 1 if k < n else n
+        if isinstance(parsed, dict) and parsed.get("type"):
+            actions.append(parsed)
+        # Swallow through the ']' when present, else through the '}'
+        # plus any stray separators the k-scan already skipped.
+        after = (k + 1) if bracket_found else k
+        while after < n and text[after] in (" ", "\n", "\r", "\t"):
+            after += 1
+        i = after
 
     cleaned = "".join(out_parts).strip()
     cleaned = _scrub_response_text(cleaned)
