@@ -1668,7 +1668,7 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
 
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
-  Voice profile: {json.dumps(biz.get('voice_profile') or {})[:500]}{et_summary}{autopilot_block}
+  Voice profile: {json.dumps(biz.get('voice_profile') or {})[:1200]}{et_summary}{autopilot_block}
 
 CONTACTS: {ctx['contacts_total']} total
   by_status: {json.dumps(ctx['contacts_by_status'])}
@@ -9320,6 +9320,52 @@ async def handle_update_business_profile_field(client, biz, action) -> Dict:
     }
 
 
+# ─── update_voice_profile ──────────────────────────────────────────────
+# Voice notes (2026-07-17, Kevin's ruling): brand_voice is a single enum
+# and can't hold nuance like "warm overall, but blend ministry and
+# corporate language depending on the client" — that was landing in
+# remember() where no surface displays it. These notes merge into
+# businesses.voice_profile (ALREADY injected into every Chief prompt),
+# render in About My Business → My Voice, and are practitioner-editable
+# there too. Chief writes them directly instead of saying "I don't have
+# a direct action for that."
+
+_VOICE_PROFILE_FIELDS = {"tone", "description", "audience_note", "signature_phrases", "avoid"}
+
+
+async def handle_update_voice_profile(client, biz, action) -> Dict:
+    """Merge free-text voice fields into businesses.voice_profile."""
+    patch = action.get("patch") or {}
+    if not patch and action.get("field"):
+        patch = {action.get("field"): action.get("value")}
+    patch = {
+        k: str(v).strip()
+        for k, v in patch.items()
+        if k in _VOICE_PROFILE_FIELDS and v is not None and str(v).strip()
+    }
+    if not patch:
+        return _fail("update_voice_profile",
+                     f"patch required with keys from: {', '.join(sorted(_VOICE_PROFILE_FIELDS))}")
+
+    current = dict(biz.get("voice_profile") or {})
+    current.update(patch)
+    try:
+        await _sb(client, "PATCH", f"/businesses?id=eq.{biz['id']}",
+                  {"voice_profile": current})
+    except Exception as e:
+        return _fail("update_voice_profile", str(e))
+
+    what = ", ".join(sorted(patch.keys()))
+    return {
+        "type": "update_voice_profile",
+        "result": f"voice profile updated ({what})",
+        "label": "Voice notes saved",
+        "frontend_event": {"name": "solutionist-voice-profile-changed", "detail": {}},
+        "nav": _nav("build", "business-profile"),
+        "toast": {"message": "Saved to About My Business → My Voice.", "kind": "success"},
+    }
+
+
 # ─── send_report ───────────────────────────────────────────────────────
 # Lets the Chief actually email reports to a recipient (typically the
 # user's accountant) without bouncing through the UI. The user can say
@@ -10099,6 +10145,7 @@ ACTION_HANDLERS = {
     "set_timer":                  handle_set_timer,
     # JIT capture (Build 2)
     "update_business_profile_field": handle_update_business_profile_field,
+    "update_voice_profile": handle_update_voice_profile,
     # Practitioner profile (Build 3)
     "update_practitioner_profile_field": handle_update_practitioner_profile_field,
     # Brand Engine v1
@@ -12801,6 +12848,7 @@ ACTIONS — NAVIGATION + MEMORY:
   [ACTION:{{"type":"show_revenue"}}]     — opens GROW → Revenue (the canonical Revenue Analytics surface: Allocator, Expenses, planned-vs-actual, Export, Send to Accountant).
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
   [ACTION:{{"type":"update_business_profile_field","field_path":"governing_state|produces_deliverables|sensitive_areas.health_advice|sensitive_areas.session_recording|sensitive_areas.physical_activity","value":"<their answer>"}}]
+  [ACTION:{{"type":"update_voice_profile","patch":{{"description":"...","audience_note":"...","avoid":"...","signature_phrases":"..."}}}}]  — VOICE NOTES: when the practitioner describes HOW they want to sound or WHO they serve — tone blends the brand_voice enum can't hold ("warm, but mix ministry and corporate language depending on the client"), audience framing ("faith-based and secular clients alike"), phrases they love, words to avoid — save it HERE, not just in remember(). Include only the keys they actually addressed. These notes live in About My Business → My Voice, the practitioner can edit them there, and they are in your context on every future draft. brand_voice (the single enum) still goes through update_business_profile_field.
   — used ONLY after the user has explicitly confirmed a value for a previously-missing profile field. Never emit on speculation. The JIT-CAPTURE PRIORITY block (when present at the top of this prompt) tells you which field to ask about and what brand-voice phrasing to use.
   [ACTION:{{"type":"update_practitioner_profile_field","field_path":"full_legal_name|preferred_title|timezone|working_hours_start|working_hours_end|primary_accountant_name","value":"<their answer>"}}]
   — used ONLY after the user has explicitly confirmed a value for a practitioner-level field (about the human, not the business). Practitioner data follows the user across ALL their businesses — same human, same legal name, same timezone, same accountant. Never emit on speculation.
