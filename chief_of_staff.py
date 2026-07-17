@@ -529,22 +529,40 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
             duration_ms=int(time.time() * 1000) - started_ms)
         return "".join(full_parts).strip()
 
-    try:
-        resp = await client.post(ANTHROPIC_API_URL, headers={
-            "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json",
-        }, json=payload, timeout=HTTP_TIMEOUT)
-    except httpx.HTTPError as e:
-        logger.warning(f"Claude request failed: {e}")
-        await log_api_usage(endpoint="/chief/backend", model=model,
-            input_tokens=0, output_tokens=0, business_id=business_id,
-            duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=str(e))
-        return ""
-    if resp.status_code >= 400:
-        logger.warning(f"Claude error: {resp.status_code} {resp.text[:300]}")
+    # Transient-failure retry (2026-07-17, Kevin's live repro: back-to-back
+    # "trouble connecting" turns). Rate limits (429), overload (529), and
+    # transport hiccups usually clear within seconds — one failure was
+    # going straight to the user-facing fallback. Retry up to twice with
+    # backoff. Hard client errors (400/401/403/404) are OUR bugs or key
+    # problems — never retried, fail fast and loud in the logs.
+    resp = None
+    last_err = ""
+    for attempt in range(3):
+        if attempt:
+            await asyncio.sleep(1.5 * attempt)
+        try:
+            resp = await client.post(ANTHROPIC_API_URL, headers={
+                "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json",
+            }, json=payload, timeout=HTTP_TIMEOUT)
+        except httpx.HTTPError as e:
+            last_err = str(e)
+            logger.warning(f"Claude request failed (attempt {attempt + 1}/3): {e}")
+            resp = None
+            continue
+        if resp.status_code >= 400:
+            last_err = f"{resp.status_code}"
+            logger.warning(f"Claude error (attempt {attempt + 1}/3): {resp.status_code} {resp.text[:300]}")
+            if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
+                resp = None
+                continue
+            resp = None
+            break
+        break
+    if resp is None:
         await log_api_usage(endpoint="/chief/backend", model=model,
             input_tokens=0, output_tokens=0, business_id=business_id,
             duration_ms=int(time.time() * 1000) - started_ms, ok=False,
-            error=f"{resp.status_code}")
+            error=last_err or "exhausted retries")
         return ""
     data = resp.json()
     usage = data.get("usage", {}) if isinstance(data, dict) else {}
