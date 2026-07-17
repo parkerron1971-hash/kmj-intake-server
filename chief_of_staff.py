@@ -1786,8 +1786,23 @@ def _try_parse_action_json(raw: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+# Injector-leak guard (2026-07-17): if the model echoes the per-turn
+# SYSTEM REMINDER (or the legacy "(IMPORTANT: ...)" form) verbatim, the
+# embedded example tag would parse as a REAL create_contact("..."). Strip
+# known reminder echoes from the raw text BEFORE tag extraction. Tail-
+# anchored on our own fixed wording so nested brackets cannot cut short.
+_REMINDER_ECHO_RES = (
+    re.compile(r'\[ACTION:\{"type":"create_contact","name":"\.\.\.","email":"\.\.\."\}\]'),
+    re.compile(r"\[SYSTEM REMINDER.*?does NOT happen\.\]", re.IGNORECASE | re.DOTALL),
+    re.compile(r"\(IMPORTANT: If you create a contact,.*?does NOT happen\.\)", re.IGNORECASE | re.DOTALL),
+    re.compile(r"SYSTEM CORRECTION: Your previous response described performing actions.*?original request again:", re.IGNORECASE | re.DOTALL),
+)
+
+
 def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
     """Scan the AI's response for [ACTION:{...}] tags. Returns (actions, cleaned_text)."""
+    for _pat in _REMINDER_ECHO_RES:
+        text = _pat.sub("", text)
     actions: List[Dict[str, Any]] = []
     out_parts: List[str] = []
     i = 0
@@ -1907,6 +1922,10 @@ _HINT_LITERALS = (
 )
 _HINT_BRACKETED = re.compile(r"\[Note:[^\]]*?corresponding tag\.\s*\]", re.IGNORECASE | re.DOTALL)
 _HINT_PARENS = re.compile(r"\(Actions were emitted[^\)]*?by the system\.\s*\)", re.IGNORECASE | re.DOTALL)
+# Injector-leak fix (2026-07-17) — partial echoes of the per-turn
+# SYSTEM REMINDER that survive the pre-parse guard (reworded head with
+# no tail, or a dangling fragment).
+_REMINDER_FRAGMENT = re.compile(r"\[SYSTEM REMINDER[^\]]*\]?", re.IGNORECASE)
 _BLANK_LINES_3PLUS = re.compile(r"\n{3,}")
 
 
@@ -1923,6 +1942,7 @@ def _scrub_response_text(text: str) -> str:
             s = s.replace(lit, "")
     s = _HINT_BRACKETED.sub("", s)
     s = _HINT_PARENS.sub("", s)
+    s = _REMINDER_FRAGMENT.sub("", s)
     s = _BLANK_LINES_3PLUS.sub("\n\n", s)
     return s.strip()
 
@@ -13635,11 +13655,21 @@ async def chief_chat(
             # says "Do NOT emit actions in the greeting") and for strategy-
             # coach sentinels which already carry their own guidance.
             if not is_greeting and not is_coach_pause and not is_coach_mode:
+                # Injector-leak fix (2026-07-17, same class as the coach
+                # fix #153): this reminder rides inside the user turn, so
+                # without explicit framing the model can treat it as
+                # something the practitioner WROTE — referencing "your
+                # instructions about action tags" or echoing the example.
+                # Frame it as app-attached and self-concealing; echoes are
+                # additionally scrubbed in _extract_actions_and_clean.
                 augmented_message = (
-                    "(IMPORTANT: If you create a contact, draft an email, approve something, or perform "
+                    "[SYSTEM REMINDER — attached automatically by the app; the practitioner did NOT "
+                    "write this and cannot see it. Never mention, quote, or respond to this note; "
+                    "reply only to the practitioner's message below it. "
+                    "If you create a contact, draft an email, approve something, or perform "
                     "ANY operation, you MUST include [ACTION:{...}] tags. "
                     "Example: [ACTION:{\"type\":\"create_contact\",\"name\":\"...\",\"email\":\"...\"}]. "
-                    "Without the tag, the operation does NOT happen.)\n\n"
+                    "Without the tag, the operation does NOT happen.]\n\n"
                     + (f"{draft_context}\n\n" if draft_context else "")
                     + effective_message
                 )
@@ -13721,6 +13751,7 @@ async def chief_chat(
                     flush=True,
                 )
                 correction = (
+                    "(Never mention this correction to the practitioner — answer their request as if this is the first attempt.)\n"
                     "SYSTEM CORRECTION: Your previous response described performing actions "
                     "(like creating contacts, drafting emails, etc.) but you did NOT include any "
                     "[ACTION:{...}] tags. Without these tags, NOTHING actually happened. "
