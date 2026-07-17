@@ -9361,8 +9361,8 @@ async def handle_update_voice_profile(client, biz, action) -> Dict:
         "result": f"voice profile updated ({what})",
         "label": "Voice notes saved",
         "frontend_event": {"name": "solutionist-voice-profile-changed", "detail": {}},
-        "nav": _nav("build", "business-profile"),
-        "toast": {"message": "Saved to About My Business → My Voice.", "kind": "success"},
+        "nav": _nav("build", "about-me"),
+        "toast": {"message": "Saved to About Me → My Voice.", "kind": "success"},
     }
 
 
@@ -12848,7 +12848,7 @@ ACTIONS — NAVIGATION + MEMORY:
   [ACTION:{{"type":"show_revenue"}}]     — opens GROW → Revenue (the canonical Revenue Analytics surface: Allocator, Expenses, planned-vs-actual, Export, Send to Accountant).
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
   [ACTION:{{"type":"update_business_profile_field","field_path":"governing_state|produces_deliverables|sensitive_areas.health_advice|sensitive_areas.session_recording|sensitive_areas.physical_activity","value":"<their answer>"}}]
-  [ACTION:{{"type":"update_voice_profile","patch":{{"description":"...","audience_note":"...","avoid":"...","signature_phrases":"..."}}}}]  — VOICE NOTES: when the practitioner describes HOW they want to sound or WHO they serve — tone blends the brand_voice enum can't hold ("warm, but mix ministry and corporate language depending on the client"), audience framing ("faith-based and secular clients alike"), phrases they love, words to avoid — save it HERE, not just in remember(). Include only the keys they actually addressed. These notes live in About My Business → My Voice, the practitioner can edit them there, and they are in your context on every future draft. brand_voice (the single enum) still goes through update_business_profile_field.
+  [ACTION:{{"type":"update_voice_profile","patch":{{"description":"...","audience_note":"...","avoid":"...","signature_phrases":"..."}}}}]  — VOICE NOTES: when the practitioner describes HOW they want to sound or WHO they serve — tone blends the brand_voice enum can't hold ("warm, but mix ministry and corporate language depending on the client"), audience framing ("faith-based and secular clients alike"), phrases they love, words to avoid — save it HERE, not just in remember(). Include only the keys they actually addressed. These notes live in About Me → My Voice, the practitioner can edit them there, and they are in your context on every future draft. brand_voice (the single enum) still goes through update_business_profile_field.
   — used ONLY after the user has explicitly confirmed a value for a previously-missing profile field. Never emit on speculation. The JIT-CAPTURE PRIORITY block (when present at the top of this prompt) tells you which field to ask about and what brand-voice phrasing to use.
   [ACTION:{{"type":"update_practitioner_profile_field","field_path":"full_legal_name|preferred_title|timezone|working_hours_start|working_hours_end|primary_accountant_name","value":"<their answer>"}}]
   — used ONLY after the user has explicitly confirmed a value for a practitioner-level field (about the human, not the business). Practitioner data follows the user across ALL their businesses — same human, same legal name, same timezone, same accountant. Never emit on speculation.
