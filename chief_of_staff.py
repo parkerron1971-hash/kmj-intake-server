@@ -10719,13 +10719,85 @@ STRATEGY_PHASE_LABELS = {
 }
 
 
+# Strategy → profile bridge (2026-07-17, Kevin's ruling): the coach's
+# deliverables must reach the business profile. Two legs — the
+# operational Chief gets the ACTUAL deliverable content (this digest)
+# so "fill my profile from my Strategy Track" works, and the coach gets
+# update_business_profile_field in its catalog to sync facts as it
+# saves them. Values are truncated hard so the digest stays cheap.
+_PROFILE_FIELD_MENU = (
+    "business_subtype (free text) | service_models (array from: one_on_one, group_program, "
+    "done_for_you, done_with_you, retainer, course_digital, event_workshop) | pricing_models "
+    "(array from: hourly, package, retainer, milestone, subscription, one_time, tiered) | "
+    "typical_engagement_length (one of: single_session, short_project, package_3_12_months, "
+    "ongoing_retainer) | produces_deliverables (true/false) | deliverables_description (text) | "
+    "brand_voice (one of: formal, warm, casual, ministry, corporate, direct) | governing_state (2-letter code)"
+)
+
+
+def _strategy_profile_fill_block(track: Optional[Dict[str, Any]]) -> str:
+    """Deliverable digest for the OPERATIONAL Chief prompt. Empty string
+    when the track has no captured content yet."""
+    if not track:
+        return ""
+
+    def _t(v: Any, n: int = 220) -> str:
+        s = str(v).strip().replace("\n", " ")
+        return (s[: n - 1] + "…") if len(s) > n else s
+
+    lines: List[str] = []
+    disc = (track.get("phases") or {}).get("discovery") or {}
+    if disc.get("summary"):
+        lines.append(f"  Idea: {_t(disc['summary'])}")
+    if disc.get("target_audience"):
+        lines.append(f"  Target audience: {_t(disc['target_audience'])}")
+    if disc.get("unique_value_proposition"):
+        lines.append(f"  Unique value: {_t(disc['unique_value_proposition'])}")
+    bm = track.get("business_model") or {}
+    for key, label in (
+        ("value_proposition", "Value proposition"),
+        ("customer_segments", "Customer segments"),
+        ("revenue_streams", "Revenue streams"),
+        ("channels", "Channels"),
+    ):
+        if bm.get(key):
+            lines.append(f"  {label}: {_t(bm[key])}")
+    tiers = (track.get("pricing_strategy") or {}).get("tiers") or []
+    if tiers:
+        lines.append("  Pricing tiers: " + "; ".join(
+            f"{t.get('name', '?')} ${t.get('price', '?')}" for t in tiers[:5] if isinstance(t, dict)))
+    pkgs = track.get("service_packages") or []
+    if pkgs:
+        lines.append("  Service packages: " + "; ".join(
+            _t(pk.get("name", "?"), 60)
+            + (f" ({_t(pk.get('delivery_format', ''), 40)})" if pk.get("delivery_format") else "")
+            for pk in pkgs[:5] if isinstance(pk, dict)))
+    if not lines:
+        return ""
+    return (
+        "STRATEGY TRACK DELIVERABLES (captured in their coaching sessions — real data, use it):\n"
+        + "\n".join(lines)
+        + "\n  PROFILE FILL: when the practitioner asks you to fill their business profile from the "
+        "Strategy Track (or a profile gap is answered by the data above), propose the values you found, "
+        "and once they confirm, emit one [ACTION:{\"type\":\"update_business_profile_field\","
+        "\"field_path\":\"...\",\"value\":...}] per field.\n"
+        "  Valid field paths: " + _PROFILE_FIELD_MENU + "."
+    )
+
+
 def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]], mode: Optional[str] = None) -> str:
     settings = biz.get("settings") or {}
     track_mode = settings.get("track")
+    is_coach = mode == "strategy_coach"
     if track_mode not in ("strategy", "launched"):
+        # Not flagged onto the track — but a strategy row can still
+        # exist (mode flipped later, older businesses). The
+        # operational Chief still gets the deliverable digest so
+        # profile-fill works either way.
+        if not is_coach and track:
+            return _strategy_profile_fill_block(track)
         return ""
 
-    is_coach = mode == "strategy_coach"
 
     # Non-coach (normal Chief): stay in your lane and defer strategy questions.
     if not is_coach:
@@ -10747,6 +10819,9 @@ def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]],
             " Do NOT emit save_phase / save_pricing / save_packages / etc."
             " For operational questions (contacts, queue, agents, modules), answer normally."
         )
+        fill = _strategy_profile_fill_block(track)
+        if fill:
+            hint += "\n\n" + fill
         return hint
 
     # Coach mode is handled by _build_coach_prompt; return empty here so the
@@ -13150,6 +13225,7 @@ ACTIONS (all emitted silently during conversation):
   [ACTION:{{"type":"save_projections","scenarios":{{"conservative":{{...}},"realistic":{{...}},"optimistic":{{...}}}},"expenses":{{...}},"break_even":X}}]
   [ACTION:{{"type":"save_swot","strengths":"...","weaknesses":"...","opportunities":"...","threats":"..."}}]
   [ACTION:{{"type":"save_launch_plan","weeks":[{{"week":1,"theme":"Setup","actions":[{{"description":"...","system_link":"intake-forms"}}]}}]}}]
+  [ACTION:{{"type":"update_business_profile_field","field_path":"...","value":...}}]  — PROFILE SYNC: when a deliverable you just saved pins down a business-profile fact, also emit one of these per fact — silently, no confirmation needed (they just told you the answer). Valid field paths: business_subtype (free text) | service_models (array: one_on_one|group_program|done_for_you|done_with_you|retainer|course_digital|event_workshop) | pricing_models (array: hourly|package|retainer|milestone|subscription|one_time|tiered) | typical_engagement_length (single_session|short_project|package_3_12_months|ongoing_retainer) | produces_deliverables (true/false) | deliverables_description (text) | brand_voice (formal|warm|casual|ministry|corporate|direct) | governing_state (2-letter code). This keeps About My Business in sync with your strategy work — the practitioner never fills the same thing in twice.
   [ACTION:{{"type":"advance_phase","to":"market_research|business_model|pricing_strategy|service_packages|financial_projections|swot|launch_plan"}}]
   [ACTION:{{"type":"session_summary","summary":"Covered target audience and pricing bands","phases_progressed":["discovery","pricing_strategy"]}}]
   [ACTION:{{"type":"complete_strategy_track"}}]
