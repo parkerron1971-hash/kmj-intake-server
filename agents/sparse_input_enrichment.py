@@ -133,13 +133,14 @@ def enrich_intake(
     user_message = "\n".join(parts)
 
     try:
-        client = Anthropic(api_key=api_key)
-        msg = client.messages.create(
+        import site_llm
+        msg = site_llm.create_message(
             model=ENRICHMENT_MODEL,
             max_tokens=ENRICHMENT_MAX_TOKENS,
             temperature=ENRICHMENT_TEMPERATURE,
             system=ENRICHMENT_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
+            user_content=user_message,
+            task="sparse_enrichment",
         )
     except Exception as e:
         logger.warning(f"[enrichment] Anthropic call failed: {type(e).__name__}: {e}")
