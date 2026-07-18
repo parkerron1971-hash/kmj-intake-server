@@ -65,12 +65,30 @@ def _header_variant(ctx: Dict[str, Any]) -> str:
 def render_header(rendered_ids: List[str], ctx: Dict[str, Any]) -> Tuple[str, str]:
     """rendered_ids = module ids that actually produced HTML, in page
     order. Returns (header_html, header_css)."""
-    variant = _header_variant(ctx)
+    # Creative-capture arc (2026-07-18): a model-AUTHORED nav spec (see
+    # nav_spec.py) drives the bar when present — architecture + logo
+    # treatment + CTA style + link style + accent detail + CTA wording,
+    # ~576 legal combinations rendered by the hand-written CSS below.
+    # No/invalid spec (or SITE_NAV_SPEC=off) → the DNA-variant bars.
+    spec = ctx.get("nav_spec") if isinstance(ctx.get("nav_spec"), dict) else None
+    variant = (spec or {}).get("architecture") or _header_variant(ctx)
+    if variant not in ("classic", "split", "banner", "ghost"):
+        variant = _header_variant(ctx)
+    spec_classes = ""
+    if spec:
+        spec_classes = (
+            f" sxm-nav--cta-{spec.get('cta_style') or 'pill'}"
+            f" sxm-nav--links-{spec.get('link_style') or 'caps'}"
+            f" sxm-nav--accent-{spec.get('accent_detail') or 'underline'}"
+        )
     biz = ctx.get("business") or {}
     name = biz.get("name") or "Home"
     booking = ctx.get("booking") or {}
 
     logo_url = _pick_logo(ctx)
+    if spec and spec.get("logo_treatment") in ("wordmark", "monogram"):
+        # The author chose typography over the uploaded image.
+        logo_url = ""
     if logo_url:
         brand_inner = (f'<img class="sxm-header-logo" src="{safe_url(logo_url)}" '
                        f'alt="{safe(name)} logo">')
@@ -116,9 +134,11 @@ def render_header(rendered_ids: List[str], ctx: Dict[str, Any]) -> Tuple[str, st
         cta_href, cta_label = safe_url(booking["url"]), "Book now"
     else:
         cta_href, cta_label = "#contact", "Get in touch"
+    if spec and spec.get("cta_label"):
+        cta_label = safe(str(spec["cta_label"]))
 
     html = f"""
-<header class="sxm-header sxm-header--{variant}">
+<header class="sxm-header sxm-header--{variant}{spec_classes}">
   <div class="sxm-header-inner">
     <a class="sxm-header-brand" href="{brand_href}" aria-label="{safe(name)} — home">{brand_inner}</a>
     {nav_html}
@@ -238,5 +258,26 @@ html { scroll-padding-top: 84px; }
       background: color-mix(in srgb, var(--sx-bg) 78%, transparent);
       border-bottom-color: color-mix(in srgb, var(--sx-border) 70%, transparent); }
   }
-}"""
+}
+
+/* ── Authored-spec axes (nav_spec.py, 2026-07-18) — each class is one
+      independent decision the model composes; absent classes = today's
+      defaults, so the DNA-variant fallback renders unchanged. ── */
+.sxm-nav--cta-sharp .sxm-header-cta { border-radius: 0; }
+.sxm-nav--cta-ghost .sxm-header-cta { background: transparent;
+  color: var(--sx-text); box-shadow: inset 0 0 0 1.5px var(--sx-accent); }
+.sxm-nav--cta-text .sxm-header-cta { background: transparent;
+  color: var(--sx-accent); padding-left: 6px; padding-right: 6px;
+  box-shadow: none; }
+.sxm-nav--links-title .sxm-header-nav a { text-transform: none;
+  letter-spacing: .035em; font-size: .84rem; font-weight: 600; }
+.sxm-nav--links-lower .sxm-header-nav a { text-transform: lowercase;
+  letter-spacing: .09em; }
+.sxm-nav--accent-dot .sxm-header-brand::after { content: "";
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: var(--sx-accent); margin-left: 7px; align-self: flex-end;
+  margin-bottom: 6px; }
+.sxm-nav--accent-frame .sxm-header-cta { outline: 1px solid var(--sx-accent);
+  outline-offset: 3px; }
+.sxm-nav--accent-none .sxm-header-nav a::after { display: none; }"""
     return html, css
