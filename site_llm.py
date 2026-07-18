@@ -88,16 +88,27 @@ def _call_moonshot(*, max_tokens: int, temperature: Optional[float],
         raise RuntimeError("MOONSHOT_API_KEY not configured")
     base = (os.environ.get("MOONSHOT_BASE_URL") or "https://api.moonshot.ai/v1").rstrip("/")
     model = _moonshot_model()
+    # Kimi K3 is a REASONING model: it spends completion tokens on
+    # internal reasoning BEFORE the visible answer (live-probed: 86
+    # reasoning tokens for a one-line reply). The composer's max_tokens
+    # values are sized for Claude's direct output, so grant thinking
+    # headroom on top — otherwise short-budget stages come back with
+    # empty content.
     payload: dict = {
         "model": model,
-        "max_tokens": max_tokens,
+        "max_tokens": max_tokens + 3000,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user_content},
         ],
     }
-    if temperature is not None:
-        payload["temperature"] = temperature
+    # Kimi K3 rejects any temperature except 1 ("invalid temperature:
+    # only 1 is allowed for this model" — live-probed 2026-07-18). The
+    # composer's temperature tuning is Claude-specific anyway, so we
+    # simply never send sampling params to moonshot. Before this fix,
+    # EVERY moonshot call 400'd and silently fell back to Claude — the
+    # Kimi experiment was never actually running.
+    _ = temperature  # accepted for signature parity; deliberately unsent
     with httpx.Client(timeout=timeout) as client:
         r = client.post(
             f"{base}/chat/completions",
