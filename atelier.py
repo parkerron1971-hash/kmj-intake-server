@@ -207,9 +207,23 @@ def _call_llm(system: str, user: str, business_id: str) -> Optional[str]:
         )
 
     try:
-        msg, used_model = model_ladder.call_with_ladder(
-            _do, model=_model(), task="atelier",
-            business_id=business_id or "", max_tokens=ATELIER_MAX_TOKENS)
+        # Provider switch (2026-07-18): the atelier was the one composer
+        # stage still hardwired to Claude — Kevin's first true Kimi build
+        # came back HYBRID (DRL stages on kimi-k3, atelier fragments on
+        # claude-opus-4-8, visible in api_usage). Same branch as
+        # drl/passes: on moonshot, site_llm handles the call (fail-open
+        # to Anthropic); otherwise the Claude model ladder as before.
+        import site_llm
+        if site_llm.provider() == "moonshot":
+            msg = site_llm.create_message(
+                model=_model(), max_tokens=ATELIER_MAX_TOKENS,
+                temperature=ATELIER_TEMPERATURE, system=system,
+                user_content=user, timeout=90.0, task="atelier")
+            used_model = getattr(msg, "model", "moonshot")
+        else:
+            msg, used_model = model_ladder.call_with_ladder(
+                _do, model=_model(), task="atelier",
+                business_id=business_id or "", max_tokens=ATELIER_MAX_TOKENS)
     except Exception as e:
         # Every rung failed. LOUD + breadcrumbed (to_model=None records
         # 'no rung succeeded') — a bare module-only page is never a
