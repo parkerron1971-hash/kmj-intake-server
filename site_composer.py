@@ -816,6 +816,22 @@ def _default_spec(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 # ─── LLM composition ─────────────────────────────────────────────────
 
+def _creative_plus_story(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Design audit P3 (2026-07-18): the story walkthrough — the richest
+    creative material the interview collects — previously reached only
+    the DRL signal pass (as intake text). Now it rides the creative
+    brief into DRO authoring verbatim. Absent story -> the creative
+    dict passes through unchanged (byte-identical prompts)."""
+    prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+    creative = prefs.get("creative") if isinstance(prefs.get("creative"), dict) else None
+    story = prefs.get("story") if isinstance(prefs.get("story"), dict) else None
+    if not story:
+        return creative
+    out = dict(creative or {})
+    out["story"] = story
+    return out
+
+
 def _module_menu() -> str:
     lines = []
     for mid, spec in site_modules.MODULES.items():
@@ -1096,6 +1112,17 @@ def compose_spec_llm(ctx: Dict[str, Any], brief_notes: str = "",
                   if offer_stmt else "")
 
     dro_block = ("\n\n" + _dro_directive(dro) + "\n") if dro else ""
+    _p3_prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+    _owner_stats_n = len(_p3_prefs.get("proof_stats") or [])
+    _owner_steps_n = len(_p3_prefs.get("process_steps") or [])
+    _owner_stats_note = (f" The owner supplied {_owner_stats_n} proof points of "
+                         "their own — statband renders them first; INCLUDE it."
+                         if _owner_stats_n else "")
+    _owner_steps_line = (f'\n- "process": the owner wrote their own '
+                         f"{_owner_steps_n}-step process — the module renders "
+                         "those real steps (numbered); you write only eyebrow/"
+                         "headline/intro. INCLUDE it, between the offer and the proof."
+                         if _owner_steps_n else "")
 
     prompt = f"""You are a creative director composing a one-page website. You do NOT write HTML or CSS — the platform renders everything. Your job: choose section modules + expression variants, and write the copy in the practitioner's voice.
 {dro_block}
@@ -1122,7 +1149,7 @@ VARIANT GUIDE (when to reach for the expressive variants):
 - offerings "menu": the engraved menu — hairline-ruled rows, italic serif names, whisper-caps prices right-aligned — when the price list itself is the craft object (salons, studios, ateliers).
 - about "pullquote": magazine spread — one strong line pulled large + narrative column + framed portrait. Pick when the about copy has a quotable line.
 - offerings "featured": the first offering as a flagship feature card (with image), the rest as numbered compact rows — when one offering clearly leads.
-- "statband": 3-4 big real numbers (years in business, offerings, testimonials). Include for established businesses; it renders nothing when the numbers aren't there, so never lean copy on it.
+- "statband": 3-4 big real numbers (years in business, offerings, testimonials). Include for established businesses; it renders nothing when the numbers aren't there, so never lean copy on it.{_owner_stats_note}{_owner_steps_line}
 - testimonials "marquee": one oversized hero quote + two supporting — when the best quote deserves a spotlight and 3+ exist.
 - gallery "mosaic": varied-size image mosaic with soft fades — for visual businesses with strong imagery.
 
@@ -1290,7 +1317,7 @@ _SECTION_DOM_IDS = {
     "hero": "top", "about": "about", "offerings": "offerings",
     "testimonials": "testimonials", "gallery": "gallery", "cta": "cta",
     "contact": "contact", "store": "store", "showcase": "showcase",
-    "statband": "stats",
+    "statband": "stats", "process": "process",
 }
 
 # Self-heal headline defaults — same voice as _default_spec (never
@@ -1300,7 +1327,7 @@ _HEAL_HEADLINES = {
     "cta": "Ready when you are.", "contact": "Get in touch",
     "testimonials": "Kind words", "gallery": "The work",
     "store": "The shop", "showcase": "What we run",
-    "statband": "By the numbers",
+    "statband": "By the numbers", "process": "How it works",
 }
 
 _TAG_STRIP_RE = re.compile(r"<[^>]+>")
@@ -2396,6 +2423,14 @@ def _ensure_connections(spec: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List
     if (ctx.get("store") or {}).get("enabled") and "store" not in present:
         additions.append({"module": "store", "variant": "featured", "content": {},
                           "_variant_defaulted": True})
+    # Design audit P3 — the owner TYPED these; they always surface.
+    _prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+    if _prefs.get("proof_stats") and "statband" not in present:
+        additions.append({"module": "statband", "variant": "band", "content": {},
+                          "_variant_defaulted": True})
+    if _prefs.get("process_steps") and "process" not in present:
+        additions.append({"module": "process", "variant": "steps", "content": {},
+                          "_variant_defaulted": True})
     if not additions:
         return spec
     contact_idx = next((i for i, s in enumerate(spec) if s.get("module") == "contact"), len(spec))
@@ -2783,9 +2818,7 @@ def compose_site(business_id: str, brief_notes: str = "",
 
     # Arc 6 — the owner's creative brief flows into DRO authoring on the
     # SINGLE compose path too (directions are opt-in, not a prerequisite).
-    creative = ((ctx.get("site_prefs") or {}).get("creative")
-                if isinstance((ctx.get("site_prefs") or {}).get("creative"), dict)
-                else None)
+    creative = _creative_plus_story(ctx)
 
     dro_failure: Optional[Dict[str, Any]] = None   # forensics → site_config.dro_failure
     if use_llm:
@@ -3179,9 +3212,7 @@ def compose_directions(business_id: str,
     ctx = gather_context(business_id)
     ref_analysis = _maybe_analyze_references(business_id, ctx)
     intake = _assemble_intake_text(ctx)
-    creative = ((ctx.get("site_prefs") or {}).get("creative")
-                if isinstance((ctx.get("site_prefs") or {}).get("creative"), dict)
-                else None)
+    creative = _creative_plus_story(ctx)
 
     from agents.composer.drl import passes as drl_passes
     # ONE signal pass shared by all three candidates (same intake).
@@ -3751,9 +3782,7 @@ def dro_selftest(body: DroSelftestBody,
     t_start = time.monotonic()
     ctx = gather_context(body.business_id)
     intake = _assemble_intake_text(ctx)
-    creative = ((ctx.get("site_prefs") or {}).get("creative")
-                if isinstance((ctx.get("site_prefs") or {}).get("creative"), dict)
-                else None)
+    creative = _creative_plus_story(ctx)
 
     sig_fail: Dict[str, str] = {}
     t0 = time.monotonic()

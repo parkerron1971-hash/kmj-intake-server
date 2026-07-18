@@ -44,8 +44,21 @@ def collect_stats(ctx: Dict[str, Any]) -> List[Tuple[str, str]]:
     """[(number, label)] from real ctx data only. Public so the composer
     (or smoke tests) can ask 'would statband render?' without rendering."""
     stats: List[Tuple[str, str]] = []
+    # Design audit P3 (2026-07-18): the interview's proof_stats are the
+    # owner's OWN attested numbers ("120+ projects", "15 years") — they
+    # render first, ahead of anything platform-derived. Still real data:
+    # the owner typed them; nothing here is generated.
+    prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+    for item in (prefs.get("proof_stats") or [])[:_MAX_STATS]:
+        if not isinstance(item, dict):
+            continue
+        value = str(item.get("value") or "").strip()
+        label = str(item.get("label") or "").strip()
+        if value and label:
+            stats.append((value, label))
+    _owner_labels = {lb.lower() for _, lb in stats}
     years = _years_on_platform(ctx)
-    if years >= 1:
+    if years >= 1 and "years in business" not in _owner_labels:
         stats.append((f"{years}+", "Years in business"))
     n_off = len([o for o in (ctx.get("offerings") or []) if o.get("name")])
     if n_off >= 2:

@@ -147,6 +147,7 @@ TOKEN_CONTRACT: Tuple[Tuple[str, str], ...] = (
     ("--sx-h2-weight", "h2 weight"),
     ("--sx-letter-tight", "negative tracking for display type"),
     ("--sx-section-pad", "the section's vertical padding rhythm (>=120px desktop)"),
+    ("--sx-rhythm-base", "the page's vertical rhythm unit — space custom blocks at this, its -half or -quarter variants; any other vertical margin is an ad-hoc margin (doctrine D5: ONE RHYTHM)"),
     ("--sx-gutter", "horizontal page gutter"),
     ("--sx-content-max", "content max-width"),
     ("--sx-radius-card", "card corner radius"),
