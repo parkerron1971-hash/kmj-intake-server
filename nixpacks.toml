@@ -1,0 +1,20 @@
+# nixpacks.toml — Railway build customization.
+#
+# Vision grader arming (Kimi Design Integration, Phase 2 §3-J):
+# installs headless Chromium + its system libraries at build time so
+# vision_grader.py can screenshot builds at 390/900/1440 for the ship
+# gate. PLAYWRIGHT_BROWSERS_PATH pins the browser into /app so the
+# runtime image always finds it.
+#
+# DISARM: revert this file + the `playwright==` line in requirements.txt
+# (grader returns to its dormant skip-with-a-log-line behavior), or set
+# env VISION_GRADER=off for a runtime kill without a deploy.
+# Expect the first deploy after this to run a few minutes longer
+# (Chromium download + apt deps, image roughly +400MB).
+
+[variables]
+PLAYWRIGHT_BROWSERS_PATH = "/app/.ms-playwright"
+
+[phases.playwright]
+dependsOn = ["install"]
+cmds = ["python -m playwright install --with-deps chromium"]
