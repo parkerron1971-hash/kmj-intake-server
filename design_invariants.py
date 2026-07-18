@@ -30,7 +30,7 @@ _MATERIAL_PROPS = (
     "border-top", "border-bottom", "border-left", "border-right",
     "border-color", "box-shadow", "outline", "fill", "stroke",
 )
-_ACCENT_TOKENS = ("--sx-accent", "var(--sx-accent")
+_ACCENT_TOKENS = ("--sx-accent", "var(--sx-accent", "--sx-secondary", "var(--sx-secondary")
 
 _HEX_RE = re.compile(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b")
 

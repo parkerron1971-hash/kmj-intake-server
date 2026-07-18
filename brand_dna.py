@@ -125,6 +125,31 @@ FONT_PAIRINGS: Dict[str, Dict[str, Any]] = {
     "expressive_display": {"heading": "Syne", "body": "Manrope", "wmax": 800},
 }
 
+# Design audit P2 (2026-07-18) — THE THIRD TYPE ROLE. Pairings whose
+# display face has no usable italic-serif axis get a distinct accent
+# face for editorial moments (the italic accent word, pull-quotes,
+# eyebrow flourishes). Serif-headed pairings use their own heading
+# italics — accent defaults to the heading face.
+ACCENT_FACES: Dict[str, str] = {
+    "condensed_impact":   "Playfair Display",
+    "bold_statement":     "Playfair Display",
+    "expressive_display": "Playfair Display",
+    "modern_grotesque":   "Playfair Display",
+    "technical_precise":  "Playfair Display",
+    "playful":            "Playfair Display",
+}
+
+# Hybrid font selection (Kevin's ruling): the practitioner's style
+# pick (interview type_personality) CONSTRAINS the pairing family;
+# the DRO still applies taste within it. brand_fonts pins the kit.
+TYPE_PERSONALITY_PAIRINGS: Dict[str, list] = {
+    "statement":      ["condensed_impact", "bold_statement", "expressive_display"],
+    "editorial":      ["editorial_serif", "storyteller", "quiet_luxury"],
+    "modern_minimal": ["modern_grotesque", "technical_precise"],
+    "classic":        ["heritage", "quiet_luxury", "editorial_serif"],
+    "handcrafted":    ["warm_humanist", "playful"],
+}
+
 # DRO schema enums map exactly; prose-ish labels resolve by keyword.
 _PAIRING_EXACT = {
     "editorial_serif": "editorial_serif",
@@ -392,6 +417,23 @@ def rederive_accent_family(palette: Dict[str, Any]) -> Dict[str, Any]:
     h, l, s = _hls(accent)
     p["accent_soft"] = _from_hls(h, (0.16 if dark_mode else 0.92), min(s, 0.55))
     p["accent_strong"] = _from_hls(h, l + (0.08 if dark_mode else -0.08), s)
+
+    # Design audit P2 (2026-07-18) — THE SECOND ACCENT. Brand Studio
+    # stores a secondary color and derive_palette carried it, but the
+    # emitter dropped it: two-accent brands (gold + green) were
+    # impossible by construction. When the secondary is genuinely
+    # chromatic AND a different hue family than the accent, derive a
+    # small family against the CURRENT ground. Neutral/near-accent
+    # secondaries stay inactive — no accidental rainbow.
+    p.pop("secondary_active", None)
+    _sec = p.get("secondary") if _parse_hex(p.get("secondary")) else None
+    if _sec:
+        hs, ls, ss = _hls(_sec)
+        _hue_gap = min(abs(hs - h), 1 - abs(hs - h)) * 360
+        if ss > 0.18 and _hue_gap > 30:
+            p["secondary_active"] = True
+            p["secondary_soft"] = _from_hls(hs, (0.16 if dark_mode else 0.92), min(ss, 0.55))
+            p["secondary_strong"] = _from_hls(hs, ls + (0.08 if dark_mode else -0.08), ss)
 
     # Quality-floor arc 7 — the full-bleed accent band made --sx-on-accent
     # a body-text surface, so its contrast is now ENFORCED (4.5), not just
@@ -667,6 +709,7 @@ def apply_owner_ground(dna: Dict[str, Any], direction: Optional[str]) -> Dict[st
 
 
 def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
+                    owner_pairings: Optional[list] = None,
                     *, fonts_pinned: bool = False) -> Dict[str, Any]:
     """DRL render conformance (2026-07-03, quality pass).
 
@@ -704,6 +747,11 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
     tspec = d.get("typography") or {}
     pers = tspec.get("display_personality")
     pairing_key = resolve_font_pairing(pers)
+    # Hybrid (P2): the owner's type_personality constrains the family —
+    # the DRO picks within it, or the family's lead pairing applies.
+    if owner_pairings:
+        if not pairing_key or pairing_key not in owner_pairings:
+            pairing_key = owner_pairings[0]
     if _has(pers, "quiet", "understated", "refined", "discreet"):
         try:
             t["heading_weight"] = min(int(t.get("heading_weight") or 700), 700)
@@ -718,6 +766,8 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
     if pairing_key and not fonts_pinned:
         pair = FONT_PAIRINGS[pairing_key]
         t["heading"], t["body"] = pair["heading"], pair["body"]
+        # P2 — the third role rides the pairing choice.
+        t["accent"] = ACCENT_FACES.get(pairing_key) or pair["heading"]
         # body_personality refinement: an explicitly serif body reads as
         # Lora (the vetted readable serif) when the pairing chose a sans.
         if _has(tspec.get("body_personality"), "serif") and t["body"] != "Lora":
@@ -839,6 +889,7 @@ def css_variables(dna: Dict[str, Any]) -> str:
   --sx-accent-on-authority: {p.get('accent_on_authority') or p['accent']};
   --sx-font-heading: '{t['heading']}', Georgia, serif;
   --sx-font-body: '{t['body']}', -apple-system, sans-serif;
+  --sx-font-accent: '{t.get('accent') or t['heading']}', Georgia, serif;{_secondary_vars(p)}
   --sx-h1: {t['h1']};
   --sx-h2: {t['h2']};
   --sx-h3: {t.get('h3', '1.6rem')};
@@ -955,6 +1006,15 @@ def emitted_heading_weights(dna: Dict[str, Any]) -> Tuple[int, int]:
     return hw, min(h2w, hw)
 
 
+def _secondary_vars(p: Dict[str, Any]) -> str:
+    """Emitted only when the brand carries an ACTIVE second accent."""
+    if not p.get("secondary_active"):
+        return ""
+    return (f"\n  --sx-secondary: {p['secondary']};"
+            f"\n  --sx-secondary-soft: {p['secondary_soft']};"
+            f"\n  --sx-secondary-strong: {p['secondary_strong']};")
+
+
 def google_fonts_url(dna: Dict[str, Any]) -> str:
     """<link> URL loading exactly the chosen pairing.
 
@@ -966,9 +1026,11 @@ def google_fonts_url(dna: Dict[str, Any]) -> str:
     heavier headings faux-bolding."""
     heading = dna["typography"]["heading"]
     body = dna["typography"]["body"]
+    # P2 — load the accent face when it is a distinct third family.
+    accent_face = dna["typography"].get("accent") or heading
     hw, h2w = emitted_heading_weights(dna)
     fams: List[str] = []
-    for name in (heading, body):
+    for name in (heading, body, accent_face):
         if name and name not in fams:
             fams.append(name)
     parts: List[str] = []
