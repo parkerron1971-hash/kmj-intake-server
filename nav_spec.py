@@ -103,7 +103,8 @@ def validate_spec(raw: Any) -> Optional[Dict[str, Any]]:
 
 
 def author_nav_spec(business_id: str, business: Dict[str, Any],
-                    dna: Dict[str, Any], site_prefs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                    dna: Dict[str, Any], site_prefs: Dict[str, Any],
+                    voice_profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Author (or return cached) nav spec. None → caller falls back to
     the DNA-variant headers. Never raises."""
     if (os.environ.get("SITE_NAV_SPEC") or "on").strip().lower() in ("off", "0", "false"):
@@ -113,19 +114,34 @@ def author_nav_spec(business_id: str, business: Dict[str, Any],
     if hit and now - hit[0] < _TTL_SECONDS:
         return hit[1]
     spec: Optional[Dict[str, Any]] = None
+    # Stage F (Kevin's spec): the CTA wording is checked against the
+    # voice profile's words-to-avoid list — in the prompt AND after.
+    avoid_words = [w.strip().lower() for w in
+                   str((voice_profile or {}).get("avoid") or "").replace(";", ",").split(",")
+                   if w.strip()]
     try:
         import site_llm
         msg = site_llm.create_message(
             model=(os.environ.get("NAV_SPEC_MODEL") or "claude-sonnet-4-5-20250929").strip(),
             max_tokens=300,
             system=_SYSTEM,
-            user_content=_build_user(business or {}, dna or {}, site_prefs or {}),
+            user_content=_build_user(business or {}, dna or {}, site_prefs or {})
+            + (("\nVOICE - words to avoid in the CTA: " + ", ".join(avoid_words[:12]))
+               if avoid_words else ""),
             timeout=45.0,
             task="nav_spec",
         )
         text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text").strip()
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
         spec = validate_spec(json.loads(text))
+        # An authored CTA label carrying an avoided word is dropped —
+        # the default label takes over; it is never shipped.
+        if spec and spec.get("cta_label") and avoid_words:
+            _low = spec["cta_label"].lower()
+            if any(w in _low for w in avoid_words):
+                logger.warning(f"[nav_spec] cta_label dropped for {business_id[:8]} "
+                               f"(contains a words-to-avoid term)")
+                spec.pop("cta_label", None)
         if spec:
             logger.info(f"[nav_spec] authored for {business_id[:8]}: {json.dumps(spec)}")
         else:

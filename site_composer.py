@@ -600,6 +600,7 @@ def gather_context(business_id: str) -> Dict[str, Any]:
             {"name": biz.get("name") or "", "type": biz.get("type") or ""},
             dna if isinstance(dna, dict) else {},
             site_prefs if isinstance(site_prefs, dict) else {},
+            voice_profile=biz.get("voice_profile") if isinstance(biz.get("voice_profile"), dict) else {},
         )
     except Exception:
         nav_spec = None
