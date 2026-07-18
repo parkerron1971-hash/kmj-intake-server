@@ -648,6 +648,12 @@ def _pop_audit_fields(parsed: dict, business_id: str) -> None:
             for i, item in enumerate(inv[:6]):
                 logger.info(f"[dro-audit] INVENTION {i + 1} "
                             f"({str(business_id)[:8]}): {str(item)[:220]}")
+            # Phase 2: stash the count for the loop's invention check.
+            try:
+                from design_register import note_inventions
+                note_inventions(business_id, len(inv))
+            except Exception:
+                pass
         echo = parsed.pop("echo_plan", None)
         if echo:
             logger.info(f"[dro-audit] ECHO_PLAN ({str(business_id)[:8]}): "
@@ -659,6 +665,12 @@ def _pop_audit_fields(parsed: dict, business_id: str) -> None:
                 if t and t.lower() != "none":
                     logger.warning(f"[dro-audit] EXCEPTION "
                                    f"({str(business_id)[:8]}): {t[:220]}")
+                    # Phase 2: the exception register (vocabulary roadmap).
+                    try:
+                        from design_register import record_exception
+                        record_exception(business_id, "dro", t)
+                    except Exception:
+                        pass
     except Exception:
         pass
 

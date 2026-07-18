@@ -563,7 +563,20 @@ def gather_context(business_id: str) -> Dict[str, Any]:
             except Exception as e:
                 logger.info(f"[composer] sms keyword lookup skipped: {e}")
 
+    # Phase 2 (spec Stage C): deterministic motion + rhythm tokens from
+    # the boldness dial — consumed by renderers (Phase 3) and graded by
+    # the invariants. Motion stops being a renderer constant.
+    try:
+        from design_tokens import boldness_from_prefs, motion_tokens, rhythm_scale
+        _b = boldness_from_prefs(site_prefs)
+        _motion = motion_tokens(_b)
+        _rhythm = rhythm_scale(_b)
+    except Exception:
+        _motion, _rhythm = {}, {}
+
     return {
+        "motion_tokens": _motion,
+        "rhythm_scale": _rhythm,
         "site_prefs": site_prefs,
         "cta_goal": cta_goal,
         "connections": connections,

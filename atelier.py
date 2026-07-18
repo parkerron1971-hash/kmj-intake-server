@@ -626,6 +626,12 @@ def _log_audit_comments(raw: str, kind: str, business_id: str) -> None:
             lvl = logger.info
             if label.upper() == "EXCEPTION" and text.strip().lower() not in ("none", "none.", '"none"'):
                 lvl = logger.warning  # wanted-but-blocked = vocabulary gap
+                # Phase 2: persist into the exception register.
+                try:
+                    from design_register import record_exception
+                    record_exception(business_id or "", f"atelier:{kind}", text)
+                except Exception:
+                    pass
             lvl(f"[atelier-audit] {label.upper()} ({kind}, "
                 f"{(business_id or 'unknown')[:8]}): {text}")
     except Exception:

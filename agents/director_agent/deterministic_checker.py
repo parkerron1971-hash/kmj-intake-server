@@ -60,6 +60,15 @@ def check_all_deterministic(
     )
 
     violations: List[Dict] = []
+    # Phase 2 (spec 3-G): MOTIF-1 / RHYTHM-1 / CONTRAST-1 run alongside
+    # the rubric rules. ADVISORY severity by default (env
+    # DESIGN_INVARIANTS=enforce promotes to HIGH) so builds keep
+    # shipping while renderers learn the rhythm tokens (Phase 3).
+    try:
+        from design_invariants import check_design_invariants
+        violations.extend(check_design_invariants(html, combined_css, enriched_brief))
+    except Exception as _inv_err:
+        logger.warning(f"[director.deterministic] invariants skipped: {_inv_err}")
     for rule in rubric.get("layer_1_deterministic", []):
         try:
             v = check_rule(rule, ctx)

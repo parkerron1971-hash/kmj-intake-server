@@ -3986,6 +3986,19 @@ async def public_health():
 
 
 # ─── Pass 3.8g: cost cap diagnostic ───────────────────────────────────
+@router.get("/design/exception-register")
+async def design_exception_register(user: AuthedUser = Depends(require_user)):
+    """Phase 2 (spec 3-J): the vocabulary roadmap — every 'wanted X,
+    spec cannot express it' from the creative stages, ranked by
+    frequency. This answers 'where is the decision-space too narrow'
+    with data instead of taste. Requires a signed-in user."""
+    try:
+        from design_register import aggregate
+        return {"ok": True, "register": aggregate()}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 @router.get("/system/cost-cap-status")
 async def cost_cap_status_endpoint():
     """Snapshot of today's Builder counter. Used by ops + frontend."""
