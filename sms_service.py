@@ -23,7 +23,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
+from auth_supabase import require_user, AuthedUser
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import pii_mask
@@ -264,7 +265,7 @@ def _twilio_configured() -> bool:
 
 
 @router.post("/sms/send")
-async def send_sms(req: SendSmsRequest):
+async def send_sms(req: SendSmsRequest, user: AuthedUser = Depends(require_user)):
     """Send an SMS (Twilio Messaging Service first; Telnyx fallback)
     and persist it as outbound."""
     to_clean = normalize_phone(req.to)
@@ -580,7 +581,7 @@ async def record_inbound_sms(
 # ─── Conversation thread ─────────────────────────────────────────────
 
 @router.get("/sms/conversation/{business_id}/{contact_id}")
-async def get_conversation(business_id: str, contact_id: str):
+async def get_conversation(business_id: str, contact_id: str, user: AuthedUser = Depends(require_user)):
     """Return the full ordered SMS thread for a contact."""
     async with httpx.AsyncClient() as client:
         rows = await _sb_get(client,
@@ -599,7 +600,7 @@ class SessionReminderRequest(BaseModel):
 
 
 @router.post("/sms/session-reminder")
-async def send_session_reminder(req: SessionReminderRequest):
+async def send_session_reminder(req: SessionReminderRequest, user: AuthedUser = Depends(require_user)):
     """Send a friendly SMS reminder for an upcoming session.
 
     Pulls the session + contact + business name, formats a short

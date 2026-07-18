@@ -38,7 +38,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
+from auth_supabase import require_user, AuthedUser
 from pydantic import BaseModel
 
 STRIPE_API_BASE = "https://api.stripe.com/v1"
@@ -183,7 +184,7 @@ async def _create_stripe_payment_link(
 
 
 @router.post("/stripe/create-payment-link", response_model=PaymentLinkResponse)
-async def create_payment_link(req: PaymentLinkRequest):
+async def create_payment_link(req: PaymentLinkRequest, user: AuthedUser = Depends(require_user)):
     """Public endpoint for ad-hoc Payment Link creation.
 
     Phase D.4 PR 3c — when business_id is supplied AND that business has
@@ -229,7 +230,7 @@ class ProductPaymentLinkRequest(BaseModel):
 
 
 @router.post("/stripe/product-link")
-async def create_product_payment_link(req: ProductPaymentLinkRequest):
+async def create_product_payment_link(req: ProductPaymentLinkRequest, user: AuthedUser = Depends(require_user)):
     """Create a Stripe payment link for a product and persist the URL
     back onto the products row.
 

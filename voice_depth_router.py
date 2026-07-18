@@ -10,7 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from auth_supabase import require_user, AuthedUser
 from fastapi.responses import JSONResponse
 
 import voice_depth_agent
@@ -25,12 +26,16 @@ def health() -> JSONResponse:
 
 
 @router.get("/depth/{owner_id}")
-def depth(owner_id: str) -> JSONResponse:
+def depth(owner_id: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your voice profile")
     return JSONResponse({"ok": True, "voice": voice_depth_agent.get_voice_depth(owner_id)})
 
 
 @router.post("/depth/{owner_id}/sample")
-def save_sample(owner_id: str, body: Dict[str, Any]) -> JSONResponse:
+def save_sample(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your voice profile")
     """Body: {slot: 'discovery_followup'|'launch_announcement'|'casual_nurture', text: '...'}"""
     slot = (body or {}).get("slot")
     text = (body or {}).get("text")
@@ -43,7 +48,9 @@ def save_sample(owner_id: str, body: Dict[str, Any]) -> JSONResponse:
 
 
 @router.post("/depth/{owner_id}/style")
-def save_style(owner_id: str, body: Dict[str, Any]) -> JSONResponse:
+def save_style(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your voice profile")
     """Body: {field: 'greeting_style'|'signoff_style', value: '...'}"""
     field = (body or {}).get("field")
     value = (body or {}).get("value")
@@ -56,7 +63,9 @@ def save_style(owner_id: str, body: Dict[str, Any]) -> JSONResponse:
 
 
 @router.post("/depth/{owner_id}/rule/add")
-def add_rule(owner_id: str, body: Dict[str, Any]) -> JSONResponse:
+def add_rule(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your voice profile")
     """Body: {list: 'voice_dos'|'voice_donts', rule: '...'}"""
     list_name = (body or {}).get("list")
     rule = (body or {}).get("rule")
@@ -69,7 +78,9 @@ def add_rule(owner_id: str, body: Dict[str, Any]) -> JSONResponse:
 
 
 @router.post("/depth/{owner_id}/rule/remove")
-def remove_rule(owner_id: str, body: Dict[str, Any]) -> JSONResponse:
+def remove_rule(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your voice profile")
     """Body: {list: 'voice_dos'|'voice_donts', idx: 0}"""
     list_name = (body or {}).get("list")
     idx = (body or {}).get("idx")
@@ -86,7 +97,9 @@ def remove_rule(owner_id: str, body: Dict[str, Any]) -> JSONResponse:
 
 
 @router.post("/depth/{owner_id}/observe")
-def observe(owner_id: str, body: Dict[str, Any]) -> JSONResponse:
+def observe(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your voice profile")
     """Frontend calls when the user edits a Chief draft and sends it.
     Body: {original_pattern, edited_pattern, context, kind}.
     Silent — never errors, never toasts. Just records."""
@@ -102,7 +115,9 @@ def observe(owner_id: str, body: Dict[str, Any]) -> JSONResponse:
 
 
 @router.post("/depth/{owner_id}/clear-observations")
-def clear_observations(owner_id: str) -> JSONResponse:
+def clear_observations(owner_id: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your voice profile")
     """Called after the user accepts a proposed rule, so Chief doesn't
     re-propose the same pattern."""
     return JSONResponse(voice_depth_agent.clear_observations_after_rule(owner_id))

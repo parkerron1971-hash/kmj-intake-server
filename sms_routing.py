@@ -48,7 +48,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from auth_supabase import require_user, AuthedUser
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -369,7 +370,7 @@ class KeywordBody(BaseModel):
 
 
 @router.get("/sms/keyword")
-async def get_keyword(business_id: str):
+async def get_keyword(business_id: str, user: AuthedUser = Depends(require_user)):
     async with httpx.AsyncClient() as client:
         rows = await _sb_get(
             client, f"/sms_keywords?business_id=eq.{business_id}&select=keyword&limit=1",
@@ -378,7 +379,7 @@ async def get_keyword(business_id: str):
 
 
 @router.post("/sms/keyword")
-async def set_keyword(body: KeywordBody):
+async def set_keyword(body: KeywordBody, user: AuthedUser = Depends(require_user)):
     word = (body.keyword or "").strip().upper()
     if not KEYWORD_RE.match(word):
         return JSONResponse({"error": "Keyword must be 3-20 letters/numbers."}, 400)
@@ -414,7 +415,7 @@ class BroadcastBody(BaseModel):
 
 
 @router.post("/sms/broadcast")
-async def broadcast(body: BroadcastBody):
+async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user)):
     """Send to every contact WITH a phone on THIS practitioner's list.
     Scoping by business_id is what makes cross-contamination
     structurally impossible; opted-out numbers are skipped."""

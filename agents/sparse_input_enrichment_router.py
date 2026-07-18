@@ -14,7 +14,8 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from auth_supabase import require_user, AuthedUser
 from pydantic import BaseModel
 
 from agents.sparse_input_enrichment import enrich_intake
@@ -40,7 +41,7 @@ class ModuleMatchRequest(BaseModel):
 
 
 @router.post("/enrich")
-def enrich(req: EnrichmentRequest):
+def enrich(req: EnrichmentRequest, user: AuthedUser = Depends(require_user)):
     """Enrich a sparse practitioner intake. Returns:
 
         {"enriched": { ... seven canonical keys ... }}
@@ -78,7 +79,7 @@ def health():
 
 
 @router.post("/match-module")
-def match_module(req: ModuleMatchRequest):
+def match_module(req: ModuleMatchRequest, user: AuthedUser = Depends(require_user)):
     """Pass 4.0a.1 — frontend module-match preview.
 
     Wraps `find_module_for_strands(strand_a, strand_b, ratio_a)` so the

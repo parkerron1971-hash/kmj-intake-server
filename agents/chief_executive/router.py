@@ -18,6 +18,7 @@ import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
+from auth_supabase import require_user, AuthedUser
 from pydantic import BaseModel
 
 from agents.chief_executive.dispatcher import compose_response, dispatch
@@ -91,7 +92,7 @@ def chief_message(req: ChiefMessageRequest,
 
 
 @router.post("/_diag/classify")
-def diag_classify(req: ClassifyDiagRequest) -> Dict[str, Any]:
+def diag_classify(req: ClassifyDiagRequest, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """Run only the classifier — no dispatch, no side effects. Used by
     the PART 2 test harness to verify the classifier's accuracy on a
     suite of canonical messages without invoking the specialists."""

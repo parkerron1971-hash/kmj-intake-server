@@ -43,7 +43,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from api_usage_logger import log_api_usage
-from auth_supabase import AuthedUser, optional_user
+from auth_supabase import AuthedUser, optional_user, require_user
 import rate_limit
 import sb_clients
 
@@ -191,6 +191,7 @@ async def transcribe(
     request: Request,
     audio: UploadFile = File(...),
     language: Optional[str] = Form(None),
+    user: AuthedUser = Depends(require_user),
 ):
     """Transcribe an uploaded audio blob via OpenAI Whisper."""
     _voice_rate_guard(request)
