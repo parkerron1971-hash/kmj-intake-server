@@ -3,15 +3,17 @@
 # Provider switch for the WEBSITE DESIGN BUILD pipeline (2026-07-17,
 # Kevin's ruling: test Kimi K3 on site generation).
 #
-# Scope: the composer/director build stages only —
+# Scope: the composer/director build stages —
 #   module_router · hero_composer · DRL passes · sparse_input_enrichment
-#   · feedback_enrichment.
-# DELIBERATELY NOT the Director's llm_judge: the judge stays on Claude
-# so it independently grades whatever the composer model produced —
-# don't let the student grade its own homework.
+#   · feedback_enrichment — plus the Director's llm_judge on its OWN
+#   independent switch. Default: the judge stays on Claude even while
+#   the builder runs on Kimi (an independent grader is the honest
+#   quality read); flip SITE_JUDGE_PROVIDER deliberately to compare
+#   Claude-judged vs Kimi-self-judged builds.
 #
 # Env contract (flip per environment, no code changes):
-#   SITE_BUILDER_PROVIDER  "anthropic" (default) | "moonshot"
+#   SITE_BUILDER_PROVIDER  "anthropic" (default) | "moonshot" — build stages
+#   SITE_JUDGE_PROVIDER    "anthropic" (default) | "moonshot" — the judge
 #   SITE_BUILDER_MODEL     model id for the chosen provider
 #                          (moonshot default: "kimi-k3")
 #   MOONSHOT_API_KEY       required for moonshot
@@ -65,6 +67,16 @@ def provider() -> str:
     return (os.environ.get("SITE_BUILDER_PROVIDER") or "anthropic").strip().lower()
 
 
+def judge_provider() -> str:
+    """The Director's judge gets its OWN switch (2026-07-17, Kevin's
+    ruling): default anthropic even while the builder runs on Kimi —
+    Claude grading Kimi's work is the honest quality read. Flip
+    SITE_JUDGE_PROVIDER=moonshot deliberately to see the difference
+    when Kimi judges its own output. The two env vars are independent
+    on purpose."""
+    return (os.environ.get("SITE_JUDGE_PROVIDER") or "anthropic").strip().lower()
+
+
 def _moonshot_model() -> str:
     return (os.environ.get("SITE_BUILDER_MODEL") or MOONSHOT_DEFAULT_MODEL).strip()
 
@@ -109,12 +121,13 @@ def _call_moonshot(*, max_tokens: int, temperature: Optional[float],
 
 def create_message(*, model: str, max_tokens: int, system: str, user_content: str,
                    temperature: Optional[float] = None, timeout: float = 120.0,
-                   task: str = "site") -> Any:
+                   task: str = "site", provider_name: Optional[str] = None) -> Any:
     """Drop-in replacement for `Anthropic().messages.create(...)` in the
     site-build pipeline. `model` is the Anthropic model the call site
     would have used — kept as the fail-open fallback and the default
-    provider's model."""
-    if provider() == "moonshot":
+    provider's model. `provider_name` overrides the global switch for
+    call sites with their own toggle (the judge)."""
+    if (provider_name or provider()) == "moonshot":
         try:
             msg = _call_moonshot(
                 max_tokens=max_tokens, temperature=temperature,
