@@ -5,7 +5,12 @@ intro, cta_label.
 
 Site Arc 9 (data dignity): the whole section is SUPPRESSED until at
 least _MIN_REAL_PRODUCTS products carry a real image AND a real price
-(>= $_MIN_REAL_PRICE) — a one-test-product store destroys trust."""
+(>= $_MIN_REAL_PRICE) — a one-test-product store destroys trust.
+
+Variants: "featured" (boxed product cards) and — B4 (2026-07-18) —
+"shelf": unboxed items on one shared baseline hairline, image / name /
+whisper price. Same items, floors and CTA.
+"""
 from __future__ import annotations
 
 import logging
@@ -15,7 +20,7 @@ from ._base import safe, safe_url, ov, eyebrow, heading_accent, accent_headline
 
 logger = logging.getLogger(__name__)
 
-VARIANTS = ("featured",)
+VARIANTS = ("featured", "shelf")
 
 _MIN_REAL_PRODUCTS = 2
 _MIN_REAL_PRICE = 5.0
@@ -109,6 +114,62 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
         <div class="sxm-store-meta"><span>{safe(o.get('name'))}</span>
         <span class="sxm-store-price">{safe(price)}</span></div>
       </a>""")
+
+    if variant == "shelf":
+        # B4 (2026-07-18) — the open shop shelf. "featured" cards the
+        # products; "shelf" sets them on one shared baseline hairline,
+        # unboxed — image, name, whisper price, nothing between the work
+        # and the visitor. Same real items, same trust floors, same CTA.
+        shelf_cards = []
+        for o in items:
+            img = (f'<img class="sxm-shelf-img" src="{safe_url(o.get("image_url"))}" '
+                   f'alt="{safe(o.get("name") or "Product photo")}">'
+                   if str(o.get("image_url") or "").startswith("http")
+                   else '<div class="sxm-shelf-img sxm-store-img-ph" role="presentation"></div>')
+            try:
+                price = f"${float(o.get('current_price') or 0):,.2f}"
+            except (TypeError, ValueError):
+                price = ""
+            shelf_cards.append(f"""
+      <a class="sxm-shelf-item" href="{safe_url(url)}">
+        {img}
+        <span class="sxm-shelf-name">{safe(o.get('name'))}</span>
+        <span class="sxm-shelf-price sxm-whisper">{safe(price)}</span>
+      </a>""")
+        html = f"""
+<section class="sxm-section sxm-store sxm-store-shelf sxm-reveal" id="store">
+  <div class="sxm-inner">
+    {heading_accent(dna)}
+    {eb}
+    <h2 {ov('store', 'headline')}>{accent_headline(headline)}</h2>
+    {intro_html}
+    <div class="sxm-shelf-row">{''.join(shelf_cards)}
+    </div>
+    <div class="sxm-store-cta">
+      <a class="sxm-cta" href="{safe_url(url)}"><span {ov('store', 'cta_label')}>{safe(content.get('cta_label') or 'Visit the store')}</span></a>
+    </div>
+  </div>
+</section>"""
+        css = """
+.sxm-store h2 { margin-bottom: 16px; }
+.sxm-store-intro { font-size: 1.02rem; margin-bottom: 10px; }
+/* The shelf: items stand on one shared hairline baseline, unboxed. */
+.sxm-shelf-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: clamp(24px, 4vw, 44px); margin-top: 34px;
+  border-bottom: 1px solid var(--sx-border); padding-bottom: clamp(22px, 3vw, 34px); }
+.sxm-shelf-item { display: flex; flex-direction: column; gap: 10px;
+  color: var(--sx-text); text-decoration: none; }
+.sxm-shelf-img { width: 100%; aspect-ratio: 1/1; object-fit: cover; display: block;
+  border-radius: var(--sx-radius-image, 12px);
+  transition: transform .5s var(--sx-ease); }
+.sxm-shelf-item:hover .sxm-shelf-img { transform: translateY(-4px); }
+.sxm-shelf-name { font-weight: 600; font-size: .98rem; }
+.sxm-shelf-price { color: var(--sx-accent); }
+@media (prefers-reduced-motion: reduce) {
+  .sxm-shelf-img { transition: none; }
+  .sxm-shelf-item:hover .sxm-shelf-img { transform: none; } }
+.sxm-store-cta { margin-top: 30px; }"""
+        return html, css
 
     html = f"""
 <section class="sxm-section sxm-store sxm-reveal" id="store">

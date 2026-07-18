@@ -19,7 +19,9 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("design_register")
 
-# In-memory per-build audit stash: {business_id: {"inventions": int, "ts": float}}
+# In-memory per-build audit stash: {business_id: {"inventions": int,
+# "texts": list, "ts": float}} — texts ride along (A4, 2026-07-18) so the
+# verification pass can check RESTATEMENT, not just count.
 _AUDIT: Dict[str, Dict[str, Any]] = {}
 
 
@@ -43,9 +45,16 @@ def record_exception(business_id: str, stage: str, wanted: str,
         logger.info(f"[register] persist skipped ({type(e).__name__}): {e}")
 
 
-def note_inventions(business_id: str, count: int) -> None:
-    """Stash the DRO invention count for the build loop's verification."""
-    _AUDIT[str(business_id)] = {"inventions": int(count), "ts": time.time()}
+def note_inventions(business_id: str, count: int,
+                    texts: Optional[List[Any]] = None) -> None:
+    """Stash the DRO invention count (+ the invention records themselves,
+    when the authoring stage hands them over) for the build loop's
+    verification."""
+    _AUDIT[str(business_id)] = {
+        "inventions": int(count),
+        "texts": [t for t in (texts or []) if t][:6],
+        "ts": time.time(),
+    }
 
 
 def get_invention_count(business_id: str) -> Optional[int]:
@@ -53,6 +62,16 @@ def get_invention_count(business_id: str) -> Optional[int]:
     if not entry or time.time() - entry.get("ts", 0) > 3600:
         return None
     return entry.get("inventions")
+
+
+def get_invention_texts(business_id: str) -> Optional[List[Any]]:
+    """The invention records (dicts with addition/builds_on/where, or raw
+    strings) stashed by the DRO pass. None when unknown/expired — callers
+    treat that as 'unverifiable', never as failure."""
+    entry = _AUDIT.get(str(business_id))
+    if not entry or time.time() - entry.get("ts", 0) > 3600:
+        return None
+    return entry.get("texts") or []
 
 
 def aggregate(limit_rows: int = 500) -> List[Dict[str, Any]]:

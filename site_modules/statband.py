@@ -12,6 +12,10 @@ figure if the context ever carries one. Nothing is ever invented; with
 fewer than two real stats the section renders nothing at all.
 
 Content: eyebrow, headline (both optional framing).
+
+Variants: "band" (the full-bleed governed-accent gold band) and — B4
+(2026-07-18) — "ledger", the quiet alternative: hairline-ruled rows on
+the page ground, display numeral left, whisper label right.
 """
 from __future__ import annotations
 
@@ -20,7 +24,7 @@ from typing import Any, Dict, List, Tuple
 
 from ._base import safe, ov, eyebrow, heading_accent, accent_headline, diamond_field
 
-VARIANTS = ("band",)
+VARIANTS = ("band", "ledger")
 
 _MIN_STATS = 2
 _MAX_STATS = 4
@@ -84,6 +88,46 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     headline = content.get("headline") or ""
     headline_html = (f'<h2 {ov("statband", "headline")}>{accent_headline(headline)}</h2>'
                      if headline else "")
+
+    if variant == "ledger":
+        # B4 (2026-07-18) — the QUIET proof. The gold band shouts the
+        # numbers; the ledger records them: hairline-ruled rows on the
+        # page ground, oversized display numeral left, whisper-caps label
+        # right — the engraved-ledger idiom the offerings "menu" speaks.
+        rows = "".join(f"""
+      <div class="sxm-statrow">
+        <span class="sxm-statrow-n">{safe(num)}</span>
+        <span class="sxm-statrow-label sxm-whisper">{safe(label)}</span>
+      </div>""" for num, label in stats)
+        html = f"""
+<section class="sxm-section sxm-statledger sxm-reveal" id="stats">
+  <div class="sxm-inner">
+    {heading_accent(dna) if (headline or content.get('eyebrow')) else ''}
+    {eb}
+    {headline_html}
+    <div class="sxm-statledger-rows">{rows}
+    </div>
+  </div>
+</section>"""
+        css = """
+.sxm-statledger h2 { margin-bottom: 26px; }
+.sxm-statledger-rows { border-top: 1px solid var(--sx-border); }
+.sxm-statrow { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 24px; padding: clamp(18px, 3vw, 28px) 2px;
+  border-bottom: 1px solid var(--sx-border); }
+.sxm-statrow-n { font-family: var(--sx-font-heading);
+  font-size: clamp(2.4rem, 5vw, 3.8rem); font-weight: var(--sx-heading-weight);
+  letter-spacing: var(--sx-letter-tight); line-height: 1; color: var(--sx-text); }
+.sxm-statrow-label { color: var(--sx-muted); text-align: right; }
+/* The accent counts — one small square per row, discovered on the second
+   look (ornaments stay sub-perceptual). */
+.sxm-statrow-n::before { content: ""; display: inline-block; width: 10px; height: 10px;
+  margin-right: 18px; background: var(--sx-accent); opacity: .28; }
+@media (max-width: 640px) {
+  .sxm-statrow { flex-direction: column; gap: 8px; }
+  .sxm-statrow-label { text-align: left; } }"""
+        return html, css
+
     blocks = "".join(f"""
       <div class="sxm-stat">
         <span class="sxm-stat-n">{safe(num)}</span>
@@ -111,7 +155,9 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-statband { position: relative; overflow: hidden;
   background: var(--sx-accent-ground, var(--sx-accent));
   color: var(--sx-on-accent-ground, var(--sx-on-accent));
-  padding-top: clamp(64px, 8vw, 80px); padding-bottom: clamp(64px, 8vw, 80px); }
+  /* P3: pads ride the page's rhythm scale (D5) — was an ad-hoc clamp. */
+  padding-top: var(--sx-rhythm-half, clamp(64px, 8vw, 80px));
+  padding-bottom: var(--sx-rhythm-half, clamp(64px, 8vw, 80px)); }
 .sxm-statband .sxm-inner { position: relative; }
 .sxm-statband h2 { margin-bottom: 30px; color: var(--sx-on-accent-ground, var(--sx-on-accent)); }
 .sxm-statband .sxm-accent-word { color: var(--sx-on-accent-ground, var(--sx-on-accent)); font-weight: 500; }

@@ -3999,6 +3999,78 @@ async def design_exception_register(user: AuthedUser = Depends(require_user)):
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+@router.get("/design/health")
+async def design_health(user: AuthedUser = Depends(require_user)):
+    """P3 (2026-07-18): platform design telemetry — 'are the generated
+    sites actually good', answered with data instead of taste. Aggregates
+    the last 200 composed site_configs: vision-grader pass rate + mean
+    rubric scores, DRO failure rate, atelier planned-vs-generated
+    fallback rate (planned seats land on composes from P3 forward; older
+    rows count generated only), invention-verification restatements.
+    Requires a signed-in user."""
+    try:
+        import sb_clients
+        rows = sb_clients.sb_get_as_service(
+            "/business_sites?order=updated_at.desc&limit=200"
+            "&select=business_id,site_config,updated_at") or []
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    composes = [r for r in rows
+                if (r.get("site_config") or {}).get("html_source")
+                == "module-composer"]
+    v_n = v_pass = 0
+    impact_sum = smell_sum = 0.0
+    dro_fail = 0
+    at_planned = at_generated = at_active = 0
+    inv_checked = inv_restatements = 0
+    for r in composes:
+        cfg = r.get("site_config") or {}
+        v = cfg.get("vision_verdict") or {}
+        if v:
+            v_n += 1
+            v_pass += 1 if v.get("passes_gate") else 0
+            try:
+                impact_sum += float(v.get("first_viewport_impact") or 0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                smell_sum += float(v.get("template_smell") or 0)
+            except (TypeError, ValueError):
+                pass
+        if cfg.get("dro_failure"):
+            dro_fail += 1
+        atl = cfg.get("atelier") if isinstance(cfg.get("atelier"), dict) else {}
+        frags = atl.get("fragments") or {}
+        if frags:
+            at_active += 1
+            at_generated += len(frags)
+            try:
+                at_planned += int(atl.get("planned") or len(frags))
+            except (TypeError, ValueError):
+                at_planned += len(frags)
+        iv = cfg.get("invention_verification") or {}
+        if iv.get("ok") is not None:
+            inv_checked += 1
+            if iv.get("ok") is False:
+                inv_restatements += 1
+    n = len(composes)
+    return {"ok": True,
+            "window": {"composed_sites": n, "business_sites_scanned": len(rows)},
+            "vision": {"graded": v_n,
+                       "pass_rate": round(v_pass / v_n, 3) if v_n else None,
+                       "mean_first_viewport_impact": round(impact_sum / v_n, 2) if v_n else None,
+                       "mean_template_smell": round(smell_sum / v_n, 2) if v_n else None},
+            "dro": {"failures": dro_fail,
+                    "failure_rate": round(dro_fail / n, 3) if n else None},
+            "atelier": {"active": at_active,
+                        "planned_seats": at_planned,
+                        "generated": at_generated,
+                        "fallback_rate": (round(1 - at_generated / at_planned, 3)
+                                          if at_planned else None)},
+            "inventions": {"verified": inv_checked,
+                           "restatements": inv_restatements}}
+
+
 @router.get("/system/cost-cap-status")
 async def cost_cap_status_endpoint():
     """Snapshot of today's Builder counter. Used by ops + frontend."""

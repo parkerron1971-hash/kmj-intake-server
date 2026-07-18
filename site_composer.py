@@ -771,7 +771,14 @@ def _default_spec(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     elevator pitch as the supporting line. Never generated."""
     dna = ctx["dna"]
     biz = ctx["business"]
-    hero_variant = {"warm": "split", "formal": "statement", "bold": "banner"}[dna["vibe"]]
+    # B5 (2026-07-18) — the no-LLM floor rotates OFF the old centered-hero
+    # + cards + CTA-band skeleton (doctrine D11's banned template). Every
+    # pick stays inside what the modules render safely with real data:
+    # bold gets the bottom-gravity film title ("anchored" — "banner" was a
+    # near-duplicate of the cinematic skeleton); formal gets the engraved
+    # menu when prices exist (the price list as craft object); warm gets
+    # the flagship-and-index hierarchy (D9: prominence follows weight).
+    hero_variant = {"warm": "split", "formal": "statement", "bold": "anchored"}[dna["vibe"]]
     b = (ctx.get("bundle") or {}).get("business") or {}
     tagline = str(b.get("tagline") or "").strip()
     pitch = str(b.get("elevator_pitch") or "").strip()
@@ -779,6 +786,14 @@ def _default_spec(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     subheadline = pitch if pitch and pitch != headline else (tagline if tagline != headline else "")
     goal_label = _CTA_GOAL_LABELS.get(str(ctx.get("cta_goal") or ""),
                                       "Book a session")
+    _offerings = ctx.get("offerings") or []
+    _has_prices = any(o.get("price") not in (None, "") for o in _offerings)
+    if dna["vibe"] == "formal":
+        offerings_variant = "menu" if _has_prices else "list"
+    elif dna["vibe"] == "warm" and len(_offerings) >= 3:
+        offerings_variant = "featured"
+    else:
+        offerings_variant = "cards"
     spec = [
         {"module": "hero", "variant": hero_variant,
          "content": {"headline": headline, "subheadline": subheadline,
@@ -787,14 +802,16 @@ def _default_spec(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         # from practitioner_intelligence.about_business (real data) and
         # DROPS the section when nothing real exists.
         {"module": "about", "variant": "portrait" if dna["vibe"] != "formal" else "narrative",
-         "content": {"headline": "The practice"}},
-        {"module": "offerings", "variant": "cards" if dna["vibe"] != "formal" else "list",
-         "content": {"headline": "Ways to work together"}},
+         "content": {"headline": _stock_headline("about", ctx)}},
+        {"module": "offerings", "variant": offerings_variant,
+         "content": {"headline": _stock_headline("offerings", ctx)}},
         {"module": "testimonials",
          "variant": "spotlight" if len(ctx.get("testimonials") or []) < 3 else "grid",
          "content": {}},
-        {"module": "cta", "variant": "band", "content": {"headline": "Ready when you are."}},
-        {"module": "contact", "variant": "standard", "content": {"headline": "Get in touch"}},
+        {"module": "cta", "variant": "band",
+         "content": {"headline": _stock_headline("cta", ctx)}},
+        {"module": "contact", "variant": "standard",
+         "content": {"headline": _stock_headline("contact", ctx)}},
     ]
     # Gallery: ANY business that uploaded real photos gets one now (their
     # products / finished work / results) — not just bold/creative vibes.
@@ -1091,9 +1108,75 @@ def _cta_goal_prompt_line(ctx: Dict[str, Any]) -> str:
     return (f"- THE OWNER'S #1 CONVERSION GOAL: {phrasing}\n" if phrasing else "")
 
 
+# ─── Spec/copy stage LLM call (A3, 2026-07-18) ───────────────────────
+# The spec stage writes ALL page copy and picks every module — it is a
+# creative stage, so it gets what the DRL passes and the atelier already
+# had: the doctrine as system prompt (Symmetry Rule: identical content
+# for both providers), provider routing through site_llm, the full model
+# ladder, and usage metering. Before this, it was a raw httpx call to a
+# hardcoded model at max_tokens=1600 with no doctrine and no telemetry —
+# untreated LLM-default prose on every build, and "Kimi builds" whose
+# copy was silently always Claude.
+
+SPEC_MAX_TOKENS = 4000  # was 1600 — truncated rich page specs mid-JSON
+
+
+def _spec_model() -> str:
+    return (os.environ.get("SITE_SPEC_MODEL") or "").strip() or "claude-opus-4-7"
+
+
+def _call_spec_stage(*, system: str, user: str, business_id: str) -> str:
+    """Mirror of the DRL passes' _call: moonshot via site_llm (fail-open
+    to the FULL Claude ladder, not one brittle call), anthropic via the
+    ladder directly. Usage logged to /composer/spec."""
+    import model_ladder
+    import site_llm
+
+    def _do(model: str, max_tokens: int, timeout: float):
+        from anthropic import Anthropic
+        client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        return client.messages.create(
+            model=model, max_tokens=max_tokens,
+            system=system, messages=[{"role": "user", "content": user}],
+            timeout=timeout,
+            **model_ladder.sampling_kwargs(model, None))
+
+    if site_llm.provider() == "moonshot":
+        try:
+            msg = site_llm.create_message(
+                model=_spec_model(), max_tokens=SPEC_MAX_TOKENS,
+                system=system, user_content=user,
+                timeout=model_ladder.timeout_for("spec", _spec_model()) + 120.0,
+                task="composer/spec")
+            used_model = getattr(msg, "model", "moonshot")
+        except Exception as _ms_err:
+            logger.warning(f"[composer] moonshot spec call failed "
+                           f"({type(_ms_err).__name__}) — full ladder fallback")
+            msg, used_model = model_ladder.call_with_ladder(
+                _do, model=_spec_model(), task="spec",
+                business_id=business_id, max_tokens=SPEC_MAX_TOKENS)
+    else:
+        msg, used_model = model_ladder.call_with_ladder(
+            _do, model=_spec_model(), task="spec",
+            business_id=business_id, max_tokens=SPEC_MAX_TOKENS)
+    try:
+        from api_usage_logger import log_api_usage_sync
+        u = getattr(msg, "usage", None)
+        log_api_usage_sync(
+            endpoint="/composer/spec", model=used_model,
+            input_tokens=getattr(u, "input_tokens", 0) or 0,
+            output_tokens=getattr(u, "output_tokens", 0) or 0,
+            business_id=business_id, task_type="composer")
+    except Exception:
+        pass
+    return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
+
+
 def compose_spec_llm(ctx: Dict[str, Any], brief_notes: str = "",
-                     dro: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    from studio_designer_agent import _call_claude, _extract_json
+                     dro: Optional[Dict[str, Any]] = None,
+                     feedback: str = "") -> List[Dict[str, Any]]:
+    from studio_designer_agent import _extract_json
+    from design_doctrine import DOCTRINE, DIVERSITY_LINE
 
     bundle = ctx.get("bundle") or {}
     voice = bundle.get("voice") or {}
@@ -1123,9 +1206,24 @@ def compose_spec_llm(ctx: Dict[str, Any], brief_notes: str = "",
                          "those real steps (numbered); you write only eyebrow/"
                          "headline/intro. INCLUDE it, between the offer and the proof."
                          if _owner_steps_n else "")
+    # A2 — the bounded quality regen injects the vision grader's notes
+    # here so the second copy pass fixes what the grader flagged.
+    _feedback_line = ("\n- GRADER FEEDBACK FROM THE PREVIOUS RENDER — the last "
+                      "version of this page FAILED design grading. Address EVERY "
+                      "point with materially different choices, not small tweaks:\n"
+                      + feedback.strip()[:900]
+                      if (feedback or "").strip() else "")
 
-    prompt = f"""You are a creative director composing a one-page website. You do NOT write HTML or CSS — the platform renders everything. Your job: choose section modules + expression variants, and write the copy in the practitioner's voice.
-{dro_block}
+    # A3: doctrine-fronted system prompt (identical for both providers —
+    # Symmetry Rule). The role line used to ride the user message with no
+    # doctrine at all.
+    system = (DOCTRINE + "\n\n"
+              "You are a creative director composing a one-page website. "
+              "You do NOT write HTML or CSS — the platform renders "
+              "everything. Your job: choose section modules + expression "
+              "variants, and write the copy in the practitioner's voice.\n\n"
+              + DIVERSITY_LINE)
+    user_prompt = f"""{dro_block}
 BUSINESS
 - Name: {biz['name']}
 - Type: {biz['type']}
@@ -1137,7 +1235,7 @@ BUSINESS
 - Real testimonials on file: {n_testi}
 - Public custom modules the business RUNS (surface via the "showcase" section): {', '.join((m.get('title') or '') + f" ({len(m.get('entries') or [])})" for m in (ctx.get('public_modules') or [])) or '(none)'}
 - Contact wiring: a real contact form + {('hours, ' if (ctx.get('contact') or {}).get('hours') else '')}{('address, ' if (ctx.get('contact') or {}).get('address') else '')}{('phone, ' if (ctx.get('contact') or {}).get('phone') else '')}socials render automatically in the "contact" section — you only write its framing.
-{_cta_goal_prompt_line(ctx)}{f'- Practitioner notes for this build: {brief_notes[:400]}' if brief_notes else ''}
+{_cta_goal_prompt_line(ctx)}{f'- Practitioner notes for this build: {brief_notes[:400]}' if brief_notes else ''}{_feedback_line}
 
 AVAILABLE MODULES (use each at most once; order is yours except hero first, contact last):
 {_module_menu()}
@@ -1152,6 +1250,10 @@ VARIANT GUIDE (when to reach for the expressive variants):
 - "statband": 3-4 big real numbers (years in business, offerings, testimonials). Include for established businesses; it renders nothing when the numbers aren't there, so never lean copy on it.{_owner_stats_note}{_owner_steps_line}
 - testimonials "marquee": one oversized hero quote + two supporting — when the best quote deserves a spotlight and 3+ exist.
 - gallery "mosaic": varied-size image mosaic with soft fades — for visual businesses with strong imagery.
+- cta "editorial": the quiet close — hairline seam, oversized display line, text-link CTA whose underline draws on hover — when the page already has a loud band elsewhere or the concept is restrained/formal.
+- statband "ledger": the quiet proof — hairline-ruled rows, display numeral left, whisper label right — editorial/restrained concepts where a full gold band would shout.
+- store "shelf": unboxed products on one shared baseline hairline — image, name, whisper price — studio/atelier retail with strong product photography.
+- contact "centered": one centered column, the form card beneath the ask — a ceremonial close for centered-formal layouts.
 
 RULES
 - If a DESIGN RATIONALE block appears above, it OVERRIDES generic instincts: concept-voice copy (in-concept headline/eyebrows/CTAs) and the section order it specifies are REQUIRED, not optional.
@@ -1172,8 +1274,21 @@ RULES
 Respond with ONLY this JSON:
 {{"sections": [{{"module": "hero", "variant": "...", "content": {{"headline": "...", ...}}}}, ...]}}"""
 
-    raw = _call_claude(prompt, max_tokens=1600, timeout=75.0)
+    business_id = str((biz or {}).get("id") or "")
+    raw = _call_spec_stage(system=system, user=user_prompt,
+                           business_id=business_id)
     parsed = _extract_json(raw)
+    if not parsed:
+        # One parse-repair retry (same pattern as the DRL passes) before
+        # giving up to the deterministic default spec.
+        logger.warning("[composer] spec JSON parse failed — repair retry")
+        raw = _call_spec_stage(
+            system=system,
+            user=user_prompt + "\n\nREMINDER: your previous reply was not "
+                               "parseable JSON. Respond with ONLY the JSON "
+                               "object — no prose, no code fences.",
+            business_id=business_id)
+        parsed = _extract_json(raw)
     if not parsed:
         raise ValueError("composer LLM returned no JSON")
     # mark_defaults: sections without an explicit valid variant stay
@@ -1322,13 +1437,29 @@ _SECTION_DOM_IDS = {
 
 # Self-heal headline defaults — same voice as _default_spec (never
 # invented facts, just the platform's neutral framing lines).
-_HEAL_HEADLINES = {
-    "about": "The practice", "offerings": "Ways to work together",
-    "cta": "Ready when you are.", "contact": "Get in touch",
-    "testimonials": "Kind words", "gallery": "The work",
-    "store": "The shop", "showcase": "What we run",
-    "statband": "By the numbers", "process": "How it works",
+# B5 (2026-07-18): the fallback floor no longer speaks one platform-wide
+# stock voice — heal/default headlines are keyed by the build's vibe.
+# Still deterministic, still generic-safe; just not identical on every
+# fallback page (doctrine D1: restating the brief back is failure —
+# and so is every fallback site reading as the same template).
+_STOCK_HEADLINES: Dict[str, Dict[str, str]] = {
+    "about":        {"warm": "The practice", "formal": "The practice", "bold": "The work, up close"},
+    "offerings":    {"warm": "Ways to work together", "formal": "Services", "bold": "What we do best"},
+    "cta":          {"warm": "Ready when you are.", "formal": "Begin the conversation.", "bold": "Let's make it happen."},
+    "contact":      {"warm": "Get in touch", "formal": "Contact the practice", "bold": "Say hello"},
+    "testimonials": {"warm": "Kind words", "formal": "What clients say", "bold": "Word of mouth"},
+    "gallery":      {"warm": "The work", "formal": "Selected work", "bold": "The proof"},
+    "store":        {"warm": "The shop", "formal": "The shop", "bold": "The goods"},
+    "showcase":     {"warm": "What we run", "formal": "Programs", "bold": "What we're building"},
+    "statband":     {"warm": "By the numbers", "formal": "By the numbers", "bold": "The receipts"},
+    "process":      {"warm": "How it works", "formal": "The process", "bold": "How it gets done"},
 }
+
+
+def _stock_headline(module: str, ctx: Dict[str, Any]) -> str:
+    vibe = str((ctx.get("dna") or {}).get("vibe") or "formal")
+    per_vibe = _STOCK_HEADLINES.get(module) or {}
+    return per_vibe.get(vibe) or per_vibe.get("formal") or ""
 
 _TAG_STRIP_RE = re.compile(r"<[^>]+>")
 _HEADLINE_TARGET_RE = re.compile(
@@ -1459,7 +1590,7 @@ def _heal_headline_default(module: str, ctx: Dict[str, Any]) -> str:
         b = (ctx.get("bundle") or {}).get("business") or {}
         return (str(b.get("tagline") or "").strip()
                 or (ctx.get("business") or {}).get("name") or "Welcome")
-    return _HEAL_HEADLINES.get(module, "")
+    return _stock_headline(module, ctx)
 
 
 def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
@@ -1822,6 +1953,11 @@ def _apply_dro_design(ctx: Dict[str, Any], dro: Dict[str, Any],
         decisions["_owner_loud_where"] = _creative["loud_where"]
     ctx["design"] = decisions
     ctx["dna"] = brand_dna.apply_dro_palette(ctx["dna"], decisions.get("palette"))
+    # B1 (2026-07-18): the DRO's palette.temperature now nudges the neutral
+    # ground family itself (was: image grade only). Owner direction still
+    # beats it via apply_owner_ground below, same precedence as palette.base.
+    ctx["dna"] = brand_dna.apply_dro_temperature(
+        ctx["dna"], (decisions.get("palette") or {}).get("temperature"))
     # Quality pass (2026-07-03): the rest of the DRO reaches the
     # pixels too — typography personality, whitespace/density,
     # motion temperature. Practitioner-pinned fonts stay supreme.
@@ -1961,7 +2097,12 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        dro_failure: Optional[Dict[str, Any]] = None,
                        _heal_attempted: bool = False,
                        _recon: Optional[Dict[str, Any]] = None,
-                       _atelier: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       _atelier: Optional[Dict[str, Any]] = None,
+                       _regen_allowed: bool = False,
+                       _regen_attempted: bool = False,
+                       _regen_notes: str = "",
+                       _prior_verdict: Optional[Dict[str, Any]] = None
+                       ) -> Dict[str, Any]:
     # Arc 4: `full_recompose` is True ONLY from compose_site (a fresh
     # spec) — it triggers override reconciliation. Shuffle/refresh/
     # override-triggered re-renders keep it False so a practitioner's
@@ -1969,6 +2110,12 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     # `defaulted_modules` feeds the gate's symmetry-honored check;
     # _heal_attempted/_recon are internal recursion state for the single
     # self-heal pass.
+    # A2 (2026-07-18): _regen_allowed marks compose_site's FIRST pass
+    # (a failing vision verdict defers the SHIP_GATE=enforce raise to
+    # compose_site's bounded regen instead of raising here);
+    # _regen_attempted marks the SECOND pass (regen notes ride into the
+    # atelier, enforce raises again, and _prior_verdict is persisted
+    # alongside the new verdict so both grades survive).
     ctx = ctx or gather_context(business_id)
     title = ctx["business"]["name"] or "Welcome"
 
@@ -2036,7 +2183,10 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                 # set or a fresh generation apply here.
                 stored=({} if full_recompose else _stored_atelier),
                 precomputed=_atelier,
-                progress_cb=progress_cb)
+                progress_cb=progress_cb,
+                # A2 — the bounded quality regen's grader notes ride into
+                # every bespoke fragment prompt (empty on normal passes).
+                feedback=_regen_notes)
         except Exception as e:
             logger.warning(f"[composer] atelier failed (non-fatal): {e}")
             atelier_meta = None
@@ -2190,6 +2340,29 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                           "checks": [{"name": "gate_error", "ok": False,
                                       "detail": str(e)}]}
 
+    # A1 (2026-07-18) — DESIGN INVARIANTS ON THE LIVE PATH. MOTIF-1 /
+    # RHYTHM-1 / CONTRAST-1 used to run only inside the retired Director
+    # build loop, which the default endpoint reroutes around — they were
+    # dead code on every real build. They run HERE now, on the final
+    # document: findings persist into the quality report and (on full
+    # recomposes) feed compose_site's bounded quality regen. Severity
+    # stays advisory unless DESIGN_INVARIANTS=enforce.
+    try:
+        from design_invariants import check_design_invariants as _cdi
+        _inv_css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>",
+                                        final_html, re.DOTALL | re.IGNORECASE))
+        _inv_findings = _cdi(final_html, _inv_css,
+                             {"site_prefs": ctx.get("site_prefs") or {}})
+        if isinstance(quality_report, dict):
+            quality_report["design_invariants"] = _inv_findings
+        if _inv_findings:
+            logger.info(f"[composer] design invariants for {business_id[:8]}: "
+                        + "; ".join(f"{f['rule_id']} ({f['severity']})"
+                                    for f in _inv_findings))
+    except Exception as _inv_err:
+        logger.warning(f"[composer] design invariants skipped (non-fatal): "
+                       f"{type(_inv_err).__name__}: {_inv_err}")
+
     # Persist: html_content serves live; site_config carries the spec.
     fresh = sb_clients.sb_get_as_service(
         f"/business_sites?id=eq.{site['id']}&select=site_config,html_content&limit=1") or []
@@ -2216,6 +2389,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     # they never ran. They live HERE now, on the path every real build
     # takes. Verdict recorded on every compose; SHIP_GATE=enforce turns
     # a failing verdict into a raised error; default observe-only.
+    _verdict: Optional[Dict[str, Any]] = None
     try:
         import vision_grader as _vg
         from design_register import get_invention_count as _gic
@@ -2228,6 +2402,10 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
             cfg.pop("vision_verdict", None)
         else:
             cfg["vision_verdict"] = _verdict
+            if _prior_verdict:
+                # A2 — the bounded regen's FIRST-pass grade, persisted
+                # alongside the new one so both survive (before/after).
+                cfg["vision_verdict_prior"] = _prior_verdict
             if not _verdict.get("passes_gate"):
                 logger.warning(
                     f"[ship-gate] FAIL for {business_id}: "
@@ -2235,7 +2413,12 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                     f"smell={_verdict.get('template_smell')} "
                     f"broken={_verdict.get('broken')} — "
                     f"notes={_verdict.get('notes')}")
-                if _vg.gate_enforced():
+                # A2: on compose_site's first pass the enforce raise
+                # DEFERS to the bounded quality regen (it owns the final
+                # verdict); everywhere else the raise fires exactly as
+                # before. The regen pass itself raises on a repeat fail.
+                if _vg.gate_enforced() and (not _regen_allowed
+                                            or _regen_attempted):
                     raise RuntimeError("ship-gate: vision verdict failed and "
                                        "SHIP_GATE=enforce is set")
         _inv = _gic(business_id)
@@ -2246,6 +2429,20 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
             if _inv < 3:
                 logger.warning(f"[ship-gate] inventions below spec for "
                                f"{business_id}: {_inv} < 3 (doctrine D12)")
+        # A4 — verify the inventions, don't just count them (spec §3-D:
+        # a restated brief line is a judge failure). Report + persist;
+        # a hard fail joins compose_site's bounded-regen trigger.
+        _inv_verification = _verify_inventions(business_id, ctx)
+        if _inv_verification.get("ok") is not None:
+            cfg["invention_verification"] = _inv_verification
+            if isinstance(quality_report, dict):
+                quality_report["invention_verification"] = _inv_verification
+            if _inv_verification.get("ok") is False:
+                logger.warning(
+                    f"[ship-gate] invention verification FAILED for "
+                    f"{business_id}: count={_inv_verification.get('count')} "
+                    f"restatements="
+                    f"{len(_inv_verification.get('restatements') or [])}")
     except RuntimeError:
         raise
     except Exception as _vg_err:
@@ -2313,6 +2510,9 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
               "slots": {"found": slots_meta.get("slots_found", []),
                         "populated": len(slots_meta.get("slots_populated") or [])},
               "quality_report": quality_report,
+              # A2 — compose_site's bounded regen decides on this; also
+              # surfaced to callers (was write-only into site_config).
+              "vision_verdict": _verdict,
               "url": f"https://{ctx['business']['slug']}.mysolutionist.app" if ctx["business"]["slug"] else None}
     if overrides_reconciled is not None:
         result["overrides_reconciled"] = {
@@ -2666,13 +2866,12 @@ def _apply_ceremony_pass(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
     Previously both call sites (compose_site + _direction_pipeline) ran
     this bare, so a ceremony bug would have killed the whole compose.
 
-    NOTE the DRO gate below: no DRO → no seams. This is the ONE switch
-    that silences the ceremony AND the atelier together (run_atelier's
-    regenerate mode is also DRO-gated) — a page missing BOTH layers
-    means dro_status=fallback, not two independent failures. The
-    atelier failing on its own can never suppress ceremony seams:
-    seams are inserted into the spec BEFORE render, and interstitial
-    is in atelier._NEVER_BESPOKE."""
+    NOTE (B5, 2026-07-18): the DRO gate below is now PARTIAL — a DRO
+    fallback drops the statement bar (it needs authored tension) but the
+    values marquee still earns its seat from real tone words alone. The
+    atelier stays fully DRO-gated (run_atelier's regenerate mode), so
+    dro_status=fallback still means no bespoke sections, but no longer
+    means a seam-free page when the brand voice is rich."""
     try:
         return _apply_ceremony_pass_inner(spec, ctx, dro, seed=seed)
     except Exception as e:
@@ -2689,8 +2888,12 @@ def _apply_ceremony_pass_inner(spec: List[Dict[str, Any]],
                                seed: Optional[str] = None
                                ) -> List[Dict[str, Any]]:
     """Insert the ceremony seams. Rules (all deterministic):
-      - no DRO or fewer than 4 sections → no seams (a short page has no
-        chapters to pause between);
+      - fewer than 4 sections → no seams (a short page has no chapters to
+        pause between);
+      - B5 (2026-07-18): a DRO fallback no longer silences ceremony. The
+        statement bar needs authored tension (DRO-only), but the values
+        marquee needs only real tone words + non-stilled motion — both
+        available without a rationale, so it still earns its seat;
       - whitespace philosophy generous (editorial_rhythm/confidence_air,
         or airy density) → silences earn a second seat; otherwise the
         filler seam is the transition thread;
@@ -2704,11 +2907,11 @@ def _apply_ceremony_pass_inner(spec: List[Dict[str, Any]],
         after the hero, never directly before contact);
       - placement + order seeded by design_rationale_id so recomposes
         vary their seams while any single rationale renders stably."""
-    if not dro or len(spec) < _CEREMONY_MIN_SECTIONS:
+    if len(spec) < _CEREMONY_MIN_SECTIONS:
         return spec
-    d = (dro.get("decisions") or {})
+    d = ((dro or {}).get("decisions") or {})
 
-    seed_src = str(seed or dro.get("id")
+    seed_src = str(seed or (dro or {}).get("id")
                    or ((d.get("hero_concept") or {}).get("concept_statement"))
                    or (ctx.get("business") or {}).get("id") or "ceremony")
     h = int(hashlib.sha256(seed_src.encode("utf-8")).hexdigest()[:12], 16)
@@ -2795,6 +2998,93 @@ def _load_stored_dro(business_id: str) -> Optional[Dict[str, Any]]:
         return None
     dro.setdefault("id", dr[0].get("id"))
     return dro
+
+
+def _regen_feedback(verdict: Optional[Dict[str, Any]],
+                    findings: List[Dict[str, Any]]) -> str:
+    """A2 — build the feedback text the bounded quality regen injects into
+    the copy stage and every atelier fragment: the vision grader's verdict
+    (when it failed) plus each design-invariant finding's fix hint."""
+    parts: List[str] = []
+    if verdict and not verdict.get("passes_gate", True):
+        parts.append(
+            "The previous render FAILED the vision ship-gate "
+            f"(first-viewport impact {verdict.get('first_viewport_impact')}/10, "
+            f"template smell {verdict.get('template_smell')}/10, "
+            f"broken={verdict.get('broken')}). "
+            f"Grader notes: {verdict.get('notes') or '(none)'}")
+    for f in (findings or [])[:6]:
+        parts.append(f"{f.get('rule_id')}: {f.get('description')} "
+                     f"Fix: {f.get('fix_hint')}")
+    return "\n".join(parts)[:1200]
+
+
+# A4 (2026-07-18) — deterministic invention verification. Words that
+# carry no design meaning are excluded from the restatement check.
+_VERIFY_STOP = frozenset({
+    "the", "and", "for", "with", "that", "this", "from", "into", "your",
+    "their", "our", "his", "her", "its", "are", "was", "were", "has",
+    "have", "had", "not", "but", "all", "any", "each", "per", "via",
+    "one", "two", "three", "every", "than", "then", "them", "they",
+    "will", "would", "could", "should", "shall", "may", "might", "must",
+    "can", "also", "just", "only", "over", "under", "between", "within",
+    "across", "while", "when", "where", "what", "which", "who", "whom",
+    "whose", "how", "why", "because", "about", "against", "brief",
+    "constraint", "builds", "addition", "section", "page",
+})
+
+
+def _content_words(text: str) -> set:
+    return {w for w in re.findall(r"[a-z]{4,}", (text or "").lower())
+            if w not in _VERIFY_STOP}
+
+
+def _verify_inventions(business_id: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """A4 — the invention check the spec's §3-D calls a judge failure:
+    >=3 inventions AND none may merely restate the brief. Deterministic
+    grade: an invention restates when >=70% of its content words already
+    appear in the owner's stated material (offer / creative brief /
+    story / feel words / tagline). ok=None means 'no records to verify'
+    — reported, never counted as failure."""
+    out: Dict[str, Any] = {"ok": None, "count": None, "restatements": []}
+    try:
+        from design_register import get_invention_count as _gic, \
+            get_invention_texts as _git
+        count = _gic(business_id)
+        texts = _git(business_id)
+        if count is None and texts is None:
+            return out
+        out["count"] = count
+        prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+        creative = prefs.get("creative") if isinstance(prefs.get("creative"), dict) else {}
+        story = prefs.get("story") if isinstance(prefs.get("story"), dict) else {}
+        tension = creative.get("tension") if isinstance(creative.get("tension"), dict) else {}
+        b = (ctx.get("bundle") or {}).get("business") or {}
+        stated = " ".join([
+            str(prefs.get("offer") or ""),
+            " ".join(str(v) for k, v in creative.items()
+                     if not isinstance(v, dict)),
+            " ".join(str(v) for v in tension.values()),
+            " ".join(str(v) for v in story.values()),
+            " ".join(str(w) for w in (prefs.get("feel_words") or [])),
+            str(prefs.get("notes") or ""),
+            str(b.get("tagline") or ""), str(b.get("elevator_pitch") or ""),
+        ])
+        stated_words = _content_words(stated)
+        restatements: List[str] = []
+        for item in (texts or []):
+            addition = (str(item.get("addition") or "")
+                        if isinstance(item, dict) else str(item or ""))
+            words = _content_words(addition)
+            if not words:
+                continue
+            if len(words & stated_words) / len(words) >= 0.7:
+                restatements.append(addition[:120])
+        out["restatements"] = restatements
+        out["ok"] = bool((count or 0) >= 3 and not restatements)
+    except Exception as e:
+        logger.info(f"[composer] invention verification skipped: {e}")
+    return out
 
 
 def compose_site(business_id: str, brief_notes: str = "",
@@ -3002,7 +3292,131 @@ def compose_site(business_id: str, brief_notes: str = "",
                                 dro_status=dro_status, dro_summary=dro_summary,
                                 defaulted_modules=defaulted_modules,
                                 full_recompose=True, progress_cb=progress_cb,
-                                dro_failure=dro_failure)
+                                dro_failure=dro_failure,
+                                _regen_allowed=use_llm)
+
+    # ── A2 (2026-07-18) — THE BOUNDED QUALITY REGEN ───────────────────
+    # The loop closes: when the vision grader FAILS the build — or the
+    # design invariants report HIGH findings (DESIGN_INVARIANTS=enforce;
+    # advisory findings stay telemetry per that file's rollout contract) —
+    # regenerate copy + bespoke fragments ONCE with the grader's notes
+    # injected into both prompts, then re-render. Keep-better guard: if
+    # pass 1 actually graded better (possible when invariants alone
+    # triggered), restore it via the banked previous_compose slot.
+    # Bounded: exactly one extra copy+atelier+render pass, only on
+    # failing full composes.
+    try:
+        _v1 = result.get("vision_verdict") or {}
+        _inv1 = ((result.get("quality_report") or {}).get("design_invariants")
+                 or [])
+        _inv_blocking = [f for f in _inv1 if f.get("severity") == "HIGH"]
+        _inv_verify = ((result.get("quality_report") or {})
+                       .get("invention_verification") or {})
+        _invention_fail = _inv_verify.get("ok") is False
+        _failed = bool(_v1) and not _v1.get("passes_gate", True)
+        if use_llm and dro and (_failed or _inv_blocking or _invention_fail):
+            _notes = _regen_feedback(_v1 if _failed else None, _inv1)
+            if _invention_fail:
+                _notes = ((_notes + "\n") if _notes else "") + (
+                    "INVENTION CHECK FAILED: the previous design offered "
+                    f"{_inv_verify.get('count')} genuine invention(s) — the "
+                    "doctrine (D12) requires >=3 additions that are NOT in "
+                    "the brief. Restated lines: "
+                    f"{'; '.join((_inv_verify.get('restatements') or [])[:3]) or 'n/a'}. "
+                    "Add design decisions the brief did not ask for, each "
+                    "building on a stated constraint.")
+            logger.warning(f"[composer] quality regen for {business_id[:8]} "
+                           f"(vision_fail={_failed}, "
+                           f"invariants_high={len(_inv_blocking)}, "
+                           f"invention_fail={_invention_fail}): "
+                           f"{_notes[:200]}")
+            _report_progress(progress_cb, 96,
+                             "Polishing from grader feedback")
+            try:
+                spec2 = compose_spec_llm(ctx, brief_notes or "", dro=dro,
+                                         feedback=_notes)
+                spec2 = _ensure_connections(spec2, ctx)
+                spec2 = _apply_cta_goal(spec2, ctx)
+                defaulted2 = [s["module"] for s in spec2
+                              if s.get("_variant_defaulted")]
+                spec2 = _apply_symmetry_preference(spec2,
+                                                   decisions.get("layout"))
+                if dro:
+                    _apply_hero_direction(spec2, decisions.get("hero_concept"))
+                if ctx.get("gallery") and not any(s.get("module") == "gallery"
+                                                  for s in spec2):
+                    _gv = ("mosaic" if (ctx.get("dna") or {}).get("vibe") == "bold"
+                           else "grid")
+                    _pos = next((i for i, s in enumerate(spec2)
+                                 if s.get("module") == "contact"), len(spec2))
+                    spec2.insert(max(1, _pos), {"module": "gallery",
+                                                "variant": _gv, "content": {}})
+                spec2 = _apply_ceremony_pass(spec2, ctx, dro, seed=dro_id)
+            except Exception as _spec_err:
+                logger.warning(f"[composer] regen copy pass failed (keeping "
+                               f"first pass): {_spec_err}")
+                spec2, defaulted2 = None, None
+            if spec2:
+                result2 = render_and_persist(
+                    business_id, spec2, ctx, dro_id=dro_id, dro=dro,
+                    dro_status=dro_status, dro_summary=dro_summary,
+                    defaulted_modules=defaulted2,
+                    full_recompose=True, progress_cb=progress_cb,
+                    dro_failure=dro_failure,
+                    _regen_attempted=True, _regen_notes=_notes,
+                    _prior_verdict=_v1 or None)
+                _v2 = result2.get("vision_verdict") or {}
+                _pass1_better = (bool(_v1) and bool(_v2)
+                                 and _v1.get("passes_gate", False)
+                                 and not _v2.get("passes_gate", True))
+                if _pass1_better:
+                    # Invariant-triggered regen made the vision grade WORSE
+                    # — restore pass 1 (render #2 banked it as
+                    # previous_compose) and re-attribute the verdict.
+                    logger.warning(f"[composer] regen graded worse for "
+                                   f"{business_id[:8]} — restoring first pass")
+                    restore_previous_compose(business_id)
+                    try:
+                        _rows = sb_clients.sb_get_as_service(
+                            f"/business_sites?business_id=eq.{business_id}"
+                            "&select=id,site_config&limit=1") or []
+                        if _rows:
+                            _cfg = dict(_rows[0].get("site_config") or {})
+                            _cfg["vision_verdict"] = _v1
+                            _cfg.pop("vision_verdict_prior", None)
+                            sb_clients.sb_patch_as_service(
+                                f"/business_sites?id=eq.{_rows[0]['id']}",
+                                {"site_config": _cfg})
+                    except Exception:
+                        pass
+                    result["quality_regen"] = {"triggered": True,
+                                               "reverted": True,
+                                               "notes": _notes[:400]}
+                else:
+                    result2["quality_regen"] = {"triggered": True,
+                                                "reverted": False,
+                                                "notes": _notes[:400]}
+                    result = result2
+    except RuntimeError:
+        raise
+    except Exception as _rg_err:
+        logger.warning(f"[composer] quality regen skipped (non-fatal): "
+                       f"{type(_rg_err).__name__}: {_rg_err}")
+
+    # SHIP_GATE=enforce when NO regen ran (DRO fallback, regen copy pass
+    # failed, or invariants-only advisory): render_and_persist deferred
+    # the raise to here — the gate still lands after the fix attempt.
+    try:
+        import vision_grader as _vg_enf
+        _vf = result.get("vision_verdict") or {}
+        if (_vf and not _vf.get("passes_gate", True)
+                and _vg_enf.gate_enforced()):
+            raise RuntimeError("ship-gate: vision verdict failed and "
+                               "SHIP_GATE=enforce is set")
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
 
     # Multi-page: render the secondary pages (sharing the home's design) and
     # persist generated_pages. Best-effort — a failure never blocks the home.
@@ -4104,7 +4518,7 @@ def refine_section(business_id: str, section: str, instruction: str,
         return {"ok": False,
                 "error": f"the {mid} section renders live data and can't be "
                          "restyled this way — try the hero, about, "
-                         "offerings, gallery, testimonials or cta section"}
+                         "offerings, gallery, testimonials, cta or contact section"}
 
     # Stored DRO (design law of the page) — same load as re-render paths.
     dro: Optional[Dict[str, Any]] = None

@@ -99,10 +99,11 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 </div>"""
         motion = (ctx.get("dna") or {}).get("motion", "standard")
         # A stilled page (motion=subtle) reads the marquee as a static
-        # row — same treatment reduced-motion gets everywhere.
+        # row — same treatment reduced-motion gets everywhere. B1: the
+        # entrance tier (arrivals only) stills it too — it's a perpetual loop.
         still = ("\n.sxm-int-mq-track { animation: none; justify-content: center; }"
                  "\n.sxm-int-mq-seq[aria-hidden] { display: none; }"
-                 if motion == "subtle" else "")
+                 if motion in ("subtle", "entrance") else "")
         css = """
 .sxm-int-marquee { overflow: hidden; padding: 16px 0;
   border-top: 1px solid var(--sx-border); border-bottom: 1px solid var(--sx-border);
@@ -130,13 +131,14 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   <span class="sxm-int-thread-line"></span>
 </div>"""
         css = """
-.sxm-int-thread { padding: clamp(30px, 5vh, 48px) var(--sx-gutter); }
+.sxm-int-thread { padding: var(--sx-rhythm-quarter, clamp(30px, 5vh, 48px)) var(--sx-gutter); }
 .sxm-int-thread-line { display: block; height: 1px; max-width: var(--sx-content-max);
   margin: 0 auto; opacity: .2;
   background: linear-gradient(90deg, transparent, var(--sx-accent) 50%, transparent)
     0 0 / 200% 100%;
   box-shadow: 0 0 16px 1px var(--sx-accent-soft); }"""
-        if (ctx.get("dna") or {}).get("motion", "standard") != "subtle":
+        # B1: entrance tier stills the sweep — it is a perpetual loop.
+        if (ctx.get("dna") or {}).get("motion", "standard") not in ("subtle", "entrance"):
             css += """
 .sxm-int-thread-line { animation: sxm-int-sweep 14s linear infinite; }
 @keyframes sxm-int-sweep { from { background-position: 200% 0; } to { background-position: -200% 0; } }
@@ -161,7 +163,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   <span class="sxm-int-silence-hairline"></span>
 </div>"""
     css = """
-.sxm-int-silence { position: relative; height: clamp(96px, 14vh, 150px); display: flex;
+.sxm-int-silence { position: relative; height: var(--sx-rhythm-base, clamp(96px, 14vh, 150px)); display: flex;
   align-items: center; justify-content: center; overflow: hidden; }
 .sxm-int-silence-hairline { width: 48px; height: 1px; opacity: .55; position: relative; z-index: 1;
   background: linear-gradient(90deg, transparent, var(--sx-accent), transparent); }
@@ -170,7 +172,8 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   font-weight: var(--sx-heading-weight); font-size: clamp(3rem, 9vw, 6.5rem);
   letter-spacing: .04em; text-transform: uppercase; color: var(--sx-text);
   opacity: .03; white-space: nowrap; user-select: none; }"""
-    if (ctx.get("dna") or {}).get("motion", "standard") != "subtle":
+    # B1: entrance tier stills the breathe/drift — both are perpetual loops.
+    if (ctx.get("dna") or {}).get("motion", "standard") not in ("subtle", "entrance"):
         css += """
 .sxm-int-silence-hairline { animation: sxm-int-breathe 8s ease-in-out infinite alternate; }
 .sxm-int-ghostword { animation: sxm-int-drift 22s ease-in-out infinite alternate; }
