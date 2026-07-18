@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Tuple
 
 from . import (hero, about, offerings, testimonials, gallery, cta_band,
                contact_footer, store, showcase, header, statband,
-               interstitial, faq)
+               interstitial, faq, process)
 from ._base import (page_shell, build_page_meta, rule_break_treatment,
                     diamond_field, is_brut)
 
@@ -192,6 +192,11 @@ MODULES: Dict[str, Dict[str, Any]] = {
         "render": faq.render,
         "fields": ("eyebrow", "headline"),
     },
+    "process": {
+        "variants": process.VARIANTS,
+        "render": process.render,
+        "fields": ("eyebrow", "headline", "intro"),
+    },
     "cta": {
         "variants": cta_band.VARIANTS,
         "render": cta_band.render,
@@ -289,6 +294,18 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
         from design_specs import motion_css_vars
         css_parts.insert(0, motion_css_vars(ctx.get("motion_tokens"),
                                             ctx.get("motion_spec")))
+    except Exception:
+        pass
+    # Design audit P3: the Stage-C rhythm scale finally reaches the
+    # page (it was computed per compose and consumed by nothing in
+    # the render path). Custom blocks space on these steps (D5).
+    try:
+        _rb = int((ctx.get("rhythm_scale") or {}).get("base_px") or 0)
+        if _rb:
+            css_parts.insert(0, (":root { --sx-rhythm-base: %dpx; "
+                                 "--sx-rhythm-half: %dpx; "
+                                 "--sx-rhythm-quarter: %dpx; }"
+                                 % (_rb, _rb // 2, _rb // 4)))
     except Exception:
         pass
     return page_shell(ctx["dna"], title, "\n".join(body_parts), "\n".join(css_parts),

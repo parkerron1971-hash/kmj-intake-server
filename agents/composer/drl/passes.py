@@ -488,6 +488,23 @@ def _creative_brief_block(creative: Optional[Dict[str, Any]]) -> str:
                     if isinstance(lean, int) else "")
         lines.append(f"- Tension to hold: '{tn['pole_a']}' vs '{tn['pole_b']}'"
                      f"{lean_txt} <- author decisions.tension from exactly these poles.")
+    st = c.get("story") if isinstance(c.get("story"), dict) else {}
+    _story_labels = (("origin", "How it started"),
+                     ("craft", "What people never guess it takes"),
+                     ("proof", "The work they are proudest of"),
+                     ("voice", "What clients say"),
+                     ("atmosphere", "What walking in feels like"))
+    st_lines = [f'    {label}: "{str(st[k]).strip()}"'
+                for k, label in _story_labels
+                if str(st.get(k) or "").strip()]
+    if st_lines:
+        # Design audit P3: the story used to reach only the signal pass;
+        # the author now reads it raw — mine it for the metaphor, the
+        # palette's temperature, and WHERE the rule-break belongs.
+        lines.append("- THE OWNER'S STORY (their own words — mine it for "
+                     "the organizing metaphor, the palette's temperature, "
+                     "and where the rule-break belongs):\n"
+                     + "\n".join(st_lines))
     if not lines:
         return ""
     return ("OWNER'S CREATIVE BRIEF (verbatim, HIGHEST PRIORITY — outranks "
