@@ -123,6 +123,7 @@ def _brand_head_meta_tags(business_id: str) -> str:
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from auth_supabase import require_user, AuthedUser
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from auth_supabase import AuthedUser, require_user
@@ -1241,7 +1242,7 @@ def restore_previous(business_id: str,
 
 
 @router.post("/sites/{business_id}/invalidate")
-async def invalidate_site_cache(business_id: str):
+async def invalidate_site_cache(business_id: str, user: AuthedUser = Depends(require_user)):
     """Bump business_sites.updated_at so consumers see a fresh
     revision after products / brand_kit / testimonials change.
 
@@ -1280,7 +1281,7 @@ async def invalidate_site_cache(business_id: str):
 
 
 @router.post("/sites/{business_id}/smart-config")
-async def save_smart_config_endpoint(business_id: str, body: Dict[str, Any]):
+async def save_smart_config_endpoint(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     """Save (merge into) site_config without flipping the use_smart_sites
     flag. Body shape: any subset of SmartSiteConfig keys."""
     try:
@@ -1376,7 +1377,7 @@ async def smart_enable_endpoint(business_id: str,
 
 
 @router.post("/sites/{business_id}/smart-disable")
-async def smart_disable_endpoint(business_id: str):
+async def smart_disable_endpoint(business_id: str, user: AuthedUser = Depends(require_user)):
     """Flip use_smart_sites = false. Falls back to legacy rendering."""
     try:
         from smart_sites import disable_smart_sites
@@ -1474,7 +1475,7 @@ async def layout_options_endpoint(business_id: str):
 
 
 @router.post("/sites/{business_id}/layout-override")
-async def layout_override_endpoint(business_id: str, body: Dict[str, Any]):
+async def layout_override_endpoint(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     """Save vocabulary or layout override into site_config.
 
     Body: { vocabulary_override: <vocab-id> | null, layout_id: <layout-id> | null }
@@ -1700,7 +1701,7 @@ def _check_decoration_cooldown(business_id: str):
 
 
 @router.post("/sites/{business_id}/generate-decoration")
-async def generate_decoration_endpoint(business_id: str):
+async def generate_decoration_endpoint(business_id: str, user: AuthedUser = Depends(require_user)):
     """Generate a unique decoration scheme via the Studio-spirit AI pipeline.
 
     Flow:
@@ -2066,7 +2067,7 @@ def _check_design_rec_cooldown(business_id: str):
 
 
 @router.post("/sites/{business_id}/generate-design-recommendation")
-async def generate_design_rec_endpoint(business_id: str):
+async def generate_design_rec_endpoint(business_id: str, user: AuthedUser = Depends(require_user)):
     """Run the Designer Agent (LLM #1). Picks strand pair + ratio +
     sub-strand + layout archetype + accent style + 2 alternatives.
 
@@ -2507,7 +2508,7 @@ _multi_page_in_flight: set = set()
 
 
 @router.post("/sites/{business_id}/set-site-type")
-async def set_site_type_endpoint(business_id: str, site_type: str):
+async def set_site_type_endpoint(business_id: str, site_type: str, user: AuthedUser = Depends(require_user)):
     """Switch a business between landing-page and multi-page rendering.
 
     Persists site_config.site_type. Routing reads this on every public
@@ -2856,7 +2857,7 @@ async def design_signals_endpoint(business_id: str):
 
 
 @router.post("/sites/{business_id}/expand-design-brief")
-async def expand_brief_endpoint(business_id: str):
+async def expand_brief_endpoint(business_id: str, user: AuthedUser = Depends(require_user)):
     """Pass 3.8b — manual idempotent Brief Expander call.
 
     Reads the persisted design_recommendation, runs LLM #2 to expand it
@@ -3083,7 +3084,7 @@ def _run_builder_job(business_id: str, site_id: str) -> None:
 
 
 @router.post("/sites/{business_id}/generate-html")
-async def generate_html_endpoint(business_id: str):
+async def generate_html_endpoint(business_id: str, user: AuthedUser = Depends(require_user)):
     """Pass 3.8d — manual idempotent Builder Agent call (LLM #3).
 
     Returns 202 immediately; the build runs in a background daemon thread

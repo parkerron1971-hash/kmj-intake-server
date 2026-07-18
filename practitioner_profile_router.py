@@ -11,7 +11,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
+from auth_supabase import require_user, AuthedUser
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -31,12 +32,16 @@ def health() -> JSONResponse:
 
 
 @router.get("/profile/{owner_id}")
-def profile(owner_id: str) -> JSONResponse:
+def profile(owner_id: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your profile")
     return JSONResponse({"ok": True, "profile": pp.get_profile(owner_id)})
 
 
 @router.post("/profile/{owner_id}")
-def save_profile(owner_id: str, data: Dict[str, Any]) -> JSONResponse:
+def save_profile(owner_id: str, data: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your profile")
     row = pp.upsert_profile(owner_id, data or {})
     if row is None:
         return JSONResponse({"ok": False, "error": "save failed"}, status_code=500)
@@ -44,7 +49,9 @@ def save_profile(owner_id: str, data: Dict[str, Any]) -> JSONResponse:
 
 
 @router.post("/profile/{owner_id}/proactive-mode")
-def set_proactive_mode(owner_id: str, body: ProactiveModeBody) -> JSONResponse:
+def set_proactive_mode(owner_id: str, body: ProactiveModeBody, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your profile")
     """Toggle the user-controlled practitioner-level proactive flag.
     Independent from business_profiles.proactive_capture_enabled — a
     user can have practitioner asks on while business asks are off,
@@ -58,10 +65,14 @@ def set_proactive_mode(owner_id: str, body: ProactiveModeBody) -> JSONResponse:
 
 
 @router.get("/profile/{owner_id}/is-complete")
-def complete(owner_id: str) -> JSONResponse:
+def complete(owner_id: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your profile")
     return JSONResponse({"ok": True, "complete": pp.is_complete(owner_id)})
 
 
 @router.get("/profile/{owner_id}/missing")
-def missing(owner_id: str) -> JSONResponse:
+def missing(owner_id: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your profile")
     return JSONResponse({"ok": True, "missing": pp.get_missing_jit_fields(owner_id)})

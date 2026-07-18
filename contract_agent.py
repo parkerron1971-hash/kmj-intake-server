@@ -42,7 +42,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from auth_supabase import require_user, AuthedUser
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -268,7 +269,7 @@ class ContractPreviewRequest(BaseModel):
 
 
 @router.post("/agents/contract/generate")
-async def contract_generate(req: ContractRequest):
+async def contract_generate(req: ContractRequest, user: AuthedUser = Depends(require_user)):
     async with httpx.AsyncClient() as client:
         businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
         if not businesses:
@@ -315,7 +316,7 @@ async def contract_generate(req: ContractRequest):
 
 
 @router.post("/agents/contract/preview")
-async def contract_preview(req: ContractPreviewRequest):
+async def contract_preview(req: ContractPreviewRequest, user: AuthedUser = Depends(require_user)):
     async with httpx.AsyncClient() as client:
         businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
         if not businesses:
@@ -535,7 +536,7 @@ class PdfRequest(BaseModel):
 
 
 @router.post("/agents/contract/pdf")
-async def contract_pdf(req: PdfRequest):
+async def contract_pdf(req: PdfRequest, user: AuthedUser = Depends(require_user)):
     async with httpx.AsyncClient() as client:
         # Fetch business + contact for header/recipient info
         businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")

@@ -34,6 +34,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from auth_supabase import require_user, AuthedUser
 from pydantic import BaseModel
 
 import sb_clients
@@ -94,6 +95,7 @@ def diag_unsplash(
     q: str,
     orientation: str = "landscape",
     min_width: int = 1200,
+    user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
     """Diagnostic: live Unsplash query, returns raw query_unsplash output.
 
@@ -126,6 +128,7 @@ def diag_build_query(
     content_archetype: str = "",
     accent_style: str = "",
     sub_strand_id: str = "",
+    user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
     """Diagnostic: show the Unsplash query that build_unsplash_query
     would compose for the given slot + brief. Pure composition, no

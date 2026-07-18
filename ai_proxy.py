@@ -77,7 +77,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
+from auth_supabase import require_user, AuthedUser
 from pydantic import BaseModel, Field
 
 import rate_limit
@@ -186,7 +187,7 @@ def _join_text_blocks(content: Any) -> str:
 
 
 @router.post("/ai/proxy")
-async def ai_proxy(req: ProxyRequest, request: Request):
+async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depends(require_user)):
     """Proxy a Claude Messages API call. The API key never leaves Railway."""
 
     # Per-caller rate limit (beta-readiness audit) — stop one source from

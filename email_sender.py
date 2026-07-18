@@ -38,7 +38,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
+from auth_supabase import require_user, AuthedUser
 from pydantic import BaseModel
 import pii_mask
 
@@ -235,7 +236,7 @@ async def send_via_resend(
 
 
 @router.post("/email/send", response_model=SendEmailResponse)
-async def send_email(req: SendEmailRequest):
+async def send_email(req: SendEmailRequest, user: AuthedUser = Depends(require_user)):
     if not os.environ.get("RESEND_API_KEY"):
         raise HTTPException(500, "Resend API key not configured")
 
