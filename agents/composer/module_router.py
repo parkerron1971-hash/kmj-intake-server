@@ -388,15 +388,19 @@ def _route_from_context(
         )
 
     user_prompt = _build_user_prompt(ctx, available)
-    client = Anthropic(api_key=api_key)
 
+    # Provider switch (2026-07-17): routes through site_llm so the
+    # site-build pipeline can run on Kimi (SITE_BUILDER_PROVIDER=
+    # moonshot) with fail-open fallback to Anthropic.
     def _call(extra_user: str = "") -> str:
-        msg = client.messages.create(
+        import site_llm
+        msg = site_llm.create_message(
             model=ROUTER_MODEL,
             max_tokens=ROUTER_MAX_TOKENS,
             temperature=ROUTER_TEMPERATURE,
             system=ROUTER_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt + extra_user}],
+            user_content=user_prompt + extra_user,
+            task="module_router",
         )
         return "".join(
             b.text for b in msg.content if getattr(b, "type", None) == "text"

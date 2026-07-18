@@ -119,13 +119,19 @@ def judge_rule(
     user_parts.append(f"HTML TO JUDGE:\n{truncated_html}")
 
     try:
-        client = Anthropic(api_key=api_key)
-        msg = client.messages.create(
+        # Judge provider switch (2026-07-17): defaults to Claude even
+        # when the builder runs on Kimi — an independent grader is the
+        # honest read. SITE_JUDGE_PROVIDER=moonshot flips it on purpose
+        # so Kevin can compare Claude-judged vs Kimi-self-judged builds.
+        import site_llm
+        msg = site_llm.create_message(
             model=JUDGE_MODEL,
             max_tokens=JUDGE_MAX_TOKENS,
             temperature=JUDGE_TEMPERATURE,
             system=JUDGE_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": "\n\n".join(user_parts)}],
+            user_content="\n\n".join(user_parts),
+            task="llm_judge",
+            provider_name=site_llm.judge_provider(),
         )
     except Exception as e:
         logger.warning(

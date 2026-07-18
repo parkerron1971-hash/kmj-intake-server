@@ -977,15 +977,17 @@ def compose_hero(
 
     user_prompt = build_user_prompt(ctx, stored_ce=stored_ce, stored_meta=stored_meta)
 
-    client = Anthropic(api_key=api_key)
-
+    # Provider switch (2026-07-17): site_llm routes to Kimi when
+    # SITE_BUILDER_PROVIDER=moonshot, fail-open back to Anthropic.
     def _call(extra_user: str = "") -> str:
-        msg = client.messages.create(
+        import site_llm
+        msg = site_llm.create_message(
             model=COMPOSER_MODEL,
             max_tokens=COMPOSER_MAX_TOKENS,
             temperature=COMPOSER_TEMPERATURE,
             system=spec.system_prompt,
-            messages=[{"role": "user", "content": user_prompt + extra_user}],
+            user_content=user_prompt + extra_user,
+            task="hero_composer",
         )
         # Arc 19 — meter the hero build (endpoint keys the unit weight).
         try:

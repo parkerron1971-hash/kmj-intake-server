@@ -129,9 +129,21 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
             **model_ladder.sampling_kwargs(model, temperature),
         )
 
-    msg, used_model = model_ladder.call_with_ladder(
-        _do, model=_drl_model(), task=family,
-        business_id=business_id, max_tokens=max_tokens)
+    # Provider switch (2026-07-17): when the site pipeline runs on
+    # Kimi (SITE_BUILDER_PROVIDER=moonshot), skip the Claude model
+    # ladder — site_llm handles the call and fails open to Anthropic
+    # (in which case the single-model path, not the ladder, applies).
+    import site_llm
+    if site_llm.provider() == "moonshot":
+        msg = site_llm.create_message(
+            model=_drl_model(), max_tokens=max_tokens,
+            temperature=temperature, system=system, user_content=user,
+            task=f"drl/{task}")
+        used_model = getattr(msg, "model", "moonshot")
+    else:
+        msg, used_model = model_ladder.call_with_ladder(
+            _do, model=_drl_model(), task=family,
+            business_id=business_id, max_tokens=max_tokens)
     try:
         from api_usage_logger import log_api_usage_sync
         u = getattr(msg, "usage", None)

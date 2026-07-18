@@ -149,13 +149,14 @@ def enrich_feedback(
     user_message = "\n".join(user_message_parts)
 
     try:
-        client = Anthropic(api_key=api_key)
-        msg = client.messages.create(
+        import site_llm
+        msg = site_llm.create_message(
             model=ENRICHMENT_MODEL,
             max_tokens=ENRICHMENT_MAX_TOKENS,
             temperature=ENRICHMENT_TEMPERATURE,
             system=ENRICHMENT_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
+            user_content=user_message,
+            task="feedback_enrichment",
         )
     except Exception as e:
         logger.warning(
