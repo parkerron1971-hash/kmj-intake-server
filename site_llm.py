@@ -168,6 +168,12 @@ def create_message(*, model: str, max_tokens: int, system: str, user_content: st
         "messages": [{"role": "user", "content": user_content}],
         "timeout": timeout,
     }
-    if temperature is not None:
-        kwargs["temperature"] = temperature
+    # Sampling params go through the same gate as every direct Claude call
+    # site (model_ladder.sampling_kwargs): Opus 4.7/4.8 / Sonnet 5 / Fable
+    # 400 on `temperature`, so passing it unconditionally made the
+    # moonshot->anthropic FALLBACK the one path that couldn't succeed —
+    # first seen live when a Kimi timeout dropped the atelier onto
+    # opus-4-8 and every bespoke fragment died on arrival.
+    import model_ladder
+    kwargs.update(model_ladder.sampling_kwargs(model, temperature))
     return client.messages.create(**kwargs)
