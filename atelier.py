@@ -328,6 +328,19 @@ def _section_data(kind: str, section_copy: Dict[str, Any],
     _offer = str((_prefs or {}).get("offer") or "").strip()
     if _offer:
         data["what_the_business_offers"] = _offer[:600]
+    # Creative-capture arc (2026-07-18) — the interview-v2 answers ride
+    # the REAL DATA block. THE CREATIVE CONTRACT: these are the FLOOR,
+    # not the ceiling — honor every constraint, then add instinct on top.
+    for _k in ("type_personality", "structure"):
+        _v = (_prefs or {}).get(_k)
+        if isinstance(_v, str) and _v.strip():
+            data[_k] = _v.strip()
+    _stats = (_prefs or {}).get("proof_stats")
+    if isinstance(_stats, list) and _stats:
+        data["proof_stats_real_numbers"] = _stats[:3]
+    _steps = (_prefs or {}).get("process_steps")
+    if isinstance(_steps, list) and _steps:
+        data["how_they_work_process"] = _steps[:5]
     cta_href = (booking.get("url") if booking.get("enabled") and booking.get("url")
                 else "#contact")
     if kind in ("hero", "cta", "about", "offerings"):

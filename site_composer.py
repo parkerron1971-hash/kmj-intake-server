@@ -589,7 +589,24 @@ def gather_context(business_id: str) -> Dict[str, Any]:
     except Exception:
         _hero_spec, _motion_spec = None, None
 
+    # Creative-capture arc (2026-07-18) — the model AUTHORS the menu spec
+    # (nav_spec.py; TTL-cached so multi-page composes share one menu and
+    # previews are free). None on any failure/env-off → header falls back
+    # to the DNA-variant bars.
+    try:
+        from nav_spec import author_nav_spec
+        nav_spec = author_nav_spec(
+            business_id,
+            {"name": biz.get("name") or "", "type": biz.get("type") or ""},
+            dna if isinstance(dna, dict) else {},
+            site_prefs if isinstance(site_prefs, dict) else {},
+            voice_profile=biz.get("voice_profile") if isinstance(biz.get("voice_profile"), dict) else {},
+        )
+    except Exception:
+        nav_spec = None
+
     return {
+        "nav_spec": nav_spec,
         "hero_spec": _hero_spec,
         "motion_spec": _motion_spec,
         "motion_tokens": _motion,
