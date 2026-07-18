@@ -902,6 +902,8 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
                           + ", ".join(str(w) for w in prefs["feel_words"]) + ".")
     if prefs.get("inspiration"):
         pref_lines.append(f"Inspiration: {prefs['inspiration']}")
+    if prefs.get("type_personality"):
+        pref_lines.append(f"Type voice the owner chose: {prefs['type_personality']}")
     if prefs.get("inspiration_urls"):
         pref_lines.append("Sites I admire: "
                           + ", ".join(str(u) for u in prefs["inspiration_urls"][:3]))
@@ -1819,9 +1821,20 @@ def _apply_dro_design(ctx: Dict[str, Any], dro: Dict[str, Any],
             f"{business_id[:8]} — type director takes over (brand kit "
             f"fonts_locked=true keeps it)")
         _owner_fonts = False
+    # Design audit P2 — the HYBRID font contract (Kevin's ruling):
+    #   • type_personality="brand_fonts" is an EXPLICIT pin — it
+    #     beats the generic-face demotion (no more silent overrides
+    #     of a choice the practitioner actually made).
+    #   • any other type_personality constrains the pairing FAMILY;
+    #     the DRO still applies taste within it.
+    _tp = str(((ctx.get("site_prefs") or {}).get("type_personality")) or "").strip().lower()
+    if _tp == "brand_fonts" and _design_cfg.get("fonts_owner_set"):
+        _owner_fonts = True
+    _owner_pairings = brand_dna.TYPE_PERSONALITY_PAIRINGS.get(_tp)
     _fonts_pinned = _owner_fonts or bool((_expr.get("hero_font") or "").strip())
     ctx["dna"] = brand_dna.apply_dro_style(
-        ctx["dna"], decisions, fonts_pinned=_fonts_pinned)
+        ctx["dna"], decisions, owner_pairings=_owner_pairings,
+        fonts_pinned=_fonts_pinned)
     # Arc 5 — the OWNER's color direction is a HARD preference:
     # when it conflicts with the DRO's palette.base, the owner
     # wins (gather_context already grounded the no-DRO paths).

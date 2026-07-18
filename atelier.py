@@ -138,6 +138,9 @@ TOKEN_CONTRACT: Tuple[Tuple[str, str], ...] = (
     ("--sx-on-accent-break", "text on the wrong-accent (fallback var(--sx-on-accent))"),
     ("--sx-font-heading", "display face — headings only"),
     ("--sx-font-body", "body face"),
+    ("--sx-font-accent", "editorial accent face — the italic accent word, pull-quotes, eyebrow flourishes (falls back to the heading face)"),
+    ("--sx-secondary", "SECOND brand accent (present only when the brand carries one) — spend it as ONE section's family per the restraint budget, never everywhere"),
+    ("--sx-secondary-soft", "soft wash of the second accent (present only with --sx-secondary)"),
     ("--sx-h1", "h1 scale (already clamp()ed)"),
     ("--sx-h2", "h2 scale (already clamp()ed)"),
     ("--sx-heading-weight", "display weight"),
@@ -513,7 +516,7 @@ def _contract_block(kind: str, uid: str, dom_id: str, slots_line: str,
 1. Exactly ONE root element: <section id="{dom_id}" class="atl-{uid} ...">…</section>. Nothing outside it.
 2. Every CSS selector is prefixed with .atl-{uid} (e.g. ".atl-{uid} .crest"). No bare element/class/#id selectors. @media queries allowed; @keyframes names must start with atl-{uid}. The atl-{uid} class itself appears ONLY on the root <section> — child elements get plain role classes (class="crest", never class="atl-{uid} crest"): repeating the scope class makes the root's base rule (min-height, flex, section padding) cascade onto every child and destroys the layout.
 3. Colors ONLY: var(--sx-*), transparent, currentColor, rgba(0,0,0,X), rgba(255,255,255,X). NO hex, NO rgb()/hsl(), no named colors.
-4. Fonts ONLY var(--sx-font-heading) / var(--sx-font-body).
+4. Fonts ONLY var(--sx-font-heading) / var(--sx-font-body) / var(--sx-font-accent) — the accent face is for italic editorial moments (one accent word in a heading, a pull-quote), never body text.
 5. Images ONLY as <img data-slot="…" src="" alt="specific, evocative alt"> with data-slot from: {slots_line}. Each slot at most once. The platform fills src.
 6. Every text element rendering a provided copy field carries data-override-target="{kind}/<field>" (fields provided: {', '.join(copy_fields) or '(none)'} — each must appear exactly once). TOTAL EDITABILITY: any ADDITIONAL display text you invent (a label, a kicker, a closing line) must carry its own data-override-target="{kind}/custom_1", "{kind}/custom_2", … numbered sequentially — every visible word on the page must be editable. Business facts you were given (prices, names) are rendered verbatim and need no extra target beyond the provided fields.
 7. Links: href is a #anchor or one of: {hrefs_line}. NO other URLs anywhere (no imports, no url(), no external anything).
