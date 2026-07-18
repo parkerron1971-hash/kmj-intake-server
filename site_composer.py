@@ -255,6 +255,46 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
                 cout["tension"] = tout
         if cout:
             out["creative"] = cout
+    # ── Interview v2 (design-quality audit fix R1, 2026-07-18): these
+    # fields were collected by the interview and silently dropped here —
+    # their downstream consumers (atelier REAL DATA, gallery-by-intent,
+    # type pairing) read keys that never existed. THE RULE: every new
+    # SitePrefs field ships with its allowlist entry, same arc.
+    tp = raw.get("type_personality")
+    if isinstance(tp, str) and tp.strip().lower() in (
+            "statement", "editorial", "modern_minimal", "classic",
+            "handcrafted", "brand_fonts"):
+        out["type_personality"] = tp.strip().lower()
+    st = raw.get("structure")
+    if isinstance(st, str) and st.strip().lower() in ("one_page", "multi_page"):
+        out["structure"] = st.strip().lower()
+    if isinstance(raw.get("wants_gallery"), bool):
+        out["wants_gallery"] = raw["wants_gallery"]
+    ps = raw.get("proof_stats")
+    if isinstance(ps, list):
+        stats = []
+        for item in ps[:3]:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or "").strip()[:40]
+            value = str(item.get("value") or "").strip()[:20]
+            if label and value:
+                stats.append({"label": label, "value": value})
+        if stats:
+            out["proof_stats"] = stats
+    pr = raw.get("process_steps")
+    if isinstance(pr, list):
+        steps = []
+        for item in pr[:5]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()[:60]
+            if not title:
+                continue
+            blurb = str(item.get("blurb") or "").strip()[:200]
+            steps.append({"title": title, **({"blurb": blurb} if blurb else {})})
+        if steps:
+            out["process_steps"] = steps
     return out or None
 
 
@@ -2129,6 +2169,40 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                 "html_content": _out_html,
                 "keys": {k: cfg.get(k) for k in _RESTORE_KEYS if k in cfg},
             }
+    # ── Design-quality audit fix R2 (2026-07-18): the vision grader /
+    # ship gate / invention verification were wired into the legacy
+    # run_build_loop path, which the default endpoint reroutes AROUND —
+    # they never ran. They live HERE now, on the path every real build
+    # takes. Verdict recorded on every compose; SHIP_GATE=enforce turns
+    # a failing verdict into a raised error; default observe-only.
+    try:
+        import vision_grader as _vg
+        from design_register import get_invention_count as _gic
+        _verdict = _vg.grade(final_html, business_id)
+        if _verdict is not None:
+            cfg["vision_verdict"] = _verdict
+            if not _verdict.get("passes_gate"):
+                logger.warning(
+                    f"[ship-gate] FAIL for {business_id}: "
+                    f"impact={_verdict.get('first_viewport_impact')} "
+                    f"smell={_verdict.get('template_smell')} "
+                    f"broken={_verdict.get('broken')} — "
+                    f"notes={_verdict.get('notes')}")
+                if _vg.gate_enforced():
+                    raise RuntimeError("ship-gate: vision verdict failed and "
+                                       "SHIP_GATE=enforce is set")
+        _inv = _gic(business_id)
+        if _inv is not None:
+            cfg["invention_count"] = _inv
+            if _inv < 3:
+                logger.warning(f"[ship-gate] inventions below spec for "
+                               f"{business_id}: {_inv} < 3 (doctrine D12)")
+    except RuntimeError:
+        raise
+    except Exception as _vg_err:
+        logger.warning(f"[ship-gate] vision pass skipped: "
+                       f"{type(_vg_err).__name__}: {_vg_err}")
+
     cfg.update({
         "page_spec": {"sections": spec},
         "generated_html": final_html,

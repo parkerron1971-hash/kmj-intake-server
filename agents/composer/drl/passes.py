@@ -135,11 +135,27 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
     # (in which case the single-model path, not the ladder, applies).
     import site_llm
     if site_llm.provider() == "moonshot":
-        msg = site_llm.create_message(
-            model=_drl_model(), max_tokens=max_tokens,
-            temperature=temperature, system=system, user_content=user,
-            task=f"drl/{task}")
-        used_model = getattr(msg, "model", "moonshot")
+        # Design-quality audit fix R3 (2026-07-18): this branch used
+        # site_llm's default 120s timeout — the full DRO needs the
+        # ladder's family-scaled ceiling (240s on slow models) plus
+        # Kimi's reasoning headroom. Under 120s the call died on BOTH
+        # attempts, every build fell to minimal mode, and the atelier
+        # (which requires a full DRO) never ran: the flat-site cascade.
+        # On ANY moonshot failure we now fall back to the FULL Claude
+        # model ladder, not a single brittle call.
+        try:
+            msg = site_llm.create_message(
+                model=_drl_model(), max_tokens=max_tokens,
+                temperature=temperature, system=system, user_content=user,
+                timeout=model_ladder.timeout_for(family, _drl_model()) + 120.0,
+                task=f"drl/{task}")
+            used_model = getattr(msg, "model", "moonshot")
+        except Exception as _ms_err:
+            logger.warning(f"[drl] moonshot path failed for {task} "
+                           f"({type(_ms_err).__name__}) — full ladder fallback")
+            msg, used_model = model_ladder.call_with_ladder(
+                _do, model=_drl_model(), task=family,
+                business_id=business_id, max_tokens=max_tokens)
     else:
         msg, used_model = model_ladder.call_with_ladder(
             _do, model=_drl_model(), task=family,
@@ -556,7 +572,13 @@ def _minimal_dro_system_prompt() -> str:
         principles = ""
     if principles:
         lines += ["", "TRANSLATION PRINCIPLES (summary):", principles]
-    return "\n".join(lines)
+    # Audit fix: minimal mode is the emergency fallback that was carrying
+    # EVERY build — it never had the doctrine. Now it does.
+    try:
+        from design_doctrine import DOCTRINE
+        return DOCTRINE + "\n\n" + "\n".join(lines)
+    except Exception:
+        return "\n".join(lines)
 
 
 def _author_dro_minimal(client: Anthropic, business_id: str,
