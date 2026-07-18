@@ -719,9 +719,16 @@ def build_dalle_prompt(
             "no text, no words, no letters"
         ),
     )
+    # Phase 1 (spec 3-I): the shared art-direction string keeps every
+    # generated image inside the same shoot as the Unsplash pulls.
+    try:
+        from design_doctrine import art_direction_string
+        _art = ", " + art_direction_string(enriched_brief, designer_pick)
+    except Exception:
+        _art = ""
     return template.format(
         aesthetic=_aesthetic_phrase(enriched_brief, designer_pick),
         composition=_composition_phrase(designer_pick),
         lighting=_lighting_phrase(designer_pick),
         mood=_mood_phrase(enriched_brief),
-    )
+    ) + _art

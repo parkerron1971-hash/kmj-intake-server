@@ -981,11 +981,14 @@ def compose_hero(
     # SITE_BUILDER_PROVIDER=moonshot, fail-open back to Anthropic.
     def _call(extra_user: str = "") -> str:
         import site_llm
+        # Phase 1 (Kimi design integration) — doctrine + instructed
+        # diversity for BOTH providers (Symmetry Rule).
+        from design_doctrine import with_doctrine, DIVERSITY_LINE
         msg = site_llm.create_message(
             model=COMPOSER_MODEL,
             max_tokens=COMPOSER_MAX_TOKENS,
             temperature=COMPOSER_TEMPERATURE,
-            system=spec.system_prompt,
+            system=with_doctrine(spec.system_prompt) + chr(10) + chr(10) + DIVERSITY_LINE,
             user_content=user_prompt + extra_user,
             task="hero_composer",
         )

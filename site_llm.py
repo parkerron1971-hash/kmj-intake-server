@@ -74,7 +74,13 @@ def judge_provider() -> str:
     SITE_JUDGE_PROVIDER=moonshot deliberately to see the difference
     when Kimi judges its own output. The two env vars are independent
     on purpose."""
-    return (os.environ.get("SITE_JUDGE_PROVIDER") or "anthropic").strip().lower()
+    # K5 (Phase 1): the ship-gate judge is PINNED, never mirrored.
+    # SHIP_JUDGE_PROVIDER is the canonical pin (set once, default
+    # Claude, survives composer fallbacks); SITE_JUDGE_PROVIDER stays
+    # honored as the earlier alias.
+    return (os.environ.get("SHIP_JUDGE_PROVIDER")
+            or os.environ.get("SITE_JUDGE_PROVIDER")
+            or "anthropic").strip().lower()
 
 
 def _moonshot_model() -> str:
