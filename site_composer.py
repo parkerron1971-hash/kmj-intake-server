@@ -574,7 +574,24 @@ def gather_context(business_id: str) -> Dict[str, Any]:
     except Exception:
         _motion, _rhythm = {}, {}
 
+    # Phase 3 (spec 5): authored hero + motion specs — the nav pattern
+    # applied again. TTL-cached; None on any failure -> deterministic
+    # fallback (today's rendering, byte-identical).
+    try:
+        from design_specs import author_hero_spec, author_motion_spec
+        _dsbiz = {"name": biz.get("name") or "", "type": biz.get("type") or ""}
+        _hero_spec = author_hero_spec(business_id, _dsbiz,
+                                      dna if isinstance(dna, dict) else {},
+                                      site_prefs if isinstance(site_prefs, dict) else {})
+        _motion_spec = author_motion_spec(business_id, _dsbiz,
+                                          dna if isinstance(dna, dict) else {},
+                                          site_prefs if isinstance(site_prefs, dict) else {})
+    except Exception:
+        _hero_spec, _motion_spec = None, None
+
     return {
+        "hero_spec": _hero_spec,
+        "motion_spec": _motion_spec,
         "motion_tokens": _motion,
         "rhythm_scale": _rhythm,
         "site_prefs": site_prefs,

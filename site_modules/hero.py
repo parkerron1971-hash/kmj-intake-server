@@ -71,7 +71,27 @@ def _constructed_recipe(ctx: Dict[str, Any]) -> Tuple[str, str]:
     return arrangement, motif
 
 
+def _apply_hero_spec(html: str, css: str, ctx: Dict[str, Any]) -> Tuple[str, str]:
+    """Phase 3 (design_specs.py): layer the authored hero axes onto
+    whichever variant rendered — modifier classes on the section tag +
+    one shared CSS block. No spec -> byte-identical passthrough."""
+    try:
+        from design_specs import hero_spec_classes, HERO_SPEC_CSS
+        cls = hero_spec_classes(ctx.get("hero_spec"))
+        if not cls or "<section class=\"" not in html:
+            return html, css
+        html = html.replace("<section class=\"", f"<section class=\"{cls} ", 1)
+        return html, css + HERO_SPEC_CSS
+    except Exception:
+        return html, css
+
+
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
+    html, css = _render_variant(variant, content, ctx)
+    return _apply_hero_spec(html, css, ctx)
+
+
+def _render_variant(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
     dna = ctx["dna"]
     biz_name = (ctx.get("business") or {}).get("name") or ""
     headline = content.get("headline") or biz_name or "Welcome"

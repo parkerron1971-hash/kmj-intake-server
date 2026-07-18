@@ -281,5 +281,15 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
     header_html, header_css = header.render_header(rendered_ids, ctx)
     body_parts.insert(0, header_html)
     css_parts.insert(0, header_css)
+    # Phase 3: Stage-C motion tokens shaped by the authored motion
+    # spec land as CSS custom properties (+ hover-mode body class via
+    # design token consumers). Absent spec/tokens -> defaults that
+    # match today's values, so nothing shifts.
+    try:
+        from design_specs import motion_css_vars
+        css_parts.insert(0, motion_css_vars(ctx.get("motion_tokens"),
+                                            ctx.get("motion_spec")))
+    except Exception:
+        pass
     return page_shell(ctx["dna"], title, "\n".join(body_parts), "\n".join(css_parts),
                       design=ctx.get("design"), meta=build_page_meta(ctx))
