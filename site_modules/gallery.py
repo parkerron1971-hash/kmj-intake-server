@@ -109,9 +109,82 @@ _LAYOUT_CSS = {
 }
 
 
+# Gallery-by-intent (2026-07-18, Kevin's ruling): the gallery's DESIGN
+# should exist when the practitioner asked for one (site_prefs.
+# wants_gallery) or the business type clearly implies visual work —
+# even before any photos exist. Empty state = designed accent frames
+# (never stock imagery, never fake work — D10 holds); the practitioner
+# fills them by uploading to the Media Library, and the next compose /
+# cache-invalidate swaps real photos in automatically.
+_VISUAL_TYPE_HINTS = (
+    "salon", "barber", "beauty", "nail", "lash", "photo", "design",
+    "artist", "art", "tattoo", "contractor", "construction", "landscap",
+    "baker", "cake", "florist", "flower", "event", "cater", "decor",
+    "boutique", "fashion", "jewel", "furniture", "wood", "detail",
+    "clean", "real estate", "realtor", "makeup", "stylist", "craft",
+)
+
+
+def _gallery_wanted(ctx: Dict[str, Any]) -> bool:
+    prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+    wants = prefs.get("wants_gallery")
+    if wants is True:
+        return True
+    if wants is False:
+        return False
+    # Unset → interpret from the business type.
+    btype = str((ctx.get("business") or {}).get("type") or "").lower()
+    return any(h in btype for h in _VISUAL_TYPE_HINTS)
+
+
+def _render_awaiting(content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
+    """The designed EMPTY gallery: six accent-washed frames that read as
+    intentional texture, each a future home for the practitioner's own
+    photo. No stock, no fake work, no 'coming soon' copy."""
+    dna = ctx.get("dna") or {}
+    eb = eyebrow("gallery", content.get("eyebrow") or "")
+    headline = content.get("headline") or "The work"
+    frames = "".join(
+        f'<figure class="sxm-gal-frame" aria-hidden="true">'
+        f'<span class="sxm-gal-frame-mark"></span></figure>'
+        for _ in range(6))
+    html = f"""
+<section class="sxm-section sxm-gallery sxm-gal-await sxm-reveal" id="gallery">
+  <div class="sxm-inner">
+    {heading_accent(dna)}
+    {eb}
+    <h2 {ov('gallery', 'headline')}>{accent_headline(headline)}</h2>
+    <div class="sxm-gal-grid sxm-gal-awaitgrid">{frames}</div>
+  </div>
+</section>"""
+    css = _BASE_CSS + """
+.sxm-gal-awaitgrid { display: grid; gap: clamp(10px, 1.6vw, 18px);
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.sxm-gal-frame { margin: 0; aspect-ratio: 4 / 3; position: relative;
+  border-radius: var(--sx-radius-image);
+  border: 1px solid color-mix(in srgb, var(--sx-accent) 26%, var(--sx-border));
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--sx-accent) 7%, transparent) 0%,
+      transparent 55%),
+    color-mix(in srgb, var(--sx-text) 3%, transparent);
+  display: flex; align-items: center; justify-content: center; }
+.sxm-gal-frame:nth-child(even) { background:
+    linear-gradient(315deg,
+      color-mix(in srgb, var(--sx-accent) 5%, transparent) 0%,
+      transparent 60%),
+    color-mix(in srgb, var(--sx-text) 2%, transparent); }
+.sxm-gal-frame-mark { width: 14px; height: 14px; transform: rotate(45deg);
+  background: color-mix(in srgb, var(--sx-accent) 30%, transparent); }
+"""
+    return html, css
+
+
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
     imgs = _images(ctx)
     if not imgs:
+        if _gallery_wanted(ctx):
+            return _render_awaiting(content, ctx)
         return "", ""   # self-drop — never a stock-filler gallery
 
     if variant not in VARIANTS:
