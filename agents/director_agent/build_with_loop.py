@@ -697,6 +697,43 @@ def run_build_loop(
                     )
                     hero_composer_module = None
 
+                # ── Phase 2 (spec 3-J): the system LOOKS at what it
+                # decided. Vision verdict recorded on every build;
+                # SHIP_GATE=enforce turns a failing verdict into a build
+                # failure (default observe-only — a grader outage can
+                # never brick composing). Invention verification rides
+                # the same audit block.
+                try:
+                    import vision_grader
+                    from design_register import get_invention_count
+                    _verdict = vision_grader.grade(final_html, business_id)
+                    if _verdict is not None:
+                        cfg["vision_verdict"] = _verdict
+                        if not _verdict.get("passes_gate"):
+                            logger.warning(
+                                f"[ship-gate] FAIL for {business_id}: "
+                                f"impact={_verdict.get('first_viewport_impact')} "
+                                f"smell={_verdict.get('template_smell')} "
+                                f"broken={_verdict.get('broken')} — "
+                                f"notes={_verdict.get('notes')}")
+                            if vision_grader.gate_enforced():
+                                raise RuntimeError(
+                                    "ship-gate: vision verdict failed and "
+                                    "SHIP_GATE=enforce is set")
+                    _inv = get_invention_count(business_id)
+                    if _inv is not None and _inv < 3:
+                        logger.warning(
+                            f"[ship-gate] inventions below spec for "
+                            f"{business_id}: {_inv} < 3 (doctrine D12)")
+                        cfg["invention_count"] = _inv
+                    elif _inv is not None:
+                        cfg["invention_count"] = _inv
+                except RuntimeError:
+                    raise
+                except Exception as _vg_err:
+                    logger.warning(f"[ship-gate] vision pass skipped: "
+                                   f"{type(_vg_err).__name__}: {_vg_err}")
+
                 cfg["generated_html"] = final_html
                 cfg["html_generated_at"] = time.strftime(
                     "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
