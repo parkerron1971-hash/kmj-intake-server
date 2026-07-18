@@ -994,7 +994,9 @@ def compose_hero(
             from api_usage_logger import log_api_usage_sync
             u = getattr(msg, "usage", None)
             log_api_usage_sync(
-                endpoint="/composer/hero", model=COMPOSER_MODEL,
+                # Provider switch: log the model that ACTUALLY ran, so
+                # usage rows show kimi vs claude without Railway logs.
+                endpoint="/composer/hero", model=getattr(msg, "model", COMPOSER_MODEL),
                 input_tokens=getattr(u, "input_tokens", 0) or 0,
                 output_tokens=getattr(u, "output_tokens", 0) or 0,
                 business_id=business_id, task_type="composer")

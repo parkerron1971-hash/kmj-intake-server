@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from ._base import safe, safe_url, diamond_mark, ov
+from ._base import safe, safe_url, diamond_mark, ov, is_brut
 
 # Rendered-module id → (anchor, label). Order here is only a fallback;
 # links are emitted in the order the sections rendered on the page.
@@ -40,9 +40,32 @@ def _pick_logo(ctx: Dict[str, Any]) -> str:
     return url if str(url).startswith("http") else ""
 
 
+def _header_variant(ctx: Dict[str, Any]) -> str:
+    """Menu architecture by design DNA (2026-07-18, Kevin: "the menu
+    for every site looks the same"). Same philosophy as
+    heading_accent: the personality signals that already vary the
+    page now vary the BAR itself. Deterministic — same business,
+    same menu.
+      brut            -> "split"   nav-left architecture, hard edge, no blur
+      block accent    -> "banner"  centered two-row masthead
+      soft accent     -> "ghost"   transparent over the hero, solidifies on scroll
+      everything else -> "classic" the original bar
+    """
+    dna = ctx.get("dna") or {}
+    if is_brut(dna):
+        return "split"
+    style = str(dna.get("accent_style") or "")
+    if style in ("block_mark", "block"):
+        return "banner"
+    if style in ("soft_rule", "soft"):
+        return "ghost"
+    return "classic"
+
+
 def render_header(rendered_ids: List[str], ctx: Dict[str, Any]) -> Tuple[str, str]:
     """rendered_ids = module ids that actually produced HTML, in page
     order. Returns (header_html, header_css)."""
+    variant = _header_variant(ctx)
     biz = ctx.get("business") or {}
     name = biz.get("name") or "Home"
     booking = ctx.get("booking") or {}
@@ -95,7 +118,7 @@ def render_header(rendered_ids: List[str], ctx: Dict[str, Any]) -> Tuple[str, st
         cta_href, cta_label = "#contact", "Get in touch"
 
     html = f"""
-<header class="sxm-header">
+<header class="sxm-header sxm-header--{variant}">
   <div class="sxm-header-inner">
     <a class="sxm-header-brand" href="{brand_href}" aria-label="{safe(name)} — home">{brand_inner}</a>
     {nav_html}
@@ -175,5 +198,45 @@ html { scroll-padding-top: 84px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .sxm-header-drawer, .sxm-hamburger span { transition: none; }
+}
+
+/* ── Menu architectures (2026-07-18) — the bar follows the DNA ── */
+/* split: nav leads, brand centered, hard editorial edge, no blur. */
+@media (min-width: 769px) {
+  .sxm-header--split { background: var(--sx-bg);
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+    border-bottom: 2px solid var(--sx-text); }
+  .sxm-header--split .sxm-header-nav { order: -1; margin-left: 0; }
+  .sxm-header--split .sxm-header-brand { margin-left: auto; margin-right: auto; }
+  .sxm-header--split .sxm-header-wordmark { font-size: 1.34rem; }
+}
+/* banner: centered two-row masthead — brand above, nav + CTA below. */
+@media (min-width: 769px) {
+  .sxm-header--banner .sxm-header-inner { flex-wrap: wrap; justify-content: center;
+    row-gap: 2px; padding-top: 14px; padding-bottom: 10px; }
+  .sxm-header--banner .sxm-header-brand { flex-basis: 100%; justify-content: center; }
+  .sxm-header--banner .sxm-header-wordmark { font-size: 1.5rem; }
+  .sxm-header--banner .sxm-header-logo { height: 44px; }
+  .sxm-header--banner .sxm-header-nav { margin-left: 0; }
+  .sxm-header--banner .sxm-header-cta { padding: 7px 16px; font-size: .78rem; }
+  .sxm-header--banner + main, html:has(.sxm-header--banner) { scroll-padding-top: 112px; }
+}
+/* ghost: transparent over the hero, solidifies as you scroll.
+   Scroll-driven animation where supported; graceful solid fallback. */
+@supports (animation-timeline: scroll()) {
+  .sxm-header--ghost { background: transparent; border-bottom-color: transparent;
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+    animation: sxm-header-solidify linear both;
+    animation-timeline: scroll(); animation-range: 0 180px; }
+  @keyframes sxm-header-solidify {
+    to { background: color-mix(in srgb, var(--sx-bg) 88%, transparent);
+         border-bottom-color: color-mix(in srgb, var(--sx-border) 70%, transparent);
+         -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sxm-header--ghost { animation: none;
+      background: color-mix(in srgb, var(--sx-bg) 78%, transparent);
+      border-bottom-color: color-mix(in srgb, var(--sx-border) 70%, transparent); }
+  }
 }"""
     return html, css
