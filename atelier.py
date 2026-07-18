@@ -62,12 +62,16 @@ ATELIER_MAX_TOKENS = 8000
 _CALL_TIMEOUT_S = 120.0
 
 # Sections that must stay modular: their value is DATA RENDERED RIGHT
-# (live records, working forms, real product cards) — bespoke rewriting
-# risks fidelity for no aesthetic win. contact/store per the Arc 8 brief;
-# statband/showcase by the same data-dense principle. interstitial
-# (Site Arc 10): the ceremony seams are deterministic chrome — no slots,
-# no seat at the atelier.
-_NEVER_BESPOKE = frozenset({"contact", "store", "statband", "showcase",
+# (live records, real product cards) — bespoke rewriting risks fidelity
+# for no aesthetic win. store per the Arc 8 brief; statband/showcase by
+# the same data-dense principle. interstitial (Site Arc 10): the
+# ceremony seams are deterministic chrome — no slots, no seat at the
+# atelier.
+# B4 (2026-07-18): contact LEFT the list — its working form now rides
+# the bespoke path VERBATIM (build_contact_form + a validator-enforced
+# presence check in generate_bespoke_section / generate_refined_section),
+# so the finale can be art-directed without the form ever being rewritten.
+_NEVER_BESPOKE = frozenset({"store", "statband", "showcase",
                             "interstitial"})
 
 # module id → the stable DOM id its <section> must carry (mirror of
@@ -90,7 +94,30 @@ ALLOWED_SLOTS: Dict[str, Tuple[str, ...]] = {
     "offerings": ("chamber_main",),
     "testimonials": ("decorative_1",),
     "cta": (),
+    "contact": (),
 }
+
+# B4 (2026-07-18) — the bespoke-contact form contract. A bespoke contact
+# fragment never WRITES a form: it places this exact token on its own
+# line where the working form belongs, and the platform substitutes the
+# real markup (build_contact_form) after validation — deterministic, no
+# byte-matching gamble, the form's endpoint/input names/consent wiring
+# physically cannot drift. run_atelier ships CONTACT_FORM_CSS + the
+# wiring script alongside any replaced contact fragment.
+_FORM_TOKEN = "<!--CONTACT_FORM-->"
+
+
+def _contact_form(ctx: Dict[str, Any]) -> Tuple[str, str]:
+    """(form_html, script_html) for a bespoke contact section — both ''
+    when no live form exists (the fragment then composes the invitation
+    + channels only, like the module's solo mode). Fail-soft: any import
+    problem means no form requirement (never blocks a compose)."""
+    try:
+        from site_modules import contact_footer
+        return contact_footer.build_contact_form(ctx)
+    except Exception:
+        return "", ""
+
 
 # Rule-break `where` free text → module id (which section the loud
 # moment lives in). First hit wins; hero keywords intentionally absent —
@@ -107,6 +134,10 @@ _WHERE_KEYWORDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
                  "mosaic")),
     ("cta", ("cta", "call to action", "invitation", "book", "closing",
              "conversion")),
+    # B4: contact is bespoke-eligible — the loud moment may live in the
+    # finale now (its form still rides by platform token, never rewritten).
+    ("contact", ("contact", "form", "finale", "get in touch", " touch",
+                 "message", "inquiry", "enquiry")),
 )
 
 # The complete --sx-* token contract — every variable page_shell's :root
@@ -291,7 +322,7 @@ def plan_bespoke(dro: Optional[Dict[str, Any]], spec: List[Dict[str, Any]],
     rb_mid = _rule_break_module(dro)
     second = rb_mid if (eligible(rb_mid) and rb_mid not in picks) else None
     if second is None:
-        for cand in ("about", "cta"):
+        for cand in ("about", "cta", "contact"):
             if eligible(cand) and cand not in picks:
                 second = cand
                 break
@@ -299,7 +330,8 @@ def plan_bespoke(dro: Optional[Dict[str, Any]], spec: List[Dict[str, Any]],
         picks.append(second)
 
     if budget >= 3 and len(picks) < 3:
-        for cand in ("about", "cta", "gallery", "testimonials", "offerings"):
+        for cand in ("about", "cta", "gallery", "testimonials", "offerings",
+                     "contact"):
             if eligible(cand) and cand not in picks:
                 picks.append(cand)
                 break
@@ -369,6 +401,22 @@ def _section_data(kind: str, section_copy: Dict[str, Any],
                                    "author": str(t.get("author_name")
                                                  or t.get("name") or "")[:80]})
         data["testimonials"] = quotes
+    if kind == "contact":
+        # B4 — the finale's REAL wiring. The fragment renders these facts
+        # (never invents handles/numbers); the working form itself does
+        # NOT ride this block — it is platform markup, injected verbatim
+        # per the WORKING FORM contract in build_bespoke_prompt.
+        contact = ctx.get("contact") or {}
+        data["contact_channels"] = {
+            "email": str(contact.get("email") or ""),
+            "phone": str(contact.get("phone") or ""),
+            "hours": str(contact.get("hours") or ""),
+            "address": str(contact.get("address") or ""),
+            "socials": {str(k): str(v) for k, v in
+                        (contact.get("social") or {}).items() if v},
+        }
+        if booking.get("enabled") and booking.get("url"):
+            data["booking_url"] = str(booking["url"])
     return data
 
 
@@ -540,17 +588,38 @@ def build_bespoke_prompt(kind: str, variant_hint: Optional[str], uid: str,
                          dro: Dict[str, Any], data: Dict[str, Any],
                          allowed_slots: Tuple[str, ...],
                          allowed_hrefs: List[str],
-                         slot_records: Optional[Dict[str, Any]] = None) -> str:
+                         slot_records: Optional[Dict[str, Any]] = None,
+                         feedback: str = "",
+                         form_token: bool = False) -> str:
     """The user prompt for one bespoke section — the DRO fused with the
     original creative-director voice, the real data, the full token
-    contract, and the hard output contract the validator enforces."""
+    contract, and the hard output contract the validator enforces.
+    `feedback` (A2, 2026-07-18) carries the vision grader's notes from a
+    FAILED previous render — the bounded quality regen injects it so the
+    second take fixes what the grader actually flagged.
+    `form_token` (B4, contact only): require the <!--CONTACT_FORM-->
+    placement token — the platform substitutes the live form markup."""
     copy_fields = sorted((data.get("copy") or {}).keys())
+    _fb = ""
+    if (feedback or "").strip():
+        _fb = ("\n\nGRADER FEEDBACK FROM THE PREVIOUS RENDER OF THIS PAGE — "
+               "the last version FAILED design grading. Fix EVERY point "
+               "below with materially different choices, not small tweaks:\n"
+               + feedback.strip()[:900])
+    _form_block = ""
+    if form_token:
+        _form_block = f"""
+
+WORKING FORM — PLATFORM MARKUP BY TOKEN:
+- This page has a LIVE contact form (real messages reach the owner). You never write it: place the exact token {_FORM_TOKEN} on its own line, EXACTLY ONCE, where the form belongs in your composition (inside a card, a column, an offset panel — your call).
+- The platform substitutes the real form there, ships its base styles, and wires its submit + SMS-consent logic. Never build a form yourself, never wrap the token in a <form>, never add handlers, never fake a static form, never emit the token twice.
+- You MAY theme around it: your CSS can target ".atl-{uid} .sxm-contact-form …" (its inputs and the .sxm-cta submit) to seat the form inside your composition."""
     slots_line = (", ".join(f'"{s}"' for s in allowed_slots)
                   if allowed_slots else "(none — this section uses NO images)")
     hrefs_line = (", ".join(allowed_hrefs) if allowed_hrefs
                   else "(none — links may only be #anchors like #contact)")
     dom_id = _SECTION_DOM_IDS.get(kind, kind)
-    return f"""{_dro_block(dro)}{_photo_reality_block(allowed_slots, slot_records)}
+    return f"""{_dro_block(dro)}{_photo_reality_block(allowed_slots, slot_records)}{_fb}{_form_block}
 
 YOUR SECTION
 - Kind: "{kind}" — you are replacing the platform's modular "{kind}" section (its library variant would have been "{variant_hint or 'default'}"; transcend it, don't imitate it).
@@ -680,9 +749,12 @@ def _split_fragment(raw: str, uid: str = "") -> Optional[Tuple[str, str]]:
 def generate_bespoke_section(kind: str, variant_hint: Optional[str],
                              dro: Dict[str, Any], ctx: Dict[str, Any],
                              section_copy: Dict[str, Any],
-                             business_id: str = "") -> Optional[Tuple[str, str]]:
+                             business_id: str = "",
+                             feedback: str = "") -> Optional[Tuple[str, str]]:
     """One bespoke section: ONE LLM call, deterministic validation, one
-    repair attempt, else None (caller keeps the module section)."""
+    repair attempt, else None (caller keeps the module section).
+    `feedback` (A2) = the vision grader's notes from a failed previous
+    render, injected by the bounded quality regen."""
     import atelier_validator
 
     uid = uuid4().hex[:8]
@@ -692,6 +764,10 @@ def generate_bespoke_section(kind: str, variant_hint: Optional[str],
     required_targets = [f for f, v in (data.get("copy") or {}).items()
                         if str(v or "").strip()]
     allowed_fields = _module_fields(kind)
+    # B4 — bespoke contact: the working form rides by token. form_html ''
+    # means no live form exists → no token requirement (solo finale).
+    form_html, _form_script = (_contact_form(ctx) if kind == "contact"
+                               else ("", ""))
     # Site Arc 9 (PHOTO REALITY): the stored slot records describe the
     # actual photographs the section will receive. Fail-soft — a missing
     # row / offline test context just omits the block.
@@ -704,7 +780,9 @@ def generate_bespoke_section(kind: str, variant_hint: Optional[str],
             slot_records = None
     prompt = build_bespoke_prompt(kind, variant_hint, uid, dro, data,
                                   allowed_slots, allowed_hrefs,
-                                  slot_records=slot_records)
+                                  slot_records=slot_records,
+                                  feedback=feedback,
+                                  form_token=bool(form_html))
 
     # Phase 1 — instructed diversity (K1) + the audit trail (K2):
     # derivation / invention / exception ride as HTML comments BEFORE
@@ -732,6 +810,18 @@ def generate_bespoke_section(kind: str, variant_hint: Optional[str],
             frag[0], frag[1], uid=uid, kind=kind, data=data,
             allowed_slots=allowed_slots, required_targets=required_targets,
             allowed_hrefs=allowed_hrefs, allowed_fields=allowed_fields)
+        # B4 — the working-form token: exactly one placement, then the
+        # platform substitutes the live form markup (deterministic — the
+        # form's endpoint/names/consent wiring cannot drift).
+        if ok and form_html:
+            n_tok = frag[0].count(_FORM_TOKEN)
+            if n_tok != 1:
+                ok = False
+                problems = [f"the working-form token {_FORM_TOKEN} must "
+                            f"appear exactly once in the HTML (found {n_tok})"] \
+                    + list(problems)
+        if ok and form_html:
+            frag = (frag[0].replace(_FORM_TOKEN, form_html), frag[1])
         return (frag if ok else None), problems
 
     frag, problems = _attempt()
@@ -773,17 +863,27 @@ def build_refine_prompt(kind: str, uid: str, dro: Dict[str, Any],
                         data: Dict[str, Any], current_html: str,
                         current_css: str, instruction: str,
                         allowed_slots: Tuple[str, ...],
-                        allowed_hrefs: List[str]) -> str:
+                        allowed_hrefs: List[str],
+                        form_token: bool = False) -> str:
     """The refine-mode user prompt: the DRO brief, the CURRENT section
     (html+css), the owner's instruction, the real data, the token
     contract, and the SAME hard output contract the validator enforces
-    (shared _contract_block — one contract, no drift)."""
+    (shared _contract_block — one contract, no drift).
+    `form_token` (B4, contact only): the current section's live form
+    must exit as the <!--CONTACT_FORM--> placement token."""
     copy_fields = sorted((data.get("copy") or {}).keys())
     slots_line = (", ".join(f'"{s}"' for s in allowed_slots)
                   if allowed_slots else "(none — this section uses NO images)")
     hrefs_line = (", ".join(allowed_hrefs) if allowed_hrefs
                   else "(none — links may only be #anchors like #contact)")
     dom_id = _SECTION_DOM_IDS.get(kind, kind)
+    _form_line = (f"\n- THE WORKING FORM: the current section's <form> is "
+                  f"LIVE platform markup (real messages reach the owner). "
+                  f"In your output its whole block becomes the exact token "
+                  f"{_FORM_TOKEN} on its own line, EXACTLY ONCE, where the "
+                  f"form belongs — the platform substitutes the real form "
+                  f"(styled + wired). Never rewrite, rename or fake it."
+                  if form_token else "")
     return f"""{_dro_block(dro)}
 
 THE OWNER'S INSTRUCTION (the reason for this revision — honor it visibly):
@@ -805,7 +905,7 @@ REVISION BAR (non-negotiable):
 - The instruction must be VISIBLE in the result — a side-by-side look shows the change immediately.
 - Everything the current section says stays sayable: keep every provided copy field (same data-override-target paths) unless the instruction explicitly asks for different wording of platform framing.
 - Keep the craft bar of the house: one accent-italic word per heading, whisper-voice micro-caps for small labels, directional scrims, gradients that fade, hovers that draw, generous vertical air, reduced-motion respect.
-- Your output is scoped under the NEW uid atl-{uid} — do not reuse the old section's atl- classes or ids.
+- Your output is scoped under the NEW uid atl-{uid} — do not reuse the old section's atl- classes or ids.{_form_line}
 
 {_contract_block(kind, uid, dom_id, slots_line, hrefs_line, copy_fields)}"""
 
@@ -828,9 +928,13 @@ def generate_refined_section(kind: str, current_html: str, current_css: str,
     required_targets = [f for f, v in (data.get("copy") or {}).items()
                         if str(v or "").strip()]
     allowed_fields = _module_fields(kind)
+    # B4 — refined contact: the live form exits as the placement token,
+    # substituted after validation (same contract as the bespoke path).
+    form_html, _form_script = (_contact_form(ctx) if kind == "contact"
+                               else ("", ""))
     prompt = build_refine_prompt(kind, uid, dro or {}, data, current_html,
                                  current_css, instruction, allowed_slots,
-                                 allowed_hrefs)
+                                 allowed_hrefs, form_token=bool(form_html))
 
     def _attempt(extra: str = "") -> Tuple[Optional[Tuple[str, str]], List[str]]:
         raw = _call_llm(_REFINE_SYSTEM_PROMPT, prompt + extra,
@@ -845,6 +949,16 @@ def generate_refined_section(kind: str, current_html: str, current_css: str,
             frag[0], frag[1], uid=uid, kind=kind, data=data,
             allowed_slots=allowed_slots, required_targets=required_targets,
             allowed_hrefs=allowed_hrefs, allowed_fields=allowed_fields)
+        # B4 — the working-form token (see generate_bespoke_section).
+        if ok and form_html:
+            n_tok = frag[0].count(_FORM_TOKEN)
+            if n_tok != 1:
+                ok = False
+                problems = [f"the working-form token {_FORM_TOKEN} must "
+                            f"appear exactly once in the HTML (found {n_tok})"] \
+                    + list(problems)
+        if ok and form_html:
+            frag = (frag[0].replace(_FORM_TOKEN, form_html), frag[1])
         return (frag if ok else None), problems
 
     frag, problems = _attempt()
@@ -952,6 +1066,7 @@ def run_atelier(html: str, spec: List[Dict[str, Any]], ctx: Dict[str, Any],
                 stored: Optional[Dict[str, Any]] = None,
                 precomputed: Optional[Dict[str, Any]] = None,
                 progress_cb=None,
+                feedback: str = "",
                 ) -> Tuple[str, Optional[Dict[str, Any]]]:
     """The render_and_persist hook. Three modes:
       precomputed — the self-heal re-render reuses the fragments the
@@ -959,6 +1074,8 @@ def run_atelier(html: str, spec: List[Dict[str, Any]], ctx: Dict[str, Any],
       regenerate  — full recompose: plan + generate + validate;
       else        — shuffle/refresh/override re-render: reuse the
                     fragments persisted on site_config.atelier.
+    `feedback` (A2): vision-grader notes from a failed previous render —
+    the bounded quality regen injects them into every fragment prompt.
     Returns (html, atelier_meta|None). Fail-soft: any failure returns
     the input html — exactly the Arc 7 module page."""
     # Site Arc 12 — startup model probe (once per process; covers the
@@ -985,7 +1102,8 @@ def run_atelier(html: str, spec: List[Dict[str, Any]], ctx: Dict[str, Any],
                 continue
             out = generate_bespoke_section(
                 mid, sec.get("variant"), dro, ctx,
-                sec.get("content") or {}, business_id=business_id)
+                sec.get("content") or {}, business_id=business_id,
+                feedback=feedback)
             if out:
                 fragments[mid] = {"html": out[0], "css": out[1],
                                   "index": i, "variant": sec.get("variant")}
@@ -998,6 +1116,11 @@ def run_atelier(html: str, spec: List[Dict[str, Any]], ctx: Dict[str, Any],
         meta = {
             "sections": [{"index": f["index"], "module": m}
                          for m, f in fragments.items()],
+            # P3 (2026-07-18): planned seat count — the design-health
+            # endpoint reads planned-vs-generated as the atelier fallback
+            # rate (a planned seat with no fragment = a silent fallback
+            # made countable).
+            "planned": len(picks),
             "model": _model(),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "fragments": fragments,
@@ -1013,6 +1136,25 @@ def run_atelier(html: str, spec: List[Dict[str, Any]], ctx: Dict[str, Any],
     if not replaced:
         return html, None
     css = "\n\n".join(str(fragments[m].get("css") or "") for m in replaced)
+    # B4 — a bespoke contact fragment carries the working form (token-
+    # substituted at generation): the platform ships the form's base
+    # styles + wiring script with it. Runs for every mode (generated,
+    # precomputed, stored) — each starts from a fresh module page whose
+    # contact script was replaced along with the section.
+    if "contact" in replaced and 'id="sxm-contact-form"' in new_html:
+        try:
+            from site_modules import contact_footer as _cf
+            _fh, _form_script = _cf.build_contact_form(ctx)
+            if _form_script:
+                css += "\n\n" + _cf.CONTACT_FORM_CSS
+                if "sxm-consent-armed" not in new_html:
+                    if "</body>" in new_html:
+                        new_html = new_html.replace(
+                            "</body>", _form_script + "\n</body>", 1)
+                    else:
+                        new_html += _form_script
+        except Exception as _e:
+            logger.info(f"[atelier] contact form runtime skipped: {_e}")
     new_html = _inject_css(new_html, css)
     logger.info(f"[atelier] {'generated' if regenerate else 'reused'} "
                 f"{len(replaced)} bespoke section(s) for {business_id[:8]}: "

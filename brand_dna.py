@@ -18,8 +18,11 @@ from __future__ import annotations
 
 import colorsys
 import hashlib
+import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # ─── Color math ───────────────────────────────────────────────────────
 
@@ -97,7 +100,11 @@ def _on_color(bg: str) -> str:
 
 _VIBE_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "warm":   {"bg": "#171310", "accent": "#d99a4e", "fonts": ("Fraunces", "Source Sans 3")},
-    "formal": {"bg": "#0e1217", "accent": "#7fa8d9", "fonts": ("Libre Caslon Text", "Inter")},
+    # B5 (2026-07-18): formal was cold-steel-blue on dark blue-charcoal —
+    # doctrine D11's banned "cold blue on dark" smell, handed to EVERY
+    # kit-less formal business as the default. Now a warm ink ground with
+    # a muted brass accent (distinct from warm's orange and bold's gold).
+    "formal": {"bg": "#141210", "accent": "#c9a96a", "fonts": ("Libre Caslon Text", "Inter")},
     "bold":   {"bg": "#0a0a0a", "accent": "#e8c15a", "fonts": ("Bricolage Grotesque", "Inter")},
 }
 
@@ -130,13 +137,19 @@ FONT_PAIRINGS: Dict[str, Dict[str, Any]] = {
 # face for editorial moments (the italic accent word, pull-quotes,
 # eyebrow flourishes). Serif-headed pairings use their own heading
 # italics — accent defaults to the heading face.
+# P3 widening (2026-07-18): all six used to collapse onto Playfair
+# Display — every sans-display site shared one italic voice, a template
+# tell. Now five distinct editorial italics, cast against the display
+# face's character (a didone against the black grotesque, Plex Serif
+# inside the Plex superfamilies, Merriweather's round sturdiness for
+# the playful face).
 ACCENT_FACES: Dict[str, str] = {
-    "condensed_impact":   "Playfair Display",
+    "condensed_impact":   "Cormorant Garamond",
     "bold_statement":     "Playfair Display",
-    "expressive_display": "Playfair Display",
-    "modern_grotesque":   "Playfair Display",
-    "technical_precise":  "Playfair Display",
-    "playful":            "Playfair Display",
+    "expressive_display": "Lora",
+    "modern_grotesque":   "IBM Plex Serif",
+    "technical_precise":  "IBM Plex Serif",
+    "playful":            "Merriweather",
 }
 
 # Hybrid font selection (Kevin's ruling): the practitioner's style
@@ -547,8 +560,13 @@ def derive_rhythm(intensity: str) -> Dict[str, Any]:
     # (--sx-space-1..8) to adopt in place of magic numbers.
     space = {"1": "4px", "2": "8px", "3": "12px", "4": "16px",
              "5": "24px", "6": "32px", "7": "48px", "8": "64px"}
+    # P3 (2026-07-18): the measure widens with the tier — every page used
+    # to share one 1180px column (a template tell). Restrained pages hold
+    # a closer measure; bold pages get a wider stage.
+    content_max = {"restrained": "1100px", "confident": "1180px",
+                   "bold": "1280px"}[intensity]
     return {"section_pad": pad, "gutter": "clamp(20px, 4vw, 48px)",
-            "content_max": "1180px", "space": space}
+            "content_max": content_max, "space": space}
 
 
 def derive_radius(vibe: str, intensity: str) -> Dict[str, str]:
@@ -692,6 +710,51 @@ def apply_dro_palette(dna: Dict[str, Any], dro_palette: Optional[Dict[str, Any]]
     return out
 
 
+# Design audit P2/B1 (2026-07-18) — palette.temperature reaches the pixels.
+# The DRO authors warm / cool / neutral_warm / neutral_cool; until now only
+# the IMAGE GRADE read it (_base.image_treatment_class) — the neutral ground
+# itself never moved, so a "warm" DRO on a cool-light brand kit still
+# rendered cool. The nudge forces the neutral family's hue to the authored
+# temperature (lightness untouched, saturation floored only on true grays so
+# the shift is visible but never loud), then re-derives the accent family
+# against the nudged grounds (same Arc 9 discipline as apply_dro_palette).
+# Called by site_composer right after apply_dro_palette; the owner's hard
+# color direction (apply_owner_ground) still beats it, same precedence as
+# the DRO's palette.base.
+_TEMP_NUDGE: Dict[str, Tuple[float, float]] = {
+    #             hue (0..1)   sat floor for grays
+    "warm":         (0.075,    0.035),     # ~27° — tan / cream
+    "neutral_warm": (0.075,    0.018),
+    "cool":         (0.580,    0.030),     # ~209° — slate
+    "neutral_cool": (0.580,    0.016),
+}
+_TEMP_NEUTRAL_FIELDS = ("bg", "surface", "surface2", "border")
+
+
+def apply_dro_temperature(dna: Dict[str, Any], temperature: Optional[str]) -> Dict[str, Any]:
+    """Nudge the neutral ground family toward the DRO's palette.temperature.
+    Returns a copy; input untouched. No-op (with a warning) for values
+    outside the schema enum — an authored axis must never silently vanish."""
+    key = str(temperature or "").strip().lower()
+    if not key:
+        return dna
+    nudge = _TEMP_NUDGE.get(key)
+    if not nudge:
+        logger.warning("[brand_dna] DRO palette.temperature %r matched no renderer",
+                       temperature)
+        return dna
+    hue, sat_floor = nudge
+    pal = dict(dna.get("palette") or {})
+    for field in _TEMP_NEUTRAL_FIELDS:
+        if not _parse_hex(pal.get(field)):
+            continue
+        h, l, s = _hls(pal[field])
+        pal[field] = _from_hls(hue, l, max(s, sat_floor))
+    out = dict(dna)
+    out["palette"] = rederive_accent_family(pal)
+    return out
+
+
 def apply_owner_ground(dna: Dict[str, Any], direction: Optional[str]) -> Dict[str, Any]:
     """Arc 5 — the OWNER's chosen color direction (site_prefs.colors.
     direction) maps 1:1 onto _BASE_GROUNDS and is a HARD preference:
@@ -719,7 +782,8 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
     those axes ADDITIVELY:
 
       - tolerant string matching (DRO values are LLM-authored prose-ish
-        labels, not enums); unknown values are a no-op
+        labels, not enums); unknown values are a no-op but never silent —
+        B1 logs a warning for any authored axis that matches no renderer
       - practitioner-pinned fonts (brand kit / creative-expression) are
         never overridden — same precedence as derive_typography
       - DRO-absent composes return the dna untouched, byte-for-byte
@@ -791,18 +855,55 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
         or _has(density, "airy", "sparse", "minimal", "spacious")
     dense = _has(ws_text, "compress", "tight", "efficient", "packed") \
         or _has(density, "dense", "packed", "rich", "abundant")
+    phil = str(ws.get("philosophy") or "").strip().lower()
+    ws_matched = True
     if airy and not dense:
         r = derive_rhythm("bold")          # the airiest vetted tier
     elif dense and not airy:
         r = derive_rhythm("restrained")    # the tightest vetted tier
+    # B1 (2026-07-18): the remaining schema philosophies render too —
+    # confidence_air already lands above via the "air" keyword; the other
+    # three used to fall through and change NOTHING on the page.
+    elif phil in ("warm_close", "dense_energy"):
+        r = derive_rhythm("restrained")    # intimate / packed cadence
+    elif phil == "editorial_rhythm":
+        # Middle tier + the alternating long/short pad cadence, which
+        # page_shell adds as the sx-editorial-rhythm body class.
+        r = derive_rhythm("confident")
+    elif phil:
+        ws_matched = False
+    if not ws_matched:
+        logger.warning("[brand_dna] DRO whitespace.philosophy %r matched no renderer",
+                       ws.get("philosophy"))
 
     # ── Motion temperature → the tier page_shell already reads ──
+    # B1: subtle_entrance and ambient_breathing used to no-op (a bold
+    # business kept the rich tier even when the DRO asked for calm).
+    # "entrance" is a real fourth tier: arrival choreography ships,
+    # perpetual loops are stilled (base_css loop_kill + interstitials).
     mt = (d.get("motion") or {}).get("temperature")
     motion_stilled = _has(mt, "still", "calm", "none", "minimal", "static")
+    motion_matched = True
     if motion_stilled:
         out["motion"] = "subtle"
+    elif _has(mt, "subtle_entrance", "entrance_only", "entrance only"):
+        out["motion"] = "entrance"      # arrivals only — loops stilled
+    elif _has(mt, "ambient", "breathing"):
+        out["motion"] = "standard"      # arrivals + the slow ambient loops
     elif _has(mt, "kinetic", "expressive", "playful", "rich", "dramatic", "alive"):
         out["motion"] = "rich"
+    else:
+        motion_matched = False
+    if mt and not motion_matched:
+        logger.warning("[brand_dna] DRO motion.temperature %r matched no renderer", mt)
+    # B1: every schema accent_strategy now renders (single_semantic and
+    # tonal_monochrome via page_shell body classes, dual_complement /
+    # vivid_block via the image grade) — warn on anything outside them.
+    strat = str((d.get("palette") or {}).get("accent_strategy") or "").strip().lower()
+    if strat and strat not in ("single_semantic", "dual_complement",
+                               "tonal_monochrome", "vivid_block"):
+        logger.warning("[brand_dna] DRO palette.accent_strategy %r matched no renderer",
+                       strat)
 
     # ── Arc 6: tension = the character engine. Deterministic + documented:
     #    pole_a (the ROOT pole) drives the typography pairing — but only
@@ -960,6 +1061,9 @@ _GOOGLE_AXES: Dict[str, Optional[str]] = {
     "Roboto": "ital,wght@0,300;0,400;0,500;0,700;0,900;1,400",
     "Poppins": "ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,400",
     "Playfair Display": "ital,wght@0,400..900;1,400..900",
+    # P3 — the widened accent-face registry entries (real shipped axes,
+    # so the italic request + weight logic stay exact).
+    "IBM Plex Serif": "ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500;1,600",
     "Merriweather": "ital,wght@0,300;0,400;0,700;0,900;1,400",
     "Nunito": "ital,wght@0,200..1000;1,200..1000",
     "Oswald": "wght@200..700",

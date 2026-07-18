@@ -119,20 +119,37 @@ def accent_headline(headline: str) -> str:
     """The quality-bar accent-word idiom (the original bar's 'one italic
     accent word in every heading'), promoted from hero.py to shared
     plumbing (quality-floor arc 7): exactly ONE emphasized italic word in
-    the accent color, picked deterministically — the longest word, the
-    heading's likely center of gravity (first wins ties). Every fragment
-    is escaped; single-word headings pass through plain. Styling lives in
-    base_css (.sxm-accent-word); accent/authority bands re-tone it."""
+    the accent color. P3d (2026-07-18): the pick ROTATES — always-the-
+    longest-word was the 'accent-word-everywhere' template tell. Candidates
+    are the two longest words plus the final word (the heading's natural
+    centers of gravity); a stable hash of the headline chooses among them,
+    so different headings accent different positions while any one heading
+    always renders the same. Words under 4 alpha chars are never treated
+    (an accented 'and' reads as a mistake); headings under 3 words pass
+    through plain — a 2-word title is already all statement. Every fragment
+    is escaped. Styling lives in base_css (.sxm-accent-word);
+    accent/authority bands re-tone it."""
     words = str(headline or "").split()
-    if len(words) < 2:
+    if len(words) < 3:
         return safe(headline)
 
     def _alpha_len(w: str) -> int:
         return sum(len(m) for m in _ALPHA_RE.findall(w))
 
-    target = max(range(len(words)), key=lambda i: _alpha_len(words[i]))
+    by_len = sorted(range(len(words)), key=lambda i: -_alpha_len(words[i]))
+    candidates: list = []
+    for i in by_len[:2]:
+        if _alpha_len(words[i]) >= 4:
+            candidates.append(i)
+    last = len(words) - 1
+    if _alpha_len(words[last]) >= 4 and last not in candidates:
+        candidates.append(last)
+    if not candidates:
+        return safe(headline)
+    pick = candidates[int(_hashlib.sha256(
+        str(headline).encode()).hexdigest(), 16) % len(candidates)]
     return " ".join(
-        f'<em class="sxm-accent-word">{safe(w)}</em>' if i == target else safe(w)
+        f'<em class="sxm-accent-word">{safe(w)}</em>' if i == pick else safe(w)
         for i, w in enumerate(words))
 
 
@@ -177,7 +194,7 @@ def heading_accent(dna: Dict[str, Any]) -> str:
 
 
 def cta_button(ctx: Dict[str, Any], label: str, section: str,
-               field: str = "cta_label") -> str:
+               field: str = "cta_label", style: str = "pill") -> str:
     """A CTA that always WORKS: booking page when enabled, else a
     mailto/contact anchor. Never a dead button.
 
@@ -228,6 +245,13 @@ def cta_button(ctx: Dict[str, Any], label: str, section: str,
             href = safe_url(booking["url"])
         else:
             href = "#contact"
+    # B4 (2026-07-18): style="link" — the same working destination ladder
+    # as the pill, rendered as a quiet editorial text link (the cta
+    # module's "editorial" variant styles .sxm-cta-link; the underline
+    # draws on hover per the house hover rule).
+    if style == "link":
+        return (f'<a class="sxm-cta-link" href="{href}">'
+                f'<span {ov(section, field)}>{safe(label or "Get in touch")}</span></a>')
     return (f'<a class="sxm-cta" href="{href}">'
             f'<span {ov(section, field)}>{safe(label or "Get in touch")}</span></a>')
 
@@ -257,10 +281,11 @@ def _cta_label_intent(label: str) -> str:
 def signature_move_class(dna: Dict[str, Any],
                          design: Optional[Dict[str, Any]]) -> str:
     """DRO motion.signature_move (a free-text named motion idea) → one of
-    three page-level signature moves, deterministically. Empty string when
+    four page-level signature moves, deterministically. Empty string when
     motion is subtle/none or no move was authored — the previous no-op
     stays the no-DRO behavior."""
-    if (dna or {}).get("motion", "standard") == "subtle":
+    tier = (dna or {}).get("motion", "standard")
+    if tier == "subtle":
         return ""
     motion = (design or {}).get("motion") or {}
     move = str(motion.get("signature_move") or "").strip().lower()
@@ -270,14 +295,23 @@ def signature_move_class(dna: Dict[str, Any],
         return ""
     if any(w in move for w in ("cascade", "stagger", "sequen", "waterfall", "step")):
         return "sx-sig-cascade"
-    if any(w in move for w in ("drift", "float", "ambient", "breath", "orbit", "sway", "hover")):
+    # Drift is a PERPETUAL loop — ineligible under the entrance tier
+    # (arrivals only, loops off), same rule as the loop_kill CSS.
+    if tier != "entrance" and any(w in move for w in ("drift", "float", "ambient", "breath", "orbit", "sway", "hover")):
         return "sx-sig-drift"
     if any(w in move for w in ("underline", "sweep", "rule", "trace", "line")):
         return "sx-sig-underline"
+    # P3d (2026-07-18): the wipe family — sections arrive through a
+    # clip-path mask ("unveil" language). "sweep" stays with underline.
+    if any(w in move for w in ("wipe", "mask", "curtain", "veil", "unveil", "shutter")):
+        return "sx-sig-wipe"
     # A named move that matches no family still gets a thesis — stable
-    # hash-pick so the same DRO always renders the same signature.
-    pick = int(_hashlib.sha256(move.encode()).hexdigest()[:8], 16) % 3
-    return ("sx-sig-cascade", "sx-sig-drift", "sx-sig-underline")[pick]
+    # hash-pick so the same DRO always renders the same signature. The
+    # entrance tier picks among the three ARRIVAL families only.
+    pick = int(_hashlib.sha256(move.encode()).hexdigest()[:8], 16)
+    if tier == "entrance":
+        return ("sx-sig-cascade", "sx-sig-underline", "sx-sig-wipe")[pick % 3]
+    return ("sx-sig-cascade", "sx-sig-drift", "sx-sig-underline", "sx-sig-wipe")[pick % 4]
 
 
 def reveal_focus_class(dna: Dict[str, Any],
@@ -373,11 +407,17 @@ body.sx-sig-underline .sxm-reveal h2::after { content: ""; position: absolute; l
   background: linear-gradient(90deg, var(--sx-accent), transparent);
   opacity: 0; transition: opacity .7s var(--sx-ease) .15s; }
 body.sx-sig-underline .sxm-reveal.sxm-in h2::after { opacity: 1; }
+/* Wipe (P3d): sections arrive through a soft clip-path mask — the
+   "unveil" family. Clip only, no transform: a curtain lift, not a slide. */
+body.sx-sig-wipe .sxm-reveal { clip-path: inset(0 0 14% 0);
+  transition: opacity .8s var(--sx-ease), transform .8s var(--sx-ease), clip-path .8s var(--sx-ease); }
+body.sx-sig-wipe .sxm-reveal.sxm-in { clip-path: inset(0 0 0 0); }
 @media (prefers-reduced-motion: reduce) {
   body.sx-sig-cascade .sxm-reveal .sxm-inner > * { opacity: 1; transform: none; transition: none; }
   body.sx-sig-drift .sxm-orn-layer, body.sx-sig-drift .sxm-motif,
   body.sx-sig-drift .sxm-cine-bg, body.sx-sig-drift .sxm-hero-bgimg { animation: none !important; }
   body.sx-sig-underline .sxm-reveal h2::after { opacity: 1; transition: none; }
+  body.sx-sig-wipe .sxm-reveal { clip-path: none; }
 }"""
 
 # Image-treatment CSS (Arc 3): one soft grade per page via body class.
@@ -431,7 +471,8 @@ body.sx-sig-soft.sx-sig-cascade .sxm-reveal.sxm-in .sxm-inner > * { transition-d
 body.sx-sig-soft.sx-sig-drift .sxm-orn-layer, body.sx-sig-soft.sx-sig-drift .sxm-motif,
 body.sx-sig-soft.sx-sig-drift .sxm-cine-bg, body.sx-sig-soft.sx-sig-drift .sxm-hero-bgimg {
   animation-duration: 44s !important; }
-body.sx-sig-soft.sx-sig-underline .sxm-reveal h2::after { width: 64px; height: 2px; }"""
+body.sx-sig-soft.sx-sig-underline .sxm-reveal h2::after { width: 64px; height: 2px; }
+body.sx-sig-soft.sx-sig-wipe .sxm-reveal { clip-path: inset(0 0 5% 0); }"""
 
 # Quality-floor arc 7 — the owner's original design bar, ported into the
 # live renderer as its DEFAULT floor (source: agents/design_intelligence/
@@ -597,9 +638,10 @@ body.sx-reveal-focus .sxm-reveal.sxm-in { transform: none; filter: blur(0); }
   body.sx-reveal-focus .sxm-reveal { filter: none; } }""" + _SIG_CSS
     # motion=subtle stills the LOOPING pieces (CTA shimmer, diamond float,
     # depth orb) — a stilled page keeps the premium statics, drops the
-    # perpetual motion.
+    # perpetual motion. B1: motion=entrance (DRO subtle_entrance) keeps the
+    # arrival choreography but stills the same perpetual loops.
     loop_kill = ("\n.sxm-cta::before, .sxm-diamond, .sxm-depth-orb { animation: none; }"
-                 if motion == "subtle" else "")
+                 if motion in ("subtle", "entrance") else "")
     return f"""
 *, *::before, *::after {{ box-sizing: border-box; }}
 html {{ scroll-behavior: smooth; }}
@@ -664,6 +706,19 @@ body.sx-scarce-accent .sxm-eyebrow {{ color: var(--sx-muted); }}
 body.sx-scarce-accent .sxm-mark-thin,
 body.sx-scarce-accent .sxm-mark-block {{ background: var(--sx-border); }}
 body.sx-scarce-accent .sxm-mark-soft {{ background: color-mix(in srgb, var(--sx-muted) 45%, transparent); }}
+/* B1 (2026-07-18): DRO tonal_monochrome — one hue, many tones. The second
+   accent family collapses onto neutrals page-wide (scarce-accent rides
+   alongside, reserving the one accent for meaning). Redefining the vars at
+   body scope wins over :root whether or not the family was emitted. */
+body.sx-mono-accent {{ --sx-secondary: var(--sx-surface2);
+  --sx-secondary-soft: var(--sx-surface2);
+  --sx-secondary-strong: var(--sx-muted); }}
+/* B1 (2026-07-18): DRO whitespace.philosophy=editorial_rhythm — the page
+   breathes in a long/short cadence: even sections tighten to ~60% pad.
+   The hero sits at position 1 (odd), so it keeps its full stage. */
+body.sx-editorial-rhythm .sxm-section:nth-of-type(even) {{
+  padding-top: calc(var(--sx-section-pad) * .6);
+  padding-bottom: calc(var(--sx-section-pad) * .6); }}
 {reveal_css}
 {_quality_css(dna)}{loop_kill}
 {_TREATMENT_CSS}
@@ -849,10 +904,20 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
     import brand_dna
     fonts = brand_dna.google_fonts_url(dna)
     # DRO single_semantic → accent scarcity body class (CSS in base_css).
+    # B1: tonal_monochrome rides the same scarcity plus the mono override
+    # (the second accent family collapses to neutrals) — one hue, many tones.
     accent_strategy = ((design or {}).get("palette") or {}).get("accent_strategy")
     classes = []
     if accent_strategy == "single_semantic":
         classes.append("sx-scarce-accent")
+    elif accent_strategy == "tonal_monochrome":
+        classes.append("sx-scarce-accent")
+        classes.append("sx-mono-accent")
+    # B1: whitespace.philosophy=editorial_rhythm → alternating pad cadence
+    # (CSS in base_css; the rhythm tier itself moved in apply_dro_style).
+    ws_phil = str(((design or {}).get("whitespace") or {}).get("philosophy") or "")
+    if "editorial" in ws_phil.lower():
+        classes.append("sx-editorial-rhythm")
     # Arc 3: signature move + image treatment reach the pixels as body
     # classes (deterministic; empty strings drop out).
     sig = signature_move_class(dna, design)

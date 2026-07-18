@@ -75,6 +75,7 @@ _MIN_REDUCED_TOKENS = 256
 #   "signals" — DRL signal detection (SIGNAL_MAX_TOKENS≈3200)
 #   "dro"     — DRO authoring incl. minimal mode (DRO_MAX_TOKENS≈6000)
 #   "atelier" — bespoke section authoring (ATELIER_MAX_TOKENS≈8000)
+#   "spec"    — page-spec/copy composition (SPEC_MAX_TOKENS=4000)
 # Slow-family (Opus/Fable) ceilings are ~2x: Opus streams ~2-3x slower
 # per token. The compose runs as a chief_jobs background job (stale sweep
 # at 10 min), so 240s worst-case single calls stay inside budget.
@@ -82,6 +83,7 @@ _TIMEOUTS = {
     "signals": (75.0, 120.0),
     "dro": (120.0, 240.0),
     "atelier": (120.0, 240.0),
+    "spec": (75.0, 120.0),
 }
 _DEFAULT_TIMEOUTS = (120.0, 240.0)
 

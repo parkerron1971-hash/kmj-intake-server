@@ -10,8 +10,16 @@ column. Desktop = two columns: LEFT the invitation (accent headline,
 note, direct channels as hairline rows with whisper labels), RIGHT the
 form as a crafted card (surface elevation, roomy inputs, accent focus
 ring, full-width premium send). Mobile stacks invitation → card; no
-form → the invitation holds the center alone. Deterministic and
-never-bespoke, exactly as before.
+form → the invitation holds the center alone. Variants: "standard"
+(the two-column finale) and — B4 (2026-07-18) — "centered" (one
+centered column, form card beneath the ask).
+
+B4: the form machinery is SHARED, not inline — build_contact_form()
+returns the working form + wiring script and CONTACT_FORM_CSS holds
+its styles, so the atelier's bespoke contact path carries the exact
+same form verbatim (validator-enforced) while composing freely around
+it. Contact left the never-bespoke list; the form's integrity is why
+the share exists.
 
 CONSENT ELEGANCE (Site Arc 11b): the SMS consent block (checkbox +
 full A2P disclosure) reveals only once the phone field has input —
@@ -27,7 +35,7 @@ from typing import Any, Dict, Tuple
 from ._base import (safe, safe_url, ov, heading_accent, social_profile_url,
                     accent_headline, diamond_mark)
 
-VARIANTS = ("standard",)
+VARIANTS = ("standard", "centered")
 
 # Display names for social platforms — links carry REAL text labels
 # (accessibility: never emoji-only anchors).
@@ -122,43 +130,58 @@ def _sms_consent_block(ctx: Dict[str, Any]) -> str:
       </label>"""
 
 
-def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
-    dna = ctx["dna"]
-    biz = ctx.get("business") or {}
-    booking = ctx.get("booking") or {}
+# B4 (2026-07-18) — the form's own styles as a SHARED constant. The
+# module's render concatenates it; the atelier ships it alongside a
+# bespoke contact fragment (the fragment composes AROUND the form, the
+# platform keeps the form itself styled + working). One text, no drift.
+CONTACT_FORM_CSS = """
+.sxm-contact-form { display: flex; flex-direction: column; align-items: stretch; gap: 14px;
+  width: 100%; text-align: left; }
+.sxm-contact-form input, .sxm-contact-form textarea { padding: 15px 17px; font: inherit; color: var(--sx-text);
+  background: var(--sx-bg); border: 1px solid var(--sx-border); border-radius: var(--sx-radius-card); width: 100%; box-sizing: border-box;
+  text-align: left; transition: border-color .25s var(--sx-ease), box-shadow .25s var(--sx-ease); }
+.sxm-contact-form input::placeholder, .sxm-contact-form textarea::placeholder { color: var(--sx-muted); }
+.sxm-contact-form input:focus, .sxm-contact-form textarea:focus { outline: none;
+  border-color: var(--sx-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sx-accent) 22%, transparent); }
+.sxm-contact-form button { margin-top: 6px; width: 100%; cursor: pointer; }
+.sxm-sms-consent { display: flex; flex-direction: row; gap: 10px; align-items: flex-start;
+  justify-content: flex-start; text-align: left; max-width: 52ch; width: 100%;
+  margin: 0; font-size: .8rem; line-height: 1.6; color: var(--sx-muted); cursor: pointer; }
+.sxm-sms-consent input { margin: 4px 0 0; flex-shrink: 0; width: auto; accent-color: var(--sx-accent); }
+.sxm-sms-consent span { flex: 1 1 auto; min-width: 0; text-align: left; display: block; }
+.sxm-consent-hint { display: none; margin: 0; font-size: .68rem; letter-spacing: .18em; }
+.sxm-contact-form.sxm-consent-armed .sxm-consent-hint { display: block; }
+.sxm-contact-form.sxm-consent-armed.sxm-consent-open .sxm-consent-hint { display: none; }
+.sxm-contact-form.sxm-consent-armed .sxm-sms-consent { display: none; }
+.sxm-contact-form.sxm-consent-armed.sxm-consent-open .sxm-sms-consent { display: flex; }
+.sxm-sent { font-size: 1.05rem; font-weight: 600; color: var(--sx-accent); text-align: center; }"""
+
+
+def build_contact_form(ctx: Dict[str, Any]) -> Tuple[str, str]:
+    """The WORKING contact form + its wiring script — (form_html,
+    script_html), both empty when no live submit endpoint exists or the
+    owner disabled the form (connections.contact_form=False). Shared by
+    the module render AND the atelier: a bespoke contact fragment must
+    carry this exact markup verbatim (the validator enforces it), and
+    run_atelier ships the script + CONTACT_FORM_CSS with the fragment.
+    The form POSTs to the live /sites/{id}/contact-submit endpoint; the
+    script drives the submit fetch and the SMS-consent reveal (A2P
+    compliance — wording byte-locked, see _sms_consent_block)."""
     contact = ctx.get("contact") or {}
-    # Site Arc 11 — explicit owner connections (absent dict → every
-    # behavior below is byte-identical to the pre-Arc-11 auto defaults).
     conn = (ctx.get("connections")
             if isinstance(ctx.get("connections"), dict) else {})
-
-    headline = content.get("headline") or "Get in touch"
-    note = content.get("note") or ""
-    note_html = f'<p class="sxm-muted" {ov("contact", "note")}>{safe(note)}</p>' if note else ""
-
-    # Primary action: booking page when enabled.
-    cta_html = ""
-    if booking.get("enabled") and booking.get("url"):
-        cta_html = (f'<a class="sxm-cta" href="{safe_url(booking["url"])}">'
-                    f'<span {ov("contact", "cta_label")}>{safe(content.get("cta_label") or "Book now")}</span></a>')
-
-    # Real contact form → the live submit endpoint. mailto is the fallback.
-    # Site Arc 11: connections.contact_form=False renders the channels
-    # (mailto / logistics / socials) WITHOUT the form — explicit owner
-    # intent; absent/True keeps the endpoint-gated default.
-    email = (contact.get("email") or "").strip()
     submit_url = contact.get("submit_url") or ""
-    form_html = ""
-    script_html = ""
-    if submit_url and conn.get("contact_form") is not False:
-        form_html = f"""
+    if not submit_url or conn.get("contact_form") is False:
+        return "", ""
+    form_html = f"""
     <form id="sxm-contact-form" class="sxm-contact-form" data-endpoint="{safe_url(submit_url)}">
       <input name="name" type="text" placeholder="Your name" required>
       <input name="email" type="email" placeholder="Your email" required>
       <textarea name="message" rows="5" placeholder="How can we help?" required></textarea>{_sms_consent_block(ctx)}
       <button type="submit" class="sxm-cta" {ov('contact', 'send_label')}>Send message</button>
     </form>"""
-        script_html = """
+    script_html = """
 <script>
 (function(){
   var f=document.getElementById('sxm-contact-form'); if(!f) return;
@@ -187,6 +210,36 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   });
 })();
 </script>"""
+    return form_html, script_html
+
+
+def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
+    dna = ctx["dna"]
+    biz = ctx.get("business") or {}
+    booking = ctx.get("booking") or {}
+    contact = ctx.get("contact") or {}
+    # Site Arc 11 — explicit owner connections (absent dict → every
+    # behavior below is byte-identical to the pre-Arc-11 auto defaults).
+    conn = (ctx.get("connections")
+            if isinstance(ctx.get("connections"), dict) else {})
+
+    headline = content.get("headline") or "Get in touch"
+    note = content.get("note") or ""
+    note_html = f'<p class="sxm-muted" {ov("contact", "note")}>{safe(note)}</p>' if note else ""
+
+    # Primary action: booking page when enabled.
+    cta_html = ""
+    if booking.get("enabled") and booking.get("url"):
+        cta_html = (f'<a class="sxm-cta" href="{safe_url(booking["url"])}">'
+                    f'<span {ov("contact", "cta_label")}>{safe(content.get("cta_label") or "Book now")}</span></a>')
+
+    # Real contact form → the live submit endpoint (B4: the shared
+    # builder — a bespoke atelier fragment carries the same markup
+    # verbatim). mailto is the fallback. Site Arc 11:
+    # connections.contact_form=False renders the channels WITHOUT the
+    # form (handled inside build_contact_form).
+    email = (contact.get("email") or "").strip()
+    form_html, script_html = build_contact_form(ctx)
     mail_html = ('<div class="sxm-contact-mail sxm-channel">'
                  '<span class="sxm-whisper sxm-channel-label">Email</span>'
                  f'<a href="mailto:{safe_url(email)}">{safe(email)}</a></div>'
@@ -219,6 +272,68 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 
     # THE FINALE COMPOSITION (Site Arc 11b): invitation column + form
     # card. No form → the invitation holds the center alone (solo).
+    if variant == "centered":
+        # B4 (2026-07-18) — the single-column centered finale. The
+        # standard split puts invitation | form side by side; the
+        # centered close stages one column: invitation first, the form
+        # card centered beneath it, channels centered under the ask.
+        # Same working form, same wiring, same footer.
+        invite_html = f"""
+    <div class="sxm-contact-invite">
+      {heading_accent(dna)}
+      <h2 {ov('contact', 'headline')}>{accent_headline(headline)}</h2>
+      {note_html}
+      {f'<div class="sxm-contact-actions">{cta_html}</div>' if cta_html else ''}
+      {channels_html}
+    </div>"""
+        card_html = (f'\n    <div class="sxm-contact-formcard">{form_html}\n    </div>'
+                     if form_html else "")
+        html = f"""
+<section class="sxm-section sxm-contact sxm-contact-centered sxm-reveal" id="contact">
+  <div class="sxm-inner">{invite_html}{card_html}
+  </div>
+</section>
+<footer class="sxm-footer">
+  <div class="sxm-inner sxm-footer-inner sxm-whisper">
+    <span class="sxm-footer-brand">{diamond_mark(dna)}<span {ov('contact', 'footer_line')}>{footer_line}</span></span>{sms_line_html}
+    <a href="https://mysolutionist.app/" target="_blank" rel="noopener" class="sxm-footer-power">Powered by Solutionist</a>
+  </div>
+</footer>{script_html}"""
+        css = """
+/* B4 — centered finale: one column, everything holds the center. */
+.sxm-contact-centered .sxm-inner { display: flex; flex-direction: column;
+  align-items: center; text-align: center; gap: clamp(36px, 5vw, 56px); }
+.sxm-contact-centered .sxm-contact-invite { max-width: 620px; }
+.sxm-contact-centered h2 { margin-bottom: 14px; }
+.sxm-contact-centered .sxm-contact-actions { display: flex; gap: 22px;
+  align-items: center; justify-content: center; flex-wrap: wrap; margin: 26px 0 6px; }
+.sxm-contact-centered .sxm-contact-channels { margin-top: 32px; display: flex;
+  flex-direction: column; width: 100%; border-top: 1px solid var(--sx-border); }
+.sxm-contact-centered .sxm-contact-logistics { display: contents; }
+.sxm-contact-centered .sxm-channel { display: flex; align-items: baseline; gap: 18px;
+  justify-content: center; padding: 14px 2px;
+  border-bottom: 1px solid var(--sx-border); font-size: .95rem; }
+.sxm-contact-centered .sxm-channel-label { flex: 0 0 72px; }
+.sxm-contact-centered .sxm-channel a { font-weight: 600; }
+.sxm-contact-centered .sxm-channel-text { color: var(--sx-text); }
+.sxm-contact-centered .sxm-channel-body { display: flex; gap: 10px 18px;
+  flex-wrap: wrap; justify-content: center; }
+.sxm-contact-centered .sxm-contact-social .sxm-social { text-decoration: none;
+  border-bottom: 1.5px solid var(--sx-accent-soft); padding-bottom: 1px; }
+.sxm-contact-centered .sxm-contact-social .sxm-social:hover { border-bottom-color: var(--sx-accent); }
+.sxm-contact-centered .sxm-contact-formcard { width: min(560px, 100%);
+  background: var(--sx-surface); border: 1px solid var(--sx-border);
+  border-radius: var(--sx-radius-card); padding: clamp(26px, 3.6vw, 46px);
+  box-shadow: 0 26px 70px rgba(0, 0, 0, .16); text-align: left; }
+/* The form's own rules ride the shared CONTACT_FORM_CSS (B4). */""" + CONTACT_FORM_CSS + """
+.sxm-footer { border-top: 1px solid var(--sx-border); padding: 26px var(--sx-gutter); }
+.sxm-footer-brand { display: inline-flex; align-items: center; }
+.sxm-footer-inner { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; font-size: .82rem; color: var(--sx-muted); }
+.sxm-footer-power { color: var(--sx-muted); }
+.sxm-footer-power:hover { color: var(--sx-accent); }
+.sxm-footer-sms { color: var(--sx-accent); white-space: nowrap; }"""
+        return html, css
+
     invite_html = f"""
     <div class="sxm-contact-invite">
       {heading_accent(dna)}
@@ -277,35 +392,8 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
    INSIDE the form every control shares ONE left edge — inputs,
    textarea, consent row and submit all start at the form's left edge,
    full form width, left-aligned text. Nothing inside the form may
-   inherit a centered ancestor. */
-.sxm-contact-form { display: flex; flex-direction: column; align-items: stretch; gap: 14px;
-  width: 100%; text-align: left; }
-.sxm-contact-form input, .sxm-contact-form textarea { padding: 15px 17px; font: inherit; color: var(--sx-text);
-  background: var(--sx-bg); border: 1px solid var(--sx-border); border-radius: var(--sx-radius-card); width: 100%; box-sizing: border-box;
-  text-align: left; transition: border-color .25s var(--sx-ease), box-shadow .25s var(--sx-ease); }
-.sxm-contact-form input::placeholder, .sxm-contact-form textarea::placeholder { color: var(--sx-muted); }
-.sxm-contact-form input:focus, .sxm-contact-form textarea:focus { outline: none;
-  border-color: var(--sx-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sx-accent) 22%, transparent); }
-.sxm-contact-form button { margin-top: 6px; width: 100%; cursor: pointer; }  /* full-width premium send — same left edge */
-/* SMS consent row — a proper left-aligned flex row: checkbox top-aligned
-   with the first text line, disclosure text explicitly LEFT-aligned (a
-   centered ancestor can never recenter it), readable measure, muted. */
-.sxm-sms-consent { display: flex; flex-direction: row; gap: 10px; align-items: flex-start;
-  justify-content: flex-start; text-align: left; max-width: 52ch; width: 100%;
-  margin: 0; font-size: .8rem; line-height: 1.6; color: var(--sx-muted); cursor: pointer; }
-.sxm-sms-consent input { margin: 4px 0 0; flex-shrink: 0; width: auto; accent-color: var(--sx-accent); }
-.sxm-sms-consent span { flex: 1 1 auto; min-width: 0; text-align: left; display: block; }
-/* CONSENT ELEGANCE (Site Arc 11b): JS arms the form; armed + empty
-   phone → one whisper hint instead of the legal wall; typing a number
-   opens the full disclosure. No JS → never armed → the disclosure
-   stays visible (compliance without JavaScript). */
-.sxm-consent-hint { display: none; margin: 0; font-size: .68rem; letter-spacing: .18em; }
-.sxm-contact-form.sxm-consent-armed .sxm-consent-hint { display: block; }
-.sxm-contact-form.sxm-consent-armed.sxm-consent-open .sxm-consent-hint { display: none; }
-.sxm-contact-form.sxm-consent-armed .sxm-sms-consent { display: none; }
-.sxm-contact-form.sxm-consent-armed.sxm-consent-open .sxm-sms-consent { display: flex; }
-.sxm-sent { font-size: 1.05rem; font-weight: 600; color: var(--sx-accent); text-align: center; }
+   inherit a centered ancestor. The form rules themselves live in the
+   shared CONTACT_FORM_CSS (B4 — one text, module + atelier). */""" + CONTACT_FORM_CSS + """
 @media (max-width: 900px) {
   .sxm-contact-inner { grid-template-columns: 1fr; gap: 44px; }
   .sxm-contact-invite { max-width: none; }

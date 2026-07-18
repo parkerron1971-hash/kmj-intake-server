@@ -54,6 +54,22 @@ def gate_enforced() -> bool:
     return (os.environ.get("SHIP_GATE") or "").strip().lower() == "enforce"
 
 
+def _meter(business_id: str, model: str, input_tokens: int,
+           output_tokens: int) -> None:
+    """Meter the judge call (2026-07-18): the grader runs a 3-screenshot
+    judge on EVERY render — self-heal recursions, refine re-renders, and
+    the bounded quality regen included — and until now none of it was
+    visible to usage tracking or spend_guard. Never raises."""
+    try:
+        from api_usage_logger import log_api_usage_sync
+        log_api_usage_sync(
+            endpoint="/vision/grade", model=model or "unknown",
+            input_tokens=input_tokens or 0, output_tokens=output_tokens or 0,
+            business_id=business_id or "unknown", task_type="vision-grade")
+    except Exception:
+        pass
+
+
 def _screenshot(html: str) -> Optional[List[bytes]]:
     """Render the html at each breakpoint; return JPEG bytes (above the
     fold). None when playwright is unavailable."""
@@ -81,7 +97,7 @@ def _screenshot(html: str) -> Optional[List[bytes]]:
     return shots
 
 
-def _grade_anthropic(shots: List[bytes]) -> Optional[str]:
+def _grade_anthropic(shots: List[bytes], business_id: str = "") -> Optional[str]:
     from anthropic import Anthropic
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
@@ -98,10 +114,13 @@ def _grade_anthropic(shots: List[bytes]) -> Optional[str]:
         model=(os.environ.get("VISION_JUDGE_MODEL") or "claude-sonnet-4-5-20250929").strip(),
         max_tokens=700, system=RUBRIC,
         messages=[{"role": "user", "content": content}], timeout=90.0)
+    _meter(business_id, getattr(msg, "model", "") or "",
+           getattr(getattr(msg, "usage", None), "input_tokens", 0) or 0,
+           getattr(getattr(msg, "usage", None), "output_tokens", 0) or 0)
     return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
 
 
-def _grade_moonshot(shots: List[bytes]) -> Optional[str]:
+def _grade_moonshot(shots: List[bytes], business_id: str = "") -> Optional[str]:
     import httpx
     key = (os.environ.get("MOONSHOT_API_KEY") or "").strip()
     if not key:
@@ -113,16 +132,22 @@ def _grade_moonshot(shots: List[bytes]) -> Optional[str]:
         content.append({"type": "image_url", "image_url": {
             "url": "data:image/jpeg;base64," + base64.b64encode(shot).decode()}})
     content.append({"type": "text", "text": "Grade per the rubric. Verdict JSON only."})
+    model = (os.environ.get("SITE_BUILDER_MODEL") or "kimi-k3").strip()
     r = httpx.post(f"{base}/chat/completions",
                    headers={"Authorization": f"Bearer {key}"},
-                   json={"model": (os.environ.get("SITE_BUILDER_MODEL") or "kimi-k3").strip(),
+                   json={"model": model,
                          "max_tokens": 3700,
                          "messages": [{"role": "system", "content": RUBRIC},
                                        {"role": "user", "content": content}]},
                    timeout=120)
     if r.status_code >= 400:
         raise RuntimeError(f"moonshot vision {r.status_code}: {r.text[:200]}")
-    return (((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+    data = r.json()
+    usage = data.get("usage") or {}
+    _meter(business_id, data.get("model") or model,
+           int(usage.get("prompt_tokens") or 0),
+           int(usage.get("completion_tokens") or 0))
+    return (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
 
 
 def _parse_verdict(text: str) -> Optional[Dict[str, Any]]:
@@ -171,12 +196,28 @@ def grade(html: str, business_id: str = "") -> Optional[Dict[str, Any]]:
     except Exception:
         provider = "anthropic"
     try:
-        raw = _grade_moonshot(shots) if provider == "moonshot" else _grade_anthropic(shots)
+        # Acceptance-run finding (2026-07-18): _grade_moonshot RAISES on
+        # transport/auth errors (401, timeout), which jumped past the
+        # fallback below straight to the outer except — Claude only
+        # covered "moonshot answered junk", not "moonshot unreachable".
+        # Contain the moonshot leg so ANY failure falls to Claude, and
+        # label the verdict with the judge that actually produced it.
+        raw = None
+        if provider == "moonshot":
+            try:
+                raw = _grade_moonshot(shots, business_id)
+            except Exception as e:
+                logger.warning(f"[vision] moonshot judge failed "
+                               f"({type(e).__name__}: {e}) — falling back to anthropic")
+        else:
+            raw = _grade_anthropic(shots, business_id)
         v = _parse_verdict(raw or "")
         if v is None and provider == "moonshot":
             # Judge fail-open mirrors the composer's: fall back to Claude.
             logger.warning("[vision] moonshot judge unusable — falling back to anthropic")
-            v = _parse_verdict(_grade_anthropic(shots) or "")
+            v = _parse_verdict(_grade_anthropic(shots, business_id) or "")
+            if v is not None:
+                provider = "anthropic"
         if v is not None:
             v["judge_provider"] = provider
             v["passes_gate"] = verdict_passes(v)

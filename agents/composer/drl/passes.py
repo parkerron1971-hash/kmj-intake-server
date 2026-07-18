@@ -687,10 +687,11 @@ def _pop_audit_fields(parsed: dict, business_id: str) -> None:
             for i, item in enumerate(inv[:6]):
                 logger.info(f"[dro-audit] INVENTION {i + 1} "
                             f"({str(business_id)[:8]}): {str(item)[:220]}")
-            # Phase 2: stash the count for the loop's invention check.
+            # Phase 2: stash the count + the records for the loop's
+            # invention check (A4 verifies count AND restatement).
             try:
                 from design_register import note_inventions
-                note_inventions(business_id, len(inv))
+                note_inventions(business_id, len(inv), texts=inv[:6])
             except Exception:
                 pass
         echo = parsed.pop("echo_plan", None)
