@@ -10,8 +10,51 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # A5 (2026-07-18) — the KMJ design acceptance harness is MANUAL-only:
+  # it needs live Supabase/Anthropic/(Moonshot)/playwright and a dedicated
+  # fixture business, so it can never ride the fake-based suite above.
+  workflow_dispatch:
+    inputs:
+      fixture_business_id:
+        description: "KMJ acceptance fixture business id (page gets overwritten)"
+        required: true
+      modes:
+        description: "anthropic,moonshot,fallback (or a subset)"
+        default: "anthropic,moonshot,fallback"
 
 jobs:
+  design-acceptance:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies (+ playwright chromium)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Run the KMJ acceptance harness
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          ACCEPTANCE_BUSINESS_ID: ${{ inputs.fixture_business_id }}
+        run: |
+          python scripts/design_acceptance.py \
+            --business-id "$ACCEPTANCE_BUSINESS_ID" \
+            --modes "${{ inputs.modes }}" \
+            --json acceptance-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: design-acceptance-report
+          path: acceptance-report.json
+
   test:
     runs-on: ubuntu-latest
     steps:
