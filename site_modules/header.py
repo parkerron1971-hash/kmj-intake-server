@@ -158,8 +158,19 @@ html { scroll-padding-top: 84px; }
 .sxm-header-brand { display: flex; align-items: center; min-width: 0; color: var(--sx-text); }
 .sxm-header-logo { height: 38px; width: auto; max-width: 180px; object-fit: contain; display: block; }
 .sxm-header-wordmark { font-family: var(--sx-font-heading); font-weight: var(--sx-heading-weight);
-  font-size: 1.22rem; letter-spacing: var(--sx-letter-tight); white-space: nowrap;
+  font-size: clamp(0.98rem, 0.7rem + 1.1vw, 1.22rem);
+  letter-spacing: var(--sx-letter-tight); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
+/* Ship-gate finding (3/3 acceptance builds): a long business name
+   ellipsized to "…" at 390px — "an ellipsis in a logo reads as broken,
+   not responsive". Small viewports let the wordmark wrap to two tight
+   lines instead of truncating; the fluid clamp above already shrinks it
+   before the wrap is needed. */
+@media (max-width: 480px) {
+  .sxm-header-wordmark { white-space: normal; overflow: visible;
+    text-overflow: clip; line-height: 1.08; font-size: 0.95rem;
+    max-width: 46vw; }
+}
 .sxm-header-nav { display: flex; align-items: center; gap: clamp(14px, 2.4vw, 28px);
   margin-left: auto; overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none;
   /* soft-faded edges when links overflow — the gradient FADES, never hard-edged */

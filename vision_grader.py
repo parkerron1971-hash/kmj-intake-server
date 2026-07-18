@@ -171,12 +171,28 @@ def grade(html: str, business_id: str = "") -> Optional[Dict[str, Any]]:
     except Exception:
         provider = "anthropic"
     try:
-        raw = _grade_moonshot(shots) if provider == "moonshot" else _grade_anthropic(shots)
+        # Acceptance-run finding (2026-07-18): _grade_moonshot RAISES on
+        # transport/auth errors (401, timeout), which jumped past the
+        # fallback below straight to the outer except — Claude only
+        # covered "moonshot answered junk", not "moonshot unreachable".
+        # Contain the moonshot leg so ANY failure falls to Claude, and
+        # label the verdict with the judge that actually produced it.
+        raw = None
+        if provider == "moonshot":
+            try:
+                raw = _grade_moonshot(shots)
+            except Exception as e:
+                logger.warning(f"[vision] moonshot judge failed "
+                               f"({type(e).__name__}: {e}) — falling back to anthropic")
+        else:
+            raw = _grade_anthropic(shots)
         v = _parse_verdict(raw or "")
         if v is None and provider == "moonshot":
             # Judge fail-open mirrors the composer's: fall back to Claude.
             logger.warning("[vision] moonshot judge unusable — falling back to anthropic")
             v = _parse_verdict(_grade_anthropic(shots) or "")
+            if v is not None:
+                provider = "anthropic"
         if v is not None:
             v["judge_provider"] = provider
             v["passes_gate"] = verdict_passes(v)

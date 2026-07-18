@@ -1373,6 +1373,7 @@ _EDITABILITY_EXEMPT_PREFIXES = (
     "sxm-sent",                                       # runtime-only state
     "sxm-int-mq",                                     # marquee tone words
     "sxm-faq-rows",                                   # Arc S: policy/FAQ records (edited via Chief)
+    "sxm-step",                                       # P3 process steps: owner data, edited in the interview
 )
 
 
@@ -2219,7 +2220,13 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         import vision_grader as _vg
         from design_register import get_invention_count as _gic
         _verdict = _vg.grade(final_html, business_id)
-        if _verdict is not None:
+        if _verdict is None:
+            # Acceptance-run finding: leaving the PREVIOUS build's verdict
+            # in site_config misattributes it to this compose (the forced-
+            # fallback run "inherited" the prior run's scores verbatim).
+            # No verdict for THIS build -> no verdict stored.
+            cfg.pop("vision_verdict", None)
+        else:
             cfg["vision_verdict"] = _verdict
             if not _verdict.get("passes_gate"):
                 logger.warning(
@@ -2232,7 +2239,9 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                     raise RuntimeError("ship-gate: vision verdict failed and "
                                        "SHIP_GATE=enforce is set")
         _inv = _gic(business_id)
-        if _inv is not None:
+        if _inv is None:
+            cfg.pop("invention_count", None)  # same staleness rule as the verdict
+        else:
             cfg["invention_count"] = _inv
             if _inv < 3:
                 logger.warning(f"[ship-gate] inventions below spec for "
@@ -2430,6 +2439,13 @@ def _ensure_connections(spec: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List
                           "_variant_defaulted": True})
     if _prefs.get("process_steps") and "process" not in present:
         additions.append({"module": "process", "variant": "steps", "content": {},
+                          "_variant_defaulted": True})
+    # Acceptance-run finding: the owner answered YES to the gallery
+    # question and the composer still skipped the section. An explicit
+    # yes forces it — with zero photos it renders the designed awaiting
+    # frames (#181), which is exactly what the owner opted into.
+    if _prefs.get("wants_gallery") is True and "gallery" not in present:
+        additions.append({"module": "gallery", "variant": "mosaic", "content": {},
                           "_variant_defaulted": True})
     if not additions:
         return spec
