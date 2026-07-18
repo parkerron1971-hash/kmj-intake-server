@@ -495,6 +495,28 @@ def build_unsplash_query(
     designer_pick: Optional[Dict[str, Any]],
     business: Optional[Dict[str, Any]],
 ) -> str:
+    """Phase 1 (spec 3-I): uniform wrapper — ONE art-direction phrase
+    prefixes every query, whichever internal path composed it, so the
+    image set reads as one shoot (independent queries produce six
+    strangers). Deterministic; fail-soft to the bare query."""
+    q = _build_unsplash_query_inner(slot_name, enriched_brief,
+                                    designer_pick, business)
+    try:
+        from design_doctrine import art_direction_string
+        lead = art_direction_string(enriched_brief, designer_pick).split(",")[0].strip()
+        if lead and lead.lower() not in q.lower():
+            q = f"{q} {lead}"
+    except Exception:
+        pass
+    return q[:100].strip()
+
+
+def _build_unsplash_query_inner(
+    slot_name: str,
+    enriched_brief: Optional[Dict[str, Any]],
+    designer_pick: Optional[Dict[str, Any]],
+    business: Optional[Dict[str, Any]],
+) -> str:
     """Compose an Unsplash query string for a slot.
 
     Concept-aware path (Arc 1 'Wear the Brand'): when the brief carries

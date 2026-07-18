@@ -362,7 +362,12 @@ def _allowed_hrefs(data: Dict[str, Any]) -> List[str]:
 
 # ─── The prompt (the product) ─────────────────────────────────────────
 
-_SYSTEM_PROMPT = """You are a senior creative director and master frontend craftsperson working in a design atelier. You art-direct ONE section of a production website — not a template slot, a composition. You read a design rationale the way a designer reads a brief: you feel the tension, hear the organizing concept, and then build the moment where the visitor's eyes land.
+# Phase 1 (Kimi design integration): THE DOCTRINE + creative contract
+# wrap the atelier's system prompt for BOTH providers (Symmetry Rule
+# — prompt content is never provider-gated; fallback keeps the law).
+from design_doctrine import DOCTRINE as _DOCTRINE, DIVERSITY_LINE as _DIVERSITY, CREATIVE_CONTRACT as _CONTRACT
+
+_SYSTEM_PROMPT = _DOCTRINE + "\n\n" + _CONTRACT + "\n\n" + """You are a senior creative director and master frontend craftsperson working in a design atelier. You art-direct ONE section of a production website — not a template slot, a composition. You read a design rationale the way a designer reads a brief: you feel the tension, hear the organizing concept, and then build the moment where the visitor's eyes land.
 
 You output exactly one <section> fragment plus its CSS. The platform owns the page shell, the design tokens, the fonts, and every other section — your section must sit inside that system flawlessly while feeling unmistakably art-directed. The difference between great and mediocre is specificity: great design encodes THIS business's actual character; mediocre design fills a layout with its data.
 
@@ -604,6 +609,29 @@ def _descope_child_uids(html: str, uid: str) -> str:
     return head + tail
 
 
+_AUDIT_COMMENT_RE = re.compile(
+    r"<!--\s*(DERIVATION|INVENTION|EXCEPTION)\s*:\s*(.*?)-->", re.DOTALL | re.IGNORECASE)
+
+
+def _log_audit_comments(raw: str, kind: str, business_id: str) -> None:
+    """Phase 1 telemetry: surface the model's derivation / invention /
+    exception audit trail in the logs. The exception register (weekly
+    aggregation -> vocabulary roadmap) is Phase 2; this feed is what it
+    will read. Never raises."""
+    try:
+        for label, body in _AUDIT_COMMENT_RE.findall(raw or ""):
+            text = " ".join(str(body).split())[:300]
+            if not text:
+                continue
+            lvl = logger.info
+            if label.upper() == "EXCEPTION" and text.strip().lower() not in ("none", "none.", '"none"'):
+                lvl = logger.warning  # wanted-but-blocked = vocabulary gap
+            lvl(f"[atelier-audit] {label.upper()} ({kind}, "
+                f"{(business_id or 'unknown')[:8]}): {text}")
+    except Exception:
+        pass
+
+
 def _split_fragment(raw: str, uid: str = "") -> Optional[Tuple[str, str]]:
     """Parse the <!--HTML--> / <!--CSS--> delimited response, then
     sanitize both parts (tail junk out of the CSS, uid scope class off
@@ -655,10 +683,24 @@ def generate_bespoke_section(kind: str, variant_hint: Optional[str],
                                   allowed_slots, allowed_hrefs,
                                   slot_records=slot_records)
 
+    # Phase 1 — instructed diversity (K1) + the audit trail (K2):
+    # derivation / invention / exception ride as HTML comments BEFORE
+    # the <!--HTML--> marker, so the fragment contract is untouched
+    # (_split_fragment anchors on the marker and ignores the preamble).
+    audit_clause = (
+        "\n\n" + _DIVERSITY + "\n"
+        "Before the <!--HTML--> marker, output exactly three single-line comments:\n"
+        "<!--DERIVATION: the 2-4 signals you read and what they imply-->\n"
+        "<!--INVENTION: one thing you added that is NOT in the brief, and the constraint it builds on-->\n"
+        "<!--EXCEPTION: anything you wanted that the spec cannot express, or none-->\n"
+        "Then the standard <!--HTML--> / <!--CSS--> fragment."
+    )
+
     def _attempt(extra: str = "") -> Tuple[Optional[Tuple[str, str]], List[str]]:
-        raw = _call_llm(_SYSTEM_PROMPT, prompt + extra, business_id or "unknown")
+        raw = _call_llm(_SYSTEM_PROMPT, prompt + audit_clause + extra, business_id or "unknown")
         if raw is None:
             return None, ["LLM call failed"]
+        _log_audit_comments(raw, kind, business_id)
         frag = _split_fragment(raw, uid)
         if frag is None:
             return None, ["response missing <!--HTML--> / <!--CSS--> delimiters "

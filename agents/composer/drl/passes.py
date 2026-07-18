@@ -380,7 +380,11 @@ def _collides(dro: Dict[str, Any], recent: List[Dict[str, Any]]) -> bool:
 
 # ─── Pass 2: DRO authoring ───────────────────────────────────────────────
 def _dro_system_prompt() -> str:
+    # Phase 1 (Kimi design integration) — THE DOCTRINE + instructed
+    # diversity wrap the DRO author for BOTH providers (Symmetry Rule).
+    from design_doctrine import DOCTRINE, DIVERSITY_LINE
     return (
+        DOCTRINE + "\n\n" + DIVERSITY_LINE + "\n\n" +
         "You are a lead designer authoring a Design Rationale Object (DRO) — "
         "the REASONING for a website's design, written BEFORE any HTML exists. "
         "You decide DIRECTION, never concrete assets: no hex codes, no font "
@@ -586,6 +590,8 @@ def _author_dro_minimal(client: Anthropic, business_id: str,
                            f"{business_id}: {last['detail']}")
             return None
         parsed = _parse_json(raw)
+        if isinstance(parsed, dict):
+            _pop_audit_fields(parsed, business_id)
         if not isinstance(parsed, dict):
             r = raw or ""
             last["detail"] = (f"minimal parse failed: len={len(r)} "
@@ -631,6 +637,32 @@ def _author_dro_minimal(client: Anthropic, business_id: str,
     return dro
 
 
+def _pop_audit_fields(parsed: dict, business_id: str) -> None:
+    """Phase 1 (spec 3-D): lift inventions / echo_plan / exception_log out
+    of the DRO before schema validation so they can never fail a build
+    (enforcement is the Phase-2 judge's job). Logged as the
+    exception-register feed. Never raises."""
+    try:
+        inv = parsed.pop("inventions", None)
+        if isinstance(inv, list):
+            for i, item in enumerate(inv[:6]):
+                logger.info(f"[dro-audit] INVENTION {i + 1} "
+                            f"({str(business_id)[:8]}): {str(item)[:220]}")
+        echo = parsed.pop("echo_plan", None)
+        if echo:
+            logger.info(f"[dro-audit] ECHO_PLAN ({str(business_id)[:8]}): "
+                        f"{str(echo)[:220]}")
+        exc = parsed.pop("exception_log", None)
+        if isinstance(exc, list):
+            for item in exc[:6]:
+                t = str(item).strip()
+                if t and t.lower() != "none":
+                    logger.warning(f"[dro-audit] EXCEPTION "
+                                   f"({str(business_id)[:8]}): {t[:220]}")
+    except Exception:
+        pass
+
+
 def author_dro(business_id: str, signals: List[Dict[str, Any]],
                recent: List[Dict[str, Any]],
                reference_analysis: Optional[List[Dict[str, Any]]] = None,
@@ -668,6 +700,18 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
     user = _dro_user_prompt(business_id, signals, exemplars, recent_sigs,
                             reference_analysis=reference_analysis,
                             creative=creative, stance=stance)
+    # Phase 1 (spec 4-C) — the audit-fields request rides the user turn.
+    # The fields are POPPED before schema validation (never build-fatal).
+    user += (
+        "\n\nAfter the rationale, ALSO include these top-level fields: "
+        '"inventions" (list of >=3 objects {addition, builds_on, where} - design '
+        "decisions NOT present in the brief; an invention that merely restates "
+        'the brief is a failure), "echo_plan" (which accent gets an atmospheric '
+        'echo, and where - per the doctrine echo rule), "exception_log" (list of '
+        "anything you wanted that the schema cannot express; may be empty but "
+        "must be present). If you cannot name three genuine additions, you have "
+        "not finished designing."
+    )
     if extra_instruction:
         user += "\n\n" + str(extra_instruction)
     last: Dict[str, str] = {}
@@ -686,6 +730,8 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
                            f"{business_id}: {last['detail']}")
             return None
         parsed = _parse_json(raw)
+        if isinstance(parsed, dict):
+            _pop_audit_fields(parsed, business_id)
         if not isinstance(parsed, dict):
             # Diagnose, don't guess: truncation = long raw w/ no closing
             # brace in the tail; refusal/preamble shows in the head.
