@@ -25,6 +25,8 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "chief":  (int(os.environ.get("RL_CHIEF_PER_MIN", "30")), 60),
     "voice":  (int(os.environ.get("RL_VOICE_PER_MIN", "40")), 60),
     "proxy":  (int(os.environ.get("RL_PROXY_PER_MIN", "60")), 60),
+    # Interview v3 (B3) — the follow-up probe's per-business hourly budget.
+    "interview_probe": (int(os.environ.get("RL_INTERVIEW_PROBE_PER_HOUR", "6")), 3600),
 }
 _DEFAULT = (60, 60)
 

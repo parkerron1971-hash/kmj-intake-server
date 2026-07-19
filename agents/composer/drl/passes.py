@@ -361,19 +361,26 @@ def distinctiveness_signature(dro: Dict[str, Any]) -> List[Any]:
     return [g(axis) for axis in sig.DISTINCTIVENESS_AXES]
 
 
-def _shared_axes(a: List[Any], b: List[Any]) -> int:
-    return sum(1 for x, y in zip(a, b) if x is not None and x == y)
+def _shared_axes(a: List[Any], b: List[Any],
+                 exempt: Optional[set] = None) -> int:
+    return sum(1 for i, (x, y) in enumerate(zip(a, b))
+               if x is not None and x == y
+               and not (exempt and i in exempt))
 
 
 def run_distinctiveness(dro: Dict[str, Any],
-                        recent: List[Dict[str, Any]]) -> Dict[str, Any]:
+                        recent: List[Dict[str, Any]],
+                        exempt: Optional[set] = None) -> Dict[str, Any]:
     """Compare against recent DRO signatures; return the distinctiveness_check
-    block. Verdict 'regenerated_once' is set by the caller after a regen."""
+    block. Verdict 'regenerated_once' is set by the caller after a regen.
+    `exempt` (Interview v3, B4): axis indexes with owner-explicit direction
+    evidence — cohort similarity there is allowed without justification and
+    does not count toward the collision threshold."""
     mine = distinctiveness_signature(dro)
     worst = 0
     nearest_ids: List[str] = []
     for r in recent:
-        shared = _shared_axes(mine, distinctiveness_signature(r))
+        shared = _shared_axes(mine, distinctiveness_signature(r), exempt=exempt)
         if shared > worst:
             worst = shared
             nearest_ids = [r.get("id") or r.get("exemplar_id") or "?"]
@@ -384,14 +391,57 @@ def run_distinctiveness(dro: Dict[str, Any],
         "compared_against": [r.get("id") or r.get("exemplar_id") for r in recent][:sig.DISTINCTIVENESS_COHORT_N],
         "axes_shared_with_nearest": worst,
         "verdict": verdict,
-        "notes": f"nearest shares {worst}/8 axes" + (f" with {nearest_ids[0]}" if nearest_ids else ""),
+        "notes": f"nearest shares {worst}/8 axes" + (f" with {nearest_ids[0]}" if nearest_ids else "")
+                 + (f" ({len(exempt)} owner-explicit axis/axes exempt)"
+                    if exempt else ""),
     }
 
 
-def _collides(dro: Dict[str, Any], recent: List[Dict[str, Any]]) -> bool:
+def _collides(dro: Dict[str, Any], recent: List[Dict[str, Any]],
+              exempt: Optional[set] = None) -> bool:
     mine = distinctiveness_signature(dro)
-    return any(_shared_axes(mine, distinctiveness_signature(r)) >= sig.DISTINCTIVENESS_COLLISION_THRESHOLD
+    return any(_shared_axes(mine, distinctiveness_signature(r), exempt=exempt) >= sig.DISTINCTIVENESS_COLLISION_THRESHOLD
                for r in recent)
+
+
+# ─── Owner-direction exemption (Interview v3, B4) ───────────────────────
+# Anti-convergence pressure exists to stop AI-default convergence — but an
+# axis the OWNER explicitly chose is not convergence, it's the brief. When
+# the intake carries owner-supplied direction evidence, cohort similarity
+# on those axes is allowed without justification (no re-roll there); every
+# other axis keeps full pressure.
+def owner_exempt_axes(site_prefs: Optional[Dict[str, Any]] = None,
+                      reference_analysis: Optional[List[Dict[str, Any]]] = None,
+                      fonts_pinned: bool = False) -> set:
+    """Axis INDEXES into sig.DISTINCTIVENESS_AXES carrying owner-explicit
+    direction evidence:
+      type_personality or fonts_pinned  → typography.display_personality
+      colors.love                       → palette base/accent/temperature
+      inspiration_urls WITH a successful reference_analysis → palette.* +
+        typography.display_personality + layout.density (the analyzer
+        extracts exactly palette read / type class / density).
+    """
+    axes = sig.DISTINCTIVENESS_AXES
+    exempt: set = set()
+    prefs = site_prefs if isinstance(site_prefs, dict) else {}
+
+    def _idx(name: str) -> int:
+        return axes.index(name)
+
+    if str(prefs.get("type_personality") or "").strip() or fonts_pinned:
+        exempt.add(_idx("typography.display_personality"))
+    colors = prefs.get("colors") if isinstance(prefs.get("colors"), dict) else {}
+    if colors.get("love"):
+        exempt.update(_idx(a) for a in ("palette.base", "palette.accent_strategy",
+                                        "palette.temperature"))
+    ok_ref = any(isinstance(r, dict) and r.get("ok")
+                 for r in (reference_analysis or []))
+    if (prefs.get("inspiration_urls") or []) and ok_ref:
+        exempt.update(_idx(a) for a in ("palette.base", "palette.accent_strategy",
+                                        "palette.temperature",
+                                        "typography.display_personality",
+                                        "layout.density"))
+    return exempt
 
 
 # ─── Pass 2: DRO authoring ───────────────────────────────────────────────
@@ -722,6 +772,7 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
                stance: Optional[str] = None,
                extra_instruction: Optional[str] = None,
                failure_out: Optional[Dict[str, str]] = None,
+               owner_direction: Optional[Dict[str, Any]] = None,
                ) -> Optional[Dict[str, Any]]:
     """signals + principles + exemplars + recent signatures (+ Arc 5
     reference-site analysis, + Arc 6 owner creative brief / directions
@@ -731,6 +782,9 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
     then enforces distinctiveness ACROSS the three candidates.
     `extra_instruction` (Arc 7) appends a caller-supplied directive to the
     authoring prompt — used by the same-business freshness regen.
+    `owner_direction` (Interview v3, B4): {"site_prefs": ..., "fonts_pinned":
+    bool} — owner-supplied direction evidence; the axes it covers are EXEMPT
+    from cohort pressure (no re-roll there, pressure stays on the rest).
 
     RESILIENCE LADDER: attempt → parse-retry → validation-retry → one
     MINIMAL-MODE attempt (stripped prompt; the result is tagged
@@ -748,10 +802,25 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
         return None
     exemplars = _select_exemplars(signals)
     recent_sigs = [distinctiveness_signature(r) for r in recent]
+    # Interview v3 (B4) — axes the owner personally directed are exempt
+    # from cohort pressure (computed once; feeds the prompt AND the gate).
+    od = owner_direction if isinstance(owner_direction, dict) else {}
+    exempt = owner_exempt_axes(
+        site_prefs=od.get("site_prefs"),
+        reference_analysis=reference_analysis,
+        fonts_pinned=bool(od.get("fonts_pinned")))
+    exempt_names = [sig.DISTINCTIVENESS_AXES[i] for i in sorted(exempt)]
     system = _dro_system_prompt()
     user = _dro_user_prompt(business_id, signals, exemplars, recent_sigs,
                             reference_analysis=reference_analysis,
                             creative=creative, stance=stance)
+    if exempt:
+        user += ("\n\nOWNER-EXPLICIT DIRECTION (anti-convergence exemption): "
+                 "the owner personally supplied direction evidence on these "
+                 f"axes: {', '.join(exempt_names)}. Matching a recent "
+                 "signature on THOSE axes is allowed WITHOUT justification — "
+                 "never vary them away from the owner's stated direction. "
+                 "Anti-convergence pressure still applies to every other axis.")
     # Phase 1 (spec 4-C) — the audit-fields request rides the user turn.
     # The fields are POPPED before schema validation (never build-fatal).
     user += (
@@ -830,17 +899,22 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
     # Stamp identity + run distinctiveness; regenerate once on collision.
     dro["dro_version"] = 1
     dro["business_id"] = business_id
-    if recent and _collides(dro, recent):
+    if recent and _collides(dro, recent, exempt=exempt):
         regen = _attempt(
             "\n\nYour DRO shares too many of the 8 distinctiveness axes with a "
             "recent site. Vary at least 2 axes (palette base/accent/temperature, "
             "display personality, layout symmetry/density, motion, hero direction) "
-            "ONLY where the signals still support it. Output ONLY the JSON.")
+            "ONLY where the signals still support it."
+            + (f" Axes {', '.join(exempt_names)} are owner-explicit direction — "
+               "do NOT move those."
+               if exempt else "")
+            + " Output ONLY the JSON.")
         if regen is not None and not _validate_dro(regen):
             regen["dro_version"] = 1
             regen["business_id"] = business_id
             regen["anti_convergence"] = {"distinctiveness_check": {
-                **run_distinctiveness(regen, recent), "verdict": "regenerated_once"}}
+                **run_distinctiveness(regen, recent, exempt=exempt),
+                "verdict": "regenerated_once"}}
             return regen
         # Collision-regen chain: NOT fatal (the valid original ships), but
         # the forensics must show the chain was attempted and why it bent.
@@ -849,7 +923,7 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
             f"({last.get('detail') or 'invalid regen'}) — keeping the "
             "original (collision-flagged) DRO")
 
-    dro["anti_convergence"] = {"distinctiveness_check": run_distinctiveness(dro, recent)}
+    dro["anti_convergence"] = {"distinctiveness_check": run_distinctiveness(dro, recent, exempt=exempt)}
     return dro
 
 
@@ -914,6 +988,7 @@ def persist_dro(business_id: str, dro: Dict[str, Any]) -> Optional[str]:
 def produce_dro(business_id: str, transcript: str,
                 reference_analysis: Optional[List[Dict[str, Any]]] = None,
                 creative: Optional[Dict[str, Any]] = None,
+                owner_direction: Optional[Dict[str, Any]] = None,
                 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
     """Full pass: detect signals → fetch recent → author DRO (with
     distinctiveness) → persist. Returns (dro, failure): the DRO (with `id`
@@ -958,7 +1033,8 @@ def produce_dro(business_id: str, transcript: str,
         recent = fetch_recent_dros(business_id)
         dro = author_dro(business_id, signals, recent,
                          reference_analysis=reference_analysis,
-                         creative=creative, failure_out=auth_fail)
+                         creative=creative, failure_out=auth_fail,
+                         owner_direction=owner_direction)
         if dro is None:
             failure = {
                 "stage": auth_fail.get("stage") or "authoring",
@@ -992,6 +1068,7 @@ def produce_dro(business_id: str, transcript: str,
                 regen = author_dro(
                     business_id, signals, recent,
                     reference_analysis=reference_analysis, creative=creative,
+                    owner_direction=owner_direction,
                     extra_instruction=(
                         "IMPORTANT — FRESHNESS: this design repeats the "
                         f"business's CURRENT live site on {len(repeated)} of "
