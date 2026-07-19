@@ -80,10 +80,45 @@ def check_motif(html: str, css: str) -> Optional[Dict[str, Any]]:
 
 # ─── RHYTHM-1 ────────────────────────────────────────────────────────
 
+# F2 (2026-07-18): the lookbehind `(?<![\w-])` keeps `scroll-padding-top`
+# out — it is anchor math, not section rhythm.
 _SECTION_PAD_RE = re.compile(
     r"(?:section|\.sxm-[a-z\-]+)\s*[^{}]*\{[^}]*?"
-    r"padding(?:-top|-bottom|-block)?\s*:\s*([^;}]+)", re.IGNORECASE)
+    r"(?<![\w-])padding(?:-top|-bottom|-block)?\s*:\s*([^;}]+)", re.IGNORECASE)
 _PX_RE = re.compile(r"(\d{2,3})px")
+
+
+def _split_css_shorthand(value: str) -> List[str]:
+    """Split a CSS value on TOP-LEVEL whitespace — clamp()/var() arguments
+    contain spaces and must stay one component."""
+    parts: List[str] = []
+    depth = 0
+    cur: List[str] = []
+    for ch in value.strip():
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if ch.isspace() and depth == 0:
+            if cur:
+                parts.append("".join(cur))
+                cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        parts.append("".join(cur))
+    return parts
+
+
+def _vertical_padding_components(value: str) -> List[str]:
+    """Only the VERTICAL components of a padding shorthand carry section
+    rhythm: 1-value → it; 2-value → first; 3/4-value → first + third.
+    (The old text scan flagged a button's `18px 44px` HORIZONTAL 44px as
+    a rhythm break.)"""
+    parts = _split_css_shorthand(value)
+    if len(parts) <= 2:
+        return parts[:1]
+    return [parts[0], parts[2]]
 
 
 def check_rhythm(css: str, scale: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -93,12 +128,18 @@ def check_rhythm(css: str, scale: Optional[Dict[str, Any]]) -> Optional[Dict[str
     tol = int(scale.get("tolerance_px") or 8)
     offenders: List[str] = []
     for m in _SECTION_PAD_RE.finditer(css):
-        for px in _PX_RE.findall(m.group(1)):
-            v = int(px)
-            if v < 40:          # small paddings are component-level, not rhythm
+        for comp in _vertical_padding_components(m.group(1)):
+            # var(--sx-*) components are token-governed — the tokens are
+            # on-scale by construction, so the author's fallback constants
+            # inside them are not rhythm evidence.
+            if comp.startswith("var("):
                 continue
-            if not any(abs(v - a) <= tol for a in allowed):
-                offenders.append(f"{v}px")
+            for px in _PX_RE.findall(comp):
+                v = int(px)
+                if v < 40:      # small paddings are component-level, not rhythm
+                    continue
+                if not any(abs(v - a) <= tol for a in allowed):
+                    offenders.append(f"{v}px")
     if not offenders:
         return None
     uniq = sorted(set(offenders), key=lambda s: int(s[:-2]))[:8]

@@ -1476,113 +1476,10 @@ def _visible_text(fragment: str) -> str:
 
 # ─── Site Arc 11 — TOTAL EDITABILITY coverage (report-only) ──────────
 #
-# Heuristic census of visible PRESENTATION-text nodes lacking a
-# data-override-target: h1-h4/p/blockquote/figcaption elements with real
-# innerText, no target on themselves or an ancestor, outside the known
-# DATA-DRIVEN surfaces (business data is edited at the source — see the
-# rule in site_modules/_base.py) and outside platform chrome. Pure
-# stdlib parse; the gate reports the count, it never blocks publish.
-
-_EDITABILITY_TAGS = frozenset({"h1", "h2", "h3", "h4", "p", "blockquote",
-                               "figcaption"})
-_EDITABILITY_VOID = frozenset({"img", "br", "hr", "input", "meta", "link",
-                               "source", "wbr", "area", "base", "col",
-                               "embed", "track"})
-# Class PREFIXES whose subtree is data-driven or chrome (un-targeted by
-# design — the _base.py editability rule): offering/product/testimonial/
-# showcase records, contact logistics, SMS compliance copy, marquee tone
-# words, header/footer chrome, runtime-only states.
-_EDITABILITY_EXEMPT_PREFIXES = (
-    "sxm-header", "sxm-footer",                       # structural chrome
-    "sxm-testi", "sxm-mq",                            # testimonial records
-    "sxm-sc-",                                        # showcase records
-    "sxm-store",                                      # product records
-    "sxm-off-desc", "sxm-off-head", "sxm-off-price",  # offering records
-    "sxm-offmenu",
-    "sxm-contact-logistics", "sxm-contact-social", "sxm-contact-mail",
-    "sxm-sms-consent",                                # compliance copy
-    "sxm-sent",                                       # runtime-only state
-    "sxm-int-mq",                                     # marquee tone words
-    "sxm-faq-rows",                                   # Arc S: policy/FAQ records (edited via Chief)
-    "sxm-step",                                       # P3 process steps: owner data, edited in the interview
-)
-
-
-from html.parser import HTMLParser as _HTMLParserBase
-
-
-class _EditabilityParser(_HTMLParserBase):
-    """Tiny stack walk counting un-targeted presentation-text nodes.
-    Exclusion (data-driven class prefix / aria-hidden) and targeting
-    (data-override-target) both INHERIT down the subtree."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.stack: List[list] = []   # rows: [tag, excluded, targeted, node|None]
-        self.count = 0
-        self.samples: List[str] = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag in _EDITABILITY_VOID:
-            return
-        a = {k.lower(): (v or "") for k, v in attrs}
-        parent = self.stack[-1] if self.stack else None
-        excluded = bool(parent and parent[1])
-        targeted = bool(parent and parent[2])
-        if a.get("aria-hidden") == "true":
-            excluded = True
-        cls = a.get("class", "")
-        if any(c.startswith(_EDITABILITY_EXEMPT_PREFIXES)
-               for c in cls.split()):
-            excluded = True
-        if "data-override-target" in a:
-            targeted = True
-        node = None
-        if tag in _EDITABILITY_TAGS and not excluded and not targeted:
-            node = {"tag": tag, "class": cls, "text": []}
-        self.stack.append([tag, excluded, targeted, node])
-
-    def handle_endtag(self, tag):
-        if tag in _EDITABILITY_VOID:
-            return
-        while self.stack:                 # tolerant unwind to the open tag
-            row = self.stack.pop()
-            node = row[3]
-            if node is not None:
-                text = " ".join(" ".join(node["text"]).split())
-                if text:
-                    self.count += 1
-                    label = node["tag"] + ("." + node["class"].split()[0]
-                                           if node["class"] else "")
-                    self.samples.append(f"{label}: {text[:60]}")
-            if row[0] == tag:
-                break
-
-    def handle_data(self, data):
-        if not data.strip():
-            return
-        for row in reversed(self.stack):
-            if row[3] is not None:
-                row[3]["text"].append(data)
-                break
-
-
-def _editability_coverage(html: str) -> tuple:
-    """(count, samples) of visible presentation-text nodes lacking a
-    data-override-target in the document body. Fail-soft: a parse error
-    reports (0, ['parse skipped: …']) rather than failing the gate."""
-    body = html
-    m = re.search(r"<body\b[^>]*>(.*)</body>", str(html or ""),
-                  re.IGNORECASE | re.DOTALL)
-    if m:
-        body = m.group(1)
-    try:
-        p = _EditabilityParser()
-        p.feed(body)
-        p.close()
-        return p.count, p.samples[:8]
-    except Exception as e:
-        return 0, [f"parse skipped: {e}"]
+# The census machinery lives in site_modules/_base.py (F4, 2026-07-18)
+# so the atelier validator enforces the same rule at the source; the
+# gate keeps its advisory page-level call via this alias.
+from site_modules._base import editability_coverage as _editability_coverage
 
 
 def _heal_headline_default(module: str, ctx: Dict[str, Any]) -> str:
@@ -1797,6 +1694,13 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
     # dead-end at #contact. Covers module AND atelier CTAs (both emit
     # class sxm-cta) plus offering Book buttons.
     from site_modules._base import _cta_label_intent
+    # F4 (2026-07-18): a booking-worded button pointing at #contact is a
+    # mismatch only when booking ACTUALLY exists — with no booking
+    # connected, the contact form IS the booking path (the cta_button
+    # ladder falls to it by design), and flagging it just punishes
+    # businesses that haven't connected a scheduler yet.
+    _bk = ctx.get("booking") or {}
+    _booking_available = bool(_bk.get("enabled") and _bk.get("url"))
     _cta_mismatch: List[str] = []
     for am in re.finditer(
             r'<a[^>]*class="[^"]*(?:sxm-cta|sxm-off-book)[^"]*"[^>]*'
@@ -1806,7 +1710,8 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
         _to_booking = ("/book" in _href or "/public/booking/" in _href)
         if _intent == "contact" and _to_booking:
             _cta_mismatch.append(f'"{_label[:40]}" → booking page')
-        elif _intent == "booking" and _href.startswith("#contact"):
+        elif (_intent == "booking" and _href.startswith("#contact")
+              and _booking_available):
             _cta_mismatch.append(f'"{_label[:40]}" → #contact')
     checks.append({
         "name": "cta_link_coherence",

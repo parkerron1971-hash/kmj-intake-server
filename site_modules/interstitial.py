@@ -71,7 +71,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   </div>
 </section>"""
         css = """
-.sxm-int-statement { padding: clamp(56px, 9vh, 96px) var(--sx-gutter); text-align: center;
+.sxm-int-statement { padding: clamp(56px, 9vh, 128px) var(--sx-gutter); text-align: center;
   background: color-mix(in srgb, var(--sx-accent) 10%, var(--sx-bg)); }
 .sxm-int-statement-text { font-family: var(--sx-font-heading); font-style: italic;
   font-weight: var(--sx-h2-weight, var(--sx-heading-weight));

@@ -158,8 +158,14 @@ def create_message(*, model: str, max_tokens: int, system: str, user_content: st
                 f"[site_llm] {task}: moonshot failed ({type(e).__name__}: {e}) "
                 f"— falling back to anthropic/{model}"
             )
-    # Default / fallback: Anthropic, exactly as before.
+    # Default / fallback: Anthropic, exactly as before — with the SAME
+    # sampling gate the direct ladder uses (#185 follow-up, 2026-07-18):
+    # Opus 4.7/4.8, Sonnet 5 and Fable-class models 400 on a raw
+    # temperature param, and the fail-open replay targets exactly those
+    # models (the acceptance fallback leg lost every atelier fragment to
+    # this before the gate was applied here too).
     from anthropic import Anthropic
+    import model_ladder
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     client = Anthropic(api_key=api_key)
     kwargs: dict = {
@@ -168,6 +174,5 @@ def create_message(*, model: str, max_tokens: int, system: str, user_content: st
         "messages": [{"role": "user", "content": user_content}],
         "timeout": timeout,
     }
-    if temperature is not None:
-        kwargs["temperature"] = temperature
+    kwargs.update(model_ladder.sampling_kwargs(model, temperature))
     return client.messages.create(**kwargs)

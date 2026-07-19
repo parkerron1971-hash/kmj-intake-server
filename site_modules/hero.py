@@ -129,7 +129,7 @@ def _render_variant(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) 
 </section>"""
         css = """
 .sxm-hero-anch { position: relative; min-height: 100vh; min-height: 100svh; display: flex;
-  align-items: flex-end; padding: var(--sx-section-pad) var(--sx-gutter) clamp(48px, 8vh, 96px);
+  align-items: flex-end; padding: var(--sx-section-pad) var(--sx-gutter) clamp(56px, 8vh, 128px);
   overflow: hidden; isolation: isolate; }
 .sxm-hero-anch .sxm-hero-bgimg { position: absolute; inset: 0; width: 100%; height: 100%;
   object-fit: cover; z-index: -2; transform: scale(1.03); }
@@ -177,7 +177,7 @@ def _render_variant(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) 
 </section>"""
         css = """
 .sxm-hero-cine { position: relative; min-height: 100vh; min-height: 100svh; display: flex;
-  align-items: flex-end; padding: var(--sx-section-pad) var(--sx-gutter) clamp(56px, 9vh, 110px);
+  align-items: flex-end; padding: var(--sx-section-pad) var(--sx-gutter) clamp(56px, 9vh, 128px);
   overflow: hidden; isolation: isolate; }
 .sxm-cine-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2;
   filter: saturate(1.04) contrast(1.04); transform: scale(1.04); }
