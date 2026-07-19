@@ -51,7 +51,15 @@ import sys
 from typing import Any, Dict, List, Optional
 
 # Repo root on sys.path when invoked as a file.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
+
+# Local runs: load the repo .env (deploy targets inject env themselves).
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(_REPO_ROOT, ".env"))
+except ImportError:
+    pass
 
 logger = logging.getLogger("design_acceptance")
 
