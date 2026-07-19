@@ -452,6 +452,25 @@ def validate_fragment(html: str, css: str, *, uid: str, kind: str,
             f'override target "{t}" not recognized — invented display text '
             f'must use data-override-target="{kind}/custom_N" (N = 1, 2, …)')
 
+    # 14 — TOTAL EDITABILITY, enforced at the source (F4, 2026-07-18):
+    # the gate kept catching fragments that INVENT display copy (a pull
+    # quote, a colophon line) with no edit path — the prompt clause alone
+    # didn't hold. Business facts rendered verbatim (present in `data`)
+    # are exempt by contract; everything else visible needs its target.
+    try:
+        from site_modules._base import (data_verbatim_strings,
+                                        editability_coverage)
+        _ed_n, _ed_samples = editability_coverage(
+            html, exempt_texts=data_verbatim_strings(data))
+        if _ed_n:
+            problems.append(
+                f"total editability: {_ed_n} visible text node(s) lack "
+                f'data-override-target — give each invented display text '
+                f'its own data-override-target="{kind}/custom_N": '
+                f"{_ed_samples[:3]}")
+    except Exception:
+        pass  # the census is best-effort; never block on a checker hiccup
+
     # 2 — CSS scoping
     _check_css_scoping(css, uid, problems)
 

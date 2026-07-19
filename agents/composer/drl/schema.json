@@ -59,7 +59,7 @@
           "required": ["display_personality", "body_personality", "pairing_logic", "because", "from_signals"],
           "properties": {
             "display_personality": { "enum": ["editorial_serif", "grotesque_bold", "humanist_warm", "geometric_precise", "expressive_display", "condensed_impact"] },
-            "body_personality": { "enum": ["warm_sans", "neutral_sans", "readable_serif", "mono_technical"] },
+            "body_personality": { "enum": ["warm_sans", "neutral_sans", "readable_serif", "mono_technical", "plain_grotesque"] },
             "pairing_logic": { "type": "string", "description": "WHY these two personalities together — contrast or kinship, and where each appears" },
             "scale_contrast": { "enum": ["dramatic", "confident", "quiet"] },
             "because": { "type": "string", "maxLength": 240 },
@@ -72,7 +72,7 @@
           "properties": {
             "symmetry": { "enum": ["asymmetric_tension", "centered_formal", "grid_modular", "editorial_columns"] },
             "density": { "enum": ["airy", "balanced", "dense_intentional"] },
-            "hierarchy_approach": { "enum": ["single_message_dominant", "guided_descent", "parallel_panels"] },
+            "hierarchy_approach": { "enum": ["single_message_dominant", "guided_descent", "parallel_panels", "editorial_columns", "modular_blocks"] },
             "because": { "type": "string", "maxLength": 240 },
             "from_signals": { "type": "array", "items": { "type": "string" } }
           }

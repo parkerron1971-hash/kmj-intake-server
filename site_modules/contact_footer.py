@@ -323,7 +323,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-contact-centered .sxm-contact-social .sxm-social:hover { border-bottom-color: var(--sx-accent); }
 .sxm-contact-centered .sxm-contact-formcard { width: min(560px, 100%);
   background: var(--sx-surface); border: 1px solid var(--sx-border);
-  border-radius: var(--sx-radius-card); padding: clamp(26px, 3.6vw, 46px);
+  border-radius: var(--sx-radius-card); padding: clamp(26px, 3.6vw, 40px);
   box-shadow: 0 26px 70px rgba(0, 0, 0, .16); text-align: left; }
 /* The form's own rules ride the shared CONTACT_FORM_CSS (B4). */""" + CONTACT_FORM_CSS + """
 .sxm-footer { border-top: 1px solid var(--sx-border); padding: 26px var(--sx-gutter); }
@@ -386,7 +386,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 .sxm-contact-social .sxm-social:hover { border-bottom-color: var(--sx-accent); }
 /* The form as a crafted card — soft surface elevation. */
 .sxm-contact-formcard { background: var(--sx-surface); border: 1px solid var(--sx-border);
-  border-radius: var(--sx-radius-card); padding: clamp(26px, 3.6vw, 46px);
+  border-radius: var(--sx-radius-card); padding: clamp(26px, 3.6vw, 40px);
   box-shadow: 0 26px 70px rgba(0, 0, 0, .16); }
 /* FORM ALIGNMENT CONTRACT (Site Arc 11): the card holds the form, and
    INSIDE the form every control shares ONE left edge — inputs,

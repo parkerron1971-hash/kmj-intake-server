@@ -7,8 +7,11 @@ anchor links to the sections that ACTUALLY rendered, and a CTA that
 always routes somewhere real (booking page > #contact).
 
 Deterministic by construction: no JS, no external icon libs. Mobile
-collapses the links to a horizontal scroll strip with soft-faded
-gradient edges (gradients always fade — never hard-edged).
+collapses the links into a CSS-only hamburger drawer (the same
+checkbox-toggle pattern the multi-page nav uses) — a horizontal
+scroll strip with mask-faded edges read as a rendering bug in
+ship-gate review (chars of the first/last link visibly clipped at
+every viewport), so that treatment was removed.
 """
 from __future__ import annotations
 
@@ -125,10 +128,22 @@ def render_header(rendered_ids: List[str], ctx: Dict[str, Any]) -> Tuple[str, st
                 links.append(f'<a href="{anchor}">{label}</a>')
         if "contact" in rendered_ids:
             links.append('<a href="#contact">Contact</a>')
-        nav_html = (f'<nav class="sxm-header-nav" aria-label="Site sections">{"".join(links)}</nav>'
-                    if links else "")
+        if links:
+            link_items = "".join(links)
+            nav_html = (f'<nav class="sxm-header-nav" aria-label="Site sections">'
+                        f'{link_items}</nav>')
+            # F3 (2026-07-18): the anchor nav gets the same CSS-only
+            # hamburger drawer as the page nav — a clipped "Contact"
+            # link off-canvas at 390px was the ship-gate's broken=y.
+            drawer_html = (
+                '\n<input type="checkbox" id="sxm-nav-toggle" class="sxm-nav-toggle" aria-hidden="true">'
+                '\n<label for="sxm-nav-toggle" class="sxm-hamburger" aria-label="Open menu">'
+                '<span></span><span></span><span></span></label>'
+                f'\n<nav class="sxm-header-drawer" aria-label="Site sections (mobile)">{link_items}</nav>')
+        else:
+            nav_html = ""
+            drawer_html = ""
         brand_href = "#top"
-        drawer_html = ""
 
     if booking.get("enabled") and booking.get("url"):
         cta_href, cta_label = safe_url(booking["url"]), "Book now"
@@ -172,10 +187,7 @@ html { scroll-padding-top: 84px; }
     max-width: 46vw; }
 }
 .sxm-header-nav { display: flex; align-items: center; gap: clamp(14px, 2.4vw, 28px);
-  margin-left: auto; overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none;
-  /* soft-faded edges when links overflow — the gradient FADES, never hard-edged */
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
-  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%); }
+  margin-left: auto; overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
 .sxm-header-nav::-webkit-scrollbar { display: none; }
 /* Quality-floor arc 7 — the bar's nav voice: small caps, wide tracking,
    accent underline sweeping 0→100% on hover. */
@@ -204,7 +216,7 @@ html { scroll-padding-top: 84px; }
 .sxm-header-pagenav a.is-active::after { transform: scaleX(1); }
 .sxm-nav-toggle, .sxm-hamburger, .sxm-header-drawer { display: none; }
 @media (max-width: 768px) {
-  .sxm-header-pagenav { display: none; }
+  .sxm-header-nav { display: none; }
   .sxm-header-cta { display: none; }
   .sxm-hamburger { display: inline-flex; flex-direction: column; gap: 5px; margin-left: auto;
     width: 42px; height: 42px; align-items: center; justify-content: center; cursor: pointer; }

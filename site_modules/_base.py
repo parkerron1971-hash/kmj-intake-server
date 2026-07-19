@@ -976,3 +976,145 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
 {reveal_script(dna)}
 </body>
 </html>"""
+
+
+# ─── Total editability census (gate + atelier validator share this) ──
+#
+# Heuristic census of visible PRESENTATION-text nodes lacking a
+# data-override-target: h1-h4/p/blockquote/figcaption elements with real
+# innerText, no target on themselves or an ancestor, outside the known
+# DATA-DRIVEN surfaces (business data is edited at the source — see the
+# editability rule at the top of this file) and outside platform chrome.
+# Pure stdlib parse. F4 (2026-07-18): moved from site_composer so the
+# atelier validator enforces the same census at the source (binding),
+# not only downstream at the gate (advisory).
+
+from html.parser import HTMLParser as _HTMLParserBase
+
+_EDITABILITY_TAGS = frozenset({"h1", "h2", "h3", "h4", "p", "blockquote",
+                               "figcaption"})
+_EDITABILITY_VOID = frozenset({"img", "br", "hr", "input", "meta", "link",
+                               "source", "wbr", "area", "base", "col",
+                               "embed", "track"})
+# Class PREFIXES whose subtree is data-driven or chrome (un-targeted by
+# design): offering/product/testimonial/showcase records, contact
+# logistics, SMS compliance copy, marquee tone words, header/footer
+# chrome, runtime-only states.
+_EDITABILITY_EXEMPT_PREFIXES = (
+    "sxm-header", "sxm-footer",                       # structural chrome
+    "sxm-testi", "sxm-mq",                            # testimonial records
+    "sxm-sc-",                                        # showcase records
+    "sxm-store",                                      # product records
+    "sxm-off-desc", "sxm-off-head", "sxm-off-price",  # offering records
+    "sxm-offmenu",
+    "sxm-contact-logistics", "sxm-contact-social", "sxm-contact-mail",
+    "sxm-sms-consent",                                # compliance copy
+    "sxm-sent",                                       # runtime-only state
+    "sxm-int-mq",                                     # marquee tone words
+    "sxm-faq-rows",                                   # policy/FAQ records (edited via Chief)
+    "sxm-step",                                       # process steps: owner data, edited in the interview
+)
+
+
+def _norm_text(s: str) -> str:
+    return " ".join(str(s or "").split())
+
+
+def data_verbatim_strings(data: Any) -> frozenset:
+    """Every string inside a JSON-ish structure, normalized — the
+    'business facts rendered verbatim need no target' exemption set for
+    editability_coverage."""
+    out: set = set()
+
+    def _walk(v: Any) -> None:
+        if isinstance(v, str):
+            n = _norm_text(v)
+            if n:
+                out.add(n)
+        elif isinstance(v, dict):
+            for x in v.values():
+                _walk(x)
+        elif isinstance(v, (list, tuple)):
+            for x in v:
+                _walk(x)
+
+    _walk(data)
+    return frozenset(out)
+
+
+class _EditabilityParser(_HTMLParserBase):
+    """Tiny stack walk counting un-targeted presentation-text nodes.
+    Exclusion (data-driven class prefix / aria-hidden) and targeting
+    (data-override-target) both INHERIT down the subtree. A node whose
+    text appears verbatim inside the exempt set (business data) is not
+    counted."""
+
+    def __init__(self, exempt_texts: frozenset = frozenset()) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: List[list] = []   # rows: [tag, excluded, targeted, node|None]
+        self.exempt = exempt_texts
+        self.count = 0
+        self.samples: List[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _EDITABILITY_VOID:
+            return
+        a = {k.lower(): (v or "") for k, v in attrs}
+        parent = self.stack[-1] if self.stack else None
+        excluded = bool(parent and parent[1])
+        targeted = bool(parent and parent[2])
+        if a.get("aria-hidden") == "true":
+            excluded = True
+        cls = a.get("class", "")
+        if any(c.startswith(_EDITABILITY_EXEMPT_PREFIXES)
+               for c in cls.split()):
+            excluded = True
+        if "data-override-target" in a:
+            targeted = True
+        node = None
+        if tag in _EDITABILITY_TAGS and not excluded and not targeted:
+            node = {"tag": tag, "class": cls, "text": []}
+        self.stack.append([tag, excluded, targeted, node])
+
+    def handle_endtag(self, tag):
+        if tag in _EDITABILITY_VOID:
+            return
+        while self.stack:                 # tolerant unwind to the open tag
+            row = self.stack.pop()
+            node = row[3]
+            if node is not None:
+                text = _norm_text(" ".join(node["text"]))
+                if text and not any(text in ds for ds in self.exempt):
+                    self.count += 1
+                    label = node["tag"] + ("." + node["class"].split()[0]
+                                           if node["class"] else "")
+                    self.samples.append(f"{label}: {text[:60]}")
+            if row[0] == tag:
+                break
+
+    def handle_data(self, data):
+        if not data.strip():
+            return
+        for row in reversed(self.stack):
+            if row[3] is not None:
+                row[3]["text"].append(data)
+                break
+
+
+def editability_coverage(html: str, exempt_texts: frozenset = frozenset()) -> tuple:
+    """(count, samples) of visible presentation-text nodes lacking a
+    data-override-target in the document body. Fail-soft: a parse error
+    reports (0, ['parse skipped: …']) rather than failing the caller."""
+    import re as _re3
+    body = html
+    m = _re3.search(r"<body\b[^>]*>(.*)</body>", str(html or ""),
+                    _re3.IGNORECASE | _re3.DOTALL)
+    if m:
+        body = m.group(1)
+    try:
+        p = _EditabilityParser(exempt_texts)
+        p.feed(body)
+        p.close()
+        return p.count, p.samples[:8]
+    except Exception as e:
+        return 0, [f"parse skipped: {e}"]

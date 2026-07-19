@@ -202,7 +202,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
   border-radius: var(--sx-radius-card); overflow: hidden; }
 .sxm-offf-img { border-radius: 0; height: 100%; }
 .sxm-offf-img img { width: 100%; height: 100%; min-height: 320px; aspect-ratio: 3/2; object-fit: cover; }
-.sxm-offf-body { padding: clamp(24px, 3.5vw, 48px); }
+.sxm-offf-body { padding: clamp(24px, 3.5vw, 40px); }
 .sxm-offf-rows { margin-top: 14px; }
 .sxm-offf-row { display: grid; grid-template-columns: auto 1fr auto; gap: clamp(16px, 3vw, 34px);
   align-items: center; padding: 24px 4px; border-bottom: 1px solid var(--sx-border); }

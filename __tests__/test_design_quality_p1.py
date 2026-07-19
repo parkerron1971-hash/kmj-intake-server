@@ -170,5 +170,51 @@ class TestDefaultSpecRotation(unittest.TestCase):
         self.assertEqual(v, "featured")
 
 
+class TestFailOpenSamplingGate(unittest.TestCase):
+    """F1 (2026-07-18) — site_llm.create_message's anthropic block (the
+    moonshot fail-open replay AND the default-provider path) must route
+    temperature through model_ladder.sampling_kwargs: Opus 4.7/4.8,
+    Sonnet 5 and Fable-class models 400 on a raw temperature param."""
+
+    def _capture_kwargs(self, model, temperature):
+        from unittest import mock
+        import site_llm
+        captured = {}
+
+        class _FakeMessages:
+            def create(self, **kwargs):
+                captured.update(kwargs)
+
+                class _R:
+                    content = []
+
+                return _R()
+
+        class _FakeClient:
+            def __init__(self, **kw):
+                self.messages = _FakeMessages()
+
+        with mock.patch("anthropic.Anthropic", _FakeClient):
+            site_llm.create_message(
+                model=model, max_tokens=16, system="s",
+                user_content="u", temperature=temperature,
+                provider_name="anthropic")
+        return captured
+
+    def test_opus48_never_receives_temperature(self):
+        kw = self._capture_kwargs("claude-opus-4-8", 0.8)
+        self.assertNotIn("temperature", kw)
+
+    def test_sampling_model_keeps_temperature(self):
+        import model_ladder
+        self.assertTrue(model_ladder.supports_sampling("claude-sonnet-4-5-20250929"))
+        kw = self._capture_kwargs("claude-sonnet-4-5-20250929", 0.8)
+        self.assertEqual(kw.get("temperature"), 0.8)
+
+    def test_no_temperature_param_stays_absent(self):
+        kw = self._capture_kwargs("claude-sonnet-4-5-20250929", None)
+        self.assertNotIn("temperature", kw)
+
+
 if __name__ == "__main__":
     unittest.main()
