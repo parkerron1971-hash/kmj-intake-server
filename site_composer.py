@@ -72,6 +72,13 @@ _COLOR_DIRECTIONS = ("deep_dark", "soft_dark", "warm_light", "cool_light",
 _CTA_GOALS = ("book", "buy", "contact", "follow")
 _AUDIENCE_CAP = 240
 _MAX_INSPIRATION_URLS = 3
+# Interview v3 (B1) — the owner's three verbs (hero material: the hand-built
+# KMJ hero "BUILD. / BRAND. / GROW." came from exactly this data) and the
+# "what specifically do you love" inspiration answer. R1: fields and their
+# allowlist entries ship in the same arc.
+_MAX_HERO_VERBS = 3
+_HERO_VERB_CAP = 24
+# inspiration_notes reuses _PREF_STR_CAP (400).
 # Arc 6 "Creative Engine" — v3 creative brief enums/caps.
 _LOUD_WHERE = ("motion", "type", "imagery", "layout")
 _CREATIVE_CAPS = {"metaphor": 200, "surprise": 200, "remember": 160}
@@ -129,6 +136,7 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
     (v2, Arc 5 — every field optional, backward compatible with v1):
     unknown keys dropped, strings trimmed + capped, feel_words ≤ 3,
     inspiration_urls ≤ 3 (http/https only, hostnames lowercased),
+    hero_verbs ≤ 3 (≤24 chars each), inspiration_notes ≤ 400,
     colors {use_brand, direction, love ≤ 4, avoid ≤ 4}, audience ≤ 240,
     cta_goal / imagery_priority / boldness clamped to their enums.
     Returns None when nothing usable remains — callers treat that as
@@ -178,6 +186,19 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
                 break
         if urls:
             out["inspiration_urls"] = urls
+
+    # Interview v3 (B1) — hero_verbs (≤3, each ≤24 chars, trimmed, empties
+    # dropped) + inspiration_notes (≤400, trimmed). Same leniency as
+    # feel_words / notes above.
+    hv = raw.get("hero_verbs")
+    if isinstance(hv, (list, tuple)):
+        verbs = [str(w).strip()[:_HERO_VERB_CAP] for w in hv
+                 if isinstance(w, (str, int, float)) and str(w).strip()]
+        if verbs:
+            out["hero_verbs"] = verbs[:_MAX_HERO_VERBS]
+    inotes = raw.get("inspiration_notes")
+    if isinstance(inotes, str) and inotes.strip():
+        out["inspiration_notes"] = inotes.strip()[:_PREF_STR_CAP]
 
     # v2 — colors {use_brand, direction, love[≤4], avoid[≤4]}
     c = raw.get("colors")
@@ -940,6 +961,15 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
     if prefs.get("inspiration_urls"):
         pref_lines.append("Sites I admire: "
                           + ", ".join(str(u) for u in prefs["inspiration_urls"][:3]))
+    # Interview v3 (B1) — the verbs can literally become the hero headline;
+    # the inspiration "what specifically" rides verbatim so the signal pass
+    # sees it (never appended into `notes`).
+    if prefs.get("hero_verbs"):
+        pref_lines.append("Owner's three verbs (hero material): "
+                          + ", ".join(str(v) for v in prefs["hero_verbs"][:3]))
+    if prefs.get("inspiration_notes"):
+        pref_lines.append("What the owner loves about their inspiration "
+                          f"sites: {prefs['inspiration_notes']}")
     if prefs.get("avoid"):
         pref_lines.append(f"It should NOT feel: {prefs['avoid']}")
     # Arc 5 v2 — color language, audience, conversion goal.
@@ -1193,6 +1223,12 @@ def compose_spec_llm(ctx: Dict[str, Any], brief_notes: str = "",
     offer_stmt = str(_prefs.get("offer") or "").strip()
     offer_line = (f"\n- WHAT THE BUSINESS OFFERS (the owner's own words): {offer_stmt}"
                   if offer_stmt else "")
+    # Interview v3 (B1) — the owner's three verbs are hero-headline material.
+    _hero_verbs = [str(v).strip() for v in (_prefs.get("hero_verbs") or [])
+                   if str(v or "").strip()][:3]
+    hero_verbs_line = (f"\n- THE OWNER'S THREE VERBS: {', '.join(_hero_verbs)} — "
+                       "the hero headline should consider the owner's verbs verbatim."
+                       if _hero_verbs else "")
 
     dro_block = ("\n\n" + _dro_directive(dro) + "\n") if dro else ""
     _p3_prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
@@ -1227,7 +1263,7 @@ def compose_spec_llm(ctx: Dict[str, Any], brief_notes: str = "",
 BUSINESS
 - Name: {biz['name']}
 - Type: {biz['type']}
-- Tagline: {(bundle.get('business') or {}).get('tagline') or '(none)'}{offer_line}
+- Tagline: {(bundle.get('business') or {}).get('tagline') or '(none)'}{offer_line}{hero_verbs_line}
 - About (real, from the practitioner): {str(intel.get('about_business') or intel.get('about_me') or '')[:600] or '(none provided)'}
 - Voice/tone: {voice.get('brand_voice') or ''} {voice.get('tone_words') or ''}
 - Design vibe: {ctx['dna']['vibe']}, intensity: {ctx['dna']['intensity']}
@@ -2563,6 +2599,18 @@ def _ensure_connections(spec: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List
 _REFERENCE_BUDGET_S = 20.0     # overall wall-clock budget per compose
 
 
+def _owner_direction_evidence(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Interview v3 (B4) — the anti-convergence exemption's evidence bundle
+    for author_dro/produce_dro: the stored site_prefs plus the fonts_pinned
+    signal (the kit stores owner-set fonts AND the owner locked them — the
+    explicit pin; see _apply_dro_design's Arc M logic)."""
+    design = (ctx.get("bundle") or {}).get("design")
+    design = design if isinstance(design, dict) else {}
+    return {"site_prefs": ctx.get("site_prefs"),
+            "fonts_pinned": bool(design.get("fonts_owner_set"))
+            and bool(design.get("fonts_locked"))}
+
+
 def _maybe_analyze_references(business_id: str,
                               ctx: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Run reference_analyzer over site_prefs.inspiration_urls when the
@@ -3061,7 +3109,8 @@ def compose_site(business_id: str, brief_notes: str = "",
                 intake = _assemble_intake_text(ctx)
                 dro, dro_failure = produce_dro(
                     business_id, intake, reference_analysis=ref_analysis,
-                    creative=creative)
+                    creative=creative,
+                    owner_direction=_owner_direction_evidence(ctx))
                 if dro is None:
                     # One retry — cheap insurance against a transient LLM/parse
                     # hiccup before accepting a rationale-less compose.
@@ -3069,7 +3118,8 @@ def compose_site(business_id: str, brief_notes: str = "",
                                 f"{business_id[:8]} — retrying once")
                     dro, dro_failure = produce_dro(
                         business_id, intake, reference_analysis=ref_analysis,
-                        creative=creative)
+                        creative=creative,
+                        owner_direction=_owner_direction_evidence(ctx))
                 if dro:
                     dro_id = dro.get("id")
                     dro_failure = None
@@ -3577,7 +3627,8 @@ def compose_directions(business_id: str,
             dro = drl_passes.author_dro(
                 business_id, signals, sibling_dros + recent,
                 reference_analysis=ref_analysis,
-                creative=creative, stance=stance_text)
+                creative=creative, stance=stance_text,
+                owner_direction=_owner_direction_evidence(ctx))
             if not dro:
                 errors.append(f"{stance_key}: DRO authoring failed")
                 continue
@@ -3793,6 +3844,234 @@ def prefill_signals(business_id: str,
                          "store_has_products": store_has_products,
                          "sms_capable": _platform_sms_capable(),
                          "socials_connected": socials_connected}}
+
+
+# ─── Interview v3 (Chief-guided interview) — prefill / probe / events ────
+# The backend of docs/CHIEF_GUIDED_INTERVIEW.md §4. All owner-gated, all
+# fail-soft; only the probe calls an LLM (hard-capped).
+
+
+@router.get("/interview/prefill/{business_id}")
+def interview_prefill(business_id: str,
+                      user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Interview v3 (B2) — ONE call that gives the beat machine everything
+    it needs to confirm-instead-of-ask: the raw stored site_prefs, the
+    brand-kit design tokens, the same clarity signals the adaptive
+    interview uses, and the gallery count. Single businesses.settings read
+    (the _persist_site_prefs idiom), zero LLM. Fail-soft: empty/missing
+    data → nulls/zeros and the interview simply asks everything."""
+    _require_owner(business_id, user.id)
+
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
+    settings = rows[0].get("settings") if rows else {}
+    if not isinstance(settings, dict):
+        settings = {}
+
+    site_prefs = (settings.get("site_prefs")
+                  if isinstance(settings.get("site_prefs"), dict) else None)
+
+    # brand_design — settings.brand_kit: the nested colors dict + fonts,
+    # tolerating the legacy flat primary_color shape.
+    kit = (settings.get("brand_kit")
+           if isinstance(settings.get("brand_kit"), dict) else {})
+    kc = kit.get("colors") if isinstance(kit.get("colors"), dict) else {}
+    font_pair = (kit.get("font_pair")
+                 if isinstance(kit.get("font_pair"), dict) else {})
+    brand_design = {
+        "accent_color": kc.get("accent") or kit.get("accent_color"),
+        "primary_color": kc.get("primary") or kit.get("primary_color"),
+        "secondary_color": kc.get("secondary") or kit.get("secondary_color"),
+        "background_color": kc.get("background") or kit.get("background_color"),
+        "text_color": kc.get("text") or kit.get("text_color"),
+        "font_heading": kit.get("font_heading") or font_pair.get("heading"),
+        "font_body": kit.get("font_body") or font_pair.get("body"),
+        "fonts_locked": bool(kit.get("fonts_locked")),
+    }
+
+    # signals — the same facts prefill-signals computes (one bundle read,
+    # one offerings read; each fail-soft on its own).
+    has_about = False
+    audience_known = False
+    try:
+        import brand_engine
+        bundle = brand_engine.get_bundle(business_id) or {}
+        intel = (bundle.get("practitioner_intelligence")
+                 if isinstance(bundle.get("practitioner_intelligence"), dict) else {})
+        voice = bundle.get("voice") if isinstance(bundle.get("voice"), dict) else {}
+        has_about = len(str(intel.get("about_business") or "").strip()) > 80
+        strategy = (intel.get("strategy_track")
+                    if isinstance(intel.get("strategy_track"), dict) else {})
+        audience_known = bool(str(voice.get("audience") or "").strip()
+                              or str(strategy.get("target_audience") or "").strip())
+    except Exception as e:
+        logger.info(f"[composer.interview-prefill] bundle read skipped: {e}")
+
+    offerings: List[Dict[str, Any]] = []
+    try:
+        offerings = [o for o in (sb_clients.sb_get_as_service(
+            f"/offerings?business_id=eq.{business_id}&is_active=eq.true"
+            "&select=id,name,price,description&limit=50") or [])
+            if isinstance(o, dict)]
+    except Exception as e:
+        logger.info(f"[composer.interview-prefill] offerings read skipped: {e}")
+    offer_clear = any(
+        str(o.get("name") or "").strip()
+        and o.get("price") is not None and str(o.get("price")).strip() != ""
+        and len(str(o.get("description") or "").strip()) >= 40
+        for o in offerings)
+
+    # testimonial_count — the compose context's source of truth is
+    # settings.website_content.testimonials (visible dict rows only, the
+    # gather_context rule); it rides the SAME settings read, so it's cheap.
+    wc = (settings.get("website_content")
+          if isinstance(settings.get("website_content"), dict) else {})
+    _testi_raw = wc.get("testimonials") or []
+    testimonial_count = len(
+        [t for t in _testi_raw
+         if isinstance(t, dict) and t.get("show_on_website", True)]
+    ) if isinstance(_testi_raw, list) else 0
+
+    # gallery_photos — settings.media_library.gallery, the gather_context
+    # visibility rule (dict rows with a url, show_on_website not False).
+    ml = (settings.get("media_library")
+          if isinstance(settings.get("media_library"), dict) else {})
+    _gal_raw = ml.get("gallery") or []
+    gallery_photos = len(
+        [g for g in _gal_raw
+         if isinstance(g, dict) and str(g.get("url") or "").strip()
+         and g.get("show_on_website", True)]
+    ) if isinstance(_gal_raw, list) else 0
+
+    return {"site_prefs": site_prefs,
+            "brand_design": brand_design,
+            "signals": {"offer_clear": offer_clear,
+                        "audience_known": audience_known,
+                        "has_about": has_about,
+                        "offer_count": len(offerings),
+                        "testimonial_count": testimonial_count},
+            "media": {"gallery_photos": gallery_photos}}
+
+
+_PROBE_SYSTEM = (
+    "You are Chief, mid-interview for a website design. Ask ONE short "
+    "follow-up question that would make this answer more usable for "
+    "designing the site. If the answer is already usable, respond with "
+    "the single word CLEAR.")
+_PROBE_MODEL = "claude-haiku-4-5-20251001"   # cheap + fast; 150 tokens, 10s
+_PROBE_ANSWER_CAP = 600
+_PROBE_FOLLOWUP_CAP = 300
+
+
+class InterviewProbeBody(BaseModel):
+    business_id: str
+    beat_id: Any = None            # beats are numbered client-side; stay lenient
+    answer: Any = ""
+    context: Optional[Dict[str, Any]] = None
+
+
+@router.post("/interview/probe")
+def interview_probe(body: InterviewProbeBody,
+                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Interview v3 (B3) — ONE short follow-up question when a free-text
+    answer is vague. Budget-capped server-side: 6/hour per business via
+    rate_limit.py (a budget that only lives in the client isn't a budget).
+    Fail-SILENT: CLEAR / empty / error / timeout → {"followup": None} and
+    the beat proceeds."""
+    _require_owner(body.business_id, user.id)
+
+    import rate_limit
+    if not rate_limit.allow("interview_probe", body.business_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Probe budget reached — the interview continues without it.",
+            headers={"Retry-After": str(rate_limit.retry_after("interview_probe"))})
+
+    answer = str(body.answer or "").strip()
+    if not answer:
+        return {"followup": None}
+    ctx = body.context if isinstance(body.context, dict) else {}
+    user_content = (
+        f"Business: {ctx.get('business_name') or '(unnamed)'} "
+        f"(type: {ctx.get('type') or 'unknown'})\n"
+        f"Interview beat: {body.beat_id}\n"
+        f"The owner's answer: {answer[:_PROBE_ANSWER_CAP]}")
+    try:
+        import site_llm
+        msg = site_llm.create_message(
+            model=_PROBE_MODEL, max_tokens=150, system=_PROBE_SYSTEM,
+            user_content=user_content, timeout=10.0,
+            task="composer/interview-probe")
+        text = "".join(b.text for b in msg.content
+                       if getattr(b, "type", None) == "text").strip()
+    except Exception as e:
+        logger.info(f"[composer.interview-probe] probe failed soft for "
+                    f"{body.business_id[:8]} ({type(e).__name__}): {e}")
+        return {"followup": None}
+    if not text or text.upper().rstrip(".! ") == "CLEAR":
+        return {"followup": None}
+    return {"followup": text[:_PROBE_FOLLOWUP_CAP]}
+
+
+_INTERVIEW_EVENT_KINDS = ("start", "answer", "skip", "edit_back", "probe",
+                          "skip_to_summary", "submit")
+_INTERVIEW_EVENTS_CAP = 200        # ring buffer size in settings
+_INTERVIEW_EVENTS_REQ_CAP = 50     # max events accepted per request
+
+
+class InterviewEventsBody(BaseModel):
+    business_id: str
+    # List[Any] on purpose: lenient validation lives in the endpoint —
+    # bad rows are dropped there, never a 422 (fire-and-forget telemetry).
+    events: List[Any] = []
+
+
+@router.post("/interview/events")
+def interview_events(body: InterviewEventsBody,
+                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Interview v3 (B6) — per-beat completion telemetry (Phase 2's adaptive
+    depth is only buildable with this data). Fire-and-forget from the
+    client: lenient validation (bad rows silently dropped), appended to
+    businesses.settings.interview_events as a ring buffer capped at 200
+    (read-modify-write, the _persist_site_prefs idiom). No LLM."""
+    _require_owner(body.business_id, user.id)
+
+    clean: List[Dict[str, Any]] = []
+    for e in (body.events or [])[:_INTERVIEW_EVENTS_REQ_CAP]:
+        if not isinstance(e, dict):
+            continue
+        kind = e.get("event")
+        beat = e.get("beat")
+        if kind not in _INTERVIEW_EVENT_KINDS or beat is None:
+            continue
+        row: Dict[str, Any] = {"beat": beat, "event": kind}
+        at = e.get("at")
+        if isinstance(at, (str, int, float)):
+            row["at"] = at
+        clean.append(row)
+    if not clean:
+        return {"ok": True, "accepted": 0}
+
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{body.business_id}&select=settings&limit=1") or []
+        if not rows:
+            raise HTTPException(404, "business not found")
+        settings = dict(rows[0].get("settings") or {})
+        buf = settings.get("interview_events")
+        buf = ([r for r in buf if isinstance(r, dict)]
+               if isinstance(buf, list) else [])
+        settings["interview_events"] = (buf + clean)[-_INTERVIEW_EVENTS_CAP:]
+        sb_clients.sb_patch_as_service(
+            f"/businesses?id=eq.{body.business_id}", {"settings": settings})
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Fire-and-forget telemetry: a persist hiccup never surfaces.
+        logger.info(f"[composer.interview-events] persist failed soft for "
+                    f"{body.business_id[:8]}: {e}")
+        return {"ok": False, "accepted": 0}
+    return {"ok": True, "accepted": len(clean)}
 
 
 class ShuffleBody(BaseModel):
