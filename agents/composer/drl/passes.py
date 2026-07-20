@@ -26,6 +26,7 @@ import json
 import os
 import logging
 import time
+import difflib
 from typing import Any, Dict, List, Optional, Tuple
 
 from anthropic import Anthropic
@@ -200,10 +201,70 @@ REQUIRED_DECISIONS = ["palette", "typography", "layout", "motion",
                       "hero_concept", "whitespace", "voice_to_visual"]
 
 
+# ─── Enum coercion (2026-07-20): an invented enum value must never kill a
+# 95%-valid DRO again. The 07-20 KMJ build authored a well-aligned DRO whose
+# hero_concept.direction='photographic_hero' was outside the schema enum;
+# validation rejected the whole DRO twice and the build fell back to the
+# minimal (bland) DRO. Now out-of-enum values are snapped to the nearest
+# allowed value BEFORE validation: explicit alias → difflib close match →
+# field removed (validation treats absent as unconstrained). Every snap is
+# logged — coercions are breadcrumbs, never silent. ───
+_ENUM_ALIASES: Dict[str, Dict[str, str]] = {
+    "hero_concept.direction": {
+        "photographic_hero": "portrait_presence",
+        "photo_hero": "portrait_presence",
+        "photography_led": "portrait_presence",
+    },
+    "typography.body_personality": {
+        "grotesque_bold": "plain_grotesque",
+        "warm_editorial_serif": "readable_serif",
+    },
+    "layout.hierarchy_approach": {
+        "asymmetric_editorial": "editorial_columns",
+    },
+}
+
+
+def _coerce_dro_enums(dro: Any) -> None:
+    """Mutates dro in place, snapping out-of-enum decision values to the
+    nearest allowed value. Called at the top of _validate_dro so every
+    call site benefits; idempotent (a coerced DRO is valid on re-check)."""
+    if not isinstance(dro, dict):
+        return
+    decisions = dro.get("decisions")
+    if not isinstance(decisions, dict):
+        return
+    for dec, fields in _decision_enums().items():
+        block = decisions.get(dec)
+        if not isinstance(block, dict):
+            continue
+        for field, allowed in fields.items():
+            val = block.get(field)
+            if val is None or val in allowed:
+                continue
+            key = f"{dec}.{field}"
+            norm = str(val).strip().lower()
+            snap = _ENUM_ALIASES.get(key, {}).get(norm)
+            if not snap:
+                close = difflib.get_close_matches(
+                    norm, [str(a) for a in allowed], n=1, cutoff=0.65)
+                snap = close[0] if close else None
+            if snap:
+                logger.warning(f"[drl] enum coerced: decisions.{key} "
+                               f"'{val}' -> '{snap}' (not in schema enum)")
+                block[field] = snap
+            else:
+                logger.warning(f"[drl] enum value dropped: decisions.{key} "
+                               f"'{val}' has no near match in {allowed}")
+                block.pop(field, None)
+
+
 def _validate_dro(dro: Any) -> List[str]:
     """Light structural validation → list of problems (empty = valid).
     Checks required decisions, because/from_signals on each, and enum
-    membership for the fields the schema constrains."""
+    membership for the fields the schema constrains. Coerces out-of-enum
+    values in place first (see _coerce_dro_enums)."""
+    _coerce_dro_enums(dro)
     problems: List[str] = []
     if not isinstance(dro, dict):
         return ["DRO is not an object"]
