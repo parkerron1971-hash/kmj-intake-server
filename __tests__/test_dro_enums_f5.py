@@ -44,11 +44,20 @@ class TestWidenedEnums(unittest.TestCase):
     def test_original_values_still_accepted(self):
         self.assertEqual(passes._validate_dro(_dro()), [])
 
-    def test_bogus_values_still_rejected(self):
-        problems = passes._validate_dro(_dro(hierarchy="swiss_brutalism"))
-        self.assertTrue(any("hierarchy_approach" in p for p in problems))
-        problems = passes._validate_dro(_dro(body="comic_sans_energy"))
-        self.assertTrue(any("body_personality" in p for p in problems))
+    def test_bogus_values_neutralized_not_fatal(self):
+        # Contract changed 2026-07-20 (enum coercion): bogus enum values no
+        # longer fail the DRO — that rejection path discarded a well-aligned
+        # DRO over one invented value in production and dropped the build to
+        # the minimal bland DRO. Now they are fuzzy-snapped or dropped, the
+        # DRO validates, and each coercion is logged.
+        dro = _dro(hierarchy="swiss_brutalism")
+        self.assertEqual(passes._validate_dro(dro), [])
+        self.assertNotEqual(dro["decisions"]["layout"].get("hierarchy_approach"),
+                            "swiss_brutalism")
+        dro = _dro(body="comic_sans_energy")
+        self.assertEqual(passes._validate_dro(dro), [])
+        self.assertNotEqual(dro["decisions"]["typography"].get("body_personality"),
+                            "comic_sans_energy")
 
 
 if __name__ == "__main__":

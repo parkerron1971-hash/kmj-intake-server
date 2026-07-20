@@ -70,6 +70,19 @@ def _meter(business_id: str, model: str, input_tokens: int,
         pass
 
 
+# Fast-forward entrance animations before judging: set_content fires the
+# screenshot the moment the network settles, which catches staggered hero
+# reveals mid-flight (the 07-20 KMJ build was graded broken=y because only
+# "The leap of" had animated in). Judge the final state, not the entrance.
+_ANIMATION_SETTLE_CSS = (
+    "*,*::before,*::after{"
+    "animation-delay:0s !important;"
+    "animation-duration:0.01s !important;"
+    "transition-duration:0.01s !important;"
+    "transition-delay:0s !important;}"
+)
+
+
 def _screenshot(html: str) -> Optional[List[bytes]]:
     """Render the html at each breakpoint; return JPEG bytes (above the
     fold). None when playwright is unavailable."""
@@ -87,6 +100,11 @@ def _screenshot(html: str) -> Optional[List[bytes]]:
                 for width in BREAKPOINTS:
                     page = browser.new_page(viewport={"width": width, "height": 900})
                     page.set_content(html, wait_until="networkidle", timeout=20000)
+                    try:
+                        page.add_style_tag(content=_ANIMATION_SETTLE_CSS)
+                        page.wait_for_timeout(200)
+                    except Exception:
+                        pass  # settle best-effort; screenshot regardless
                     shots.append(page.screenshot(type="jpeg", quality=60))
                     page.close()
             finally:
