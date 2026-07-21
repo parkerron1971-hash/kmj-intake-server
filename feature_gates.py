@@ -73,11 +73,29 @@ def limit_for(business_row: Optional[Dict[str, Any]], limit: str) -> Optional[in
     return PLAN_LIMITS.get(plan, {}).get(limit)
 
 
+# Price-id env aliases → the tier they entitle (2026-07-21 pricing
+# ruling). FOUNDER = the launch cohort's Professional price, locked for
+# the life of the subscription and capped at FOUNDER_SEAT_LIMIT seats
+# (enforced at checkout in stripe_billing.py); *_ANNUAL = yearly
+# billing (2 months free) for the same tier. Entitlements never differ
+# from the base tier — only the price does.
+PRICE_ENV_TO_PLAN: Dict[str, str] = {
+    "STARTER":             "starter",
+    "PROFESSIONAL":        "professional",
+    "PRACTICE":            "practice",
+    "STARTER_ANNUAL":      "starter",
+    "PROFESSIONAL_ANNUAL": "professional",
+    "PRACTICE_ANNUAL":     "practice",
+    "FOUNDER":             "professional",
+    "FOUNDER_ANNUAL":      "professional",
+}
+
+
 def price_to_plan() -> Dict[str, str]:
     """Stripe price id → tier name, from env (empty entries skipped)."""
     out: Dict[str, str] = {}
-    for plan in PLANS:
-        pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}") or "").strip()
+    for env_key, plan in PRICE_ENV_TO_PLAN.items():
+        pid = (os.environ.get(f"STRIPE_PRICE_ID_{env_key}") or "").strip()
         if pid:
             out[pid] = plan
     # Legacy single-plan default maps to professional.

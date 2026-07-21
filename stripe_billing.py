@@ -71,6 +71,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 
 from auth_supabase import AuthedUser, require_user
+from lead_admin import require_owner
 from lead_admin import _service_headers, SUPABASE_URL
 
 
@@ -186,6 +187,93 @@ def _require_owner_of(user: AuthedUser, business: Dict[str, Any]) -> None:
         )
 
 
+# ─── Founding-member seats (launch pricing, Kevin-ruled 2026-07-21) ───
+# The founder price = Professional entitlements, lifetime-locked rate,
+# capped at FOUNDER_SEAT_LIMIT seats. The cap is enforced at
+# checkout-session creation, and the publicly shown seat count comes
+# from REAL subscriptions in the DB — never a hand-typed number.
+
+def _founder_seat_limit() -> int:
+    try:
+        return int(os.environ.get("FOUNDER_SEAT_LIMIT") or "50")
+    except ValueError:
+        return 50
+
+
+def _founder_price_ids() -> list:
+    return [pid for pid in (
+        (os.environ.get("STRIPE_PRICE_ID_FOUNDER") or "").strip(),
+        (os.environ.get("STRIPE_PRICE_ID_FOUNDER_ANNUAL") or "").strip(),
+    ) if pid]
+
+
+async def _founder_seats_taken() -> int:
+    """Count businesses holding a founder price with a live (or
+    recoverable — past_due keeps the seat) subscription."""
+    ids = _founder_price_ids()
+    if not ids:
+        return 0
+    headers = {**_service_headers(), "Prefer": "count=exact"}
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            r = await c.get(
+                f"{SUPABASE_URL}/rest/v1/businesses",
+                headers=headers,
+                params={
+                    "subscription_plan": f"in.({','.join(ids)})",
+                    "subscription_status": "in.(active,trialing,past_due)",
+                    "select": "id",
+                    "limit": "1",
+                },
+            )
+        if r.status_code >= 400:
+            logger.warning(f"founder seat count failed: {r.status_code}")
+            return 0
+        content_range = r.headers.get("content-range") or ""
+        return int(content_range.split("/")[-1])
+    except (ValueError, httpx.HTTPError) as e:
+        logger.warning(f"founder seat count failed: {e}")
+        return 0
+
+
+async def _founder_summary() -> Dict[str, Any]:
+    """The founder offer's public shape (status + plans endpoints)."""
+    ids = _founder_price_ids()
+    out: Dict[str, Any] = {"configured": bool(ids)}
+    if not ids:
+        return out
+    limit = _founder_seat_limit()
+    taken = await _founder_seats_taken()
+    out.update({
+        "plan": "professional",
+        "price_id": ids[0],
+        "seat_limit": limit,
+        "seats_taken": taken,
+        "seats_left": max(0, limit - taken),
+    })
+    return out
+
+
+async def _price_display(pid: str) -> Optional[Dict[str, Any]]:
+    """Live display data for a Stripe price id, or None."""
+    if not (pid and os.environ.get("STRIPE_SECRET_KEY")):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            r = await c.get(f"{STRIPE_API_BASE}/prices/{pid}",
+                            auth=(_stripe_key(), ""))
+        if r.status_code < 400:
+            pr = r.json()
+            return {
+                "unit_amount": pr.get("unit_amount"),
+                "currency": pr.get("currency"),
+                "interval": ((pr.get("recurring") or {}).get("interval")),
+            }
+    except Exception as e:
+        logger.warning(f"price fetch {pid} failed: {e}")
+    return None
+
+
 # ─── Status (no auth) ──────────────────────────────────────────────────
 
 @router.get("/status")
@@ -199,6 +287,7 @@ async def billing_status_endpoint():
         "has_webhook_secret": bool(os.environ.get("STRIPE_WEBHOOK_SECRET")),
         "tiers_configured":   {p: bool((os.environ.get(f"STRIPE_PRICE_ID_{p.upper()}") or "").strip())
                                for p in feature_gates.PLANS},
+        "founder":            await _founder_summary(),
         "enforce":            feature_gates.enforcement_on(),
     }
 
@@ -243,25 +332,36 @@ async def billing_plans():
     for plan in fg.PLANS:
         pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}") or "").strip()
         entry = {"plan": plan, "configured": bool(pid), "price_id": pid or None}
-        if pid and os.environ.get("STRIPE_SECRET_KEY"):
-            try:
-                async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-                    r = await c.get(f"{STRIPE_API_BASE}/prices/{pid}",
-                                    auth=(_stripe_key(), ""))
-                if r.status_code < 400:
-                    pr = r.json()
-                    entry["unit_amount"] = pr.get("unit_amount")
-                    entry["currency"] = pr.get("currency")
-                    entry["interval"] = ((pr.get("recurring") or {}).get("interval"))
-            except Exception as e:
-                logger.warning(f"price fetch {pid} failed: {e}")
+        display = await _price_display(pid)
+        if display:
+            entry.update(display)
+        # Annual variant (2 months free) — display data only; checkout
+        # takes plan='<tier>_annual'.
+        annual_pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}_ANNUAL") or "").strip()
+        if annual_pid:
+            entry["annual_price_id"] = annual_pid
+            annual_display = await _price_display(annual_pid)
+            if annual_display:
+                entry["annual_unit_amount"] = annual_display.get("unit_amount")
         out.append(entry)
+
+    # Founding-member offer: Professional at the locked launch rate,
+    # first FOUNDER_SEAT_LIMIT seats. Seat counts are real.
+    founder = await _founder_summary()
+    if founder.get("configured"):
+        display = await _price_display(founder.get("price_id") or "")
+        if display:
+            founder.update(display)
+
     features_by_plan = {p: [f for f, mp in fg.FEATURE_MIN_PLAN.items()
                             if fg._PLAN_RANK[p] >= fg._PLAN_RANK[mp]]
                         for p in fg.PLANS}
-    return {"ok": True, "plans": out, "features_by_plan": features_by_plan,
+    any_configured = any(e["configured"] for e in out)
+    return {"ok": True, "plans": out, "founder": founder,
+            "features_by_plan": features_by_plan,
             "enforce": fg.enforcement_on(),
-            "note": "All features are free for every practitioner until pricing is locked."}
+            "note": (None if any_configured else
+                     "All features are free for every practitioner until pricing is locked.")}
 
 
 @router.get("/entitlements")
@@ -287,12 +387,18 @@ class CheckoutBody(BaseModel):
 
 
 def _price_for_plan(plan):
-    """Resolve a tier name -> Stripe price id from env. Falls back to the
-    legacy single-plan default."""
+    """Resolve a plan key -> Stripe price id from env. Accepts the tier
+    names plus the variant keys in feature_gates.PRICE_ENV_TO_PLAN
+    ('founder', 'professional_annual', …) — anything else falls through
+    to the legacy single-plan default. The allow-list keeps arbitrary
+    strings from probing env vars."""
+    import feature_gates
     if plan:
-        pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}") or "").strip()
-        if pid:
-            return pid
+        key = (plan or "").strip().upper()
+        if key in feature_gates.PRICE_ENV_TO_PLAN:
+            pid = (os.environ.get(f"STRIPE_PRICE_ID_{key}") or "").strip()
+            if pid:
+                return pid
     return (os.environ.get("STRIPE_PRICE_ID_DEFAULT") or "").strip()
 
 
@@ -304,6 +410,19 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     if not price_id:
         raise HTTPException(409, "Pricing is not configured yet (no Stripe price ids set). "
                                  "Everything stays free until pricing is locked.")
+
+    # Founding-member cap: once the seats are gone, they're gone. Checked
+    # against real subscriptions at session-creation time. (A race between
+    # two simultaneous checkouts can momentarily oversell by one — accept
+    # it; the founding member you'd have to claw back costs more in trust
+    # than the seat.)
+    plan_key = (body.plan or "").strip().lower()
+    if plan_key.startswith("founder") or price_id in _founder_price_ids():
+        limit = _founder_seat_limit()
+        taken = await _founder_seats_taken()
+        if taken >= limit:
+            raise HTTPException(409, f"All {limit} founding seats are taken — "
+                                     "the standard Professional plan is open.")
 
     biz = await _load_business(body.business_id)
     _require_owner_of(user, biz)
@@ -629,6 +748,108 @@ async def seats_endpoint(biz: str,
     _require_owner_of(user, biz_row)
     import billing_limits
     return billing_limits.can_add_seat(biz, biz_row)
+
+
+# ─── One-click catalog bootstrap (owner-only, 2026-07-21) ─────────────
+# Creates the locked pricing catalog IN STRIPE using the server's own
+# key — no dashboard clicking. Idempotent: every price carries a
+# lookup_key, so re-runs find and reuse instead of duplicating. Env
+# stays the source of truth for resolution — the response hands back
+# the exact block to paste into Railway.
+
+BOOTSTRAP_CATALOG = [
+    # (env_key, lookup_key, product_name, unit_amount_cents, interval)
+    ("STRIPE_PRICE_ID_STARTER",             "solutionist_starter_monthly",      "Solutionist Starter",       7900,   "month"),
+    ("STRIPE_PRICE_ID_STARTER_ANNUAL",      "solutionist_starter_annual",       "Solutionist Starter",       79000,  "year"),
+    ("STRIPE_PRICE_ID_PROFESSIONAL",        "solutionist_professional_monthly", "Solutionist Professional",  19900,  "month"),
+    ("STRIPE_PRICE_ID_PROFESSIONAL_ANNUAL", "solutionist_professional_annual",  "Solutionist Professional",  199000, "year"),
+    ("STRIPE_PRICE_ID_PRACTICE",            "solutionist_practice_monthly",     "Solutionist Practice",      39900,  "month"),
+    ("STRIPE_PRICE_ID_PRACTICE_ANNUAL",     "solutionist_practice_annual",      "Solutionist Practice",      399000, "year"),
+    ("STRIPE_PRICE_ID_FOUNDER",             "solutionist_founder_monthly",      "Solutionist Professional — Founding Member", 14900,  "month"),
+    ("STRIPE_PRICE_ID_FOUNDER_ANNUAL",      "solutionist_founder_annual",       "Solutionist Professional — Founding Member", 149000, "year"),
+]
+
+
+async def _stripe_get(path: str, params: list) -> Dict[str, Any]:
+    """GET from Stripe with repeated-key params (lookup_keys[] etc.)."""
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.get(f"{STRIPE_API_BASE}{path}",
+                        auth=(_stripe_key(), ""), params=params)
+    if r.status_code >= 400:
+        logger.error(f"Stripe GET {path} {r.status_code}: {r.text[:300]}")
+        raise HTTPException(status_code=r.status_code,
+                            detail=f"Stripe error: {r.text[:200]}")
+    return r.json()
+
+
+@router.post("/bootstrap-prices")
+async def bootstrap_prices(_owner=Depends(require_owner)):
+    """Create the locked pricing catalog (4 products, 8 recurring
+    prices, the MINISTRY20 promo) in Stripe. Owner-only; safe to
+    re-run — existing lookup_keys are reused, never duplicated."""
+    if not os.environ.get("STRIPE_SECRET_KEY", "").strip():
+        raise HTTPException(409, "STRIPE_SECRET_KEY is not set on the server.")
+
+    # 1. What already exists, by lookup key.
+    existing: Dict[str, Dict[str, Any]] = {}
+    params = [("lookup_keys[]", lk) for (_e, lk, _n, _a, _i) in BOOTSTRAP_CATALOG]
+    params.append(("limit", "100"))
+    for price in (await _stripe_get("/prices", params)).get("data", []):
+        if price.get("lookup_key"):
+            existing[price["lookup_key"]] = price
+
+    # 2. Existing products by exact name, so a partial earlier run (or a
+    #    hand-made product) is reused rather than duplicated.
+    products_by_name: Dict[str, str] = {}
+    prods = await _stripe_get("/products", [("active", "true"), ("limit", "100")])
+    for prod in prods.get("data", []):
+        products_by_name.setdefault(prod.get("name") or "", prod["id"])
+
+    env: Dict[str, str] = {}
+    created: list = []
+    reused: list = []
+    for env_key, lookup_key, product_name, amount, interval in BOOTSTRAP_CATALOG:
+        price = existing.get(lookup_key)
+        if price:
+            env[env_key] = price["id"]
+            reused.append(lookup_key)
+            continue
+        product_id = products_by_name.get(product_name)
+        if not product_id:
+            prod = await _stripe_post("/products", {"name": product_name})
+            product_id = prod["id"]
+            products_by_name[product_name] = product_id
+        price = await _stripe_post("/prices", {
+            "product": product_id,
+            "currency": "usd",
+            "unit_amount": amount,
+            "recurring": {"interval": interval},
+            "lookup_key": lookup_key,
+            "nickname": lookup_key,
+        })
+        env[env_key] = price["id"]
+        created.append(lookup_key)
+
+    # 3. MINISTRY20 — 20% off forever for churches/nonprofits.
+    promo_state = "reused"
+    promos = await _stripe_get("/promotion_codes", [("code", "MINISTRY20"), ("limit", "1")])
+    if not promos.get("data"):
+        coupon = await _stripe_post("/coupons", {
+            "percent_off": 20, "duration": "forever",
+            "name": "Ministry & Nonprofit",
+        })
+        await _stripe_post("/promotion_codes", {"coupon": coupon["id"], "code": "MINISTRY20"})
+        promo_state = "created"
+
+    env["STRIPE_PRICE_ID_DEFAULT"] = env.get("STRIPE_PRICE_ID_PROFESSIONAL", "")
+    env["FOUNDER_SEAT_LIMIT"] = (os.environ.get("FOUNDER_SEAT_LIMIT") or "50").strip()
+    railway_block = "\n".join(f"{k}={v}" for k, v in env.items() if v)
+    # Which of these differ from the running env (i.e. still need Railway)?
+    env_pending = [k for k, v in env.items()
+                   if v and (os.environ.get(k) or "").strip() != v]
+    return {"ok": True, "env": env, "railway_block": railway_block,
+            "created": created, "reused": reused,
+            "ministry_promo": promo_state, "env_pending": env_pending}
 
 
 @router.post("/webhook")
