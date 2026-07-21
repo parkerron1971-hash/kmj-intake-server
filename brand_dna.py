@@ -173,17 +173,24 @@ _PAIRING_EXACT = {
     "condensed_impact": "condensed_impact",
 }
 
+# Arc B (2026-07-21, the Anton-on-a-luxury-page defect): order IS the
+# tie-break. A DRO that writes "condensed editorial display" used to
+# resolve condensed_impact because the impact families sat above the
+# refined ones — the live editorial-luxury build shipped Anton for every
+# heading. Refined/serif-led families now match FIRST, so any mixed
+# description resolves toward refinement; pure impact language
+# ("brutal", "poster") still lands on the impact faces unambiguously.
 _PAIRING_FUZZY = (
     ("quiet_luxury", ("quiet", "luxur", "elegant", "refined", "understated", "discreet")),
     ("heritage", ("heritage", "classic", "traditional", "timeless")),
+    ("editorial_serif", ("editorial", "serif", "magazine", "literati")),
+    ("storyteller", ("story", "narrat", "literary", "book")),
     ("technical_precise", ("technical", "precis", "mono", "engineer", "system")),
+    ("warm_humanist", ("humanist", "warm", "human", "approachable", "welcom")),
+    ("playful", ("playful", "fun", "round", "friendly", "joy", "whimsic")),
     ("condensed_impact", ("condensed", "compact", "poster", "impact")),
     ("bold_statement", ("bold", "brutal", "loud", "statement", "commanding", "heavy", "black")),
-    ("storyteller", ("story", "narrat", "literary", "book")),
-    ("playful", ("playful", "fun", "round", "friendly", "joy", "whimsic")),
-    ("warm_humanist", ("humanist", "warm", "human", "approachable", "welcom")),
     ("expressive_display", ("expressive", "artistic", "creative", "eccentric", "display")),
-    ("editorial_serif", ("editorial", "serif", "magazine", "literati")),
     ("modern_grotesque", ("grotesque", "modern", "geometric", "minimal", "clean", "tech")),
 )
 
@@ -811,6 +818,23 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
     tspec = d.get("typography") or {}
     pers = tspec.get("display_personality")
     pairing_key = resolve_font_pairing(pers)
+    # Arc B (2026-07-21) — DIRECTION COHERENCE: when the DRO's own
+    # aesthetic evidence reads refined (editorial / luxury / quiet
+    # whitespace) but the resolved pairing is an impact face, the
+    # execution contradicts the direction — the live defect set Anton
+    # as the display face of a "60% editorial + 40% luxury" page. The
+    # direction wins: impact pairings snap to the refined family.
+    _ws_spec = d.get("whitespace") or {}
+    _refined_evidence = _has(
+        f"{pers or ''} {_ws_spec.get('philosophy') or ''} "
+        f"{_ws_spec.get('approach') or ''} {(d.get('palette') or {}).get('accent_strategy') or ''}",
+        "editorial", "luxur", "quiet", "refined", "understated",
+        "elegant", "monastic", "literar", "essay")
+    if _refined_evidence and pairing_key in ("condensed_impact",
+                                             "bold_statement"):
+        pairing_key = "quiet_luxury" if _has(pers, "luxur", "quiet",
+                                             "refined", "elegant") \
+            else "editorial_serif"
     # Hybrid (P2): the owner's type_personality constrains the family —
     # the DRO picks within it, or the family's lead pairing applies.
     if owner_pairings:
@@ -947,6 +971,30 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
                                           pal.get("bg") or "")
         pal["accent_break"], pal["on_accent_break"] = brk, on_brk
         out["palette"] = pal
+
+    # ── Arc B (2026-07-21) — REFINED-DIRECTION CHROMA GOVERNOR ──
+    # The live editorial-luxury build shipped --sx-accent #00ff59: a
+    # pure-neon ink reads tech/athletic and contradicts a refined
+    # direction on every element it touches. When the SAME refined
+    # evidence that steers typography is present AND the accent (or
+    # active secondary) carries near-maximum saturation, chroma pulls
+    # to a refined ceiling — hue and lightness stay THEIRS (brand
+    # fidelity: this is the brand color composed, not replaced), and
+    # the whole accent family re-derives so soft/strong/ground stay
+    # consistent. Non-refined directions keep full neon on purpose.
+    if _refined_evidence:
+        pal = dict(out.get("palette") or {})
+        changed = False
+        for key in ("accent", "secondary"):
+            v = pal.get(key)
+            if not (v and _parse_hex(v)):
+                continue
+            hh, ll, ssat = _hls(v)
+            if ssat > 0.80:
+                pal[key] = _from_hls(hh, ll, 0.68)
+                changed = True
+        if changed:
+            out["palette"] = rederive_accent_family(pal)
 
     out["typography"] = t
     out["rhythm"] = r
