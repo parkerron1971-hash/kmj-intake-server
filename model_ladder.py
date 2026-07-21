@@ -84,6 +84,9 @@ _TIMEOUTS = {
     "dro": (120.0, 240.0),
     "atelier": (120.0, 240.0),
     "spec": (75.0, 120.0),
+    # Canvas Pass (Phase 1): whole-page chunk authoring (8-12K tokens per
+    # call) — same ceilings as the atelier family.
+    "canvas": (120.0, 240.0),
 }
 _DEFAULT_TIMEOUTS = (120.0, 240.0)
 

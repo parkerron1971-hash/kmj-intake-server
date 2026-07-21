@@ -1984,7 +1984,10 @@ def _ensure_site_row(business_id: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
 # rationale pointer, concept fingerprint, gate report).
 _RESTORE_KEYS = ("page_spec", "atelier", "design_rationale_id", "dro_status",
                  "dro_summary", "dro_failure", "slot_concept",
-                 "quality_report", "generated_html", "html_generated_at")
+                 "quality_report", "generated_html", "html_generated_at",
+                 # Canvas Pass: the keep-better restore must reinstate the
+                 # canvas document + report with everything else.
+                 "canvas", "canvas_report")
 
 
 def restore_previous_compose(business_id: str) -> Dict[str, Any]:
@@ -2042,7 +2045,9 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        _regen_allowed: bool = False,
                        _regen_attempted: bool = False,
                        _regen_notes: str = "",
-                       _prior_verdict: Optional[Dict[str, Any]] = None
+                       _prior_verdict: Optional[Dict[str, Any]] = None,
+                       _canvas_html: Optional[str] = None,
+                       _canvas_report: Optional[Dict[str, Any]] = None
                        ) -> Dict[str, Any]:
     # Arc 4: `full_recompose` is True ONLY from compose_site (a fresh
     # spec) — it triggers override reconciliation. Shuffle/refresh/
@@ -2098,39 +2103,61 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     _stored_atelier = (((site or {}).get("site_config") or {}).get("atelier")
                        if isinstance(((site or {}).get("site_config") or {})
                                      .get("atelier"), dict) else {})
+
+    # Canvas Pass (Phase 1, docs/CANVAS_PASS.md §3.5): a canvas-composed
+    # page arrives fully assembled (immutable blocks + authored chunks,
+    # fact-checked) and JOINS the flow here, at slot population —
+    # render_page/run_atelier are skipped, everything downstream (slot
+    # populate, overrides, quality gate, invariants, vision grader,
+    # persist) is today's flow, untouched. Non-full re-renders
+    # (shuffle/refresh/override saves) reuse the stored canvas document
+    # instead of re-authoring (spec §8 — the same stored semantics as
+    # atelier fragments).
+    if _canvas_html is None and not full_recompose:
+        _stored_canvas = (((site or {}).get("site_config") or {}).get("canvas")
+                          if isinstance(((site or {}).get("site_config") or {})
+                                        .get("canvas"), dict) else {})
+        if str((_stored_canvas or {}).get("html") or "").strip():
+            _canvas_html = str(_stored_canvas["html"])
+            logger.info(f"[composer] canvas reused (stored document) for "
+                        f"{business_id[:8]}")
+
     atelier_active = False
     atelier_meta: Optional[Dict[str, Any]] = None
-    try:
-        import atelier as _atelier_mod
-        atelier_active = _atelier_mod.atelier_enabled() and bool(
-            (full_recompose and dro)
-            or (_atelier or {}).get("fragments")
-            or (not full_recompose and (_stored_atelier.get("fragments") or {})))
-    except Exception as e:
-        logger.warning(f"[composer] atelier unavailable (non-fatal): {e}")
-
-    html = _mark(site_modules.render_page(spec, ctx, title,
-                                          fragment_markers=atelier_active))
-    if atelier_active:
-        _report_progress(progress_cb, 55, "Drafting bespoke sections")
+    if _canvas_html:
+        html = _mark(_canvas_html)
+    else:
         try:
-            html, atelier_meta = _atelier_mod.run_atelier(
-                html, spec, ctx, dro, business_id,
-                regenerate=bool(full_recompose and not _heal_attempted
-                                and _atelier is None),
-                # A full recompose NEVER reuses the previous compose's
-                # stored fragments (stale copy would mask the fresh
-                # composition) — only the heal recursion's precomputed
-                # set or a fresh generation apply here.
-                stored=({} if full_recompose else _stored_atelier),
-                precomputed=_atelier,
-                progress_cb=progress_cb,
-                # A2 — the bounded quality regen's grader notes ride into
-                # every bespoke fragment prompt (empty on normal passes).
-                feedback=_regen_notes)
+            import atelier as _atelier_mod
+            atelier_active = _atelier_mod.atelier_enabled() and bool(
+                (full_recompose and dro)
+                or (_atelier or {}).get("fragments")
+                or (not full_recompose and (_stored_atelier.get("fragments") or {})))
         except Exception as e:
-            logger.warning(f"[composer] atelier failed (non-fatal): {e}")
-            atelier_meta = None
+            logger.warning(f"[composer] atelier unavailable (non-fatal): {e}")
+
+        html = _mark(site_modules.render_page(spec, ctx, title,
+                                              fragment_markers=atelier_active))
+        if atelier_active:
+            _report_progress(progress_cb, 55, "Drafting bespoke sections")
+            try:
+                html, atelier_meta = _atelier_mod.run_atelier(
+                    html, spec, ctx, dro, business_id,
+                    regenerate=bool(full_recompose and not _heal_attempted
+                                    and _atelier is None),
+                    # A full recompose NEVER reuses the previous compose's
+                    # stored fragments (stale copy would mask the fresh
+                    # composition) — only the heal recursion's precomputed
+                    # set or a fresh generation apply here.
+                    stored=({} if full_recompose else _stored_atelier),
+                    precomputed=_atelier,
+                    progress_cb=progress_cb,
+                    # A2 — the bounded quality regen's grader notes ride into
+                    # every bespoke fragment prompt (empty on normal passes).
+                    feedback=_regen_notes)
+            except Exception as e:
+                logger.warning(f"[composer] atelier failed (non-fatal): {e}")
+                atelier_meta = None
 
     # Slot population (existing pipeline) then resolution into the HTML.
     # The enriched_brief threads the DRO's design concept into the
@@ -2250,7 +2277,12 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
             business_id, spec, ctx, final_html, dro=dro,
             dro_status=dro_status, defaulted_modules=defaulted_modules,
             previous_html=prev_html, atelier_meta=atelier_meta)
-        if not quality_report["passed"] and fixes and not _heal_attempted:
+        # Canvas Pass: the heal re-render rebuilds from the SPEC (module
+        # path), which would destroy a canvas-authored page — the canvas
+        # already ran its own fact-check + corrective retry upstream, so
+        # the gate stays report-only on canvas pages.
+        if not quality_report["passed"] and fixes and not _heal_attempted \
+                and not _canvas_html:
             healed = _apply_quality_fixes(spec, ctx, fixes)
             if healed is not None:
                 failed = [c["name"] for c in quality_report["checks"] if not c["ok"]]
@@ -2293,7 +2325,10 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         _inv_css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>",
                                         final_html, re.DOTALL | re.IGNORECASE))
         _inv_findings = _cdi(final_html, _inv_css,
-                             {"site_prefs": ctx.get("site_prefs") or {}})
+                             {"site_prefs": ctx.get("site_prefs") or {},
+                              # Canvas Pass §10.3 — IMAGERY-1 needs to know
+                              # whether the business HAS gallery photos.
+                              "gallery": ctx.get("gallery") or []})
         if isinstance(quality_report, dict):
             quality_report["design_invariants"] = _inv_findings
         if _inv_findings:
@@ -2412,6 +2447,20 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         cfg["atelier"] = atelier_meta
     elif full_recompose:
         cfg.pop("atelier", None)
+    # Canvas Pass (Phase 1): persist the assembled (pre-slot) canvas
+    # document + the fact-check report alongside quality_report (§7).
+    # Shuffle/refresh/override re-renders reuse the document without an
+    # LLM call; a full recompose WITHOUT the canvas clears both (a stale
+    # canvas must never mask a fresh module compose — the atelier rule).
+    if _canvas_html:
+        cfg["canvas"] = {"html": _canvas_html,
+                         "generated_at": datetime.now(timezone.utc).isoformat()}
+        if _canvas_report:
+            cfg["canvas_report"] = _canvas_report
+        cfg["html_source"] = "canvas"
+    elif full_recompose:
+        cfg.pop("canvas", None)
+        cfg.pop("canvas_report", None)
     # Arc 7 — persist the imagery-concept fingerprint so the NEXT full
     # recompose can tell whether the concept actually changed (and only
     # then re-roll the default slot imagery). Never clobbered by an
@@ -2461,6 +2510,12 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
             "stale": overrides_reconciled.get("stale", 0)}
     if atelier_meta and (atelier_meta.get("fragments") or {}):
         result["atelier"] = {"sections": sorted(atelier_meta["fragments"])}
+    if _canvas_html:
+        result["canvas"] = {
+            "fresh": bool(_canvas_report),
+            "fact_check_ok": bool(((_canvas_report or {}).get("fact_check")
+                                   or {}).get("ok")) if _canvas_report else None,
+        }
     return result
 
 
@@ -3243,12 +3298,55 @@ def compose_site(business_id: str, brief_notes: str = "",
     except Exception as _e:
         logger.info(f"[composer] multi-page home-nav skipped: {_e}")
 
+    # ── Canvas Pass (Phase 1, docs/CANVAS_PASS.md) ─────────────────────
+    # Gated on SITE_CANVAS=on + full recompose + a DRO existing: the
+    # canvas planner splits the page into immutable data blocks (module-
+    # pre-rendered truth) and open creative sections (LLM-authored in
+    # 2-3 chunks under the canvas contract), fact-checks the assembled
+    # page, and hands the document to render_and_persist at slot
+    # population. Any failure falls back to today's module+atelier path
+    # (the §9 degradation ladder). Default OFF: unset SITE_CANVAS leaves
+    # the deterministic path byte-identical.
+    canvas_html: Optional[str] = None
+    canvas_report: Optional[Dict[str, Any]] = None
+
+    def _try_canvas(the_spec: List[Dict[str, Any]], notes: str = ""):
+        import canvas as _canvas_mod
+        return _canvas_mod.run_canvas(the_spec, ctx, dro, business_id,
+                                      progress_cb=progress_cb, feedback=notes)
+
+    if use_llm and dro:
+        try:
+            import canvas as _canvas_mod
+            if _canvas_mod.canvas_enabled():
+                _report_progress(progress_cb, 50, "Authoring the canvas")
+                _out = _try_canvas(spec)
+                canvas_html = (_out or {}).get("html") or None
+                canvas_report = (_out or {}).get("report") or None
+                if canvas_html:
+                    logger.info(f"[composer] CANVAS composed for "
+                                f"{business_id[:8]} "
+                                f"(planned={((canvas_report or {}).get('planned'))})")
+                else:
+                    logger.warning(f"[composer] canvas fell back to the module "
+                                   f"path for {business_id[:8]}: "
+                                   f"{(canvas_report or {}).get('fallbacks')}")
+        except Exception as _ce:
+            logger.warning(f"[composer] canvas crashed (non-fatal — the "
+                           f"module path continues): "
+                           f"{type(_ce).__name__}: {_ce}")
+            canvas_html, canvas_report = None, {
+                "fallbacks": [{"stage": "exception",
+                               "detail": f"{type(_ce).__name__}: {_ce}"}]}
+
     result = render_and_persist(business_id, spec, ctx, dro_id=dro_id, dro=dro,
                                 dro_status=dro_status, dro_summary=dro_summary,
                                 defaulted_modules=defaulted_modules,
                                 full_recompose=True, progress_cb=progress_cb,
                                 dro_failure=dro_failure,
-                                _regen_allowed=use_llm)
+                                _regen_allowed=use_llm,
+                                _canvas_html=canvas_html,
+                                _canvas_report=canvas_report)
 
     # ── A2 (2026-07-18) — THE BOUNDED QUALITY REGEN ───────────────────
     # The loop closes: when the vision grader FAILS the build — or the
@@ -3312,6 +3410,21 @@ def compose_site(business_id: str, brief_notes: str = "",
                                f"first pass): {_spec_err}")
                 spec2, defaulted2 = None, None
             if spec2:
+                # Canvas Pass: pass 1 was canvas-composed → the regen
+                # RE-AUTHORS the canvas on the new spec with the grader's
+                # notes (not the module path); a failed canvas regen
+                # degrades to the module path per the §9 ladder. The
+                # keep-better guard below is untouched either way.
+                _c2_html: Optional[str] = None
+                _c2_report: Optional[Dict[str, Any]] = None
+                if canvas_html is not None:
+                    try:
+                        _out2 = _try_canvas(spec2, _notes)
+                        _c2_html = (_out2 or {}).get("html") or None
+                        _c2_report = (_out2 or {}).get("report") or None
+                    except Exception as _ce2:
+                        logger.warning(f"[composer] canvas regen failed "
+                                       f"(module path): {_ce2}")
                 result2 = render_and_persist(
                     business_id, spec2, ctx, dro_id=dro_id, dro=dro,
                     dro_status=dro_status, dro_summary=dro_summary,
@@ -3319,7 +3432,8 @@ def compose_site(business_id: str, brief_notes: str = "",
                     full_recompose=True, progress_cb=progress_cb,
                     dro_failure=dro_failure,
                     _regen_attempted=True, _regen_notes=_notes,
-                    _prior_verdict=_v1 or None)
+                    _prior_verdict=_v1 or None,
+                    _canvas_html=_c2_html, _canvas_report=_c2_report)
                 _v2 = result2.get("vision_verdict") or {}
                 _pass1_better = (bool(_v1) and bool(_v2)
                                  and _v1.get("passes_gate", False)

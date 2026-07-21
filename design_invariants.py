@@ -154,7 +154,6 @@ def check_rhythm(css: str, scale: Optional[Dict[str, Any]]) -> Optional[Dict[str
 
 
 # ─── CONTRAST-1 ──────────────────────────────────────────────────────
-
 def _hex_to_rgb(h: str):
     h = h.lstrip("#")
     if len(h) == 3:
@@ -198,12 +197,102 @@ def check_contrast(css: str) -> Optional[Dict[str, Any]]:
     )
 
 
+# ─── Substance invariants (Canvas Pass §10.3) ────────────────────────
+# WORDS-1 / IMAGERY-1 / MOTION-CEILING-1 — the audit's floor metrics,
+# graded against the final document regardless of authoring path (they
+# serve module builds too — the Fable floor audit's 292-352 visible
+# words, 0 real images, 11-14 keyframes were module-path builds).
+# Advisory by default (the file's rollout contract); DESIGN_INVARIANTS=
+# enforce promotes them into the bounded regen's HIGH-finding trigger.
+
+_WORD_RE = re.compile(r"[A-Za-z0-9][\w'’\-]*")
+
+
+def _visible_word_count(html: str) -> int:
+    t = re.sub(r"<(script|style|noscript)\b[\s\S]*?</\1>", " ",
+               str(html or ""), flags=re.IGNORECASE)
+    t = re.sub(r"<!--[\s\S]*?-->", " ", t)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return len(_WORD_RE.findall(t))
+
+
+def _floor_words() -> int:
+    try:
+        return max(0, int(os.environ.get("CANVAS_FLOOR_WORDS") or 450))
+    except ValueError:
+        return 450
+
+
+def _keyframe_cap() -> int:
+    try:
+        return max(1, int(os.environ.get("CANVAS_KEYFRAME_CAP") or 8))
+    except ValueError:
+        return 8
+
+
+def check_words(html: str) -> Optional[Dict[str, Any]]:
+    """WORDS-1 — visible words on the final document ≥ the floor
+    (CANVAS_FLOOR_WORDS, default 450). The reference carried 867; our
+    module builds averaged 292-352."""
+    n = _visible_word_count(html)
+    floor = _floor_words()
+    if n >= floor:
+        return None
+    return _finding(
+        "WORDS-1",
+        "The page is thin — visible word count below the substance floor.",
+        f"{n} visible words < {floor} (CANVAS_FLOOR_WORDS)",
+        "Grow real paragraphs in the authored sections (about ≥ 60 words, "
+        "a real hero subhead) — never filler.",
+    )
+
+
+def check_imagery(html: str, gallery_nonempty: bool) -> Optional[Dict[str, Any]]:
+    """IMAGERY-1 — when the business HAS gallery photos, the final
+    document must carry ≥1 data-slot image with a populated src (runs
+    post slot-resolution, so a populated img means the pipeline actually
+    placed a real photograph)."""
+    if not gallery_nonempty:
+        return None
+    for m in re.finditer(r"<img\b[^>]*>", str(html or ""), re.IGNORECASE):
+        tag = m.group(0)
+        if re.search(r"\bdata-slot\s*=\s*\"[^\"]+\"", tag) and \
+                re.search(r"\bsrc\s*=\s*\"[^\"]+\"", tag):
+            return None
+    return _finding(
+        "IMAGERY-1",
+        "Gallery photos exist but no real image is load-bearing on the page.",
+        "no <img data-slot=… src=…> with a populated src in the document",
+        "Give at least one section a real photograph via its data-slot — "
+        "imagery must be load-bearing, not decorative absence.",
+    )
+
+
+def check_motion_ceiling(html: str, css: str) -> Optional[Dict[str, Any]]:
+    """MOTION-CEILING-1 — total @keyframes across the document's styles
+    ≤ the cap (CANVAS_KEYFRAME_CAP, default 8). The reference had 1 (the
+    marquee); ours averaged 11-14 — motion spent on entrances instead of
+    the ONE signature moment."""
+    n = len(re.findall(r"@(?:-webkit-)?keyframes\b", str(css or "")))
+    cap = _keyframe_cap()
+    if n <= cap:
+        return None
+    return _finding(
+        "MOTION-CEILING-1",
+        "Too many keyframes — motion is spent everywhere, so it signs nowhere.",
+        f"{n} @keyframes > {cap} (CANVAS_KEYFRAME_CAP)",
+        "Cut entrance choreography down to the ONE signature motion moment; "
+        "let arrivals be quiet.",
+    )
+
+
 # ─── Entry ───────────────────────────────────────────────────────────
 
 def check_design_invariants(html: str, css: str,
                             enriched_brief: Optional[Dict[str, Any]] = None
                             ) -> List[Dict[str, Any]]:
-    """Run MOTIF-1 / RHYTHM-1 / CONTRAST-1. Never raises."""
+    """Run MOTIF-1 / RHYTHM-1 / CONTRAST-1 (+ the Canvas Pass substance
+    invariants WORDS-1 / IMAGERY-1 / MOTION-CEILING-1). Never raises."""
     findings: List[Dict[str, Any]] = []
     try:
         from design_tokens import boldness_from_prefs, rhythm_scale
@@ -212,9 +301,13 @@ def check_design_invariants(html: str, css: str,
             brief.get("site_prefs") or {"boldness": brief.get("boldness")}))
     except Exception:
         scale = None
+    has_gallery = bool((enriched_brief or {}).get("gallery"))
     for fn, args in ((check_motif, (html, css)),
                      (check_rhythm, (css, scale)),
-                     (check_contrast, (css,))):
+                     (check_contrast, (css,)),
+                     (check_words, (html,)),
+                     (check_imagery, (html, has_gallery)),
+                     (check_motion_ceiling, (html, css))):
         try:
             f = fn(*args)
             if f:
