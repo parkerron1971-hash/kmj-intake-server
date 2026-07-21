@@ -61,6 +61,15 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _ts_for_query(value: Any) -> str:
+    """Timestamp formatted for a PostgREST QUERY STRING. isoformat()'s
+    '+00:00' offset reads as a space in a URL and silently kills the
+    whole filter (the live '0 people' bug, 2026-07-21) — always use the
+    'Z' form in query paths. JSON bodies are unaffected."""
+    s = str(value)
+    return s.replace("+00:00", "Z").replace(" ", "T")
+
+
 # ─── Ownership / loading ─────────────────────────────────────────────
 
 def _load_business(business_id: str) -> Dict[str, Any]:
@@ -99,7 +108,7 @@ def _audience_filter(audience: Dict[str, Any]) -> str:
         return "status=not.in.(inactive,churned)"
     # 'silent' — quiet for N+ days (or never contacted), not inactive.
     days = int((audience or {}).get("days_silent") or 30)
-    cutoff = (_now() - timedelta(days=days)).isoformat()
+    cutoff = _ts_for_query((_now() - timedelta(days=days)).isoformat())
     return (f"status=not.in.(inactive,churned)"
             f"&or=(last_interaction.is.null,last_interaction.lt.{cutoff})")
 
@@ -409,7 +418,7 @@ def _campaign_results(camp: Dict[str, Any]) -> Dict[str, Any]:
         ids = ",".join(sorted(contact_ids))
         ev = sb_clients.sb_get_as_service(
             f"/events?business_id=eq.{camp['business_id']}"
-            f"&contact_id=in.({ids})&created_at=gte.{start}"
+            f"&contact_id=in.({ids})&created_at=gte.{_ts_for_query(start)}"
             f"&event_type=in.(email_reply_received,email_replied,sms_received,booking_created)"
             f"&select=event_type") or []
         for e in ev:
