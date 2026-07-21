@@ -58,6 +58,16 @@ def _figure(img: Dict[str, Any], biz_name: str, overlay: bool = False) -> str:
 _BASE_CSS = """
 .sxm-gallery h2 { margin-bottom: var(--sx-space-6, 32px); }
 .sxm-gal-fig { margin: 0; }
+/* Arc B (2026-07-21) — THE MAT: practitioners upload mixed material
+   (white-ground product shots next to full-bleed art), and raw tiles
+   read as uploads floating on the page — the live noir build glared.
+   A surface mat + hairline + inset pad makes any mix hang together
+   like one curated wall. Overlay figures keep their full-bleed crop. */
+.sxm-gal-fig:not(.sxm-gal-fig-over) { background: var(--sx-surface);
+  border: 1px solid var(--sx-border); border-radius: var(--sx-radius-image);
+  padding: 10px; }
+.sxm-gal-fig:not(.sxm-gal-fig-over) .sxm-gal-img {
+  border-radius: calc(var(--sx-radius-image) - 4px); }
 .sxm-gal-cap { margin-top: var(--sx-space-2, 8px); color: var(--sx-muted); line-height: 1.4; }
 .sxm-gal-fig-over { position: relative; overflow: hidden; border-radius: var(--sx-radius-image); }
 .sxm-gal-cap-over { position: absolute; left: 0; right: 0; bottom: 0; margin: 0;

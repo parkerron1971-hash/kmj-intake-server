@@ -901,6 +901,22 @@ def _head_meta_block(meta: Optional[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+_ACCENT_WORD_RE = _re2.compile(
+    r"<em\s+class=[\"']sxm-accent-word[\"']>(.*?)</em>", _re2.DOTALL)
+
+
+def _cap_accent_words(html: str, keep: int = 2) -> str:
+    """Keep the first `keep` accent-word treatments; unwrap the rest to
+    plain text (Arc B accent-word budget — see page_shell)."""
+    count = {"n": 0}
+
+    def _sub(m: "_re2.Match") -> str:
+        count["n"] += 1
+        return m.group(0) if count["n"] <= keep else m.group(1)
+
+    return _ACCENT_WORD_RE.sub(_sub, html)
+
+
 def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
                design: Optional[Dict[str, Any]] = None,
                meta: Optional[Dict[str, Any]] = None) -> str:
@@ -959,6 +975,13 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
             else:
                 classes.append("sx-sig-soft")    # break is loud, motion quiet
     body_class = " ".join(classes)
+    # Arc B (2026-07-21) — THE ACCENT-WORD BUDGET: one italic accent word
+    # per heading is the idiom; six of them down one page is a template
+    # tell (the live build accented alone/walk/clear/path/cleared…). The
+    # page keeps its first two accented words; every later occurrence
+    # renders as plain text. Deterministic; covers module AND bespoke
+    # fragments alike because it runs on the assembled body.
+    body = _cap_accent_words(body, keep=2)
     # Site Arc 10 — the dark-ground depth orb: ONE blurred pool of brand
     # light behind everything (markup on dark palettes only; the CSS
     # hides it on mobile + reduced-motion, motion=subtle stills it).
