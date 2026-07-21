@@ -1182,6 +1182,16 @@ def fact_check_canvas(html: str, ctx: Dict[str, Any],
                             f"node(s) lack data-override-target: {samples[:3]}")
     except Exception:
         pass
+    # Platform scripts that ride inside immutable blocks (the contact
+    # form's submit handler, contact_footer.py) are byte-identical
+    # splices of registry output — the census already guarantees block
+    # byte-identity, so an exact body match against the block markup is
+    # by definition platform-owned, not canvas-authored.
+    block_scripts = set()
+    for _b in (blocks or {}).values():
+        for _body in re.findall(r"<script\b[^>]*>([\s\S]*?)</script>",
+                                str(_b.get("html") or ""), re.IGNORECASE):
+            block_scripts.add(_body)
     canvas_scripts = 0
     for attrs, body_js in re.findall(r"<script\b([^>]*)>([\s\S]*?)</script>",
                                      html, re.IGNORECASE):
@@ -1194,6 +1204,8 @@ def fact_check_canvas(html: str, ctx: Dict[str, Any],
             continue
         if "IntersectionObserver" in body_js and "sxm-" in body_js:
             continue                      # the platform reveal script
+        if body_js in block_scripts:
+            continue                      # platform script inside an immutable block
         problems.append("unidentified <script> block — only the platform "
                         "reveal script and ONE sx-canvas-js are allowed")
     if canvas_scripts > 1:

@@ -612,6 +612,29 @@ class TestFactCheck(unittest.TestCase):
         self.assertFalse(ok2)
         self.assertTrue(any("inline event handler" in p for p in problems2))
 
+    def test_block_script_exempt_from_census(self):
+        # the contact form's submit handler rides inside the immutable
+        # block — a byte-identical platform script must not trip the
+        # single-script census (the first live build fell back on this)
+        out, plan, blocks = _run_ok()
+        victim = next(b for b in blocks.values() if b["module"] == "offerings")
+        platform_js = ("\n(function(){var f=document.getElementById("
+                       "'sxm-contact-form'); if(!f) return;})();\n")
+        new_html = victim["html"] + f"<script>{platform_js}</script>"
+        page = out["html"].replace(victim["html"], new_html)
+        victim["html"] = new_html
+        ok, problems = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
+        self.assertTrue(ok, problems)
+
+    def test_unknown_script_still_fails(self):
+        out, plan, blocks = _run_ok()
+        page = out["html"].replace("</body>",
+                                   "<script>var x = 1;</script></body>")
+        ok, problems = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
+        self.assertFalse(ok)
+        self.assertTrue(any("unidentified <script> block" in p
+                            for p in problems), problems)
+
     def test_per_section_substance(self):
         out, plan, blocks = _run_ok()
         thin = out["html"].replace(PARA_ABOUT, "A short line.")
