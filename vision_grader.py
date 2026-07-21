@@ -122,7 +122,22 @@ def _screenshot(html: str) -> Optional[List[bytes]]:
     return shots
 
 
-def _grade_anthropic(shots: List[bytes], business_id: str = "") -> Optional[str]:
+def _rubric(standard: Optional[str]) -> str:
+    """Arc D (2026-07-21): the judge grades AGAINST A BAR, not in a
+    vacuum. When a reference standard rides along, it is appended with
+    teeth — a page that would look amateur beside the standard cannot
+    score top marks."""
+    if not (standard or "").strip():
+        return RUBRIC
+    return (RUBRIC
+            + "\n\nTHE STANDARD — grade against this bar, not in a vacuum. "
+              "If this page sat beside work meeting the bar below and "
+              "looked amateur, FIRST-VIEWPORT IMPACT cannot exceed 6 and "
+              "TEMPLATE SMELL cannot be below 4:\n" + standard.strip())
+
+
+def _grade_anthropic(shots: List[bytes], business_id: str = "",
+                     standard: Optional[str] = None) -> Optional[str]:
     from anthropic import Anthropic
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
@@ -137,7 +152,7 @@ def _grade_anthropic(shots: List[bytes], business_id: str = "") -> Optional[str]
     client = Anthropic(api_key=key)
     msg = client.messages.create(
         model=(os.environ.get("VISION_JUDGE_MODEL") or "claude-sonnet-4-5-20250929").strip(),
-        max_tokens=700, system=RUBRIC,
+        max_tokens=700, system=_rubric(standard),
         messages=[{"role": "user", "content": content}], timeout=90.0)
     _meter(business_id, getattr(msg, "model", "") or "",
            getattr(getattr(msg, "usage", None), "input_tokens", 0) or 0,
@@ -145,7 +160,8 @@ def _grade_anthropic(shots: List[bytes], business_id: str = "") -> Optional[str]
     return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
 
 
-def _grade_moonshot(shots: List[bytes], business_id: str = "") -> Optional[str]:
+def _grade_moonshot(shots: List[bytes], business_id: str = "",
+                    standard: Optional[str] = None) -> Optional[str]:
     import httpx
     key = (os.environ.get("MOONSHOT_API_KEY") or "").strip()
     if not key:
@@ -162,7 +178,7 @@ def _grade_moonshot(shots: List[bytes], business_id: str = "") -> Optional[str]:
                    headers={"Authorization": f"Bearer {key}"},
                    json={"model": model,
                          "max_tokens": 3700,
-                         "messages": [{"role": "system", "content": RUBRIC},
+                         "messages": [{"role": "system", "content": _rubric(standard)},
                                        {"role": "user", "content": content}]},
                    timeout=120)
     if r.status_code >= 400:
@@ -208,8 +224,12 @@ def verdict_passes(v: Dict[str, Any]) -> bool:
             and v.get("broken") != "y")
 
 
-def grade(html: str, business_id: str = "") -> Optional[Dict[str, Any]]:
-    """Screenshot + grade. None = grader unavailable (never build-fatal)."""
+def grade(html: str, business_id: str = "",
+          standard: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Screenshot + grade. None = grader unavailable (never build-fatal).
+    `standard` (Arc D) = the authored reference bar for this build's
+    direction (reference_standards.standard_for) — the judge scores
+    against it instead of grading in a vacuum."""
     if not _enabled():
         return None
     shots = _screenshot(html)
@@ -230,17 +250,17 @@ def grade(html: str, business_id: str = "") -> Optional[Dict[str, Any]]:
         raw = None
         if provider == "moonshot":
             try:
-                raw = _grade_moonshot(shots, business_id)
+                raw = _grade_moonshot(shots, business_id, standard)
             except Exception as e:
                 logger.warning(f"[vision] moonshot judge failed "
                                f"({type(e).__name__}: {e}) — falling back to anthropic")
         else:
-            raw = _grade_anthropic(shots, business_id)
+            raw = _grade_anthropic(shots, business_id, standard)
         v = _parse_verdict(raw or "")
         if v is None and provider == "moonshot":
             # Judge fail-open mirrors the composer's: fall back to Claude.
             logger.warning("[vision] moonshot judge unusable — falling back to anthropic")
-            v = _parse_verdict(_grade_anthropic(shots, business_id) or "")
+            v = _parse_verdict(_grade_anthropic(shots, business_id, standard) or "")
             if v is not None:
                 provider = "anthropic"
         if v is not None:
