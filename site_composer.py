@@ -2685,11 +2685,15 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     if _canvas_html:
         cfg["canvas"] = {"html": _canvas_html,
                          "generated_at": datetime.now(timezone.utc).isoformat()}
-        if _canvas_report:
-            cfg["canvas_report"] = _canvas_report
         cfg["html_source"] = "canvas"
     elif full_recompose:
         cfg.pop("canvas", None)
+    # The report persists even on a FALLBACK (no canvas html) — the
+    # fallback forensics are exactly what a diagnosis needs; a silent
+    # "(none)" cost a live build's postmortem once already (2026-07-21).
+    if _canvas_report:
+        cfg["canvas_report"] = _canvas_report
+    elif full_recompose:
         cfg.pop("canvas_report", None)
     # Arc 7 — persist the imagery-concept fingerprint so the NEXT full
     # recompose can tell whether the concept actually changed (and only
