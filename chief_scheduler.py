@@ -165,7 +165,8 @@ async def due_tick() -> None:
         rows = await asyncio.to_thread(
             sb_clients.sb_get_as_service,
             f"/chief_scheduled_actions?status=eq.queued"
-            f"&run_at=lte.{_now().isoformat()}"
+            # Z form — '+00:00' reads as a space in query strings.
+            f"&run_at=lte.{_now().isoformat().replace('+00:00', 'Z')}"
             f"&order=run_at.asc&limit={MAX_PER_TICK}&select=*")
     except Exception as e:  # pragma: no cover
         logger.warning(f"[scheduler] due fetch failed: {e}")

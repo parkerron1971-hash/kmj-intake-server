@@ -3681,7 +3681,7 @@ async def booking_slots(slug: str, days: int = 14):
         window_end = now + timedelta(days=window)
         existing = await _sb(client,
             f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
-            f"&scheduled_for=gte.{now.isoformat()}&scheduled_for=lte.{window_end.isoformat()}"
+            f"&scheduled_for=gte.{now.isoformat().replace('+00:00', 'Z')}&scheduled_for=lte.{window_end.isoformat().replace('+00:00', 'Z')}"
             f"&select=scheduled_for,duration_minutes&limit=200") or []
 
         booked_ranges = []
@@ -3774,8 +3774,11 @@ async def booking_submit(slug: str, req: BookingSubmission):
         slot_end = scheduled + timedelta(minutes=duration + buffer)
         conflicts = await _sb(client,
             f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
-            f"&scheduled_for=gte.{(scheduled - timedelta(minutes=duration + buffer)).isoformat()}"
-            f"&scheduled_for=lte.{slot_end.isoformat()}"
+            # Z form — '+00:00' reads as a space in query strings; the
+            # broken filter made this conflict check ALWAYS pass (silent
+            # double-booking risk, 2026-07-21 platform bug class).
+            f"&scheduled_for=gte.{(scheduled - timedelta(minutes=duration + buffer)).isoformat().replace('+00:00', 'Z')}"
+            f"&scheduled_for=lte.{slot_end.isoformat().replace('+00:00', 'Z')}"
             f"&select=id&limit=1")
         if conflicts:
             raise HTTPException(409, "Time slot no longer available")
