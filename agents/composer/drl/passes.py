@@ -135,7 +135,11 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
     # ladder — site_llm handles the call and fails open to Anthropic
     # (in which case the single-model path, not the ladder, applies).
     import site_llm
-    if site_llm.provider() == "moonshot":
+    # Stage routing (2026-07-21): the BRAIN defaults to Claude even when
+    # the global builder is Kimi (site_llm.provider_for's brain rule) —
+    # this branch now only fires when a stage map EXPLICITLY routes the
+    # DRL to moonshot.
+    if site_llm.provider_for(f"drl/{task}") == "moonshot":
         # Design-quality audit fix R3 (2026-07-18): this branch used
         # site_llm's default 120s timeout — the full DRO needs the
         # ladder's family-scaled ceiling (240s on slow models) plus
@@ -507,11 +511,17 @@ def owner_exempt_axes(site_prefs: Optional[Dict[str, Any]] = None,
 
 # ─── Pass 2: DRO authoring ───────────────────────────────────────────────
 def _dro_system_prompt() -> str:
-    # Phase 1 (Kimi design integration) — THE DOCTRINE + instructed
-    # diversity wrap the DRO author for BOTH providers (Symmetry Rule).
-    from design_doctrine import DOCTRINE, DIVERSITY_LINE
+    # PROMPT DIET (2026-07-21 root-cause fix): the full DOCTRINE block
+    # (~6KB of HTML-execution law) was wrapped around the DRO author in
+    # Phase 1 — but the DRO writes REASONING, not HTML, and the forensic
+    # record shows the design brain starving to 'applied_thin' since the
+    # doctrine era: heavier prompts, more timeouts, more minimal-mode
+    # fallbacks, flatter sites. The DRO keeps its own CREATIVE ENGINE
+    # philosophy (below) + the short diversity clause; the doctrine
+    # stays where HTML is authored (atelier / hero / canvas).
+    from design_doctrine import DIVERSITY_LINE
     return (
-        DOCTRINE + "\n\n" + DIVERSITY_LINE + "\n\n" +
+        DIVERSITY_LINE + "\n\n" +
         "You are a lead designer authoring a Design Rationale Object (DRO) — "
         "the REASONING for a website's design, written BEFORE any HTML exists. "
         "You decide DIRECTION, never concrete assets: no hex codes, no font "

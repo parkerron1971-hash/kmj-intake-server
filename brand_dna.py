@@ -780,7 +780,8 @@ def apply_owner_ground(dna: Dict[str, Any], direction: Optional[str]) -> Dict[st
 
 def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
                     owner_pairings: Optional[list] = None,
-                    *, fonts_pinned: bool = False) -> Dict[str, Any]:
+                    *, fonts_pinned: bool = False,
+                    extra_direction_evidence: str = "") -> Dict[str, Any]:
     """DRL render conformance (2026-07-03, quality pass).
 
     The DRO already authors typography personality, whitespace philosophy,
@@ -825,11 +826,19 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
     # as the display face of a "60% editorial + 40% luxury" page. The
     # direction wins: impact pairings snap to the refined family.
     _ws_spec = d.get("whitespace") or {}
+    # Vocabulary decoupling (2026-07-21): a starved/thin DRO carries no
+    # refined words, which let neon ride through every guard — the
+    # business's design VOCABULARY (e.g. 'sovereign-authority') is
+    # direction evidence that exists even when the DRO is thin, so the
+    # caller passes it in via extra_direction_evidence.
     _refined_evidence = _has(
         f"{pers or ''} {_ws_spec.get('philosophy') or ''} "
-        f"{_ws_spec.get('approach') or ''} {(d.get('palette') or {}).get('accent_strategy') or ''}",
+        f"{_ws_spec.get('approach') or ''} "
+        f"{(d.get('palette') or {}).get('accent_strategy') or ''} "
+        f"{extra_direction_evidence or ''}",
         "editorial", "luxur", "quiet", "refined", "understated",
-        "elegant", "monastic", "literar", "essay")
+        "elegant", "monastic", "literar", "essay", "sovereign",
+        "heritage", "prestig")
     if _refined_evidence and pairing_key in ("condensed_impact",
                                              "bold_statement"):
         pairing_key = "quiet_luxury" if _has(pers, "luxur", "quiet",
