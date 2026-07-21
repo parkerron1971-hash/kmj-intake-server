@@ -830,16 +830,40 @@ async def bootstrap_prices(_owner=Depends(require_owner)):
         env[env_key] = price["id"]
         created.append(lookup_key)
 
-    # 3. MINISTRY20 — 20% off forever for churches/nonprofits.
+    # 3. MINISTRY20 — 20% off forever for churches/nonprofits. NON-FATAL:
+    #    the catalog + env block must come back even if the promo step
+    #    trips (2026-07-21: newer Stripe API versions renamed the
+    #    promotion_codes `coupon` param to `promotion` — try modern
+    #    shape first, fall back to legacy).
     promo_state = "reused"
-    promos = await _stripe_get("/promotion_codes", [("code", "MINISTRY20"), ("limit", "1")])
-    if not promos.get("data"):
-        coupon = await _stripe_post("/coupons", {
-            "percent_off": 20, "duration": "forever",
-            "name": "Ministry & Nonprofit",
-        })
-        await _stripe_post("/promotion_codes", {"coupon": coupon["id"], "code": "MINISTRY20"})
-        promo_state = "created"
+    try:
+        promos = await _stripe_get("/promotion_codes", [("code", "MINISTRY20"), ("limit", "1")])
+        if not promos.get("data"):
+            # Reuse an existing matching coupon (e.g. from a prior run
+            # that failed at the promo-code step) before creating one.
+            coupon_id = None
+            for cp in (await _stripe_get("/coupons", [("limit", "100")])).get("data", []):
+                if cp.get("name") == "Ministry & Nonprofit" and cp.get("percent_off") == 20:
+                    coupon_id = cp["id"]
+                    break
+            if not coupon_id:
+                coupon = await _stripe_post("/coupons", {
+                    "percent_off": 20, "duration": "forever",
+                    "name": "Ministry & Nonprofit",
+                })
+                coupon_id = coupon["id"]
+            try:
+                await _stripe_post("/promotion_codes", {
+                    "code": "MINISTRY20",
+                    "promotion": {"type": "coupon", "coupon": coupon_id},
+                })
+            except HTTPException:
+                await _stripe_post("/promotion_codes", {
+                    "code": "MINISTRY20", "coupon": coupon_id,
+                })
+            promo_state = "created"
+    except HTTPException as e:
+        promo_state = f"failed: {str(e.detail)[:140]}"
 
     env["STRIPE_PRICE_ID_DEFAULT"] = env.get("STRIPE_PRICE_ID_PROFESSIONAL", "")
     env["FOUNDER_SEAT_LIMIT"] = (os.environ.get("FOUNDER_SEAT_LIMIT") or "50").strip()
