@@ -75,12 +75,19 @@ def judge_provider() -> str:
     when Kimi judges its own output. The two env vars are independent
     on purpose."""
     # K5 (Phase 1): the ship-gate judge is PINNED, never mirrored.
-    # SHIP_JUDGE_PROVIDER is the canonical pin (set once, default
-    # Claude, survives composer fallbacks); SITE_JUDGE_PROVIDER stays
-    # honored as the earlier alias.
-    return (os.environ.get("SHIP_JUDGE_PROVIDER")
-            or os.environ.get("SITE_JUDGE_PROVIDER")
-            or "anthropic").strip().lower()
+    # Arc C (2026-07-21, Kevin's ruling "the critic isn't the author"):
+    # the legacy SITE_JUDGE_PROVIDER alias is RETIRED for the judge —
+    # Railway had it set to moonshot, which silently made Kimi grade
+    # Kimi's own builds. SHIP_JUDGE_PROVIDER remains the one deliberate
+    # override; everything else judges on Claude.
+    legacy = (os.environ.get("SITE_JUDGE_PROVIDER") or "").strip().lower()
+    pinned = (os.environ.get("SHIP_JUDGE_PROVIDER") or "").strip().lower()
+    if legacy and not pinned:
+        logger.warning(
+            "[site_llm] SITE_JUDGE_PROVIDER=%s is set but no longer honored "
+            "for the judge (self-grading hazard) — set SHIP_JUDGE_PROVIDER "
+            "explicitly if a non-Claude judge is truly intended.", legacy)
+    return (pinned or "anthropic")
 
 
 def _moonshot_model() -> str:
