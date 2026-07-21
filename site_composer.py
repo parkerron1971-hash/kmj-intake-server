@@ -1937,9 +1937,22 @@ def _apply_dro_design(ctx: Dict[str, Any], dro: Dict[str, Any],
         _owner_fonts = True
     _owner_pairings = brand_dna.TYPE_PERSONALITY_PAIRINGS.get(_tp)
     _fonts_pinned = _owner_fonts or bool((_expr.get("hero_font") or "").strip())
+    # Vocabulary decoupling (2026-07-21): the design vocabulary is
+    # direction evidence that survives a thin DRO — Sovereign Authority
+    # keeps its refined chroma/type guards even when the rationale is
+    # starved.
+    _site_cfg_v = (((ctx.get("site") or {}).get("site_config") or {})
+                   if isinstance(((ctx.get("site") or {}).get("site_config")
+                                  or {}), dict) else {})
+    _vocab_evidence = " ".join(str(v or "") for v in (
+        _site_cfg_v.get("vocabulary_override"),
+        (_site_cfg_v.get("build_inputs") or {}).get("vocab_id")
+        if isinstance(_site_cfg_v.get("build_inputs"), dict) else "",
+    ))
     ctx["dna"] = brand_dna.apply_dro_style(
         ctx["dna"], decisions, owner_pairings=_owner_pairings,
-        fonts_pinned=_fonts_pinned)
+        fonts_pinned=_fonts_pinned,
+        extra_direction_evidence=_vocab_evidence)
     # Arc 5 — the OWNER's color direction is a HARD preference:
     # when it conflicts with the DRO's palette.base, the owner
     # wins (gather_context already grounded the no-DRO paths).

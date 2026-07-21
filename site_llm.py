@@ -30,6 +30,7 @@
 # bad experiment must never break a practitioner's site build.
 # ─────────────────────────────────────────────────────────────────────
 
+import json
 import logging
 import os
 from typing import Any, List, Optional
@@ -65,6 +66,45 @@ class _Message:
 
 def provider() -> str:
     return (os.environ.get("SITE_BUILDER_PROVIDER") or "anthropic").strip().lower()
+
+
+def provider_for(task: str = "") -> str:
+    """STAGE-LEVEL provider routing (2026-07-21, Kevin's ruling: Claude
+    is the builder; Kimi stays one env flip away; the hybrid future is a
+    per-stage map, not a fork).
+
+    Resolution order:
+      1. SITE_STAGE_PROVIDERS — JSON env mapping stage prefixes to
+         providers, longest matching prefix wins. Example hybrid:
+         {"drl": "anthropic", "atelier": "moonshot", "copy": "moonshot"}
+         = Claude brain, Kimi hands, in ONE pipeline.
+      2. THE BRAIN RULE: drl/* (signals + the DRO author) defaults to
+         anthropic even when the global builder is moonshot. The design
+         rationale is the single highest-leverage call in the pipeline
+         (~$0.15) and the forensic record shows it starving to
+         'applied_thin' on reasoning-model timeouts — every flat build
+         traced back to it. Only an explicit stage-map entry may move
+         the brain off Claude.
+      3. The global SITE_BUILDER_PROVIDER switch (default anthropic).
+    """
+    t = (task or "").strip().lower()
+    raw = (os.environ.get("SITE_STAGE_PROVIDERS") or "").strip()
+    if raw:
+        try:
+            m = json.loads(raw)
+            if isinstance(m, dict):
+                best = ""
+                for k in m:
+                    kk = str(k).strip().lower()
+                    if kk and t.startswith(kk) and len(kk) > len(best):
+                        best = kk
+                if best:
+                    return str(m[best]).strip().lower()
+        except Exception as e:
+            logger.warning(f"[site_llm] SITE_STAGE_PROVIDERS unparseable: {e}")
+    if t.startswith("drl"):
+        return "anthropic"
+    return provider()
 
 
 def judge_provider() -> str:
@@ -151,7 +191,7 @@ def create_message(*, model: str, max_tokens: int, system: str, user_content: st
     would have used — kept as the fail-open fallback and the default
     provider's model. `provider_name` overrides the global switch for
     call sites with their own toggle (the judge)."""
-    if (provider_name or provider()) == "moonshot":
+    if (provider_name or provider_for(task)) == "moonshot":
         try:
             msg = _call_moonshot(
                 max_tokens=max_tokens, temperature=temperature,
