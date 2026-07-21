@@ -6,12 +6,26 @@ for the life of the subscription, first 50 seats**. Nonprofit/ministry =
 20% coupon code. Credit packs unchanged ($10/100 · $25/275 · $50/600 —
 already live, no dashboard products needed).
 
-Everything below the line is Kevin-side (Stripe dashboard + Railway env).
-The code is already deployed and self-activates when the env vars land.
+---
+
+## The fast path (one click, ~2 minutes)
+
+1. Merge this PR (Railway deploys main) + the frontend PR.
+2. Mission Control → **Money & Website** → press
+   **"Create Stripe catalog (products + prices + MINISTRY20)"**.
+   The server creates all 4 products, all 8 recurring prices, and the
+   MINISTRY20 promo using its own Stripe key. Idempotent — pressing it
+   twice reuses, never duplicates (prices carry lookup_keys).
+3. The panel shows the exact env block — **Copy env block** → paste into
+   Railway → Variables → save. Railway redeploys; pricing is live.
+4. Verify per §4 below.
+
+The manual dashboard path below does the same thing by hand — keep it as
+the fallback/reference.
 
 ---
 
-## 1. Create the products in the Stripe dashboard
+## 1. (Manual fallback) Create the products in the Stripe dashboard
 
 Stripe dashboard → **Product catalog → + Add product**. Create THREE
 products, each with a monthly and a yearly recurring price:

@@ -71,6 +71,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 
 from auth_supabase import AuthedUser, require_user
+from lead_admin import require_owner
 from lead_admin import _service_headers, SUPABASE_URL
 
 
@@ -747,6 +748,108 @@ async def seats_endpoint(biz: str,
     _require_owner_of(user, biz_row)
     import billing_limits
     return billing_limits.can_add_seat(biz, biz_row)
+
+
+# ─── One-click catalog bootstrap (owner-only, 2026-07-21) ─────────────
+# Creates the locked pricing catalog IN STRIPE using the server's own
+# key — no dashboard clicking. Idempotent: every price carries a
+# lookup_key, so re-runs find and reuse instead of duplicating. Env
+# stays the source of truth for resolution — the response hands back
+# the exact block to paste into Railway.
+
+BOOTSTRAP_CATALOG = [
+    # (env_key, lookup_key, product_name, unit_amount_cents, interval)
+    ("STRIPE_PRICE_ID_STARTER",             "solutionist_starter_monthly",      "Solutionist Starter",       7900,   "month"),
+    ("STRIPE_PRICE_ID_STARTER_ANNUAL",      "solutionist_starter_annual",       "Solutionist Starter",       79000,  "year"),
+    ("STRIPE_PRICE_ID_PROFESSIONAL",        "solutionist_professional_monthly", "Solutionist Professional",  19900,  "month"),
+    ("STRIPE_PRICE_ID_PROFESSIONAL_ANNUAL", "solutionist_professional_annual",  "Solutionist Professional",  199000, "year"),
+    ("STRIPE_PRICE_ID_PRACTICE",            "solutionist_practice_monthly",     "Solutionist Practice",      39900,  "month"),
+    ("STRIPE_PRICE_ID_PRACTICE_ANNUAL",     "solutionist_practice_annual",      "Solutionist Practice",      399000, "year"),
+    ("STRIPE_PRICE_ID_FOUNDER",             "solutionist_founder_monthly",      "Solutionist Professional — Founding Member", 14900,  "month"),
+    ("STRIPE_PRICE_ID_FOUNDER_ANNUAL",      "solutionist_founder_annual",       "Solutionist Professional — Founding Member", 149000, "year"),
+]
+
+
+async def _stripe_get(path: str, params: list) -> Dict[str, Any]:
+    """GET from Stripe with repeated-key params (lookup_keys[] etc.)."""
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.get(f"{STRIPE_API_BASE}{path}",
+                        auth=(_stripe_key(), ""), params=params)
+    if r.status_code >= 400:
+        logger.error(f"Stripe GET {path} {r.status_code}: {r.text[:300]}")
+        raise HTTPException(status_code=r.status_code,
+                            detail=f"Stripe error: {r.text[:200]}")
+    return r.json()
+
+
+@router.post("/bootstrap-prices")
+async def bootstrap_prices(_owner=Depends(require_owner)):
+    """Create the locked pricing catalog (4 products, 8 recurring
+    prices, the MINISTRY20 promo) in Stripe. Owner-only; safe to
+    re-run — existing lookup_keys are reused, never duplicated."""
+    if not os.environ.get("STRIPE_SECRET_KEY", "").strip():
+        raise HTTPException(409, "STRIPE_SECRET_KEY is not set on the server.")
+
+    # 1. What already exists, by lookup key.
+    existing: Dict[str, Dict[str, Any]] = {}
+    params = [("lookup_keys[]", lk) for (_e, lk, _n, _a, _i) in BOOTSTRAP_CATALOG]
+    params.append(("limit", "100"))
+    for price in (await _stripe_get("/prices", params)).get("data", []):
+        if price.get("lookup_key"):
+            existing[price["lookup_key"]] = price
+
+    # 2. Existing products by exact name, so a partial earlier run (or a
+    #    hand-made product) is reused rather than duplicated.
+    products_by_name: Dict[str, str] = {}
+    prods = await _stripe_get("/products", [("active", "true"), ("limit", "100")])
+    for prod in prods.get("data", []):
+        products_by_name.setdefault(prod.get("name") or "", prod["id"])
+
+    env: Dict[str, str] = {}
+    created: list = []
+    reused: list = []
+    for env_key, lookup_key, product_name, amount, interval in BOOTSTRAP_CATALOG:
+        price = existing.get(lookup_key)
+        if price:
+            env[env_key] = price["id"]
+            reused.append(lookup_key)
+            continue
+        product_id = products_by_name.get(product_name)
+        if not product_id:
+            prod = await _stripe_post("/products", {"name": product_name})
+            product_id = prod["id"]
+            products_by_name[product_name] = product_id
+        price = await _stripe_post("/prices", {
+            "product": product_id,
+            "currency": "usd",
+            "unit_amount": amount,
+            "recurring": {"interval": interval},
+            "lookup_key": lookup_key,
+            "nickname": lookup_key,
+        })
+        env[env_key] = price["id"]
+        created.append(lookup_key)
+
+    # 3. MINISTRY20 — 20% off forever for churches/nonprofits.
+    promo_state = "reused"
+    promos = await _stripe_get("/promotion_codes", [("code", "MINISTRY20"), ("limit", "1")])
+    if not promos.get("data"):
+        coupon = await _stripe_post("/coupons", {
+            "percent_off": 20, "duration": "forever",
+            "name": "Ministry & Nonprofit",
+        })
+        await _stripe_post("/promotion_codes", {"coupon": coupon["id"], "code": "MINISTRY20"})
+        promo_state = "created"
+
+    env["STRIPE_PRICE_ID_DEFAULT"] = env.get("STRIPE_PRICE_ID_PROFESSIONAL", "")
+    env["FOUNDER_SEAT_LIMIT"] = (os.environ.get("FOUNDER_SEAT_LIMIT") or "50").strip()
+    railway_block = "\n".join(f"{k}={v}" for k, v in env.items() if v)
+    # Which of these differ from the running env (i.e. still need Railway)?
+    env_pending = [k for k, v in env.items()
+                   if v and (os.environ.get(k) or "").strip() != v]
+    return {"ok": True, "env": env, "railway_block": railway_block,
+            "created": created, "reused": reused,
+            "ministry_promo": promo_state, "env_pending": env_pending}
 
 
 @router.post("/webhook")
