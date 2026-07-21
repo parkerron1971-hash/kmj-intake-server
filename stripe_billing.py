@@ -186,6 +186,93 @@ def _require_owner_of(user: AuthedUser, business: Dict[str, Any]) -> None:
         )
 
 
+# ─── Founding-member seats (launch pricing, Kevin-ruled 2026-07-21) ───
+# The founder price = Professional entitlements, lifetime-locked rate,
+# capped at FOUNDER_SEAT_LIMIT seats. The cap is enforced at
+# checkout-session creation, and the publicly shown seat count comes
+# from REAL subscriptions in the DB — never a hand-typed number.
+
+def _founder_seat_limit() -> int:
+    try:
+        return int(os.environ.get("FOUNDER_SEAT_LIMIT") or "50")
+    except ValueError:
+        return 50
+
+
+def _founder_price_ids() -> list:
+    return [pid for pid in (
+        (os.environ.get("STRIPE_PRICE_ID_FOUNDER") or "").strip(),
+        (os.environ.get("STRIPE_PRICE_ID_FOUNDER_ANNUAL") or "").strip(),
+    ) if pid]
+
+
+async def _founder_seats_taken() -> int:
+    """Count businesses holding a founder price with a live (or
+    recoverable — past_due keeps the seat) subscription."""
+    ids = _founder_price_ids()
+    if not ids:
+        return 0
+    headers = {**_service_headers(), "Prefer": "count=exact"}
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            r = await c.get(
+                f"{SUPABASE_URL}/rest/v1/businesses",
+                headers=headers,
+                params={
+                    "subscription_plan": f"in.({','.join(ids)})",
+                    "subscription_status": "in.(active,trialing,past_due)",
+                    "select": "id",
+                    "limit": "1",
+                },
+            )
+        if r.status_code >= 400:
+            logger.warning(f"founder seat count failed: {r.status_code}")
+            return 0
+        content_range = r.headers.get("content-range") or ""
+        return int(content_range.split("/")[-1])
+    except (ValueError, httpx.HTTPError) as e:
+        logger.warning(f"founder seat count failed: {e}")
+        return 0
+
+
+async def _founder_summary() -> Dict[str, Any]:
+    """The founder offer's public shape (status + plans endpoints)."""
+    ids = _founder_price_ids()
+    out: Dict[str, Any] = {"configured": bool(ids)}
+    if not ids:
+        return out
+    limit = _founder_seat_limit()
+    taken = await _founder_seats_taken()
+    out.update({
+        "plan": "professional",
+        "price_id": ids[0],
+        "seat_limit": limit,
+        "seats_taken": taken,
+        "seats_left": max(0, limit - taken),
+    })
+    return out
+
+
+async def _price_display(pid: str) -> Optional[Dict[str, Any]]:
+    """Live display data for a Stripe price id, or None."""
+    if not (pid and os.environ.get("STRIPE_SECRET_KEY")):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            r = await c.get(f"{STRIPE_API_BASE}/prices/{pid}",
+                            auth=(_stripe_key(), ""))
+        if r.status_code < 400:
+            pr = r.json()
+            return {
+                "unit_amount": pr.get("unit_amount"),
+                "currency": pr.get("currency"),
+                "interval": ((pr.get("recurring") or {}).get("interval")),
+            }
+    except Exception as e:
+        logger.warning(f"price fetch {pid} failed: {e}")
+    return None
+
+
 # ─── Status (no auth) ──────────────────────────────────────────────────
 
 @router.get("/status")
@@ -199,6 +286,7 @@ async def billing_status_endpoint():
         "has_webhook_secret": bool(os.environ.get("STRIPE_WEBHOOK_SECRET")),
         "tiers_configured":   {p: bool((os.environ.get(f"STRIPE_PRICE_ID_{p.upper()}") or "").strip())
                                for p in feature_gates.PLANS},
+        "founder":            await _founder_summary(),
         "enforce":            feature_gates.enforcement_on(),
     }
 
@@ -243,25 +331,36 @@ async def billing_plans():
     for plan in fg.PLANS:
         pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}") or "").strip()
         entry = {"plan": plan, "configured": bool(pid), "price_id": pid or None}
-        if pid and os.environ.get("STRIPE_SECRET_KEY"):
-            try:
-                async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-                    r = await c.get(f"{STRIPE_API_BASE}/prices/{pid}",
-                                    auth=(_stripe_key(), ""))
-                if r.status_code < 400:
-                    pr = r.json()
-                    entry["unit_amount"] = pr.get("unit_amount")
-                    entry["currency"] = pr.get("currency")
-                    entry["interval"] = ((pr.get("recurring") or {}).get("interval"))
-            except Exception as e:
-                logger.warning(f"price fetch {pid} failed: {e}")
+        display = await _price_display(pid)
+        if display:
+            entry.update(display)
+        # Annual variant (2 months free) — display data only; checkout
+        # takes plan='<tier>_annual'.
+        annual_pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}_ANNUAL") or "").strip()
+        if annual_pid:
+            entry["annual_price_id"] = annual_pid
+            annual_display = await _price_display(annual_pid)
+            if annual_display:
+                entry["annual_unit_amount"] = annual_display.get("unit_amount")
         out.append(entry)
+
+    # Founding-member offer: Professional at the locked launch rate,
+    # first FOUNDER_SEAT_LIMIT seats. Seat counts are real.
+    founder = await _founder_summary()
+    if founder.get("configured"):
+        display = await _price_display(founder.get("price_id") or "")
+        if display:
+            founder.update(display)
+
     features_by_plan = {p: [f for f, mp in fg.FEATURE_MIN_PLAN.items()
                             if fg._PLAN_RANK[p] >= fg._PLAN_RANK[mp]]
                         for p in fg.PLANS}
-    return {"ok": True, "plans": out, "features_by_plan": features_by_plan,
+    any_configured = any(e["configured"] for e in out)
+    return {"ok": True, "plans": out, "founder": founder,
+            "features_by_plan": features_by_plan,
             "enforce": fg.enforcement_on(),
-            "note": "All features are free for every practitioner until pricing is locked."}
+            "note": (None if any_configured else
+                     "All features are free for every practitioner until pricing is locked.")}
 
 
 @router.get("/entitlements")
@@ -287,12 +386,18 @@ class CheckoutBody(BaseModel):
 
 
 def _price_for_plan(plan):
-    """Resolve a tier name -> Stripe price id from env. Falls back to the
-    legacy single-plan default."""
+    """Resolve a plan key -> Stripe price id from env. Accepts the tier
+    names plus the variant keys in feature_gates.PRICE_ENV_TO_PLAN
+    ('founder', 'professional_annual', …) — anything else falls through
+    to the legacy single-plan default. The allow-list keeps arbitrary
+    strings from probing env vars."""
+    import feature_gates
     if plan:
-        pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}") or "").strip()
-        if pid:
-            return pid
+        key = (plan or "").strip().upper()
+        if key in feature_gates.PRICE_ENV_TO_PLAN:
+            pid = (os.environ.get(f"STRIPE_PRICE_ID_{key}") or "").strip()
+            if pid:
+                return pid
     return (os.environ.get("STRIPE_PRICE_ID_DEFAULT") or "").strip()
 
 
@@ -304,6 +409,19 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     if not price_id:
         raise HTTPException(409, "Pricing is not configured yet (no Stripe price ids set). "
                                  "Everything stays free until pricing is locked.")
+
+    # Founding-member cap: once the seats are gone, they're gone. Checked
+    # against real subscriptions at session-creation time. (A race between
+    # two simultaneous checkouts can momentarily oversell by one — accept
+    # it; the founding member you'd have to claw back costs more in trust
+    # than the seat.)
+    plan_key = (body.plan or "").strip().lower()
+    if plan_key.startswith("founder") or price_id in _founder_price_ids():
+        limit = _founder_seat_limit()
+        taken = await _founder_seats_taken()
+        if taken >= limit:
+            raise HTTPException(409, f"All {limit} founding seats are taken — "
+                                     "the standard Professional plan is open.")
 
     biz = await _load_business(body.business_id)
     _require_owner_of(user, biz)
