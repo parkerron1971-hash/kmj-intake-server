@@ -224,15 +224,16 @@ async def _gather_midday_data(client, biz_id: str) -> Dict:
 
 
 async def _gather_evening_data(client, biz_id: str) -> Dict:
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=EVENING_LOOKBACK_HOURS)).isoformat()
-    tomorrow_end = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+    # Z form — '+00:00' reads as a space in PostgREST query strings.
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=EVENING_LOOKBACK_HOURS)).isoformat().replace("+00:00", "Z")
+    tomorrow_end = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat().replace("+00:00", "Z")
 
     approved, completed, new_contacts, pending, upcoming = await asyncio.gather(
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.approved&reviewed_at=gte.{cutoff}&select=id,agent,subject&limit=20"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.completed&scheduled_for=gte.{cutoff}&select=id,title,contacts(name)&limit=10"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&created_at=gte.{cutoff}&select=id,name,status&limit=10"),
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority&limit=20"),
-        _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled&scheduled_for=gte.{datetime.now(timezone.utc).isoformat()}&scheduled_for=lte.{tomorrow_end}&order=scheduled_for.asc&select=id,title,scheduled_for,contacts(name)&limit=10"),
+        _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled&scheduled_for=gte.{datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}&scheduled_for=lte.{tomorrow_end}&order=scheduled_for.asc&select=id,title,scheduled_for,contacts(name)&limit=10"),
     )
     return {
         "approved_today": approved or [],
@@ -459,7 +460,7 @@ async def _check_urgent(client, biz_id: str) -> Dict:
 
     now = datetime.now(timezone.utc)
     recent_cutoff = (now - timedelta(minutes=URGENT_LOOKBACK_MINUTES)).isoformat()
-    soon_cutoff = (now + timedelta(minutes=SESSION_IMMINENT_MINUTES)).isoformat()
+    soon_cutoff = (now + timedelta(minutes=SESSION_IMMINENT_MINUTES)).isoformat().replace("+00:00", "Z")
     created: List[Dict] = []
 
     # 1. Hot intake leads (form_submit events with high lead_score)
@@ -488,7 +489,7 @@ async def _check_urgent(client, biz_id: str) -> Dict:
     # 2. Imminent sessions (start within 15 minutes, not yet alerted)
     imminent = await _sb(client, "GET",
         f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
-        f"&scheduled_for=gte.{now.isoformat()}&scheduled_for=lte.{soon_cutoff}"
+        f"&scheduled_for=gte.{now.isoformat().replace('+00:00', 'Z')}&scheduled_for=lte.{soon_cutoff}"
         f"&select=id,title,scheduled_for,contact_id,contacts(name)&limit=5") or []
     for s in imminent:
         dedup = f"session_imminent:{s['id']}"

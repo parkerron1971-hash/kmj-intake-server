@@ -275,7 +275,8 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
     custom_thresholds = settings.get("nurture_thresholds", {})
     threshold_days = custom_thresholds.get("inactivity_days") or DEFAULT_THRESHOLDS.get(biz_type, 14)
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=threshold_days)).isoformat()
+    # Z form — '+00:00' reads as a space in PostgREST query strings.
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=threshold_days)).isoformat().replace("+00:00", "Z")
 
     # Debug: fetch ALL contacts for this business (unfiltered) so response shows raw state
     all_contacts = await _sb(client, "GET",
@@ -298,7 +299,7 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
         # Check if we already reached out recently
         recent_outreach = await _sb(client, "GET",
             f"/agent_queue?contact_id=eq.{cid}&agent=eq.nurture"
-            f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(days=RECENT_OUTREACH_COOLDOWN_DAYS)).isoformat()}"
+            f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(days=RECENT_OUTREACH_COOLDOWN_DAYS)).isoformat().replace('+00:00', 'Z')}"
             f"&select=id&limit=1"
         )
         if recent_outreach and len(recent_outreach) > 0:

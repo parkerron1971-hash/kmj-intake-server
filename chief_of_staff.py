@@ -752,7 +752,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&select=id,type,title,body,priority,suggested_action,created_at"),
         _sb(client, "GET",
             f"/agent_queue?business_id=eq.{biz_id}"
-            f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()}"
+            f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat().replace('+00:00', 'Z')}"
             f"&order=created_at.desc&limit=30"
             f"&select=id,agent,action_type,subject,status,priority,contact_id,body,created_at"),
         _sb(client, "GET",
@@ -3904,7 +3904,7 @@ async def _evaluate_escalations(client, biz: Dict[str, Any]) -> int:
         sessions = await _sb(
             client, "GET",
             f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
-            f"&scheduled_for=gte.{tomorrow_start.isoformat()}&scheduled_for=lt.{tomorrow_end.isoformat()}"
+            f"&scheduled_for=gte.{tomorrow_start.isoformat().replace('+00:00', 'Z')}&scheduled_for=lt.{tomorrow_end.isoformat().replace('+00:00', 'Z')}"
             f"&select=id,title,scheduled_for,prep_brief,contact_id,contacts(name)&limit=10",
         ) or []
     except Exception:
@@ -11881,7 +11881,7 @@ async def _get_draft_context(client: httpx.AsyncClient, biz_id: str,
         upcoming = await _sb(
             client, "GET",
             f"/sessions?contact_id=eq.{contact_id}&status=eq.scheduled"
-            f"&scheduled_for=gte.{datetime.now(timezone.utc).isoformat()}"
+            f"&scheduled_for=gte.{datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}"
             f"&order=scheduled_for.asc&limit=1&select=scheduled_for,session_type",
         ) or []
         if upcoming:

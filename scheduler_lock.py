@@ -64,8 +64,13 @@ def try_acquire() -> bool:
         _is_leader = True
         return True
     now = _now()
-    expires = (now + timedelta(seconds=LEASE_TTL_SEC)).isoformat()
-    now_iso = now.isoformat()
+    # PostgREST QUERY STRINGS: isoformat()'s '+00:00' reads as a space
+    # in a URL and kills the filter — the claim PATCH always errored, so
+    # after any redeploy NO instance could re-acquire the lease and every
+    # gated job silently stopped (2026-07-21 platform bug class). Always
+    # the Z form in query paths.
+    expires = (now + timedelta(seconds=LEASE_TTL_SEC)).isoformat().replace("+00:00", "Z")
+    now_iso = now.isoformat().replace("+00:00", "Z")
     try:
         # Claim only if expired OR already held by me. PostgREST 'or='
         # filter; the UPDATE is row-locked so the race resolves to one
