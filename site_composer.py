@@ -2403,8 +2403,30 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                 # DEFERS to the bounded quality regen (it owns the final
                 # verdict); everywhere else the raise fires exactly as
                 # before. The regen pass itself raises on a repeat fail.
-                if _vg.gate_enforced() and (not _regen_allowed
-                                            or _regen_attempted):
+                #
+                # THE RATCHET (2026-07-21, after two paid-for-nothing
+                # rejections): the gate now blocks only REGRESSIONS. A
+                # below-bar build still ships when it beats the verdict
+                # of the site that's currently live (or when the live
+                # site has no verdict to defend) — practitioners always
+                # get their money's worth of progress; the gate's job is
+                # "never downgrade", not "perfection or nothing".
+                _live_verdict = (((site or {}).get("site_config") or {})
+                                 .get("vision_verdict")
+                                 if isinstance(((site or {}).get("site_config")
+                                                or {}), dict) else None)
+                _is_regression = (
+                    _live_verdict is not None
+                    and _vg.verdict_composite(_verdict)
+                    <= _vg.verdict_composite(_live_verdict))
+                if not _is_regression:
+                    logger.info(
+                        f"[ship-gate] below-bar build ships by ratchet for "
+                        f"{business_id}: new composite "
+                        f"{_vg.verdict_composite(_verdict)} vs live "
+                        f"{_vg.verdict_composite(_live_verdict)}")
+                if _vg.gate_enforced() and _is_regression \
+                        and (not _regen_allowed or _regen_attempted):
                     # Verdict visibility (2026-07-21, the silent-rejection
                     # gap): the FIRST enforced rebuild blocked correctly
                     # but the editor showed NOTHING — the button appeared
