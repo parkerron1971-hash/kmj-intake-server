@@ -756,8 +756,16 @@ class TestSubstanceInvariants(unittest.TestCase):
         self.assertIn("WORDS-1", ids)
         self.assertIn("IMAGERY-1", ids)
         self.assertIn("MOTION-CEILING-1", ids)
+        # Arc C2 (2026-07-21): ENFORCE is the default now; observe is the
+        # explicit relax valve.
         for f in findings:
-            self.assertEqual(f["severity"], "ADVISORY")
+            self.assertEqual(f["severity"], "HIGH")
+        with mock.patch.dict(os.environ, {"DESIGN_INVARIANTS": "observe"}):
+            relaxed = di.check_design_invariants(
+                thin, "@keyframes a { to {opacity:1;} }" * 9,
+                {"site_prefs": {}, "gallery": [{"url": "x"}]})
+            for f in relaxed:
+                self.assertEqual(f["severity"], "ADVISORY")
 
 
 # ─── Mono-accent guard (§10.1) ───────────────────────────────────────

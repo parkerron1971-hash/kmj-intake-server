@@ -36,8 +36,13 @@ _HEX_RE = re.compile(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b")
 
 
 def _severity() -> str:
-    return ("HIGH" if (os.environ.get("DESIGN_INVARIANTS") or "").strip().lower() == "enforce"
-            else "ADVISORY")
+    """Arc C2 (2026-07-21): ENFORCE is now the default — Arc A sealed the
+    leak class and Arc B made execution obey direction, so invariant
+    violations are defects, not learning noise. DESIGN_INVARIANTS=observe
+    is the explicit relax valve."""
+    return ("ADVISORY" if (os.environ.get("DESIGN_INVARIANTS") or "").strip().lower()
+            in ("observe", "advisory", "off")
+            else "HIGH")
 
 
 def _finding(rule_id: str, description: str, evidence: str, fix_hint: str) -> Dict[str, Any]:

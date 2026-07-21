@@ -51,7 +51,14 @@ def _enabled() -> bool:
 
 
 def gate_enforced() -> bool:
-    return (os.environ.get("SHIP_GATE") or "").strip().lower() == "enforce"
+    """Arc C2 (2026-07-21): the ship gate ENFORCES by default — a failing
+    vision verdict blocks the build and the bounded quality regen retries
+    with the judge's notes. SHIP_GATE=observe is the explicit relax valve.
+    (When the grader can't run at all — no playwright, judge outage — it
+    returns None upstream and the gate never fires: enforcement only
+    applies to a verdict actually rendered.)"""
+    return (os.environ.get("SHIP_GATE") or "").strip().lower() not in (
+        "observe", "off", "0", "false")
 
 
 def _meter(business_id: str, model: str, input_tokens: int,
