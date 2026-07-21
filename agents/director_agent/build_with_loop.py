@@ -706,7 +706,15 @@ def run_build_loop(
                 try:
                     import vision_grader
                     from design_register import get_invention_count
-                    _verdict = vision_grader.grade(final_html, business_id)
+                    # Arc D: the legacy loop grades against the default
+                    # floor standard (no ctx here).
+                    try:
+                        from reference_standards import STANDARDS as _RS
+                        _ref_std = _RS.get("default")
+                    except Exception:
+                        _ref_std = None
+                    _verdict = vision_grader.grade(final_html, business_id,
+                                                   standard=_ref_std)
                     if _verdict is not None:
                         cfg["vision_verdict"] = _verdict
                         if not _verdict.get("passes_gate"):

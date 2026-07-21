@@ -2369,7 +2369,14 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     try:
         import vision_grader as _vg
         from design_register import get_invention_count as _gic
-        _verdict = _vg.grade(final_html, business_id)
+        # Arc D (2026-07-21): the judge grades against the direction's
+        # authored reference standard, never in a vacuum.
+        try:
+            from reference_standards import standard_for as _std_for
+            _ref_standard = _std_for(ctx)
+        except Exception:
+            _ref_standard = None
+        _verdict = _vg.grade(final_html, business_id, standard=_ref_standard)
         if _verdict is None:
             # Acceptance-run finding: leaving the PREVIOUS build's verdict
             # in site_config misattributes it to this compose (the forced-
