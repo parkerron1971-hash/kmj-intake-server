@@ -72,9 +72,9 @@ def _max_tokens() -> int:
 
 def _floor_words() -> int:
     try:
-        return max(0, int(os.environ.get("CANVAS_FLOOR_WORDS") or 450))
+        return max(0, int(os.environ.get("CANVAS_FLOOR_WORDS") or 650))
     except ValueError:
-        return 450
+        return 650
 
 
 def _keyframe_cap() -> int:
@@ -324,12 +324,12 @@ WHAT GREAT LOOKS LIKE (the same craft bar as the atelier):
 - A full-bleed color-blocked band on the authority ground as punctuation between chapters — braver than any gradient.
 - Micro-caps (9-11px, 0.18-0.34em tracking) carrying every eyebrow, label, price and button — the whisper that makes the display monumental.
 - Designed silence between chapters; sub-perceptual ornaments (0.04-0.08 opacity) the eye discovers on the second look.
-- ONE signature interaction, owned and polished — a values marquee, filter tabs that actually filter, a modal worth opening.
+- ONE signature interaction, owned and polished (a values marquee, a statement moment) — functional furniture (filter tabs that actually filter, a modal worth opening, an accordion) may ride along inside the JS budget, but never upstages the signature.
 
 WHAT MEDIOCRE LOOKS LIKE (never do these):
 - Centered "Welcome to [Business]" + generic value prop + "Get Started".
 - Copy that could belong to any business in the category; caption-only sections; filler paragraphs.
-- Motion spent on entrances instead of the ONE signature moment.
+- Motion spent on entrances instead of the signature moment.
 
 You never invent facts, prices, testimonials, stats or credentials. You render ONLY the data you are given, in the concept's voice — the data sections are pre-rendered truth, and the fact-checker traces every number on the page back to the business data."""
 
@@ -364,7 +364,7 @@ def _canvas_contract(span: List[Dict[str, Any]], is_final: bool,
 9. At least one @media (max-width: 760px) block that keeps every section intact on a phone.
 10. Any animation respects @media (prefers-reduced-motion: reduce). Keyframes are precious: spend at most {kf_budget} new one(s) — the page cap is 8 total, shell included.
 11. SUBSTANCE FLOOR: a hero headline is ≤ 9 words with a REAL subhead; an about section carries ≥ 60 words; no caption-only sections. Real paragraphs, real voice.
-12. INTERACTIONS: at most ONE signature interaction (marquee, filter tabs, modal, accordion).{js_request}
+12. INTERACTIONS: ONE signature interaction, owned and polished; functional furniture (filter tabs, modal, accordion) may ride along inside the page-JS budget.{js_request}
 13. Size: HTML ≤ 18KB, CSS ≤ 14KB.
 
 OUTPUT FORMAT — exactly this, nothing else:

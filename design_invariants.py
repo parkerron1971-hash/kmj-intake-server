@@ -218,9 +218,9 @@ def _visible_word_count(html: str) -> int:
 
 def _floor_words() -> int:
     try:
-        return max(0, int(os.environ.get("CANVAS_FLOOR_WORDS") or 450))
+        return max(0, int(os.environ.get("CANVAS_FLOOR_WORDS") or 650))
     except ValueError:
-        return 450
+        return 650
 
 
 def _keyframe_cap() -> int:
@@ -232,7 +232,7 @@ def _keyframe_cap() -> int:
 
 def check_words(html: str) -> Optional[Dict[str, Any]]:
     """WORDS-1 — visible words on the final document ≥ the floor
-    (CANVAS_FLOOR_WORDS, default 450). The reference carried 867; our
+    (CANVAS_FLOOR_WORDS, default 650). The reference carried 867; our
     module builds averaged 292-352."""
     n = _visible_word_count(html)
     floor = _floor_words()
