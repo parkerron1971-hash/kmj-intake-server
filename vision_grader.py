@@ -129,11 +129,15 @@ def _rubric(standard: Optional[str]) -> str:
     score top marks."""
     if not (standard or "").strip():
         return RUBRIC
+    # Ratchet calibration (2026-07-21): the original clause hard-capped
+    # scores ("cannot exceed 6") which clustered every real build into
+    # rejection — a practitioner paid for a rebuild and got nothing,
+    # twice. The standard ANCHORS judgment now; it never dictates caps.
     return (RUBRIC
-            + "\n\nTHE STANDARD — grade against this bar, not in a vacuum. "
-              "If this page sat beside work meeting the bar below and "
-              "looked amateur, FIRST-VIEWPORT IMPACT cannot exceed 6 and "
-              "TEMPLATE SMELL cannot be below 4:\n" + standard.strip())
+            + "\n\nTHE STANDARD — the craft bar for this page's direction. "
+              "Grade against it, not in a vacuum; score honestly on each "
+              "axis and let the numbers land where they land:\n"
+            + standard.strip())
 
 
 def _grade_anthropic(shots: List[bytes], business_id: str = "",
@@ -222,6 +226,21 @@ def verdict_passes(v: Dict[str, Any]) -> bool:
     return (v.get("first_viewport_impact", 0) >= 7
             and v.get("template_smell", 10) < 4
             and v.get("broken") != "y")
+
+
+def verdict_composite(v: Optional[Dict[str, Any]]) -> int:
+    """One comparable quality number (higher = better): the four craft
+    axes minus smell. Used by the never-downgrade ratchet."""
+    if not isinstance(v, dict):
+        return -999
+    try:
+        return (int(v.get("first_viewport_impact", 0))
+                + int(v.get("balance", 0))
+                + int(v.get("motif_visibility", 0))
+                + int(v.get("rhythm", 0))
+                - int(v.get("template_smell", 10)))
+    except (TypeError, ValueError):
+        return -999
 
 
 def grade(html: str, business_id: str = "",
