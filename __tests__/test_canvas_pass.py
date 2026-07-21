@@ -24,14 +24,14 @@ import canvas_brief
 
 PARA_HERO = (" ".join(["The morning light crosses the bench while "
                        "joints are cut by hand and every surface is "
-                       "finished until it holds a quiet sheen"] * 7))
+                       "finished until it holds a quiet sheen"] * 9))
 PARA_ABOUT = (" ".join(["A two person workshop grew out of a garage "
                         "and still measures twice before any cut "
                         "because furniture should outlive its maker "
-                        "by several calm generations"] * 7))
+                        "by several calm generations"] * 9))
 PARA_CTA = (" ".join(["Bring a room a piece that earns its place and "
                       "watch it gather the small marks of a life well "
-                      "lived around it over the years"] * 7))
+                      "lived around it over the years"] * 9))
 
 
 def _ctx(gallery=False, tone_words=None, motion="standard"):
@@ -694,7 +694,7 @@ class TestFallbacks(unittest.TestCase):
         self.assertEqual(report["planned"]["authored"], ["hero", "about", "cta"])
         self.assertEqual(report["planned"]["blocks"], ["offerings", "contact"])
         self.assertTrue(all(c["ok"] for c in report["chunks"]))
-        self.assertGreaterEqual(report["words"], 450)
+        self.assertGreaterEqual(report["words"], 650)
         self.assertLessEqual(report["keyframes"], 8)
         self.assertTrue(report["script"])
 
@@ -714,11 +714,11 @@ class TestSubstanceInvariants(unittest.TestCase):
         thin = "<html><body><p>" + " ".join(["word"] * 100) + "</p></body></html>"
         f = di.check_words(thin)
         self.assertEqual(f["rule_id"], "WORDS-1")
-        fat = "<html><body><p>" + " ".join(["word"] * 500) + "</p></body></html>"
+        fat = "<html><body><p>" + " ".join(["word"] * 700) + "</p></body></html>"
         self.assertIsNone(di.check_words(fat))
         self.assertIsNone(di.check_words(
             "<html><body><script>" + " ".join(["word"] * 999) +
-            "</script><p>" + " ".join(["word"] * 500) + "</p></body></html>"))
+            "</script><p>" + " ".join(["word"] * 700) + "</p></body></html>"))
         with mock.patch.dict(os.environ, {"CANVAS_FLOOR_WORDS": "10"}):
             self.assertIsNone(di.check_words(thin))
 

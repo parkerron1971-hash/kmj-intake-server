@@ -206,7 +206,7 @@ Runs on the assembled page before slot population. Returns `(ok, problems)`:
 2. **Block integrity**: every planned `<!--SX_BLOCK-->` placed exactly once;
    block markup byte-identical to the pre-render (no model edits).
 3. **Substance floor** (deterministic, from the audit's table): visible words
-   ≥ `CANVAS_FLOOR_WORDS` (default 450); ≥1 real `data-slot` image populated
+   ≥ `CANVAS_FLOOR_WORDS` (default 650); ≥1 real `data-slot` image populated
    when `media.gallery` is non-empty; keyframe count ≤ `CANVAS_KEYFRAME_CAP`
    (default 8 — the reference has 1; ours averaged 11–14).
 4. **Required anatomy**: section markers, DOM ids, override-target census,
@@ -280,7 +280,7 @@ that code is the reason this arc is weeks, not months.
 
 On the KMJ business (real data, real prefs), `SITE_CANVAS=on`:
 
-1. Floor metrics: visible words ≥ 450; sections ≥ 6; ≥ 2 real images (given
+1. Floor metrics: visible words ≥ 650; sections ≥ 6; ≥ 2 real images (given
    gallery photos exist); keyframes ≤ 8; ≥ 1 signature interaction (marquee,
    filter, or modal) when the DRO calls for it.
 2. Truth: fact-check 100% trace; block sections byte-identical to module
