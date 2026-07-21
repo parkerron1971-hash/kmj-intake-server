@@ -272,6 +272,11 @@ app.include_router(platform_console_router)
 # /billing/webhook (Stripe signature-verified), /billing/status (open).
 from stripe_billing import router as stripe_billing_router
 app.include_router(stripe_billing_router)
+# Campaigns Phase 1 (2026-07-21) — Chief-drafted marketing sequences
+# over the existing email/SMS rails. /campaigns/* (all JWT-authed,
+# ownership verified); the send sweep registers in startup() below.
+from campaigns_router import router as campaigns_api_router
+app.include_router(campaigns_api_router)
 # Hardening pass 1 — data export + account/business deletion (GDPR
 # portability + erasure). /account/export, DELETE /account/business/{id},
 # DELETE /account. All JWT-authed, ownership verified server-side.
@@ -773,6 +778,15 @@ async def startup():
                           "interval", minutes=1, id="chief_scheduled")
     except Exception as e:
         print(f"   [warn] chief scheduled-actions job not scheduled: {e}")
+    # Campaigns Phase 1 (2026-07-21) — execute due campaign touches
+    # through the shared email/SMS rails (suppression + consent + quiet
+    # hours inside). Kill switch: CAMPAIGNS=off.
+    try:
+        import campaigns_router as _campaigns
+        scheduler.add_job(g("campaigns_tick", _campaigns.campaigns_tick),
+                          "interval", minutes=1, id="campaigns_tick")
+    except Exception as e:
+        print(f"   [warn] campaigns sweep not scheduled: {e}")
     # Chief Layers arc — trusted-autonomy sweep: executes pending
     # proposals ONLY in categories the practitioner explicitly granted
     # after graduation (Trust Track). Kill switch: TRUSTED_AUTONOMY=off.
