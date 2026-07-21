@@ -2385,6 +2385,9 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
             cfg.pop("vision_verdict", None)
         else:
             cfg["vision_verdict"] = _verdict
+            # A shipped build (pass, or observe-mode fail) supersedes any
+            # stored rejection banner.
+            cfg.pop("vision_rejection", None)
             if _prior_verdict:
                 # A2 — the bounded regen's FIRST-pass grade, persisted
                 # alongside the new one so both survive (before/after).
@@ -2402,6 +2405,31 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                 # before. The regen pass itself raises on a repeat fail.
                 if _vg.gate_enforced() and (not _regen_allowed
                                             or _regen_attempted):
+                    # Verdict visibility (2026-07-21, the silent-rejection
+                    # gap): the FIRST enforced rebuild blocked correctly
+                    # but the editor showed NOTHING — the button appeared
+                    # to do nothing. Before raising, best-effort persist
+                    # the rejection onto the EXISTING site_config (old
+                    # html untouched) so the frontend can show the
+                    # judge's scores + notes and a practitioner knows the
+                    # gate held the line, not that the build vanished.
+                    try:
+                        from datetime import datetime as _dt, timezone as _tz
+                        _rej_rows = sb_clients.sb_get_as_service(
+                            f"/business_sites?business_id=eq.{business_id}"
+                            "&select=id,site_config&limit=1") or []
+                        if _rej_rows:
+                            _rej_cfg = dict(_rej_rows[0].get("site_config") or {})
+                            _rej_cfg["vision_rejection"] = {
+                                "at": _dt.now(_tz.utc).isoformat(),
+                                "verdict": _verdict,
+                            }
+                            sb_clients.sb_patch_as_service(
+                                f"/business_sites?id=eq.{_rej_rows[0]['id']}",
+                                {"site_config": _rej_cfg})
+                    except Exception as _rej_e:
+                        logger.warning(f"[ship-gate] rejection persist "
+                                       f"failed: {_rej_e}")
                     raise RuntimeError("ship-gate: vision verdict failed and "
                                        "SHIP_GATE=enforce is set")
         _inv = _gic(business_id)
