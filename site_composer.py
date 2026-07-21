@@ -2798,6 +2798,27 @@ def _norm_copy_line(v: Any) -> str:
     return " ".join(str(v or "").split()).lower().strip(" .!?……\"'“”‘’")
 
 
+# Arc A (2026-07-21) — design-craft vocabulary that marks a line as the
+# designer describing the PAGE rather than the page speaking to a
+# visitor. Conservative on purpose: a false positive costs one statement
+# bar (a thread renders instead); a false negative prints art direction
+# on a public site.
+_DESIGN_NOTE_RE = re.compile(
+    r"\b(diagonal|gradient|palette|typograph\w*|serif|font\w*|layout|"
+    r"motif|white\s?space|hue|saturat\w*|viewport|scroll[\s-]?trigger\w*|"
+    r"animation|keyframe|hero\s+(?:section|band|image)|section\s+(?:opens|title)|"
+    r"letter[\s-]?spac\w*|small[\s-]?caps|display[\s-]?(?:face|type)|"
+    r"accent\s+(?:color|face|word)|color[\s-]?mix|wordmark|eyebrow|"
+    r"numeral|margin|padding|css|token)\b",
+    re.IGNORECASE)
+
+
+def _reads_as_design_note(line: str) -> bool:
+    """True when a candidate statement line reads as internal design
+    language (art direction / craft vocabulary) instead of visitor copy."""
+    return bool(_DESIGN_NOTE_RE.search(line))
+
+
 def _spec_copy_corpus(spec: List[Dict[str, Any]]) -> List[str]:
     """Every normalized copy string the page's SECTIONS carry (all spec
     content fields, interstitials excluded) — the rendered-copy proxy
@@ -2842,14 +2863,14 @@ def _ceremony_statement_line(spec: List[Dict[str, Any]],
     had_candidates = False
 
     candidates: List[str] = []
-    d = (dro or {}).get("decisions") or {}
-    for raw in (
-        ((d.get("hero_concept") or {}).get("concept_statement")),
-        ((d.get("first_impression") or {}).get("remember")),
-        ((d.get("tension") or {}).get("expression")),
-    ):
-        if isinstance(raw, str) and raw.strip():
-            candidates.append(raw)
+    # Arc A (2026-07-21, THE LEAK): DRO-internal fields (concept_statement /
+    # first_impression.remember / tension.expression) are the DESIGNER
+    # talking — art direction, not visitor copy. The live defect rendered
+    # "A diagonal line of light that starts as a scattered problem…" as a
+    # full-width pull-quote on the public page. Internal design language
+    # never ships: the statement bar draws ONLY from spec copy fields
+    # (owner-facing copy by construction), and every candidate still
+    # passes the design-note guard as belt-and-suspenders.
     for mod, field in _STATEMENT_COPY_SOURCES:
         candidates.append(str((by_module.get(mod) or {}).get(field) or ""))
 
@@ -2858,6 +2879,8 @@ def _ceremony_statement_line(spec: List[Dict[str, Any]],
         if not (12 <= len(v) <= 200):
             continue
         had_candidates = True
+        if _reads_as_design_note(v):
+            continue  # craft vocabulary → this is a designer's note
         n = _norm_copy_line(v)
         if any(n in c or c in n for c in corpus):
             continue  # the page already says this line — never repeat it
