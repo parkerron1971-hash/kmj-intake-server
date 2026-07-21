@@ -912,7 +912,14 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
         classes.append("sx-scarce-accent")
     elif accent_strategy == "tonal_monochrome":
         classes.append("sx-scarce-accent")
-        classes.append("sx-mono-accent")
+        # Canvas Pass §10.1 — MONO-ACCENT GUARD: the mono collapse never
+        # neutralizes --sx-secondary when the brand kit carries a genuinely
+        # CHROMATIC secondary (brand_dna's P2 activation rule: sat > 0.18
+        # AND hue gap > 30°, surfaced as palette.secondary_active). Owner
+        # brand beats stance — same principle as the B4 anti-convergence
+        # exemption.
+        if not ((dna.get("palette") or {}).get("secondary_active")):
+            classes.append("sx-mono-accent")
     # B1: whitespace.philosophy=editorial_rhythm → alternating pad cadence
     # (CSS in base_css; the rhythm tier itself moved in apply_dro_style).
     ws_phil = str(((design or {}).get("whitespace") or {}).get("philosophy") or "")
