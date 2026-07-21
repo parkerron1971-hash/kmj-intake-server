@@ -25,6 +25,18 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     rows = [r for r in (ctx.get("faq") or [])
             if isinstance(r, dict) and str(r.get("q") or "").strip()
             and str(r.get("a") or "").strip()]
+    # Arc A (2026-07-21, live defect): the same question stored twice in
+    # business_picture rendered twice on the page. Dedupe by normalized
+    # question — first answer wins.
+    seen_q: set = set()
+    deduped = []
+    for r in rows:
+        nq = " ".join(str(r["q"]).split()).lower().strip(" ?.!")
+        if nq in seen_q:
+            continue
+        seen_q.add(nq)
+        deduped.append(r)
+    rows = deduped
     if not rows:
         return "", ""
 

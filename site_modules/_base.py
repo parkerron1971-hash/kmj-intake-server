@@ -668,6 +668,9 @@ p {{ margin: 0 0 1.15em; max-width: 62ch; }}
 .sxm-small {{ font-size: var(--sx-small, .82rem); }}
 a {{ color: var(--sx-accent); text-decoration: none; }}
 .sxm-section {{ padding: var(--sx-section-pad) var(--sx-gutter); }}
+/* Arc A (2026-07-21): anchor nav (#faq, #offerings…) must not bury the
+   section title under the sticky header. */
+.sxm-section, section[id] {{ scroll-margin-top: 92px; }}
 /* Site Arc 11b — dead-band fix: a section straight after a ceremony seam
    trims its top pad ~45% (the interstitial already carries the pause). */
 .sxm-section.sxm-after-seam {{ padding-top: calc(var(--sx-section-pad) * 0.55); }}

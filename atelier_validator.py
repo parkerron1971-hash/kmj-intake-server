@@ -496,6 +496,30 @@ def validate_fragment(html: str, css: str, *, uid: str, kind: str,
     if p.headings < 1:
         problems.append("no heading (h1-h3) in the section")
 
+    # 16 — DATA COMPLETENESS for offerings (Arc A 2026-07-21, the
+    # empty-waypoints defect): a live bespoke offerings section rendered
+    # 3 of 4 rows as bare names — descriptions existed in the data and
+    # were silently dropped, so the page read as unfinished. Substance is
+    # the contract: every offering whose data carries a description must
+    # show at least its opening words. (One-directional, like check 12 —
+    # the fragment may trim/restyle, never omit.)
+    if kind == "offerings":
+        visible = " ".join(" ".join(p.text_parts).lower().split())
+        for o in (data or {}).get("offerings") or []:
+            if not isinstance(o, dict):
+                continue
+            name = str(o.get("name") or "").strip()
+            desc = " ".join(str(o.get("description") or "").split())
+            if not desc:
+                continue
+            probe = " ".join(desc.lower().split()[:5])
+            if probe and probe not in visible:
+                problems.append(
+                    f'offering "{name}" has a real description in the data '
+                    "but the fragment omits it — every offering row must "
+                    "carry its description (verbatim or lightly trimmed), "
+                    "never a bare name")
+
     # 12 — DATA FIDELITY: every rendered digit-run must exist in the data.
     # Site Arc 9 DATA DIGNITY note: the rule is one-directional (rendered
     # digits ⊆ data), so the literal string "Free" standing in for a
