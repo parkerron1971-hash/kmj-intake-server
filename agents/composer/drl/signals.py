@@ -109,6 +109,53 @@ DISTINCTIVENESS_COLLISION_THRESHOLD: int = 6
 DISTINCTIVENESS_COHORT_N: int = 10
 
 
+def signals_from_prefs(prefs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """THE INTERVIEW BRIDGE (2026-07-22). detect_signals reads Chief's
+    conversational transcript — but the richest design testimony is the
+    style interview, which never reached the taxonomy. Result: every
+    interview-driven build ran the brain starved (applied_thin) no
+    matter how much the owner said. These are deterministic, source=
+    practitioner_set, evidence = the owner's own words — the strongest
+    class of signal, not an inference."""
+    out: List[Dict[str, Any]] = []
+    if not isinstance(prefs, dict):
+        return out
+
+    def add(sid: str, value: Any, quote: str) -> None:
+        if quote:
+            out.append({"signal_id": sid, "value": value, "confidence": 0.85,
+                        "evidence": [str(quote)[:200]],
+                        "source": "practitioner_set"})
+
+    b = str(prefs.get("boldness") or "")
+    if b:
+        add("energy_signature",
+            {"quiet": "deliberate", "bold": "high_conviction",
+             "loud": "high_conviction"}.get(b, "warm_steady"),
+            f"boldness: {b}")
+    creative = prefs.get("creative") if isinstance(prefs.get("creative"), dict) else {}
+    if str(creative.get("metaphor") or "").strip():
+        add("communication_temperature", 0.6,
+            f"their metaphor: {creative.get('metaphor')}")
+        out[-1]["modifier_flags"] = ["analogical"]
+    if str(prefs.get("avoid") or "").strip():
+        add("vertical_conventions", "break_deliberately",
+            f"never like: {prefs.get('avoid')}")
+    feel = prefs.get("feel_words") or []
+    direction = str(((prefs.get("colors") or {}) if isinstance(prefs.get("colors"), dict) else {}).get("direction") or "")
+    if feel or direction:
+        add("first_five_seconds",
+            " ".join([*(str(w) for w in feel[:4]), direction]).strip(),
+            f"they want visitors to feel: {' '.join(str(w) for w in feel[:4])} {direction}")
+    if prefs.get("wants_gallery") is True:
+        add("offering_texture", "discrete_artifacts",
+            "they asked for a gallery of real work")
+    if str(prefs.get("audience") or "").strip():
+        add("audience_emotional_state", "curious",
+            f"who it's for, in their words: {prefs.get('audience')}")
+    return out
+
+
 def signal_ids() -> List[str]:
     """The canonical signal_id enum (matches schema.json)."""
     return list(SIGNALS.keys())

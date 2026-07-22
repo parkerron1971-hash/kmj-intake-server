@@ -1102,6 +1102,22 @@ def produce_dro(business_id: str, transcript: str,
         sig_fail: Dict[str, str] = {}
         auth_fail: Dict[str, str] = {}
         signals = detect_signals(business_id, transcript, failure_out=sig_fail)
+        # THE INTERVIEW BRIDGE (2026-07-22): the owner's interview answers
+        # become practitioner_set signals — the transcript detector alone
+        # left interview-driven builds starved to applied_thin forever.
+        # Detected signals keep priority per id; the bridge fills gaps.
+        try:
+            _prefs = ((owner_direction or {}).get("site_prefs")
+                      if isinstance(owner_direction, dict) else None) or {}
+            _have = {s.get("signal_id") for s in signals}
+            _bridged = [s for s in sig.signals_from_prefs(_prefs)
+                        if s["signal_id"] not in _have]
+            if _bridged:
+                signals = signals + _bridged
+                logger.info(f"[drl] interview bridge added "
+                            f"{len(_bridged)} practitioner_set signals")
+        except Exception as _be:
+            logger.warning(f"[drl] interview bridge failed open: {_be}")
         consumable_n = sum(
             1 for s in signals
             if isinstance(s.get("confidence"), (int, float))
