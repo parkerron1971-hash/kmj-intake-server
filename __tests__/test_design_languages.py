@@ -46,6 +46,21 @@ def test_rubric_neutral_when_nothing_argues():
     assert dl.rubric_select({"business": {"type": "plumbing"}})[0] is None
 
 
+def test_rubric_monograph_for_quiet_portfolio_studio():
+    ctx = {"site_prefs": {"boldness": "quiet"},
+           "gallery": [{}] * 5,
+           "business": {"type": "design studio"}}
+    key, because = dl.rubric_select(ctx)
+    assert key == "monograph" and "portfolio" in because
+
+
+def test_loudness_beats_portfolio_type():
+    ctx = {"site_prefs": {"boldness": "loud"},
+           "gallery": [{}] * 5,
+           "business": {"type": "design studio"}}
+    assert dl.rubric_select(ctx)[0] == "mural"
+
+
 def test_resolve_prefers_dro_over_rubric():
     dro = {"decisions": {"language": {"choice": "ledger", "because": "the evidence"}}}
     ctx = {"site_prefs": {"boldness": "bold"}, "gallery": [{}] * 4,

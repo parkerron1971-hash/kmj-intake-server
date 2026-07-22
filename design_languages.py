@@ -119,6 +119,90 @@ LANGUAGES: Dict[str, Dict[str, Any]] = {
   box-shadow: inset 0 -0.18em 0 color-mix(in srgb, var(--sx-accent) 55%, transparent); }
 """,
     },
+    "monograph": {
+        "label": "Monograph",
+        "source": "distilled 2026-07-22 from a design-studio reference "
+                  "(monochrome frame, the work is the only color, ticker "
+                  "ribbon, annotation layer, curved seams)",
+        "believes": "The frame stays silent so the work can speak — one "
+                    "color on this page: yours.",
+        "sings": "portfolio-led businesses with colorful work (designers, "
+                 "photographers, beauty, fashion, events), strong personal "
+                 "brand + studio portraits, editorial or modern-minimal "
+                 "tastes, owners who answered calm or middle boldness",
+        "fails": "no portfolio imagery, businesses needing the site itself "
+                 "to supply warmth or color, loud tastes, text-heavy "
+                 "advisory content",
+        "brief": (
+            "MONOGRAPH LANGUAGE — execute these instincts: (1) MONOCHROME "
+            "FRAME: the page lives on a grayscale ladder (near-black, two "
+            "grays, white); the practitioner's WORK is the only color — "
+            "gallery and portfolio imagery full-bleed against the quiet "
+            "frame. The brand accent appears only as small marks (a star, "
+            "a link arrow), never as washes. (2) TICKER RIBBON: one "
+            "services marquee in giant caps with star separators as a "
+            "section divider. (3) FASHION-EDITORIAL HERO: portrait on a "
+            "seamless gray, thin wide headline, tracked-out kicker, "
+            "text-link CTA with a long arrow. (4) ANNOTATION LAYER: one "
+            "handwritten-style aside or note-card of personal facts — "
+            "humanity against the monochrome. (5) Monogram wallpaper: the "
+            "business initials repeated tone-on-tone on one dark band. "
+            "(6) CURVED SEAMS: at least one section edge arcs instead of "
+            "cutting straight."),
+        "pairing_hint": "modern minimal thin grotesque editorial",
+        "css": """
+/* ── MONOGRAPH floor — scoped, token-driven ───────────────────────── */
+/* The frame goes quiet: headings lighten, tracking opens. */
+.sx-lang-monograph .sxm-section h2 { font-weight: 500;
+  letter-spacing: 0.02em; }
+.sx-lang-monograph .sxm-eyebrow { letter-spacing: 0.42em;
+  color: color-mix(in srgb, var(--sx-text) 62%, transparent); }
+/* Interstitial seams become the ticker ribbon: giant caps, star
+   separators, a slow drift (stilled under reduced motion). */
+.sx-lang-monograph .sxm-interstitial { overflow: hidden;
+  border-block: 1px solid color-mix(in srgb, var(--sx-text) 14%, transparent);
+  background: var(--sx-bg); padding-block: clamp(18px, 3vh, 34px); }
+.sx-lang-monograph .sxm-interstitial p,
+.sx-lang-monograph .sxm-interstitial .sxm-ceremony-line {
+  font-family: var(--sx-font-heading); text-transform: uppercase;
+  font-size: clamp(1.6rem, 4.2vw, 3.2rem); letter-spacing: 0.04em;
+  white-space: nowrap; width: max-content; margin-inline: auto;
+  animation: sxlm-drift 26s ease-in-out infinite alternate; }
+.sx-lang-monograph .sxm-interstitial p::before,
+.sx-lang-monograph .sxm-interstitial .sxm-ceremony-line::before {
+  content: "\\2605\\2002"; color: var(--sx-accent); }
+.sx-lang-monograph .sxm-interstitial p::after,
+.sx-lang-monograph .sxm-interstitial .sxm-ceremony-line::after {
+  content: "\\2002\\2605"; color: var(--sx-accent); }
+@keyframes sxlm-drift { from { transform: translateX(4%); }
+  to { transform: translateX(-4%); } }
+@media (prefers-reduced-motion: reduce) {
+  .sx-lang-monograph .sxm-interstitial p,
+  .sx-lang-monograph .sxm-interstitial .sxm-ceremony-line {
+    animation: none; } }
+/* Gallery: the work carries the color — mats dissolve to a whisper so
+   nothing competes with the pieces. Boards go quiet-editorial. */
+.sx-lang-monograph .sxm-gal-fig:not(.sxm-gal-fig-over) {
+  background: transparent; border-color:
+    color-mix(in srgb, var(--sx-text) 10%, transparent); }
+.sx-lang-monograph .sxm-gal-board { background: var(--sx-bg);
+  border: 1px solid color-mix(in srgb, var(--sx-text) 16%, transparent); }
+.sx-lang-monograph .sxm-gal-board-line { font-style: normal;
+  font-weight: 500; letter-spacing: 0.01em; }
+.sx-lang-monograph .sxm-gal-board-num { color:
+    color-mix(in srgb, var(--sx-text) 12%, transparent); }
+.sx-lang-monograph .sxm-gal-board-rule { height: 1px;
+  background: color-mix(in srgb, var(--sx-text) 40%, transparent); }
+/* CTAs step back to quiet confidence: outline + arrow, no glow. */
+.sx-lang-monograph .sxm-cta { box-shadow: none; }
+.sx-lang-monograph .sxm-cta::after { content: "\\2002\\27F6"; }
+/* One curved seam: the contact section rises on an arc. */
+.sx-lang-monograph .sxm-contact { border-top-left-radius: 50% 4.5rem;
+  border-top-right-radius: 50% 4.5rem;
+  background: color-mix(in srgb, var(--sx-text) 4%, var(--sx-bg));
+  margin-top: -2rem; }
+""",
+    },
     "ledger": {
         "label": "Ledger",
         "source": "distilled 2026-07-22 from the Kimi noir-gold reference "
@@ -194,11 +278,24 @@ def rubric_select(ctx: Dict[str, Any]) -> Tuple[Optional[str], str]:
     boldness = str(prefs.get("boldness") or "")
     tp = str(prefs.get("type_personality") or "")
     btype = str((ctx.get("business") or {}).get("type") or "").lower()
-    if boldness in ("bold", "loud") or (photos >= 3 and any(
-            w in btype for w in ("creativ", "minist", "church", "coach",
-                                 "speak", "artist", "media"))):
-        return "mural", (f"rubric: boldness={boldness or 'n/a'}, "
+    # Loudness is decisive evidence; after that, WHAT the photos are of
+    # (a portfolio vs a person) separates monograph from mural.
+    if boldness in ("bold", "loud"):
+        return "mural", (f"rubric: boldness={boldness}, "
                          f"{photos} photos, type={btype[:24]!r}")
+    if photos >= 4 and any(
+            w in btype for w in ("design", "photo", "beauty", "fashion",
+                                 "salon", "event", "brand", "studio",
+                                 "makeup", "stylist")):
+        return "monograph", (f"rubric: {photos} portfolio photos, "
+                             f"type={btype[:24]!r}, boldness="
+                             f"{boldness or 'unset'} — the work carries "
+                             "the color")
+    if photos >= 3 and any(
+            w in btype for w in ("creativ", "minist", "church", "coach",
+                                 "speak", "artist", "media")):
+        return "mural", (f"rubric: {photos} photos, "
+                         f"person-forward type={btype[:24]!r}")
     if tp in ("editorial", "classic") or any(
             w in btype for w in ("law", "account", "financ", "consult",
                                  "advis", "insur")):
