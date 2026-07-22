@@ -8410,6 +8410,16 @@ async def handle_generate_payment_link(client, biz, action) -> Dict:
     base = os.environ.get("RAILWAY_INTERNAL_BASE") or os.environ.get(
         "RAILWAY_PUBLIC_BASE"
     ) or "http://127.0.0.1:8000"
+    # Same 401 class as send_sms (2026-07-22): /stripe/product-link
+    # requires a user JWT the internal client doesn't carry. chief_chat
+    # binds the practitioner's token to the sb_clients context — forward
+    # it. (Scheduler-context calls have no JWT and still fail loudly;
+    # payment links are an interactive verb in practice.)
+    _auth_jwt = None
+    try:
+        _auth_jwt = sb_clients.get_current_user_jwt()
+    except Exception:
+        pass
     try:
         resp = await client.post(
             f"{base.rstrip('/')}/stripe/product-link",
@@ -8418,6 +8428,7 @@ async def handle_generate_payment_link(client, biz, action) -> Dict:
                 "product_id": product_id,
                 "force_regenerate": force,
             },
+            headers=({"Authorization": f"Bearer {_auth_jwt}"} if _auth_jwt else {}),
             timeout=30.0,
         )
         if resp.status_code >= 400:
@@ -8802,30 +8813,19 @@ async def handle_send_sms(client, biz, action) -> Dict:
         who = contact_name or contact_id or "the contact"
         return _fail("send_sms", f"{who} has no phone number on file")
 
-    base = (
-        os.environ.get("RAILWAY_INTERNAL_BASE")
-        or os.environ.get("RAILWAY_PUBLIC_BASE")
-        or "http://127.0.0.1:8000"
-    ).rstrip("/")
+    # In-process send (2026-07-22): this used to POST to our own
+    # /sms/send, which requires a user JWT that neither the chat client
+    # nor the scheduler's bare client carries since the endpoint sweep —
+    # every Chief-initiated text died with a 401. Ownership was already
+    # verified upstream (chat verifies biz; scheduled rows were created
+    # by an authed session), so the core send runs directly.
     try:
-        resp = await client.post(
-            f"{base}/sms/send",
-            json={
-                "business_id": biz["id"],
-                "contact_id": contact_id or None,
-                "to": contact_phone,
-                "message": message,
-            },
-            timeout=30.0,
-        )
+        import sms_service
+        data = await sms_service.send_sms_core(
+            client, business_id=biz["id"], to=contact_phone,
+            message=message, contact_id=contact_id or None)
     except Exception as e:
-        return _fail("send_sms", f"sms send call failed: {e}")
-
-    if resp.status_code >= 400:
-        detail = resp.text[:300]
-        return _fail("send_sms", f"sms error: {detail}")
-
-    data = resp.json() if resp.text else {}
+        return _fail("send_sms", f"sms error: {str(e)[:300]}")
     return {
         "type": "send_sms",
         "result": "sent",

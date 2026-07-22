@@ -264,83 +264,107 @@ def _twilio_configured() -> bool:
     )
 
 
-@router.post("/sms/send")
-async def send_sms(req: SendSmsRequest, user: AuthedUser = Depends(require_user)):
-    """Send an SMS (Twilio Messaging Service first; Telnyx fallback)
-    and persist it as outbound."""
-    to_clean = normalize_phone(req.to)
+class SmsSendError(RuntimeError):
+    """A send failure with the practitioner-readable reason + the HTTP
+    status the endpoint wrapper should return."""
+
+    def __init__(self, message: str, status: int = 502):
+        super().__init__(message)
+        self.status = status
+
+
+async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
+                        to: str, message: str,
+                        contact_id: Optional[str] = None) -> Dict[str, Any]:
+    """The whole outbound send (validate → consent gate → contact
+    resolve → Twilio/Telnyx → store → event log), callable IN-PROCESS.
+
+    Extracted from the /sms/send endpoint (2026-07-22) because Chief's
+    send_sms handler and the scheduler used to POST to our own endpoint
+    — which requires a user JWT neither context carries since the
+    endpoint sweep, so every Chief-initiated text 401'd. Raises
+    SmsSendError with the reason; returns the endpoint's success body."""
+    to_clean = normalize_phone(to)
     if not to_clean:
-        return JSONResponse({"error": f"Invalid phone number: {req.to}"}, 400)
-    if not req.message.strip():
-        return JSONResponse({"error": "Message body required"}, 400)
+        raise SmsSendError(f"Invalid phone number: {to}", 400)
+    if not (message or "").strip():
+        raise SmsSendError("Message body required", 400)
 
     use_twilio = _twilio_configured()
     if not use_twilio and not os.environ.get("TELNYX_API_KEY"):
-        return JSONResponse(
-            {"error": "SMS not configured. Set the TWILIO_* vars (or TELNYX_API_KEY) in Railway."},
-            503,
-        )
+        raise SmsSendError(
+            "SMS not configured. Set the TWILIO_* vars (or TELNYX_API_KEY) in Railway.",
+            503)
 
-    async with httpx.AsyncClient() as client:
-        # Consent gate — never send to a number that opted out.
-        if await is_opted_out(client, to_clean):
-            return JSONResponse(
-                {"error": f"{to_clean} has opted out of texts (STOP). "
-                          f"They can text START to opt back in."},
-                422,
-            )
+    # Consent gate — never send to a number that opted out.
+    if await is_opted_out(client, to_clean):
+        raise SmsSendError(
+            f"{to_clean} has opted out of texts (STOP). "
+            f"They can text START to opt back in.", 422)
 
-        # Resolve contact by phone if caller didn't supply one.
-        contact_id = req.contact_id
-        if not contact_id and req.business_id:
-            match = await _find_contact_by_phone(client, req.business_id, to_clean)
-            if match:
-                contact_id = match.get("id")
+    # Resolve contact by phone if caller didn't supply one.
+    if not contact_id and business_id:
+        match = await _find_contact_by_phone(client, business_id, to_clean)
+        if match:
+            contact_id = match.get("id")
 
-        if use_twilio:
-            try:
-                from starlette.concurrency import run_in_threadpool
-                import twilio_sms
-                # Provider message id lands in the telnyx_id column —
-                # provider-agnostic in intent; the status callback
-                # (/webhooks/twilio/status) PATCHes on it.
-                telnyx_id = await run_in_threadpool(twilio_sms.send_sms, to_clean, req.message)
-            except Exception as e:
-                logger.warning(f"[SMS] twilio send failed: {e}")
-                return JSONResponse({"error": str(e)[:300]}, 502)
-        else:
-            try:
-                tx = await _send_via_telnyx(client, to_clean, req.message)
-            except RuntimeError as e:
-                logger.warning(f"[SMS] send failed: {e}")
-                return JSONResponse({"error": str(e)}, 502)
-            telnyx_id = (tx.get("data") or {}).get("id", "") if isinstance(tx, dict) else ""
+    if use_twilio:
+        try:
+            from starlette.concurrency import run_in_threadpool
+            import twilio_sms
+            # Provider message id lands in the telnyx_id column —
+            # provider-agnostic in intent; the status callback
+            # (/webhooks/twilio/status) PATCHes on it.
+            telnyx_id = await run_in_threadpool(twilio_sms.send_sms, to_clean, message)
+        except Exception as e:
+            logger.warning(f"[SMS] twilio send failed: {e}")
+            raise SmsSendError(str(e)[:300], 502)
+    else:
+        try:
+            tx = await _send_via_telnyx(client, to_clean, message)
+        except RuntimeError as e:
+            logger.warning(f"[SMS] send failed: {e}")
+            raise SmsSendError(str(e), 502)
+        telnyx_id = (tx.get("data") or {}).get("id", "") if isinstance(tx, dict) else ""
 
-        msg_id = await _store_sms(
-            client,
-            business_id=req.business_id,
-            contact_id=contact_id,
-            phone_number=to_clean,
-            message=req.message,
-            direction="outbound",
-            telnyx_id=telnyx_id,
-            status="sent",
-        )
+    msg_id = await _store_sms(
+        client,
+        business_id=business_id,
+        contact_id=contact_id,
+        phone_number=to_clean,
+        message=message,
+        direction="outbound",
+        telnyx_id=telnyx_id,
+        status="sent",
+    )
 
-        await _log_event(client, req.business_id, contact_id, "sms_sent", {
-            "to": to_clean,
-            "preview": req.message[:200],
-            "telnyx_id": telnyx_id,
-            "sms_id": msg_id,
+    await _log_event(client, business_id, contact_id, "sms_sent", {
+        "to": to_clean,
+        "preview": message[:200],
+        "telnyx_id": telnyx_id,
+        "sms_id": msg_id,
+    })
+
+    if contact_id:
+        await _sb_patch(client, f"/contacts?id=eq.{contact_id}", {
+            "last_interaction": datetime.now(timezone.utc).isoformat(),
         })
 
-        if contact_id:
-            await _sb_patch(client, f"/contacts?id=eq.{contact_id}", {
-                "last_interaction": datetime.now(timezone.utc).isoformat(),
-            })
+    logger.info(f"[SMS] sent biz={business_id[:8]} to={to_clean} len={len(message)} telnyx={telnyx_id}")
+    return {"status": "sent", "id": msg_id, "telnyx_id": telnyx_id}
 
-        logger.info(f"[SMS] sent biz={req.business_id[:8]} to={to_clean} len={len(req.message)} telnyx={telnyx_id}")
-        return {"status": "sent", "id": msg_id, "telnyx_id": telnyx_id}
+
+@router.post("/sms/send")
+async def send_sms(req: SendSmsRequest, user: AuthedUser = Depends(require_user)):
+    """Send an SMS (Twilio Messaging Service first; Telnyx fallback)
+    and persist it as outbound. Thin wrapper over send_sms_core."""
+    async with httpx.AsyncClient() as client:
+        try:
+            return await send_sms_core(
+                client, business_id=req.business_id, to=req.to,
+                message=req.message, contact_id=req.contact_id)
+        except SmsSendError as e:
+            return JSONResponse({"error": str(e)}, e.status)
 
 
 # ─── Contact lookup helpers ──────────────────────────────────────────
