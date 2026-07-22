@@ -1936,7 +1936,13 @@ def _apply_dro_design(ctx: Dict[str, Any], dro: Dict[str, Any],
     if _tp == "brand_fonts" and _design_cfg.get("fonts_owner_set"):
         _owner_fonts = True
     _owner_pairings = brand_dna.TYPE_PERSONALITY_PAIRINGS.get(_tp)
-    _fonts_pinned = _owner_fonts or bool((_expr.get("hero_font") or "").strip())
+    # ANTON TRACE (2026-07-22): creative_expression.hero_font — an old
+    # brand-engine artifact — counted as a permanent pin, silently
+    # blocking every pairing override on every rebuild regardless of the
+    # interview ("the design never changes"). A pin now requires the
+    # owner's EXPLICIT brand-fonts choice; a stored hero_font is just the
+    # starting default the DRO's taste may dress.
+    _fonts_pinned = _owner_fonts
     # Vocabulary decoupling (2026-07-21): the design vocabulary is
     # direction evidence that survives a thin DRO — Sovereign Authority
     # keeps its refined chroma/type guards even when the rationale is
