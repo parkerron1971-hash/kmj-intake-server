@@ -647,11 +647,24 @@ _DRO_OUTPUT_SHAPE = (
     '"hero_concept":{...},"whitespace":{...},"voice_to_visual":{...},'
     '"rule_break":{"what":"...","where":"...","because":"..."},'
     '"tension":{"pole_a":"...","pole_b":"...","expression":"how the design holds both","because":"..."},'
-    '"first_impression":{"feel_in_3s":"...","remember":"...","because":"..."}},'
+    '"first_impression":{"feel_in_3s":"...","remember":"...","because":"..."},'
+    '"language":{"choice":"<a listed language key or none>","because":"argued from THIS business\'s evidence"}},'
     '"anti_convergence":{"distinctiveness_check":{}},'
     '"summary_for_practitioner":"plain-language why-your-site-looks-this-way",'
     '"exemplars_consulted":[{"exemplar_id":"..","borrowed":"the move, named"}]}'
 )
+
+
+def _language_sheets_block() -> str:
+    """The design-language character sheets (design_languages registry) —
+    lazy + fail-open so a registry error never blocks DRO authoring."""
+    try:
+        import design_languages
+        if design_languages.enabled():
+            return "\n\n" + design_languages.character_sheets()
+    except Exception:
+        pass
+    return ""
 
 
 def _dro_user_prompt(business_id: str, signals: List[Dict[str, Any]],
@@ -677,7 +690,7 @@ def _dro_user_prompt(business_id: str, signals: List[Dict[str, Any]],
         f"{json.dumps([_exemplar_for_prompt(e) for e in exemplars], indent=2)}\n\n"
         f"RECENTLY-USED 8-AXIS SIGNATURES (justify any repetition from signals; "
         f"axes order = {sig.DISTINCTIVENESS_AXES}):\n{json.dumps(recent_signatures, indent=2)}\n\n"
-        + _DRO_OUTPUT_SHAPE
+        + _DRO_OUTPUT_SHAPE + _language_sheets_block()
     )
 
 

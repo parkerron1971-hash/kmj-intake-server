@@ -317,6 +317,20 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
     # wins cascade ties against the templates. Fail-open: any failure and
     # the page ships exactly as before this pass existed.
     _body_html = "\n".join(body_parts)
+    # DESIGN LANGUAGE floor (2026-07-22): the chosen language's CSS lands
+    # after the module styles (its rules win) and BEFORE the art-direction
+    # layer (the author may still push past the floor). Body class scopes
+    # every language rule; no language = byte-identical output.
+    _lang_key = str(ctx.get("language_key") or "")
+    if _lang_key:
+        try:
+            import design_languages as _dl
+            _lang_css = _dl.css_for(_lang_key)
+            if _lang_css:
+                css_parts.append(f"/* — design language: {_lang_key} — */\n"
+                                 + _lang_css)
+        except Exception:
+            _lang_key = ""
     try:
         import art_direction
         _ad_layer = art_direction.author_layer(
@@ -326,5 +340,9 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
             ctx["_art_direction_chars"] = len(_ad_layer)
     except Exception:
         pass
-    return page_shell(ctx["dna"], title, _body_html, "\n".join(css_parts),
-                      design=ctx.get("design"), meta=build_page_meta(ctx))
+    _page = page_shell(ctx["dna"], title, _body_html, "\n".join(css_parts),
+                       design=ctx.get("design"), meta=build_page_meta(ctx))
+    if _lang_key:
+        _page = _page.replace('<body class="',
+                              f'<body class="sx-lang-{_lang_key} ', 1)
+    return _page

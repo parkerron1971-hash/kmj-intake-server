@@ -182,6 +182,9 @@ def _user_prompt(design: Dict[str, Any], dna: Dict[str, Any],
     fw = str(_fw_d.get("label") or "") if isinstance(_fw_d, dict) else ""
     fw_line = (f"PAGE FRAMEWORK: {fw} — respect its structure; dress it.\n\n"
                if fw else "")
+    lb = str((design or {}).get("_language_brief") or "")
+    if lb:
+        fw_line += f"{lb}\nThe language's floor CSS is already on the page — deepen it, never fight it.\n\n"
     return (
         f"BUSINESS: {business_name}\n\n"
         f"THE VISION (DRO summary):\n{(dro_summary or 'none recorded')[:900]}\n\n"
@@ -232,6 +235,12 @@ def author_layer(ctx: Dict[str, Any], body_html: str,
         design = dict(ctx.get("design") or {})
         if ctx.get("framework_label"):
             design["_framework"] = {"label": ctx["framework_label"]}
+        if ctx.get("language_key"):
+            try:
+                import design_languages as _dl
+                design["_language_brief"] = _dl.brief_for(str(ctx["language_key"]))
+            except Exception:
+                pass
         dna = ctx.get("dna") or {}
         summary = str(ctx.get("dro_summary") or
                       (design.get("meta") or {}).get("summary") or "")
