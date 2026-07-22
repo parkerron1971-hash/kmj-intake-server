@@ -47,8 +47,16 @@ _MAX_TOKENS = 3000
 # renderer or atelier actually stamped.
 _ALLOWED_SELECTOR = re.compile(
     r"^\s*(:root$|\.(?:sxm|sx|atl|sxad)-)")
+# position:absolute joined the ban after the first live layer pinned all
+# four gallery figures to one corner (the model guessed .sxm-gal-fig-over
+# was a caption chip; it was the figure itself). The art director styles
+# surfaces, type, color, spacing — it does NOT re-architect layout, so
+# structural declarations are dropped wholesale.
 _FORBIDDEN_SNIPPETS = ("@import", "url(", "expression(", "position:fixed",
-                       "position: fixed", "</style", "<script")
+                       "position: fixed", "position:absolute",
+                       "position: absolute", "display:none", "display: none",
+                       "visibility:hidden", "visibility: hidden",
+                       "</style", "<script")
 
 
 def enabled() -> bool:
@@ -136,6 +144,11 @@ HARD CONTRACT (violations are dropped silently, so obey exactly):
 - @keyframes names must start with `sxad-`.
 - Use the design tokens (var(--sx-accent), --sx-surface, --sx-font-heading …)
   so the layer stays theme-coherent. You may retune tokens on :root.
+- NEVER change `position` or `display` of existing elements, and never hide
+  anything. You see class NAMES, not their structural roles — a class that
+  sounds like a caption may be the element itself, and re-positioning it
+  destroys the layout. Style surfaces, borders, spacing, typography, color,
+  shadows, transitions; leave the skeleton alone.
 - Total under 8000 characters. Output ONLY CSS — no prose, no markdown fences.
 
 WHAT AUTHORSHIP MEANS HERE (your instincts, the ones templates lack):

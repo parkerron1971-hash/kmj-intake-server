@@ -29,6 +29,18 @@ def test_forbidden_payloads_drop():
         assert ad.sanitize_layer(bad) == ""
 
 
+def test_structural_declarations_drop():
+    # The live gallery-smash bug: the model re-positioned a figure class
+    # it mistook for a caption. Structure changes never survive.
+    for bad in (".sxm-gal-fig-over { position: absolute; left: .9rem; }",
+                ".sxm-card { display: none; }",
+                ".sxm-hero-inner { visibility: hidden; }"):
+        assert ad.sanitize_layer(bad) == ""
+    # Surface styling on the same class still flows.
+    ok = ".sxm-gal-fig-over { border: 1px solid var(--sx-hair); }"
+    assert "sxm-gal-fig-over" in ad.sanitize_layer(ok)
+
+
 def test_media_query_recurses():
     good = "@media (max-width: 768px) { .sxm-gallery { grid-template-columns: 1fr; } }"
     bad = "@media (max-width: 768px) { div { display: none; } }"
