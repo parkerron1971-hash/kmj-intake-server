@@ -2448,10 +2448,48 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                                  .get("vision_verdict")
                                  if isinstance(((site or {}).get("site_config")
                                                 or {}), dict) else None)
+                # ── RATCHET v2 (2026-07-22, the frozen-site fix). Two
+                # deadlocks found on a real business:
+                #  • ERA MISMATCH: a live verdict graded under an older
+                #    rubric defends the live site with a score today's
+                #    judge would never award (a stale 28 vs a fresh 6 =
+                #    the old site is immortal). Verdicts now carry a
+                #    rubric stamp; a live verdict from another era gets
+                #    the live page RE-GRADED under today's standard
+                #    before it may defend — and if the re-grade is
+                #    unavailable, the stale score defends nothing.
+                #  • JUDGE NOISE: composites jitter a few points between
+                #    runs; `<=` blocked every rebuild landing within a
+                #    point of the live score, freezing the site ("same
+                #    everything keeps being made"). A regression now
+                #    means MEANINGFULLY worse: new < live − margin
+                #    (SHIP_GATE_MARGIN, default 2). Ties + noise ship.
+                if (_live_verdict is not None
+                        and _live_verdict.get("rubric")
+                        != getattr(_vg, "RUBRIC_VERSION", None)):
+                    try:
+                        _live_html = str(((site or {}).get("site_config")
+                                          or {}).get("generated_html") or "")
+                        _live_verdict = (_vg.grade(_live_html, business_id,
+                                                   standard=_ref_standard)
+                                         if _live_html.strip() else None)
+                        logger.info(
+                            f"[ship-gate] live verdict was stale-era — "
+                            f"re-graded under current rubric: "
+                            f"{_vg.verdict_composite(_live_verdict)}")
+                    except Exception as _era_e:
+                        logger.warning(
+                            f"[ship-gate] live re-grade failed ({_era_e}) "
+                            f"— stale verdict defends nothing")
+                        _live_verdict = None
+                try:
+                    _margin = int(os.getenv("SHIP_GATE_MARGIN", "2") or 2)
+                except (TypeError, ValueError):
+                    _margin = 2
                 _is_regression = (
                     _live_verdict is not None
                     and _vg.verdict_composite(_verdict)
-                    <= _vg.verdict_composite(_live_verdict))
+                    < _vg.verdict_composite(_live_verdict) - _margin)
                 if not _is_regression:
                     logger.info(
                         f"[ship-gate] below-bar build ships by ratchet for "
