@@ -2182,6 +2182,21 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         except Exception as e:
             logger.warning(f"[composer] atelier unavailable (non-fatal): {e}")
 
+        # DESIGN LANGUAGES (2026-07-22): the brain's pick (DRO `language`
+        # block, rubric fallback) resolves ONCE here, before render — the
+        # renderer applies the language's CSS floor + body class, and the
+        # atelier/AD prompts receive its brief. Fail-open throughout.
+        try:
+            import design_languages as _dl
+            _lk, _lwhy, _lby = _dl.resolve(ctx, dro)
+            if _lk:
+                ctx["language_key"] = _lk
+                ctx["language_because"] = _lwhy
+                logger.info(f"[languages] {business_id[:8]} → {_lk} "
+                            f"(by {_lby}): {_lwhy[:120]}")
+        except Exception:
+            pass
+
         html = _mark(site_modules.render_page(spec, ctx, title,
                                               fragment_markers=atelier_active))
         if atelier_active:
@@ -2626,6 +2641,15 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
             cfg["dro_summary"] = dro_summary
         else:
             cfg.pop("dro_summary", None)   # never show a stale summary on fallback
+    # Design languages + frameworks — persist the skeleton + craft picks
+    # with their because (forensics + the future outcome-priors loop).
+    if ctx.get("language_key"):
+        cfg["language"] = {"key": ctx["language_key"],
+                           "because": str(ctx.get("language_because") or "")[:300]}
+    elif full_recompose:
+        cfg.pop("language", None)
+    if ctx.get("framework_key"):
+        cfg["framework_key"] = ctx["framework_key"]
         # Failure forensics (never lose the reason again): fallback persists
         # WHY — {stage: signals|authoring|validation|exception|skipped,
         # detail, at} — served by GET /composer/spec; an applied compose

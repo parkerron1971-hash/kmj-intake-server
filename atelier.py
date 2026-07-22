@@ -387,6 +387,18 @@ def _section_data(kind: str, section_copy: Dict[str, Any],
         _v = (_prefs or {}).get(_k)
         if isinstance(_v, str) and _v.strip():
             data[_k] = _v.strip()
+    # Design language (2026-07-22): the chosen language's brief rides the
+    # REAL DATA block — the bespoke author executes its instincts (band
+    # rhythm, materials, person-through-type) instead of inventing a
+    # third aesthetic.
+    if ctx.get("language_key"):
+        try:
+            import design_languages as _dl
+            _lb = _dl.brief_for(str(ctx["language_key"]))
+            if _lb:
+                data["design_language"] = _lb
+        except Exception:
+            pass
     _stats = (_prefs or {}).get("proof_stats")
     if isinstance(_stats, list) and _stats:
         data["proof_stats_real_numbers"] = _stats[:3]
