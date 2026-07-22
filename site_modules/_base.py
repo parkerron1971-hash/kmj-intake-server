@@ -722,7 +722,7 @@ summary:focus-visible {{
    physical instead of blurry. */
 .sxm-card {{ box-shadow:
     0 1px 2px color-mix(in srgb, #000 18%, transparent),
-    0 6px 22px {SHADOW_REST}; }}
+    0 6px 22px color-mix(in srgb, #000 24%, transparent); }}
 /* Form fields: one consistent, designed input voice everywhere. */
 .sxm-section input:not([type="checkbox"]):not([type="radio"]),
 .sxm-section textarea, .sxm-section select {{
