@@ -49,7 +49,12 @@ logger = logging.getLogger("drl.passes")
 # $3/$15; a single compose is 1 signal pass + 1 DRO (~10k out) ≈ +$0.15,
 # a directions run authors 3 candidate DROs on this model (~20k out)
 # ≈ +$0.40 — Kevin ruled quality-first (2026-07).
-DRL_MODEL_DEFAULT = "claude-opus-4-8"
+# COST DIET (2026-07-22, Kevin's ruling): Sonnet 5 is the default brain
+# — the DRO is structured reasoning Sonnet handles well at ~40% of Opus
+# cost, and per-build spend had crept 4-6x past the return-point era.
+# DRL_MODEL=claude-opus-4-8 remains the one-env premium override (the
+# future Practice-tier lever).
+DRL_MODEL_DEFAULT = "claude-sonnet-5"
 
 
 def _drl_model() -> str:
