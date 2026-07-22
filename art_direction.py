@@ -161,7 +161,15 @@ WHAT AUTHORSHIP MEANS HERE (your instincts, the ones templates lack):
 - The gallery is where generic shows most: frame it (mats, offsets, varied
   spans, a caption voice) so it reads curated, not dumped.
 - Details carry conviction: selection color, focus states, numbered markers,
-  first-letter or first-line moves where the content invites them."""
+  first-letter or first-line moves where the content invites them.
+- SPACING DISCIPLINE (live-audit): the page's rhythm should vary, but no
+  section becomes a near-empty viewport — padding-block above 8rem needs
+  content the space is staging. Tighten bloated bands; don't add air to air.
+- ACCENT DISCIPLINE: at most ONE full-bleed accent-tinted band on the whole
+  page. Elsewhere the accent lives in ink-level doses — words, hairlines,
+  one button. A page bathed in accent reads cheap; scarcity reads intended.
+- Body copy and form hints always var(--sx-font-body) — fix any section
+  where the display face leaked into paragraphs."""
 
 
 def _user_prompt(design: Dict[str, Any], dna: Dict[str, Any],
