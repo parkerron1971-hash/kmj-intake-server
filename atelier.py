@@ -51,7 +51,11 @@ logger = logging.getLogger("atelier")
 # families that reject sampling params (Opus 4.7/4.8 400s on it — the
 # post-#62 silent-atelier killer: every bespoke call failed identically
 # and fell back to the module section with only a per-section warning).
-ATELIER_MODEL_DEFAULT = "claude-opus-4-8"
+# COST DIET (2026-07-22): Sonnet 5 default — the atelier writes
+# structured HTML fragments under a validator + repair loop; Sonnet
+# handles it at a fraction of Opus cost. ATELIER_MODEL env = premium
+# override.
+ATELIER_MODEL_DEFAULT = "claude-sonnet-5"
 ATELIER_TEMPERATURE = 0.8          # creative latitude — the point of the atelier
                                    # (auto-omitted where the model rejects it)
 ATELIER_MAX_TOKENS = 8000

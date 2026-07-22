@@ -2042,6 +2042,19 @@ def restore_previous_compose(business_id: str) -> Dict[str, Any]:
             "note": "swap is symmetric — restore again to switch back"}
 
 
+class _SkipJudge(Exception):
+    """Cost diet: cheap re-renders skip the vision pass entirely (the
+    stored verdict stays; caught by the vision block's generic guard)."""
+
+
+def _quality_regen_enabled() -> bool:
+    """COST DIET (2026-07-22): the bounded quality regen re-runs the
+    ENTIRE build (atelier + judge included) on a gate fail — doubling
+    the spend automatically. Default OFF; QUALITY_REGEN=on re-arms it."""
+    return (os.environ.get("QUALITY_REGEN") or "off").strip().lower() in (
+        "on", "1", "true")
+
+
 def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                        ctx: Optional[Dict[str, Any]] = None,
                        dro_id: Optional[str] = None,
@@ -2379,9 +2392,16 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     # takes. Verdict recorded on every compose; SHIP_GATE=enforce turns
     # a failing verdict into a raised error; default observe-only.
     _verdict: Optional[Dict[str, Any]] = None
+    # COST DIET (2026-07-22): the judge runs ONCE per user action — on
+    # full recomposes (and the explicit regen pass). Shuffles, refreshes,
+    # override re-renders and self-heal intermediates keep the stored
+    # verdict instead of paying for 3 screenshots + a vision call each.
+    _should_judge = bool(full_recompose or _regen_attempted)
     try:
         import vision_grader as _vg
         from design_register import get_invention_count as _gic
+        if not _should_judge:
+            raise _SkipJudge()
         # Arc D (2026-07-21): the judge grades against the direction's
         # authored reference standard, never in a vacuum.
         try:
@@ -3437,7 +3457,14 @@ def compose_site(business_id: str, brief_notes: str = "",
                                 defaulted_modules=defaulted_modules,
                                 full_recompose=True, progress_cb=progress_cb,
                                 dro_failure=dro_failure,
-                                _regen_allowed=use_llm,
+                                # COST DIET (2026-07-22): the automatic
+                                # second full build on a gate fail is
+                                # OPT-IN (QUALITY_REGEN=on). The verdict
+                                # + notes are visible in the editor and
+                                # the ratchet blocks downgrades — the
+                                # practitioner decides whether a retry
+                                # is worth paying for.
+                                _regen_allowed=use_llm and _quality_regen_enabled(),
                                 _canvas_html=canvas_html,
                                 _canvas_report=canvas_report)
 

@@ -77,8 +77,21 @@ CREATIVE_CONTRACT = """THE CREATIVE CONTRACT
   omitted. (D10)"""
 
 
+def doctrine_enabled() -> bool:
+    """COST DIET (2026-07-22, Kevin's ruling): DESIGN_DOCTRINE=off strips
+    the doctrine wrapper from every stage — prompt weight returns to the
+    return-point baseline (~25% fewer input tokens on the HTML stages)
+    with one reversible env flip. Default stays ON."""
+    import os
+    return (os.environ.get("DESIGN_DOCTRINE") or "on").strip().lower() not in (
+        "off", "0", "false")
+
+
 def with_doctrine(system_prompt: str) -> str:
-    """Prepend the shared doctrine to a stage's system prompt."""
+    """Prepend the shared doctrine to a stage's system prompt (no-op
+    when DESIGN_DOCTRINE=off — the cost/return-point switch)."""
+    if not doctrine_enabled():
+        return system_prompt
     return DOCTRINE + "\n\n" + system_prompt
 
 
