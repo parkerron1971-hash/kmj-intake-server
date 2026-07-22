@@ -317,6 +317,23 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
     # wins cascade ties against the templates. Fail-open: any failure and
     # the page ships exactly as before this pass existed.
     _body_html = "\n".join(body_parts)
+    # FLOW PASS (2026-07-22): sequence numerals on the kickers — the
+    # page reads as ordered chapters ("01 · The work"), the move that
+    # made the reference build feel "in order, nothing missing".
+    # Deterministic, document-order, skips nothing that has an eyebrow.
+    try:
+        import re as _re_eb
+        _eb_counter = {"n": 0}
+
+        def _number_eyebrow(m: "_re_eb.Match[str]") -> str:
+            _eb_counter["n"] += 1
+            return (m.group(0)
+                    + f'<i class="sxm-eb-n" aria-hidden="true">'
+                      f'{_eb_counter["n"]:02d} ·</i> ')
+        _body_html = _re_eb.sub(r'<div class="sxm-eyebrow"[^>]*>',
+                                _number_eyebrow, _body_html)
+    except Exception:
+        pass
     # DESIGN LANGUAGE floor (2026-07-22): the chosen language's CSS lands
     # after the module styles (its rules win) and BEFORE the art-direction
     # layer (the author may still push past the floor). Body class scopes

@@ -106,7 +106,22 @@ def ov(section: str, field: str) -> str:
     return f'data-override-target="{section}/{field}"'
 
 
+# THE FLOW PASS (2026-07-22, Kevin's ruling from the Emergent study:
+# "everything in order, flowed, aligned — nothing missing"): a section
+# without its kicker breaks the page's table-of-contents rhythm. When
+# the copy pass skips the eyebrow, a per-section default keeps every
+# chapter dressed; the copy LLM's in-concept eyebrows still win.
+_EYEBROW_DEFAULTS = {
+    "hero": "", "about": "The story", "offerings": "What we make",
+    "process": "The way", "testimonials": "Proof", "gallery": "The work",
+    "faq": "Questions, answered", "cta": "The step", "contact": "Begin",
+    "statband": "By the numbers", "store": "The goods",
+    "showcase": "Selected work",
+}
+
+
 def eyebrow(section: str, text: str, field: str = "eyebrow") -> str:
+    text = (text or "").strip() or _EYEBROW_DEFAULTS.get(section, "")
     if not text:
         return ""
     return f'<div class="sxm-eyebrow" {ov(section, field)}>{safe(text)}</div>'
@@ -678,7 +693,16 @@ a {{ color: var(--sx-accent); text-decoration: none; }}
 .sxm-eyebrow {{
   font-size: .76rem; letter-spacing: .26em; text-transform: uppercase;
   color: var(--sx-accent); font-weight: 700; margin-bottom: 14px;
+  display: flex; align-items: center; gap: 12px;
 }}
+/* Flow pass: the kicker is FRAMED — a short rule leads in, so every
+   chapter opens with the same gesture and the page reads sequenced. */
+.sxm-eyebrow::before {{ content: ""; width: 34px; height: 1px;
+  background: color-mix(in srgb, var(--sx-accent) 70%, transparent);
+  flex-shrink: 0; }}
+.sxm-eyebrow .sxm-eb-n {{ font-style: normal; font-weight: 700;
+  color: color-mix(in srgb, var(--sx-accent) 68%, var(--sx-text));
+  font-variant-numeric: tabular-nums; letter-spacing: .12em; }}
 .sxm-accent-word {{ font-style: italic; color: var(--sx-accent); }}
 .sxm-mark {{ display: block; margin-bottom: 22px; }}
 .sxm-mark-thin {{ width: 48px; height: 3px;
