@@ -186,7 +186,8 @@ _PAIRING_FUZZY = (
     ("editorial_serif", ("editorial", "serif", "magazine", "literati")),
     ("storyteller", ("story", "narrat", "literary", "book")),
     ("technical_precise", ("technical", "precis", "mono", "engineer", "system")),
-    ("warm_humanist", ("humanist", "warm", "human", "approachable", "welcom")),
+    ("warm_humanist", ("humanist", "warm", "human", "approachable", "welcom",
+                       "calm", "serene", "sooth", "gentle", "grounded")),
     ("playful", ("playful", "fun", "round", "friendly", "joy", "whimsic")),
     ("condensed_impact", ("condensed", "compact", "poster", "impact")),
     ("bold_statement", ("bold", "brutal", "loud", "statement", "commanding", "heavy", "black")),
@@ -819,6 +820,28 @@ def apply_dro_style(dna: Dict[str, Any], decisions: Optional[Dict[str, Any]],
     tspec = d.get("typography") or {}
     pers = tspec.get("display_personality")
     pairing_key = resolve_font_pairing(pers)
+    # THIN-DRO FALLBACK (2026-07-22, the "generic default" defect): a
+    # starved DRO usually ships no display_personality, so no pairing
+    # resolved and the BRAND-KIT heading ruled every rebuild by forfeit
+    # (live case: kit Anton on a DRO that reasoned "calm and dark, one
+    # warm accent"). The DRO's own prose still carries direction words —
+    # resolve the pairing from that evidence before surrendering to the
+    # kit default. Rubric, not lookup: any word the fuzzy map understands
+    # counts, wherever the DRO said it.
+    if not pairing_key:
+        _hc = d.get("hero_concept") or {}
+        _prose = " ".join(str(x or "") for x in (
+            (d.get("whitespace") or {}).get("philosophy"),
+            (d.get("whitespace") or {}).get("approach"),
+            (d.get("palette") or {}).get("accent_strategy"),
+            (d.get("palette") or {}).get("temperature"),
+            _hc.get("concept_statement"),
+            d.get("first_impression"),
+            extra_direction_evidence))
+        pairing_key = resolve_font_pairing(_prose)
+        if pairing_key:
+            logger.info(f"[brand_dna] pairing from DRO prose (thin "
+                        f"display_personality): {pairing_key}")
     # Arc B (2026-07-21) — DIRECTION COHERENCE: when the DRO's own
     # aesthetic evidence reads refined (editorial / luxury / quiet
     # whitespace) but the resolved pairing is an impact face, the
