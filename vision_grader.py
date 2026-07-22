@@ -228,6 +228,13 @@ def verdict_passes(v: Dict[str, Any]) -> bool:
             and v.get("broken") != "y")
 
 
+# Bumped whenever the grading rubric or reference standards change
+# meaningfully. The ratchet refuses to compare verdicts across eras — a
+# live verdict stamped with an older (or missing) rubric gets re-graded
+# under today's standard before it may defend the live site.
+RUBRIC_VERSION = "arcD-1"
+
+
 def verdict_composite(v: Optional[Dict[str, Any]]) -> int:
     """One comparable quality number (higher = better): the four craft
     axes minus smell. Used by the never-downgrade ratchet."""
@@ -285,6 +292,7 @@ def grade(html: str, business_id: str = "",
         if v is not None:
             v["judge_provider"] = provider
             v["passes_gate"] = verdict_passes(v)
+            v["rubric"] = RUBRIC_VERSION
             logger.info(f"[vision] verdict for {(business_id or 'unknown')[:8]}: "
                         f"{json.dumps(v)[:400]}")
         return v
