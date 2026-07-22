@@ -742,6 +742,13 @@ summary:focus-visible {{
 /* Numbers line up wherever they stack (stats, prices, numerals). */
 .sxm-off-price, .sxm-stat-value, .sxm-ghost-numeral {{
   font-variant-numeric: tabular-nums; }}
+/* FLOOR LAW (live-audit 2026-07-22): the display face never sets running
+   copy — the contact lede shipped in condensed Anton. Paragraphs, list
+   items and form hints are body-face by decree; headings/labels keep
+   their own rules. */
+.sxm-section p, .sxm-section li, .sxm-section label,
+.sxm-section input, .sxm-section textarea, .sxm-section select {{
+  font-family: var(--sx-font-body); }}
 .sxm-cta:hover {{ transform: translateY(-3px); background: var(--sx-accent-strong);
   box-shadow: 0 20px 50px color-mix(in srgb, var(--sx-accent) 35%, transparent); }}
 .sxm-muted {{ color: var(--sx-muted); }}

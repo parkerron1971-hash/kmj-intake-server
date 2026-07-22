@@ -589,6 +589,18 @@ def _contract_block(kind: str, uid: str, dom_id: str, slots_line: str,
 9. Responsive: include at least one @media (max-width: 760px) block that keeps the composition intact on a phone.
 10. Any animation respects @media (prefers-reduced-motion: reduce).
 11. Size: HTML ≤ 14KB, CSS ≤ 10KB.
+12. FLOOR LAWS (live-audit 2026-07-22 — violations read as template output):
+   - A practitioner PORTRAIT is a presence, not a stamp: on desktop it owns
+     at least a third of the composition's width, fills its frame
+     (object-fit: cover, no dead margins inside the card), and is
+     composed WITH the text, not beside leftover space.
+   - Body copy is ALWAYS var(--sx-font-body). The display face never sets
+     a paragraph, lede, or form hint — headings and short labels only.
+   - CTA budget: at most ONE filled-accent button in your section; any
+     second action is a quiet text link.
+   - Generous is not empty: no band of your section may be a near-empty
+     viewport. If you reach for padding above 8rem, the space must stage
+     content the eye travels to, not absence.
 
 OUTPUT FORMAT — exactly this, nothing else:
 <!--HTML-->
