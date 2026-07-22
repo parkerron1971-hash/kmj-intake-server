@@ -3531,7 +3531,12 @@ def compose_site(business_id: str, brief_notes: str = "",
                        .get("invention_verification") or {})
         _invention_fail = _inv_verify.get("ok") is False
         _failed = bool(_v1) and not _v1.get("passes_gate", True)
-        if use_llm and dro and (_failed or _inv_blocking or _invention_fail):
+        # COST DIET enforcement (2026-07-22): #206 declared the automatic
+        # second build opt-in, but this condition never consulted the
+        # flag — every below-bar build silently paid for a full second
+        # compose. QUALITY_REGEN=on is now required, as documented.
+        if (use_llm and dro and _quality_regen_enabled()
+                and (_failed or _inv_blocking or _invention_fail)):
             _notes = _regen_feedback(_v1 if _failed else None, _inv1)
             if _invention_fail:
                 _notes = ((_notes + "\n") if _notes else "") + (
@@ -3630,26 +3635,22 @@ def compose_site(business_id: str, brief_notes: str = "",
                                                 "reverted": False,
                                                 "notes": _notes[:400]}
                     result = result2
-    except RuntimeError:
-        raise
     except Exception as _rg_err:
-        logger.warning(f"[composer] quality regen skipped (non-fatal): "
-                       f"{type(_rg_err).__name__}: {_rg_err}")
+        # FALSE-FAILURE FIX (2026-07-22, Kevin's report: "it says it
+        # didn't meet the standard, then I refresh and the upgrade is
+        # there"): by the time this regen block runs, PASS 1 HAS ALREADY
+        # SHIPPED — so nothing here (including the ratchet blocking the
+        # regen's second build) may fail the job. A genuine block of
+        # pass 1 raises from render_and_persist above and never reaches
+        # this block.
+        logger.warning(f"[composer] quality regen abandoned (first pass "
+                       f"is live): {type(_rg_err).__name__}: {_rg_err}")
 
-    # SHIP_GATE=enforce when NO regen ran (DRO fallback, regen copy pass
-    # failed, or invariants-only advisory): render_and_persist deferred
-    # the raise to here — the gate still lands after the fix attempt.
-    try:
-        import vision_grader as _vg_enf
-        _vf = result.get("vision_verdict") or {}
-        if (_vf and not _vf.get("passes_gate", True)
-                and _vg_enf.gate_enforced()):
-            raise RuntimeError("ship-gate: vision verdict failed and "
-                               "SHIP_GATE=enforce is set")
-    except RuntimeError:
-        raise
-    except Exception:
-        pass
+    # (Removed 2026-07-22: the pre-ratchet tail enforce block re-raised
+    # "ship-gate: vision verdict failed" for every below-bar verdict even
+    # when the ratchet had already SHIPPED the build — the exact
+    # failed-message-but-refresh-shows-the-upgrade defect. The ratchet
+    # inside render_and_persist is the single gate authority now.)
 
     # Multi-page: render the secondary pages (sharing the home's design) and
     # persist generated_pages. Best-effort — a failure never blocks the home.
