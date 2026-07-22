@@ -185,7 +185,10 @@ MODULES: Dict[str, Dict[str, Any]] = {
     "gallery": {
         "variants": gallery.VARIANTS,
         "render": gallery.render,
-        "fields": ("eyebrow", "headline"),
+        # statement_1..3 = the accent boards (Kevin's ruling 2026-07-22):
+        # short craft-manifesto lines mounted between the photos.
+        "fields": ("eyebrow", "headline",
+                   "statement_1", "statement_2", "statement_3"),
     },
     "faq": {
         "variants": faq.VARIANTS,

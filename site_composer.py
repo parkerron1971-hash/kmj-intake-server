@@ -57,7 +57,8 @@ RAILWAY_BASE = "https://kmj-intake-server-production.up.railway.app"
 COMPOSER_MARK = '<meta name="x-solutionist-composer" content="module-composer">'
 
 _MAX_FIELD = {"body": 900, "intro": 400, "note": 300, "subheadline": 260,
-              "pull_quote": 260, "headline": 120, "eyebrow": 60, "cta_label": 40}
+              "pull_quote": 260, "headline": 120, "eyebrow": 60, "cta_label": 40,
+              "statement_1": 90, "statement_2": 90, "statement_3": 90}
 
 
 # ─── Arc 2 "Ask the Owner" — design preferences ───────────────────────
@@ -1118,6 +1119,7 @@ def _dro_directive(dro: Dict[str, Any]) -> str:
 - Voice→visual couplings to honor in copy: {notes or '(none)'}
 - Section order / hierarchy: {layout.get('hierarchy_approach') or 'guided_descent'} — order sections as a persuasion funnel (hook → credibility → offer → proof → conversion → contact), shaped by this hierarchy.
 - Layout symmetry: {layout.get('symmetry') or 'unspecified'} — asymmetric_tension/editorial_columns lean toward the offset variants (hero "editorial", about "pullquote", offerings "featured", testimonials "marquee", gallery "mosaic"); centered_formal leans toward the centered ones (hero "statement", about "narrative", testimonials "spotlight").
+- Gallery statement boards: fill gallery statement_1/statement_2/statement_3 — three SHORT craft-manifesto lines (3-8 words each) in the concept's voice, mounted as accent plates between the photos. They are convictions about how the work is made ("Faith, worn boldly", "Built for the called"), NEVER captions, never generic ("Quality you can trust" is a failure). If the owner gave verbs or a metaphor, forge the lines from those.
 - Pacing: layout density={layout.get('density') or 'balanced'}, motion={motion.get('temperature') or 'subtle_entrance'} — match copy length/rhythm to it (airy/quiet → fewer words; dense/expressive → punchier, more).
 - Still NEVER invent facts. Concept reframing is about VOICE, not fabricated specifics."""
 

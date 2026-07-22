@@ -122,12 +122,20 @@ def render_header(rendered_ids: List[str], ctx: Dict[str, Any]) -> Tuple[str, st
             f'\n<nav class="sxm-header-drawer" aria-label="Pages (mobile)">{link_items}</nav>')
     else:
         links = []
+        # Menu voice (Kevin's ruling 2026-07-22, "the menu is stale"):
+        # each destination carries a small accent index numeral — the
+        # nav reads as a table of contents for a designed document, not
+        # four flat words. Numbering follows the page's real order.
         for mid in rendered_ids:
             if mid in _NAV_LABELS and len(links) < _MAX_LINKS:
                 anchor, label = _NAV_LABELS[mid]
-                links.append(f'<a href="{anchor}">{label}</a>')
+                links.append(
+                    f'<a href="{anchor}"><span class="sxm-nav-num" '
+                    f'aria-hidden="true">{len(links) + 1:02d}</span>{label}</a>')
         if "contact" in rendered_ids:
-            links.append('<a href="#contact">Contact</a>')
+            links.append(
+                f'<a href="#contact"><span class="sxm-nav-num" '
+                f'aria-hidden="true">{len(links) + 1:02d}</span>Contact</a>')
         if links:
             link_items = "".join(links)
             nav_html = (f'<nav class="sxm-header-nav" aria-label="Site sections">'
@@ -201,6 +209,14 @@ html { scroll-padding-top: 84px; }
   transition: transform .3s var(--sx-ease); }
 .sxm-header-nav a:hover { opacity: 1; color: var(--sx-accent); }
 .sxm-header-nav a:hover::after { transform: scaleX(1); }
+/* The index numerals — a designed table of contents, not flat words. */
+.sxm-nav-num { font-size: .58rem; letter-spacing: .08em; margin-right: 7px;
+  color: var(--sx-accent); font-variant-numeric: tabular-nums;
+  vertical-align: 0.18em; opacity: .85;
+  transition: opacity .15s ease; }
+.sxm-header-nav a:hover .sxm-nav-num { opacity: 1; }
+.sxm-header-drawer .sxm-nav-num { font-size: .7rem; margin-right: 10px;
+  color: var(--sx-accent); font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) {
   .sxm-header-nav a::after { transition: none; }
 }
