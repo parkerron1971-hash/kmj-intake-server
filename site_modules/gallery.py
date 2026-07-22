@@ -190,6 +190,80 @@ def _render_awaiting(content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str,
     return html, css
 
 
+def _statements(content: Dict[str, Any], ctx: Dict[str, Any]) -> List[str]:
+    """The accent-board lines (Kevin's ruling 2026-07-22): Chief authors
+    statement_1..3 in the concept's voice; when the copy pass left them
+    empty, forge honest ones from the owner's own interview material
+    (their three verbs, their offer) — never boilerplate."""
+    out = [str(content.get(f"statement_{i}") or "").strip() for i in (1, 2, 3)]
+    out = [s for s in out if s]
+    if out:
+        return out[:3]
+    prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+    verbs = [str(v).strip() for v in (prefs.get("hero_verbs") or []) if str(v or "").strip()]
+    forged: List[str] = []
+    if verbs:
+        forged.append(". ".join(w.capitalize() for w in verbs[:3]) + ".")
+    offer = str(prefs.get("offer") or "").strip()
+    if offer:
+        first = offer.split(".")[0].strip()
+        if 8 <= len(first) <= 80:
+            forged.append(first)
+    return forged[:2]
+
+
+def _board(i: int, text: str) -> str:
+    return (f'<div class="sxm-gal-board">'
+            f'<span class="sxm-gal-board-num" aria-hidden="true">{i:02d}</span>'
+            f'<p class="sxm-gal-board-line" {ov("gallery", f"statement_{i}")}>'
+            f'{safe(text)}</p>'
+            f'<span class="sxm-gal-board-rule" aria-hidden="true"></span></div>')
+
+
+def _interleave_boards(figs: List[str], boards: List[str]) -> List[str]:
+    """Mount the plates INTO the photo flow — after the lead image, at
+    the middle, near the end — so the wall reads curated, statement by
+    statement, instead of photos then afterthought."""
+    if not boards:
+        return figs
+    out = list(figs)
+    positions = [1, max(2, (len(figs) + 1) // 2 + 1), len(figs)]
+    for n, (pos, text) in enumerate(zip(positions, boards), start=1):
+        out.insert(min(pos + (n - 1), len(out)), _board(n, text))
+    return out
+
+
+_BOARD_CSS = """
+/* Accent boards — conviction plates mounted among the photos. */
+.sxm-gal-board { position: relative; display: flex; flex-direction: column;
+  justify-content: center; gap: 10px; min-height: 150px;
+  padding: clamp(18px, 2.6vw, 30px);
+  border: 1px solid color-mix(in srgb, var(--sx-accent) 34%, var(--sx-border));
+  border-radius: var(--sx-radius-image);
+  background:
+    linear-gradient(140deg,
+      color-mix(in srgb, var(--sx-accent) 12%, transparent) 0%,
+      color-mix(in srgb, var(--sx-accent) 4%, transparent) 60%,
+      transparent 100%),
+    var(--sx-surface); overflow: hidden; }
+.sxm-gal-board-num { position: absolute; top: 10px; right: 14px;
+  font-family: var(--sx-font-heading); font-size: 2.2rem; line-height: 1;
+  color: color-mix(in srgb, var(--sx-accent) 22%, transparent);
+  font-variant-numeric: tabular-nums; }
+.sxm-gal-board-line { margin: 0;
+  font-family: var(--sx-font-accent, var(--sx-font-heading));
+  font-style: italic; font-size: clamp(1.05rem, 1.7vw, 1.35rem);
+  line-height: 1.35; color: var(--sx-text); }
+.sxm-gal-board-rule { width: 44px; height: 2px;
+  background: var(--sx-accent); }
+.sxm-gal-mosaic .sxm-gal-board { height: 100%; min-height: 0; }
+.sxm-gal-masonry .sxm-gal-board { break-inside: avoid;
+  margin: 0 0 var(--sx-space-4, 16px); }
+.sxm-gal-carousel .sxm-gal-board { flex: 0 0 clamp(220px, 34vw, 320px);
+  scroll-snap-align: start; }
+"""
+
+
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
     imgs = _images(ctx)
     if not imgs:
@@ -206,6 +280,8 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     if not figs:
         return "", ""
 
+    boards = _statements(content, ctx)
+    pieces = _interleave_boards(figs, boards)
     eb = eyebrow("gallery", content.get("eyebrow") or "")
     headline = content.get("headline") or "The work"
     container_class = f"sxm-gal-{variant}"
@@ -215,8 +291,8 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     {heading_accent(dna)}
     {eb}
     <h2 {ov('gallery', 'headline')}>{accent_headline(headline)}</h2>
-    <div class="{container_class}">{''.join(figs)}</div>
+    <div class="{container_class}">{''.join(pieces)}</div>
   </div>
 </section>"""
-    css = _BASE_CSS + _LAYOUT_CSS[variant]
+    css = _BASE_CSS + _LAYOUT_CSS[variant] + (_BOARD_CSS if boards else "")
     return html, css

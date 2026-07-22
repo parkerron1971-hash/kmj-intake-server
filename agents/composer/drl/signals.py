@@ -127,6 +127,11 @@ def signals_from_prefs(prefs: Dict[str, Any]) -> List[Dict[str, Any]]:
                         "evidence": [str(quote)[:200]],
                         "source": "practitioner_set"})
 
+    verbs = [str(v).strip() for v in (prefs.get("hero_verbs") or [])
+             if str(v or "").strip()]
+    if verbs:
+        add("opening_posture", "craft_first",
+            f"their three verbs: {' / '.join(verbs[:3])}")
     b = str(prefs.get("boldness") or "")
     if b:
         add("energy_signature",
