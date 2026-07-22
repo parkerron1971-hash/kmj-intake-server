@@ -308,5 +308,20 @@ def render_page(sections: List[Dict[str, Any]], ctx: Dict[str, Any],
                                  % (_rb, _rb // 2, _rb // 4)))
     except Exception:
         pass
-    return page_shell(ctx["dna"], title, "\n".join(body_parts), "\n".join(css_parts),
+    # THE AUTHORSHIP PASS (2026-07-22, instinct arc piece 1): with the
+    # whole body assembled, the model art-directs the page as ONE work —
+    # a sanitized page-wide CSS layer appended LAST so the author's voice
+    # wins cascade ties against the templates. Fail-open: any failure and
+    # the page ships exactly as before this pass existed.
+    _body_html = "\n".join(body_parts)
+    try:
+        import art_direction
+        _ad_layer = art_direction.author_layer(
+            ctx, _body_html, str(ctx.get("business_id") or ""))
+        if _ad_layer:
+            css_parts.append("/* — art direction (authored) — */\n" + _ad_layer)
+            ctx["_art_direction_chars"] = len(_ad_layer)
+    except Exception:
+        pass
+    return page_shell(ctx["dna"], title, _body_html, "\n".join(css_parts),
                       design=ctx.get("design"), meta=build_page_meta(ctx))
