@@ -2641,6 +2641,27 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
             cfg["dro_summary"] = dro_summary
         else:
             cfg.pop("dro_summary", None)   # never show a stale summary on fallback
+    # RESIDUE PURGE (2026-07-22, Kevin's live report: "so much residue of
+    # past designs"): a FULL recompose sweeps the dead Director-era
+    # artifacts out of site_config — they are read only by the legacy
+    # /director path and confuse every forensic read. Live-path keys
+    # (vocabulary_override, previous_compose, build_inputs) stay.
+    if full_recompose:
+        for _dead in ("design_brief", "design_recommendation",
+                      "enriched_brief", "generated_decoration",
+                      "slot_concept", "page_spec", "html_build_error",
+                      "html_build_failed_at", "html_validation_errors",
+                      "dalle_spend_log", "composer_cache", "sections"):
+            cfg.pop(_dead, None)
+    # Brain-mode telemetry: a minimal-mode DRO is the real "thin" story —
+    # surface it so applied_thin is never a mystery again.
+    try:
+        if isinstance(dro, dict) and (dro.get("meta") or {}).get("authored_minimal"):
+            cfg["dro_mode"] = "minimal"
+        else:
+            cfg.pop("dro_mode", None)
+    except Exception:
+        pass
     # Design languages + frameworks — persist the skeleton + craft picks
     # with their because (forensics + the future outcome-priors loop).
     if ctx.get("language_key"):

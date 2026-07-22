@@ -278,11 +278,15 @@ def rubric_select(ctx: Dict[str, Any]) -> Tuple[Optional[str], str]:
     boldness = str(prefs.get("boldness") or "")
     tp = str(prefs.get("type_personality") or "")
     btype = str((ctx.get("business") or {}).get("type") or "").lower()
-    # Loudness is decisive evidence; after that, WHAT the photos are of
-    # (a portfolio vs a person) separates monograph from mural.
-    if boldness in ("bold", "loud"):
-        return "mural", (f"rubric: boldness={boldness}, "
-                         f"{photos} photos, type={btype[:24]!r}")
+    # Loudness / a statement type-voice is decisive evidence; after
+    # that, WHAT the photos are of (portfolio vs person) separates
+    # monograph from mural. Live lesson (2026-07-22): a business-type
+    # STRING like 'consultant' must never outvote conviction evidence —
+    # a gold-brand statement-voiced ministry got the law-firm language.
+    if boldness in ("bold", "loud") or tp == "statement":
+        return "mural", (f"rubric: boldness={boldness or 'n/a'}, "
+                         f"type_voice={tp or 'n/a'}, {photos} photos — "
+                         "conviction evidence")
     if photos >= 4 and any(
             w in btype for w in ("design", "photo", "beauty", "fashion",
                                  "salon", "event", "brand", "studio",
@@ -296,10 +300,12 @@ def rubric_select(ctx: Dict[str, Any]) -> Tuple[Optional[str], str]:
                                  "speak", "artist", "media")):
         return "mural", (f"rubric: {photos} photos, "
                          f"person-forward type={btype[:24]!r}")
-    if tp in ("editorial", "classic") or any(
-            w in btype for w in ("law", "account", "financ", "consult",
-                                 "advis", "insur")):
-        return "ledger", f"rubric: type_personality={tp or 'n/a'}, type={btype[:24]!r}"
+    if (tp in ("editorial", "classic")
+            or (photos < 3 and any(
+                w in btype for w in ("law", "account", "financ", "consult",
+                                     "advis", "insur")))):
+        return "ledger", (f"rubric: type_personality={tp or 'n/a'}, "
+                          f"type={btype[:24]!r}, {photos} photos")
     return None, "rubric: no language fits better than neutral"
 
 
