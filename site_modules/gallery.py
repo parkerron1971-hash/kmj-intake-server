@@ -202,6 +202,9 @@ def _statements(content: Dict[str, Any], ctx: Dict[str, Any]) -> List[str]:
     prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
     verbs = [str(v).strip() for v in (prefs.get("hero_verbs") or []) if str(v or "").strip()]
     forged: List[str] = []
+    slogan = str(prefs.get("slogan") or "").strip()
+    if slogan:
+        forged.append(slogan)
     if verbs:
         forged.append(". ".join(w.capitalize() for w in verbs[:3]) + ".")
     offer = str(prefs.get("offer") or "").strip()
@@ -209,7 +212,7 @@ def _statements(content: Dict[str, Any], ctx: Dict[str, Any]) -> List[str]:
         first = offer.split(".")[0].strip()
         if 8 <= len(first) <= 80:
             forged.append(first)
-    return forged[:2]
+    return forged[:3]
 
 
 def _board(i: int, text: str) -> str:

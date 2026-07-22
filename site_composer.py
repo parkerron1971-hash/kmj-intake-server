@@ -282,6 +282,12 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
     # their downstream consumers (atelier REAL DATA, gallery-by-intent,
     # type pairing) read keys that never existed. THE RULE: every new
     # SitePrefs field ships with its allowlist entry, same arc.
+    # Slogan / key statement (Kevin's ruling 2026-07-22): the owner gives
+    # EITHER a slogan OR their three verbs — Chief forges the page's key
+    # statements from whichever exists.
+    sl = raw.get("slogan")
+    if isinstance(sl, str) and sl.strip():
+        out["slogan"] = sl.strip()[:120]
     tp = raw.get("type_personality")
     if isinstance(tp, str) and tp.strip().lower() in (
             "statement", "editorial", "modern_minimal", "classic",
@@ -968,6 +974,12 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
     if prefs.get("hero_verbs"):
         pref_lines.append("Owner's three verbs (hero material): "
                           + ", ".join(str(v) for v in prefs["hero_verbs"][:3]))
+    if prefs.get("slogan"):
+        pref_lines.append(
+            f"Owner's slogan / key statement: \"{prefs['slogan']}\" — this is "
+            "LOAD-BEARING copy: the hero subheadline or a gallery statement "
+            "board must carry it (verbatim or lightly polished), and every "
+            "other key statement should rhyme with its voice.")
     if prefs.get("inspiration_notes"):
         pref_lines.append("What the owner loves about their inspiration "
                           f"sites: {prefs['inspiration_notes']}")
