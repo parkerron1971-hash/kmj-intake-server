@@ -267,19 +267,101 @@ _BOARD_CSS = """
 """
 
 
+def _piece_plate(img: Dict[str, Any], i: int) -> str:
+    """Per-piece editorial plate (Kevin's ruling 2026-07-22, from the
+    Emergent study): every piece presented as a CASE — category chip +
+    title + one-line description — not a bare tile. Sourced from the
+    piece's own caption/category fields; graceful when absent."""
+    cap = str(img.get("caption") or "").strip()
+    category = str(img.get("category") or "").strip()
+    title = str(img.get("title") or "").strip()
+    if not title and cap:
+        title = cap if len(cap) <= 48 else ""
+    line = cap if (cap and cap != title) else ""
+    if not (category or title or line):
+        return ""
+    bits = ['<figcaption class="sxm-gal-plate">']
+    if category:
+        bits.append(f'<span class="sxm-gal-chip">{safe(category)}</span>')
+    if title:
+        bits.append(f'<span class="sxm-gal-plate-title">{safe(title)}</span>')
+    if line:
+        bits.append(f'<span class="sxm-gal-plate-line">{safe(line)}</span>')
+    bits.append("</figcaption>")
+    return "".join(bits)
+
+
+_PLATE_CSS = """
+.sxm-gal-plate { display: flex; flex-direction: column; gap: 5px;
+  margin: 10px 2px 2px; }
+.sxm-gal-chip { align-self: flex-start; font-size: 0.62rem;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--sx-accent); border: 1px solid
+    color-mix(in srgb, var(--sx-accent) 55%, transparent);
+  border-radius: 999px; padding: 3px 10px; }
+.sxm-gal-plate-title { font-family: var(--sx-font-heading);
+  font-size: 1.02rem; color: var(--sx-text); }
+.sxm-gal-plate-line { font-size: 0.82rem; line-height: 1.45;
+  color: var(--sx-muted); }
+.sxm-gal-ph { position: relative; }
+.sxm-gal-ph::after { content: "PLACEHOLDER \\2014 SWAP IN EDITOR";
+  position: absolute; top: 10px; left: 10px; font-size: 0.56rem;
+  letter-spacing: 0.14em; padding: 3px 8px; border-radius: 4px;
+  color: var(--sx-bg); background:
+    color-mix(in srgb, var(--sx-accent) 85%, #000); }
+"""
+
+
+def _fill_placeholders(imgs: List[Dict[str, Any]], ctx: Dict[str, Any],
+                       target: int = 6) -> List[Dict[str, Any]]:
+    """Kevin's ruling (2026-07-22, supersedes the no-stock-ever rule):
+    a designed gallery may open with SWAPPABLE placeholder imagery —
+    clearly ribboned, seeded per business so no two sites share frames,
+    replaced the moment real work is uploaded or swapped in the editor.
+    Real photos always lead; placeholders only top up to `target`."""
+    if len(imgs) >= target:
+        return imgs
+    seed = str((ctx.get("business") or {}).get("id") or "kmj")[:8]
+    out = list(imgs)
+    for n in range(target - len(imgs)):
+        out.append({"url": f"https://picsum.photos/seed/{seed}-{n}/900/700",
+                    "caption": "", "_placeholder": True})
+    return out
+
+
 def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[str, str]:
     imgs = _images(ctx)
     if not imgs:
         if _gallery_wanted(ctx):
             return _render_awaiting(content, ctx)
-        return "", ""   # self-drop — never a stock-filler gallery
+        return "", ""   # no gallery asked for, none implied — self-drop
 
     if variant not in VARIANTS:
         variant = "grid"
+    # LAYOUT VARIETY (Kevin's ruling: "all galleries should be
+    # different"): when few real photos exist, the seed rotates the
+    # layout per (business, rationale) so rebuilds and businesses
+    # don't share one gallery shape.
+    _vseed = sum(ord(c) for c in (
+        str((ctx.get("business") or {}).get("id") or "") +
+        str(ctx.get("design_rationale_id") or "")))
+    if len(imgs) < 3 and variant == "grid":
+        variant = ("grid", "mosaic", "masonry")[_vseed % 3]
+    imgs = _fill_placeholders(imgs, ctx) if _gallery_wanted(ctx) else imgs
     dna = ctx.get("dna") or {}
     biz_name = (ctx.get("business") or {}).get("name") or "Business"
     overlay = variant in ("mosaic", "carousel")   # cropped tiles → caption overlay
-    figs = [f for f in (_figure(g, biz_name, overlay=overlay) for g in imgs) if f]
+    figs = []
+    for i, g in enumerate(imgs):
+        f = _figure(g, biz_name, overlay=overlay)
+        if not f:
+            continue
+        plate = "" if overlay else _piece_plate(g, i)
+        if plate:
+            f = f.replace("</figure>", f"{plate}</figure>")
+        if g.get("_placeholder"):
+            f = f.replace('class="sxm-gal-fig', 'class="sxm-gal-fig sxm-gal-ph', 1)
+        figs.append(f)
     if not figs:
         return "", ""
 
@@ -297,5 +379,6 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     <div class="{container_class}">{''.join(pieces)}</div>
   </div>
 </section>"""
-    css = _BASE_CSS + _LAYOUT_CSS[variant] + (_BOARD_CSS if boards else "")
+    css = (_BASE_CSS + _LAYOUT_CSS[variant] + _PLATE_CSS
+           + (_BOARD_CSS if boards else ""))
     return html, css
