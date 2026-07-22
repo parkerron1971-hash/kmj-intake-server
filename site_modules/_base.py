@@ -700,6 +700,48 @@ a {{ color: var(--sx-accent); text-decoration: none; }}
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .28), transparent);
   transform: translateX(-120%); transition: transform .6s var(--sx-ease); }}
 .sxm-cta:hover::before {{ transform: translateX(120%); }}
+/* ── PRIMITIVES POLISH (2026-07-22, the Emergent lesson: the floor is
+   handcrafted). Craft details every professional design system carries
+   and generated sites usually miss — all token-driven, all cheap. ── */
+/* Selection wears the brand — the small tell of a considered page. */
+::selection {{ background: color-mix(in srgb, var(--sx-accent) 30%, transparent);
+  color: var(--sx-text); }}
+/* Keyboard focus is designed, not the UA default. */
+.sxm-cta:focus-visible, a:focus-visible, button:focus-visible,
+summary:focus-visible {{
+  outline: 2px solid color-mix(in srgb, var(--sx-accent) 80%, transparent);
+  outline-offset: 3px; border-radius: var(--sx-radius-button, 6px); }}
+/* CTA press state + inner hairline highlight (the optical 'machined
+   edge' every hand-built button has). */
+.sxm-cta {{ box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #ffffff 18%, transparent),
+    0 1px 2px color-mix(in srgb, var(--sx-accent) 30%, transparent),
+    0 16px 40px color-mix(in srgb, var(--sx-accent) 22%, transparent); }}
+.sxm-cta:active {{ transform: translateY(1px) scale(.995); }}
+/* Cards: layered shadow (tight contact + soft ambient) — depth reads
+   physical instead of blurry. */
+.sxm-card {{ box-shadow:
+    0 1px 2px color-mix(in srgb, #000 18%, transparent),
+    0 6px 22px {SHADOW_REST}; }}
+/* Form fields: one consistent, designed input voice everywhere. */
+.sxm-section input:not([type="checkbox"]):not([type="radio"]),
+.sxm-section textarea, .sxm-section select {{
+  width: 100%; padding: 13px 15px;
+  font: inherit; font-size: .95rem; color: var(--sx-text);
+  background: color-mix(in srgb, var(--sx-surface) 80%, transparent);
+  border: 1px solid var(--sx-border);
+  border-radius: var(--sx-radius-button, 8px);
+  transition: border-color .25s var(--sx-ease), box-shadow .25s var(--sx-ease); }}
+.sxm-section input:not([type="checkbox"]):not([type="radio"]):focus,
+.sxm-section textarea:focus, .sxm-section select:focus {{
+  outline: none; border-color: color-mix(in srgb, var(--sx-accent) 65%, var(--sx-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sx-accent) 18%, transparent); }}
+.sxm-section ::placeholder {{ color: var(--sx-muted); opacity: .75; }}
+/* FAQ rows breathe on hover. */
+.sxm-faq-item summary:hover {{ color: var(--sx-accent-strong, var(--sx-accent)); }}
+/* Numbers line up wherever they stack (stats, prices, numerals). */
+.sxm-off-price, .sxm-stat-value, .sxm-ghost-numeral {{
+  font-variant-numeric: tabular-nums; }}
 .sxm-cta:hover {{ transform: translateY(-3px); background: var(--sx-accent-strong);
   box-shadow: 0 20px 50px color-mix(in srgb, var(--sx-accent) 35%, transparent); }}
 .sxm-muted {{ color: var(--sx-muted); }}

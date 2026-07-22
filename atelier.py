@@ -317,7 +317,18 @@ def plan_bespoke(dro: Optional[Dict[str, Any]], spec: List[Dict[str, Any]],
         return bool(mid) and mid in by_module and mid not in _NEVER_BESPOKE
 
     rb = ((dro or {}).get("decisions") or {}).get("rule_break")
-    budget = 3 if isinstance(rb, dict) and (rb.get("what") or rb.get("where")) else 2
+    # EARNED BESPOKE (2026-07-22, the Emergent lesson): restraint is the
+    # default; the third seat is earned twice over — the DRO authored a
+    # rule-break AND the owner actually fed the creative brief (metaphor/
+    # surprise/tension answers). A thin brief gets hero + one seat on a
+    # polished modular floor — uniform done well beats bespoke done thin.
+    _creative = ((ctx.get("site_prefs") or {}).get("creative")
+                 if isinstance((ctx.get("site_prefs") or {}).get("creative"), dict)
+                 else {})
+    _rich_brief = any(str(_creative.get(k) or "").strip()
+                      for k in ("metaphor", "surprise", "remember", "tension"))
+    _has_rb = isinstance(rb, dict) and bool(rb.get("what") or rb.get("where"))
+    budget = 3 if (_has_rb and _rich_brief) else 2
 
     picks: List[str] = []
     if eligible("hero"):
