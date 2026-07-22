@@ -178,9 +178,14 @@ def _user_prompt(design: Dict[str, Any], dna: Dict[str, Any],
     import json
     pal = (dna.get("palette") or {})
     typ = (dna.get("typography") or {})
+    _fw_d = (design or {}).get("_framework")
+    fw = str(_fw_d.get("label") or "") if isinstance(_fw_d, dict) else ""
+    fw_line = (f"PAGE FRAMEWORK: {fw} — respect its structure; dress it.\n\n"
+               if fw else "")
     return (
         f"BUSINESS: {business_name}\n\n"
         f"THE VISION (DRO summary):\n{(dro_summary or 'none recorded')[:900]}\n\n"
+        f"{fw_line}"
         f"DRO DESIGN FIELDS:\n{json.dumps(design or {}, default=str)[:2200]}\n\n"
         f"CURRENT TOKENS: accent={pal.get('accent')} bg={pal.get('bg')} "
         f"surface={pal.get('surface')} heading_font={typ.get('heading')} "
@@ -224,7 +229,9 @@ def author_layer(ctx: Dict[str, Any], body_html: str,
         if len(inventory) < 5:
             logger.info("[art-direction] inventory too small — skipping")
             return ""
-        design = ctx.get("design") or {}
+        design = dict(ctx.get("design") or {})
+        if ctx.get("framework_label"):
+            design["_framework"] = {"label": ctx["framework_label"]}
         dna = ctx.get("dna") or {}
         summary = str(ctx.get("dro_summary") or
                       (design.get("meta") or {}).get("summary") or "")

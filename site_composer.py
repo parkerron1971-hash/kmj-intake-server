@@ -3439,6 +3439,15 @@ def compose_site(business_id: str, brief_notes: str = "",
     # Site Arc 10 — the ceremony pass: deterministic interstitial seams
     # between the chapters (after sanitize/symmetry, before render;
     # inside the existing 45-55% progress window — no new stage).
+    # FRAMEWORKS ARC (2026-07-22): the skeleton decision — one named
+    # page architecture governs order, portrait seat, and one-
+    # representation-per-content-type (the process×3 fix) — BEFORE the
+    # ceremony pass places seams between the final chapters.
+    try:
+        import page_frameworks
+        spec = page_frameworks.apply_framework(spec, ctx, dro)
+    except Exception:
+        pass
     spec = _apply_ceremony_pass(spec, ctx, dro, seed=dro_id)
 
     # Multi-page (site_multipage): when the site opts in, give the HOME header
@@ -3573,6 +3582,11 @@ def compose_site(business_id: str, brief_notes: str = "",
                                  if s.get("module") == "contact"), len(spec2))
                     spec2.insert(max(1, _pos), {"module": "gallery",
                                                 "variant": _gv, "content": {}})
+                try:
+                    import page_frameworks as _pf2
+                    spec2 = _pf2.apply_framework(spec2, ctx, dro)
+                except Exception:
+                    pass
                 spec2 = _apply_ceremony_pass(spec2, ctx, dro, seed=dro_id)
             except Exception as _spec_err:
                 logger.warning(f"[composer] regen copy pass failed (keeping "
