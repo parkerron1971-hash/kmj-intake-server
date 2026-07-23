@@ -169,7 +169,11 @@ WHAT AUTHORSHIP MEANS HERE (your instincts, the ones templates lack):
   page. Elsewhere the accent lives in ink-level doses — words, hairlines,
   one button. A page bathed in accent reads cheap; scarcity reads intended.
 - Body copy and form hints always var(--sx-font-body) — fix any section
-  where the display face leaked into paragraphs."""
+  where the display face leaked into paragraphs.
+- STROKE TRAFFIC: never add rules, borders or underlines that touch or
+  cross text, existing underlines, or buttons — decorative strokes live
+  in empty space with clearance. The platform already underlines accent
+  words; never double it."""
 
 
 def _user_prompt(design: Dict[str, Any], dna: Dict[str, Any],

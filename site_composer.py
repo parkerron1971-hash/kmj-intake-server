@@ -2187,6 +2187,13 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         # block, rubric fallback) resolves ONCE here, before render — the
         # renderer applies the language's CSS floor + body class, and the
         # atelier/AD prompts receive its brief. Fail-open throughout.
+        # Per-build seed (2026-07-23, Kevin: "menu still the same"): the
+        # rotation seeds (menu architecture, gallery shape, AD cache)
+        # read ctx["design_rationale_id"] — which was persisted to the
+        # config but never placed on ctx, so every rotation collapsed to
+        # the business-id constant. One line ends the sameness.
+        if dro_id:
+            ctx["design_rationale_id"] = dro_id
         try:
             import design_languages as _dl
             _lk, _lwhy, _lby = _dl.resolve(ctx, dro)
