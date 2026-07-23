@@ -3126,7 +3126,7 @@ async def handle_enroll_student(client, biz, action) -> Dict:
 
 # "insight" (Chief Layers arc) = weekly longitudinal findings written by
 # chief_insights.py — rendered in their own prompt section, never by hand.
-VALID_MEMORY_CATEGORIES = {"preference", "pattern", "context", "decision", "boundary", "goal", "standing_instruction", "other", "jit_asked", "insight"}
+VALID_MEMORY_CATEGORIES = {"preference", "pattern", "context", "decision", "boundary", "goal", "standing_instruction", "other", "jit_asked", "insight", "note"}
 VALID_MEMORY_SOURCES = {"user_stated", "ai_inferred", "manual_added"}
 
 # Stop words excluded from memory dedup signature
@@ -3219,6 +3219,28 @@ async def handle_remember(client, biz, action) -> Dict:
 
     label = f"Remembered ({category}): {content[:80]}"
     return {"type": "remember", "result": "stored", "label": label, "nav": None}
+
+
+async def handle_save_note(client, biz, action) -> Dict:
+    """THE NOTES RAIL (2026-07-23, Kevin's ruling): 'note this for later'
+    in any Chief conversation files a NOTE the practitioner reviews in
+    the app's Notes section. Rides chief_memories (category='note') —
+    zero new schema. Unlike memories, notes are the practitioner's OWN
+    parking lot: no dedup (repeating a note is allowed), stored verbatim."""
+    content = (action.get("content") or "").strip()
+    if not content:
+        return _fail("save_note", "nothing to note — content required")
+    inserted = await _sb(client, "POST", "/chief_memories", {
+        "business_id": biz["id"],
+        "category": "note",
+        "content": content[:2000],
+        "source": "user_stated",
+        "importance": 5,
+    })
+    if not inserted:
+        return _fail("save_note", "note insert failed")
+    return {"type": "save_note", "result": "noted",
+            "label": f"📝 Noted for later: {content[:80]}", "nav": None}
 
 
 # ─── Chief → Claude Code bridge (2026-07-11) ─────────────────────────
@@ -10083,6 +10105,7 @@ ACTION_HANDLERS = {
     "create_course":         handle_create_course,
     "enroll_student":        handle_enroll_student,
     "remember":              handle_remember,
+    "save_note":             handle_save_note,
     "queue_build_request":   handle_queue_build_request,
     "forget":                handle_forget,
     "approve_draft":         handle_approve_draft,
@@ -12865,6 +12888,7 @@ ACTIONS — NAVIGATION + MEMORY:
     • When the practitioner wraps up while voice is active ("that's all for now", "we're done here") → say a short, warm goodbye in your reply FIRST, then emit visible:false + keep_talking:false — the window closes after your goodbye finishes playing.
   [ACTION:{{"type":"show_revenue"}}]     — opens GROW → Revenue (the canonical Revenue Analytics surface: Allocator, Expenses, planned-vs-actual, Export, Send to Accountant).
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
+  [ACTION:{{"type":"save_note","content":"..."}}]  — THE NOTES PAD: when they say "note this for later", "put this in a note", "save that thought", "write this down", or hand you anything they'll want to REVIEW later (an idea, a to-revisit, a reminder-to-self), file it as a NOTE — verbatim or lightly cleaned, never summarized away. Notes land in their Notes section in the app for review. Use save_note for the practitioner's OWN parking lot; use remember for facts YOU should recall about them. After filing, confirm with the note's first words so they know it's captured.
   [ACTION:{{"type":"update_business_profile_field","field_path":"governing_state|produces_deliverables|sensitive_areas.health_advice|sensitive_areas.session_recording|sensitive_areas.physical_activity","value":"<their answer>"}}]
   [ACTION:{{"type":"update_voice_profile","patch":{{"description":"...","audience_note":"...","avoid":"...","signature_phrases":"..."}}}}]  — VOICE NOTES: when the practitioner describes HOW they want to sound or WHO they serve — tone blends the brand_voice enum can't hold ("warm, but mix ministry and corporate language depending on the client"), audience framing ("faith-based and secular clients alike"), phrases they love, words to avoid — save it HERE, not just in remember(). Include only the keys they actually addressed. These notes live in About Me → My Voice, the practitioner can edit them there, and they are in your context on every future draft. brand_voice (the single enum) still goes through update_business_profile_field.
     • THIS IS ALSO HOW YOU WRITE TO THE ABOUT ME PAGE. There is no separate "About page body copy" action and none is needed — when you draft a positioning/audience line and the practitioner approves it ("add that to my About Me", "implement it into the About Me"), emit this action with the approved text: audience-framing lines go in audience_note, tone descriptions in description. Example: [ACTION:{{"type":"update_voice_profile","patch":{{"audience_note":"I work with entrepreneurs from all walks of life, some from a faith background, others not — the coaching is the same: practical strategy paired with real accountability."}}}}]
