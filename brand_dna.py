@@ -213,6 +213,79 @@ def is_generic_display(font_name: Any) -> bool:
     return str(font_name or "").strip().lower() in GENERIC_DISPLAY_FACES
 
 
+# ── COLOR WORDS AS SEEDS (2026-07-23, adopted from Kevin's Studio) ────
+# Owners describe colors three ways: exact hex (used verbatim — already
+# handled by colors.love), NAMED colors ("navy and gold"), or FEELINGS
+# ("warm and earthy"). Names resolve through a variant lens — a rich/
+# deep navy is not a bright corporate navy — chosen from modifier words
+# in the same phrase. Deterministic, rubric not lookup: unknown words
+# simply contribute nothing (fail-open to today's behavior).
+_NAMED_COLORS: Dict[str, Dict[str, str]] = {
+    #        default     deep/luxury  warm        bright
+    "navy":      {"d": "#1f3a5f", "x": "#141f38", "w": "#27456d", "b": "#2456a4"},
+    "blue":      {"d": "#2a6bb0", "x": "#1b3a5e", "w": "#3d7ab5", "b": "#2f88e0"},
+    "gold":      {"d": "#c79d26", "x": "#a67c1a", "w": "#d4a940", "b": "#e8b830"},
+    "green":     {"d": "#2f7d4f", "x": "#1f4d36", "w": "#4c7a51", "b": "#29d665"},
+    "sage":      {"d": "#8a9a7b", "x": "#68785c", "w": "#9aa888", "b": "#a3b18a"},
+    "emerald":   {"d": "#199761", "x": "#0f6b45", "w": "#2aa06d", "b": "#17c27a"},
+    "red":       {"d": "#c0392b", "x": "#7e1f1f", "w": "#c74a33", "b": "#e13b2f"},
+    "burgundy":  {"d": "#6e1f33", "x": "#4e1524", "w": "#7d2c3e", "b": "#8e2743"},
+    "purple":    {"d": "#6d4b9e", "x": "#42306b", "w": "#7d5aa5", "b": "#8b5cf6"},
+    "lavender":  {"d": "#a48fd0", "x": "#7f6ab0", "w": "#b09cd8", "b": "#b8a5ec"},
+    "teal":      {"d": "#1f7a83", "x": "#14555c", "w": "#2c868c", "b": "#14b8c4"},
+    "black":     {"d": "#141414", "x": "#0a0a0a", "w": "#1c1814", "b": "#202020"},
+    "white":     {"d": "#f5f2ec", "x": "#efe9df", "w": "#f7f1e6", "b": "#ffffff"},
+    "cream":     {"d": "#efe6d4", "x": "#e5d8bf", "w": "#f2e8d2", "b": "#f7efdd"},
+    "brown":     {"d": "#6d4c33", "x": "#4b3221", "w": "#7a5638", "b": "#8a5a2c"},
+    "tan":       {"d": "#c9a97e", "x": "#a9885e", "w": "#d2b088", "b": "#dcbd92"},
+    "terracotta": {"d": "#b5541c", "x": "#8e3f13", "w": "#c06026", "b": "#d0642a"},
+    "pink":      {"d": "#d16b96", "x": "#a94b74", "w": "#d87ba0", "b": "#f472b6"},
+    "blush":     {"d": "#e6b8b8", "x": "#cf9b9b", "w": "#ecc4bf", "b": "#f4cccc"},
+    "orange":    {"d": "#d97a2b", "x": "#a95c1c", "w": "#e08636", "b": "#f97316"},
+    "yellow":    {"d": "#d9b32b", "x": "#ac8c1d", "w": "#e0bd3d", "b": "#facc15"},
+    "gray":      {"d": "#6f7680", "x": "#4a4f57", "w": "#7d7a72", "b": "#9aa1ab"},
+    "grey":      {"d": "#6f7680", "x": "#4a4f57", "w": "#7d7a72", "b": "#9aa1ab"},
+    "charcoal":  {"d": "#33373d", "x": "#24272c", "w": "#3a3733", "b": "#42474f"},
+    "olive":     {"d": "#6b6b35", "x": "#4c4c26", "w": "#787840", "b": "#8a8a3d"},
+}
+_FEELING_SEEDS: Dict[str, str] = {
+    "warm": "#b5541c", "earth": "#7a5c3e", "moody": "#232733",
+    "airy": "#dfe7ee", "calm": "#5b7c99", "bold": "#c8102e",
+    "fresh": "#2f9e6e", "rich": "#5c2a3d", "luxur": "#0f1b2d",
+    "sunny": "#e8a13a", "ocean": "#1b6f8a", "forest": "#1f4d36",
+    "royal": "#3b2a6d", "minimal": "#1a1a1a", "soft": "#e9dfd6",
+}
+
+
+def interpret_color_words(words: Any) -> List[str]:
+    """'navy and gold' / 'warm and earthy' → up to 3 seed hexes that ride
+    colors.love downstream (anchors, not rules — derive_palette still
+    designs the supporting cast). Modifier words in the phrase pick the
+    variant: deep/dark/rich/luxur → x, warm/earth → w,
+    bright/vibrant/bold/neon → b, else default."""
+    s = str(words or "").lower()
+    if not s.strip():
+        return []
+    variant = "d"
+    if any(m in s for m in ("deep", "dark", "rich", "luxur", "elegant")):
+        variant = "x"
+    elif any(m in s for m in ("bright", "vibrant", "neon", "electric", "bold")):
+        variant = "b"
+    elif any(m in s for m in ("warm", "earth", "cozy", "golden")):
+        variant = "w"
+    seeds: List[str] = []
+    for name, variants in _NAMED_COLORS.items():
+        if name in s and len(seeds) < 3:
+            hexv = variants.get(variant, variants["d"])
+            if hexv not in seeds:
+                seeds.append(hexv)
+    if not seeds:
+        for feel, hexv in _FEELING_SEEDS.items():
+            if feel in s and len(seeds) < 2 and hexv not in seeds:
+                seeds.append(hexv)
+    return seeds
+
+
 def resolve_font_pairing(display_personality: Any) -> Optional[str]:
     """DRO typography.display_personality (schema enum OR prose-ish
     label) → FONT_PAIRINGS key, or None when nothing matches."""

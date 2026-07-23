@@ -122,7 +122,8 @@ _TASK_FAMILY = {"signals": "signals"}   # everything else = "dro"
 
 
 def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
-          temperature: float, business_id: str, task: str) -> str:
+          temperature: float, business_id: str, task: str,
+          prefill: str = "") -> str:
     """One DRL call under the model ladder (Site Arc 12): family-scaled
     timeout, loud+breadcrumbed sonnet fallback on a model-identity error,
     same-model reduced-tokens retry on a timeout. Raises only when every
@@ -132,10 +133,22 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
     (Opus 4.7/4.8 / Sonnet 5 / Fable)."""
     family = _TASK_FAMILY.get(task, "dro")
 
+    # JSON PREFILL (2026-07-23, adopted from Kevin's Studio hardening):
+    # pre-seeding the assistant turn with the JSON's first key removes
+    # the output-shape drift class outright — the model can only
+    # continue the object, never open with prose or a fence. Applied on
+    # the Claude ladder path only (moonshot lacks prefill; that path
+    # keeps today's behavior + parse retries).
+    _messages = [{"role": "user", "content": user}]
+    if prefill:
+        _messages.append({"role": "assistant", "content": prefill})
+    _prefill_applied = {"v": False}
+
     def _do(model: str, max_tokens: int, timeout: float):
+        _prefill_applied["v"] = bool(prefill)
         return client.messages.create(
             model=model, max_tokens=max_tokens,
-            system=system, messages=[{"role": "user", "content": user}],
+            system=system, messages=_messages,
             timeout=timeout,
             **model_ladder.sampling_kwargs(model, temperature),
         )
@@ -185,7 +198,8 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
             business_id=business_id, task_type="composer")
     except Exception:
         pass
-    return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
+    _text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
+    return (prefill + _text) if _prefill_applied["v"] else _text
 
 
 def _parse_json(raw: str) -> Optional[Any]:
@@ -764,7 +778,7 @@ def _author_dro_minimal(client: Anthropic, business_id: str,
         try:
             raw = _call(client, system, user + extra, max_tokens=DRO_MAX_TOKENS,
                         temperature=DRO_TEMPERATURE, business_id=business_id,
-                        task="dro_minimal")
+                        task="dro_minimal", prefill='{"dro_version"')
         except Exception as e:
             last["detail"] = (f"minimal call failed after "
                               f"{time.monotonic() - t0:.0f}s "
@@ -945,7 +959,7 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
         try:
             raw = _call(client, system, user + extra, max_tokens=DRO_MAX_TOKENS,
                         temperature=DRO_TEMPERATURE, business_id=business_id,
-                        task="dro")
+                        task="dro", prefill='{"dro_version"')
         except Exception as e:
             last["detail"] = (f"DRO call failed after "
                               f"{time.monotonic() - t0:.0f}s "
