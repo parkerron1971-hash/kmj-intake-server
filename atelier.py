@@ -613,6 +613,18 @@ def _contract_block(kind: str, uid: str, dom_id: str, slots_line: str,
    - Generous is not empty: no band of your section may be a near-empty
      viewport. If you reach for padding above 8rem, the space must stage
      content the eye travels to, not absence.
+   - COMPOSED, not scattered (live-audit: a hero read as "words and a
+     picture placed in random places on a black screen"): every element
+     sits on a deliberate alignment structure — a grid, a shared edge,
+     an intentional axis. If an element's position has no relationship
+     to another element, it is misplaced.
+   - PROPORTION: media scale answers whitespace scale — generous space
+     around a small image reads as an error, not elegance; size the
+     image (or tighten the space) until the ratio reads intended.
+   - MOTION IS PART OF THE COMPOSITION: give your section an entrance
+     (the sxm-reveal choreography is free — stagger children) and at
+     least one considered hover; a fully static bespoke section reads
+     as a screenshot, not a page.
 
 OUTPUT FORMAT — exactly this, nothing else:
 <!--HTML-->

@@ -54,6 +54,24 @@ def _header_variant(ctx: Dict[str, Any]) -> str:
       soft accent     -> "ghost"   transparent over the hero, solidifies on scroll
       everything else -> "classic" the original bar
     """
+    # MENU VARIETY (2026-07-23, Kevin: "the menu is generic and seems
+    # to never change at all!!"): 'same business, same menu' was the
+    # old rule; now the chosen LANGUAGE shortlists the architectures
+    # that suit its voice and the rationale seed rotates within the
+    # shortlist — every rebuild can wear a different bar, always one
+    # that fits the language.
+    _lang = str(ctx.get("language_key") or "")
+    if _lang:
+        _shortlist = {
+            "mural": ("banner", "split", "classic"),
+            "monograph": ("ghost", "classic", "split"),
+            "ledger": ("classic", "split", "banner"),
+        }.get(_lang)
+        if _shortlist:
+            _seed = sum(ord(c) for c in (
+                str(ctx.get("design_rationale_id") or "")
+                + str((ctx.get("business") or {}).get("id") or "")))
+            return _shortlist[_seed % len(_shortlist)]
     dna = ctx.get("dna") or {}
     if is_brut(dna):
         return "split"
