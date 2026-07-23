@@ -34,11 +34,15 @@ breakpoints (390 / 900 / 1440). Score each 0-10:
 2. BALANCE & COLLISION — any overlaps, crowding, dead zones, orphans?
    (10 = perfectly composed, 0 = colliding mess)
 3. MOTIF VISIBILITY — do accents live in materials (glows, rules, tags,
-   hovers), not only in type? (Doctrine D3)
+   washes), not only in type? (Doctrine D3)
 4. RHYTHM — does vertical spacing feel systematic, with one deliberately
    quiet section?
 5. TEMPLATE SMELL (0 = none, 10 = reeks) — gradient-purple hero, three-
    icon generic feature row, builder monotony, cold blue on dark.
+You are looking at STATIC screenshots. NEVER penalize for interactive
+behavior you cannot observe — hover states, animations, transitions,
+scroll effects all exist in the CSS but cannot show in a still image.
+Judge only what is visible.
 Also answer: DOES ANY SECTION LOOK BROKEN? (y/n + which)
 Output verdict JSON ONLY:
 {"first_viewport_impact": n, "balance": n, "motif_visibility": n,
@@ -232,7 +236,10 @@ def verdict_passes(v: Dict[str, Any]) -> bool:
 # meaningfully. The ratchet refuses to compare verdicts across eras — a
 # live verdict stamped with an older (or missing) rubric gets re-graded
 # under today's standard before it may defend the live site.
-RUBRIC_VERSION = "arcD-1"
+# arcD-2 (2026-07-23): static-screenshot rule — the judge was docking
+# every build's motif score for "no hover states visible", an axis a
+# still image can never show.
+RUBRIC_VERSION = "arcD-2"
 
 
 def verdict_composite(v: Optional[Dict[str, Any]]) -> int:
@@ -251,11 +258,17 @@ def verdict_composite(v: Optional[Dict[str, Any]]) -> int:
 
 
 def grade(html: str, business_id: str = "",
-          standard: Optional[str] = None) -> Optional[Dict[str, Any]]:
+          standard: Optional[str] = None,
+          standard_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Screenshot + grade. None = grader unavailable (never build-fatal).
     `standard` (Arc D) = the authored reference bar for this build's
     direction (reference_standards.standard_for) — the judge scores
-    against it instead of grading in a vacuum."""
+    against it instead of grading in a vacuum.
+    `standard_key` (judge fairness, 2026-07-23) names which bar the
+    verdict was earned under; the ratchet refuses to compare composites
+    across different bars (a build judged against the Nike-campaign
+    standard must not have to beat a live score earned on a softer
+    default bar)."""
     if not _enabled():
         return None
     shots = _screenshot(html)
@@ -293,6 +306,7 @@ def grade(html: str, business_id: str = "",
             v["judge_provider"] = provider
             v["passes_gate"] = verdict_passes(v)
             v["rubric"] = RUBRIC_VERSION
+            v["standard_key"] = standard_key or "default"
             logger.info(f"[vision] verdict for {(business_id or 'unknown')[:8]}: "
                         f"{json.dumps(v)[:400]}")
         return v
