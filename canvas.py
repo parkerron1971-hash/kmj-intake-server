@@ -1204,6 +1204,8 @@ def fact_check_canvas(html: str, ctx: Dict[str, Any],
             continue
         if "IntersectionObserver" in body_js and "sxm-" in body_js:
             continue                      # the platform reveal script
+        if "studio-select" in body_js and "data-override-target" in body_js:
+            continue                      # the platform Studio bridge (_base.STUDIO_BRIDGE)
         if body_js in block_scripts:
             continue                      # platform script inside an immutable block
         problems.append("unidentified <script> block — only the platform "
