@@ -3230,10 +3230,14 @@ async def handle_save_note(client, biz, action) -> Dict:
     content = (action.get("content") or "").strip()
     if not content:
         return _fail("save_note", "nothing to note — content required")
+    # Category rides 'other' with a [note] marker: the DB's
+    # chief_memories_category_check predates 'note' (live 400, 2026-07-23)
+    # and notes living in the memory table means Chief RECALLS them in
+    # later conversations — which is the point of "note this for later".
     inserted = await _sb(client, "POST", "/chief_memories", {
         "business_id": biz["id"],
-        "category": "note",
-        "content": content[:2000],
+        "category": "other",
+        "content": ("[note] " + content)[:2000],
         "source": "user_stated",
         "importance": 5,
     })
