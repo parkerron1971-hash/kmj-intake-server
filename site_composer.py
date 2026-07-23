@@ -2671,8 +2671,14 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     try:
         if isinstance(dro, dict) and (dro.get("meta") or {}).get("authored_minimal"):
             cfg["dro_mode"] = "minimal"
+            _ff = (dro.get("meta") or {}).get("full_failure")
+            if isinstance(_ff, dict):
+                cfg["dro_mode_detail"] = _ff   # WHY the full brain fell back
+            else:
+                cfg.pop("dro_mode_detail", None)
         else:
             cfg.pop("dro_mode", None)
+            cfg.pop("dro_mode_detail", None)
     except Exception:
         pass
     # Design languages + frameworks — persist the skeleton + craft picks

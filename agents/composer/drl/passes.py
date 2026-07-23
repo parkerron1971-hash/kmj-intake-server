@@ -80,7 +80,12 @@ THIN_BRIEF_MIN_SIGNALS = 3
 # because + from_signals) — 3000 truncated the JSON mid-object, and a parse
 # failure returned None with NO retry, killing all three direction stances
 # identically ("0/3 succeeded"). Roomy cap + parse-retry in author_dro.
-DRO_MAX_TOKENS = 6000
+# Why-minimal hunt (2026-07-23): the interview bridge grew the consumed-
+# signal set by 3-6 entries, and the output shape used to echo every
+# signal WITH its evidence quotes — prime truncation suspect for the
+# full DRO JSON dying at the old 6000 cap (every build since the bridge
+# fell to minimal). Slimmer echo above + a taller cap below.
+DRO_MAX_TOKENS = 9000
 DRO_TEMPERATURE = 0.4                          # reasoning with creative latitude
 
 
@@ -642,7 +647,7 @@ def _creative_brief_block(creative: Optional[Dict[str, Any]]) -> str:
 # the output contract is identical in both modes.
 _DRO_OUTPUT_SHAPE = (
     "OUTPUT ONLY the DRO as JSON: "
-    '{"dro_version":1,"business_id":"...","signals":[...echo the consumed signals...],'
+    '{"dro_version":1,"business_id":"...","signals":[{"signal_id":"...","value":"..."} for each consumed signal — IDs and values ONLY, never repeat evidence quotes],'
     '"decisions":{"palette":{...},"typography":{...},"layout":{...},"motion":{...},'
     '"hero_concept":{...},"whitespace":{...},"voice_to_visual":{...},'
     '"rule_break":{"what":"...","where":"...","because":"..."},'
@@ -806,6 +811,15 @@ def _author_dro_minimal(client: Anthropic, business_id: str,
     dro["business_id"] = business_id
     meta = dro.get("meta") if isinstance(dro.get("meta"), dict) else {}
     meta["authored_minimal"] = True
+    # WHY-MINIMAL TELEMETRY (2026-07-23, the burning-money rule): the
+    # FULL attempt's failure stage+detail rides the DRO so site_config
+    # can say exactly why the brain fell back — one organic build
+    # diagnoses what paid test builds were burning cash to guess at.
+    if isinstance(failure_out, dict) and (failure_out.get("stage")
+                                          or failure_out.get("detail")):
+        meta["full_failure"] = {
+            "stage": str(failure_out.get("stage") or "")[:40],
+            "detail": str(failure_out.get("detail") or "")[:300]}
     dro["meta"] = meta
     # No collision regen at this rung (last resort) — but the check block
     # still records honestly how close to the cohort it landed.
