@@ -625,6 +625,15 @@ def _contract_block(kind: str, uid: str, dom_id: str, slots_line: str,
      (the sxm-reveal choreography is free — stagger children) and at
      least one considered hover; a fully static bespoke section reads
      as a screenshot, not a page.
+   - STROKE TRAFFIC (live-audit: a drawn concept-line crossed a
+     headline's underline and ran under the button): decorative
+     strokes, rules and drawn lines route through EMPTY space only —
+     never across text, never touching another line or underline,
+     never within 32px of a button. If the concept demands a line pass
+     near content, it passes behind at <=25% opacity and still never
+     under an interactive element. One drawn line per section; the
+     platform already underlines accent words, so never add your own
+     line under or beside a heading.
 
 OUTPUT FORMAT — exactly this, nothing else:
 <!--HTML-->
