@@ -1307,6 +1307,7 @@ VARIANT GUIDE (when to reach for the expressive variants):
 
 RULES
 - If a DESIGN RATIONALE block appears above, it OVERRIDES generic instincts: concept-voice copy (in-concept headline/eyebrows/CTAs) and the section order it specifies are REQUIRED, not optional.
+- THE SELLING LAW (2026-07-23, Kevin's ruling — the site's JOB): a visitor must leave every section knowing WHAT this business does, WHO it serves, and WHY to act — the copy is the practitioner's best salesperson, not a mood board. Every body/intro/subheadline field is FULL SENTENCES rich with the real facts you were given (offerings, prices, process, stats, story) — never bare fragments. A stylish fragment ("Kept quiet and kept honest.") may open a section ONLY when a complete, concrete selling sentence follows it. If you know a fact a buyer would want (what's included, how long, what it costs, what changes for them), it belongs in the copy. Thin copy is a failed section.
 - Copy must sound like THIS practitioner, not a template. Specific beats generic.
 - A stranger must know within 5 seconds what is offered and for whom — the hero
   subheadline and the offerings section carry this burden.{" Use the owner's offer statement verbatim-adjacent." if offer_stmt else ""}

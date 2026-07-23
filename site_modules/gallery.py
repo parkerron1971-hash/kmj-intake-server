@@ -35,7 +35,8 @@ def _images(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
             and g.get("show_on_website", True)][:_MAX_IMAGES]
 
 
-def _figure(img: Dict[str, Any], biz_name: str, overlay: bool = False) -> str:
+def _figure(img: Dict[str, Any], biz_name: str, overlay: bool = False,
+            lb_id: str = "") -> str:
     url = safe_url(img.get("url"))
     if not url:
         return ""
@@ -49,9 +50,60 @@ def _figure(img: Dict[str, Any], biz_name: str, overlay: bool = False) -> str:
         figcap = (f'<figcaption class="sxm-gal-cap sxm-small">{cap}</figcaption>'
                   if cap else "")
         cls = "sxm-gal-fig"
-    return (f'<figure class="{cls}">'
-            f'<img src="{url}" alt="{alt}" loading="lazy" class="sxm-gal-img">'
-            f'{figcap}</figure>')
+    img_tag = f'<img src="{url}" alt="{alt}" loading="lazy" class="sxm-gal-img">'
+    # Lightbox (Kevin's ruling 2026-07-23): a piece opens full-screen
+    # with its story. CSS-only (:target) — no scripts.
+    if lb_id:
+        img_tag = f'<a class="sxm-gal-open" href="#{lb_id}">{img_tag}</a>'
+    return (f'<figure class="{cls}">{img_tag}{figcap}</figure>')
+
+
+def _lightbox(img: Dict[str, Any], lb_id: str, biz_name: str) -> str:
+    url = safe_url(img.get("url"))
+    if not url:
+        return ""
+    alt = safe(img.get("alt") or img.get("caption") or f"{biz_name} — work sample")
+    title = safe(str(img.get("title") or img.get("caption") or "").strip())
+    line = safe(str(img.get("description") or img.get("caption") or "").strip())
+    if line == title:
+        line = ""
+    return (
+        f'<div class="sxm-gal-lb" id="{lb_id}" role="dialog" aria-label="{alt}">'
+        f'<a class="sxm-gal-lb-close" href="#gallery" aria-label="Close">✕</a>'
+        f'<a class="sxm-gal-lb-back" href="#gallery" aria-hidden="true"></a>'
+        f'<figure class="sxm-gal-lb-fig">'
+        f'<img src="{url}" alt="{alt}">'
+        + (f'<figcaption><strong>{title}</strong>'
+           + (f'<span>{line}</span>' if line else "")
+           + '</figcaption>' if (title or line) else "")
+        + '</figure></div>')
+
+
+_LIGHTBOX_CSS = """
+.sxm-gal-open { display: block; cursor: zoom-in; }
+.sxm-gal-lb { position: fixed; inset: 0; z-index: 240; display: none;
+  align-items: center; justify-content: center; padding: 4vh 4vw; }
+.sxm-gal-lb:target { display: flex; }
+.sxm-gal-lb-back { position: absolute; inset: 0;
+  background: rgba(8, 8, 10, 0.92); }
+.sxm-gal-lb-fig { position: relative; margin: 0; max-width: min(920px, 92vw);
+  max-height: 88vh; display: flex; flex-direction: column; gap: 12px; }
+.sxm-gal-lb-fig img { max-width: 100%; max-height: 72vh; object-fit: contain;
+  border-radius: var(--sx-radius-image);
+  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.6); }
+.sxm-gal-lb-fig figcaption { display: flex; flex-direction: column; gap: 4px;
+  color: #f2eee4; }
+.sxm-gal-lb-fig figcaption strong { font-family: var(--sx-font-heading);
+  font-size: 1.1rem; }
+.sxm-gal-lb-fig figcaption span { font-size: 0.88rem; line-height: 1.5;
+  color: rgba(242, 238, 228, 0.75); }
+.sxm-gal-lb-close { position: absolute; top: 18px; right: 22px; z-index: 2;
+  width: 40px; height: 40px; display: grid; place-items: center;
+  border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #fff; font-size: 1rem; }
+.sxm-gal-lb-close:hover { border-color: var(--sx-accent);
+  color: var(--sx-accent); }
+"""
 
 
 # Shared CSS — the figure/image/caption primitives every layout reuses.
@@ -352,10 +404,14 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     biz_name = (ctx.get("business") or {}).get("name") or "Business"
     overlay = variant in ("mosaic", "carousel")   # cropped tiles → caption overlay
     figs = []
+    lightboxes = []
     for i, g in enumerate(imgs):
-        f = _figure(g, biz_name, overlay=overlay)
+        lb_id = "" if g.get("_placeholder") else f"sxgl-{i + 1}"
+        f = _figure(g, biz_name, overlay=overlay, lb_id=lb_id)
         if not f:
             continue
+        if lb_id:
+            lightboxes.append(_lightbox(g, lb_id, biz_name))
         plate = "" if overlay else _piece_plate(g, i)
         if plate:
             f = f.replace("</figure>", f"{plate}</figure>")
@@ -377,8 +433,10 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
     {eb}
     <h2 {ov('gallery', 'headline')}>{accent_headline(headline)}</h2>
     <div class="{container_class}">{''.join(pieces)}</div>
+    {''.join(lightboxes)}
   </div>
 </section>"""
     css = (_BASE_CSS + _LAYOUT_CSS[variant] + _PLATE_CSS
+           + (_LIGHTBOX_CSS if lightboxes else "")
            + (_BOARD_CSS if boards else ""))
     return html, css

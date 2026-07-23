@@ -81,13 +81,24 @@ LANGUAGES: Dict[str, Dict[str, Any]] = {
 .sx-lang-mural .sxm-statband .sxm-stat-value {
   font-size: clamp(4rem, 9vw, 7.5rem); line-height: 1;
   letter-spacing: -0.02em; }
-/* CTA band: ink-marble material (layered radials), hard cut. */
+/* CTA band: ink-marble material (layered radials), hard cut.
+   CONTRAST GUARANTEE (2026-07-23, the unreadable closing section):
+   this band's ground is near-black, so its ink is FORCED light — no
+   authored layer may leave dark words on it. */
 .sx-lang-mural .sxm-cta-section, .sx-lang-mural .sxm-ctaed { background:
     radial-gradient(90rem 40rem at 15% 20%,
       color-mix(in srgb, var(--sx-accent) 20%, transparent), transparent 60%),
     radial-gradient(70rem 50rem at 85% 80%,
       color-mix(in srgb, var(--sx-accent) 12%, transparent), transparent 55%),
     color-mix(in srgb, #000 88%, var(--sx-accent)); }
+.sx-lang-mural .sxm-cta-section h2, .sx-lang-mural .sxm-ctaed h2,
+.sx-lang-mural .sxm-cta-section p, .sx-lang-mural .sxm-ctaed p {
+  color: #f2eee4 !important; }
+.sx-lang-mural .sxm-cta-section .sxm-accent-word,
+.sx-lang-mural .sxm-ctaed .sxm-accent-word {
+  color: var(--sx-accent) !important; }
+.sx-lang-mural .sxm-ctaed .sxm-cta {
+  background: var(--sx-accent); color: #14100a; }
 /* Footer + contact: diagonal-rib material. */
 .sx-lang-mural .sxm-contact { background:
     repeating-linear-gradient(-55deg,
