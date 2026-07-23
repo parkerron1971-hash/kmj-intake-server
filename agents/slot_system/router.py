@@ -16,6 +16,8 @@ User-facing endpoints (PART 5):
   POST /slots/{business_id}/{slot_name}/upload    — practitioner upload
   POST /slots/{business_id}/{slot_name}/clear     — revert to default
   POST /slots/{business_id}/{slot_name}/reroll    — re-query default
+  POST /slots/{business_id}/{slot_name}/remove    — hide from the site
+  POST /slots/{business_id}/{slot_name}/restore   — un-hide
 
 Owner gating: NONE at this layer. Matches the existing pattern across
 practitioner_profile_router, voice_depth_agent, public_site.py — all
@@ -601,6 +603,67 @@ def clear_slot(
     }
 
 
+@router.post("/{business_id}/{slot_name}/remove")
+def remove_slot(
+    business_id: str,
+    slot_name: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
+    """Hide a slot's image from the served site entirely. The resolver
+    strips the tag — no image, no placeholder box — so the page simply
+    renders without it. Nothing is deleted: the custom upload and the
+    default suggestion both stay on the record, and /restore (or a new
+    upload / reroll) brings the image back. Survives rebuilds."""
+    defn = get_slot_definition(slot_name)
+    if not defn:
+        raise HTTPException(404, f"unknown slot: {slot_name}")
+
+    ok = slot_storage.set_slot_removed(business_id, slot_name, True)
+    if not ok:
+        raise HTTPException(
+            502,
+            {
+                "error": "slot_remove_failed",
+                "business_id": business_id,
+                "slot_name": slot_name,
+            },
+        )
+    _refresh_composed(business_id)   # re-render so the removal shows live
+    return {
+        "success": True,
+        "slot": _slot_record_for_response(business_id, slot_name),
+    }
+
+
+@router.post("/{business_id}/{slot_name}/restore")
+def restore_slot(
+    business_id: str,
+    slot_name: str,
+    _: UserSession = Depends(sb_clients.authed_request),
+) -> Dict[str, Any]:
+    """Lift a /remove: the slot resolves normally again (custom upload
+    wins, else default suggestion, else placeholder)."""
+    defn = get_slot_definition(slot_name)
+    if not defn:
+        raise HTTPException(404, f"unknown slot: {slot_name}")
+
+    ok = slot_storage.set_slot_removed(business_id, slot_name, False)
+    if not ok:
+        raise HTTPException(
+            502,
+            {
+                "error": "slot_restore_failed",
+                "business_id": business_id,
+                "slot_name": slot_name,
+            },
+        )
+    _refresh_composed(business_id)
+    return {
+        "success": True,
+        "slot": _slot_record_for_response(business_id, slot_name),
+    }
+
+
 class RerollRequest(BaseModel):
     quality: Optional[str] = None  # "standard" | "hd" — DALL-E only
 
@@ -793,6 +856,11 @@ def reroll_slot(
     elif new_source == "dalle":
         persist_kwargs["dalle_prompt"] = record.get("default_dalle_prompt")
     slot_storage.set_slot_default(**persist_kwargs)
+
+    # An explicit reroll means the practitioner wants an image here —
+    # lift any prior removal so the fresh suggestion actually shows.
+    if record.get("removed"):
+        slot_storage.set_slot_removed(business_id, slot_name, False)
 
     # Increment counter AFTER the retrieval succeeds — so a failed
     # reroll attempt doesn't burn the daily budget.

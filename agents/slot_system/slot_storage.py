@@ -18,7 +18,10 @@ Slot record shape persisted under site_config["slots"][slot_name]:
     "custom_url": str | None,         # set by /slots/upload
     "custom_uploaded_at": str | None, # ISO8601 UTC
     "reroll_count_today": int,        # 0 each new UTC date
-    "reroll_last_at": str | None      # ISO8601 UTC of most recent reroll
+    "reroll_last_at": str | None,     # ISO8601 UTC of most recent reroll
+    "removed": bool                   # practitioner hid this image; the
+                                      # site renders WITHOUT it (no
+                                      # placeholder). Survives rebuilds.
   }
 """
 from __future__ import annotations
@@ -101,6 +104,7 @@ def _empty_slot_record() -> Dict[str, Any]:
         "custom_uploaded_at": None,
         "reroll_count_today": 0,
         "reroll_last_at": None,
+        "removed": False,
     }
 
 
@@ -176,6 +180,31 @@ def set_slot_custom(
     record = dict(slots.get(slot_name) or _empty_slot_record())
     record["custom_url"] = url
     record["custom_uploaded_at"] = _now_utc_iso()
+    # An explicit upload means the practitioner wants an image here —
+    # lift any prior removal.
+    record["removed"] = False
+    slots[slot_name] = record
+    cfg["slots"] = slots
+    return _patch_site_config(site_id, cfg)
+
+
+def set_slot_removed(
+    business_id: str,
+    slot_name: str,
+    removed: bool,
+) -> bool:
+    """Practitioner-controlled visibility flag. removed=True → the site
+    renders WITHOUT this slot's image (the resolver strips the tag —
+    no placeholder box on the public page). Upload and reroll lift the
+    flag, since an explicit new image means they want it visible.
+    Build-time populates (set_slot_default) deliberately do NOT touch
+    it, so a removed slot stays removed across rebuilds."""
+    site_id, cfg = _fetch_site_row(business_id)
+    if not site_id:
+        return False
+    slots = dict(cfg.get("slots") or {})
+    record = dict(slots.get(slot_name) or _empty_slot_record())
+    record["removed"] = bool(removed)
     slots[slot_name] = record
     cfg["slots"] = slots
     return _patch_site_config(site_id, cfg)

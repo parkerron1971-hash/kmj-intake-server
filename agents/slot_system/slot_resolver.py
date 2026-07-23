@@ -14,6 +14,8 @@ Pure functions — no IO, no Supabase, no HTTP. Two surfaces:
     emits a credit footer block injected before </footer> or </body>.
 
 Precedence (resolve_slot_url):
+  0. removed flag set    → render NOTHING (resolve_html_slots strips
+                           the <img> tag entirely — no placeholder)
   1. custom_url present  → render the practitioner's upload (no credit)
   2. default_url present → render the suggested image (Unsplash credit
                            or DALL-E generation marker)
@@ -53,6 +55,16 @@ def resolve_slot_url(
             "source": "placeholder",
             "credit": None,
             "is_placeholder": True,
+        }
+
+    if slot_data.get("removed"):
+        return {
+            **base,
+            "url": None,
+            "source": "removed",
+            "credit": None,
+            "is_placeholder": False,
+            "removed": True,
         }
 
     custom_url = slot_data.get("custom_url")
@@ -257,6 +269,12 @@ def resolve_html_slots(
         record = slots.get(slot_name)
         resolved = resolve_slot_url(record, slot_name)
         defn = slot_definitions.get(slot_name)
+
+        # Practitioner removed this image — the page renders without
+        # it. Strip the tag entirely (no placeholder box on a live
+        # public site).
+        if resolved.get("source") == "removed":
+            return ""
 
         if resolved["is_placeholder"]:
             return render_placeholder_html(slot_name, defn)
