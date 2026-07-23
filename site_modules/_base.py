@@ -1097,19 +1097,21 @@ STUDIO_BRIDGE = """<script>(function () {
   try { if (!new URLSearchParams(location.search).has('studio')) return; }
   catch (e) { return; }
   var st = document.createElement('style');
-  st.textContent = '[data-override-target]{cursor:pointer}' +
-    '[data-override-target]:hover{outline:2px dashed rgba(52,211,153,.55);outline-offset:3px}' +
+  st.textContent = '[data-override-target],[data-sx-zone]{cursor:pointer}' +
+    '[data-override-target]:hover,[data-sx-zone]:hover{outline:2px dashed rgba(52,211,153,.55);outline-offset:3px}' +
     '.sx-studio-sel{outline:2px solid #34d399 !important;outline-offset:3px}';
   document.head.appendChild(st);
   document.addEventListener('click', function (ev) {
-    var el = ev.target && ev.target.closest ? ev.target.closest('[data-override-target]') : null;
+    var el = ev.target && ev.target.closest ? ev.target.closest('[data-override-target],[data-sx-zone]') : null;
     if (!el) return;
     ev.preventDefault(); ev.stopPropagation();
     var prev = document.querySelectorAll('.sx-studio-sel');
     for (var i = 0; i < prev.length; i++) prev[i].classList.remove('sx-studio-sel');
     el.classList.add('sx-studio-sel');
     parent.postMessage({ type: 'studio-select',
-      target: el.getAttribute('data-override-target'),
+      target: el.getAttribute('data-override-target')
+        || ('zone:' + (el.getAttribute('data-sx-zone') || '')),
+      label: el.getAttribute('data-sx-label') || '',
       text: (el.textContent || '').trim().slice(0, 120) }, '*');
   }, true);
 })();</script>"""

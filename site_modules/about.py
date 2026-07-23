@@ -74,7 +74,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
       </div>
       <div class="sxm-pq-photo">
         <div class="sxm-imgbox">
-          <img data-slot="about_subject" src="" alt="{img_alt}">
+          <img data-slot="about_subject" src="" alt="{img_alt}" data-sx-zone="image" data-sx-label="Portrait">
         </div>
       </div>
     </div>
@@ -122,7 +122,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
 <section class="sxm-section sxm-about-portrait sxm-reveal" id="about">
   <div class="sxm-inner sxm-about-grid">
     <div class="sxm-about-photo sxm-imgbox">
-      <img data-slot="about_subject" src="" alt="{img_alt}">
+      <img data-slot="about_subject" src="" alt="{img_alt}" data-sx-zone="image" data-sx-label="Portrait">
     </div>
     <div>
       {heading_accent(dna)}

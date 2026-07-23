@@ -50,7 +50,8 @@ def _figure(img: Dict[str, Any], biz_name: str, overlay: bool = False,
         figcap = (f'<figcaption class="sxm-gal-cap sxm-small">{cap}</figcaption>'
                   if cap else "")
         cls = "sxm-gal-fig"
-    img_tag = f'<img src="{url}" alt="{alt}" loading="lazy" class="sxm-gal-img">'
+    img_tag = (f'<img src="{url}" alt="{alt}" loading="lazy" class="sxm-gal-img" '
+               f'data-sx-zone="image" data-sx-label="{safe(str(img.get("title") or img.get("caption") or "Work sample"))[:40]}">')
     # Lightbox (Kevin's ruling 2026-07-23): a piece opens full-screen
     # with its story. CSS-only (:target) — no scripts.
     if lb_id:

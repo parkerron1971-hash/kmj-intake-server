@@ -217,6 +217,12 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
                         if isinstance(x, (str, int, float)) and str(x).strip()]
                 if vals:
                     cout[key] = vals[:4]
+        # Colors as SEEDS (2026-07-23, Studio adoption): the owner may
+        # describe colors in words ("navy and gold", "warm and earthy")
+        # instead of picking swatches.
+        w = c.get("words")
+        if isinstance(w, str) and w.strip():
+            cout["words"] = w.strip()[:120]
         if cout:
             out["colors"] = cout
 
@@ -595,6 +601,20 @@ def gather_context(business_id: str) -> Dict[str, Any]:
     # model) and logs when the DRO's base was overridden.
     color_prefs = (site_prefs.get("colors")
                    if isinstance(site_prefs.get("colors"), dict) else None)
+    # COLOR SEEDS + PROVENANCE (2026-07-23, Studio adoption): words like
+    # "navy and gold" become love-anchors when no explicit picks exist,
+    # and color_source records where the palette's anchors came from —
+    # ending the "where is this green from" forensics class.
+    color_source = "owner_hex" if (color_prefs or {}).get("love") else None
+    if (color_prefs and not color_prefs.get("love")
+            and color_prefs.get("words")):
+        _seeds = brand_dna.interpret_color_words(color_prefs["words"])
+        if _seeds:
+            color_prefs = {**color_prefs, "love": _seeds}
+            color_source = "interpreted_words"
+    if color_source is None:
+        color_source = ("brand_kit" if (color_prefs or {}).get("use_brand") is not False
+                        else "model")
     dna = brand_dna.build_brand_dna(business_id, bundle, color_prefs=color_prefs)
     if (color_prefs or {}).get("direction"):
         dna = brand_dna.apply_owner_ground(dna, color_prefs["direction"])
@@ -680,6 +700,7 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "motion_tokens": _motion,
         "rhythm_scale": _rhythm,
         "site_prefs": site_prefs,
+        "color_source": color_source,
         "cta_goal": cta_goal,
         "connections": connections,
         "store": store,
@@ -2697,6 +2718,8 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         cfg.pop("language", None)
     if ctx.get("framework_key"):
         cfg["framework_key"] = ctx["framework_key"]
+    if ctx.get("color_source"):
+        cfg["color_source"] = ctx["color_source"]
         # Failure forensics (never lose the reason again): fallback persists
         # WHY — {stage: signals|authoring|validation|exception|skipped,
         # detail, at} — served by GET /composer/spec; an applied compose

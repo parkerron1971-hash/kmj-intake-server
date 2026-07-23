@@ -118,7 +118,7 @@ def _render_variant(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) 
                        f'{ov("hero", "eyebrow")}>{safe(content["eyebrow"])}</div>')
         html = f"""
 <section class="sxm-hero-anch" id="top">
-  <img data-slot="hero_main" src="" alt="{img_alt}" class="sxm-hero-bgimg">
+  <img data-slot="hero_main" src="" alt="{img_alt}" class="sxm-hero-bgimg" data-sx-zone="image-overlay" data-sx-bg="true" data-sx-label="Hero background">
   <div class="sxm-anch-scrim"></div>
   <div class="sxm-inner sxm-anch-inner">
     {eb_anch}
@@ -314,7 +314,7 @@ def _render_variant(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) 
     if variant == "banner":
         html = f"""
 <section class="sxm-hero-banner" id="top">
-  <img data-slot="hero_main" src="" alt="{img_alt}" class="sxm-hero-bgimg">
+  <img data-slot="hero_main" src="" alt="{img_alt}" class="sxm-hero-bgimg" data-sx-zone="image-overlay" data-sx-bg="true" data-sx-label="Hero background">
   <div class="sxm-hero-banner-scrim"></div>
   <div class="sxm-inner sxm-hero-banner-inner">
     {heading_accent(dna)}
