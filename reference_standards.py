@@ -127,9 +127,12 @@ def classify(evidence_text: str) -> str:
     return "default"
 
 
-def standard_for(ctx: Optional[Dict[str, Any]]) -> str:
-    """The authored bar for this build's direction. Never raises; always
-    returns a non-empty standard (default floor at minimum)."""
+def standard_key_for(ctx: Optional[Dict[str, Any]]) -> str:
+    """Which authored bar this build's direction classifies to. Never
+    raises; always returns a key present in STANDARDS. Exposed separately
+    from standard_for so verdicts can be STAMPED with the bar they were
+    earned under — the ratchet must not compare composites graded
+    against different bars."""
     try:
         c = ctx or {}
         design = c.get("design") or {}
@@ -140,9 +143,15 @@ def standard_for(ctx: Optional[Dict[str, Any]]) -> str:
             str((prefs or {}).get("boldness") or ""),
             str(((c.get("bundle") or {}).get("design") or {}).get("vibe_family") or ""),
         ))
-        key = classify(evidence)
+        return classify(evidence)
     except Exception as e:
         logger.warning(f"[standards] classify failed, using default: {e}")
-        key = "default"
+        return "default"
+
+
+def standard_for(ctx: Optional[Dict[str, Any]]) -> str:
+    """The authored bar for this build's direction. Never raises; always
+    returns a non-empty standard (default floor at minimum)."""
+    key = standard_key_for(ctx)
     merged = {**STANDARDS, **_overrides()}
     return merged.get(key) or merged["default"]

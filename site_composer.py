@@ -2470,7 +2470,9 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         # authored reference standard, never in a vacuum.
         try:
             from reference_standards import standard_for as _std_for
+            from reference_standards import standard_key_for as _std_key_for
             _ref_standard = _std_for(ctx)
+            _ref_standard_key = _std_key_for(ctx)
             # LANGUAGE↔STANDARD COHERENCE (2026-07-23, live rejection):
             # the judge graded a MURAL build against the refined_luxury
             # bar ("against Aman, Mont Blanc…") because the standard
@@ -2483,9 +2485,12 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                 _std_key = _dl_std.LANGUAGES.get(_lk, {}).get("standard")
                 if _std_key and _std_key in _STDS:
                     _ref_standard = _STDS[_std_key]
+                    _ref_standard_key = _std_key
         except Exception:
             _ref_standard = None
-        _verdict = _vg.grade(final_html, business_id, standard=_ref_standard)
+            _ref_standard_key = None
+        _verdict = _vg.grade(final_html, business_id, standard=_ref_standard,
+                             standard_key=_ref_standard_key)
         if _verdict is None:
             # Acceptance-run finding: leaving the PREVIOUS build's verdict
             # in site_config misattributes it to this compose (the forced-
@@ -2540,18 +2545,34 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                 #    everything keeps being made"). A regression now
                 #    means MEANINGFULLY worse: new < live − margin
                 #    (SHIP_GATE_MARGIN, default 2). Ties + noise ship.
+                # SAME-BAR RULE (2026-07-23, the paid-for-nothing loop):
+                # composites are only comparable when both verdicts were
+                # earned under the same rubric AND the same reference
+                # standard. Tonight's builds spoke Mural and were judged
+                # against the bold_statement bar ("a Nike campaign
+                # page") while the live verdict's 25 was earned on a
+                # softer default bar — an unwinnable fight the ratchet
+                # treated as a regression, burning a build fee each try.
+                # A live verdict from another rubric era OR another bar
+                # gets the live page re-graded under the CANDIDATE's
+                # rubric + standard before it may defend.
                 if (_live_verdict is not None
-                        and _live_verdict.get("rubric")
-                        != getattr(_vg, "RUBRIC_VERSION", None)):
+                        and (_live_verdict.get("rubric")
+                             != getattr(_vg, "RUBRIC_VERSION", None)
+                             or _live_verdict.get("standard_key")
+                             != (_ref_standard_key or "default"))):
                     try:
                         _live_html = str(((site or {}).get("site_config")
                                           or {}).get("generated_html") or "")
-                        _live_verdict = (_vg.grade(_live_html, business_id,
-                                                   standard=_ref_standard)
+                        _live_verdict = (_vg.grade(
+                                            _live_html, business_id,
+                                            standard=_ref_standard,
+                                            standard_key=_ref_standard_key)
                                          if _live_html.strip() else None)
                         logger.info(
-                            f"[ship-gate] live verdict was stale-era — "
-                            f"re-graded under current rubric: "
+                            f"[ship-gate] live verdict was stale-era or "
+                            f"other-bar — re-graded under current rubric "
+                            f"+ candidate's standard: "
                             f"{_vg.verdict_composite(_live_verdict)}")
                     except Exception as _era_e:
                         logger.warning(
@@ -2592,6 +2613,11 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                             _rej_cfg["vision_rejection"] = {
                                 "at": _dt.now(_tz.utc).isoformat(),
                                 "verdict": _verdict,
+                                # The practitioner PAID for this build —
+                                # keep the candidate so a rejection isn't
+                                # a total loss (inspectable, and a future
+                                # "ship it anyway" needs no rebuild).
+                                "candidate_html": final_html,
                             }
                             sb_clients.sb_patch_as_service(
                                 f"/business_sites?id=eq.{_rej_rows[0]['id']}",
