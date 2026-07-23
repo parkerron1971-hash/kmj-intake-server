@@ -66,6 +66,7 @@ LANGUAGES: Dict[str, Dict[str, Any]] = {
             "into the band. (6) The accent owns every action; a second "
             "hue may own identity marks only."),
         "pairing_hint": "bold statement architectural caps",
+        "standard": "bold_statement",
         "css": """
 /* ── MURAL floor — scoped, token-driven, ink-safe ─────────────────── */
 /* Stat band becomes a monument wall: full-accent ground, ghosted
@@ -150,6 +151,7 @@ LANGUAGES: Dict[str, Dict[str, Any]] = {
             "(6) CURVED SEAMS: at least one section edge arcs instead of "
             "cutting straight."),
         "pairing_hint": "modern minimal thin grotesque editorial",
+        "standard": "editorial",
         "css": """
 /* ── MONOGRAPH floor — scoped, token-driven ───────────────────────── */
 /* The frame goes quiet: headings lighten, tracking opens. */
@@ -224,6 +226,7 @@ LANGUAGES: Dict[str, Dict[str, Any]] = {
             "rules organize; no heavy borders. (5) Numbers set tabular, "
             "small-caps labels with wide tracking."),
         "pairing_hint": "editorial refined condensed display",
+        "standard": "refined_luxury",
         "css": """
 /* ── LEDGER floor — scoped, token-driven ──────────────────────────── */
 .sx-lang-ledger .sxm-hero-statement, .sx-lang-ledger .sxm-hero-anchored {

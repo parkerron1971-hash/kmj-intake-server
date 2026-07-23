@@ -2442,6 +2442,18 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         try:
             from reference_standards import standard_for as _std_for
             _ref_standard = _std_for(ctx)
+            # LANGUAGE↔STANDARD COHERENCE (2026-07-23, live rejection):
+            # the judge graded a MURAL build against the refined_luxury
+            # bar ("against Aman, Mont Blanc…") because the standard
+            # classifier and the language selector chose independently.
+            # A build is judged by the bar of the language it SPEAKS.
+            _lk = str(ctx.get("language_key") or "")
+            if _lk:
+                import design_languages as _dl_std
+                from reference_standards import STANDARDS as _STDS
+                _std_key = _dl_std.LANGUAGES.get(_lk, {}).get("standard")
+                if _std_key and _std_key in _STDS:
+                    _ref_standard = _STDS[_std_key]
         except Exception:
             _ref_standard = None
         _verdict = _vg.grade(final_html, business_id, standard=_ref_standard)
