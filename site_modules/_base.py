@@ -1080,8 +1080,39 @@ def page_shell(dna: Dict[str, Any], title: str, body: str, css: str,
 <body class="{body_class}">
 {orb}{body}
 {reveal_script(dna)}
+{STUDIO_BRIDGE}
 </body>
 </html>"""
+
+
+# ── THE STUDIO BRIDGE (2026-07-22, Design Studio phase 2) ─────────────
+# Select-to-talk: inside the Design Studio's iframe (and ONLY there —
+# the script exits instantly unless framed AND ?studio= is present),
+# every element carrying data-override-target becomes tappable. A tap
+# outlines it and posts {type:'studio-select', target, text} to the
+# parent, where Chief receives it as conversation context. Inert on the
+# public site: no frame, no param, no listeners.
+STUDIO_BRIDGE = """<script>(function () {
+  if (window.parent === window) return;
+  try { if (!new URLSearchParams(location.search).has('studio')) return; }
+  catch (e) { return; }
+  var st = document.createElement('style');
+  st.textContent = '[data-override-target]{cursor:pointer}' +
+    '[data-override-target]:hover{outline:2px dashed rgba(52,211,153,.55);outline-offset:3px}' +
+    '.sx-studio-sel{outline:2px solid #34d399 !important;outline-offset:3px}';
+  document.head.appendChild(st);
+  document.addEventListener('click', function (ev) {
+    var el = ev.target && ev.target.closest ? ev.target.closest('[data-override-target]') : null;
+    if (!el) return;
+    ev.preventDefault(); ev.stopPropagation();
+    var prev = document.querySelectorAll('.sx-studio-sel');
+    for (var i = 0; i < prev.length; i++) prev[i].classList.remove('sx-studio-sel');
+    el.classList.add('sx-studio-sel');
+    parent.postMessage({ type: 'studio-select',
+      target: el.getAttribute('data-override-target'),
+      text: (el.textContent || '').trim().slice(0, 120) }, '*');
+  }, true);
+})();</script>"""
 
 
 # ─── Total editability census (gate + atelier validator share this) ──
