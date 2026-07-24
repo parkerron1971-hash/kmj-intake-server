@@ -3669,7 +3669,37 @@ def compose_site(business_id: str, brief_notes: str = "",
         logger.warning(f"[composer] DRO missing but an APPROVED SPEC "
                        f"exists — canvas runs on the spec for "
                        f"{business_id[:8]}")
-    if use_llm and (dro or _has_spec):
+    # ── BUILDER V2 (Revamp Phase 2, SITE_BUILDER_V2=on) ────────────────
+    # One mind, one call, the whole page from the APPROVED SPEC; the
+    # contract armor (annotator, JS/external armor, truth + coverage,
+    # one scoped repair) runs after authorship. On success the document
+    # joins at the same seam the canvas uses; on any failure the ladder
+    # continues below (canvas → modules), wearing the spec's tokens via
+    # the bridge either way.
+    if use_llm and _has_spec and canvas_html is None:
+        try:
+            import builder_v2 as _bv2
+            if _bv2.enabled():
+                _report_progress(progress_cb, 47, "Builder v2 — one mind")
+                _v2 = _bv2.run_builder_v2(
+                    ctx.get("design_spec_text") or "", ctx, business_id,
+                    progress_cb=lambda pct, stage: _report_progress(
+                        progress_cb, pct, stage))
+                canvas_report = (_v2 or {}).get("report") or canvas_report
+                if (_v2 or {}).get("html"):
+                    canvas_html = _v2["html"]
+                    logger.info(f"[composer] BUILDER V2 composed for "
+                                f"{business_id[:8]}")
+                else:
+                    logger.warning(f"[composer] builder v2 fell back for "
+                                   f"{business_id[:8]}: "
+                                   f"{(canvas_report or {}).get('fallbacks')}")
+        except Exception as _v2e:
+            logger.warning(f"[composer] builder v2 crashed (non-fatal — "
+                           f"the ladder continues): "
+                           f"{type(_v2e).__name__}: {_v2e}")
+
+    if use_llm and (dro or _has_spec) and canvas_html is None:
         try:
             import canvas as _canvas_mod
             if _canvas_mod.canvas_enabled():
