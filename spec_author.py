@@ -84,6 +84,12 @@ A vague brief gets filled with the median of the internet. Your spec leaves NO d
 - Decide the interactions: what moves, when, and what every hover/click does. One signature interaction maximum; name it.
 - Decide the mobile behavior in one line per non-obvious section.
 
+THE BRAND COLOR LAW:
+When the business has brand colors — visible in a brand mark you were shown, or carried as hexes in the dossier's brand section — those colors ARE the site's accent palette. You may refine a shade within the same hue family (declare the refinement and why), but inventing a NEW accent hue while brand colors exist is a violation on par with inventing a fact. If the brand carries two colors, the second is a real citizen: give it a job (a section family, a label voice), never drop it.
+
+THE ATMOSPHERE RULE (accent scarcity is NOT atmosphere scarcity):
+Keeping accents disciplined never licenses a flat, empty ground. The stage itself must be DESIGNED: subtle texture or grain, a warm radial glow behind the hero, gradient depth between sections, one full-width color band as punctuation. These are atmosphere, and they have their own budget — spend it. A page can hold a strict three-touch accent rule AND feel lit, warm, and alive; a page that reads as "flat dark rectangle" has failed the atmosphere budget even if every accent rule was obeyed.
+
 THE GENEROSITY RULE (learned the hard way — the first live spec produced an austere concept poster and the owner rejected it on sight):
 A business site is GENEROUS. Rich sections executed cleanly beat austere concept pages, every time. Restraint disciplines COLOR and MOTION — never CONTENT. A visitor should always have something to look at, and every piece of the business should have a home. If the finished page could be described as "minimal," you have failed this business. Your concept is the thread that runs THROUGH a full site — never a substitute for one.
 
