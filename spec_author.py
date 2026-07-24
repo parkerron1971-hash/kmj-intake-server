@@ -71,7 +71,7 @@ THE COVERAGE LAW (equal in force to the truth law):
 Every real asset in the dossier gets a home on the page. Omitting real material is a violation exactly as serious as inventing fake material.
 - A fixed NAVIGATION with the business name and section links. Always.
 - EVERY real service/offering appears — each with its own cell/card and copy.
-- EVERY real portfolio/gallery image appears, referenced by its given name/url — real work is the strongest thing on any business site. Never ban imagery when real imagery exists.
+- EVERY real portfolio/gallery image appears, referenced by its exact url — real work is the strongest thing on any business site. Never ban imagery when real imagery exists. AUTHOR a proper display caption for each piece (a caption describes what the piece is — it is copy, yours to write; a raw filename is data and must never render as a caption).
 - The owner's PORTRAIT appears if provided (about section).
 - Every real testimonial/quote appears.
 - A CONTACT section with a working inquiry form and every real contact channel. Always.
@@ -143,8 +143,35 @@ def _inventory_digest(ctx: Dict[str, Any],
             lines.append(f"{i}. {g['url']} — "
                          f"{g.get('alt') or g.get('caption') or 'untitled piece'}")
     if lines:
-        parts.append("[gallery — EVERY image below appears on the page]\n"
+        parts.append("[gallery — EVERY image below appears on the page. "
+                     "Names here may be raw filenames: AUTHOR a proper "
+                     "display caption for each (captions are copy, not "
+                     "facts) while referencing the exact url.]\n"
                      + "\n".join(lines))
+    # The practitioner's OWN slot uploads (portrait, hero photo …) — the
+    # first live spec never saw the real portrait and stood in a poster
+    # for it. Custom uploads are real assets; removed slots are skipped.
+    slots = (((ctx.get("site") or {}).get("site_config") or {})
+             .get("slots") or {})
+    slot_lines: List[str] = []
+    for name, rec in sorted(slots.items()):
+        if not isinstance(rec, dict) or rec.get("removed"):
+            continue
+        cu = (rec.get("custom_url") or "").strip()
+        if cu:
+            slot_lines.append(f"- {name}: {cu} (the owner's own upload)")
+    if slot_lines:
+        parts.append("[owner's uploaded images — real, use by slot role; "
+                     "the *about/portrait* slot is the owner's portrait]\n"
+                     + "\n".join(slot_lines))
+    # Real contact channels — the first live spec had to leave an
+    # "add email/phone" hole because it never saw these.
+    contact = ctx.get("contact") if isinstance(ctx.get("contact"), dict) else {}
+    ch = [f"- {k}: {v}" for k, v in contact.items()
+          if isinstance(v, str) and v.strip()]
+    if ch:
+        parts.append("[contact channels — every one appears in the "
+                     "contact section]\n" + "\n".join(ch))
     return "\n\n".join(parts)
 
 
