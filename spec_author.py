@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -446,6 +447,109 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
 
 
 # ─── Persistence ─────────────────────────────────────────────────────
+
+# ─── THE SPEC TOKEN BRIDGE (2026-07-24, "old design living inside") ──
+# An approved spec names its palette and fonts, but the page's --sx-*
+# tokens came from the stored brand DNA — the spec's colors physically
+# could not reach the page, and an author that obeyed the spec's hexes
+# was killed by the token-only validator (hex literals banned). These
+# helpers extract the spec's declared roles and install them as the
+# page's tokens LAST, on every path — canvas or module fallback — so
+# the approved look survives even a fallback build.
+
+_TOKEN_RE = re.compile(
+    r"(--sx-[a-z][a-z0-9-]*)\s*[:=]\s*"
+    r"(#[0-9a-fA-F]{3,8}\b|rgba?\([^)]+\))")
+
+# Font whitelist: common Google families the shell can safely load.
+_FONT_NAMES = (
+    "Montserrat", "Open Sans", "Bebas Neue", "Playfair Display",
+    "DM Sans", "Inter", "Poppins", "Oswald", "Raleway", "Lato",
+    "Archivo", "Space Grotesk", "Manrope", "Fraunces", "Work Sans",
+    "Libre Baskerville", "Cormorant Garamond", "Anton", "Sora",
+    "Outfit", "Barlow", "Karla", "Rubik", "Crimson Pro",
+)
+_FONT_RE = re.compile("|".join(re.escape(f) for f in _FONT_NAMES))
+
+
+def extract_token_overrides(spec_text: str) -> Dict[str, str]:
+    """{--sx-token: value} for every color role the spec declares.
+    First declaration wins. Font tokens are excluded here (fonts need
+    a <link>, handled by extract_font_overrides)."""
+    out: Dict[str, str] = {}
+    for m in _TOKEN_RE.finditer(spec_text or ""):
+        name, val = m.group(1), m.group(2).strip()
+        if "font" in name or "display" in name or "body" in name:
+            continue
+        if name not in out:
+            out[name] = val
+    return out
+
+
+def extract_font_overrides(spec_text: str) -> Dict[str, str]:
+    """{--sx-font-heading/body: 'Family'} from the spec's font section.
+    Heuristic: the first whitelisted family on a display/headline line
+    is the heading face; the first on a body line is the body face."""
+    out: Dict[str, str] = {}
+    for line in (spec_text or "").splitlines():
+        low = line.lower()
+        m = _FONT_RE.search(line)
+        if not m:
+            continue
+        fam = m.group(0)
+        if ("display" in low or "headline" in low) \
+                and "--sx-font-heading" not in out:
+            out["--sx-font-heading"] = fam
+        elif ("body" in low or "copy" in low) \
+                and "--sx-font-body" not in out:
+            out["--sx-font-body"] = fam
+    return out
+
+
+def spec_override_css(spec_text: str) -> str:
+    """The late-cascade override block, or '' when the spec declares
+    nothing usable. Also retires the legacy signature-underline chrome
+    — the spec owns the page's signature now."""
+    colors = extract_token_overrides(spec_text)
+    fonts = extract_font_overrides(spec_text)
+    if not colors and not fonts:
+        return ""
+    decls = [f"{k}:{v}" for k, v in colors.items()]
+    for tok, fam in fonts.items():
+        decls.append(f"{tok}:'{fam}',sans-serif")
+    return (
+        "<style id=\"sx-spec-overrides\">/* the approved spec's tokens — "
+        "installed last so they win every cascade */\n"
+        ":root{" + ";".join(decls) + "}\n"
+        "body[class*=\"sx-sig-\"] .sxm-reveal h2::after{content:none!important;"
+        "display:none!important}\n"
+        "</style>")
+
+
+def _font_link(fonts: Dict[str, str]) -> str:
+    fams = sorted({f for f in fonts.values()})
+    if not fams:
+        return ""
+    spec = "&family=".join(
+        f.replace(" ", "+") + ":wght@300;400;600;700;800;900" for f in fams)
+    return (f'<link rel="stylesheet" '
+            f'href="https://fonts.googleapis.com/css2?family={spec}'
+            f'&display=swap">')
+
+
+def apply_spec_overrides(html: str, spec_text: str) -> str:
+    """Inject the spec's token overrides (+ font links) before </head>.
+    Fail-open: any problem returns the html untouched."""
+    try:
+        block = spec_override_css(spec_text)
+        if not block or "</head>" not in html:
+            return html
+        inject = _font_link(extract_font_overrides(spec_text)) + block
+        return html.replace("</head>", inject + "</head>", 1)
+    except Exception as e:
+        logger.warning(f"[spec] override injection skipped: {e}")
+        return html
+
 
 def _site_row(business_id: str):
     import sb_clients

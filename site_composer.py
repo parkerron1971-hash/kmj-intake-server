@@ -2340,6 +2340,27 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     except Exception as e:
         logger.warning(f"[composer] text override resolution failed (non-fatal): {e}")
     final_html = _inject_color_overrides(final_html, business_id)       # color
+    # THE SPEC TOKEN BRIDGE (2026-07-24, "old design living inside"):
+    # an approved spec names its palette/fonts, but the page's tokens
+    # came from the stored brand DNA — the spec's look physically could
+    # not reach the page, and every canvas fallback re-dressed the site
+    # in the old regime (Anton + old accent + sig-underline). The spec's
+    # declared --sx-* roles now override the tokens LAST on EVERY path,
+    # so the approved look survives even a fallback build.
+    try:
+        import spec_author as _sa_over
+        _spec_txt = (ctx.get("design_spec_text") or "").strip()
+        if not _spec_txt:
+            # Re-render paths (shuffle/refresh/override saves) bypass
+            # compose_site — load the approved spec here so a re-render
+            # never strips the approved look back to the old tokens.
+            _spec_txt = _sa_over.approved_spec_text(business_id)
+        if _spec_txt:
+            final_html = _sa_over.apply_spec_overrides(final_html, _spec_txt)
+            logger.info(f"[composer] spec token bridge applied for "
+                        f"{business_id[:8]}")
+    except Exception as _so_e:
+        logger.warning(f"[composer] spec token bridge skipped: {_so_e}")
 
     # Arc 4 — QUALITY GATE: deterministic conformance report over the
     # final document. ONE self-heal re-render for fixable spec issues,

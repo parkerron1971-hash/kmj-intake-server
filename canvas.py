@@ -903,7 +903,11 @@ def _author_chunk(brief: str, span: List[Dict[str, Any]],
         logger.warning(f"[canvas] chunk fell back: "
                        f"{[s['module'] for s in authored]} for "
                        f"{(business_id or 'unknown')[:8]} — {problems[:6]}")
-        return None
+        # Telemetry (2026-07-24, the blind-fallback night): the caller
+        # persists these problems into canvas_report so a failed canvas
+        # is diagnosable from the DB, not just live logs. A sentinel
+        # dict, NOT None — None still means "nothing authored at all".
+        return {"__failed__": [str(p)[:160] for p in problems[:6]]}
     html, css, js, js_dropped = out
     sections = _split_sections(html, uids)
     logger.info(f"[canvas] chunk accepted for {(business_id or 'unknown')[:8]} "
@@ -1434,13 +1438,17 @@ def run_canvas(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
                 is_final=(ci == n - 1), prior_summary=prior,
                 business_id=business_id, feedback=notes)
             mids = [s["module"] for s in span if s["role"] == "authored"]
-            if out is None:
+            _failp = out.get("__failed__") if isinstance(out, dict) else None
+            if out is None or _failp is not None:
                 report["chunks"].append({"index": ci, "sections": mids,
-                                         "ok": False})
+                                         "ok": False,
+                                         "problems": _failp or []})
                 report["fallbacks"].append({
                     "stage": f"chunk_{ci}",
                     "detail": "validation failed after one repair — "
-                              f"{', '.join(mids)} render from modules"})
+                              f"{', '.join(mids)} render from modules"
+                              + (f" | problems: {'; '.join(_failp)}"
+                                 if _failp else "")})
                 continue
             report["chunks"].append({
                 "index": ci, "sections": mids, "ok": True,
