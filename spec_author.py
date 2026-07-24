@@ -88,7 +88,7 @@ THE COVERAGE LAW (equal in force to the truth law):
 Every real asset in the dossier gets a home on the page. Omitting real material is a violation exactly as serious as inventing fake material.
 - A fixed NAVIGATION with the business name and section links. Always.
 - EVERY real service/offering appears — each with its own cell/card and copy.
-- EVERY real portfolio/gallery image appears, referenced by its exact url — real work is the strongest thing on any business site. Never ban imagery when real imagery exists. AUTHOR a proper display caption for each piece (a caption describes what the piece is — it is copy, yours to write; a raw filename is data and must never render as a caption).
+- EVERY real portfolio/gallery image appears, referenced by its exact url — real work is the strongest thing on any business site. Never ban imagery when real imagery exists. AUTHOR a proper display caption for each piece (a caption describes what the piece is — it is copy, yours to write; a raw filename is data and must never render as a caption). CAPTION TRUTH: describe only what the labeled image actually shows — a caption bound to the wrong url is a truth violation. NO CONDITIONAL ENTRIES: the inventory is definitive; never write "(if provided — otherwise omit)" rows. Spec what exists, exactly.
 - The owner's PORTRAIT appears if provided (about section).
 - Every real testimonial/quote appears.
 - A CONTACT section with a working inquiry form and every real contact channel. Always.
@@ -233,10 +233,15 @@ def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
     return "\n".join(parts)
 
 
-def _image_urls(ctx: Dict[str, Any], cap: int = 6) -> List[str]:
+def _image_urls(ctx: Dict[str, Any], cap: int = 12) -> List[str]:
     """The owner's real work, for the Director's eyes (THE ARCHAEOLOGY).
     Priority: slot custom uploads (brand mark / portrait / hero — the
-    most identity-dense pieces), then gallery, deduped, capped. Pure."""
+    most identity-dense pieces), then gallery, deduped, capped. Pure.
+
+    Cap raised 6→12 (2026-07-24): the first sighted draft's cap cut
+    exactly the owner's LOUDEST pieces (the display-type flyers) — the
+    Director observed the quiet half of the portfolio and reached for
+    Montserrat again. The whole gallery must be seen."""
     urls: List[str] = []
     slots = (((ctx.get("site") or {}).get("site_config") or {})
              .get("slots") or {})
@@ -283,13 +288,24 @@ def _call_llm(system: str, user: str, business_id: str,
         # SEES, not from adjectives. Fail-open: a bad url only costs
         # that image (the API skips unfetchable url sources by erroring
         # — so a fetch failure retries once with text only).
+        # LABELED EYES (2026-07-24): every image block is preceded by a
+        # text label carrying its exact url — without labels the first
+        # sighted draft observed correctly but bound its observations
+        # to the WRONG urls (a cross tee captioned "working session").
+        # Observation without addressability scrambles the spec.
         content: Any = user
         if image_urls:
             blocks: List[Dict[str, Any]] = [
                 {"type": "text",
                  "text": "THE OWNER'S REAL WORK — study these first "
-                         "(the archaeology), then write the spec:"}]
-            for u in image_urls:
+                         "(the archaeology). Each image is labeled with "
+                         "its EXACT url: bind every observation and "
+                         "every caption to that label. Caption ONLY "
+                         "images shown here; never invent a caption for "
+                         "an image you did not see."}]
+            for i, u in enumerate(image_urls, 1):
+                blocks.append({"type": "text",
+                               "text": f"IMAGE {i} — exact url: {u}"})
                 blocks.append({"type": "image",
                                "source": {"type": "url", "url": u}})
             blocks.append({"type": "text", "text": user})
