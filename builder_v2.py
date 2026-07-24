@@ -47,7 +47,14 @@ V2_TEMPERATURE = 0.8
 DOC_MAX_BYTES = 300 * 1024
 
 _ALLOWED_LINK_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
-_DIGIT_RUN_RE = re.compile(r"\d{2,}")     # 2+ digit runs must trace
+# AUDIT FIX (flight one): the 2-digit rule attacked the DESIGN — the
+# spec's own section numerals (01, 02…) and the copyright year were
+# flagged as invented facts, firing repairs that pressured the author
+# to strip its own design language. CLAIMS are 3+ digit runs; 1-2
+# digit ordinals are layout, and the current year is a date, not a
+# claim. (Trade-off accepted: an invented 2-digit stat now passes the
+# automated trace — the judge and the owner remain its referees.)
+_DIGIT_RUN_RE = re.compile(r"\d{3,}")
 _FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$", re.MULTILINE)
 
 _JS_BANNED = (
@@ -198,32 +205,43 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
 
 # ─── mechanical armor (deterministic, zero model calls) ─────────────
 
+_ANNOT_TAG_RE = re.compile(
+    r"<(h1|h2|h3|h4|p|li|blockquote|figcaption)(\s[^>]*)?>",
+    re.IGNORECASE)
+
+
 def annotate_editability(html: str) -> Tuple[str, int]:
     """THE ANNOTATOR (Amendment 1): guarantee data-override-target on
-    every text-bearing element the model missed. Returns (html, added)."""
+    every text-bearing element the model missed. Returns (html, added).
+
+    AUDIT FIX (2026-07-24, flight one): the first version re-serialized
+    the WHOLE document through bs4, which lowercases case-sensitive SVG
+    attributes (viewBox, preserveAspectRatio) — silently breaking any
+    inline-SVG signature move (the spec's DOTS line) before the judge
+    ever saw it. Now a surgical regex injects the attribute into the
+    matched opening tags ONLY — every other byte of the document is
+    untouched."""
     try:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, "html.parser")
-        n = 0
-        existing = {el.get("data-override-target")
-                    for el in soup.find_all(attrs={"data-override-target": True})}
-        counter = 0
-        for tag in soup.find_all(["h1", "h2", "h3", "h4", "p", "li",
-                                   "blockquote", "figcaption"]):
-            if tag.get("data-override-target"):
-                continue
-            text = tag.get_text(strip=True)
-            if not text or len(text) < 2:
-                continue
-            counter += 1
-            target = f"v2/auto_{counter}"
+        existing = set(re.findall(r'data-override-target\s*=\s*["\']([^"\']+)',
+                                  html))
+        state = {"n": 0, "counter": 0}
+
+        def _inject(m: re.Match) -> str:
+            tag_open = m.group(0)
+            if "data-override-target" in tag_open:
+                return tag_open
+            state["counter"] += 1
+            target = f"v2/auto_{state['counter']}"
             while target in existing:
-                counter += 1
-                target = f"v2/auto_{counter}"
-            tag["data-override-target"] = target
+                state["counter"] += 1
+                target = f"v2/auto_{state['counter']}"
             existing.add(target)
-            n += 1
-        return str(soup), n
+            state["n"] += 1
+            return (tag_open[:-1]
+                    + f' data-override-target="{target}">')
+
+        out = _ANNOT_TAG_RE.sub(_inject, html)
+        return out, state["n"]
     except Exception as e:
         logger.warning(f"[v2] annotator skipped: {e}")
         return html, 0
@@ -286,12 +304,16 @@ def _visible_text(html: str) -> str:
 
 
 def check_truth(html: str, real_data: str) -> List[str]:
-    """Every 2+ digit run in visible text must appear in the data (the
-    canvas fact-trace, page-wide). Years-as-copy ('24/7') ride only if
-    the data holds them too — real or removed."""
+    """Every 3+ digit run in visible text must appear in the data (the
+    fact-trace, page-wide) — with the current year exempt (a copyright
+    line is a date, not a claim)."""
+    from datetime import datetime, timezone
     data_runs = set(_DIGIT_RUN_RE.findall(real_data))
+    year = str(datetime.now(timezone.utc).year)
     problems: List[str] = []
     for run in dict.fromkeys(_DIGIT_RUN_RE.findall(_visible_text(html))):
+        if run == year:
+            continue
         if run not in data_runs:
             problems.append(f"number '{run}' on the page but not in the "
                             f"REAL DATA — real or removed")

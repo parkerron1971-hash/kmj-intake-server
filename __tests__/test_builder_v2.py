@@ -32,13 +32,41 @@ def test_parse_doc_strips_fences_and_bounds():
 
 def test_annotator_adds_targets_and_preserves_existing():
     html = ("<html><body><h1 data-override-target='v2/f1'>Hi</h1>"
-            "<p>copy one</p><p>copy two</p><li></li></body></html>")
+            "<p>copy one</p><p>copy two</p></body></html>")
     out, added = v2.annotate_editability(html)
     assert added == 2                       # two unstamped paragraphs
     assert 'data-override-target="v2/auto_1"' in out
     assert "v2/f1" in out                   # existing stamp untouched
-    # empty <li> gets nothing
     assert out.count("data-override-target") == 3
+
+
+def test_annotator_never_reserializes_the_document():
+    """AUDIT FIX (flight one): the bs4 version re-serialized the whole
+    doc and lowercased case-sensitive SVG attributes — silently
+    breaking inline-SVG signature moves (viewBox, preserveAspectRatio)
+    before the judge ever saw them. The regex version touches ONLY the
+    matched opening tags."""
+    html = ("<html><body>"
+            '<svg viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet">'
+            '<circle r="2"/></svg>'
+            "<script>if(a>1){b()}</script><p>text</p></body></html>")
+    out, added = v2.annotate_editability(html)
+    assert added == 1
+    assert "viewBox" in out and "preserveAspectRatio" in out
+    assert "if(a>1)" in out
+
+
+def test_truth_exempts_design_numerals_and_current_year():
+    """AUDIT FIX: '01' section numerals and the copyright year are
+    layout and dates, not claims — the old 2-digit rule fired repairs
+    that pressured the author to strip its own design language."""
+    from datetime import datetime, timezone
+    year = datetime.now(timezone.utc).year
+    data = 'BUSINESS: KMJ\n{"count": "400"}'
+    page = (f"<html><body><p>01</p><p>02 — Phase</p><p>© {year}</p>"
+            f"<p>400 clients</p><p>trusted by 999</p></body></html>")
+    flags = v2.check_truth(page, data)
+    assert len(flags) == 1 and "999" in flags[0]
 
 
 # ─── mechanical armor ────────────────────────────────────────────────

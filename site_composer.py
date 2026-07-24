@@ -1386,6 +1386,12 @@ def _inject_color_overrides(html: str, business_id: str) -> str:
         return html
     rules: List[str] = []
     for path, row in colors.items():
+        # AUDIT FIX (2026-07-24, the contamination audit): stale rows
+        # were applied forever — color overrides had NO reconciliation,
+        # so tweaks made against an OLD design repainted every NEW
+        # design (!important, every render, positional key collisions).
+        if str((row or {}).get("status") or "active") == "stale":
+            continue
         hexv = ((row or {}).get("override_value") or "").strip()
         if not (hexv.startswith("#") and 4 <= len(hexv) <= 9):
             continue
@@ -2194,6 +2200,19 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     atelier_meta: Optional[Dict[str, Any]] = None
     if _canvas_html:
         html = _mark(_canvas_html)
+        # AUDIT FIX (2026-07-24): canvas/v2 documents bypass page_shell,
+        # which is the ONLY place the Studio select-to-talk bridge was
+        # emitted — so every v2 page shipped with Edit Mode's tap-to-
+        # select dead. Inject the platform bridge here when the document
+        # doesn't already carry one. Inert on the public site (the
+        # script exits unless framed with ?studio=).
+        if "studio-select" not in html and "</body>" in html:
+            try:
+                from site_modules._base import STUDIO_BRIDGE as _sx_bridge
+                html = html.replace("</body>", _sx_bridge + "\n</body>", 1)
+            except Exception as _sb_e:
+                logger.warning(f"[composer] studio bridge injection "
+                               f"skipped (non-fatal): {_sb_e}")
     else:
         try:
             import atelier as _atelier_mod
@@ -2324,6 +2343,31 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                     f"[composer] recompose staled {overrides_reconciled['stale']} "
                     f"text override(s) for {business_id[:8]}: "
                     f"{overrides_reconciled.get('stale_paths')}")
+            # AUDIT FIX (2026-07-24): color overrides had NO
+            # reconciliation at all — tweaks made against the OLD
+            # design repainted every NEW design (!important, every
+            # render, and v2's positional keys collide across
+            # designs). A full recompose is a redesign: every stored
+            # color tweak was made against a page that no longer
+            # exists, so ALL of them go stale here. The practitioner
+            # re-tints the new design if they want to — Edit Mode
+            # writes fresh active rows.
+            try:
+                from agents.override_system.override_storage import (
+                    list_overrides, mark_overrides_status)
+                _crows = list_overrides(business_id, "color_role") or []
+                _cids = [r.get("id") for r in _crows
+                         if r.get("id")
+                         and str(r.get("status") or "active") != "stale"]
+                if _cids:
+                    mark_overrides_status(_cids, "stale")
+                    logger.warning(
+                        f"[composer] recompose staled {len(_cids)} color "
+                        f"override(s) for {business_id[:8]} — a redesign "
+                        f"invalidates old-design color tweaks")
+            except Exception as _ce:
+                logger.warning(f"[composer] color-override reconciliation "
+                               f"failed (non-fatal): {_ce}")
         except Exception as e:
             logger.warning(f"[composer] override reconciliation failed (non-fatal): {e}")
 
@@ -2348,17 +2392,31 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     # declared --sx-* roles now override the tokens LAST on EVERY path,
     # so the approved look survives even a fallback build.
     try:
-        import spec_author as _sa_over
-        _spec_txt = (ctx.get("design_spec_text") or "").strip()
-        if not _spec_txt:
-            # Re-render paths (shuffle/refresh/override saves) bypass
-            # compose_site — load the approved spec here so a re-render
-            # never strips the approved look back to the old tokens.
-            _spec_txt = _sa_over.approved_spec_text(business_id)
-        if _spec_txt:
-            final_html = _sa_over.apply_spec_overrides(final_html, _spec_txt)
-            logger.info(f"[composer] spec token bridge applied for "
-                        f"{business_id[:8]}")
+        # AUDIT FIX (2026-07-24): the bridge exists to rescue MODULE
+        # pages whose tokens fossilized from old brand DNA. A builder-v2
+        # document was authored FROM the spec — its colors/fonts already
+        # ARE the spec — so re-injecting a late-cascade :root block +
+        # a foreign Google-fonts link into its finished head is pure
+        # risk (it can silently re-skin any --sx-* the author bound).
+        # v2 documents are identified by their v2/ override namespace.
+        _is_v2_doc = 'data-override-target="v2/' in final_html \
+            or "data-override-target='v2/" in final_html
+        if _is_v2_doc:
+            logger.info(f"[composer] spec token bridge skipped for "
+                        f"{business_id[:8]} — builder-v2 document is "
+                        f"already spec-authored")
+        else:
+            import spec_author as _sa_over
+            _spec_txt = (ctx.get("design_spec_text") or "").strip()
+            if not _spec_txt:
+                # Re-render paths (shuffle/refresh/override saves) bypass
+                # compose_site — load the approved spec here so a re-render
+                # never strips the approved look back to the old tokens.
+                _spec_txt = _sa_over.approved_spec_text(business_id)
+            if _spec_txt:
+                final_html = _sa_over.apply_spec_overrides(final_html, _spec_txt)
+                logger.info(f"[composer] spec token bridge applied for "
+                            f"{business_id[:8]}")
     except Exception as _so_e:
         logger.warning(f"[composer] spec token bridge skipped: {_so_e}")
 
