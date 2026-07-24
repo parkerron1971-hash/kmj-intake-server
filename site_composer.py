@@ -2507,6 +2507,23 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                 if _std_key and _std_key in _STDS:
                     _ref_standard = _STDS[_std_key]
                     _ref_standard_key = _std_key
+            # SPEC-AS-BAR (2026-07-24, v2 flight one): when an OWNER-
+            # APPROVED spec governs the page, the spec IS the bar. The
+            # first v2 build was dinged for a "solid fill pill" CTA the
+            # approved spec explicitly ordered — a generic direction
+            # standard must never outrank the document the owner signed.
+            # The judge grades craft AND fidelity to the spec.
+            _spec_bar = (ctx.get("design_spec_text") or "").strip()
+            if _spec_bar:
+                _ref_standard = (
+                    "THE OWNER-APPROVED SPEC governs this page — it is "
+                    "the bar. Grade CRAFT (execution quality) and "
+                    "FIDELITY (does the page deliver what this document "
+                    "orders — its named move, its palette roles, its "
+                    "section intents). Never penalize a choice the spec "
+                    "explicitly makes.\n--- THE SPEC (excerpt) ---\n"
+                    + _spec_bar[:2000])
+                _ref_standard_key = "approved-spec"
         except Exception:
             _ref_standard = None
             _ref_standard_key = None
@@ -2527,13 +2544,18 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                 # A2 — the bounded regen's FIRST-pass grade, persisted
                 # alongside the new one so both survive (before/after).
                 cfg["vision_verdict_prior"] = _prior_verdict
-            if not _verdict.get("passes_gate"):
-                logger.warning(
-                    f"[ship-gate] FAIL for {business_id}: "
+            # NO-DOWNGRADE FOR ALL (2026-07-24): the ratchet used to
+            # fire only on below-bar builds — a PASSING build worse
+            # than the live site skipped the comparison entirely and
+            # replaced it (the live 30→19 downgrade). Every build now
+            # answers to the live score, passing or not.
+            if True:  # every verdict answers the ratchet — see above
+                logger.info(
+                    f"[ship-gate] verdict for {business_id}: "
+                    f"passes={_verdict.get('passes_gate')} "
                     f"impact={_verdict.get('first_viewport_impact')} "
                     f"smell={_verdict.get('template_smell')} "
-                    f"broken={_verdict.get('broken')} — "
-                    f"notes={_verdict.get('notes')}")
+                    f"broken={_verdict.get('broken')}")
                 # A2: on compose_site's first pass the enforce raise
                 # DEFERS to the bounded quality regen (it owns the final
                 # verdict); everywhere else the raise fires exactly as
@@ -2608,7 +2630,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                     _live_verdict is not None
                     and _vg.verdict_composite(_verdict)
                     < _vg.verdict_composite(_live_verdict) - _margin)
-                if not _is_regression:
+                if not _is_regression and not _verdict.get("passes_gate"):
                     logger.info(
                         f"[ship-gate] below-bar build ships by ratchet for "
                         f"{business_id}: new composite "
@@ -2639,6 +2661,11 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
                                 # a total loss (inspectable, and a future
                                 # "ship it anyway" needs no rebuild).
                                 "candidate_html": final_html,
+                                # v2 flight one: the engine report died
+                                # with the rejection — persist it here so
+                                # a rejected build is diagnosable (which
+                                # engine, armor log, repair, fallbacks).
+                                "engine_report": _canvas_report,
                             }
                             sb_clients.sb_patch_as_service(
                                 f"/business_sites?id=eq.{_rej_rows[0]['id']}",
