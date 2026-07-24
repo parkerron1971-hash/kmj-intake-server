@@ -1239,6 +1239,36 @@ def fact_check_canvas(html: str, ctx: Dict[str, Any],
 
 # ─── Orchestration (§3 architecture + §9 degradation ladder) ─────────
 
+def _judge_lessons(business_id: str) -> List[str]:
+    """The judge's notes from this business's most recent graded builds
+    (the live verdict + the last rejection) — bans learned from our own
+    past mistakes on this exact site, the one brief ingredient no fresh
+    model has. Best-effort: [] on any failure, deduped, capped at 8."""
+    try:
+        import sb_clients
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            "&select=site_config&limit=1") or []
+        cfg = (rows[0].get("site_config") if rows else None) or {}
+        notes: List[str] = []
+        rej = cfg.get("vision_rejection") or {}
+        for v in ((rej.get("verdict") if isinstance(rej, dict) else None),
+                  cfg.get("vision_verdict")):
+            if isinstance(v, dict):
+                notes += [str(n) for n in (v.get("notes") or []) if n]
+        seen: set = set()
+        out: List[str] = []
+        for n in notes:
+            key = n[:60].lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(n[:240])
+        return out[:8]
+    except Exception as e:
+        logger.info(f"[canvas] judge lessons skipped: {e}")
+        return []
+
+
 def run_canvas(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
                dro: Optional[Dict[str, Any]], business_id: str,
                progress_cb=None, feedback: str = ""
@@ -1269,6 +1299,43 @@ def run_canvas(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
         "blocks": [b["module"] for _i, b in sorted(blocks.items())],
         "marquee_wired": bool(plan.get("marquee_wired")),
     }
+    # ── THE DIRECTOR (Director's Cut arc 1) ────────────────────────
+    # Aim the author before it paints: resolve the design language onto
+    # ctx (so the brief can teach it, the ship-gate's language-standard
+    # coherence holds the page to that language's bar, and the persist
+    # step records the choice), name the reference bar, and load the
+    # judge's notes from this business's past graded builds. All
+    # fail-open — a missing piece just means a leaner brief.
+    try:
+        import design_languages as _dl
+        if _dl.enabled() and not ctx.get("language_key"):
+            _lk, _lwhy, _lby = _dl.resolve(ctx, dro)
+            if _lk:
+                ctx["language_key"] = _lk
+                ctx["language_because"] = _lwhy
+                logger.info(f"[canvas] language {_lk} (by {_lby}) for "
+                            f"{business_id[:8]}")
+    except Exception as e:
+        logger.info(f"[canvas] language resolve skipped: {e}")
+    try:
+        import design_languages as _dl2
+        from reference_standards import STANDARDS as _STDS
+        from reference_standards import standard_for as _std_for
+        _lk_now = str(ctx.get("language_key") or "")
+        if _lk_now:
+            ctx.setdefault("language_brief_text", _dl2.brief_for(_lk_now))
+            _skey = _dl2.LANGUAGES.get(_lk_now, {}).get("standard")
+        else:
+            _skey = None
+        ctx.setdefault("reference_bar",
+                       _STDS.get(_skey) if _skey else _std_for(ctx))
+    except Exception as e:
+        logger.info(f"[canvas] reference bar skipped: {e}")
+    try:
+        ctx.setdefault("judge_lessons", _judge_lessons(business_id))
+    except Exception:
+        pass
+
     brief = canvas_brief.compile_canvas_brief(ctx, dro, spec)
     spans = chunk_spans(plan)
     if not spans:
