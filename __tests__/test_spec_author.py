@@ -20,6 +20,36 @@ def test_system_prompt_teaches_the_anatomy():
         assert section in s, f"anatomy section missing: {section}"
 
 
+def test_recalibration_generosity_and_coverage_laws():
+    """Kevin rejected the first live spec on sight: an austere concept
+    poster — no nav, no images, no form — while 7 real portfolio pieces
+    sat in the DB. The recalibration makes abundance a law."""
+    s = spec_author._SYSTEM
+    assert "GENEROSITY RULE" in s
+    assert "COVERAGE LAW" in s
+    assert "DENSITY SKELETON" in s
+    # restraint disciplines color/motion, never content
+    assert "never CONTENT" in s
+    # minimal = failure, stated plainly
+    assert '"minimal," you have failed' in s
+    # the non-negotiable functions
+    for func in ("NAVIGATION", "CONTACT", "FOOTER", "portfolio"):
+        assert func.lower() in s.lower(), f"missing mandatory function: {func}"
+    # never ban imagery when real imagery exists
+    assert "Never ban imagery" in s
+
+
+def test_inventory_rides_the_prompt():
+    p = spec_author.build_user_prompt(
+        "D", _PLAN, inventory="[gallery]\n1. https://x/img.png — cross tee")
+    assert "THE INVENTORY" in p
+    assert "coverage law" in p
+    assert "cross tee" in p
+    # and absent when empty — no hollow section
+    p2 = spec_author.build_user_prompt("D", _PLAN)
+    assert "THE INVENTORY" not in p2
+
+
 def test_system_prompt_demands_decidedness_not_vibes():
     s = spec_author._SYSTEM
     assert "write the headline" in s.lower() or "Write the ACTUAL words" in s
