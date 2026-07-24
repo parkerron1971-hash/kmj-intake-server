@@ -189,6 +189,28 @@ def _compile(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]],
       "never a literal.")
     A("")
 
+    # ── THE DESIGN LANGUAGE + THE BAR (Director's Cut arc 1) ──
+    # run_canvas resolves the language and the reference standard onto
+    # ctx before compiling; the compiler stays pure (reads only ctx).
+    # The author must KNOW the language the page speaks and the bar the
+    # judge will hold it to — a brief without a named bar retrieves the
+    # median of everything; a named bar retrieves the top of the space.
+    lang_key = str(ctx.get("language_key") or "")
+    lang_brief = str(ctx.get("language_brief_text") or "").strip()
+    if lang_key and lang_brief:
+        A("== THE DESIGN LANGUAGE (the whole page speaks this) ==")
+        because = str(ctx.get("language_because") or "").strip()
+        A(f"- language: {lang_key}"
+          + (f" — chosen because: {because[:200]}" if because else ""))
+        A(lang_brief)
+        A("")
+    bar = str(ctx.get("reference_bar") or "").strip()
+    if bar:
+        A("== THE BAR (an expert judge grades this page against this "
+          "standard — build to hang beside it) ==")
+        A(bar)
+        A("")
+
     # ── SECTION PLAN with per-section intent ──
     A("== SECTION PLAN (in order) ==")
     for i, sec in enumerate(spec or [], start=1):
@@ -220,6 +242,19 @@ def _compile(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]],
       "everything, modals read inline).")
     A("")
 
+    # ── THE JUDGE'S EYE: lessons from this business's graded builds ──
+    # The one mechanism no fresh model has: bans learned from OUR OWN
+    # past builds. run_canvas loads the last graded verdict + rejection
+    # notes onto ctx["judge_lessons"]; each note is a mistake already
+    # made once on this exact site — the author must not repeat it.
+    lessons = ctx.get("judge_lessons")
+    if isinstance(lessons, (list, tuple)) and lessons:
+        A("== THE JUDGE'S EYE (its real notes on THIS business's "
+          "previous builds — repeat none of these) ==")
+        for n in lessons[:8]:
+            A(f"- {str(n)[:240]}")
+        A("")
+
     # ── DO / DON'T ──
     A("== DO / DON'T ==")
     tension = d.get("tension") or {}
@@ -244,4 +279,10 @@ def _compile(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]],
     A("DON'T invent facts, prices, testimonials, stats, or credentials — "
       "doctrine D10: REAL OR REMOVED. Every constraint above is the floor, "
       "not the ceiling (D1) — honor it, then add instinct on top.")
+    A("")
+    # ── THE LICENSE (ambition, granted explicitly) ──
+    A("THE LICENSE: the safe, competent, generic version of this page is "
+      "a FAILURE here. Commit to the concept. Make ONE move a visitor "
+      "would describe to a friend tomorrow. Every fact stays true; every "
+      "aesthetic choice is yours to push.")
     return "\n".join(lines)

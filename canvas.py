@@ -1083,14 +1083,21 @@ def fact_check_canvas(html: str, ctx: Dict[str, Any],
                       plan: Dict[str, Any],
                       blocks: Dict[int, Dict[str, Any]],
                       module_fallbacks: Tuple[str, ...] = (),
-                      ) -> Tuple[bool, List[str]]:
+                      ) -> Tuple[bool, List[str], List[str]]:
     """§7 — runs on the assembled page BEFORE slot population. Returns
-    (ok, problems): fact trace over authored sections, immutable block
-    byte-identity, the substance floor, required anatomy. Authored
-    sections in module_fallbacks degraded to registry renders (§9) —
-    they carry no atl-uid and need no fact trace (module output is
-    deterministic from ctx)."""
+    (ok, problems, warnings). TRUTH is hard (problems → corrective
+    retry → fallback): fact trace over authored sections, immutable
+    block byte-identity, required anatomy, script census, handlers.
+    TASTE is advisory (warnings → reported, page still ships): the
+    substance floors and editability census — the module path carries
+    those as advisories too (design invariants, quality gate), so a
+    thin-but-true canvas page must never be nuked for a miss the
+    module path ships daily (the 650-floor fallback, 2026-07-21).
+    Authored sections in module_fallbacks degraded to registry renders
+    (§9) — they carry no atl-uid and need no fact trace (module output
+    is deterministic from ctx)."""
     problems: List[str] = []
+    warnings: List[str] = []
     authored = [s for s in plan["sections"]
                 if s["role"] == "authored" and s.get("uid")
                 and s["module"] not in module_fallbacks]
@@ -1127,20 +1134,22 @@ def fact_check_canvas(html: str, ctx: Dict[str, Any],
         problems.append("an unspliced <!--SX_BLOCK:…--> token survived "
                         "assembly")
 
-    # §7.3 — SUBSTANCE FLOOR (deterministic, from the audit's table)
+    # §7.3 — SUBSTANCE FLOOR (deterministic, from the audit's table).
+    # Advisory: reported as warnings, never a fallback trigger — the
+    # same standard the module path lives under (WORDS-1 is ADVISORY).
     words = _count_visible_words(html)
     if words < _floor_words():
-        problems.append(f"substance floor: {words} visible words < "
+        warnings.append(f"substance floor: {words} visible words < "
                         f"{_floor_words()} (CANVAS_FLOOR_WORDS)")
     if (ctx.get("gallery") or []) and \
             not re.search(r"<img\b[^>]*\bdata-slot=", html):
-        problems.append("imagery floor: gallery photos exist but no "
+        warnings.append("imagery floor: gallery photos exist but no "
                         "data-slot image is present in the markup")
     css_all = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", html,
                                    re.DOTALL | re.IGNORECASE))
     n_kf = len(re.findall(r"@(?:-webkit-)?keyframes\b", css_all))
     if n_kf > _keyframe_cap():
-        problems.append(f"motion ceiling: {n_kf} @keyframes > "
+        warnings.append(f"motion ceiling: {n_kf} @keyframes > "
                         f"{_keyframe_cap()} (CANVAS_KEYFRAME_CAP)")
     for s in authored:
         sec = _extract_uid_section(html, s["uid"])
@@ -1149,7 +1158,7 @@ def fact_check_canvas(html: str, ctx: Dict[str, Any],
         if s["module"] == "about":
             n = len(_WORD_RE.findall(_visible_text(sec)))
             if n < 60:
-                problems.append(f"about section carries {n} words (< 60 — "
+                warnings.append(f"about section carries {n} words (< 60 — "
                                 "the §4.7 substance minimum)")
         if s["module"] == "hero":
             h = re.search(r"<h1[^>]*>([\s\S]*?)</h1>", sec, re.IGNORECASE)
@@ -1157,7 +1166,7 @@ def fact_check_canvas(html: str, ctx: Dict[str, Any],
                 n = len(_WORD_RE.findall(
                     re.sub(r"<[^>]+>", " ", h.group(1))))
                 if n > 9:
-                    problems.append(f"hero headline runs {n} words (> 9 — "
+                    warnings.append(f"hero headline runs {n} words (> 9 — "
                                     "the §4.7 ceiling)")
 
     # §7.4 — REQUIRED ANATOMY: markers, DOM ids, override-target census,
@@ -1178,7 +1187,7 @@ def fact_check_canvas(html: str, ctx: Dict[str, Any],
         n_ed, samples = editability_coverage(
             html, exempt_texts=data_verbatim_strings(census_data))
         if n_ed:
-            problems.append(f"override-target census: {n_ed} visible text "
+            warnings.append(f"override-target census: {n_ed} visible text "
                             f"node(s) lack data-override-target: {samples[:3]}")
     except Exception:
         pass
@@ -1224,10 +1233,41 @@ def fact_check_canvas(html: str, ctx: Dict[str, Any],
         except Exception:
             pass
     problems = list(dict.fromkeys(problems))
-    return (not problems), problems
+    warnings = list(dict.fromkeys(warnings))
+    return (not problems), problems, warnings
 
 
 # ─── Orchestration (§3 architecture + §9 degradation ladder) ─────────
+
+def _judge_lessons(business_id: str) -> List[str]:
+    """The judge's notes from this business's most recent graded builds
+    (the live verdict + the last rejection) — bans learned from our own
+    past mistakes on this exact site, the one brief ingredient no fresh
+    model has. Best-effort: [] on any failure, deduped, capped at 8."""
+    try:
+        import sb_clients
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            "&select=site_config&limit=1") or []
+        cfg = (rows[0].get("site_config") if rows else None) or {}
+        notes: List[str] = []
+        rej = cfg.get("vision_rejection") or {}
+        for v in ((rej.get("verdict") if isinstance(rej, dict) else None),
+                  cfg.get("vision_verdict")):
+            if isinstance(v, dict):
+                notes += [str(n) for n in (v.get("notes") or []) if n]
+        seen: set = set()
+        out: List[str] = []
+        for n in notes:
+            key = n[:60].lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(n[:240])
+        return out[:8]
+    except Exception as e:
+        logger.info(f"[canvas] judge lessons skipped: {e}")
+        return []
+
 
 def run_canvas(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
                dro: Optional[Dict[str, Any]], business_id: str,
@@ -1259,6 +1299,43 @@ def run_canvas(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
         "blocks": [b["module"] for _i, b in sorted(blocks.items())],
         "marquee_wired": bool(plan.get("marquee_wired")),
     }
+    # ── THE DIRECTOR (Director's Cut arc 1) ────────────────────────
+    # Aim the author before it paints: resolve the design language onto
+    # ctx (so the brief can teach it, the ship-gate's language-standard
+    # coherence holds the page to that language's bar, and the persist
+    # step records the choice), name the reference bar, and load the
+    # judge's notes from this business's past graded builds. All
+    # fail-open — a missing piece just means a leaner brief.
+    try:
+        import design_languages as _dl
+        if _dl.enabled() and not ctx.get("language_key"):
+            _lk, _lwhy, _lby = _dl.resolve(ctx, dro)
+            if _lk:
+                ctx["language_key"] = _lk
+                ctx["language_because"] = _lwhy
+                logger.info(f"[canvas] language {_lk} (by {_lby}) for "
+                            f"{business_id[:8]}")
+    except Exception as e:
+        logger.info(f"[canvas] language resolve skipped: {e}")
+    try:
+        import design_languages as _dl2
+        from reference_standards import STANDARDS as _STDS
+        from reference_standards import standard_for as _std_for
+        _lk_now = str(ctx.get("language_key") or "")
+        if _lk_now:
+            ctx.setdefault("language_brief_text", _dl2.brief_for(_lk_now))
+            _skey = _dl2.LANGUAGES.get(_lk_now, {}).get("standard")
+        else:
+            _skey = None
+        ctx.setdefault("reference_bar",
+                       _STDS.get(_skey) if _skey else _std_for(ctx))
+    except Exception as e:
+        logger.info(f"[canvas] reference bar skipped: {e}")
+    try:
+        ctx.setdefault("judge_lessons", _judge_lessons(business_id))
+    except Exception:
+        pass
+
     brief = canvas_brief.compile_canvas_brief(ctx, dro, spec)
     spans = chunk_spans(plan)
     if not spans:
@@ -1311,10 +1388,10 @@ def run_canvas(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
     if mod_fb:
         logger.info(f"[canvas] module-rendered authored sections for "
                     f"{business_id[:8]}: {mod_fb}")
-    ok, problems = fact_check_canvas(html, ctx, plan, blocks,
-                                     module_fallbacks=tuple(mod_fb))
+    ok, problems, warnings = fact_check_canvas(
+        html, ctx, plan, blocks, module_fallbacks=tuple(mod_fb))
     report["fact_check"] = {"ok": ok, "problems": problems[:20],
-                            "retried": False}
+                            "warnings": warnings[:20], "retried": False}
 
     if not ok:
         # §7 — ONE corrective retry with the problems pasted in, then
@@ -1332,11 +1409,12 @@ def run_canvas(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
             return {"html": None, "report": report}
         html2, mod_fb2 = assemble_canvas(plan, results2, blocks, ctx,
                                          title, script2)
-        ok2, problems2 = fact_check_canvas(html2, ctx, plan, blocks,
-                                           module_fallbacks=tuple(mod_fb2))
+        ok2, problems2, warnings2 = fact_check_canvas(
+            html2, ctx, plan, blocks, module_fallbacks=tuple(mod_fb2))
         if ok2:
             html, script = html2, script2
-            report["fact_check"].update({"ok": True, "problems": []})
+            report["fact_check"].update({"ok": True, "problems": [],
+                                         "warnings": warnings2[:20]})
         else:
             report["fact_check"]["problems"] = (problems2 or problems)[:20]
             report["fallbacks"].append({

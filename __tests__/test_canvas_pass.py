@@ -538,14 +538,14 @@ class TestFactCheck(unittest.TestCase):
         out, plan, blocks = _run_ok()
         self.assertTrue(out["report"]["fact_check"]["ok"],
                         out["report"]["fact_check"]["problems"])
-        ok, problems = canvas.fact_check_canvas(out["html"], _ctx(), plan, blocks)
+        ok, problems, warnings = canvas.fact_check_canvas(out["html"], _ctx(), plan, blocks)
         self.assertTrue(ok, problems)
 
     def test_invented_fact_fails(self):
         out, plan, blocks = _run_ok()
         page = out["html"].replace("Made slowly in our workshop",
                                    "Trusted by 40 workshops")
-        ok, problems = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
+        ok, problems, warnings = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
         self.assertFalse(ok)
         self.assertTrue(any("number '40'" in p for p in problems), problems)
 
@@ -553,49 +553,56 @@ class TestFactCheck(unittest.TestCase):
         out, plan, blocks = _run_ok()
         victim = next(b for b in blocks.values() if b["module"] == "offerings")
         page = out["html"].replace(victim["html"], "<section>rewritten</section>")
-        ok, problems = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
+        ok, problems, warnings = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
         self.assertFalse(ok)
         self.assertTrue(any("immutable block 'offerings'" in p for p in problems))
 
     def test_substance_floor(self):
+        # TASTE is advisory: a thin page warns but still ships (the same
+        # standard the module path lives under — WORDS-1 is ADVISORY)
         out, plan, blocks = _run_ok()
         with mock.patch.dict(os.environ, {"CANVAS_FLOOR_WORDS": "100000"}):
-            ok, problems = canvas.fact_check_canvas(out["html"], _ctx(),
+            ok, problems, warnings = canvas.fact_check_canvas(out["html"], _ctx(),
                                                     plan, blocks)
-        self.assertFalse(ok)
-        self.assertTrue(any("substance floor" in p for p in problems))
+        self.assertTrue(ok, problems)
+        self.assertTrue(any("substance floor" in w for w in warnings), warnings)
 
     def test_keyframe_cap(self):
         out, plan, blocks = _run_ok()
         junk = "<style>" + "".join(f"@keyframes pad-{i} {{ to {{ opacity: 1; }} }}"
                                    for i in range(9)) + "</style>"
         page = out["html"].replace("</head>", junk + "</head>")
-        ok, problems = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
-        self.assertFalse(ok)
-        self.assertTrue(any("motion ceiling" in p for p in problems))
+        ok, problems, warnings = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
+        self.assertTrue(ok, problems)
+        self.assertTrue(any("motion ceiling" in w for w in warnings), warnings)
 
     def test_imagery_floor(self):
         out, plan, blocks = _run_ok()
         # the shell ships a chamber <img data-slot>; strip all imagery so
         # the floor has something to bite on
         page = re.sub(r"<img\b[^>]*>", "", out["html"])
-        ok, problems = canvas.fact_check_canvas(
-            page, _ctx(gallery=True), plan, blocks)
-        self.assertFalse(ok)
-        self.assertTrue(any("imagery floor" in p for p in problems))
-        # and the untouched page passes with the same non-empty gallery
-        ok2, _ = canvas.fact_check_canvas(
+        # a stripped COPY of the blocks (keeps byte-identity in step
+        # without polluting the shared fixture for the second check)
+        stripped = {i: {**b, "html": re.sub(r"<img\b[^>]*>", "", b["html"])}
+                    for i, b in blocks.items()}
+        ok, problems, warnings = canvas.fact_check_canvas(
+            page, _ctx(gallery=True), plan, stripped)
+        self.assertTrue(ok, problems)
+        self.assertTrue(any("imagery floor" in w for w in warnings), warnings)
+        # and the untouched page passes clean with the same non-empty gallery
+        ok2, _, warnings2 = canvas.fact_check_canvas(
             out["html"], _ctx(gallery=True), plan, blocks)
         self.assertTrue(ok2)
+        self.assertFalse(any("imagery floor" in w for w in warnings2))
 
     def test_anatomy_census(self):
         out, plan, blocks = _run_ok()
         page = out["html"].replace("<!--sx:about:2-->", "")
-        ok, problems = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
+        ok, problems, warnings = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
         self.assertFalse(ok)
         self.assertTrue(any("section marker" in p for p in problems))
         page2 = out["html"].replace('<section id="about"', "<section")
-        ok2, problems2 = canvas.fact_check_canvas(page2, _ctx(), plan, blocks)
+        ok2, problems2, warnings2 = canvas.fact_check_canvas(page2, _ctx(), plan, blocks)
         self.assertFalse(ok2)
         self.assertTrue(any("DOM id 'about'" in p for p in problems2))
 
@@ -603,12 +610,12 @@ class TestFactCheck(unittest.TestCase):
         out, plan, blocks = _run_ok()
         page = out["html"].replace(
             "</body>", '<script id="sx-canvas-js">(function(){})();</script></body>')
-        ok, problems = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
+        ok, problems, warnings = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
         self.assertFalse(ok)
         self.assertTrue(any("exactly one" in p for p in problems))
         page2 = out["html"].replace('data-override-target="hero/headline"',
                                     'onclick="go()" data-override-target="hero/headline"')
-        ok2, problems2 = canvas.fact_check_canvas(page2, _ctx(), plan, blocks)
+        ok2, problems2, warnings2 = canvas.fact_check_canvas(page2, _ctx(), plan, blocks)
         self.assertFalse(ok2)
         self.assertTrue(any("inline event handler" in p for p in problems2))
 
@@ -623,14 +630,14 @@ class TestFactCheck(unittest.TestCase):
         new_html = victim["html"] + f"<script>{platform_js}</script>"
         page = out["html"].replace(victim["html"], new_html)
         victim["html"] = new_html
-        ok, problems = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
+        ok, problems, warnings = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
         self.assertTrue(ok, problems)
 
     def test_unknown_script_still_fails(self):
         out, plan, blocks = _run_ok()
         page = out["html"].replace("</body>",
                                    "<script>var x = 1;</script></body>")
-        ok, problems = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
+        ok, problems, warnings = canvas.fact_check_canvas(page, _ctx(), plan, blocks)
         self.assertFalse(ok)
         self.assertTrue(any("unidentified <script> block" in p
                             for p in problems), problems)
@@ -638,15 +645,15 @@ class TestFactCheck(unittest.TestCase):
     def test_per_section_substance(self):
         out, plan, blocks = _run_ok()
         thin = out["html"].replace(PARA_ABOUT, "A short line.")
-        ok, problems = canvas.fact_check_canvas(thin, _ctx(), plan, blocks)
-        self.assertFalse(ok)
-        self.assertTrue(any("about section carries" in p for p in problems))
+        ok, problems, warnings = canvas.fact_check_canvas(thin, _ctx(), plan, blocks)
+        self.assertTrue(ok, problems)
+        self.assertTrue(any("about section carries" in w for w in warnings), warnings)
         long_h1 = out["html"].replace(
             "Furniture that outlives trends",
             "Furniture that outlives every trend and fills your home with quiet warmth")
-        ok2, problems2 = canvas.fact_check_canvas(long_h1, _ctx(), plan, blocks)
-        self.assertFalse(ok2)
-        self.assertTrue(any("hero headline runs" in p for p in problems2))
+        ok2, problems2, warnings2 = canvas.fact_check_canvas(long_h1, _ctx(), plan, blocks)
+        self.assertTrue(ok2, problems2)
+        self.assertTrue(any("hero headline runs" in w for w in warnings2), warnings2)
 
 
 # ─── The degradation ladder (§9) ─────────────────────────────────────
@@ -678,15 +685,38 @@ class TestFallbacks(unittest.TestCase):
         self.assertIn("<!--sx:cta:", out["html"])
 
     def test_fact_check_retry_then_module_path(self):
+        # a TRUTH problem at the page level is a hard gate: exactly one
+        # corrective retry, then the module path. (Taste misses — thin
+        # words, keyframes — are advisory warnings, not retry triggers.)
+        calls = {"n": 0}
+
+        def fake_check(html, ctx, plan, blocks, module_fallbacks=()):
+            calls["n"] += 1
+            return (False, ["injected truth problem"], [])
+
+        llm, _ = _mock_llm()
+        with mock.patch.object(canvas, "_call_llm", llm), \
+                mock.patch.object(canvas, "fact_check_canvas", fake_check):
+            out = canvas.run_canvas(_spec(), _ctx(), _dro(), "biz-canvas")
+        self.assertIsNone(out["html"])
+        self.assertEqual(calls["n"], 2)          # initial + ONE retry
+        self.assertTrue(out["report"]["fact_check"]["retried"])
+        self.assertIn("fact_check",
+                      [f["stage"] for f in out["report"]["fallbacks"]])
+
+    def test_thin_page_ships_with_warnings(self):
+        # a page that only misses TASTE floors still ships — the warnings
+        # ride the report instead of nuking the canvas
         thin = {"hero": "Short line one.", "about": "Short line two.",
                 "cta": "Short line three."}
         llm, _ = _mock_llm(paras=thin)
         with mock.patch.object(canvas, "_call_llm", llm):
             out = canvas.run_canvas(_spec(), _ctx(), _dro(), "biz-canvas")
-        self.assertIsNone(out["html"])
-        self.assertTrue(out["report"]["fact_check"]["retried"])
-        self.assertIn("fact_check",
-                      [f["stage"] for f in out["report"]["fallbacks"]])
+        self.assertIsNotNone(out["html"])
+        fc = out["report"]["fact_check"]
+        self.assertTrue(fc["ok"])
+        self.assertTrue(any("substance floor" in w
+                            for w in fc["warnings"]), fc["warnings"])
 
     def test_report_shape_on_success(self):
         out, plan, blocks = _run_ok()
