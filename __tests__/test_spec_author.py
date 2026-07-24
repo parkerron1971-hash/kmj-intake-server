@@ -153,6 +153,21 @@ def test_system_prompt_teaches_the_archaeology():
     assert "could not be traced back" in s
 
 
+def test_system_prompt_teaches_the_imagination():
+    """Kevin (mid-arc): 'it might not see any person's work to get its
+    inspiration from' — the no-portfolio path must conjure from the
+    business's WORLD, declared and accountable, never the safe median
+    and never a vacuum."""
+    s = spec_author._SYSTEM
+    assert "THE IMAGINATION" in s
+    assert "IMAGINED FOR THE WORK:" in s
+    assert "mines the client's WORLD" in s
+    assert "adjacent masters" in s
+    assert "never design from a vacuum" in s
+    # the ladder: work first, world second, no rung skipped
+    assert "never skip a rung that exists" in s
+
+
 def test_image_urls_priority_dedupe_and_cap():
     ctx = _ctx(
         gallery=[{"url": f"https://x/g{i}.png"} for i in range(8)],

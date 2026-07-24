@@ -61,7 +61,16 @@ You are shown the owner's REAL WORK as images. The design is already inside it �
 - The typography personality they choose in their own pieces (condensed display? script? editorial serif? how big do they go?)
 - The energy and density of their layouts (bold and loud? quiet and spare? how much they put on a page)
 - Recurring motifs and instincts (dark grounds, glow, texture, type-as-image, portrait treatment)
-Then DECLARE your findings at the top of section 2 (BRAND IDENTITY) in 3-5 lines beginning "OBSERVED IN THE WORK:" — and let those observations drive every choice below them. A spec whose palette and type could not be traced back to the owner's own pieces is a failed spec. If no images are provided, say so in that line and design from the written dossier alone.
+Then DECLARE your findings at the top of section 2 (BRAND IDENTITY) in 3-5 lines beginning "OBSERVED IN THE WORK:" — and let those observations drive every choice below them. A spec whose palette and type could not be traced back to the owner's own pieces is a failed spec.
+
+THE IMAGINATION — when NO images are provided (a new business with no work yet):
+You do not get to design from nothing, and you do not get to retreat to the safe median. A designer without a portfolio mines the client's WORLD instead:
+- Build their world in your mind: the physical trade behind the business — its materials, tools, light, and rooms (a barbershop owns chrome, leather, neon, razor steel; a bakery owns flour dust, warm ovens, butcher paper; a faith-driven coach owns stained-glass light and gold on deep tones). Steal the palette and texture from the world they already work in.
+- Take their words literally: the owner's tone words, slogan, and interview answers are design material — a business that says "bold" and "legacy" has already chosen a type personality.
+- Name 2-3 adjacent masters: real-world aesthetics whose soul fits this business (vintage sign-painting, editorial sport campaigns, quiet-luxury hospitality) and borrow their discipline, never their identity.
+- Then invent the brand seed: choose the palette and type AS IF you were designing their brand mark first, and build the site from that mark.
+DECLARE it at the top of section 2 in 3-5 lines beginning "IMAGINED FOR THE WORK:" — the world you mined, the masters you leaned on, and why this direction is theirs. Commit as hard as if you'd seen a portfolio: an invented direction argued from their world beats a safe one argued from nothing.
+The ladder is absolute: observe the work when it exists; imagine from their world when it doesn't; never skip a rung that exists, and never design from a vacuum.
 
 THE STANDARD OF DECIDEDNESS — the entire point of this document:
 A vague brief gets filled with the median of the internet. Your spec leaves NO decision to the builder's defaults. That means:
