@@ -4696,6 +4696,62 @@ def approve_design_spec(body: SpecStatusBody,
     return {"ok": True, "spec": spec}
 
 
+# ─── DISCOVERY (Revamp Phase 1) — the ONE dossier ────────────────────
+
+class DiscoveryReconBody(BaseModel):
+    business_id: str
+
+
+class DiscoveryReferenceBody(BaseModel):
+    business_id: str
+    url: str
+    verdict: str            # "love" | "hate"
+    why: Optional[str] = None
+
+
+@router.get("/discovery/{business_id}")
+def get_discovery(business_id: str,
+                  session: UserSession = Depends(sb_clients.authed_request)
+                  ) -> Dict[str, Any]:
+    """The current discovery dossier, or null."""
+    _require_owner(business_id, session.user.id)
+    import discovery
+    return {"dossier": discovery.get_dossier(business_id)}
+
+
+@router.post("/discovery/recon")
+def discovery_recon(body: DiscoveryReconBody,
+                    session: UserSession = Depends(sb_clients.authed_request)
+                    ) -> Dict[str, Any]:
+    """Step 0: migrate what the system already holds into the dossier
+    (brand mark, work, portrait, prefs, vertical) with source 'recon'.
+    Never clobbers what the practitioner said. No LLM, no build."""
+    _require_owner(body.business_id, session.user.id)
+    import discovery
+    d = discovery.recon_dossier(body.business_id)
+    if d is None:
+        raise HTTPException(404, "business not found")
+    return {"ok": True, "dossier": d}
+
+
+@router.post("/discovery/reference")
+def discovery_reference(body: DiscoveryReferenceBody,
+                        session: UserSession = Depends(sb_clients.authed_request)
+                        ) -> Dict[str, Any]:
+    """Study one loved/hated reference site: screenshot → transferable
+    rules + bans + taste reading. Failures are recorded facts (the
+    dossier notes what couldn't be captured); the response is never a
+    silent gap and never a 500 for a bot-blocked site."""
+    _require_owner(body.business_id, session.user.id)
+    if not (body.url or "").lower().startswith("http"):
+        raise HTTPException(400, "url must be http(s)")
+    import discovery
+    entry = discovery.study_reference(
+        body.business_id, body.url.strip(), body.verdict,
+        (body.why or "").strip())
+    return {"ok": True, "reference": entry}
+
+
 class RefreshBody(BaseModel):
     business_id: str
 
