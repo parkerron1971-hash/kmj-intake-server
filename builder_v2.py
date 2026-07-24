@@ -343,13 +343,18 @@ def _call(system: str, user: str, business_id: str) -> Optional[str]:
         key = os.environ.get("ANTHROPIC_API_KEY")
         if not key:
             return None
-        client = Anthropic(api_key=key, timeout=600.0, max_retries=1)
+        # Flight one lesson: the full-page pass is ONE giant generation;
+        # a tight timeout forced the ladder's reduced-tokens retry and
+        # shipped a SQUEEZED page ("headline feels compressed"). Give
+        # the first attempt real room — a slow masterpiece beats a fast
+        # miniature.
+        client = Anthropic(api_key=key, timeout=900.0, max_retries=1)
 
         def _do(model: str, max_tokens: int, timeout: float):
             return client.messages.create(
                 model=model, max_tokens=max_tokens, system=system,
                 messages=[{"role": "user", "content": user}],
-                timeout=max(timeout, 420.0),
+                timeout=max(timeout, 900.0),
                 **model_ladder.sampling_kwargs(model, V2_TEMPERATURE))
 
         msg, used_model = model_ladder.call_with_ladder(
