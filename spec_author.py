@@ -55,6 +55,14 @@ def _model() -> str:
 
 _SYSTEM = """You are the DIRECTOR — a senior creative director writing the complete design specification for one business's website. A builder (another craftsperson) will execute your document exactly as written, so the quality of the final page equals the decidedness of your spec.
 
+THE ARCHAEOLOGY — do this FIRST, before writing a word:
+You are shown the owner's REAL WORK as images. The design is already inside it — your job is to translate a visual voice that already exists, never to invent a new brand over it. Study the images and extract:
+- The palette they ACTUALLY use (exact color families you can see — a brand mark's colors outrank any abstract preference)
+- The typography personality they choose in their own pieces (condensed display? script? editorial serif? how big do they go?)
+- The energy and density of their layouts (bold and loud? quiet and spare? how much they put on a page)
+- Recurring motifs and instincts (dark grounds, glow, texture, type-as-image, portrait treatment)
+Then DECLARE your findings at the top of section 2 (BRAND IDENTITY) in 3-5 lines beginning "OBSERVED IN THE WORK:" — and let those observations drive every choice below them. A spec whose palette and type could not be traced back to the owner's own pieces is a failed spec. If no images are provided, say so in that line and design from the written dossier alone.
+
 THE STANDARD OF DECIDEDNESS — the entire point of this document:
 A vague brief gets filled with the median of the internet. Your spec leaves NO decision to the builder's defaults. That means:
 - Write the ACTUAL words: every headline verbatim, every eyebrow, every stat with its real number and label, every button label. Never "a strong headline about X" — write the headline.
@@ -216,7 +224,35 @@ def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
     return "\n".join(parts)
 
 
-def _call_llm(system: str, user: str, business_id: str) -> Optional[str]:
+def _image_urls(ctx: Dict[str, Any], cap: int = 6) -> List[str]:
+    """The owner's real work, for the Director's eyes (THE ARCHAEOLOGY).
+    Priority: slot custom uploads (brand mark / portrait / hero — the
+    most identity-dense pieces), then gallery, deduped, capped. Pure."""
+    urls: List[str] = []
+    slots = (((ctx.get("site") or {}).get("site_config") or {})
+             .get("slots") or {})
+    for _name, rec in sorted(slots.items()):
+        if isinstance(rec, dict) and not rec.get("removed"):
+            cu = (rec.get("custom_url") or "").strip()
+            if cu:
+                urls.append(cu)
+    gallery = ctx.get("gallery") if isinstance(ctx.get("gallery"), list) else []
+    for g in gallery:
+        if isinstance(g, dict) and (g.get("url") or "").strip():
+            urls.append(g["url"].strip())
+    seen: set = set()
+    out: List[str] = []
+    for u in urls:
+        if u.lower().startswith("https://") and u not in seen:
+            seen.add(u)
+            out.append(u)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _call_llm(system: str, user: str, business_id: str,
+              image_urls: Optional[List[str]] = None) -> Optional[str]:
     """Anthropic call THROUGH THE MODEL LADDER — same discipline as the
     canvas/atelier. The naive first version passed temperature
     unconditionally; with SPEC_AUTHOR_MODEL unset the model resolves to
@@ -233,11 +269,42 @@ def _call_llm(system: str, user: str, business_id: str) -> Optional[str]:
             return None
         client = Anthropic(api_key=key, timeout=120.0, max_retries=1)
 
+        # THE ARCHAEOLOGY: the owner's real pieces ride the call as
+        # url-source image blocks so the Director designs from what it
+        # SEES, not from adjectives. Fail-open: a bad url only costs
+        # that image (the API skips unfetchable url sources by erroring
+        # — so a fetch failure retries once with text only).
+        content: Any = user
+        if image_urls:
+            blocks: List[Dict[str, Any]] = [
+                {"type": "text",
+                 "text": "THE OWNER'S REAL WORK — study these first "
+                         "(the archaeology), then write the spec:"}]
+            for u in image_urls:
+                blocks.append({"type": "image",
+                               "source": {"type": "url", "url": u}})
+            blocks.append({"type": "text", "text": user})
+            content = blocks
+
         def _do(model: str, max_tokens: int, timeout: float):
-            return client.messages.create(
-                model=model, max_tokens=max_tokens, system=system,
-                messages=[{"role": "user", "content": user}], timeout=timeout,
-                **model_ladder.sampling_kwargs(model, SPEC_TEMPERATURE))
+            try:
+                return client.messages.create(
+                    model=model, max_tokens=max_tokens, system=system,
+                    messages=[{"role": "user", "content": content}],
+                    timeout=timeout,
+                    **model_ladder.sampling_kwargs(model, SPEC_TEMPERATURE))
+            except Exception as e:
+                # An unfetchable image url 400s the whole request —
+                # the spec must never die for a broken image link.
+                if content is not user and "image" in str(e).lower():
+                    logger.warning(f"[spec] image blocks rejected "
+                                   f"({type(e).__name__}) — text-only retry")
+                    return client.messages.create(
+                        model=model, max_tokens=max_tokens, system=system,
+                        messages=[{"role": "user", "content": user}],
+                        timeout=timeout,
+                        **model_ladder.sampling_kwargs(model, SPEC_TEMPERATURE))
+                raise
 
         msg, used_model = model_ladder.call_with_ladder(
             _do, model=_model(), task="spec_author",
@@ -278,7 +345,8 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
         inventory = ""
     user = build_user_prompt(dossier, spec_plan, prior_spec, feedback,
                              inventory=inventory)
-    text = (_call_llm(_SYSTEM, user, business_id) or "").strip()
+    text = (_call_llm(_SYSTEM, user, business_id,
+                      image_urls=_image_urls(ctx)) or "").strip()
     if not text:
         return None
     return text[:SPEC_MAX_CHARS]
