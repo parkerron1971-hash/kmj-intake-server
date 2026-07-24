@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -30,11 +31,11 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("spec_author")
 
-SPEC_MAX_TOKENS = 4000
+SPEC_MAX_TOKENS = 6000   # a GENEROUS 8-11 section spec with real copy
 SPEC_TEMPERATURE = 0.7
 # The spec leads the canvas brief — cap what rides downstream so the
 # builder's context stays sane even if a model over-writes.
-SPEC_MAX_CHARS = 12000
+SPEC_MAX_CHARS = 20000
 
 
 def _model() -> str:
@@ -62,6 +63,23 @@ A vague brief gets filled with the median of the internet. Your spec leaves NO d
 - Decide every section's composition in one or two sentences a builder can execute ("two-column: portrait left in a hairline frame; bio right, 2 paragraphs, second one shorter").
 - Decide the interactions: what moves, when, and what every hover/click does. One signature interaction maximum; name it.
 - Decide the mobile behavior in one line per non-obvious section.
+
+THE GENEROSITY RULE (learned the hard way — the first live spec produced an austere concept poster and the owner rejected it on sight):
+A business site is GENEROUS. Rich sections executed cleanly beat austere concept pages, every time. Restraint disciplines COLOR and MOTION — never CONTENT. A visitor should always have something to look at, and every piece of the business should have a home. If the finished page could be described as "minimal," you have failed this business. Your concept is the thread that runs THROUGH a full site — never a substitute for one.
+
+THE COVERAGE LAW (equal in force to the truth law):
+Every real asset in the dossier gets a home on the page. Omitting real material is a violation exactly as serious as inventing fake material.
+- A fixed NAVIGATION with the business name and section links. Always.
+- EVERY real service/offering appears — each with its own cell/card and copy.
+- EVERY real portfolio/gallery image appears, referenced by its given name/url — real work is the strongest thing on any business site. Never ban imagery when real imagery exists.
+- The owner's PORTRAIT appears if provided (about section).
+- Every real testimonial/quote appears.
+- A CONTACT section with a working inquiry form and every real contact channel. Always.
+- A FOOTER. Always.
+- Real stats/proof points if provided (never invented — mark a confirm-then-publish placeholder only when the owner has signaled a number exists).
+
+THE DENSITY SKELETON — the default shape of a complete business site (deviate creatively in STYLE, never by omission of FUNCTION). Aim for 8-11 sections:
+nav → full-viewport hero (display headline + real proof stats) → a brand moment (ticker/marquee/band) → services grid (all of them) → a second-family strip (method/studio/values) → portfolio with the real work (filters if 5+ pieces) → process steps → about with portrait → contact with form → footer.
 
 STRUCTURE — output the document in exactly this anatomy, plain text with section rules (=====) and numbered sections:
 1. OVERVIEW — what this site is, one paragraph. The page's single memorable move, named.
@@ -92,15 +110,64 @@ def _digest_plan(spec_plan: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _inventory_digest(ctx: Dict[str, Any],
+                      spec_plan: List[Dict[str, Any]]) -> str:
+    """Every real asset, itemized — the coverage law applies to each.
+    Reuses the atelier's REAL DATA assembly (the pipeline's single
+    source of rendered truth) plus the gallery list with urls. The
+    first live spec banned all imagery while seven real portfolio
+    pieces sat in the database — the Director can't cover an inventory
+    it never saw."""
+    parts: List[str] = []
+    try:
+        import atelier
+        seen: set = set()
+        for s in spec_plan or []:
+            mid = str(s.get("module") or "")
+            if not mid or mid in seen:
+                continue
+            seen.add(mid)
+            try:
+                data = atelier._section_data(mid, s.get("content") or {}, ctx)
+            except Exception:
+                continue
+            if data:
+                parts.append(f"[{mid}]\n" + json.dumps(
+                    data, ensure_ascii=False, indent=1)[:2600])
+    except Exception as e:
+        logger.info(f"[spec] inventory via atelier skipped: {e}")
+    gallery = ctx.get("gallery") if isinstance(ctx.get("gallery"), list) else []
+    lines: List[str] = []
+    for i, g in enumerate(gallery[:12], 1):
+        if isinstance(g, dict) and (g.get("url") or "").strip():
+            lines.append(f"{i}. {g['url']} — "
+                         f"{g.get('alt') or g.get('caption') or 'untitled piece'}")
+    if lines:
+        parts.append("[gallery — EVERY image below appears on the page]\n"
+                     + "\n".join(lines))
+    return "\n\n".join(parts)
+
+
 def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
-                      prior_spec: str = "", feedback: str = "") -> str:
+                      prior_spec: str = "", feedback: str = "",
+                      inventory: str = "") -> str:
     """Pure prompt assembly (testable, no IO). `dossier` is the canvas
-    brief — everything the system knows, already compiled."""
+    brief — everything the system knows, already compiled; `inventory`
+    is the itemized asset list the coverage law binds to."""
     parts = [
         "== THE DOSSIER (everything known about this business — the only "
         "source of facts) ==",
         dossier.strip(),
         "",
+    ]
+    if inventory.strip():
+        parts += [
+            "== THE INVENTORY (every real asset — the coverage law applies "
+            "to each item; every one gets a home on the page) ==",
+            inventory.strip(),
+            "",
+        ]
+    parts += [
         "== THE CURRENT SECTION PLAN (the page's chapters, in order) ==",
         _digest_plan(spec_plan),
         "",
@@ -177,7 +244,13 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
     except Exception as e:
         logger.warning(f"[spec] dossier compile failed ({e}) — minimal dossier")
         dossier = "Follow the design rationale. Real data only; never invent facts."
-    user = build_user_prompt(dossier, spec_plan, prior_spec, feedback)
+    try:
+        inventory = _inventory_digest(ctx, spec_plan)
+    except Exception as e:
+        logger.info(f"[spec] inventory digest skipped: {e}")
+        inventory = ""
+    user = build_user_prompt(dossier, spec_plan, prior_spec, feedback,
+                             inventory=inventory)
     text = (_call_llm(_SYSTEM, user, business_id) or "").strip()
     if not text:
         return None
