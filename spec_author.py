@@ -31,11 +31,14 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("spec_author")
 
-SPEC_MAX_TOKENS = 6000   # a GENEROUS 8-11 section spec with real copy
+SPEC_MAX_TOKENS = 12000  # room to FINISH: both live drafts died
+                         # mid-sentence in section 4 at the 6K cap
 SPEC_TEMPERATURE = 0.7
 # The spec leads the canvas brief — cap what rides downstream so the
-# builder's context stays sane even if a model over-writes.
-SPEC_MAX_CHARS = 20000
+# builder's context stays sane even if a model over-writes. Sized
+# above the token budget so the char slice never truncates a document
+# the model completed (12K tokens ≈ 45K chars worst case).
+SPEC_MAX_CHARS = 48000
 
 
 def _model() -> str:
@@ -334,6 +337,12 @@ def _call_llm(system: str, user: str, business_id: str,
         msg, used_model = model_ladder.call_with_ladder(
             _do, model=_model(), task="spec_author",
             business_id=business_id, max_tokens=SPEC_MAX_TOKENS)
+        if getattr(msg, "stop_reason", "") == "max_tokens":
+            # The document was cut mid-sentence — ship it anyway (the
+            # owner can revise) but say so LOUDLY; a silent truncation
+            # reads as a finished spec.
+            logger.warning(f"[spec] document hit the {SPEC_MAX_TOKENS}-token "
+                           f"ceiling for {business_id[:8]} — output truncated")
         try:
             from api_usage_logger import log_api_usage_sync
             u = getattr(msg, "usage", None)
