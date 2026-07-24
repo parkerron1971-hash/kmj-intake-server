@@ -123,23 +123,36 @@ def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
 
 
 def _call_llm(system: str, user: str, business_id: str) -> Optional[str]:
-    """Anthropic call, usage metered under its own endpoint so spec
-    authoring cost is visible separately from builds."""
+    """Anthropic call THROUGH THE MODEL LADDER — same discipline as the
+    canvas/atelier. The naive first version passed temperature
+    unconditionally; with SPEC_AUTHOR_MODEL unset the model resolves to
+    ATELIER_MODEL=claude-opus-4-8, which 400s on sampling params — the
+    exact silent-atelier killer sampling_kwargs() exists to prevent.
+    The ladder also buys invalid-model fallback + timeout retry. Usage
+    metered under its own endpoint so spec cost is visible separately."""
     try:
+        import model_ladder
         from anthropic import Anthropic
         key = os.environ.get("ANTHROPIC_API_KEY")
         if not key:
+            logger.warning("[spec] no ANTHROPIC_API_KEY — author unavailable")
             return None
-        client = Anthropic(api_key=key)
-        msg = client.messages.create(
-            model=_model(), max_tokens=SPEC_MAX_TOKENS,
-            temperature=SPEC_TEMPERATURE, system=system,
-            messages=[{"role": "user", "content": user}], timeout=120.0)
+        client = Anthropic(api_key=key, timeout=120.0, max_retries=1)
+
+        def _do(model: str, max_tokens: int, timeout: float):
+            return client.messages.create(
+                model=model, max_tokens=max_tokens, system=system,
+                messages=[{"role": "user", "content": user}], timeout=timeout,
+                **model_ladder.sampling_kwargs(model, SPEC_TEMPERATURE))
+
+        msg, used_model = model_ladder.call_with_ladder(
+            _do, model=_model(), task="spec_author",
+            business_id=business_id, max_tokens=SPEC_MAX_TOKENS)
         try:
             from api_usage_logger import log_api_usage_sync
             u = getattr(msg, "usage", None)
             log_api_usage_sync(
-                endpoint="/composer/spec", model=getattr(msg, "model", "") or "",
+                endpoint="/composer/spec", model=used_model or "",
                 input_tokens=getattr(u, "input_tokens", 0) or 0,
                 output_tokens=getattr(u, "output_tokens", 0) or 0,
                 business_id=business_id, task_type="spec_author")

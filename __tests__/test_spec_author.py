@@ -87,3 +87,43 @@ def test_approved_spec_leads_the_brief():
 def test_brief_unchanged_without_spec():
     brief = compile_canvas_brief(_ctx(), None, _PLAN)
     assert "THE APPROVED SPEC" not in brief
+
+
+# ─── the temperature-400 regression (live 502, 2026-07-24) ───────────
+# First live author call 502'd: SPEC_AUTHOR_MODEL unset resolved to
+# ATELIER_MODEL=claude-opus-4-8, which 400s on sampling params. The
+# call must ride the model ladder (sampling_kwargs + fallback rungs).
+
+def test_call_llm_rides_the_model_ladder(monkeypatch):
+    import model_ladder
+
+    captured = {}
+
+    def fake_ladder(fn, model, task, business_id, max_tokens):
+        captured["model"] = model
+        captured["task"] = task
+
+        class _Block:
+            type = "text"
+            text = "SPEC DOCUMENT"
+
+        class _Usage:
+            input_tokens = 1
+            output_tokens = 1
+
+        class _Msg:
+            content = [_Block()]
+            usage = _Usage()
+
+        return _Msg(), model
+
+    monkeypatch.setattr(model_ladder, "call_with_ladder", fake_ladder)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+    out = spec_author._call_llm("sys", "user", "biz")
+    assert out == "SPEC DOCUMENT"
+    assert captured["task"] == "spec_author"
+
+
+def test_opus_family_drops_temperature():
+    import model_ladder
+    assert model_ladder.sampling_kwargs("claude-opus-4-8", 0.7) == {}
