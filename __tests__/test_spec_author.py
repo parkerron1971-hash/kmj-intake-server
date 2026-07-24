@@ -39,6 +39,26 @@ def test_recalibration_generosity_and_coverage_laws():
     assert "Never ban imagery" in s
 
 
+def test_inventory_covers_slots_and_contact():
+    """The first live spec never saw the portrait or the contact
+    channels — the digest now itemizes both."""
+    ctx = _ctx(
+        gallery=[{"url": "https://x/a.png", "alt": ""}],
+        contact={"email": "hello@kmjcreate.com", "phone": "", "website": "kmjcreate.com"},
+        site={"site_config": {"slots": {
+            "about_subject": {"custom_url": "https://x/portrait.png"},
+            "hero_main": {"custom_url": "https://x/gone.png", "removed": True},
+        }}},
+    )
+    d = spec_author._inventory_digest(ctx, [])
+    assert "https://x/portrait.png" in d
+    assert "owner's own upload" in d
+    assert "https://x/gone.png" not in d          # removed stays removed
+    assert "hello@kmjcreate.com" in d
+    assert "phone" not in d.split("[contact")[1]  # empty channels skipped
+    assert "AUTHOR a proper display caption" in d
+
+
 def test_inventory_rides_the_prompt():
     p = spec_author.build_user_prompt(
         "D", _PLAN, inventory="[gallery]\n1. https://x/img.png — cross tee")
