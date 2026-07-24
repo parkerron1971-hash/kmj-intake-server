@@ -207,6 +207,20 @@ def test_caption_truth_and_no_conditionals_taught():
     assert "NO CONDITIONAL ENTRIES" in s
 
 
+def test_brand_color_law_and_atmosphere_rule():
+    """Kevin on the third render: 'why didn't it use the brand colors?
+    no accent in this design. the background should be better.' Brand
+    hues bind; the second brand color gets a job; and a flat ground
+    fails the atmosphere budget even with every accent rule obeyed."""
+    s = spec_author._SYSTEM
+    assert "THE BRAND COLOR LAW" in s
+    assert "inventing a NEW accent hue while brand colors exist" in s
+    assert "the second is a real citizen" in s
+    assert "THE ATMOSPHERE RULE" in s
+    assert "accent scarcity is NOT atmosphere scarcity" in s
+    assert "flat dark rectangle" in s
+
+
 def test_image_urls_https_only():
     ctx = _ctx(gallery=[{"url": "http://insecure/x.png"},
                         {"url": "https://x/ok.png"}])
