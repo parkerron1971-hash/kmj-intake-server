@@ -207,6 +207,31 @@ def test_caption_truth_and_no_conditionals_taught():
     assert "NO CONDITIONAL ENTRIES" in s
 
 
+def test_brand_mark_urls_reads_the_brand_kit():
+    """Kevin uploaded the mark to the Brand Kit (settings.brand_kit.
+    logos.primary) — a source the eyes never read; the next draft still
+    ran amber/no-green. The mark now leads the image feed."""
+    ctx = _ctx(bundle={"business": {"settings": {"brand_kit": {
+        "logos": {"primary": "https://x/mark.png",
+                  "alt": "https://x/mark-alt.png"},
+        "logo_url": "https://x/mark.png",
+    }}}})
+    urls = spec_author._brand_mark_urls(ctx, "")
+    assert urls[0] == "https://x/mark.png"
+    assert len(urls) <= 2
+    assert len(set(urls)) == len(urls)
+    # no settings, no business_id -> empty, never raises
+    assert spec_author._brand_mark_urls(_ctx(), "") == []
+
+
+def test_declaration_rule_taught():
+    s = spec_author._SYSTEM
+    assert "THE DECLARATION RULE" in s
+    assert 'MUST begin "OBSERVED IN THE WORK:"' in s
+    assert "zero-image business" in s
+    assert "bind --sx-accent" in s
+
+
 def test_brand_color_law_and_atmosphere_rule():
     """Kevin on the third render: 'why didn't it use the brand colors?
     no accent in this design. the background should be better.' Brand
