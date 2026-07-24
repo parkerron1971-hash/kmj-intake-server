@@ -86,6 +86,52 @@ def test_study_reference_replaces_prior_entry_for_same_url(monkeypatch):
     assert len(refs) == 1 and refs[0]["verdict"] == "love"
 
 
+# ─── practitioner writes (Phase 1b) ──────────────────────────────────
+
+def test_answer_door_rejects_non_practitioner_sources():
+    d = discovery._empty_dossier()
+    out = discovery.apply_practitioner_patch(d, {
+        "identity": {"one_liner": {"value": "sneaky", "source": "recon"}},
+        "taste": {"ground": {"value": "dark", "source": "inferred"}},
+    })
+    assert "one_liner" not in out["identity"]
+    assert "ground" not in out["taste"]
+
+
+def test_answer_door_accepts_practitioner_sources_and_brief():
+    d = discovery._empty_dossier()
+    d["taste"]["ground"] = {"value": "dark", "source": "inferred",
+                             "confidence": 0.9}
+    out = discovery.apply_practitioner_patch(d, {
+        "identity": {"one_liner": {"value": "I launch businesses",
+                                    "source": "asked"}},
+        "taste": {"tone": {"value": "serious", "source": "flipped"}},
+        "truth": {"proven_stats": [{"label": "years in", "value": "15",
+                                     "proof": "since 2011"}],
+                  "colors_avoid": [{"color": "red", "why": "old logo"}]},
+        "confirmed_brief": "dark, warm, type-led, gold and green.",
+    })
+    assert out["identity"]["one_liner"]["value"] == "I launch businesses"
+    assert out["taste"]["tone"]["source"] == "flipped"
+    assert out["truth"]["proven_stats"][0]["value"] == "15"
+    assert out["truth"]["colors_avoid"][0]["source"] == "asked"
+    assert out["confirmed_brief"].startswith("dark")
+    assert out["confirmed_at"]
+    # confirmation upgraded the bare inference — never ships unconfirmed
+    assert out["taste"]["ground"]["source"] == "inferred-confirmed"
+
+
+def test_derive_taste_respects_practitioner_and_records_gap(monkeypatch):
+    # no artifacts at all → recorded gap, no crash, no call
+    d = discovery._empty_dossier()
+    saved = {}
+    monkeypatch.setattr(discovery, "get_dossier", lambda b: d)
+    monkeypatch.setattr(discovery, "save_dossier",
+                        lambda b, dd: saved.update(dd) or True)
+    out = discovery.derive_taste("biz")
+    assert "taste_underivable_no_artifacts" in out["gaps"]
+
+
 # ─── the Director's view ─────────────────────────────────────────────
 
 def test_dossier_digest_empty_when_nothing_useful():
