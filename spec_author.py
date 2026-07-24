@@ -205,16 +205,29 @@ def _inventory_digest(ctx: Dict[str, Any],
 
 def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
                       prior_spec: str = "", feedback: str = "",
-                      inventory: str = "") -> str:
+                      inventory: str = "", discovery: str = "") -> str:
     """Pure prompt assembly (testable, no IO). `dossier` is the canvas
     brief — everything the system knows, already compiled; `inventory`
-    is the itemized asset list the coverage law binds to."""
+    is the itemized asset list the coverage law binds to; `discovery`
+    is the Discovery dossier digest (Revamp Phase 1) — the practitioner's
+    own confirmed answers, taste readings with provenance, and studied
+    reference rules."""
     parts = [
         "== THE DOSSIER (everything known about this business — the only "
         "source of facts) ==",
         dossier.strip(),
         "",
     ]
+    if discovery.strip():
+        parts += [
+            "== THE DISCOVERY DOSSIER (the practitioner's own answers and "
+            "confirmed taste — provenance matters: 'asked' and 'flipped' "
+            "values are their words and outrank 'inferred-confirmed', "
+            "which outranks 'recon'; reference `rules` are transferable "
+            "disciplines to learn from, `bans` are hard bans) ==",
+            discovery.strip(),
+            "",
+        ]
     if inventory.strip():
         parts += [
             "== THE INVENTORY (every real asset — the coverage law applies "
@@ -435,8 +448,18 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
     except Exception as e:
         logger.info(f"[spec] inventory digest skipped: {e}")
         inventory = ""
+    # Revamp Phase 1: the Discovery dossier rides the prompt from day
+    # one — confirmed answers, provenance-tagged taste, reference rules.
+    disc = ""
+    try:
+        import discovery as _disc
+        _dd = (((ctx.get("site") or {}).get("site_config") or {})
+               .get("discovery_dossier"))
+        disc = _disc.dossier_digest(_dd)
+    except Exception as e:
+        logger.info(f"[spec] discovery digest skipped: {e}")
     user = build_user_prompt(dossier, spec_plan, prior_spec, feedback,
-                             inventory=inventory)
+                             inventory=inventory, discovery=disc)
     marks = _brand_mark_urls(ctx, business_id)
     work = [u for u in _image_urls(ctx) if u not in marks]
     text = (_call_llm(_SYSTEM, user, business_id,

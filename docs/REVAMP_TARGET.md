@@ -5,6 +5,11 @@ what the generator becomes, what dies, in what order, and what may never
 break while we operate. Nothing in this doc is code; nothing gets stripped
 until Kevin signs off on this page.*
 
+*Amended same-day (signed): repair economics + annotator, promotion gate
+with vertical spread, front-matter validation at approval, token-bleed
+check on all paths, mobile verification, drain-and-queue footnote,
+reference-study loud degradation, model-portable builder prompt.*
+
 ---
 
 ## 1. The lesson that drives the whole revamp
@@ -65,6 +70,11 @@ dossier**. Full script in `docs/DISCOVERY_AGENT.md`. Key properties:
 - **Reference-site study**: Playwright screenshots the practitioner's
   loved/hated sites; the Director SEES them (transferable rules only,
   never identity — the languages-extraction protocol, per practitioner).
+  Screenshot failures (bot-blocked sites, dead links, timeouts)
+  degrade to skip-and-record: the dossier notes WHICH reference could
+  not be captured and why, discovery continues, and the Director is
+  told what it couldn't see. Per Invariant 8, a missing reference is a
+  recorded fact, never a silent gap and never a stalled intake.
 - Output: `site_config.discovery_dossier` — one JSON object, the single
   source the Director reads.
 
@@ -81,6 +91,15 @@ fallback, not the mechanism).
 ### Layer 3 — APPROVE (exists; keep)
 The Studio Blueprint panel. Cost model stays inverted: deciding is
 pennies; the build fee only ever renders an approved document.
+The blueprint's machine-readable header is validated AT APPROVAL,
+not at build. The Blueprint panel refuses approval — loudly, with
+the exact missing fields — if the JSON front-matter lacks any of:
+complete token set, font stack, or section list. The deterministic
+spec→module translator downstream is itself a seam; it stays safe
+only if the header is a complete contract. Per Invariant 6, an
+incomplete spec must fail at the pennies stage, never at the
+build-fee stage. Regex-parsing the prose body is a diagnostic
+fallback for humans, never a mechanism.
 
 ### Layer 4 — BUILD (the big change)
 Replace the chunked canvas + module assembly + atelier fragments + AD
@@ -94,14 +113,32 @@ layer + language CSS floors + framework skeletons with:
   - COVERAGE: every real image present by url; nav/contact-form/footer
     present; every service present
   - EDITABILITY: data-override-target on all copy, data-slot on images,
-    zone stamps — Edit Mode and the Studio keep working
+    zone stamps — Edit Mode and the Studio keep working. Editability is
+    NOT the model's job to get perfect: a deterministic ANNOTATOR
+    post-pass walks the DOM after authorship and injects any missing
+    override targets, slots, and zone stamps. The model is asked to
+    stamp them; the annotator guarantees them. An editability gap never
+    costs a model call and never triggers repair or fallback.
   - TOKEN BRIDGE: spec tokens installed last on every path
   - SAFETY: JS armor, no external calls, size caps
-  - One repair pass with the exact violations; then fallback.
+  - REPAIR ECONOMICS: violations are triaged before any repair runs.
+    * Mechanical violations (editability, token installation, size/JS
+      armor trims) → fixed deterministically, zero model calls.
+    * Authorship violations (truth, coverage) → ONE surgical repair
+      call scoped to the violating sections only — the exact violations
+      plus the minimum surrounding HTML, never a whole-page regenerate.
+      A full 24–32K re-roll can reintroduce new violations elsewhere;
+      the repair call is a scalpel, not a second surgery.
+    * Repair fails validation again → fallback. One repair, ever.
 - **Fallback**: the deterministic module path, unchanged, wearing spec
   tokens. It is the floor, never the ceiling.
 
 ### Layer 5 — VERIFY (exists; keep)
+The easel step screenshots BOTH viewports — desktop and mobile
+(390px) — and the author reviews both. The judge scores both; a page
+that sings on desktop and breaks on mobile fails, full stop.
+Invariant 4 (mobile parity ships in the same pass) is a build rule;
+this is its verification twin. What isn't screenshotted isn't real.
 Easel step → judge (arcD-2 rubric, same-bar rule, static-only law) →
 ratchet with margin. Rejected candidates keep their HTML.
 
@@ -140,6 +177,11 @@ data-truth renderers and emergency fallback only).
 5. **The judge gates every ship; the ratchet never downgrades.**
 6. **Decide cheap, build once.** No paid build without an approved spec.
 7. **No deploys during builds.** Merges wait for `running = 0`.
+   (Known limit: this works at current volume. As builds become
+   continuous, it becomes an indefinite deploy blocker; the successor
+   is a drain-and-queue — stop accepting new builds, finish in-flight
+   ones, deploy, reopen. Noted now so future-us treats this as a
+   scaling milestone, not a violated law.)
 8. **Loud failures.** Any stage that skips/falls back writes WHY to the
    config. Silent fallback is the enemy that ate this month.
 
@@ -156,19 +198,39 @@ data-truth renderers and emergency fallback only).
 - **Phase 2 — Builder v2.** Single-call whole-page builder + armor +
   repair pass, behind the flag. A/B against the old path on the same
   approved spec — judge scores both, Kevin eyeballs both.
-- **Phase 3 — promotion.** V2 becomes default when it beats the old path
-  on **3 consecutive real builds** (judge composite ≥ the old path's AND
-  Kevin-score ≥ 8). Old path demoted to emergency fallback.
+- **Phase 3 — promotion.** V2 becomes default when it beats the old
+  path on real builds at EITHER of these bars, whichever is met first:
+  (a) 3 consecutive wins spanning at least 2 distinct verticals, or
+  (b) 4 wins out of any 5 builds, spanning at least 2 distinct
+  verticals. A "win" = judge composite ≥ the old path's on the same
+  approved spec AND Kevin-score ≥ 8. The vertical-spread requirement
+  exists because three coaching sites in a row prove nothing about a
+  restaurant or a storefront; the 4-of-5 alternative exists because one
+  fluky loss should not reset a real winner. RIDER (current scale):
+  seeded demo businesses with real-shaped data COUNT toward the
+  vertical spread — judged builds on them are cheap, and the spread
+  must be satisfiable before there are two live customers. Old path
+  demoted to emergency fallback.
 - **Phase 4 — the strip.** Kill-list components removed from the build
   path; code deleted only after two clean weeks. Every removal is its own
   PR with the invariant checklist in the description.
 
 **Success metrics:** judge composite ≥ 30 sustained · Kevin-score ≥ 8 ·
-zero old-token bleed (automated check: retired hexes/fonts absent from
-served HTML) · one paid build per accepted design · a failed build is
-always diagnosable from the DB alone.
+zero old-token bleed on EVERY served page regardless of which path
+built it — v2 output, repair output, AND the fallback module path (the
+fallback is where fossilized tokens live and where this bug
+historically resurfaced). Formulation: when a spec governs, the served
+page's tokens must MATCH the spec's declared set; a blacklist of
+retired hexes/fonts is only the bootstrap check for pre-spec pages ·
+one paid build per accepted design · a failed build is always
+diagnosable from the DB alone.
 
 ---
 
-*Sign-off: Kevin approves this doc → Phase 1 begins. Edits welcome — this
-page is the contract for the revamp.*
+**Strategic note:** Builder v2 concentrates page quality in one large
+model call. The model_ladder surviving the kill list is the hedge —
+keep the v2 builder prompt portable (no model-specific syntax,
+capabilities declared in config) so laddering to a different model is
+a config change, not a rewrite.
+
+*SIGNED OFF 2026-07-24 (Kevin), amendments folded. Phase 1 is live.*
