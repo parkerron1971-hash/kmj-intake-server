@@ -252,6 +252,54 @@ def test_image_urls_https_only():
     assert spec_author._image_urls(ctx) == ["https://x/ok.png"]
 
 
+# ─── THE SPEC TOKEN BRIDGE (the "old design living inside" bug) ──────
+# The approved spec named its palette, but page tokens came from the
+# stored brand DNA — the spec's look physically couldn't reach the
+# page, and every canvas fallback re-dressed the site in the old
+# regime (Anton + old accent + sig-underline).
+
+_SPEC_SAMPLE = """
+- --sx-bg: #0c0c0e (primary dark stage)
+- --sx-accent: #d9a514 (THE amber)
+- --sx-secondary: #9cad4e (THE brand green)
+- --sx-line-green: rgba(156,173,78,0.22) (the Method strip's rule)
+- DISPLAY / headlines: var(--sx-display) = Montserrat, 700-900 weight
+- BODY / copy: var(--sx-body) = Open Sans, 400-600
+"""
+
+
+def test_extract_token_overrides():
+    t = spec_author.extract_token_overrides(_SPEC_SAMPLE)
+    assert t["--sx-accent"] == "#d9a514"
+    assert t["--sx-secondary"] == "#9cad4e"
+    assert t["--sx-line-green"] == "rgba(156,173,78,0.22)"
+    assert "--sx-display" not in t          # fonts excluded here
+
+
+def test_extract_font_overrides():
+    f = spec_author.extract_font_overrides(_SPEC_SAMPLE)
+    assert f["--sx-font-heading"] == "Montserrat"
+    assert f["--sx-font-body"] == "Open Sans"
+
+
+def test_apply_spec_overrides_injects_and_retires_old_chrome():
+    html = "<html><head><title>x</title></head><body class='sx-sig-underline'>hi</body></html>"
+    out = spec_author.apply_spec_overrides(html, _SPEC_SAMPLE)
+    assert 'id="sx-spec-overrides"' in out
+    assert "--sx-accent:#d9a514" in out
+    assert "fonts.googleapis.com" in out and "Montserrat" in out
+    # the legacy underline chrome is retired when a spec governs
+    assert "content:none!important" in out
+    # injected before </head>, exactly once
+    assert out.index("sx-spec-overrides") < out.index("</head>")
+
+
+def test_apply_spec_overrides_fails_open():
+    html = "<html><head></head><body></body></html>"
+    assert spec_author.apply_spec_overrides(html, "no tokens here") == html
+    assert spec_author.apply_spec_overrides("no head tag", _SPEC_SAMPLE) == "no head tag"
+
+
 # ─── the temperature-400 regression (live 502, 2026-07-24) ───────────
 # First live author call 502'd: SPEC_AUTHOR_MODEL unset resolved to
 # ATELIER_MODEL=claude-opus-4-8, which 400s on sampling params. The

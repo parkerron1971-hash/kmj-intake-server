@@ -160,6 +160,14 @@ def _compile(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]],
         A("== THE APPROVED SPEC (the owner approved this document — it is "
           "THE LAW of the page; everything below only supplies data and "
           "constraints it doesn't cover) ==")
+        A("TOKEN NOTE (critical): the spec's --sx-* color and font values "
+          "are ALREADY INSTALLED as the page's design tokens by the "
+          "platform. Reference tokens ONLY — var(--sx-accent), "
+          "var(--sx-secondary), var(--sx-font-heading) — and NEVER emit "
+          "the literal hex codes the spec names; the validator rejects "
+          "any literal color and the whole section falls back to an old "
+          "template. The spec's hexes are documentation of what the "
+          "tokens hold, not values for you to write.")
         A(spec_doc)
         A("")
 
