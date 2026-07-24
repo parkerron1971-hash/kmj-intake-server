@@ -66,6 +66,42 @@ def test_fail_open_without_director_context():
     assert "== SECTION PLAN (in order) ==" in brief
 
 
+def test_owners_words_lead_the_brief():
+    brief = compile_canvas_brief(_ctx(
+        owner_brief="deep navy with warm gold, typographic hero with motion",
+    ), None, _SPEC)
+    assert "THE OWNER'S WORDS" in brief
+    assert "deep navy with warm gold" in brief
+    # they lead — before the overview
+    assert brief.index("THE OWNER'S WORDS") < brief.index("== OVERVIEW ==")
+
+
+def test_owners_words_absent_without_prompt():
+    brief = compile_canvas_brief(_ctx(), None, _SPEC)
+    assert "THE OWNER'S WORDS" not in brief
+
+
+def test_vision_loop_env_switch():
+    import os
+    from unittest import mock
+    import canvas
+    with mock.patch.dict(os.environ, {"CANVAS_VISION_LOOP": "off"}):
+        assert canvas._vision_loop_enabled() is False
+    with mock.patch.dict(os.environ, {"CANVAS_VISION_LOOP": "on"}):
+        assert canvas._vision_loop_enabled() is True
+    # default (unset) = ON — checked in a cleared env so the conftest
+    # test guard doesn't leak in, and nothing leaks out
+    with mock.patch.dict(os.environ, {}, clear=True):
+        assert canvas._vision_loop_enabled() is True
+
+
+def test_self_review_fails_open_without_screenshots():
+    from unittest import mock
+    import canvas
+    with mock.patch("vision_grader._screenshot", return_value=None):
+        assert canvas._self_review("<html></html>", "brief", "biz") is None
+
+
 def test_judge_lessons_capped_and_truncated():
     brief = compile_canvas_brief(_ctx(
         judge_lessons=[f"note {i}: " + "x" * 400 for i in range(20)],

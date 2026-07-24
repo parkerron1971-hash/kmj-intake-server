@@ -151,6 +151,18 @@ def _compile(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]],
     A(f"CANVAS BRIEF — {biz.get('name') or 'this business'}")
     A("")
 
+    # ── THE OWNER'S WORDS (Director's Cut arc 2) ──
+    # The practitioner's own prompt for THIS build (Studio chat →
+    # rebuild job → compose_site stashes it on ctx). It leads the brief
+    # and outranks every taste rule below — facts and the canvas
+    # contract still bind.
+    owner = str(ctx.get("owner_brief") or "").strip()
+    if owner:
+        A("== THE OWNER'S WORDS (verbatim — they asked for exactly this; "
+          "honor it above every taste rule below) ==")
+        A(owner[:600])
+        A("")
+
     # ── OVERVIEW: offer, audience, verbs ──
     A("== OVERVIEW ==")
     A(f"- what they offer: {_offer_line(ctx)}")
