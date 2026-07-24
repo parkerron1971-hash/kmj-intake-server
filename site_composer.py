@@ -3637,7 +3637,18 @@ def compose_site(business_id: str, brief_notes: str = "",
         return _canvas_mod.run_canvas(the_spec, ctx, dro, business_id,
                                       progress_cb=progress_cb, feedback=notes)
 
-    if use_llm and dro:
+    # SPEC IS VISION (2026-07-24): the canvas used to require a DRO —
+    # so a DRO failure (e.g. the prefill 400) silently skipped the
+    # canvas AND the practitioner's APPROVED SPEC never reached any
+    # author; the module path shipped the old template instead. An
+    # approved spec is a complete, owner-read design document: it
+    # qualifies as the vision on its own.
+    _has_spec = bool((ctx.get("design_spec_text") or "").strip())
+    if use_llm and not dro and _has_spec:
+        logger.warning(f"[composer] DRO missing but an APPROVED SPEC "
+                       f"exists — canvas runs on the spec for "
+                       f"{business_id[:8]}")
+    if use_llm and (dro or _has_spec):
         try:
             import canvas as _canvas_mod
             if _canvas_mod.canvas_enabled():
