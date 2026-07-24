@@ -173,7 +173,7 @@ def test_image_urls_priority_dedupe_and_cap():
         gallery=[{"url": f"https://x/g{i}.png"} for i in range(8)],
         site={"site_config": {"slots": {
             "about_subject": {"custom_url": "https://x/portrait.png"},
-            "hero_main": {"custom_url": "https://x/g0.png"},          # dupe w/ gallery? no — distinct
+            "hero_main": {"custom_url": "https://x/g0.png"},   # dupe with gallery g0
             "chamber_main": {"custom_url": "https://x/gone.png", "removed": True},
         }}},
     )
@@ -184,6 +184,27 @@ def test_image_urls_priority_dedupe_and_cap():
     assert "https://x/gone.png" not in urls
     # dedupe holds
     assert len(set(urls)) == len(urls)
+
+
+def test_image_cap_default_covers_a_full_portfolio():
+    """Cap 6 cut the owner's loudest pieces (the display-type flyers) —
+    the Director observed the quiet half and speced Montserrat again.
+    The default must see a 2-upload + 7-image portfolio whole."""
+    ctx = _ctx(
+        gallery=[{"url": f"https://x/g{i}.png"} for i in range(9)],
+        site={"site_config": {"slots": {
+            "about_subject": {"custom_url": "https://x/portrait.png"},
+            "hero_main": {"custom_url": "https://x/hero.png"},
+        }}},
+    )
+    urls = spec_author._image_urls(ctx)
+    assert len(urls) == 11        # everything, nothing cut
+
+
+def test_caption_truth_and_no_conditionals_taught():
+    s = spec_author._SYSTEM
+    assert "CAPTION TRUTH" in s
+    assert "NO CONDITIONAL ENTRIES" in s
 
 
 def test_image_urls_https_only():
