@@ -139,6 +139,44 @@ def test_brief_unchanged_without_spec():
     assert "THE APPROVED SPEC" not in brief
 
 
+# ─── THE ARCHAEOLOGY (2026-07-24, "the design was already inside") ───
+# claude.ai reproduced the same weak design from the same blueprint —
+# the document was the problem, and the document was blind. Kevin's
+# bar-setting prompt was authored by a mind that had SEEN his work.
+
+def test_system_prompt_teaches_the_archaeology():
+    s = spec_author._SYSTEM
+    assert "THE ARCHAEOLOGY" in s
+    assert "OBSERVED IN THE WORK:" in s
+    assert "translate a visual voice that already exists" in s
+    # traceability requirement — palette/type must come FROM the work
+    assert "could not be traced back" in s
+
+
+def test_image_urls_priority_dedupe_and_cap():
+    ctx = _ctx(
+        gallery=[{"url": f"https://x/g{i}.png"} for i in range(8)],
+        site={"site_config": {"slots": {
+            "about_subject": {"custom_url": "https://x/portrait.png"},
+            "hero_main": {"custom_url": "https://x/g0.png"},          # dupe w/ gallery? no — distinct
+            "chamber_main": {"custom_url": "https://x/gone.png", "removed": True},
+        }}},
+    )
+    urls = spec_author._image_urls(ctx, cap=6)
+    assert len(urls) == 6
+    # owner uploads lead (identity-dense first)
+    assert urls[0] == "https://x/portrait.png"
+    assert "https://x/gone.png" not in urls
+    # dedupe holds
+    assert len(set(urls)) == len(urls)
+
+
+def test_image_urls_https_only():
+    ctx = _ctx(gallery=[{"url": "http://insecure/x.png"},
+                        {"url": "https://x/ok.png"}])
+    assert spec_author._image_urls(ctx) == ["https://x/ok.png"]
+
+
 # ─── the temperature-400 regression (live 502, 2026-07-24) ───────────
 # First live author call 502'd: SPEC_AUTHOR_MODEL unset resolved to
 # ATELIER_MODEL=claude-opus-4-8, which 400s on sampling params. The
