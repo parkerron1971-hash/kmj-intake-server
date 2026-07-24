@@ -3420,6 +3420,18 @@ def compose_site(business_id: str, brief_notes: str = "",
     # steered the section plan; now the author hears them too.
     if (brief_notes or "").strip():
         ctx["owner_brief"] = brief_notes.strip()[:600]
+    # Arc 3 — an APPROVED design spec is the law of the page: it leads
+    # the canvas brief. Authoring/revision happen via /composer/spec/*
+    # for pennies, so only decided designs pay for builds.
+    try:
+        import spec_author as _sa
+        _spec_text = _sa.approved_spec_text(business_id)
+        if _spec_text:
+            ctx["design_spec_text"] = _spec_text
+            logger.info(f"[composer] approved spec leads this build "
+                        f"({len(_spec_text)} chars) for {business_id[:8]}")
+    except Exception as _spec_e:
+        logger.info(f"[composer] spec load skipped: {_spec_e}")
     dro: Optional[Dict[str, Any]] = None
     dro_id: Optional[str] = None
     source = "llm"
@@ -4555,6 +4567,101 @@ def shuffle(body: ShuffleBody,
     return {"ok": True, "shuffled": {"index": body.section_index,
                                      "module": sec["module"],
                                      "variant": sec["variant"]}, **result}
+
+
+# ─── THE SPEC AUTHOR (Director's Cut arc 3) ──────────────────────────
+# The design spec is authored, read, revised and approved for PENNIES
+# (text-only calls); only an APPROVED spec is worth a paid build,
+# where compose_site hands it to the canvas as the law of the page.
+
+class SpecAuthorBody(BaseModel):
+    business_id: str
+    notes: Optional[str] = None      # the owner's words for this draft
+
+
+class SpecReviseBody(BaseModel):
+    business_id: str
+    notes: str                       # revision notes — required
+
+
+class SpecStatusBody(BaseModel):
+    business_id: str
+
+
+def _spec_inputs(business_id: str):
+    """Shared assembly for author/revise: ctx + stored DRO + the stored
+    section plan (no LLM, no compose fee)."""
+    ctx = gather_context(business_id)
+    dro = _load_stored_dro(business_id)
+    cfg = ((ctx.get("site") or {}).get("site_config") or {})
+    spec_raw = cfg.get("page_spec")
+    plan = sanitize_spec(spec_raw, ctx) if spec_raw else []
+    return ctx, dro, plan
+
+
+@router.get("/spec/{business_id}")
+def get_design_spec(business_id: str,
+                    session: UserSession = Depends(sb_clients.authed_request)
+                    ) -> Dict[str, Any]:
+    """The current design spec document (draft or approved), or null."""
+    _require_owner(business_id, session.user.id)
+    import spec_author
+    return {"spec": spec_author.get_spec(business_id)}
+
+
+@router.post("/spec/author")
+def author_design_spec(body: SpecAuthorBody,
+                       session: UserSession = Depends(sb_clients.authed_request)
+                       ) -> Dict[str, Any]:
+    """Author a fresh spec draft from everything the system knows.
+    Text-only call — cheap by design; never triggers a build."""
+    _require_owner(body.business_id, session.user.id)
+    import spec_author
+    ctx, dro, plan = _spec_inputs(body.business_id)
+    if (body.notes or "").strip():
+        ctx["owner_brief"] = body.notes.strip()[:600]
+    text = spec_author.author_spec(body.business_id, ctx, dro, plan)
+    if not text:
+        raise HTTPException(502, "spec author unavailable — try again")
+    saved = spec_author.save_spec(body.business_id, text, status="draft")
+    return {"ok": True, "spec": saved}
+
+
+@router.post("/spec/revise")
+def revise_design_spec(body: SpecReviseBody,
+                       session: UserSession = Depends(sb_clients.authed_request)
+                       ) -> Dict[str, Any]:
+    """Revise the existing spec with the owner's notes — keeps every
+    decision the notes don't question."""
+    _require_owner(body.business_id, session.user.id)
+    import spec_author
+    prior = spec_author.get_spec(body.business_id)
+    if not prior:
+        raise HTTPException(409, "no spec to revise — author one first")
+    if not (body.notes or "").strip():
+        raise HTTPException(400, "revision notes are required")
+    ctx, dro, plan = _spec_inputs(body.business_id)
+    text = spec_author.author_spec(
+        body.business_id, ctx, dro, plan,
+        prior_spec=str(prior.get("text") or ""), feedback=body.notes.strip())
+    if not text:
+        raise HTTPException(502, "spec author unavailable — try again")
+    saved = spec_author.save_spec(body.business_id, text, status="draft")
+    return {"ok": True, "spec": saved}
+
+
+@router.post("/spec/approve")
+def approve_design_spec(body: SpecStatusBody,
+                        session: UserSession = Depends(sb_clients.authed_request)
+                        ) -> Dict[str, Any]:
+    """Mark the spec approved — the next full rebuild executes it as
+    the law of the page."""
+    _require_owner(body.business_id, session.user.id)
+    import spec_author
+    spec = spec_author.set_status(body.business_id, "approved")
+    if not spec:
+        raise HTTPException(409, "no spec to approve — author one first")
+    return {"ok": True, "spec": spec}
 
 
 class RefreshBody(BaseModel):

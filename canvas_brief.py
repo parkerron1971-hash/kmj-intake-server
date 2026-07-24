@@ -151,6 +151,18 @@ def _compile(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]],
     A(f"CANVAS BRIEF — {biz.get('name') or 'this business'}")
     A("")
 
+    # ── THE APPROVED SPEC (Director's Cut arc 3) ──
+    # The owner read and approved this document; it outranks everything
+    # below. The rest of the brief supplies data + platform constraints
+    # the spec doesn't cover (tokens, real rows, contract).
+    spec_doc = str(ctx.get("design_spec_text") or "").strip()
+    if spec_doc:
+        A("== THE APPROVED SPEC (the owner approved this document — it is "
+          "THE LAW of the page; everything below only supplies data and "
+          "constraints it doesn't cover) ==")
+        A(spec_doc)
+        A("")
+
     # ── THE OWNER'S WORDS (Director's Cut arc 2) ──
     # The practitioner's own prompt for THIS build (Studio chat →
     # rebuild job → compose_site stashes it on ctx). It leads the brief
