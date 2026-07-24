@@ -145,13 +145,41 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
     _prefill_applied = {"v": False}
 
     def _do(model: str, max_tokens: int, timeout: float):
-        _prefill_applied["v"] = bool(prefill)
-        return client.messages.create(
-            model=model, max_tokens=max_tokens,
-            system=system, messages=_messages,
-            timeout=timeout,
-            **model_ladder.sampling_kwargs(model, temperature),
-        )
+        # PREFILL FALLBACK (2026-07-24, the silent-brain killer): newer
+        # model families 400 on assistant prefill ("This model does not
+        # support assistant message prefill"). That error took the WHOLE
+        # DRO down in 0s on every build after the prefill shipped —
+        # dro=None, so the canvas AND the atelier silently skipped and
+        # the deterministic module path rendered the old template while
+        # the practitioner's approved spec never reached an author.
+        # Reactive, model-agnostic: try prefilled, retry bare on that
+        # specific 400. Never let a shape optimization kill the brain.
+        use_prefill = bool(prefill)
+        try:
+            msg = client.messages.create(
+                model=model, max_tokens=max_tokens,
+                system=system,
+                messages=_messages if use_prefill
+                else [{"role": "user", "content": user}],
+                timeout=timeout,
+                **model_ladder.sampling_kwargs(model, temperature),
+            )
+            _prefill_applied["v"] = use_prefill
+            return msg
+        except Exception as e:
+            if use_prefill and "prefill" in str(e).lower():
+                logger.warning(f"[drl] {model} rejects assistant prefill "
+                               f"— retrying bare (task={task})")
+                msg = client.messages.create(
+                    model=model, max_tokens=max_tokens,
+                    system=system,
+                    messages=[{"role": "user", "content": user}],
+                    timeout=timeout,
+                    **model_ladder.sampling_kwargs(model, temperature),
+                )
+                _prefill_applied["v"] = False
+                return msg
+            raise
 
     # Provider switch (2026-07-17): when the site pipeline runs on
     # Kimi (SITE_BUILDER_PROVIDER=moonshot), skip the Claude model
