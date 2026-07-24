@@ -1239,6 +1239,82 @@ def fact_check_canvas(html: str, ctx: Dict[str, Any],
 
 # ─── Orchestration (§3 architecture + §9 degradation ladder) ─────────
 
+def _vision_loop_enabled() -> bool:
+    """The easel step (Director's Cut arc 2), default ON. The review
+    call is cheap (3 screenshots + a tiny completion) and a re-author
+    only fires when the author itself faults the page — so a clean
+    first pass pays almost nothing. CANVAS_VISION_LOOP=off kills it."""
+    return (os.environ.get("CANVAS_VISION_LOOP") or "on").strip().lower() \
+        not in ("off", "0", "false", "no")
+
+
+_SELF_REVIEW_PROMPT = """You are the same creative director who authored the CREATIVE sections of this page — these screenshots are YOUR OWN assembled work rendered at 390 / 900 / 1440 px. Step back from the easel and see it the way a stranger does in the first 3 seconds.
+
+The brief you worked from follows after the images. The data sections are immutable truth — never note them. Note ONLY what re-authoring the creative sections can fix: composition and balance, spacing rhythm, type scale and hierarchy, accent discipline, dead zones, orphaned ornament, generic patterns, a hero that doesn't land.
+
+If the page already lands the brief, reply with exactly: SHIP
+Otherwise reply with 2-6 terse revision notes, one per line, each concrete and actionable ("right half of the hero is dead space — pull the composition across it", "eyebrow crowds the display type at 390px — give it air"). No preamble, no JSON, no praise."""
+
+
+def _self_review(html: str, brief: str,
+                 business_id: str) -> Optional[str]:
+    """The author looks at its own rendered page. Returns None when the
+    step can't run (no playwright, no key, transport error) or when the
+    author says SHIP; otherwise the revision notes. Fail-open always —
+    a review hiccup never costs the page."""
+    try:
+        import vision_grader as _vg
+        shots = _vg._screenshot(html)
+    except Exception as e:
+        logger.info(f"[canvas] self-review screenshots skipped: {e}")
+        return None
+    if not shots:
+        return None
+    try:
+        import base64
+        from anthropic import Anthropic
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            return None
+        content: List[Dict[str, Any]] = []
+        for width, shot in zip(_vg.BREAKPOINTS, shots):
+            content.append({"type": "text", "text": f"Breakpoint {width}px:"})
+            content.append({"type": "image", "source": {
+                "type": "base64", "media_type": "image/jpeg",
+                "data": base64.b64encode(shot).decode()}})
+        content.append({"type": "text",
+                        "text": "THE BRIEF YOU WORKED FROM:\n"
+                                + brief[:6000]
+                                + "\n\nSHIP, or your revision notes:"})
+        client = Anthropic(api_key=key)
+        msg = client.messages.create(
+            model=(os.environ.get("CANVAS_REVIEW_MODEL")
+                   or os.environ.get("VISION_JUDGE_MODEL")
+                   or "claude-sonnet-4-5-20250929").strip(),
+            max_tokens=500, system=_SELF_REVIEW_PROMPT,
+            messages=[{"role": "user", "content": content}], timeout=90.0)
+        try:
+            from api_usage_logger import log_api_usage_sync
+            u = getattr(msg, "usage", None)
+            log_api_usage_sync(
+                endpoint="/composer/canvas-review",
+                model=getattr(msg, "model", "") or "",
+                input_tokens=getattr(u, "input_tokens", 0) or 0,
+                output_tokens=getattr(u, "output_tokens", 0) or 0,
+                business_id=business_id, task_type="canvas_review")
+        except Exception:
+            pass
+        text = "".join(b.text for b in msg.content
+                       if getattr(b, "type", None) == "text").strip()
+    except Exception as e:
+        logger.info(f"[canvas] self-review call skipped: "
+                    f"{type(e).__name__}: {e}")
+        return None
+    if not text or text.upper().startswith("SHIP"):
+        return None
+    return text[:1500]
+
+
 def _judge_lessons(business_id: str) -> List[str]:
     """The judge's notes from this business's most recent graded builds
     (the live verdict + the last rejection) — bans learned from our own
@@ -1421,6 +1497,44 @@ def run_canvas(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
                 "stage": "fact_check",
                 "detail": "; ".join((problems2 or problems)[:6])})
             return {"html": None, "report": report}
+
+    # ── THE EASEL STEP (Director's Cut arc 2) ──────────────────────
+    # The author steps back and looks at its own rendered page before
+    # handing it in — the mechanic that separates a one-shot draft from
+    # a designed page. SHIP → hand it in unchanged (the common, nearly
+    # free case). Notes → ONE re-author pass carrying them; a revision
+    # that breaks fact-check is discarded and the first pass ships (a
+    # revision may only ever improve, never cost the page).
+    if _vision_loop_enabled():
+        _report(progress_cb, 56, "The author reviews its own work")
+        rev_notes = _self_review(html, brief, business_id)
+        report["self_review"] = {"ran": True,
+                                 "verdict": "notes" if rev_notes else "ship",
+                                 "notes": (rev_notes or "")[:800]}
+        if rev_notes:
+            _report(progress_cb, 57, "Revising from its own notes")
+            results3, script3 = _author_all(
+                "YOUR OWN REVIEW OF THE RENDERED PAGE — you are revising "
+                "your own work. Keep everything that works; fix exactly "
+                "these:\n" + rev_notes)
+            if results3:
+                html3, mod_fb3 = assemble_canvas(plan, results3, blocks,
+                                                 ctx, title, script3)
+                ok3, problems3, warnings3 = fact_check_canvas(
+                    html3, ctx, plan, blocks,
+                    module_fallbacks=tuple(mod_fb3))
+                if ok3:
+                    html, script = html3, script3
+                    report["fact_check"].update(
+                        {"ok": True, "problems": [],
+                         "warnings": warnings3[:20]})
+                    report["self_review"]["applied"] = True
+                else:
+                    report["self_review"]["applied"] = False
+                    report["self_review"]["revision_rejected"] = \
+                        (problems3 or [])[:6]
+            else:
+                report["self_review"]["applied"] = False
 
     report["words"] = _count_visible_words(html)
     report["keyframes"] = len(re.findall(

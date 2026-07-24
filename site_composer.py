@@ -3414,6 +3414,12 @@ def compose_site(business_id: str, brief_notes: str = "",
     # boundaries with honest labels; None on every non-job path.
     _report_progress(progress_cb, 5, "Reading your business")
     ctx = gather_context(business_id)
+    # Director's Cut arc 2 — the practitioner's own words for THIS build
+    # (Studio chat → rebuild job params.brief_notes) ride ctx so the
+    # canvas brief can lead with them verbatim. brief_notes already
+    # steered the section plan; now the author hears them too.
+    if (brief_notes or "").strip():
+        ctx["owner_brief"] = brief_notes.strip()[:600]
     dro: Optional[Dict[str, Any]] = None
     dro_id: Optional[str] = None
     source = "llm"
