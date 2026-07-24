@@ -330,6 +330,172 @@ def study_reference(business_id: str, url: str, verdict: str,
     return entry
 
 
+# ─── practitioner writes (Phase 1b) ──────────────────────────────────
+
+_TASTE_PAIRS = ("ground", "density", "carrier", "edges", "era",
+                "tone", "motion")
+
+
+def apply_practitioner_patch(existing: Dict[str, Any],
+                             patch: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge a practitioner-sourced patch into the dossier. Only
+    practitioner sources may ride this door (asked / flipped /
+    inferred-confirmed) — recon and inference have their own paths.
+    Pure (testable). Unknown sections/leaves are ignored."""
+    out = json.loads(json.dumps(existing))
+
+    def _valid_leaf(v: Any) -> bool:
+        return (isinstance(v, dict) and "value" in v
+                and str(v.get("source")) in _PRACTITIONER_SOURCES)
+
+    for section in ("identity", "taste"):
+        for k, v in (patch.get(section) or {}).items():
+            if _valid_leaf(v):
+                out.setdefault(section, {})[k] = v
+    truth = patch.get("truth") or {}
+    if isinstance(truth.get("proven_stats"), list):
+        out.setdefault("truth", {})["proven_stats"] = [
+            {"label": str(s.get("label"))[:80],
+             "value": str(s.get("value"))[:40],
+             "proof": str(s.get("proof") or "")[:160]}
+            for s in truth["proven_stats"][:8]
+            if isinstance(s, dict) and s.get("label") and s.get("value")]
+    if isinstance(truth.get("colors_avoid"), list):
+        keep = [a for a in (out.get("truth", {}).get("colors_avoid") or [])
+                if _src_of(a) == "recon"]
+        out.setdefault("truth", {})["colors_avoid"] = keep + [
+            {"color": str(a.get("color"))[:60],
+             "why": str(a.get("why") or "")[:200], "source": "asked"}
+            for a in truth["colors_avoid"][:6]
+            if isinstance(a, dict) and a.get("color")]
+    for k, v in ((patch.get("vertical") or {}).get("answers") or {}).items():
+        if _valid_leaf(v):
+            out.setdefault("vertical", {}).setdefault("answers", {})[k] = v
+    if isinstance(patch.get("confirmed_brief"), str) \
+            and patch["confirmed_brief"].strip():
+        out["confirmed_brief"] = patch["confirmed_brief"].strip()[:1200]
+        out["confirmed_at"] = datetime.now(timezone.utc).isoformat()
+        # confirmation upgrades any remaining bare inferences: an
+        # unconfirmed inference is a GAP, not a value (§5 invariant)
+        for k, v in list((out.get("taste") or {}).items()):
+            if isinstance(v, dict) and v.get("source") == "inferred":
+                v["source"] = "inferred-confirmed"
+    return out
+
+
+def answer(business_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The practitioner-write endpoint's engine."""
+    existing = get_dossier(business_id) or _empty_dossier()
+    merged = apply_practitioner_patch(existing, patch)
+    if not save_dossier(business_id, merged):
+        return None
+    return merged
+
+
+# ─── the derived-taste reading (Phase 1b, Revision 2 §3) ─────────────
+
+_DERIVE_SYSTEM = """You are reading a business's design taste from its real artifacts: the brand mark, the owner's work, and taste readings extracted from reference sites they love. Synthesize ONE verdict per pair with a confidence score. This is inference for the owner to CONFIRM — it will be shown to them for a yes; do not hedge into the middle, commit to the likelier pole.
+
+Return JSON ONLY:
+{"taste": {"ground": {"value": "dark|light", "confidence": 0.0-1.0},
+           "density": {"value": "spacious|rich", "confidence": ...},
+           "carrier": {"value": "type|photo", "confidence": ...},
+           "edges": {"value": "sharp|soft", "confidence": ...},
+           "era": {"value": "modern|classic", "confidence": ...},
+           "tone": {"value": "playful|serious", "confidence": ...},
+           "motion": {"value": "signature-moment|gentle|still", "confidence": ...}}}"""
+
+
+def derive_taste(business_id: str) -> Optional[Dict[str, Any]]:
+    """One vision call over the mark + work + reference readings →
+    the seven pair readings, written with source 'inferred' (pending
+    the practitioner's confirm). Pairs the practitioner already
+    answered are NEVER overwritten. Fail-open: on any failure the
+    dossier is returned unchanged with a recorded gap."""
+    dossier = get_dossier(business_id) or _empty_dossier()
+    arts = dossier.get("artifacts") or {}
+    urls: List[str] = []
+    if (arts.get("brand_mark_url") or "").strip():
+        urls.append(arts["brand_mark_url"].strip())
+    for w in (arts.get("work") or [])[:5]:
+        u = (w.get("url") or "").strip() if isinstance(w, dict) else ""
+        if u and u not in urls:
+            urls.append(u)
+    ref_readings = [
+        {"verdict": r.get("verdict"), "why": r.get("why"),
+         "taste": r.get("taste")}
+        for r in (arts.get("references") or [])
+        if isinstance(r, dict) and r.get("taste")]
+    if not urls and not ref_readings:
+        gaps = set(dossier.get("gaps") or [])
+        gaps.add("taste_underivable_no_artifacts")
+        dossier["gaps"] = sorted(gaps)
+        save_dossier(business_id, dossier)
+        return dossier
+    try:
+        from anthropic import Anthropic
+        import model_ladder
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise RuntimeError("no ANTHROPIC_API_KEY")
+        content: List[Dict[str, Any]] = []
+        for i, u in enumerate(urls, 1):
+            label = ("THE BRAND MARK" if i == 1 and arts.get("brand_mark_url")
+                     else f"WORK {i}")
+            content.append({"type": "text", "text": f"{label}: {u}"})
+            content.append({"type": "image",
+                            "source": {"type": "url", "url": u}})
+        if ref_readings:
+            content.append({"type": "text",
+                            "text": "REFERENCE READINGS (from sites they "
+                                    "love/hate):\n"
+                                    + json.dumps(ref_readings)[:3000]})
+        content.append({"type": "text", "text": "Synthesize. JSON only."})
+        client = Anthropic(api_key=key, timeout=90.0, max_retries=1)
+
+        def _do(model: str, max_tokens: int, timeout: float):
+            return client.messages.create(
+                model=model, max_tokens=max_tokens, system=_DERIVE_SYSTEM,
+                messages=[{"role": "user", "content": content}],
+                timeout=timeout,
+                **model_ladder.sampling_kwargs(model, None))
+
+        msg, _used = model_ladder.call_with_ladder(
+            _do, model=(os.environ.get("DISCOVERY_STUDY_MODEL")
+                        or "claude-sonnet-4-5-20250929").strip(),
+            task="discovery_derive", business_id=business_id,
+            max_tokens=600)
+        raw = "".join(b.text for b in msg.content
+                      if getattr(b, "type", None) == "text")
+        import re as _re
+        m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        taste = (json.loads(m.group(0)) if m else {}).get("taste") or {}
+    except Exception as e:
+        logger.warning(f"[discovery] derive_taste failed: "
+                       f"{type(e).__name__}: {e}")
+        gaps = set(dossier.get("gaps") or [])
+        gaps.add("taste_derivation_failed")
+        dossier["gaps"] = sorted(gaps)
+        save_dossier(business_id, dossier)
+        return dossier
+
+    t_out = dossier.setdefault("taste", {})
+    for pair in _TASTE_PAIRS:
+        v = taste.get(pair)
+        if not isinstance(v, dict) or not v.get("value"):
+            continue
+        if _src_of(t_out.get(pair)) in _PRACTITIONER_SOURCES:
+            continue                       # their word stands
+        t_out[pair] = {"value": str(v["value"])[:40],
+                       "confidence": float(v.get("confidence") or 0.5),
+                       "source": "inferred"}
+    dossier["gaps"] = sorted(set(dossier.get("gaps") or [])
+                             - {"taste_underivable_no_artifacts",
+                                "taste_derivation_failed"})
+    save_dossier(business_id, dossier)
+    return dossier
+
+
 # ─── the Director's view ─────────────────────────────────────────────
 
 def dossier_digest(dossier: Optional[Dict[str, Any]]) -> str:

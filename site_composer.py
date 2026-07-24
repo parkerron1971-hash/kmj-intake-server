@@ -4752,6 +4752,47 @@ def discovery_reference(body: DiscoveryReferenceBody,
     return {"ok": True, "reference": entry}
 
 
+class DiscoveryAnswerBody(BaseModel):
+    business_id: str
+    patch: Dict[str, Any]
+
+
+class DiscoveryDeriveBody(BaseModel):
+    business_id: str
+
+
+@router.post("/discovery/answer")
+def discovery_answer(body: DiscoveryAnswerBody,
+                     session: UserSession = Depends(sb_clients.authed_request)
+                     ) -> Dict[str, Any]:
+    """The practitioner-write door: identity/taste/truth/vertical leaves
+    (each {"value","source"} with a practitioner source) and/or the
+    confirmed_brief. Recon and inference have their own doors; nothing
+    here can be silently overwritten by them later."""
+    _require_owner(body.business_id, session.user.id)
+    import discovery
+    d = discovery.answer(body.business_id, body.patch or {})
+    if d is None:
+        raise HTTPException(404, "business site not found")
+    return {"ok": True, "dossier": d}
+
+
+@router.post("/discovery/derive")
+def discovery_derive(body: DiscoveryDeriveBody,
+                     session: UserSession = Depends(sb_clients.authed_request)
+                     ) -> Dict[str, Any]:
+    """Derive the seven taste readings from the mark + work + studied
+    references (one vision call). Written with source 'inferred' —
+    pending the practitioner's confirm; their answered pairs are never
+    overwritten. Fail-open with a recorded gap."""
+    _require_owner(body.business_id, session.user.id)
+    import discovery
+    d = discovery.derive_taste(body.business_id)
+    if d is None:
+        raise HTTPException(404, "business site not found")
+    return {"ok": True, "dossier": d}
+
+
 class RefreshBody(BaseModel):
     business_id: str
 
