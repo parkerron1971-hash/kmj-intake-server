@@ -70,6 +70,13 @@ from chief_booking_actions import (
     handle_create_booking,
     handle_reschedule_booking,
 )
+# P0.2 — bookkeeping verbs over the existing chief_bookkeeping engine.
+from chief_bookkeeping_actions import (
+    handle_approve_bookkeeping_proposal,
+    handle_list_bookkeeping_proposals,
+    handle_reject_bookkeeping_proposal,
+    handle_review_books,
+)
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -10178,6 +10185,12 @@ ACTION_HANDLERS = {
     "create_booking":             handle_create_booking,
     "reschedule_booking":         handle_reschedule_booking,
     "cancel_booking":             handle_cancel_booking,
+    # P0.2 — bookkeeping was reachable only through its own router; these make
+    # the existing proposal engine conversational.
+    "review_books":                    handle_review_books,
+    "list_bookkeeping_proposals":      handle_list_bookkeeping_proposals,
+    "approve_bookkeeping_proposal":    handle_approve_bookkeeping_proposal,
+    "reject_bookkeeping_proposal":     handle_reject_bookkeeping_proposal,
     "set_availability_day":       handle_set_availability_day,
     "set_availability_override":  handle_set_availability_override,
     "add_block_range":            handle_add_block_range,
@@ -12595,6 +12608,16 @@ ACTIONS — BUILDER BRIDGE (your direct line to the system's developer):
     — Use when the practitioner says "queue a build", "send this to the developer / to Claude Code", or asks for a feature or fix the system can't do yet. YOU write the complete brief from the conversation — what, where it lives, why it matters, constraints, and what done looks like — they just talk.
     — Optional "repo": "frontend" (the app UI — default) or "backend" (Chief, sites, bookings, SMS, billing machinery). Choose by where the change lives.
     — What happens depends on who's asking, and the action RESULT tells you which occurred: for the PLATFORM OWNER it is dispatched to the builder (Claude Code opens a pull request); for every other practitioner it is filed as a feature request the team reviews. Mirror the result's language exactly — never mention the builder, GitHub, or Claude Code to a practitioner whose result says "feature request", and never promise a delivery date to anyone.
+
+ACTIONS — BOOKKEEPING (the books, from the conversation):
+  [ACTION:{{"type":"review_books"}}]  — run the checks and report what's outstanding. Optional "scope": "unmatched" | "uncategorized" | "period_close" | "gl" (default: all).
+  [ACTION:{{"type":"list_bookkeeping_proposals"}}]  — what's waiting on the practitioner. Optional "status" (default "pending").
+  [ACTION:{{"type":"approve_bookkeeping_proposal","proposal_id":"<uuid>"}}]  — apply ONE proposal.
+  [ACTION:{{"type":"reject_bookkeeping_proposal","proposal_id":"<uuid>","reason":"that's a personal expense","override":{{"business_category":"personal"}}}}]
+    — Show before you apply. list first, name what each one does, then approve the specific one they pick.
+    — There is NO bulk approve, by design. These are financial records; one at a time, each named.
+    — When the practitioner says what it SHOULD have been, pass "override" AND "reason" — that trains the next proposal. A bare rejection teaches nothing.
+    — Omitting proposal_id works ONLY when exactly one is pending; otherwise the action asks which.
 
 ACTIONS — BOOKINGS (putting real appointments on the calendar):
   [ACTION:{{"type":"create_booking","customer_name":"Maria Lopez","offering_name":"Color + Cut","appointment_at":"2026-08-04T14:00:00Z"}}]
