@@ -65,6 +65,7 @@ You are shown the owner's REAL WORK as images. The design is already inside it �
 - The energy and density of their layouts (bold and loud? quiet and spare? how much they put on a page)
 - Recurring motifs and instincts (dark grounds, glow, texture, type-as-image, portrait treatment)
 Then DECLARE your findings at the top of section 2 (BRAND IDENTITY) in 3-5 lines beginning "OBSERVED IN THE WORK:" — and let those observations drive every choice below them. A spec whose palette and type could not be traced back to the owner's own pieces is a failed spec.
+THE DECLARATION RULE: if ANY images were provided above, the declaration MUST begin "OBSERVED IN THE WORK:" — "IMAGINED FOR THE WORK:" is permitted ONLY on a zero-image business. When an image labeled THE BRAND MARK is present, your palette section MUST name the mark's actual colors and bind --sx-accent (and any second accent) to them.
 
 THE IMAGINATION — when NO images are provided (a new business with no work yet):
 You do not get to design from nothing, and you do not get to retreat to the safe median. A designer without a portfolio mines the client's WORLD instead:
@@ -242,6 +243,43 @@ def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
     return "\n".join(parts)
 
 
+def _brand_mark_urls(ctx: Dict[str, Any], business_id: str = "") -> List[str]:
+    """THE BRAND MARK — the single most identity-dense artifact, and
+    the Brand Color Law's anchor. Lives in businesses.settings.brand_kit
+    (logos.primary / logo_url, the Brand Kit upload surface — where the
+    owner's 2026-07-24 upload actually landed while the Director kept
+    reading only slots+gallery and never saw it). ctx first; service
+    fetch fallback; https-only; at most 2."""
+    settings: Dict[str, Any] = {}
+    try:
+        settings = (((ctx.get("bundle") or {}).get("business") or {})
+                    .get("settings")) or {}
+    except Exception:
+        settings = {}
+    if not settings and business_id:
+        try:
+            import sb_clients
+            rows = sb_clients.sb_get_as_service(
+                f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
+            settings = (rows[0].get("settings") if rows else None) or {}
+        except Exception as e:
+            logger.info(f"[spec] brand-kit fetch skipped: {e}")
+            return []
+    bk = settings.get("brand_kit") if isinstance(settings.get("brand_kit"), dict) else {}
+    logos = bk.get("logos") if isinstance(bk.get("logos"), dict) else {}
+    si = settings.get("site_images") if isinstance(settings.get("site_images"), dict) else {}
+    candidates = [logos.get("primary"), bk.get("logo_url"), si.get("logo")]
+    candidates += [v for k, v in sorted(logos.items()) if k != "primary"]
+    out: List[str] = []
+    for v in candidates:
+        if isinstance(v, str) and v.strip().lower().startswith("https://") \
+                and v.strip() not in out:
+            out.append(v.strip())
+        if len(out) >= 2:
+            break
+    return out
+
+
 def _image_urls(ctx: Dict[str, Any], cap: int = 12) -> List[str]:
     """The owner's real work, for the Director's eyes (THE ARCHAEOLOGY).
     Priority: slot custom uploads (brand mark / portrait / hero — the
@@ -275,7 +313,8 @@ def _image_urls(ctx: Dict[str, Any], cap: int = 12) -> List[str]:
 
 
 def _call_llm(system: str, user: str, business_id: str,
-              image_urls: Optional[List[str]] = None) -> Optional[str]:
+              image_urls: Optional[List[str]] = None,
+              mark_urls: Optional[List[str]] = None) -> Optional[str]:
     """Anthropic call THROUGH THE MODEL LADDER — same discipline as the
     canvas/atelier. The naive first version passed temperature
     unconditionally; with SPEC_AUTHOR_MODEL unset the model resolves to
@@ -303,7 +342,7 @@ def _call_llm(system: str, user: str, business_id: str,
         # to the WRONG urls (a cross tee captioned "working session").
         # Observation without addressability scrambles the spec.
         content: Any = user
-        if image_urls:
+        if image_urls or mark_urls:
             blocks: List[Dict[str, Any]] = [
                 {"type": "text",
                  "text": "THE OWNER'S REAL WORK — study these first "
@@ -312,9 +351,21 @@ def _call_llm(system: str, user: str, business_id: str,
                          "every caption to that label. Caption ONLY "
                          "images shown here; never invent a caption for "
                          "an image you did not see."}]
-            for i, u in enumerate(image_urls, 1):
+            n = 0
+            for u in (mark_urls or []):
+                n += 1
                 blocks.append({"type": "text",
-                               "text": f"IMAGE {i} — exact url: {u}"})
+                               "text": f"IMAGE {n} — THE BRAND MARK (the "
+                                       f"color authority: the Brand Color "
+                                       f"Law binds the site's accent "
+                                       f"palette to the exact colors in "
+                                       f"this mark) — exact url: {u}"})
+                blocks.append({"type": "image",
+                               "source": {"type": "url", "url": u}})
+            for u in (image_urls or []):
+                n += 1
+                blocks.append({"type": "text",
+                               "text": f"IMAGE {n} — exact url: {u}"})
                 blocks.append({"type": "image",
                                "source": {"type": "url", "url": u}})
             blocks.append({"type": "text", "text": user})
@@ -385,8 +436,10 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
         inventory = ""
     user = build_user_prompt(dossier, spec_plan, prior_spec, feedback,
                              inventory=inventory)
+    marks = _brand_mark_urls(ctx, business_id)
+    work = [u for u in _image_urls(ctx) if u not in marks]
     text = (_call_llm(_SYSTEM, user, business_id,
-                      image_urls=_image_urls(ctx)) or "").strip()
+                      image_urls=work, mark_urls=marks) or "").strip()
     if not text:
         return None
     return text[:SPEC_MAX_CHARS]
