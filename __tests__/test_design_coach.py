@@ -106,6 +106,40 @@ def test_recon_never_overwrites_coach_answers():
     assert merged["identity"]["one_liner"]["value"] == "the owner's words"
 
 
+# ─── exit-safe progress: the transcript rides the dossier ───────────
+
+def test_session_persist_and_finish_clear():
+    store = {"d": discovery._empty_dossier()}
+    with mock.patch.object(discovery, "get_dossier",
+                           side_effect=lambda b: store["d"]), \
+         mock.patch.object(discovery, "save_dossier",
+                           side_effect=lambda b, d: store.update(d=d) or True):
+        dc._persist_session("b1",
+                            [{"role": "assistant", "content": "Welcome!"},
+                             {"role": "user", "content": "hey coach"}],
+                            {"reply": "Tell me about the shop.",
+                             "stage": "world", "chips": ["It's cozy"],
+                             "pair": None, "gallery": None,
+                             "reflect_back": []})
+    sess = store["d"]["session"]
+    assert sess["stage"] == "world"
+    assert sess["messages"][-1] == {"role": "assistant",
+                                    "content": "Tell me about the shop."}
+    assert sess["messages"][0]["content"] == "Welcome!"
+    assert sess["last"]["chips"] == ["It's cozy"]
+    # the transcript never reaches the Director's prompt
+    assert "Tell me about the shop" not in discovery.dossier_digest(store["d"])
+    # finish clears the resume state (answers stay; thread resets)
+    with mock.patch.object(discovery, "get_dossier",
+                           side_effect=lambda b: store["d"]), \
+         mock.patch.object(discovery, "save_dossier",
+                           side_effect=lambda b, d: store.update(d=d) or True), \
+         mock.patch.object(discovery, "derive_taste", return_value=None), \
+         mock.patch.object(discovery, "answer", return_value={}):
+        dc.finish_session("b1")
+    assert "session" not in store["d"]
+
+
 # ─── the prompt: known context rides every turn ──────────────────────
 
 def test_turn_prompt_injects_known_context_first_user_message():
