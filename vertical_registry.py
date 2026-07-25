@@ -65,10 +65,14 @@ KNOWN_GAPS: Dict[str, Dict[str, str]] = {
     # nonprofit CLOSED 2026-07-14: intel (Leg 1), then onboarding picker +
     # module blueprint (APPLY-2026-07-14-nonprofit-blueprint.sql) + smart-
     # sites touch + type_steer. Now first-class end-to-end.
-    "personal_services": {
-        "onboarding": "reachable via admin/custom today",
-        "blueprint":  "no dedicated blueprint — uses generic",
-    },
+    # personal_services CLOSED 2026-07-25: both recorded gaps had gone stale.
+    # onboarding — solutionist-studio#218 adds it to BUSINESS_TYPES (canonical
+    # position, CDI warm-community), so it is a picker card, not an admin stamp.
+    # blueprint — business_type_module_blueprint already carries five bespoke
+    # rows (Appointments / Clients with formulas+sensitivities / Service Menu
+    # with fixed AND quote-required modes / Payments with duration-gated
+    # deposits / Staff with commission+booth-rent), verified against the live
+    # DB — not the generic set. Now first-class end-to-end.
     # service_provider + custom are intentionally the GENERIC baseline for
     # Chief intelligence (a deliberate catch-all voice, not a missing profile).
     "service_provider": {
