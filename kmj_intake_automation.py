@@ -11,6 +11,7 @@
 # Install: pip install fastapi uvicorn anthropic python-dotenv apscheduler httpx
 
 import os
+import llm_call
 import json
 import httpx
 import asyncio
@@ -366,7 +367,7 @@ def client_messages_create(**kwargs):
         key = os.getenv("ANTHROPIC_API_KEY")
         if not key:
             raise RuntimeError("ANTHROPIC_API_KEY not configured")
-        _anthropic_client = Anthropic(api_key=key)
+        _anthropic_client = llm_call.sdk_client(key=key)
     return _anthropic_client.messages.create(**kwargs)
 
 

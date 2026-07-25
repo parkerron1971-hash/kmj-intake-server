@@ -31,6 +31,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import llm_call
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 from vertical_terminology import BASE_TERMS, VERTICAL_TERMS
@@ -246,20 +247,12 @@ async def generate_overrides_via_chief(
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
         if anthropic_key:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={
-                        "x-api-key": anthropic_key,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json",
-                    },
-                    json={
+                resp = await llm_call.apost(client, {
                         "model": "claude-haiku-4-5-20251001",
                         "max_tokens": 800,
                         "system": "Return only valid JSON, no prose.",
                         "messages": [{"role": "user", "content": prompt}],
-                    },
-                )
+                    })
             if resp.status_code < 400:
                 data = resp.json()
                 content_blocks = data.get("content") or []

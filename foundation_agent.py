@@ -27,6 +27,7 @@ Tables:
 from __future__ import annotations
 
 import os
+import llm_call
 import json
 import logging
 from datetime import datetime, timezone
@@ -292,7 +293,7 @@ async def recommend_entity(business_id: str, situation: Dict[str, Any]) -> Dict[
         return {"ok": False, "error": "ANTHROPIC_API_KEY not configured"}
     foreign = is_foreign_entity(situation)
     try:
-        client = Anthropic(api_key=api_key)
+        client = llm_call.sdk_client(key=api_key)
         msg = client.messages.create(
             model=ANTHROPIC_MODEL,
             max_tokens=ANTHROPIC_MAX_TOKENS,
@@ -513,7 +514,7 @@ async def _generate_policy(business_id: str, kind: str, business_data: Dict[str,
         logger.warning(f"_generate_policy: bundle enrichment skipped: {_e}")
 
     try:
-        client = Anthropic(api_key=api_key)
+        client = llm_call.sdk_client(key=api_key)
         msg = client.messages.create(
             model=ANTHROPIC_MODEL,
             max_tokens=ANTHROPIC_MAX_TOKENS,

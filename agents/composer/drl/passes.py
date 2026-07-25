@@ -23,6 +23,7 @@
 # ═══════════════════════════════════════════════════════════════════════
 
 import json
+import llm_call  # noqa: E402
 import os
 import logging
 import time
@@ -103,7 +104,7 @@ _CLIENT_DEFAULT_TIMEOUT_S = 120.0
 
 def _client() -> Optional[Anthropic]:
     key = os.environ.get("ANTHROPIC_API_KEY")
-    return (Anthropic(api_key=key, timeout=_CLIENT_DEFAULT_TIMEOUT_S,
+    return (llm_call.sdk_client(key=key, timeout=_CLIENT_DEFAULT_TIMEOUT_S,
                       max_retries=1) if key else None)
 
 

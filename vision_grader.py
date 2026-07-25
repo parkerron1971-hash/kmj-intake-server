@@ -18,6 +18,7 @@
 
 import base64
 import json
+import llm_call
 import logging
 import os
 import re
@@ -157,7 +158,7 @@ def _grade_anthropic(shots: List[bytes], business_id: str = "",
             "type": "base64", "media_type": "image/jpeg",
             "data": base64.b64encode(shot).decode()}})
     content.append({"type": "text", "text": "Grade per the rubric. Verdict JSON only."})
-    client = Anthropic(api_key=key)
+    client = llm_call.sdk_client(key=key)
     msg = client.messages.create(
         model=(os.environ.get("VISION_JUDGE_MODEL") or "claude-sonnet-4-5-20250929").strip(),
         max_tokens=700, system=_rubric(standard),

@@ -31,6 +31,7 @@
 # ─────────────────────────────────────────────────────────────────────
 
 import json
+import llm_call
 import logging
 import os
 from typing import Any, List, Optional
@@ -214,7 +215,7 @@ def create_message(*, model: str, max_tokens: int, system: str, user_content: st
     from anthropic import Anthropic
     import model_ladder
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-    client = Anthropic(api_key=api_key)
+    client = llm_call.sdk_client(key=api_key)
     kwargs: dict = {
         "model": model, "max_tokens": max_tokens,
         "system": system,

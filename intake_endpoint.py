@@ -58,6 +58,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+import llm_call
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -86,7 +88,6 @@ def _intake_rate_ok(ip: str) -> bool:
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 
 # Models — same as ai_proxy.py
@@ -163,20 +164,16 @@ async def call_claude(
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
 
-    resp = await client.post(
-        ANTHROPIC_API_URL,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": ANTHROPIC_VERSION,
-            "content-type": "application/json",
-        },
-        json={
+    resp = await llm_call.apost(
+        client,
+        {
             "model": model,
             "max_tokens": max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": user_msg}],
         },
         timeout=HTTP_TIMEOUT,
+        key=api_key,
     )
 
     if resp.status_code >= 400:

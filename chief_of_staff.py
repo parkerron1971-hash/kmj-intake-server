@@ -41,6 +41,8 @@ from datetime import datetime, timedelta, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+
+import llm_call
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -82,7 +84,6 @@ from chief_bookkeeping_actions import (
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 # Chief Layers arc (2026-07-09): model choice per lane lives in
 # chief_models.py — chat/voice on Sonnet 5 (shared prompt cache),
@@ -489,10 +490,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         in_tok = out_tok = 0
         cache_read_tok = cache_write_tok = 0
         try:
-            async with client.stream("POST", ANTHROPIC_API_URL, headers={
-                "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION,
-                "content-type": "application/json",
-            }, json=payload, timeout=HTTP_TIMEOUT) as resp:
+            async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key) as resp:
                 if resp.status_code >= 400:
                     body = await resp.aread()
                     logger.warning(f"Claude stream error: {resp.status_code} {body[:300]}")
@@ -554,9 +552,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         if attempt:
             await asyncio.sleep(1.5 * attempt)
         try:
-            resp = await client.post(ANTHROPIC_API_URL, headers={
-                "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json",
-            }, json=payload, timeout=HTTP_TIMEOUT)
+            resp = await llm_call.apost(client, payload, timeout=HTTP_TIMEOUT, key=key)
         except httpx.HTTPError as e:
             last_err = str(e)
             logger.warning(f"Claude request failed (attempt {attempt + 1}/3): {e}")

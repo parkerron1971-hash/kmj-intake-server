@@ -33,6 +33,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+import llm_call
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
@@ -1299,15 +1301,7 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=60.0, write=15.0, pool=10.0)) as c:
-            r = await c.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json=payload,
-            )
+            r = await llm_call.apost(c, payload, key=api_key)
     except Exception as e:
         raise HTTPException(502, f"Anthropic call failed: {e}")
 

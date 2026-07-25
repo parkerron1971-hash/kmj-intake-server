@@ -38,12 +38,12 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+import llm_call
+
 import chief_models
 
 logger = logging.getLogger("chief_action_reasoner")
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_VERSION = "2023-06-01"
 
 _MAX_PLAN = 3  # a remap composes at most this many known primitives
 
@@ -155,14 +155,11 @@ def reason_unknown_action(action_type: str, payload: Dict[str, Any],
         f"Return the JSON now."
     )
     try:
-        resp = httpx.post(ANTHROPIC_API_URL, headers={
-            "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION,
-            "content-type": "application/json",
-        }, json={
+        resp = llm_call.post({
             "model": model, "max_tokens": 500,
             "system": _SYSTEM.replace("{rubric}", _rubric()),
             "messages": [{"role": "user", "content": user_msg}],
-        }, timeout=httpx.Timeout(connect=8.0, read=40.0, write=15.0, pool=8.0))
+        }, timeout=httpx.Timeout(connect=8.0, read=40.0, write=15.0, pool=8.0), key=key)
     except httpx.HTTPError as e:
         logger.info(f"[action_reasoner] call failed: {e}")
         return None

@@ -28,13 +28,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+import llm_call
+
 import sb_clients
 import chief_bookkeeping
 import plaid_categorization
 
 logger = logging.getLogger("chief_llm")
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
@@ -185,9 +186,7 @@ async def _call_claude(business_id: str, system: str, user_content: str,
     }
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(ANTHROPIC_API_URL, json=payload, headers={
-                "x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION,
-                "content-type": "application/json"})
+            resp = await llm_call.apost(client, payload, key=api_key)
     except Exception as e:
         logger.warning(f"[chief_llm] call failed: {e}")
         return None

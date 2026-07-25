@@ -35,6 +35,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+import llm_call
+
 logger = logging.getLogger("brand_engine")
 if not logger.handlers:
     h = logging.StreamHandler()
@@ -44,7 +46,6 @@ if not logger.handlers:
 
 
 HTTP_TIMEOUT = 15.0
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929"
 
 
@@ -956,20 +957,12 @@ def _call_claude_for_kit(system_prompt: str, user_message: str) -> Dict[str, Any
         return {"ok": False, "error": "ANTHROPIC_API_KEY not configured"}
     try:
         with httpx.Client(timeout=60.0) as client:
-            r = client.post(
-                ANTHROPIC_API_URL,
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
+            r = llm_call.post_with(client, {
                     "model": ANTHROPIC_MODEL,
                     "max_tokens": 2000,
                     "system": system_prompt,
                     "messages": [{"role": "user", "content": user_message}],
-                },
-            )
+                }, key=api_key)
         if r.status_code != 200:
             logger.warning(f"Anthropic error {r.status_code}: {r.text[:200]}")
             return {"ok": False, "error": f"Anthropic API error: {r.status_code}"}

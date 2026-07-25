@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import json
+import llm_call
 import logging
 import os
 import re
@@ -266,7 +267,7 @@ def _call_llm(system: str, user: str, business_id: str) -> Optional[str]:
             logger.info("[canvas] no ANTHROPIC_API_KEY — skipping authoring")
             return None
         from anthropic import Anthropic
-        client = Anthropic(api_key=key, timeout=_CALL_TIMEOUT_S, max_retries=1)
+        client = llm_call.sdk_client(key=key, timeout=_CALL_TIMEOUT_S, max_retries=1)
     logger.info(f"[canvas] authoring with model={_model()} for "
                 f"{(business_id or 'unknown')[:8]}")
 
@@ -1290,7 +1291,7 @@ def _self_review(html: str, brief: str,
                         "text": "THE BRIEF YOU WORKED FROM:\n"
                                 + brief[:6000]
                                 + "\n\nSHIP, or your revision notes:"})
-        client = Anthropic(api_key=key)
+        client = llm_call.sdk_client(key=key)
         msg = client.messages.create(
             model=(os.environ.get("CANVAS_REVIEW_MODEL")
                    or os.environ.get("VISION_JUDGE_MODEL")

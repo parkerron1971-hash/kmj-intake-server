@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import llm_call
 import logging
 import os
 import re
@@ -1200,7 +1201,7 @@ def _call_spec_stage(*, system: str, user: str, business_id: str) -> str:
 
     def _do(model: str, max_tokens: int, timeout: float):
         from anthropic import Anthropic
-        client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        client = llm_call.sdk_client(key=os.environ.get("ANTHROPIC_API_KEY"))
         return client.messages.create(
             model=model, max_tokens=max_tokens,
             system=system, messages=[{"role": "user", "content": user}],
