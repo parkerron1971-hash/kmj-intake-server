@@ -59,6 +59,27 @@ def test_studio_bridge_carries_the_touchable_grammar():
     assert "fetch(" not in b             # parent does every network call
 
 
+def test_bridge_upgrade_replaces_older_generation():
+    """A page baked with the select-only bridge must GAIN edit powers
+    on re-render — the old presence-check froze pages on generation 1."""
+    from site_modules._base import STUDIO_BRIDGE
+    old_bridge = ("<script>(function () {\n"
+                  "  if (window.parent === window) return;\n"
+                  "  /* gen-1 */ parent.postMessage({type:'studio-select'},'*');\n"
+                  "})();</script>")
+    html = f"<html><body><p>x</p>{old_bridge}\n</body></html>"
+    # the seam logic, reproduced: current-generation check + strip + inject
+    import re as _re
+    assert "studio-edit-mode" not in html
+    out = _re.sub(r"<script>\(function \(\) \{\s*"
+                  r"if \(window\.parent === window\) return;.*?</script>",
+                  "", html, flags=_re.DOTALL)
+    out = out.replace("</body>", STUDIO_BRIDGE + "\n</body>", 1)
+    assert out.count("window.parent === window") == 1   # old one gone
+    assert "studio-edit-mode" in out                     # new powers in
+    assert "<p>x</p>" in out
+
+
 def test_refresh_if_composed_covers_canvas_pages():
     """THE no-op bug: Edit Mode saves persisted but never reached the
     served page of a v2 site because the refresh trigger only knew
