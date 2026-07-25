@@ -46,6 +46,12 @@ def _empty_dossier() -> Dict[str, Any]:
                        "portrait_url": None, "references": []},
         "identity": {},
         "taste": {},
+        # Design Coach sections (2026-07-25): the conversational door
+        # captures the owner's world, story, and signature moment in
+        # their own words — the Director's richest material.
+        "world": {},
+        "story": {},
+        "signature": {},
         "truth": {"proven_stats": [], "colors_must": [], "colors_avoid": []},
         "vertical": {"type": None, "answers": {}},
         "gaps": [],
@@ -348,7 +354,8 @@ def apply_practitioner_patch(existing: Dict[str, Any],
         return (isinstance(v, dict) and "value" in v
                 and str(v.get("source")) in _PRACTITIONER_SOURCES)
 
-    for section in ("identity", "taste"):
+    for section in ("identity", "taste", "world", "story", "signature",
+                    "meta"):
         for k, v in (patch.get(section) or {}).items():
             if _valid_leaf(v):
                 out.setdefault(section, {})[k] = v
@@ -505,10 +512,12 @@ def dossier_digest(dossier: Optional[Dict[str, Any]]) -> str:
         return ""
     slim = {k: v for k, v in dossier.items()
             if k in ("artifacts", "identity", "taste", "truth",
+                     "world", "story", "signature",
                      "vertical", "gaps", "confirmed_brief") and v}
     refs = ((slim.get("artifacts") or {}).get("references")) or []
     if not any((slim.get(k)) for k in
-               ("identity", "taste", "confirmed_brief")) and not refs:
+               ("identity", "taste", "world", "story", "signature",
+                "confirmed_brief")) and not refs:
         # recon-only artifact lists already ride the inventory — don't
         # duplicate them into a second section for nothing
         return ""
