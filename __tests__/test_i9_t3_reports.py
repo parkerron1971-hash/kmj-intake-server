@@ -134,7 +134,14 @@ def test_profitability_contribution_and_method_surfaced(fake):
     assert "proportionally" in out["method"]                 # fork surfaced in-band
 
 
-def test_trends_momentum_and_seasonality(fake):
+def test_trends_momentum_and_seasonality(fake, monkeypatch):
+    # trends() reads the wall clock: the 12-month window ends at the current
+    # month and momentum compares the last 3 FULL months against the prior 3.
+    # With fixed 2026-01..05 invoices that made the expected averages drift
+    # month to month — the assertion below only held during 2026-06 and went
+    # red on 2026-07-01. Pin the clock so the arithmetic is stable forever.
+    from datetime import date as _date
+    monkeypatch.setattr(gl, "_today", lambda: _date(2026, 6, 15))
     fb = fake
     _inv(fb, "i1", 100, sent="2026-01-10T00:00:00Z")
     _inv(fb, "i2", 200, sent="2026-02-10T00:00:00Z")

@@ -133,7 +133,7 @@ def test_threshold_notifications_fire_once(fake, monkeypatch):
         "id": "b1", "owner_id": "o", "is_active": True, "name": "b1",
         "subscription_status": "active", "subscription_plan": "price_starter"})
     now_iso = datetime.now(timezone.utc).replace(day=2).isoformat()
-    for i in range(60):                                          # 80% of 75
+    for i in range(240):                                         # 80% of 300
         fb.rows("api_usage").append({"id": f"u{i}", "business_id": "b1",
                                      "created_at": now_iso, "endpoint": "/ai/proxy"})
     fired = um.check_thresholds("b1")
