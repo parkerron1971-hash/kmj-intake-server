@@ -60,15 +60,17 @@ def test_business_cap_dormant_then_enforced(fake, monkeypatch):
 
 
 def test_chief_metering_month_window_and_cap(fake, monkeypatch):
-    """Arc 19 LOCKED semantics: allotment 75; blocking happens only at the
-    2x-bill cap (75 + $79/$0.40 = 272 units) or a practitioner hard cap —
-    overage between allotment and cap is ALLOWED (it bills)."""
+    """Pricing v2 LOCKED semantics: starter allotment 300, then PREPAID
+    credits — not postpaid overage. Past the allowance you draw down credits;
+    with none left you stop ("out_of_units"), and a practitioner hard cap
+    stops you at the allowance even when credits remain. Nothing bills as
+    overage anymore, so the legacy postpaid fields must stay zeroed."""
     import usage_metering as um
     fb = fake
     _biz(fb, "b1", plan="price_starter")
     now = datetime.now(timezone.utc)
     this_month = now.replace(day=2).isoformat()
-    for i in range(80):                                          # over allotment
+    for i in range(305):                                         # past allowance
         fb.rows("api_usage").append({"id": f"u{i}", "business_id": "b1",
                                      "created_at": this_month, "endpoint": "/ai/proxy"})
     # Last month's usage doesn't count (auto-reset = computed window).
@@ -76,31 +78,53 @@ def test_chief_metering_month_window_and_cap(fake, monkeypatch):
                                  "created_at": "2020-01-15T00:00:00Z",
                                  "endpoint": "/ai/proxy"})
     s0 = um.usage_summary("b1")
-    assert s0["weighted_used"] == 80
+    assert s0["weighted_used"] == 305
     assert bl.chief_can_send("b1") is True                       # dormant
+
+    # Enforcing, no credits banked: past the allowance is a full stop.
     monkeypatch.setenv("BILLING_ENFORCE", "on")
     monkeypatch.setenv("STRIPE_PRICE_ID_STARTER", "price_starter")
     s1 = um.usage_summary("b1")
-    assert s1["allotment"] == 75 and s1["overage_units"] == 5
-    assert s1["overage_cents"] == 5 * 40
-    assert s1["cap_units"] == 75 + 7900 // 40                    # 272
-    assert bl.chief_can_send("b1") is True                       # overage allowed
-    # Weighted: a full site build = 25 units.
+    assert s1["allotment"] == 300 and s1["overage_units"] == 5
+    assert s1["credits_balance"] == 0 and s1["credits_burned_month"] == 0
+    assert s1["blocked"] and s1["blocked_reason"] == "out_of_units"
+    assert bl.chief_can_send("b1") is False
+    # Postpaid is retired — these stay zeroed for older UI readers.
+    assert s1["overage_cents"] == 0
+    assert s1["overage_rate_cents"] is None and s1["cap_units"] is None
+
+    # Bank a credit pack: the same usage now draws down instead of blocking.
+    fb.rows("credit_ledger").append({"id": "c1", "business_id": "b1",
+                                     "delta_units": 500, "kind": "purchase",
+                                     "source": "pack:test"})
+    s2 = um.usage_summary("b1")
+    assert s2["credits_burned_month"] == 5                       # the 5 past 300
+    assert s2["credits_balance"] == 495                          # 500 - 5
+    assert not s2["blocked"] and bl.chief_can_send("b1") is True
+
+    # Weighted: a full site build = 25 units. Re-reading GROWS the same
+    # month's burn row rather than stacking a second one.
     for i in range(8):
         fb.rows("api_usage").append({"id": f"b{i}", "business_id": "b1",
                                      "created_at": this_month,
                                      "endpoint": "/director/build"})
-    s2 = um.usage_summary("b1")
-    assert s2["weighted_used"] == 80 + 8 * 25                    # 280 ≥ cap 272
-    assert s2["blocked"] and s2["blocked_reason"] == "bill_cap"
-    assert bl.chief_can_send("b1") is False                      # 2x promise holds
-    # Overage billing stops AT the cap (bill can never exceed 2x plan).
-    assert s2["overage_cents"] == (272 - 75) * 40
+    s3 = um.usage_summary("b1")
+    assert s3["weighted_used"] == 305 + 8 * 25                   # 505
+    assert s3["credits_burned_month"] == 205                     # 505 - 300
+    assert s3["credits_balance"] == 295                          # 500 - 205
+    assert not s3["blocked"]                                     # credits remain
+
+    # The practitioner's own hard cap stops at the allowance regardless.
+    fb.rows("businesses")[0]["settings"] = {"usage_hard_cap": True}
+    s4 = um.usage_summary("b1")
+    assert s4["hard_cap"] and s4["blocked"]
+    assert s4["blocked_reason"] == "hard_cap"
+    assert bl.chief_can_send("b1") is False
 
 
 def test_chief_llm_respects_cap_gracefully(fake, monkeypatch):
     """Practitioner hard cap: at/over allotment with usage_hard_cap set,
-    AI interactions soft-block (Arc 19)."""
+    AI interactions soft-block (Arc 19 rule, Pricing v2 allotment)."""
     fb = fake
     fb.rows("businesses").append({
         "id": "b1", "owner_id": "owner1", "is_active": True, "name": "b1",
@@ -110,7 +134,7 @@ def test_chief_llm_respects_cap_gracefully(fake, monkeypatch):
     monkeypatch.setenv("BILLING_ENFORCE", "on")
     monkeypatch.setenv("STRIPE_PRICE_ID_STARTER", "price_starter")
     now_iso = datetime.now(timezone.utc).replace(day=2).isoformat()
-    for i in range(75):                                          # at allotment
+    for i in range(300):                                         # at allotment
         fb.rows("api_usage").append({"id": f"u{i}", "business_id": "b1",
                                      "created_at": now_iso, "endpoint": "/ai/proxy"})
     out = asyncio.run(chief_llm.ask_transaction("b1", "lawyer", "t1", None))

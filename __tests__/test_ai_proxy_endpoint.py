@@ -18,6 +18,7 @@ sys.path.insert(0, str(_here))
 import pytest  # noqa: E402
 
 import ai_proxy  # noqa: E402
+from auth_supabase import AuthedUser  # noqa: E402
 from test_i2_gl_sync import FakeSB  # noqa: E402
 
 
@@ -60,6 +61,25 @@ def proxy_env(monkeypatch):
     return fb
 
 
+class _FakeRequest:
+    """Stand-in for starlette's Request. The endpoint only ever reaches for
+    rate_limit.client_ip(request), which wants .headers and .client.host."""
+
+    class _Client:
+        host = "203.0.113.7"
+
+    headers = {"x-forwarded-for": "203.0.113.7"}
+    client = _Client()
+
+
+def _user():
+    """The endpoint takes an AuthedUser via Depends(require_user) purely as
+    the auth gate — nothing in the body reads it. Calling the function
+    directly bypasses Depends, so we hand it one ourselves."""
+    return AuthedUser(id="11111111-1111-1111-1111-111111111111",
+                      email="kevin@example.com", role="authenticated")
+
+
 def _req(**over):
     base = {"task_type": "draft",
             "messages": [{"role": "user", "content": "hi"}],
@@ -72,15 +92,15 @@ def _req(**over):
 def test_endpoint_runs_end_to_end_with_metadata(proxy_env):
     """THE regression: task_type + metadata present must not raise
     (UnboundLocalError class) and must return a normal response."""
-    out = asyncio.run(ai_proxy.ai_proxy(_req()))
+    out = asyncio.run(ai_proxy.ai_proxy(_req(), _FakeRequest(), _user()))
     assert out["content"] == "hello from fake claude"
     assert out["usage"]["output_tokens"] == 5
 
 
 def test_endpoint_runs_without_metadata_and_without_task_type(proxy_env):
-    out1 = asyncio.run(ai_proxy.ai_proxy(_req(metadata=None)))
+    out1 = asyncio.run(ai_proxy.ai_proxy(_req(metadata=None), _FakeRequest(), _user()))
     assert out1["content"] == "hello from fake claude"
-    out2 = asyncio.run(ai_proxy.ai_proxy(_req(task_type=None)))
+    out2 = asyncio.run(ai_proxy.ai_proxy(_req(task_type=None), _FakeRequest(), _user()))
     assert out2["content"] == "hello from fake claude"
 
 
@@ -92,7 +112,7 @@ def test_gate_exception_fails_open(proxy_env, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("gate exploded")
     monkeypatch.setattr(inference_gate, "surface_cacheable", boom)
-    out = asyncio.run(ai_proxy.ai_proxy(_req(task_type="score")))
+    out = asyncio.run(ai_proxy.ai_proxy(_req(task_type="score"), _FakeRequest(), _user()))
     assert out["content"] == "hello from fake claude"
 
 
@@ -102,9 +122,9 @@ def test_cache_hit_short_circuits(proxy_env, monkeypatch):
     monkeypatch.setattr(inference_gate, "_embed", lambda t: [0.1] * 4)
     # Pre-store, then the same request must come back cached with zero
     # Anthropic involvement signaled via stop_reason.
-    first = asyncio.run(ai_proxy.ai_proxy(_req(task_type="score")))
+    first = asyncio.run(ai_proxy.ai_proxy(_req(task_type="score"), _FakeRequest(), _user()))
     assert first["stop_reason"] != "cached"
-    second = asyncio.run(ai_proxy.ai_proxy(_req(task_type="score")))
+    second = asyncio.run(ai_proxy.ai_proxy(_req(task_type="score"), _FakeRequest(), _user()))
     assert second["stop_reason"] == "cached"
     assert second["content"] == "hello from fake claude"
     assert second["usage"]["cache_layer2_hit"] is True
