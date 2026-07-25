@@ -277,6 +277,40 @@ def apply_saves(business_id: str, saves: List[Dict[str, Any]]) -> int:
     return n
 
 
+def _persist_session(business_id: str, messages: List[Dict[str, str]],
+                     turn: Dict[str, Any]) -> None:
+    """EXIT-SAFE PROGRESS (Kevin's ruling: "if we exit out it saves"):
+    after every successful turn the whole conversation rides the
+    dossier — transcript, stage, and the last turn's interactive
+    pieces — so closing the session (or the laptop) loses nothing.
+    The frontend resumes from dossier.session on reopen; finish
+    clears it. Best-effort: a persist failure never fails the turn.
+    dossier_digest whitelists sections, so the transcript never
+    bloats the Director's prompt."""
+    try:
+        import discovery
+        from datetime import datetime, timezone
+        d = discovery.get_dossier(business_id) or discovery._empty_dossier()
+        transcript = [
+            {"role": ("assistant" if m.get("role") == "assistant"
+                      else "user"),
+             "content": str(m.get("content") or "")[:MAX_MSG_CHARS]}
+            for m in (messages or [])[-MAX_TURNS:]
+            if str(m.get("content") or "").strip()
+        ]
+        transcript.append({"role": "assistant", "content": turn["reply"]})
+        d["session"] = {
+            "messages": transcript[-MAX_TURNS:],
+            "stage": turn.get("stage"),
+            "last": {k: turn.get(k) for k in
+                     ("chips", "pair", "gallery", "reflect_back")},
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        discovery.save_dossier(business_id, d)
+    except Exception as e:
+        logger.info(f"[coach] session persist skipped (non-fatal): {e}")
+
+
 # ─── the calls ───────────────────────────────────────────────────────
 
 def _model() -> str:
@@ -330,6 +364,7 @@ def run_turn(business_id: str,
             return {"error": "the coach lost the thread — try again"}
         applied = apply_saves(business_id, turn.pop("saves", []))
         turn["saves_applied"] = applied
+        _persist_session(business_id, messages, turn)
         return turn
     except Exception as e:
         logger.error(f"[coach] turn failed: {type(e).__name__}: {e}")
@@ -343,6 +378,14 @@ def finish_session(business_id: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {"ok": True}
     try:
         import discovery
+        # the session is complete — clear the resume transcript so the
+        # NEXT session starts fresh (the dossier keeps every answer)
+        try:
+            d = discovery.get_dossier(business_id)
+            if d and d.pop("session", None) is not None:
+                discovery.save_dossier(business_id, d)
+        except Exception:
+            pass
         try:
             derived = discovery.derive_taste(business_id)
             out["derived"] = bool(derived)
