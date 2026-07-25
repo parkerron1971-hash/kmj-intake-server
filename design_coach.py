@@ -86,11 +86,18 @@ OUTPUT — STRICT JSON, nothing else:
   "reply": "your next message to them (plain text, no markdown headers)",
   "chips": ["up to 4 short tap-to-answer suggestions", "..."],        // optional
   "pair": {"key": "ground", "a": "Dark and moody", "b": "Light and airy"},  // optional, when asking a this-or-that
+  "gallery": {"kind": "looks", "options": ["mural", "monograph", "ledger"]},  // optional, see THE GALLERIES
   "saves": [{"section": "story", "field": "voice", "value": "..."}],
   "stage": "world|story|taste|signature|truth|brief",
   "done": false,
   "reflect_back": ["6-10 short vivid lines summarizing the session"]   // ONLY with stage "brief"
 }
+THE GALLERIES (show, then ask — the Claude Design pattern): when the conversation reaches a LOOK, LAYOUT, or MOTION choice, set "gallery" instead of "pair" — the platform renders each option as a small designed card in the option's own style, tinted with their brand color, and their tap arrives as an ordinary message. Use ONLY these kinds and keys:
+- kind "looks" (the design language): mural (bold oversized display type on a dark ground, image-led), monograph (editorial serif on a light ground, hairline rules, quiet luxury), ledger (structured grid, mono labels, disciplined and technical).
+- kind "layouts" (the hero's shape): split-stage (copy one side, portrait the other), poster (one full-bleed statement), editorial (a magazine column with a lead image), exhibition (the work itself leads, gallery-first).
+- kind "motion" (how the page moves): kinetic-hero (the headline arrives line by masked line), the-thread (one drawn line walks the page and lights each section), depth (layers drift at different speeds as you scroll), quiet (almost still; one soft reveal).
+Set gallery as {"kind": "looks", "options": ["mural", "monograph", "ledger"]} (2-4 keys), keep the reply ONE short question ("Which of these feels like walking into your shop?"), and never describe the options in words — the cards do that. Use each kind at most once per session.
+
 Rules: chips are answers THEY might tap, not questions. Use "pair" at most every third turn. When stage is "brief", "reply" asks them to confirm the reflect_back (or correct anything), and "done" stays false until they confirm; after their confirmation, respond with done true and a warm send-off saying the Director will draft their blueprint from this.
 NEVER write sentences spliced with dashes in reply or saves — use periods, commas, or colons (the owner's standing grammar rule)."""
 
@@ -200,6 +207,18 @@ def parse_turn(raw: str) -> Optional[Dict[str, Any]]:
     pair = out.get("pair")
     out["pair"] = pair if (isinstance(pair, dict) and pair.get("a")
                            and pair.get("b")) else None
+    g = out.get("gallery")
+    _G_KINDS = {
+        "looks": {"mural", "monograph", "ledger"},
+        "layouts": {"split-stage", "poster", "editorial", "exhibition"},
+        "motion": {"kinetic-hero", "the-thread", "depth", "quiet"},
+    }
+    out["gallery"] = None
+    if isinstance(g, dict) and g.get("kind") in _G_KINDS:
+        opts = [str(o) for o in (g.get("options") or [])
+                if str(o) in _G_KINDS[g["kind"]]]
+        if len(opts) >= 2:
+            out["gallery"] = {"kind": g["kind"], "options": opts[:4]}
     rb = out.get("reflect_back")
     out["reflect_back"] = [str(x)[:200] for x in rb[:12]] \
         if isinstance(rb, list) else []
