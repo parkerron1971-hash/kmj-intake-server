@@ -159,6 +159,10 @@ def test_prompt_carries_galleries_and_director_carries_motion():
     assert "THE KINETIC HERO" in sa._SYSTEM
     assert "THE ORBIT" in sa._SYSTEM
     assert "prefers-reduced-motion" in sa._SYSTEM
+    # the audited material + modern-motion vocabulary (panels arc)
+    assert "THE FOIL" in sa._SYSTEM and "THE EMBOSS" in sa._SYSTEM
+    assert "THE TEAR" in sa._SYSTEM and "THE PIN" in sa._SYSTEM
+    assert "MICRO-DELIGHT" in sa._SYSTEM
 
 
 def test_system_prompt_carries_the_standing_rules():

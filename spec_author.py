@@ -93,10 +93,16 @@ THE MOVES VOCABULARY — the difference between "has a motif" and "is built out 
 - THE EXHIBITION: the work hung like a gallery wall — lead pieces large and full-bleed, rhythmic bands after, one designed typographic tile sitting among the artwork.
 - THE ECHO FRAME: portraits and lead images in hairline frames with a second offset frame behind; captions running vertical along the frame edge.
 - THE STAGE LIGHT: one warm radial glow that owns the hero and returns once at the close, grain over everything, gradient depth between grounds.
+MATERIAL MOVES (audited builder-native, 2026-07-25 — order them by name):
+- THE FOIL: metallic type via gradient clipped to the letters (gold, bronze, silver) — a luxury headline that costs nothing.
+- THE EMBOSS: pressed-in or raised surfaces from pure inset light and shadow — swatches, seals, cards that read as physical.
+- THE TEAR: torn-paper section breaks via inline SVG masks — the hand-made edge between grounds.
 MOTION MOVES (the Emergent-class arrivals — all pure CSS/JS, no libraries; the builder cannot load external scripts):
 - THE KINETIC HERO: the headline arrives line by MASKED line (overflow-hidden line wrappers, staggered rise), the accent word landing last with its own gesture. One-time, on arrival.
 - THE DEPTH: two or three layers drifting at different speeds on scroll (transform-only parallax; subtle, never seasick).
 - THE ORBIT: the work turning slowly in 3D space (CSS preserve-3d ring) as the gallery's signature — reserved for businesses whose work IS the show.
+- THE PIN: one scroll scene that HOLDS (position: sticky) while its content changes beside it — the modern storytelling beat, used once.
+MICRO-DELIGHT is a floor, not a move: every interactive element answers its hover with something small and intentional (a lift, a fill, an underline drawing itself) — 21st-century pages feel alive at the fingertips.
 Motion discipline is unchanged and absolute: ONE signature motion moment per page, scroll reveals scroll-position driven, prefers-reduced-motion shows everything instantly.
 Choose from this vocabulary or invent a move of equal specificity and NAME it — "tasteful animations" is not a move. The chosen move(s) must appear in section 1 by name, in section 3 at every recurrence, and in section 4 with their exact behavior.
 
