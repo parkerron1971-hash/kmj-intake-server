@@ -44,3 +44,28 @@ def test_color_overrides_all_stale_leaves_document_untouched():
     with _lookup(rows):
         out = sc._inject_color_overrides(_HTML, "b1")
     assert out == _HTML                            # no style block at all
+
+
+# ─── canvas protection (the 05:00 incident, 2026-07-25) ─────────────
+# A retired Smart Sites banner click rerouted into compose_site(
+# use_llm=False) and a sub-second module compose overwrote the paid
+# one-mind build, deleting the stored canvas. A no-LLM compose must
+# REFUSE to touch a canvas-authored page.
+
+def _canvas_row(cfg):
+    return mock.patch.object(
+        sc.sb_clients, "sb_get_as_service",
+        return_value=[{"site_config": cfg}])
+
+
+def test_no_llm_compose_refuses_canvas_authored_page():
+    with _canvas_row({"html_source": "canvas"}):
+        out = sc.compose_site("b1", use_llm=False)
+    assert out.get("skipped") == "canvas-protected"
+
+
+def test_no_llm_compose_refuses_when_canvas_doc_stored():
+    with _canvas_row({"html_source": "module-composer",
+                      "canvas": {"html": "<html>doc</html>"}}):
+        out = sc.compose_site("b1", use_llm=False)
+    assert out.get("skipped") == "canvas-protected"

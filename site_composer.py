@@ -3512,6 +3512,39 @@ def compose_site(business_id: str, brief_notes: str = "",
     imagery_priority/boldness/notes) is sanitized and persisted to
     businesses.settings.site_prefs BEFORE composing, so gather_context reads
     it back; recomposes without fresh prefs reuse the stored ones."""
+    # CANVAS PROTECTION (2026-07-25, the 05:00 incident): a retired
+    # Smart Sites banner's click rerouted into compose_site(use_llm=
+    # False) and a SUB-SECOND deterministic module compose silently
+    # OVERWROTE a paid one-mind build (judge composite 33), deleting
+    # the stored canvas document with it. The rank rule already
+    # protects module-composer from smart-sites (_use_smart_sites);
+    # the same rule now protects canvas from module-composer: a
+    # no-LLM convenience compose NEVER replaces a canvas-authored
+    # page. Full LLM rebuilds (the paid path) replace it by design.
+    if not use_llm:
+        try:
+            _rows = sb_clients.sb_get_as_service(
+                f"/business_sites?business_id=eq.{business_id}"
+                "&select=site_config&limit=1") or []
+            _cfg = (_rows[0].get("site_config") or {}) if _rows else {}
+            _has_canvas_doc = (
+                _cfg.get("html_source") == "canvas"
+                or str(((_cfg.get("canvas") or {}) if isinstance(
+                    _cfg.get("canvas"), dict) else {}).get("html")
+                    or "").strip() != "")
+            if _has_canvas_doc:
+                logger.warning(
+                    f"[composer] CANVAS-PROTECTED: refusing a no-LLM "
+                    f"compose over a canvas-authored page for "
+                    f"{business_id[:8]} — the live document stands")
+                return {"ok": True, "skipped": "canvas-protected",
+                        "note": "This site is authored by the one-mind "
+                                "builder. A quick compose never replaces "
+                                "it; run a full rebuild to redesign."}
+        except Exception as _cp_e:
+            logger.warning(f"[composer] canvas-protection check failed "
+                           f"(continuing): {_cp_e}")
+
     prefs = sanitize_design_prefs(design_prefs)
     if prefs:
         _persist_site_prefs(business_id, prefs)
