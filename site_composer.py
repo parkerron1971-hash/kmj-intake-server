@@ -39,7 +39,8 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import (APIRouter, Depends, File, HTTPException, UploadFile,
+                     Form as FormField)
 from pydantic import BaseModel
 
 import sb_clients
@@ -4978,6 +4979,115 @@ def coach_finish(body: CoachFinishBody,
     return design_coach.finish_session(body.business_id)
 
 
+class DropFillBody(BaseModel):
+    business_id: str
+    slot: str
+    url: str
+
+
+_DROP_SLOT_RE_TMPL = (
+    r'<div\b[^>]*\bdata-sx-slot="{slot}"[^>]*>'
+    r'(?:(?!</?div\b).)*?</div>')
+
+
+def fill_drop_slot(html: str, slot: str, url: str) -> Optional[str]:
+    """Deterministic placeholder → image swap (the claude.ai Design
+    Labs move, 2026-07-25). The builder authored the frame and the
+    crop; the owner's photo inherits that intention. Pure; None when
+    the slot isn't found. The inline display:block outranks the
+    authored `.sx-drop{display:none}` so a FILLED slot shows on the
+    public page while empty ones stay hidden."""
+    safe_slot = re.escape(slot)
+    pat = re.compile(_DROP_SLOT_RE_TMPL.format(slot=safe_slot),
+                     re.DOTALL | re.IGNORECASE)
+    if not pat.search(html):
+        return None
+    esc_url = url.replace('"', "%22")
+    replacement = (
+        f'<div class="sx-drop sx-filled" data-sx-slot="{slot}" '
+        f'style="display:block;padding:0">'
+        f'<img src="{esc_url}" alt="" loading="lazy" '
+        f'style="width:100%;height:100%;object-fit:cover;display:block">'
+        f'</div>')
+    return pat.sub(replacement, html, count=1)
+
+
+@router.post("/drop/fill")
+def drop_fill(body: DropFillBody,
+              session: UserSession = Depends(sb_clients.authed_request)
+              ) -> Dict[str, Any]:
+    """Fill an art-directed drop slot with the owner's uploaded image —
+    zero model calls, surgical, persisted to BOTH the served page and
+    the stored canvas so re-renders keep the photo."""
+    _require_owner(body.business_id, session.user.id)
+    url = (body.url or "").strip()
+    if not (url.startswith("https://") and len(url) < 2000):
+        raise HTTPException(400, "a https image url is required")
+    rows = sb_clients.sb_get_as_service(
+        f"/business_sites?business_id=eq.{body.business_id}"
+        "&select=id,html_content,site_config&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "site not found")
+    row = rows[0]
+    html = row.get("html_content") or ""
+    filled = fill_drop_slot(html, body.slot, url)
+    if filled is None:
+        raise HTTPException(404, f"drop slot '{body.slot}' not on the page")
+    cfg = dict(row.get("site_config") or {})
+    canvas = cfg.get("canvas") if isinstance(cfg.get("canvas"), dict) else None
+    if canvas and str(canvas.get("html") or "").strip():
+        c_filled = fill_drop_slot(str(canvas["html"]), body.slot, url)
+        if c_filled is not None:
+            canvas = dict(canvas)
+            canvas["html"] = c_filled
+            cfg["canvas"] = canvas
+    fills = dict(cfg.get("drop_fills") or {})
+    fills[body.slot] = url
+    cfg["drop_fills"] = fills
+    sb_clients.sb_patch_as_service(
+        f"/business_sites?id=eq.{row['id']}",
+        {"html_content": filled, "site_config": cfg})
+    logger.info(f"[composer] drop slot '{body.slot}' filled for "
+                f"{body.business_id[:8]}")
+    return {"ok": True, "slot": body.slot}
+
+
+_DROP_UPLOAD_MIMES = {"image/jpeg": "jpg", "image/jpg": "jpg",
+                      "image/png": "png", "image/webp": "webp",
+                      "image/avif": "avif"}
+_DROP_UPLOAD_MAX = 10 * 1024 * 1024
+
+
+@router.post("/drop/upload")
+async def drop_upload(business_id: str = FormField(...),
+                      slot: str = FormField(...),
+                      file: UploadFile = File(...),
+                      session: UserSession = Depends(sb_clients.authed_request)
+                      ) -> Dict[str, Any]:
+    """ONE gesture: the owner clicks a drop slot in the Studio, picks a
+    photo, and this uploads it (site_images bucket) AND fills the frame
+    (fill_drop_slot persistence) in a single call."""
+    _require_owner(business_id, session.user.id)
+    ext = _DROP_UPLOAD_MIMES.get((file.content_type or "").lower())
+    if not ext:
+        raise HTTPException(400, "jpeg, png, webp, or avif only")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "empty file")
+    if len(data) > _DROP_UPLOAD_MAX:
+        raise HTTPException(400, "image too large (10 MB max)")
+    import time as _time
+    from agents.slot_system.dalle_client import _upload_site_image
+    safe_slot = re.sub(r"[^a-zA-Z0-9_-]", "_", slot)[:60]
+    path = f"{business_id}/drop_{safe_slot}_{int(_time.time())}.{ext}"
+    url = _upload_site_image(path, data, file.content_type or "image/jpeg")
+    if not url:
+        raise HTTPException(502, "storage upload failed — try again")
+    fill = drop_fill(DropFillBody(business_id=business_id, slot=slot,
+                                  url=url), session)
+    return {**fill, "url": url}
+
+
 class RefreshBody(BaseModel):
     business_id: str
 
@@ -5475,11 +5585,22 @@ def refresh_if_composed(business_id: str) -> bool:
     pages (their own live-injection paths already handle freshness)."""
     ctx = gather_context(business_id)
     cfg = ((ctx.get("site") or {}).get("site_config") or {})
-    if cfg.get("html_source") != "module-composer" or not cfg.get("page_spec"):
-        return False
-    spec = sanitize_spec(cfg["page_spec"], ctx)
-    render_and_persist(business_id, spec, ctx)
-    return True
+    src = cfg.get("html_source")
+    if src == "module-composer" and cfg.get("page_spec"):
+        spec = sanitize_spec(cfg["page_spec"], ctx)
+        render_and_persist(business_id, spec, ctx)
+        return True
+    # TOUCHABLE PREVIEW (2026-07-25): canvas/v2 pages re-render too —
+    # render_and_persist reuses the STORED canvas document on non-full
+    # passes and re-applies text + color overrides onto it. Without
+    # this, an Edit Mode save persisted to the database but NEVER
+    # reached the served page of a v2 site (the trigger was a no-op).
+    _cv = cfg.get("canvas") if isinstance(cfg.get("canvas"), dict) else {}
+    if src == "canvas" and str((_cv or {}).get("html") or "").strip():
+        spec = sanitize_spec(cfg.get("page_spec") or {"sections": []}, ctx)
+        render_and_persist(business_id, spec, ctx)
+        return True
+    return False
 
 
 def refresh_if_composed_async(business_id: str) -> None:

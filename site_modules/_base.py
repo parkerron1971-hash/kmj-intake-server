@@ -1096,14 +1096,70 @@ STUDIO_BRIDGE = """<script>(function () {
   if (window.parent === window) return;
   try { if (!new URLSearchParams(location.search).has('studio')) return; }
   catch (e) { return; }
+  /* THE TOUCHABLE PREVIEW (2026-07-25). Three jobs, all DOM-only —
+     the parent does every network call:
+     1. select-to-talk (unchanged): tap an element, Chief hears it.
+     2. EDIT MODE: parent posts {type:'studio-edit-mode',on} — tapped
+        text becomes editable in place; commit posts studio-edit.
+     3. DROP SLOTS: body.sx-studio reveals art-directed placeholders;
+        tapping one posts studio-drop so the parent opens the picker. */
+  try { document.body.classList.add('sx-studio'); } catch (e) {}
+  var editing = false;
   var st = document.createElement('style');
   st.textContent = '[data-override-target],[data-sx-zone]{cursor:pointer}' +
     '[data-override-target]:hover,[data-sx-zone]:hover{outline:2px dashed rgba(52,211,153,.55);outline-offset:3px}' +
-    '.sx-studio-sel{outline:2px solid #34d399 !important;outline-offset:3px}';
+    '.sx-studio-sel{outline:2px solid #34d399 !important;outline-offset:3px}' +
+    'body.sx-editing [data-override-target]:hover{outline-color:rgba(217,165,20,.8)}' +
+    '[contenteditable="true"]{outline:2px solid rgba(217,165,20,.9) !important;outline-offset:3px}' +
+    '.sx-drop{cursor:pointer}' +
+    'body.sx-studio .sx-drop:hover{outline:2px dashed rgba(217,165,20,.8);outline-offset:3px}';
   document.head.appendChild(st);
+
+  window.addEventListener('message', function (ev) {
+    var d = ev && ev.data;
+    if (!d || typeof d.type !== 'string') return;
+    if (d.type === 'studio-edit-mode') {
+      editing = !!d.on;
+      document.body.classList.toggle('sx-editing', editing);
+      if (!editing) commitAll();
+    } else if (d.type === 'studio-apply-color' && d.target) {
+      var els = document.querySelectorAll(
+        '[data-override-target="' + String(d.target).replace(/"/g, '') + '"]');
+      for (var i = 0; i < els.length; i++) els[i].style.color = String(d.color || '');
+    }
+  });
+
+  function commit(el) {
+    if (!el || el.getAttribute('contenteditable') !== 'true') return;
+    el.removeAttribute('contenteditable');
+    var now = (el.innerText || '').trim();
+    if (now !== el.__sxOriginal && now) {
+      parent.postMessage({ type: 'studio-edit',
+        target: el.getAttribute('data-override-target') || '',
+        value: now.slice(0, 4000) }, '*');
+    } else if (!now && el.__sxOriginal) {
+      el.innerText = el.__sxOriginal;   /* emptied by accident — restore */
+    }
+  }
+  function commitAll() {
+    var open = document.querySelectorAll('[contenteditable="true"]');
+    for (var i = 0; i < open.length; i++) commit(open[i]);
+  }
+
   document.addEventListener('click', function (ev) {
-    var el = ev.target && ev.target.closest ? ev.target.closest('[data-override-target],[data-sx-zone]') : null;
+    var t = ev.target;
+    /* a drop slot: the owner fills the frame the designer drew */
+    var drop = t && t.closest ? t.closest('.sx-drop:not(.sx-filled)') : null;
+    if (drop) {
+      ev.preventDefault(); ev.stopPropagation();
+      parent.postMessage({ type: 'studio-drop',
+        slot: drop.getAttribute('data-sx-slot') || '',
+        brief: (drop.textContent || '').trim().slice(0, 160) }, '*');
+      return;
+    }
+    var el = t && t.closest ? t.closest('[data-override-target],[data-sx-zone]') : null;
     if (!el) return;
+    if (el.getAttribute('contenteditable') === 'true') return; /* typing */
     ev.preventDefault(); ev.stopPropagation();
     var prev = document.querySelectorAll('.sx-studio-sel');
     for (var i = 0; i < prev.length; i++) prev[i].classList.remove('sx-studio-sel');
@@ -1113,6 +1169,27 @@ STUDIO_BRIDGE = """<script>(function () {
         || ('zone:' + (el.getAttribute('data-sx-zone') || '')),
       label: el.getAttribute('data-sx-label') || '',
       text: (el.textContent || '').trim().slice(0, 120) }, '*');
+    /* EDIT MODE: the tap also opens the words for retyping */
+    if (editing && el.hasAttribute('data-override-target')) {
+      commitAll();
+      el.__sxOriginal = (el.innerText || '').trim();
+      el.setAttribute('contenteditable', 'true');
+      try { el.focus(); } catch (e) {}
+    }
+  }, true);
+
+  document.addEventListener('keydown', function (ev) {
+    var el = ev.target;
+    if (!el || el.getAttribute && el.getAttribute('contenteditable') !== 'true') return;
+    if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); commit(el); }
+    if (ev.key === 'Escape') {
+      el.innerText = el.__sxOriginal || el.innerText;
+      el.removeAttribute('contenteditable');
+    }
+  }, true);
+  document.addEventListener('blur', function (ev) {
+    if (ev.target && ev.target.getAttribute
+        && ev.target.getAttribute('contenteditable') === 'true') commit(ev.target);
   }, true);
 })();</script>"""
 
