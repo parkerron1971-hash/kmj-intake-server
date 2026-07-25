@@ -119,6 +119,24 @@ def test_turn_prompt_injects_known_context_first_user_message():
     joined = " ".join(m["content"] for m in msgs if m["role"] == "user")
     assert "KNOWN CONTEXT" in joined and "BUSINESS: KMJ" in joined
     assert "hi coach" in joined
+    # alternation holds for the API
+    roles = [m["role"] for m in msgs]
+    assert all(a != b for a, b in zip(roles, roles[1:]))
+
+
+def test_turn_prompt_mirrors_assistant_turns_as_json():
+    """The lost-thread bug: prior coach replies fed back as prose made
+    the model mirror prose by turn two. Assistant turns must ride the
+    transcript in their JSON envelope."""
+    with mock.patch.object(dc, "_known_context", return_value="X"):
+        msgs = dc.build_turn_prompt("b1", [
+            {"role": "assistant", "content": "Welcome to the studio!"},
+            {"role": "user", "content": "thanks coach"},
+        ])
+    assistant = [m for m in msgs if m["role"] == "assistant"]
+    assert len(assistant) == 1
+    env = json.loads(assistant[0]["content"])
+    assert env == {"reply": "Welcome to the studio!"}
 
 
 def test_parse_turn_sanitizes_gallery():
