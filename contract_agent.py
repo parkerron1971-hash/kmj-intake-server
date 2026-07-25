@@ -224,8 +224,12 @@ Draft the proposal."""
     if dry_run:
         return result
 
-    # Insert into agent_queue
-    await _sb(client, "POST", "/agent_queue", {
+    # Insert into agent_queue. The returned row id is surfaced on the result
+    # as `queue_id` so a caller can act on THIS draft specifically — Chief's
+    # draft_contract → approve_draft chain needs the id, and before this the
+    # only way to find it again was "the most recent draft", which is wrong
+    # the moment two drafts exist.
+    queued = await _sb(client, "POST", "/agent_queue", {
         "business_id": biz_id,
         "contact_id": contact_id,
         "agent": "contract",
@@ -238,6 +242,8 @@ Draft the proposal."""
         "ai_reasoning": reasoning,
         "ai_model": DRAFT_MODEL,
     })
+    if isinstance(queued, list) and queued:
+        result["queue_id"] = queued[0].get("id")
 
     # Log event
     await _sb(client, "POST", "/events", {
