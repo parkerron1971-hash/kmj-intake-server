@@ -79,6 +79,11 @@ from chief_bookkeeping_actions import (
     handle_reject_bookkeeping_proposal,
     handle_review_books,
 )
+# P0.3 — contract verbs over the existing contract_agent drafting + PDF path.
+from chief_contract_actions import (
+    handle_contract_pdf,
+    handle_draft_contract,
+)
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -10187,6 +10192,11 @@ ACTION_HANDLERS = {
     "list_bookkeeping_proposals":      handle_list_bookkeeping_proposals,
     "approve_bookkeeping_proposal":    handle_approve_bookkeeping_proposal,
     "reject_bookkeeping_proposal":     handle_reject_bookkeeping_proposal,
+    # P0.3 — contract drafting per-contact + the branded PDF. Sending stays
+    # with approve_draft; there is no send_for_signature because there is no
+    # e-signature provider (see chief_contract_actions module docstring).
+    "draft_contract":                  handle_draft_contract,
+    "contract_pdf":                    handle_contract_pdf,
     "set_availability_day":       handle_set_availability_day,
     "set_availability_override":  handle_set_availability_override,
     "add_block_range":            handle_add_block_range,
@@ -12614,6 +12624,16 @@ ACTIONS — BOOKKEEPING (the books, from the conversation):
     — There is NO bulk approve, by design. These are financial records; one at a time, each named.
     — When the practitioner says what it SHOULD have been, pass "override" AND "reason" — that trains the next proposal. A bare rejection teaches nothing.
     — Omitting proposal_id works ONLY when exactly one is pending; otherwise the action asks which.
+
+ACTIONS — CONTRACTS & PROPOSALS (the engagement letter, in their voice):
+  [ACTION:{{"type":"draft_contract","contact_name":"Marcus Webb"}}]  — draft the proposal / engagement letter for ONE person, written in the practitioner's voice from what you know about that relationship.
+  [ACTION:{{"type":"contract_pdf","contact_name":"Marcus Webb"}}]  — render the draft as the branded PDF and return a shareable link. Optional "queue_id" to pick a specific draft.
+    — It lands as a DRAFT. Nothing reaches the client until the practitioner approves it — say so, and offer the read before the send.
+    — To actually send it, chain approve_draft with the queue_id draft_contract returned (or "latest"). Draft → read → approve is the sequence; don't skip the middle step on their behalf.
+    — A contract needs a named counterparty. If the name is ambiguous or unknown the action asks — never draft for whoever happened to match first.
+    — If the result says the wording is generic placeholder, SAY THAT. It means the model returned nothing and a stub was substituted; calling it "your engagement letter" would be a lie about work that didn't happen.
+    — You CANNOT send anything for e-signature — there is no signing integration. You draft it, render it, and email it. Never say "sent for signature", "out for signing", or imply the client can sign it here; if they ask for that, name it as the gap and offer queue_build_request.
+    — Drafting the words is not giving legal advice. You do not vet terms, judge enforceability, or advise on what a clause means — that stays with their attorney, and for a law practice the engagement letter is the practitioner's own instrument to approve.
 
 ACTIONS — BOOKINGS (putting real appointments on the calendar):
   [ACTION:{{"type":"create_booking","customer_name":"Maria Lopez","offering_name":"Color + Cut","appointment_at":"2026-08-04T14:00:00Z"}}]
