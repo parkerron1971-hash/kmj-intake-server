@@ -121,6 +121,28 @@ def test_turn_prompt_injects_known_context_first_user_message():
     assert "hi coach" in joined
 
 
+def test_parse_turn_sanitizes_gallery():
+    good = _turn(gallery={"kind": "looks",
+                          "options": ["mural", "monograph", "junk"]})
+    out = dc.parse_turn(good)
+    assert out["gallery"] == {"kind": "looks",
+                              "options": ["mural", "monograph"]}
+    # unknown kind or too few valid options → dropped
+    assert dc.parse_turn(_turn(gallery={"kind": "vibes",
+                                        "options": ["a", "b"]}))["gallery"] is None
+    assert dc.parse_turn(_turn(gallery={"kind": "motion",
+                                        "options": ["kinetic-hero"]}))["gallery"] is None
+
+
+def test_prompt_carries_galleries_and_director_carries_motion():
+    assert "THE GALLERIES" in dc._SYSTEM
+    assert '"kind": "looks"' in dc._SYSTEM
+    import spec_author as sa
+    assert "THE KINETIC HERO" in sa._SYSTEM
+    assert "THE ORBIT" in sa._SYSTEM
+    assert "prefers-reduced-motion" in sa._SYSTEM
+
+
 def test_system_prompt_carries_the_standing_rules():
     s = dc._SYSTEM
     assert "ONE question at a time" in s

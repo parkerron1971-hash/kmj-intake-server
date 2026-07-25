@@ -93,6 +93,11 @@ THE MOVES VOCABULARY — the difference between "has a motif" and "is built out 
 - THE EXHIBITION: the work hung like a gallery wall — lead pieces large and full-bleed, rhythmic bands after, one designed typographic tile sitting among the artwork.
 - THE ECHO FRAME: portraits and lead images in hairline frames with a second offset frame behind; captions running vertical along the frame edge.
 - THE STAGE LIGHT: one warm radial glow that owns the hero and returns once at the close, grain over everything, gradient depth between grounds.
+MOTION MOVES (the Emergent-class arrivals — all pure CSS/JS, no libraries; the builder cannot load external scripts):
+- THE KINETIC HERO: the headline arrives line by MASKED line (overflow-hidden line wrappers, staggered rise), the accent word landing last with its own gesture. One-time, on arrival.
+- THE DEPTH: two or three layers drifting at different speeds on scroll (transform-only parallax; subtle, never seasick).
+- THE ORBIT: the work turning slowly in 3D space (CSS preserve-3d ring) as the gallery's signature — reserved for businesses whose work IS the show.
+Motion discipline is unchanged and absolute: ONE signature motion moment per page, scroll reveals scroll-position driven, prefers-reduced-motion shows everything instantly.
 Choose from this vocabulary or invent a move of equal specificity and NAME it — "tasteful animations" is not a move. The chosen move(s) must appear in section 1 by name, in section 3 at every recurrence, and in section 4 with their exact behavior.
 
 THE COPY GRAMMAR (the DASH LAW — the owner's standing rule): you write every word of the page's copy, so grammar defects are YOUR defects. Never splice a sentence with a dash: no em dashes in headlines, body copy, or captions you author. Rewrite with a period, comma, or colon. A dash survives only inside a proper title the dossier itself carries (an artwork or event name).
