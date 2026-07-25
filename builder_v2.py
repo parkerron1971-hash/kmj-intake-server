@@ -75,6 +75,14 @@ _JS_BANNED = (
 )
 
 
+def contact_endpoint(business_id: str) -> str:
+    """The one url the page's script is allowed to fetch: the platform's
+    own contact-submit endpoint (a JSON POST — a native form post can't
+    reach it, so the script MUST carry this call for the form to work)."""
+    return (f"https://kmj-intake-server-production.up.railway.app"
+            f"/sites/{business_id}/contact-submit")
+
+
 def enabled() -> bool:
     return (os.environ.get("SITE_BUILDER_V2") or "").strip().lower() in (
         "on", "1", "true", "yes")
@@ -106,15 +114,15 @@ _SYSTEM = """You are a master web designer-craftsperson building ONE complete pr
 THE LAW OF THE PAGE is the approved design specification the owner has read and signed. Execute it exactly: its sections, its written copy, its named signature move, its color and font roles. Where the spec is silent, decide with craft in the spec's spirit — never retreat to a generic median.
 
 HARD RULES (a validator checks each; violations cost a repair round):
-1. Output ONE complete HTML document: <!DOCTYPE html> through </html>. Inline <style>. At most one <script> (a single IIFE, DOM-only: class toggles, listeners on elements you rendered; the page must stay fully coherent with JS disabled).
+1. Output ONE complete HTML document: <!DOCTYPE html> through </html>. Inline <style>. At most one <script> (a single IIFE, DOM-only: class toggles, listeners on elements you rendered; the page must stay fully coherent with JS disabled). THE SCRIPT'S ONE NETWORK CALL: the contact-form submit of rule 9 is the only fetch permitted, written with the endpoint url inline as a string literal — fetch("<the given endpoint>", …). A security pass strips the ENTIRE script if it contains any other fetch, XMLHttpRequest, eval, storage, or dynamic import — and with the script go your reveals, lightbox, and filters. Nothing else on the page may touch the network.
 2. TRUTH: every fact, number, price, and claim on the page appears in the REAL DATA below. Nothing invented — a stat the data doesn't prove renders as a clearly-marked editable placeholder, never a made-up figure.
 3. COVERAGE: every listed image appears (exact url in src); a fixed navigation; a working contact form posting to the given endpoint (method="POST", the given action url, name/email fields at minimum); a footer. Every real service/offering has a home.
-4. EXTERNAL REQUESTS: Google Fonts stylesheet links and the provided https image urls ONLY. No other external scripts, styles, frames, or calls.
+4. EXTERNAL REQUESTS: Google Fonts stylesheet links, the provided https image urls, and the one contact-form fetch of rule 9 ONLY. No other external scripts, styles, frames, or calls.
 5. EDITABILITY: stamp data-override-target="v2/f1", "v2/f2", … on headings, paragraphs, and captions as you write them (a platform pass guarantees any you miss — stamping well keeps the labels meaningful).
 6. MOBILE: a real responsive pass in the same document — media queries so every section holds at 390px. What breaks on a phone fails the whole page. The page must also hold on wide screens (1900px+): content keeps an intentional measure, backgrounds and motifs extend, nothing stretches thin or drifts off-grid.
 7. The spec's color hexes and font names are law — write them directly in your CSS (:root custom properties named as the spec names them, then var() references).
 8. COPY GRAMMAR (the DASH LAW): never splice a sentence with a dash. No em dashes, no " - " splices in headings, paragraphs, or list copy — rewrite with a period, comma, or colon. A dash may appear only inside a proper title supplied by the data (an artwork or event name).
-9. INTERACTION GRAMMAR — controls do what they promise: a gallery of images opens each piece larger on click (a lightbox: element id="lightbox", dimmed backdrop, the artwork with its title, closes on backdrop click, a close button, and Escape); category filters actually filter and an empty result states so in words, never blank space; the contact form shows a visible confirmation state after submit; every clickable element answers hover AND keyboard focus; anything that opens can be closed.
+9. INTERACTION GRAMMAR — controls do what they promise: a gallery of images opens each piece larger on click (a lightbox: element id="lightbox", dimmed backdrop, the artwork with its title, closes on backdrop click, a close button, and Escape); category filters actually filter and an empty result states so in words, never blank space; the contact form intercepts submit and POSTs JSON {name, email, phone, message} via fetch to the given endpoint (the url inline as a string literal — the endpoint reads JSON, so a bare native form post cannot reach it), disables the button while sending, then shows a visible confirmation state in place; every clickable element answers hover AND keyboard focus; anything that opens can be closed.
 10. REVEAL SAFETY: if content starts hidden for a scroll reveal, the reveal must be scroll-position driven (on scroll, anything whose top has passed the reveal line becomes visible), so fast scrolling can NEVER leave a section invisible. Never rely on an IntersectionObserver alone. Honor prefers-reduced-motion by showing everything.
 11. INVENTORY-SHAPED LAYOUT: compose the gallery/grid to the number of images that actually exist. Two images get a two-image composition; never a grid with holes, never a repeated image as filler.
 11b. ART-DIRECTED DROP SLOTS: when the composition WANTS an image the inventory doesn't have (a hero portrait, a third gallery piece), author a placeholder the owner can fill: <div class="sx-drop" data-sx-slot="short_name">…</div> containing ONE line of shot direction in plain words ("You at the chair, mid-cut, warm light" — you are telling them what to photograph). Style: a dashed 1px frame in the accent color at low opacity, the design's crop and position already decided, so a dropped-in photo inherits your intention. Your CSS MUST include `.sx-drop{display:none}` and `body.sx-studio .sx-drop{display:flex;…}` — the public page never shows an empty frame; the owner's Studio reveals them. Never fake an image, never leave a hole: real, or an art-directed drop slot.
@@ -179,8 +187,7 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
     if ch:
         parts.append("CONTACT CHANNELS: " + json.dumps(ch, ensure_ascii=False))
     parts.append("CONTACT FORM ENDPOINT (the form's action): "
-                 f"https://kmj-intake-server-production.up.railway.app"
-                 f"/sites/{business_id}/contact-submit")
+                 + contact_endpoint(business_id))
     try:
         import atelier
         for mid in ("offerings", "testimonials", "statband", "faq", "store"):
@@ -266,14 +273,27 @@ def annotate_editability(html: str) -> Tuple[str, int]:
         return html, 0
 
 
-def armor_scripts(html: str) -> Tuple[str, List[str]]:
-    """Drop any <script> containing a banned call; report what fell."""
+def armor_scripts(html: str,
+                  allowed_fetch: str = "") -> Tuple[str, List[str]]:
+    """Drop any <script> containing a banned call; report what fell.
+
+    allowed_fetch: the ONE url a fetch( may target — the platform's own
+    contact-submit endpoint (a JSON endpoint; the form is dead without
+    it). Only the inline string-literal form is permitted, so the probe
+    can verify the target without executing anything: fetch("<url>" or
+    fetch('<url>'. Any other fetch — variable, template, other url —
+    still drops the whole script."""
     dropped: List[str] = []
 
     def _check(m: re.Match) -> str:
         body = m.group(1) or ""
+        probe = body
+        if allowed_fetch:
+            for quote in ('"', "'"):
+                probe = probe.replace(
+                    f"fetch({quote}{allowed_fetch}{quote}", "")
         for ban in _JS_BANNED:
-            if ban in body:
+            if ban in probe:
                 dropped.append(ban)
                 return ""
         return m.group(0)
@@ -281,6 +301,23 @@ def armor_scripts(html: str) -> Tuple[str, List[str]]:
     out = re.sub(r"<script[^>]*>(.*?)</script>", _check, html,
                  flags=re.DOTALL | re.IGNORECASE)
     return out, dropped
+
+
+def armor_violations(dropped: List[str], endpoint: str) -> List[str]:
+    """A dropped script is a LAW violation, not a silent event — the
+    page's reveal states orphan into permanent invisibility when the
+    runtime falls (the 2026-07-25 blank-page bug). The violation carries
+    the reason so the surgical repair fixes the cause, not a symptom."""
+    return [
+        f'SCRIPT REMOVED BY THE SECURITY ARMOR: your <script> used "{ban}", '
+        "which is banned, so the ENTIRE script was stripped — the page "
+        "shipped with no JavaScript, and every hidden-for-reveal element "
+        "stays invisible forever. Rewrite the single script without it. "
+        "The ONLY permitted network call is the contact form submit: "
+        f'fetch("{endpoint}", …) with the url written inline exactly as '
+        "that string literal. Everything else must be DOM-only."
+        for ban in dropped
+    ]
 
 
 def armor_external(html: str) -> Tuple[str, List[str]]:
@@ -425,6 +462,15 @@ def check_interactions(html: str) -> List[str]:
             "scrolling can skip sections forever. Reveal on scroll "
             "position (anything whose top passed the reveal line becomes "
             "visible), or drop the hidden state.")
+    has_runtime = bool(re.search(r"<script[^>]*>\s*\S", html,
+                                 re.IGNORECASE | re.DOTALL))
+    if not has_runtime and "opacity:0" in html.replace(" ", ""):
+        problems.append(
+            "REVEAL SAFETY: the stylesheet sets reveal states to "
+            "opacity:0 but no script exists on the page to add the "
+            "shown class, so those sections never appear. Include the "
+            "runtime script, or author the page with every section "
+            "visible by default.")
     return problems
 
 
@@ -678,8 +724,10 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                                     "detail": "no parseable document"})
         return {"html": None, "report": report}
 
+    endpoint = contact_endpoint(business_id)
+
     def _mechanical(d: str) -> str:
-        d, dropped = armor_scripts(d)
+        d, dropped = armor_scripts(d, allowed_fetch=endpoint)
         d, stripped = armor_external(d)
         d, added = annotate_editability(d)
         report["mechanical"] = {"scripts_dropped": dropped,
@@ -688,8 +736,14 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         return d
 
     def _laws(d: str) -> List[str]:
+        # armor_violations reads the drops _mechanical just recorded for
+        # this same doc — a dropped script must fail the law gate loudly
+        # (silently shipping it is the 2026-07-25 blank-sections bug).
         return (check_truth(d, real_data) + check_coverage(d, real_data)
-                + check_grammar(d) + check_head(d) + check_interactions(d))
+                + check_grammar(d) + check_head(d) + check_interactions(d)
+                + armor_violations(
+                    report["mechanical"].get("scripts_dropped") or [],
+                    endpoint))
 
     doc = _mechanical(doc)
     violations = _laws(doc)

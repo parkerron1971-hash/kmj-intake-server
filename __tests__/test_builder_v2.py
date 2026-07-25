@@ -79,6 +79,45 @@ def test_script_armor_drops_banned_keeps_clean():
     assert dropped == ["fetch("]
 
 
+def test_script_armor_allows_the_contact_fetch_literal_only():
+    """The 2026-07-25 blank-sections bug: the contact endpoint reads
+    JSON, so the page's script MUST fetch it — but the armor dropped any
+    script containing fetch(, taking the reveals down with it. The one
+    permitted form is the inline string-literal call to the platform's
+    own endpoint; every other fetch still fells the script."""
+    ep = v2.contact_endpoint("b1")
+    ok = (f"<script>fetch(\"{ep}\", {{method:'POST'}});"
+          "document.body.classList.add('shown')</script>")
+    out, dropped = v2.armor_scripts(ok, allowed_fetch=ep)
+    assert dropped == [] and "classList" in out
+    # single-quoted literal is equally fine
+    out, dropped = v2.armor_scripts(
+        f"<script>fetch('{ep}')</script>", allowed_fetch=ep)
+    assert dropped == []
+    # any OTHER fetch target still drops the script
+    out, dropped = v2.armor_scripts(
+        f"<script>fetch(\"{ep}\");fetch('https://evil')</script>",
+        allowed_fetch=ep)
+    assert dropped == ["fetch("] and "evil" not in out
+    # a variable target is not verifiable → dropped
+    out, dropped = v2.armor_scripts(
+        "<script>var u=x;fetch(u)</script>", allowed_fetch=ep)
+    assert dropped == ["fetch("]
+    # without an allowance the old behavior holds
+    out, dropped = v2.armor_scripts(f"<script>fetch('{ep}')</script>")
+    assert dropped == ["fetch("]
+
+
+def test_armor_violations_name_the_cause_and_the_permitted_form():
+    ep = v2.contact_endpoint("b1")
+    vs = v2.armor_violations(["fetch("], ep)
+    assert len(vs) == 1
+    assert "SCRIPT REMOVED" in vs[0]          # says what happened
+    assert '"fetch("' in vs[0]                # names the banned call
+    assert ep in vs[0]                        # teaches the permitted form
+    assert v2.armor_violations([], ep) == []
+
+
 def test_external_armor_keeps_fonts_strips_rest():
     html = ('<link href="https://fonts.googleapis.com/css2?family=X" rel="stylesheet">'
             '<link href="https://evil.example/steal.css" rel="stylesheet">'
@@ -176,6 +215,23 @@ def test_reveal_safety_flags_observer_without_scroll_fallback():
             "window.addEventListener('scroll',sweep)</script>"
             "</body></html>")
     assert not any("REVEAL SAFETY" in p for p in v2.check_interactions(safe))
+
+
+def test_reveal_safety_flags_hidden_state_with_no_script_at_all():
+    """The armored page from 2026-07-25: reveal CSS survived, the script
+    did not — eleven sections at opacity:0 with nothing left to show
+    them. A scriptless page with reveal-hidden CSS fails the law."""
+    orphaned = ("<html><style>.reveal{opacity:0}</style><body>"
+                "<p class='reveal'>hi</p></body></html>")
+    assert any("no script" in p for p in v2.check_interactions(orphaned))
+    # a real runtime beside the hidden state passes this check
+    alive = ("<html><style>.reveal{opacity:0}</style><body>"
+             "<script>window.addEventListener('scroll',s)</script>"
+             "</body></html>")
+    assert not any("no script" in p for p in v2.check_interactions(alive))
+    # no hidden state, no script needed
+    plain = "<html><body><p>hi</p></body></html>"
+    assert v2.check_interactions(plain) == []
 
 
 # ─── the eyes (vision loop plumbing — no browser, no API) ────────────
