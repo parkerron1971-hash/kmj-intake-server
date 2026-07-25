@@ -171,3 +171,7 @@ def test_system_prompt_carries_the_standing_rules():
     # and never opens with a menu.
     assert "THE OPENING" in s and "BY NAME" in s
     assert '"how can I help"' in s
+    # THE LANE (Kevin: "people must feel the difference"): brand, not
+    # business plan — sensory questions only, business facts referenced.
+    assert "NOT THE BUSINESS PLAN" in s
+    assert "business-plan interview" in s
