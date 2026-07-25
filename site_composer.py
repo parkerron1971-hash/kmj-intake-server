@@ -4941,6 +4941,43 @@ def discovery_derive(body: DiscoveryDeriveBody,
     return {"ok": True, "dossier": d}
 
 
+class CoachTurnBody(BaseModel):
+    business_id: str
+    messages: List[Dict[str, str]] = []
+
+
+class CoachFinishBody(BaseModel):
+    business_id: str
+
+
+@router.post("/coach/turn")
+def coach_turn(body: CoachTurnBody,
+               session: UserSession = Depends(sb_clients.authed_request)
+               ) -> Dict[str, Any]:
+    """THE DESIGN COACH (2026-07-25) — discovery's conversational door.
+    Stateless: the frontend carries the transcript, the backend carries
+    the truth (dossier + business facts injected every turn so the
+    coach never re-asks). Every extracted detail lands in the dossier
+    with provenance 'asked' before the reply returns. Errors come back
+    as {error} for a visible retry, never a 500 blank."""
+    _require_owner(body.business_id, session.user.id)
+    import design_coach
+    return design_coach.run_turn(body.business_id, body.messages or [])
+
+
+@router.post("/coach/finish")
+def coach_finish(body: CoachFinishBody,
+                 session: UserSession = Depends(sb_clients.authed_request)
+                 ) -> Dict[str, Any]:
+    """Session close: derive the taste readings from everything
+    gathered, stamp the session complete, return the digest. The
+    frontend follows with /spec/author so the Director drafts the
+    blueprint from a still-warm dossier."""
+    _require_owner(body.business_id, session.user.id)
+    import design_coach
+    return design_coach.finish_session(body.business_id)
+
+
 class RefreshBody(BaseModel):
     business_id: str
 
