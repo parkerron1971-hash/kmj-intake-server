@@ -127,3 +127,7 @@ def test_system_prompt_carries_the_standing_rules():
     assert "NEVER RE-ASK" in s
     assert "dashes" in s            # the dash law reaches the coach too
     assert "screenshots ONE moment" in s
+    # THE OPENING (Kevin's study): the coach greets FIRST, by name,
+    # and never opens with a menu.
+    assert "THE OPENING" in s and "BY NAME" in s
+    assert '"how can I help"' in s
