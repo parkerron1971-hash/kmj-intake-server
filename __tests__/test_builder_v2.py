@@ -279,3 +279,12 @@ def test_repair_prompt_is_surgical():
     # the fresh-build prompt carries the spec as law instead
     p2 = v2.build_user_prompt("SPEC TEXT", "DATA")
     assert "THE APPROVED SPEC" in p2 and "SURGICAL" not in p2
+
+
+def test_filled_space_rule_rides_builder_prompt_and_inspector():
+    """The builder executes the FILLED-SPACE LAW (rule 14) and the eyes
+    measure it from the render walk (dead bands are visible in stills;
+    arrival variety stays a prompt-level law)."""
+    assert "FILLED SPACE" in v2._SYSTEM
+    assert "transition-delay" in v2._SYSTEM
+    assert "FILLED SPACE" in v2._INSPECTOR
