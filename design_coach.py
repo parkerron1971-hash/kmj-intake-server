@@ -145,8 +145,16 @@ def _known_context(business_id: str) -> str:
 
 def build_turn_prompt(business_id: str,
                       messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """The transcript as ladder messages: KNOWN CONTEXT rides the first
-    user message so caching-friendly system stays constant."""
+    """The transcript as ladder messages. Two disciplines:
+
+    1. KNOWN CONTEXT rides the first user message (system stays
+       constant and cache-friendly).
+    2. FORMAT MIRROR (the lost-thread bug, 2026-07-25): prior coach
+       turns are re-wrapped in their JSON envelope. The frontend
+       stores plain reply text; feeding that back verbatim showed the
+       model a transcript of itself speaking PROSE, so by turn two it
+       mirrored the prose and dropped the JSON contract. The model
+       must only ever see itself speaking JSON."""
     trimmed = [
         {"role": ("assistant" if m.get("role") == "assistant" else "user"),
          "content": str(m.get("content") or "")[:MAX_MSG_CHARS]}
@@ -156,25 +164,24 @@ def build_turn_prompt(business_id: str,
     known = _known_context(business_id)
     lead = ("KNOWN CONTEXT (the platform already knows this — never "
             "re-ask any of it):\n" + known
-            + "\n\nBegin (or continue) the session. JSON only.")
-    if not trimmed:
-        return [{"role": "user", "content": lead}]
-    # prepend the known-context to the FIRST user message
-    out: List[Dict[str, str]] = []
-    injected = False
+            + "\n\nRun the session. EVERY reply is the strict JSON of "
+              "the contract — no prose outside the JSON, ever.")
+    out: List[Dict[str, str]] = [{"role": "user", "content": lead}]
     for m in trimmed:
-        if not injected and m["role"] == "user":
-            out.append({"role": "user",
-                        "content": lead + "\n\nTHEY SAY: " + m["content"]})
-            injected = True
+        if m["role"] == "assistant":
+            out.append({"role": "assistant",
+                        "content": json.dumps({"reply": m["content"]},
+                                              ensure_ascii=False)})
         else:
-            out.append(m)
-    if not injected:
-        out.insert(0, {"role": "user", "content": lead})
-    # anthropic requires user-first
-    if out[0]["role"] != "user":
-        out.insert(0, {"role": "user", "content": lead})
-    return out
+            out.append({"role": "user", "content": m["content"]})
+    # collapse any same-role neighbors (the API wants alternation)
+    merged: List[Dict[str, str]] = []
+    for m in out:
+        if merged and merged[-1]["role"] == m["role"]:
+            merged[-1]["content"] += "\n\n" + m["content"]
+        else:
+            merged.append(dict(m))
+    return merged
 
 
 # ─── the turn contract ───────────────────────────────────────────────
