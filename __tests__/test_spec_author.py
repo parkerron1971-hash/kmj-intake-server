@@ -338,3 +338,16 @@ def test_call_llm_rides_the_model_ladder(monkeypatch):
 def test_opus_family_drops_temperature():
     import model_ladder
     assert model_ladder.sampling_kwargs("claude-opus-4-8", 0.7) == {}
+
+
+def test_filled_space_law_rides_the_system_prompt():
+    """Kevin's 2026-07-25 review of his own live page: a lit hero with
+    an empty half, scroll-deserts between chapters, every section
+    arriving with the same fade. The law makes filled space and varied
+    arrival grammar the floor for EVERY site, not a per-site note."""
+    s = spec_author._SYSTEM
+    assert "FILLED-SPACE LAW" in s
+    assert "off-axis half" in s
+    assert "REVEAL GRAMMAR VARIETY" in s
+    # the one-signature-motion discipline survives the addition
+    assert "ONE signature motion moment" in s
