@@ -123,6 +123,93 @@ def test_coverage_checks_images_nav_form_footer_endpoint():
     assert "no <form>" in joined and "no <footer>" in joined
 
 
+# ─── the new laws (Kevin's review, 2026-07-25) ───────────────────────
+
+def test_dash_law_flags_spliced_copy_and_exempts_titles():
+    html = ("<html><body>"
+            "<p>We do the work — together.</p>"
+            "<h2>Clean headline</h2>"
+            "<figcaption><strong>The Glow Up — Summer Series</strong>"
+            "</figcaption></body></html>")
+    problems = v2.check_grammar(html)
+    assert len(problems) == 1
+    assert "DASH LAW" in problems[0] and "together" in problems[0]
+
+
+def test_dash_law_clean_page_passes():
+    html = ("<html><body><p>We do the work, together.</p>"
+            "<p>One kind of person: the one who moves.</p></body></html>")
+    assert v2.check_grammar(html) == []
+
+
+def test_head_check_requires_title_description_og():
+    bare = "<html><head></head><body></body></html>"
+    problems = " | ".join(v2.check_head(bare))
+    assert "<title>" in problems and "description" in problems \
+        and "og:image" in problems
+    good = ("<html><head><title>KMJ</title>"
+            '<meta name="description" content="x">'
+            '<meta property="og:image" content="https://x/y.png">'
+            "</head><body></body></html>")
+    assert v2.check_head(good) == []
+
+
+def test_gallery_requires_lightbox_only_at_gallery_scale():
+    imgs5 = "<img src='a'>" * 5
+    assert any("lightbox" in p for p in
+               v2.check_interactions(f"<html><body>{imgs5}</body></html>"))
+    # a lightbox satisfies it
+    ok = f"<html><body>{imgs5}<div id=\"lightbox\"></div></body></html>"
+    assert v2.check_interactions(ok) == []
+    # four images is not a gallery
+    assert v2.check_interactions(
+        "<html><body>" + "<img src='a'>" * 4 + "</body></html>") == []
+
+
+def test_reveal_safety_flags_observer_without_scroll_fallback():
+    risky = ("<html><style>.rv{opacity:0}</style><body>"
+             "<script>new IntersectionObserver(function(){})</script>"
+             "</body></html>")
+    assert any("REVEAL SAFETY" in p for p in v2.check_interactions(risky))
+    safe = ("<html><style>.rv{opacity:0}</style><body>"
+            "<script>new IntersectionObserver(function(){});"
+            "window.addEventListener('scroll',sweep)</script>"
+            "</body></html>")
+    assert not any("REVEAL SAFETY" in p for p in v2.check_interactions(safe))
+
+
+# ─── the eyes (vision loop plumbing — no browser, no API) ────────────
+
+def test_eyes_flag_defaults_on_and_conftest_holds_it_off():
+    import os
+    assert os.environ.get("SITE_V2_VISION_LOOP") == "off"   # tests never pay
+    with mock.patch.dict(os.environ, {}, clear=True):
+        assert v2.eyes_enabled() is True                     # prod default on
+    with mock.patch.dict(os.environ, {"SITE_V2_VISION_LOOP": "off"}):
+        assert v2.eyes_enabled() is False
+
+
+def test_parse_inspector_verdicts():
+    good = ('```json\n{"verdict":"repair","violations":[{"where":"hero",'
+            '"what":"portrait floats small","fix":"cover-fit"}]}\n```')
+    out = v2._parse_inspector(good)
+    assert out["verdict"] == "repair" and len(out["violations"]) == 1
+    # empty violations collapses to ship; junk returns None
+    assert v2._parse_inspector('{"verdict":"repair","violations":[]}')[
+        "verdict"] == "ship"
+    assert v2._parse_inspector("not json") is None
+    assert v2._parse_inspector('{"verdict":"maybe"}') is None
+
+
+def test_vision_violations_become_surgical_prompt_lines():
+    p = v2.build_user_prompt(
+        "SPEC", "DATA",
+        violations=["SEEN IN THE RENDER (hero): portrait floats small "
+                    "— FIX: cover-fit the frame"],
+        prior_doc="<html>doc</html>")
+    assert "SURGICAL REPAIR" in p and "SEEN IN THE RENDER" in p
+
+
 # ─── the surgical repair prompt (never a re-roll) ────────────────────
 
 def test_repair_prompt_is_surgical():
