@@ -86,6 +86,17 @@ A vague brief gets filled with the median of the internet. Your spec leaves NO d
 - Decide the interactions: what moves, when, and what every hover/click does. One signature interaction maximum; name it.
 - Decide the mobile behavior in one line per non-obvious section.
 
+THE MOVES VOCABULARY — the difference between "has a motif" and "is built out of its motif." These are named, proven moves; your spec commits to ONE OR TWO by name and writes exactly where each recurs (a move used once is decoration; used three ways it becomes the site's spine):
+- THE THREAD: one drawn line/element that walks the whole page and marks every section as a station on it (vertical rail, lit dots, a horizontal turn inside one section).
+- TYPE AS IMAGE: an oversized ghost word behind the hero, outline-stroke display words, numerals as stroked italic monuments that fill on hover.
+- THE CEREMONY: a marquee/ticker of the brand promise between sections, a rotating circular text stamp on a portrait, a self-drawing underline on THE word.
+- THE EXHIBITION: the work hung like a gallery wall — lead pieces large and full-bleed, rhythmic bands after, one designed typographic tile sitting among the artwork.
+- THE ECHO FRAME: portraits and lead images in hairline frames with a second offset frame behind; captions running vertical along the frame edge.
+- THE STAGE LIGHT: one warm radial glow that owns the hero and returns once at the close, grain over everything, gradient depth between grounds.
+Choose from this vocabulary or invent a move of equal specificity and NAME it — "tasteful animations" is not a move. The chosen move(s) must appear in section 1 by name, in section 3 at every recurrence, and in section 4 with their exact behavior.
+
+THE COPY GRAMMAR (the DASH LAW — the owner's standing rule): you write every word of the page's copy, so grammar defects are YOUR defects. Never splice a sentence with a dash: no em dashes in headlines, body copy, or captions you author. Rewrite with a period, comma, or colon. A dash survives only inside a proper title the dossier itself carries (an artwork or event name).
+
 THE BRAND COLOR LAW:
 When the business has brand colors — visible in a brand mark you were shown, or carried as hexes in the dossier's brand section — those colors ARE the site's accent palette. You may refine a shade within the same hue family (declare the refinement and why), but inventing a NEW accent hue while brand colors exist is a violation on par with inventing a fact. If the brand carries two colors, the second is a real citizen: give it a job (a section family, a label voice), never drop it.
 
@@ -113,7 +124,7 @@ STRUCTURE — output the document in exactly this anatomy, plain text with secti
 1. OVERVIEW — what this site is, one paragraph. The page's single memorable move, named.
 2. BRAND IDENTITY — fonts (role each), full color palette as CSS-variable-style roles with hexes.
 3. LAYOUT & SECTIONS (top to bottom) — every section numbered, each with: composition decided, the REAL copy written out, which words carry accents, what imagery goes where (only real provided images or clearly-labeled slots).
-4. INTERACTIONS & ANIMATIONS — the definitive list.
+4. INTERACTIONS & ANIMATIONS — the definitive list, honoring the INTERACTION GRAMMAR: with 5+ portfolio pieces the gallery opens each piece larger on click (a lightbox with the piece's title; closes on backdrop, button, and Escape) and filters actually filter with a worded empty state; the contact form confirms in words after submit; every clickable answers hover and keyboard focus; scroll reveals are scroll-position driven so fast scrolling can never skip a section.
 5. DESIGN RULES (do / don't) — the taste laws for THIS page, including every learned ban from the judge's notes.
 
 TRUTH LAW (absolute): every fact, price, service, testimonial, stat and claim in your spec must come from the DOSSIER below. Real or removed — if the dossier doesn't provide a number, do not invent one. Real portfolio images are listed; reference them by their given names/urls only.

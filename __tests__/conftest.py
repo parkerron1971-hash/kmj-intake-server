@@ -8,3 +8,7 @@ import os
 # the env). Tests that exercise the switch itself re-enable it via
 # mock.patch.dict.
 os.environ.setdefault("CANVAS_VISION_LOOP", "off")
+
+# Same rule for builder v2's vision loop (the eyes): screenshots + a
+# vision call belong to real builds, never to unit tests.
+os.environ.setdefault("SITE_V2_VISION_LOOP", "off")
