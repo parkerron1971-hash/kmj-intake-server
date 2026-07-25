@@ -60,6 +60,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Optional, Tuple
 
+import llm_call
+
 logger = logging.getLogger("model_ladder")
 
 # The ladder's one rung down. Sonnet 4.5 (dated full ID): accepts
@@ -262,12 +264,13 @@ def probe_models_once(models: Iterable[Optional[str]]) -> None:
 
     def _run() -> None:
         try:
-            from anthropic import Anthropic
+            # The SDK import now happens inside llm_call.sdk_client, which
+            # keeps it just as lazy as it was here.
             key = os.environ.get("ANTHROPIC_API_KEY")
             if not key:
                 logger.info("[model-probe] skipped: no ANTHROPIC_API_KEY")
                 return
-            client = Anthropic(api_key=key, timeout=10.0, max_retries=0)
+            client = llm_call.sdk_client(key=key, timeout=10.0, max_retries=0)
             for m in targets:
                 try:
                     # NO temperature — the slow families reject it.

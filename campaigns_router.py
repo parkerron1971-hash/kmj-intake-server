@@ -30,6 +30,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+import llm_call
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -40,7 +42,6 @@ logger = logging.getLogger("campaigns")
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 DRAFT_MODEL = os.environ.get("CAMPAIGN_DRAFT_MODEL", "claude-sonnet-5")
 HTTP_TIMEOUT = 60.0
@@ -218,13 +219,10 @@ async def _draft_campaign_with_chief(business: Dict[str, Any], goal: str,
     )
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            resp = await client.post(ANTHROPIC_API_URL, headers={
-                "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION,
-                "content-type": "application/json",
-            }, json={
+            resp = await llm_call.apost(client, {
                 "model": DRAFT_MODEL, "max_tokens": 1500, "system": system,
                 "messages": [{"role": "user", "content": user_msg}],
-            })
+            }, key=key)
         if resp.status_code >= 400:
             logger.warning(f"campaign draft model error {resp.status_code}")
             return fallback

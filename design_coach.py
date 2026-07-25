@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import json
+import llm_call
 import logging
 import os
 import re
@@ -335,7 +336,7 @@ def run_turn(business_id: str,
         key = os.environ.get("ANTHROPIC_API_KEY")
         if not key:
             return {"error": "coach unavailable (no key)"}
-        client = Anthropic(api_key=key, timeout=120.0, max_retries=1)
+        client = llm_call.sdk_client(key=key, timeout=120.0, max_retries=1)
         turn_msgs = build_turn_prompt(business_id, messages)
 
         def _do(model: str, max_tokens: int, timeout: float):

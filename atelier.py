@@ -30,6 +30,7 @@ full compose — inside the compose background job's budget.
 from __future__ import annotations
 
 import json
+import llm_call
 import logging
 import os
 import re
@@ -212,7 +213,7 @@ def _model() -> str:
 def _client():
     from anthropic import Anthropic
     key = os.environ.get("ANTHROPIC_API_KEY")
-    return (Anthropic(api_key=key, timeout=_CALL_TIMEOUT_S, max_retries=1)
+    return (llm_call.sdk_client(key=key, timeout=_CALL_TIMEOUT_S, max_retries=1)
             if key else None)
 
 

@@ -36,12 +36,12 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+import llm_call
+
 import chief_models
 
 logger = logging.getLogger("design_intent")
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_VERSION = "2023-06-01"
 
 # The safe output primitives — 1:1 with what the renderer can build
 # (smart_sites.VIBE_FAMILIES / brand_dna intensity ladder).
@@ -147,15 +147,12 @@ def interpret(descriptors: Any, business_type: Optional[str] = None) -> Optional
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     model = chief_models.model_for("background")
     try:
-        resp = httpx.post(ANTHROPIC_API_URL, headers={
-            "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION,
-            "content-type": "application/json",
-        }, json={
+        resp = llm_call.post({
             "model": model, "max_tokens": 250,
             "system": _SYSTEM,
             "messages": [{"role": "user",
                           "content": _build_user_msg(words, business_type)}],
-        }, timeout=httpx.Timeout(connect=8.0, read=30.0, write=15.0, pool=8.0))
+        }, timeout=httpx.Timeout(connect=8.0, read=30.0, write=15.0, pool=8.0), key=key)
     except httpx.HTTPError as e:
         logger.info(f"[design_intent] call failed: {e}")
         return None

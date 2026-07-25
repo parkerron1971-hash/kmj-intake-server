@@ -32,6 +32,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+import llm_call
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -39,8 +41,6 @@ from pydantic import BaseModel
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_VERSION = "2023-06-01"
 BRIEFING_MODEL = "claude-sonnet-4-5-20250929"
 INSIGHTS_MODEL = "claude-sonnet-4-5-20250929"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)
@@ -100,12 +100,10 @@ async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str,
     key = _anthropic_key()
     if not key:
         return ""
-    resp = await client.post(ANTHROPIC_API_URL, headers={
-        "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json",
-    }, json={
+    resp = await llm_call.apost(client, {
         "model": model, "max_tokens": max_tokens, "system": system,
         "messages": [{"role": "user", "content": user_msg}],
-    }, timeout=HTTP_TIMEOUT)
+    }, timeout=HTTP_TIMEOUT, key=key)
     if resp.status_code >= 400:
         logger.warning(f"Claude error: {resp.status_code} {resp.text[:400]}")
         return ""

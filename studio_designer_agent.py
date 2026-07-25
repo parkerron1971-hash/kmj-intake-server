@@ -21,6 +21,8 @@ from typing import Optional, TypedDict
 
 import httpx
 
+import llm_call
+
 from studio_strands import STYLE_STRANDS, STRAND_IDS, get_strand
 from studio_substrands import SUB_STRANDS, SUBSTRAND_IDS, get_substrands_for_parent
 from studio_design_constants import (
@@ -32,7 +34,6 @@ from studio_data import VOCABULARIES
 
 
 CLAUDE_MODEL = "claude-opus-4-7"
-ANTHROPIC_API_BASE = "https://api.anthropic.com/v1/messages"
 
 
 class DesignAlternative(TypedDict, total=False):
@@ -382,20 +383,21 @@ def _call_claude(prompt: str, max_tokens: int = 2500, timeout: float = 60.0) -> 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
-    response = httpx.post(
-        ANTHROPIC_API_BASE,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json; charset=utf-8",
-            "Accept-Charset": "utf-8",
-        },
+    response = llm_call.post(
+        # Serialized here on purpose: ensure_ascii=False + explicit UTF-8
+        # bytes and charset headers. Passing `content` keeps that exact
+        # encoding path instead of letting httpx re-serialize.
         content=json.dumps({
             "model": CLAUDE_MODEL,
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
         }, ensure_ascii=False).encode("utf-8"),
         timeout=timeout,
+        key=api_key,
+        extra_headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept-Charset": "utf-8",
+        },
     )
     response.raise_for_status()
     response.encoding = "utf-8"

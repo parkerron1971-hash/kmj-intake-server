@@ -46,6 +46,7 @@
 from __future__ import annotations
 
 import json
+import llm_call
 import logging
 import os
 import re
@@ -576,7 +577,7 @@ def inspect_with_eyes(doc: str, spec_text: str,
                 "data": base64.b64encode(shot).decode()}})
         content.append({"type": "text",
                         "text": "Inspect per the checklist. JSON only."})
-        client = Anthropic(api_key=key, timeout=180.0, max_retries=1)
+        client = llm_call.sdk_client(key=key, timeout=180.0, max_retries=1)
 
         def _do(model: str, max_tokens: int, timeout: float):
             return client.messages.create(
@@ -622,7 +623,7 @@ def _call(system: str, user: str, business_id: str) -> Optional[str]:
         # shipped a SQUEEZED page ("headline feels compressed"). Give
         # the first attempt real room — a slow masterpiece beats a fast
         # miniature.
-        client = Anthropic(api_key=key, timeout=900.0, max_retries=1)
+        client = llm_call.sdk_client(key=key, timeout=900.0, max_retries=1)
 
         def _do(model: str, max_tokens: int, timeout: float):
             return client.messages.create(

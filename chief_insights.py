@@ -49,14 +49,14 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+import llm_call
+
 import sb_clients
 import chief_models
 from api_usage_logger import log_api_usage_sync
 
 logger = logging.getLogger("chief_insights")
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_VERSION = "2023-06-01"
 
 WINDOW_DAYS = 84            # 12 weeks of history feeds each analysis
 CADENCE_DAYS = 6.5          # re-run once this much time has passed
@@ -212,14 +212,11 @@ def _synthesize(biz: Dict[str, Any], digest: Dict[str, Any],
     )
 
     try:
-        resp = httpx.post(ANTHROPIC_API_URL, headers={
-            "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION,
-            "content-type": "application/json",
-        }, json={
+        resp = llm_call.post({
             "model": model, "max_tokens": 1000,
             "system": _SYSTEM.replace("{max_n}", str(MAX_INSIGHTS)),
             "messages": [{"role": "user", "content": user_msg}],
-        }, timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0))
+        }, timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0), key=key)
     except httpx.HTTPError as e:
         logger.warning(f"[insights] LLM call failed: {e}")
         log_api_usage_sync(endpoint="/chief/insights", model=model,

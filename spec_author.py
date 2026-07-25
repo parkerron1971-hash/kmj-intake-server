@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import json
+import llm_call
 import logging
 import os
 import re
@@ -365,7 +366,7 @@ def _call_llm(system: str, user: str, business_id: str,
         if not key:
             logger.warning("[spec] no ANTHROPIC_API_KEY — author unavailable")
             return None
-        client = Anthropic(api_key=key, timeout=120.0, max_retries=1)
+        client = llm_call.sdk_client(key=key, timeout=120.0, max_retries=1)
 
         # THE ARCHAEOLOGY: the owner's real pieces ride the call as
         # url-source image blocks so the Director designs from what it

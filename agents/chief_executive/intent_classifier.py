@@ -19,6 +19,7 @@ Public API:
 from __future__ import annotations
 
 import json
+import llm_call  # noqa: E402
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -272,7 +273,7 @@ def classify_intent(
     )
 
     try:
-        client = Anthropic(api_key=api_key)
+        client = llm_call.sdk_client(key=api_key)
         msg = client.messages.create(
             model=CLASSIFIER_MODEL,
             max_tokens=CLASSIFIER_MAX_TOKENS,

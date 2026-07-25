@@ -77,6 +77,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+import llm_call
 from fastapi import APIRouter, HTTPException, Request, Depends
 from auth_supabase import require_user, AuthedUser
 from pydantic import BaseModel, Field
@@ -89,7 +91,6 @@ from api_usage_logger import log_api_usage
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 
 # Server-owned model selection. Change here, no client redeploy needed.
@@ -311,11 +312,8 @@ async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depen
     started_ms = int(time.time() * 1000)
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            resp = await client.post(
-                ANTHROPIC_API_URL,
-                headers=headers,
-                json=anthropic_payload,
-            )
+            resp = await llm_call.apost(client, anthropic_payload,
+                                        extra_headers=headers, key=api_key)
     except httpx.TimeoutException as e:
         logger.error(f"Anthropic request timed out: {e}")
         # Log the failed call so we still see it in api_usage

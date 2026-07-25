@@ -23,11 +23,11 @@ Ruled forks honored:
 from __future__ import annotations
 
 import json
+import llm_call
 import logging
 import os
 from typing import Any, Dict, List, Literal, Optional
 
-from anthropic import Anthropic
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 import sb_clients
@@ -865,7 +865,7 @@ def generate_module_proposal(
         user += ("\n\nAdditional practitioner guidance (use to revise the design "
                  "and update decomposition_reasoning):\n" + extra_guidance.strip())
     try:
-        client = Anthropic(api_key=api_key)
+        client = llm_call.sdk_client(key=api_key)
         msg = client.messages.create(
             model=GENERATOR_MODEL,
             max_tokens=GENERATOR_MAX_TOKENS,

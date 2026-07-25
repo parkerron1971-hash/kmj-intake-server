@@ -13,6 +13,8 @@ from typing import Optional
 
 import httpx
 
+import llm_call
+
 from studio_data import VOCABULARIES, LAYOUTS
 from studio_decoration_scheme import validate_decoration_scheme
 
@@ -20,7 +22,6 @@ from studio_decoration_scheme import validate_decoration_scheme
 CLAUDE_MODEL = "claude-opus-4-7"
 GPT_MODEL = "gpt-5.4"
 
-ANTHROPIC_API_BASE = "https://api.anthropic.com/v1/messages"
 OPENAI_API_BASE = "https://api.openai.com/v1/chat/completions"
 
 
@@ -398,20 +399,20 @@ def call_claude(prompt, max_tokens=2500):
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
 
-    response = httpx.post(
-        ANTHROPIC_API_BASE,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json; charset=utf-8",
-            "Accept-Charset": "utf-8",
-        },
+    response = llm_call.post(
+        # ensure_ascii=False + explicit UTF-8 bytes and charset headers —
+        # `content` preserves that encoding path exactly.
         content=json.dumps({
             "model": CLAUDE_MODEL,
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
         }, ensure_ascii=False).encode("utf-8"),
         timeout=60,
+        key=api_key,
+        extra_headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept-Charset": "utf-8",
+        },
     )
     response.raise_for_status()
     response.encoding = "utf-8"

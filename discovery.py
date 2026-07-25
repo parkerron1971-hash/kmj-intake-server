@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import json
+import llm_call
 import logging
 import os
 from datetime import datetime, timezone
@@ -299,7 +300,7 @@ def study_reference(business_id: str, url: str, verdict: str,
                                     f"{verdict.upper()}"
                                     + (f' ("{why}")' if why else "")
                                     + ". Extract per the contract. JSON only."})
-            client = Anthropic(api_key=key, timeout=90.0, max_retries=1)
+            client = llm_call.sdk_client(key=key, timeout=90.0, max_retries=1)
 
             def _do(model: str, max_tokens: int, timeout: float):
                 return client.messages.create(
@@ -458,7 +459,7 @@ def derive_taste(business_id: str) -> Optional[Dict[str, Any]]:
                                     "love/hate):\n"
                                     + json.dumps(ref_readings)[:3000]})
         content.append({"type": "text", "text": "Synthesize. JSON only."})
-        client = Anthropic(api_key=key, timeout=90.0, max_retries=1)
+        client = llm_call.sdk_client(key=key, timeout=90.0, max_retries=1)
 
         def _do(model: str, max_tokens: int, timeout: float):
             return client.messages.create(
