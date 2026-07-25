@@ -2207,9 +2207,20 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         # select dead. Inject the platform bridge here when the document
         # doesn't already carry one. Inert on the public site (the
         # script exits unless framed with ?studio=).
-        if "studio-select" not in html and "</body>" in html:
+        # BRIDGE UPGRADE (2026-07-25): the bridge is BAKED at persist,
+        # so a page carrying an older generation would never gain new
+        # powers — the "studio-select present → skip" check froze
+        # Kevin's page on the select-only script and Edit Mode looked
+        # dead. Detect the CURRENT generation instead, strip any older
+        # bridge first (both generations share the same opening
+        # signature), then inject fresh. Idempotent.
+        if "studio-edit-mode" not in html and "</body>" in html:
             try:
                 from site_modules._base import STUDIO_BRIDGE as _sx_bridge
+                html = re.sub(
+                    r"<script>\(function \(\) \{\s*"
+                    r"if \(window\.parent === window\) return;.*?</script>",
+                    "", html, flags=re.DOTALL)
                 html = html.replace("</body>", _sx_bridge + "\n</body>", 1)
             except Exception as _sb_e:
                 logger.warning(f"[composer] studio bridge injection "
