@@ -1123,13 +1123,19 @@ def _create_appointment(
     business_id: str,
     module_id: str,
     data: Dict[str, Any],
+    created_by: str = "booking_widget",
 ) -> Optional[Dict[str, Any]]:
+    """`created_by` defaults to the widget so every existing caller is
+    unchanged. chief_booking_actions passes "chief_of_staff" so a booking the
+    practitioner made through Chief is distinguishable from one a customer
+    made themselves — they are different events for reporting and for the
+    confirmation-email decision."""
     created = sb_clients.sb_post_as_service("/module_entries", {
         "business_id": business_id,
         "module_id": module_id,
         "data": data,
         "status": "active",
-        "created_by": "booking_widget",
+        "created_by": created_by,
     })
     if isinstance(created, list) and created:
         # One calendar — mirror immediately so the booking hits the

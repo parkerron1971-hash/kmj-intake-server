@@ -64,6 +64,19 @@ import brand_engine
 from brand_engine import chief_context_block as brand_engine_chief_context_block
 import voice_depth_agent
 from voice_depth_agent import chief_voice_context_block as voice_chief_context_block
+# P0.1 — booking verbs, kept in their own module (chief_bookkeeping pattern).
+from chief_booking_actions import (
+    handle_cancel_booking,
+    handle_create_booking,
+    handle_reschedule_booking,
+)
+# P0.2 — bookkeeping verbs over the existing chief_bookkeeping engine.
+from chief_bookkeeping_actions import (
+    handle_approve_bookkeeping_proposal,
+    handle_list_bookkeeping_proposals,
+    handle_reject_bookkeeping_proposal,
+    handle_review_books,
+)
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -10166,6 +10179,18 @@ ACTION_HANDLERS = {
     # Arc 28 — behavior-profile readiness report
     "offering_readiness":         handle_offering_readiness,
     # Phase D.1.2 — availability CRUD
+    # P0.1 — the booking verbs. Chief could configure the calendar but not
+    # write to it; these reuse the widget's booking path (see
+    # chief_booking_actions module docstring).
+    "create_booking":             handle_create_booking,
+    "reschedule_booking":         handle_reschedule_booking,
+    "cancel_booking":             handle_cancel_booking,
+    # P0.2 — bookkeeping was reachable only through its own router; these make
+    # the existing proposal engine conversational.
+    "review_books":                    handle_review_books,
+    "list_bookkeeping_proposals":      handle_list_bookkeeping_proposals,
+    "approve_bookkeeping_proposal":    handle_approve_bookkeeping_proposal,
+    "reject_bookkeeping_proposal":     handle_reject_bookkeeping_proposal,
     "set_availability_day":       handle_set_availability_day,
     "set_availability_override":  handle_set_availability_override,
     "add_block_range":            handle_add_block_range,
@@ -12583,6 +12608,28 @@ ACTIONS — BUILDER BRIDGE (your direct line to the system's developer):
     — Use when the practitioner says "queue a build", "send this to the developer / to Claude Code", or asks for a feature or fix the system can't do yet. YOU write the complete brief from the conversation — what, where it lives, why it matters, constraints, and what done looks like — they just talk.
     — Optional "repo": "frontend" (the app UI — default) or "backend" (Chief, sites, bookings, SMS, billing machinery). Choose by where the change lives.
     — What happens depends on who's asking, and the action RESULT tells you which occurred: for the PLATFORM OWNER it is dispatched to the builder (Claude Code opens a pull request); for every other practitioner it is filed as a feature request the team reviews. Mirror the result's language exactly — never mention the builder, GitHub, or Claude Code to a practitioner whose result says "feature request", and never promise a delivery date to anyone.
+
+ACTIONS — BOOKKEEPING (the books, from the conversation):
+  [ACTION:{{"type":"review_books"}}]  — run the checks and report what's outstanding. Optional "scope": "unmatched" | "uncategorized" | "period_close" | "gl" (default: all).
+  [ACTION:{{"type":"list_bookkeeping_proposals"}}]  — what's waiting on the practitioner. Optional "status" (default "pending").
+  [ACTION:{{"type":"approve_bookkeeping_proposal","proposal_id":"<uuid>"}}]  — apply ONE proposal.
+  [ACTION:{{"type":"reject_bookkeeping_proposal","proposal_id":"<uuid>","reason":"that's a personal expense","override":{{"business_category":"personal"}}}}]
+    — Show before you apply. list first, name what each one does, then approve the specific one they pick.
+    — There is NO bulk approve, by design. These are financial records; one at a time, each named.
+    — When the practitioner says what it SHOULD have been, pass "override" AND "reason" — that trains the next proposal. A bare rejection teaches nothing.
+    — Omitting proposal_id works ONLY when exactly one is pending; otherwise the action asks which.
+
+ACTIONS — BOOKINGS (putting real appointments on the calendar):
+  [ACTION:{{"type":"create_booking","customer_name":"Maria Lopez","offering_name":"Color + Cut","appointment_at":"2026-08-04T14:00:00Z"}}]
+  [ACTION:{{"type":"create_booking","contact_id":"<uuid>","offering_id":"<uuid>","appointment_at":"2026-08-04T14:00:00Z","notes":"wants the corner chair"}}]
+  [ACTION:{{"type":"reschedule_booking","contact_name":"Maria","new_appointment_at":"2026-08-06T16:00:00Z"}}]
+  [ACTION:{{"type":"cancel_booking","contact_name":"Maria","reason":"client is travelling"}}]
+    — This is how you BOOK someone, not how you set hours (that's BOOKING SETUP below).
+    — Name the offering OR give offering_id. If the business has exactly one active offering you may omit it. If the name is ambiguous the action returns the candidates — ask, don't guess.
+    — Give contact_id when you have it; otherwise contact_name is matched against existing contacts, and customer_name alone is fine for a walk-in.
+    — The slot is re-checked before writing. If the time is taken the action FAILS and hands you free alternatives — offer those, never book over someone.
+    — create_booking emails the customer a confirmation when an email is known. Pass "send_confirmation": false when the practitioner says not to.
+    — reschedule_booking / cancel_booking find the booking by booking_id, or by client name (the next upcoming one). Cancelling frees the slot immediately.
 
 ACTIONS — BOOKING SETUP (availability — the hours the booking widget offers):
   [ACTION:{{"type":"set_availability_day","day":"monday","hours":[["09:00","17:00"]]}}]  — set a day's open hours (24h clock, list of ranges; empty list = closed).
