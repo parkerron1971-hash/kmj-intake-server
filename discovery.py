@@ -53,6 +53,10 @@ def _empty_dossier() -> Dict[str, Any]:
         "world": {},
         "story": {},
         "signature": {},
+        # THE WIRED-SITE CONTRACT (2026-07-26): which working doors the
+        # site carries — booking, store. Owner's decision over system
+        # truth; leaves like {booking: {value: "on", source: "asked"}}.
+        "capabilities": {},
         "truth": {"proven_stats": [], "colors_must": [], "colors_avoid": []},
         "vertical": {"type": None, "answers": {}},
         "gaps": [],
@@ -356,7 +360,7 @@ def apply_practitioner_patch(existing: Dict[str, Any],
                 and str(v.get("source")) in _PRACTITIONER_SOURCES)
 
     for section in ("identity", "taste", "world", "story", "signature",
-                    "meta"):
+                    "capabilities", "meta"):
         for k, v in (patch.get(section) or {}).items():
             if _valid_leaf(v):
                 out.setdefault(section, {})[k] = v
@@ -513,7 +517,7 @@ def dossier_digest(dossier: Optional[Dict[str, Any]]) -> str:
         return ""
     slim = {k: v for k, v in dossier.items()
             if k in ("artifacts", "identity", "taste", "truth",
-                     "world", "story", "signature",
+                     "world", "story", "signature", "capabilities",
                      "vertical", "gaps", "confirmed_brief") and v}
     refs = ((slim.get("artifacts") or {}).get("references")) or []
     if not any((slim.get(k)) for k in

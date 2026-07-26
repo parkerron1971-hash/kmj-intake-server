@@ -68,7 +68,7 @@ THE TERRITORY (walk it naturally; skip what's already known; follow heat when th
 2. story — origin (how it started), craft (what nobody guesses it takes), proof (proudest win), voice (what customers say walking away), atmosphere (the place it feels like).
 3. taste — reactions, not vocabulary: this-or-that pairs (use the "pair" field), the one site/brand they admire and WHY in their words, what they'd never want ("cringe" answers — save these as bans).
 4. signature — "if a visitor screenshots ONE moment on your page, what is it?" Push until it's concrete.
-5. truth — real numbers they're proud of (years, clients, reviews) WITH where each comes from; the one action a visitor should take.
+5. truth — real numbers they're proud of (years, clients, reviews) WITH where each comes from; the one action a visitor should take. THE WORKING DOORS belong here too: when KNOWN CONTEXT lists CONNECTED SYSTEMS (booking, store), confirm each in ONE question pre-filled from that truth ("Booking is live with your services. Should the site carry a Book button front and center?") and save the answer. Never ask about a door the context doesn't list, and never re-explain what a door is — they built it.
 6. brief — when the territory is covered (or they're done), reflect the whole session back as a short vivid summary they can confirm.
 
 NEVER RE-ASK what the KNOWN CONTEXT below already contains — reference it instead ("I know you work with coaches and barbers — who's the one client you'd clone?"). If the context shows brand colors or images, react to them like a director would.
@@ -81,6 +81,7 @@ Every turn, extract anything learned into "saves". Use these dossier sections/fi
 - taste: each answered pair saved as its OWN field (field is one of ground/density/carrier/edges/era/tone/motion, value is the chosen word); plus admired (what and why, one string) and bans (the cringe answers, one string or list)
 - signature: moment (their words), sharpened (your one-line phrasing of it)
 - truth: proven_stats (value is a list of {label, value, proof} objects)
+- capabilities: booking, store (value "on" or "off" — the owner's answer to whether the SITE carries that door)
 Save the practitioner's OWN PHRASING in values — verbatim quotes are design material. Only save what THIS turn established. Empty saves list is fine.
 
 OUTPUT — STRICT JSON, nothing else:
@@ -142,6 +143,26 @@ def _known_context(business_id: str) -> str:
                          "never re-ask):\n" + digest[:2400])
     except Exception as e:
         logger.info(f"[coach] dossier context skipped: {e}")
+    # THE WIRED-SITE CONTRACT (2026-07-26): mirror the platform's truth
+    # about which doors are actually live, so the coach CONFIRMS the
+    # site connections instead of asking blind — and never offers a
+    # door the platform doesn't have.
+    try:
+        import offering_profiles
+        state = offering_profiles.business_state(business_id)
+        doors: List[str] = []
+        if state.get("booking_enabled") and state.get("booking_url"):
+            doors.append("BOOKING is LIVE — customers can book at "
+                         + state["booking_url"])
+        if state.get("store_url"):
+            doors.append("STORE page exists at " + state["store_url"])
+        if doors:
+            parts.append("CONNECTED SYSTEMS (the platform's truth — "
+                         "confirm which of these the SITE should carry; "
+                         "never offer a door not listed here):\n"
+                         + "\n".join("- " + s for s in doors))
+    except Exception as e:
+        logger.info(f"[coach] connected-systems context skipped: {e}")
     return "\n\n".join(parts) or "(nothing known yet — a fresh start)"
 
 
@@ -190,7 +211,13 @@ def build_turn_prompt(business_id: str,
 
 _FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$", re.MULTILINE)
 _ALLOWED_SECTIONS = {"identity", "world", "story", "taste", "signature",
-                     "truth"}
+                     "truth", "capabilities"}
+
+# capabilities saves are a contract, not prose: value normalizes to
+# on/off; anything unrecognizable is dropped rather than guessed.
+_CAPABILITY_FIELDS = {"booking", "store"}
+_CAP_ON = {"on", "yes", "true", "1"}
+_CAP_OFF = {"off", "no", "false", "0"}
 
 
 def parse_turn(raw: str) -> Optional[Dict[str, Any]]:
@@ -238,8 +265,20 @@ def parse_turn(raw: str) -> Optional[Dict[str, Any]]:
             continue
         sec = str(s.get("section") or "").strip()
         fld = str(s.get("field") or "").strip()
-        if sec in _ALLOWED_SECTIONS and fld and s.get("value") not in (None, ""):
-            clean.append({"section": sec, "field": fld, "value": s["value"]})
+        if sec not in _ALLOWED_SECTIONS or not fld \
+                or s.get("value") in (None, ""):
+            continue
+        if sec == "capabilities":
+            word = str(s["value"]).strip().lower()
+            if fld not in _CAPABILITY_FIELDS:
+                continue
+            if word in _CAP_ON:
+                s = {"section": sec, "field": fld, "value": "on"}
+            elif word in _CAP_OFF:
+                s = {"section": sec, "field": fld, "value": "off"}
+            else:
+                continue
+        clean.append({"section": sec, "field": fld, "value": s["value"]})
     out["saves"] = clean[:10]
     return out
 

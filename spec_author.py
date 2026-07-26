@@ -131,6 +131,7 @@ Every real asset in the dossier gets a home on the page. Omitting real material 
 - The owner's PORTRAIT appears if provided (about section).
 - Every real testimonial/quote appears.
 - A CONTACT section with a working inquiry form and every real contact channel. Always.
+- THE CONNECTED DOORS: when the dossier's capabilities (or the data's CONNECTED SYSTEMS block) mark a door on — booking, store — the page carries it as a first-class action: in the nav AND as a devoted moment (the Book flow, the shop section), wired to the exact url the data provides. A working system the site never mentions is a coverage violation; a door the data doesn't list must never be invented.
 - A FOOTER. Always.
 - Real stats/proof points if provided (never invented — mark a confirm-then-publish placeholder only when the owner has signaled a number exists).
 
