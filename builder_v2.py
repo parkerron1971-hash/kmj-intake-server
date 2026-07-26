@@ -128,7 +128,8 @@ HARD RULES (a validator checks each; violations cost a repair round):
 11b. ART-DIRECTED DROP SLOTS: when the composition WANTS an image the inventory doesn't have (a hero portrait, a third gallery piece), author a placeholder the owner can fill: <div class="sx-drop" data-sx-slot="short_name">…</div> containing ONE line of shot direction in plain words ("You at the chair, mid-cut, warm light" — you are telling them what to photograph). Style: a dashed 1px frame in the accent color at low opacity, the design's crop and position already decided, so a dropped-in photo inherits your intention. Your CSS MUST include `.sx-drop{display:none}` and `body.sx-studio .sx-drop{display:flex;…}` — the public page never shows an empty frame; the owner's Studio reveals them. Never fake an image, never leave a hole: real, or an art-directed drop slot.
 12. ALIGNMENT LAW: photographic subjects fill their frames (cover-fit, deliberate crop anchor); edges align to the type they sit beside; nothing floats small inside an oversized border.
 13. HEAD + SHARE: a real <title>, a meta description written from the data, and og:title / og:description / og:image (the strongest image url from the data) so a shared link looks intentional.
-14. FILLED SPACE: the hero's off-axis half holds a presence (real work in the light, a ghost word, the signature motif) — never bare ground beside the headline. Gaps between sections carry the page's connective architecture; no featureless band taller than half a viewport. Execution notes: staggered cascades via transition-delay stepped by item index on the same scroll-driven reveal class; sequential fills (steps, thread stations) keyed to scroll position; ghost type is aria-hidden and never traps selection; a marquee is CSS-only, slow, and frozen under prefers-reduced-motion; a cursor-following glow is desktop-only, subtle, transform-based.
+14. CONNECTED DOORS: the data's CONNECTED SYSTEMS block lists working doors the owner turned on (booking, store) with their exact urls — each appears on the page as a REAL link twice over: in the navigation, and as a devoted moment styled to the spec (a Book action, a shop section). Use the exact url given. Never invent a door the block doesn't carry; never render a dead placeholder for one it does.
+15. FILLED SPACE: the hero's off-axis half holds a presence (real work in the light, a ghost word, the signature motif) — never bare ground beside the headline. Gaps between sections carry the page's connective architecture; no featureless band taller than half a viewport. Execution notes: staggered cascades via transition-delay stepped by item index on the same scroll-driven reveal class; sequential fills (steps, thread stations) keyed to scroll position; ghost type is aria-hidden and never traps selection; a marquee is CSS-only, slow, and frozen under prefers-reduced-motion; a cursor-following glow is desktop-only, subtle, transform-based.
 
 CRAFT FLOOR: generous, complete pages beat austere concepts; restraint disciplines color and motion, never content. Light the stage (glow, texture, gradient depth) — never a flat rectangle. One signature moment, executed exactly as the spec draws it. POLISH: a themed ::selection color, :focus-visible states, honest alt text on every image, aspect-ratio reserved on media so nothing jumps while loading, loading="lazy" below the fold.
 
@@ -227,7 +228,82 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
                          + digest)
     except Exception:
         pass
+    block = connected_systems_block(business_id, ctx)
+    if block:
+        parts.append(block)
     return "\n\n".join(parts)
+
+
+_CONNECTED_LINE_RE = re.compile(
+    r"^- (BOOKING|STORE): ON — .*?(https://\S+)", re.MULTILINE)
+
+
+def connected_systems_block(business_id: str,
+                            ctx: Optional[Dict[str, Any]] = None) -> str:
+    """THE WIRED-SITE CONTRACT: the working doors the page MUST carry.
+    A door is ON when the platform has it live AND the owner hasn't
+    turned it off in the dossier (silence defaults to wired — a working
+    system unreachable from the site is the dead-weight rule violated
+    at platform scale). Format is law: check_connected parses these
+    exact lines."""
+    try:
+        import offering_profiles
+        state = offering_profiles.business_state(business_id)
+    except Exception as e:
+        logger.info(f"[v2] connected-systems probe skipped: {e}")
+        return ""
+    caps: Dict[str, Any] = {}
+    try:
+        dd = ((((ctx or {}).get("site") or {}).get("site_config") or {})
+              .get("discovery_dossier")) or {}
+        caps = dd.get("capabilities") or {}
+    except Exception:
+        caps = {}
+
+    def _off(name: str) -> bool:
+        leaf = caps.get(name)
+        return isinstance(leaf, dict) and \
+            str(leaf.get("value")).strip().lower() == "off"
+
+    lines: List[str] = []
+    if state.get("booking_enabled") and state.get("booking_url") \
+            and not _off("booking"):
+        lines.append(f"- BOOKING: ON — every book/schedule action links "
+                     f"to {state['booking_url']}")
+    if state.get("store_url") and not _off("store") \
+            and _store_has_products(ctx):
+        lines.append(f"- STORE: ON — the shop moment links to "
+                     f"{state['store_url']}")
+    if not lines:
+        return ""
+    return ("CONNECTED SYSTEMS (working doors the owner turned on — "
+            "each url below MUST appear on the page as a real link; "
+            "never invent a door not listed here):\n" + "\n".join(lines))
+
+
+def _store_has_products(ctx: Optional[Dict[str, Any]]) -> bool:
+    """A store door only counts when something is actually in it — an
+    empty shop page linked from the site is its own dead end."""
+    try:
+        import atelier
+        data = atelier._section_data("store", {}, ctx or {})
+        return bool(data)
+    except Exception:
+        return False
+
+
+def check_connected(html: str, real_data: str) -> List[str]:
+    """Deterministic contract check: every ON door's url appears in the
+    document. A missing door costs a repair round, exactly like a
+    missing image (the coverage law's sibling)."""
+    problems: List[str] = []
+    for name, url in _CONNECTED_LINE_RE.findall(real_data):
+        if url not in html:
+            problems.append(
+                f"CONNECTED DOOR MISSING: {name} is ON but its url "
+                f"({url}) appears nowhere on the page — add it as a "
+                "real link in the nav and as a devoted moment.")
+    return problems
 
 
 # ─── mechanical armor (deterministic, zero model calls) ─────────────
@@ -743,6 +819,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         # (silently shipping it is the 2026-07-25 blank-sections bug).
         return (check_truth(d, real_data) + check_coverage(d, real_data)
                 + check_grammar(d) + check_head(d) + check_interactions(d)
+                + check_connected(d, real_data)
                 + armor_violations(
                     report["mechanical"].get("scripts_dropped") or [],
                     endpoint))

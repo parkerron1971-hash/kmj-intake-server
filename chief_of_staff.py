@@ -7815,11 +7815,36 @@ async def handle_create_offering(client, biz, action) -> Dict:
     # reply tells the practitioner where the thing actually went.
     store_str = (" — live in your store" if category in ("product", "course", "package")
                  and off.get("current_price") else "")
+    # THE WIRED-SITE CONTRACT (2026-07-26): a bookable offering's reply
+    # states the SITE truth — where booking already lives, and how to
+    # put the door on the website when the site plan doesn't carry it.
+    site_note = ""
+    if category in ("service", "session"):
+        try:
+            import offering_profiles
+            state = await asyncio.to_thread(
+                offering_profiles.business_state, str(biz["id"]))
+            if state.get("booking_enabled") and state.get("booking_url"):
+                site_note = f" — bookable at {state['booking_url']}"
+                sites = await _sb(client, "GET",
+                    f"/business_sites?business_id=eq.{biz['id']}"
+                    "&select=site_config&limit=1")
+                caps = ((((sites[0].get("site_config") or {})
+                          .get("discovery_dossier") or {})
+                         .get("capabilities") or {}) if sites else {})
+                leaf = caps.get("booking") or {}
+                if str(leaf.get("value")).strip().lower() != "on":
+                    site_note += (". Your website doesn't carry a Book "
+                                  "button yet — say 'wire booking into "
+                                  "my site' and I'll add it to the site "
+                                  "plan.")
+        except Exception as e:
+            logger.info(f"[create_offering] site-door note skipped: {e}")
     _refresh_composed_site_bg(biz["id"])
     return {
         "type": "create_offering",
         "result": "created",
-        "label": f"💲 Created offering: {off.get('name')}{price_str}{dur_str}{store_str}",
+        "label": f"💲 Created offering: {off.get('name')}{price_str}{dur_str}{store_str}{site_note}",
         "offering_id": off.get("id"),
         "nav": _nav("build"),
         # C.1.3.1b — refresh OfferingsManager + any other listener when
@@ -7927,6 +7952,56 @@ async def handle_update_offering(client, biz, action) -> Dict:
         # C.1.3.1b — see handle_create_offering note.
         "frontend_event": {"name": "solutionist-offerings-changed"},
     }
+
+
+async def handle_set_site_capability(client, biz, action) -> Dict:
+    """THE WIRED-SITE CONTRACT (2026-07-26) — record whether the website
+    carries a connected door (booking, store). Writes the capability
+    into the discovery dossier at 'asked' provenance (the owner said so
+    in chat — same rank as a coach answer); the builder's connected-
+    doors law then makes the next rebuild/refine carry it. action:
+    {capability: "booking"|"store", on: true|false}.
+
+    Trust-layer: the honesty gate refuses to wire a door the platform
+    doesn't actually have live, so the label can never promise a Book
+    button with no booking page behind it."""
+    cap = str(action.get("capability") or "").strip().lower()
+    if cap not in ("booking", "store"):
+        return _fail("set_site_capability",
+                     "capability must be 'booking' or 'store'")
+    on = action.get("on")
+    on = True if on is None else bool(on)
+    import offering_profiles
+    state = await asyncio.to_thread(
+        offering_profiles.business_state, str(biz["id"]))
+    if on and cap == "booking" and not (
+            state.get("booking_enabled") and state.get("booking_url")):
+        return _fail("set_site_capability",
+                     "booking isn't live yet — publish the booking page "
+                     "first (Build → Booking), then wire it into the site")
+    if on and cap == "store" and not state.get("store_url"):
+        return _fail("set_site_capability",
+                     "no store page exists yet — the business needs a "
+                     "published site slug first")
+    import discovery
+    patch = {"capabilities": {cap: {"value": "on" if on else "off",
+                                    "source": "asked"}}}
+    saved = await asyncio.to_thread(discovery.answer, str(biz["id"]), patch)
+    if saved is None:
+        return _fail("set_site_capability",
+                     "no site row to store the site plan on yet — "
+                     "create the site first")
+    if on:
+        url = (state.get("booking_url") if cap == "booking"
+               else state.get("store_url"))
+        label = (f"🔌 {cap.title()} is wired into the site plan ({url}). "
+                 "The next site pass must carry it — say 'refine my "
+                 "site' to apply it now.")
+    else:
+        label = (f"🔌 {cap.title()} removed from the site plan — the "
+                 "next site pass drops the door.")
+    return {"type": "set_site_capability", "result": "saved",
+            "label": label, "nav": _nav("build")}
 
 
 async def handle_offering_readiness(client, biz, action) -> Dict:
@@ -10177,6 +10252,8 @@ ACTION_HANDLERS = {
     "list_offerings":             handle_list_offerings,
     # Arc 27 — hosted storefront (configure / status)
     "setup_store":                handle_setup_store,
+    # THE WIRED-SITE CONTRACT — which doors the website carries
+    "set_site_capability":        handle_set_site_capability,
     # Arc 28 — behavior-profile readiness report
     "offering_readiness":         handle_offering_readiness,
     # Phase D.1.2 — availability CRUD
@@ -12814,6 +12891,7 @@ ACTIONS — OFFERINGS (Phase C.1.2 — canonical pricing for service-based arche
   [ACTION:{{"type":"list_offerings"}}]
   [ACTION:{{"type":"list_offerings","category":"service"}}]
     — `category` is a closed enum: service | session | event | course | product | package | custom. 'donation' is NOT a valid category — donations live in the restricted-modules surface.
+  [ACTION:{{"type":"set_site_capability","capability":"booking","on":true}}]  — THE WIRED-SITE CONTRACT: records whether the WEBSITE carries a connected door (capability: booking | store). Use when they say "put booking on my site", "wire booking into my website", "add a book button", "put my shop on the site", or answer yes to your wiring nudge. It saves the decision into the site plan; the label tells them a refine/rebuild applies it — after emitting it, offer the refine ("want me to refine the site now so the button appears?"). "on":false takes a door OFF the site plan. It does NOT create booking or the store — those must already be live (the action refuses otherwise, and the label says what to set up first).
     — ROUTING — OFFERINGS vs PRODUCTS (read carefully — they are SEPARATE catalogs):
        • OFFERINGS are the canonical pricing for archetype-referenced things — services a barber books, sessions a coach takes, courses a creator sells (when consumed by an archetype like booking_calendar). When the practitioner says "haircut", "session", "lesson", "massage", "appointment", "service" — DEFAULT to offerings.
        • OFFERINGS are ALSO the catalog behind the hosted STORE (see ACTIONS — STORE): physical goods, digital downloads, courses, and packages the practitioner SELLS go in offerings with category product/course/package. This is the DEFAULT for anything sellable.
