@@ -141,8 +141,11 @@ def test_reads_are_exposable_and_writes_are_not_by_default():
 
 def test_class_b_needs_a_granted_scope():
     """B is auto-eligible only WITH a scope; A without one. If a B verb ever
-    reads as eligible bare, the distinction has collapsed."""
+    reads as eligible bare, the distinction has collapsed. Bulk verbs are
+    excluded — they answer to the rule below instead."""
     for verb in reg.REGISTRY:
+        if reg.is_bulk(verb):
+            continue
         rev = reg.reversibility(verb)
         if rev == "A":
             assert reg.is_autonomy_eligible(verb), f"{verb}: class A is auto-eligible"
@@ -151,6 +154,33 @@ def test_class_b_needs_a_granted_scope():
                 f"{verb}: class B must NOT be autonomous without a granted scope")
             assert reg.is_autonomy_eligible(verb, granted_scope=True), (
                 f"{verb}: class B should be autonomous once scoped")
+
+
+def test_bulk_verbs_are_never_autonomous():
+    """A bulk verb acts on a whole filtered set at once. The reversibility of
+    one row says nothing about undoing forty, so bulk overrides class — even
+    class A, and even with a scope granted."""
+    bulk = [v for v in reg.REGISTRY if reg.is_bulk(v)]
+    assert bulk, "expected at least one bulk verb (bulk_approve, bulk_dismiss, batch_email)"
+    for verb in bulk:
+        assert not reg.is_autonomy_eligible(verb), f"{verb}: bulk must never be autonomous"
+        assert not reg.is_autonomy_eligible(verb, granted_scope=True), (
+            f"{verb}: no scope grant may make a bulk verb autonomous")
+
+
+def test_nothing_is_class_b_while_there_is_no_outbox():
+    """§2.4 defines B as a send with a recall window. This system has no
+    delayed-send outbox — every send is immediate — so nothing can honestly
+    be B yet, and the outbound verbs sit at C instead.
+
+    When an outbox ships, this test is the thing that should fail: that is
+    the moment to walk the C entries whose note says "becomes B with an
+    outbox" and move them. It is a reminder, not a prohibition."""
+    b_verbs = [v for v in reg.REGISTRY if reg.reversibility(v) == "B"]
+    assert not b_verbs, (
+        f"{b_verbs} are class B — has a delayed-send outbox shipped? If so, good: "
+        f"move every C entry noting 'becomes B with an outbox' and delete this test. "
+        f"If not, B grants autonomy against a safety net that does not exist.")
 
 
 # ── the invariant chief_action_reasoner only asks for in a comment ───

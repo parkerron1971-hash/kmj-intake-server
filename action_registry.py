@@ -46,13 +46,26 @@ THE TWO AXES
         posts, anything that leaves a compliance trail. PROPOSAL-ONLY,
         FOREVER. Not a tuning knob.
 
+WHAT CLASS C DOES AND DOES NOT MEAN
+  It does NOT mean Chief cannot do the thing. It means Chief will not do it
+  *unprompted*. A practitioner who says "send that invoice" has supplied the
+  approval; `is_autonomy_eligible` only governs acting without being asked.
+  So classing a verb C costs nothing on the explicit-request path and is the
+  cheap, safe answer whenever money or the outside world is involved.
+
+  Note the corollary for class B: §2.4 defines it as a send with a recall
+  window, and this system has no delayed-send outbox — every send is
+  immediate and final. So NOTHING is class B today. Each outbound verb below
+  records that it becomes B on the day an outbox exists. Inventing a B now
+  would hand out autonomy against a safety net that isn't there.
+
 DEFAULT-DENY IS WHAT MAKES A PARTIAL REGISTRY SAFE
-  80 of 128 verbs are still `UNCLASSIFIED` (S1.1 steps 3-4). Every accessor
-  below returns the *refusing* answer for a verb it does not know: not
-  exposable, not autonomy-eligible, reversibility None. So an unclassified
-  verb behaves exactly like a class-C one until somebody rules on it, and
-  this file is useful before it is complete. Never add a fallback that
-  guesses — an unknown verb must stay unknown.
+  127 of 128 verbs are classified; `setup_store` remains `UNCLASSIFIED`.
+  Every accessor below returns the *refusing* answer for a verb it does not
+  know: not exposable, not autonomy-eligible, reversibility None. So an
+  unclassified verb behaves exactly like a class-C one until somebody rules
+  on it. Never add a fallback that guesses — an unknown verb must stay
+  unknown.
 
 KEEPING IT HONEST
   `__tests__/test_action_registry.py` asserts the registry and
@@ -63,7 +76,7 @@ KEEPING IT HONEST
 """
 from __future__ import annotations
 
-from typing import Dict, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 # ── effect kinds ─────────────────────────────────────────────────────
 READ = "read"
@@ -82,15 +95,21 @@ def _ui(why: str) -> Dict[str, str]:
     return {"effect": UI, "why": why}
 
 
-def _w(rev: str, why: str) -> Dict[str, str]:
-    return {"effect": WRITE, "reversibility": rev, "why": why}
+def _w(rev: str, why: str, bulk: bool = False) -> Dict[str, Any]:
+    """A write. `bulk=True` marks a verb that acts on a whole set at once —
+    those are never autonomy-eligible whatever their class, because the
+    reversibility of one row says nothing about undoing forty of them."""
+    entry: Dict[str, Any] = {"effect": WRITE, "reversibility": rev, "why": why}
+    if bulk:
+        entry["bulk"] = True
+    return entry
 
 
 # ─────────────────────────────────────────────────────────────────────
 # REGISTRY — every entry verified against its handler, 2026-07-27.
 # ─────────────────────────────────────────────────────────────────────
 
-REGISTRY: Dict[str, Dict[str, str]] = {
+REGISTRY: Dict[str, Dict[str, Any]] = {
 
     # ── reads ────────────────────────────────────────────────────────
     # Verified: each fetches and formats, and reaches nothing that writes.
@@ -156,7 +175,99 @@ REGISTRY: Dict[str, Dict[str, str]] = {
                                     "activity row, both deactivatable. Note: invokes the model, "
                                     "so it is a spend vector on any metered surface"),
 
+    # Reads that compute rather than fetch. They persist nothing, so an
+    # agent surface may call them — but each spends model tokens, which is
+    # why the note says so out loud.
+    "propose_brand_kit_from_context": _r("generates a brand-kit proposal and returns it; the "
+                                         "docstring is explicit that it does NOT save. Model spend"),
+    "propose_voice_rule":            _r("returns a proposed rule; 'We do NOT store the rule here' "
+                                        "— the frontend calls add_voice_rule on accept"),
+    "list_bookkeeping_proposals":    _r("lists existing proposal rows"),
+
+    # ── writes, class A (continued) ──────────────────────────────────
+    "accept_module_spec":     _w("A", "materializes a draft spec into a custom_modules row; "
+                                      "idempotent, and the module can be archived after"),
+    "add_block_range":        _w("A", "blocks a date range; remove_block_range is the exact undo"),
+    "remove_block_range":     _w("A", "removes a block; add_block_range restores it"),
+    "add_voice_rule":         _w("A", "adds a voice rule; remove_voice_rule is the undo"),
+    "remove_voice_rule":      _w("A", "removes a voice rule; add_voice_rule restores it"),
+    "update_voice_style":     _w("A", "edits voice style fields"),
+    "update_voice_sample":    _w("A", "edits a voice sample"),
+    "update_voice_profile":   _w("A", "merges free-text fields into businesses.voice_profile"),
+    "advance_phase":          _w("A", "moves a strategy track's phase pointer; re-settable"),
+    "archive_offering":       _w("A", "SOFT delete — is_active=false + archived_at, and existing "
+                                      "references keep working off denormalized fields"),
+    "dismiss_draft":          _w("A", "flips a queued draft's status to dismissed; the row survives"),
+    "edit_draft":             _w("A", "edits a queued draft in place — still a draft, still unsent"),
+    "rewrite_draft":          _w("A", "regenerates a queued draft's body; still unsent"),
+    "bulk_dismiss":           _w("A", "flips status to dismissed across a filtered set; each row "
+                                      "survives, but forty at once is not one undo", bulk=True),
+    "cancel_scheduled":       _w("A", "cancels a queued scheduled action; schedule_action re-adds it"),
+    "cancel_booking":         _w("A", "cancels an appointment. Verified it sends NO client email — "
+                                      "only create_booking does. §2.4 lists scheduling as class A. "
+                                      "Worth noting separately that a silently-cancelled client "
+                                      "appointment is a product question, not a classification one"),
+    "reschedule_booking":     _w("A", "moves an appointment; sends nothing, same as cancel"),
+    "create_course":          _w("A", "scaffolds academy_courses + academy_lessons rows"),
+    "create_growth_objective": _w("A", "materializes an objective plus its modules/workflows/"
+                                       "milestones — a lot of rows, all ordinary records"),
+    "enroll_student":         _w("A", "inserts an academy_enrollments row"),
+    "mark_reply_read":        _w("A", "flips email_replies.read; re-markable"),
+    "mark_sms_read":          _w("A", "flips sms_messages.read; re-markable"),
+    "notify_practitioner":    _w("A", "in-app notification + push to the OWNER. It does leave the "
+                                      "device, but never reaches a client, so it is not the "
+                                      "client-facing send class B exists for"),
+    "plan_content":           _w("A", "adds a planned post to settings.content_calendar"),
+    "propose_module_from_intake": _w("A", "writes ModuleSpec DRAFTS that accept_module_spec later "
+                                          "materializes — the draft itself changes nothing live"),
+    "record_edit_pattern":    _w("A", "silent observation row in edit_observations"),
+    "reject_bookkeeping_proposal": _w("A", "the module's own docstring: 'Rejecting is inert'"),
+    "reject_module_spec":     _w("A", "marks a draft spec rejected; nothing was live yet"),
+    "remove_testimonial":     _w("A", "removes one entry from the testimonials array; re-addable"),
+    "restore_previous_site":  _w("A", "the undo verb itself — swaps the live site back to the "
+                                      "previous compose. Docstring: 'no external effects, fully "
+                                      "reversible (the swap is symmetric)'"),
+    "run_agent":              _w("A", "dispatches an agent whose output lands in /agent_queue as a "
+                                      "DRAFT. Verified: it writes queue rows, it does not send. "
+                                      "Sending is approve_draft, which is class C"),
+    "generate_briefing":      _w("A", "delegates to run_agent('briefing') — inherits its class"),
+    "generate_insights":      _w("A", "runs the insight engine; writes insight memories, which "
+                                      "forget deactivates. Model spend"),
+    "review_books":           _w("A", "writes bookkeeping PROPOSALS only — inert until approved"),
+    "run_market_research":    _w("A", "writes analysis onto the strategy track. Model spend"),
+    "save_business_model":    _w("A", "saves a strategy-track deliverable"),
+    "save_launch_plan":       _w("A", "saves a strategy-track deliverable"),
+    "save_packages":          _w("A", "saves a strategy-track deliverable"),
+    "save_phase":             _w("A", "saves a strategy-track phase deliverable"),
+    "save_pricing":           _w("A", "saves a strategy-track deliverable"),
+    "save_projections":       _w("A", "saves a strategy-track deliverable"),
+    "save_swot":              _w("A", "saves a strategy-track deliverable"),
+    "session_summary":        _w("A", "appends a coaching-session summary to phases.session_log"),
+    "save_email_template":    _w("A", "saves a reusable template into settings; editable"),
+    "save_note":              _w("A", "files a note (chief_memories, category='note')"),
+    "set_availability_day":       _w("A", "sets one day's weekly hours; re-settable"),
+    "set_availability_override":  _w("A", "sets a date-specific override; re-settable"),
+    "set_lead_time":              _w("A", "sets required booking lead time"),
+    "set_slot_granularity":       _w("A", "sets the slot grid spacing"),
+    "set_business_timezone":      _w("A", "sets the canonical timezone"),
+    "set_site_capability":        _w("A", "records a capability into the discovery dossier"),
+    "update_contact_health":      _w("A", "sets a contact's health score"),
+    "update_practitioner_profile_field": _w("A", "sets one practitioner_profiles field (owner-scoped)"),
+    "upgrade_module_archetype":   _w("A", "refines an existing module's archetype params"),
+    "contract_pdf":           _w("A", "renders an existing draft as a branded PDF and returns the "
+                                      "URL. Produces an artifact; sends nothing"),
+    "draft_contract":         _w("A", "drafts an engagement letter for one contact — a draft, and "
+                                      "there is no send_for_signature verb to pair it with yet"),
+
     # ── writes, class C ──────────────────────────────────────────────
+    # Two families: what leaves the system, and what touches money.
+    #
+    # On outbound: §2.4 reserves class B for a send with a recall window
+    # (its example is a 60-second delayed send). No such outbox exists in
+    # this system today — every send is immediate and final — so there is
+    # currently NOTHING that can honestly be class B, and each entry below
+    # records that it becomes B on the day an outbox lands. Inventing a B
+    # here would grant autonomy against a safety net that does not exist.
     "delete_contact":       _w("C", "HARD delete — issues DELETE /contacts; `contacts` has no "
                                     "soft-delete column and no archive, so the row is gone. Now "
                                     "guarded: Chief refuses when anything is attached (sessions "
@@ -164,6 +275,47 @@ REGISTRY: Dict[str, Dict[str, str]] = {
                                     "so it can only reach a contact with no history. Stays C — "
                                     "the guard bounds the blast radius, it does not make the "
                                     "delete undoable"),
+    "approve_draft":        _w("C", "approves AND SENDS a queued draft — the result string is "
+                                    "literally 'approved and sent'. Becomes B with an outbox"),
+    "draft_and_send":       _w("C", "drafts and sends in one step; the name is the whole story. "
+                                    "Becomes B with an outbox"),
+    "send_report":          _w("C", "emails a report out. Becomes B with an outbox"),
+    "send_sms":             _w("C", "Telnyx, immediate, no recall. Becomes B with an outbox"),
+    "batch_email":          _w("C", "sends the same body to a list of contacts. Outbound AND bulk",
+                               bulk=True),
+    "bulk_approve":         _w("C", "approves and sends every draft matching a filter. Outbound "
+                                    "AND bulk — the worst combination in the registry", bulk=True),
+    "publish_post":         _w("C", "publishes to Facebook/Instagram via Meta. There is an unpublish, "
+                                    "but a post that was seen cannot be unseen"),
+    "create_booking":       _w("C", "creates the appointment AND emails the client a confirmation "
+                                    "(send_confirmation defaults true). The send is what makes this "
+                                    "C while cancel/reschedule are A"),
+    "create_invoice":       _w("C", "money-touching, which §2.4 makes C on its own. Also accepts "
+                                    "auto_send on a recurrence, arming future unattended sends — a "
+                                    "standing rule, not a one-off write. (Revised from an earlier "
+                                    "'A' recommendation made before reading the handler.)"),
+    "send_invoice":         _w("C", "sends an invoice and touches Stripe"),
+    "mark_invoice_paid":    _w("C", "records payment — a ledger fact with a compliance trail"),
+    "cancel_recurring_invoice": _w("C", "stops or cancels recurring billing; money-touching"),
+    "approve_bookkeeping_proposal": _w("C", "executes a categorization/match against the books. The "
+                                            "module's own header refuses to offer bulk approval "
+                                            "because financial records are 'exactly the action a "
+                                            "practitioner cannot un-see'"),
+    "generate_payment_link": _w("C", "creates a Stripe Price + PaymentLink — external money object"),
+    "create_product":       _w("C", "creates the product AND its Stripe counterpart"),
+    "update_product":       _w("C", "edits the product and its Stripe counterpart"),
+    "enqueue_job":          _w("C", "queues heavy server-side work such as rebuild_site. Spends real "
+                                    "money and can replace a live site — the failure mode behind the "
+                                    "canvas-overwrite incident"),
+    "complete_strategy_track": _w("C", "composite finaliser: creates a products module and entries, "
+                                       "seeds an intake form, GENERATES THE SITE, and flips the "
+                                       "business to launched. Site generation alone earns the C"),
+    "queue_build_request":  _w("C", "the builder bridge — files a GitHub issue for the owner, a "
+                                    "support ticket for everyone else. Leaves the system"),
+    "schedule_action":      _w("C", "meta-verb: schedules ANY toolkit action for later. Its own "
+                                    "class is whatever it schedules, so it inherits the worst — "
+                                    "otherwise it is a hole straight through this table. The "
+                                    "scheduled verb must be checked at execution time too"),
 }
 
 
@@ -181,102 +333,11 @@ REGISTRY: Dict[str, Dict[str, str]] = {
 _PENDING = "not yet classified"
 
 UNCLASSIFIED: Dict[str, str] = {
-    # --- contested: need a ruling, not just an audit ---
-    "send_sms": "B or C? Telnyx sends immediately and there is no delayed-send "
-                "outbox, so a recall window does not exist today. Recommend C "
-                "until one does",
-    "publish_post": "B or C? §2.4 offers 'unpublish' as a class-A example, but a "
-                    "social post that was seen cannot be unseen. Recommend B",
-    "create_invoice": "A or C? Creating is a record; sending is the money-facing "
-                      "act. Recommend A here and C on send_invoice",
-    "send_invoice": "C almost certainly — money-facing and leaves the system. "
-                    "Paired with the create_invoice ruling",
-    "mark_invoice_paid": "C almost certainly — has a ledger/GL effect",
-    "run_agent": "meta-verb: dispatches other agents, so its class is whatever "
-                 "they are. Recommend C, or exclude from the registry entirely "
-                 "and classify what it dispatches",
-    "generate_briefing": "delegates straight to run_agent('briefing') — inherits "
-                         "whatever run_agent is ruled",
-    "bulk_approve": "blast radius. Recommend: inherit the strictest class of what "
-                    "it touches, and never autonomy-eligible regardless",
-    "bulk_dismiss": "blast radius — same rule as bulk_approve",
-    "batch_email": "blast radius over an outbound channel — same rule",
-    "restore_previous_site": "its docstring claims fully reversible and symmetric, "
-                             "which is plausible; unverified here because the "
-                             "effect lives in site_composer.restore_previous_compose. "
-                             "Adjacent to the canvas-overwrite incident class, so it "
-                             "gets read before it gets classified",
-
-    # --- not yet worked ---
-    "accept_module_spec": _PENDING,
-    "add_block_range": _PENDING,
-    "add_voice_rule": _PENDING,
-    "advance_phase": _PENDING,
-    "approve_bookkeeping_proposal": _PENDING,
-    "approve_draft": _PENDING,
-    "archive_offering": _PENDING,
-    "cancel_booking": _PENDING,
-    "cancel_recurring_invoice": _PENDING,
-    "cancel_scheduled": _PENDING,
-    "complete_strategy_track": _PENDING,
-    "contract_pdf": _PENDING,
-    "create_booking": _PENDING,
-    "create_course": _PENDING,
-    "create_growth_objective": _PENDING,
-    "create_product": _PENDING,
-    "dismiss_draft": _PENDING,
-    "draft_and_send": _PENDING,
-    "draft_contract": _PENDING,
-    "edit_draft": _PENDING,
-    "enqueue_job": _PENDING,
-    "enroll_student": _PENDING,
-    "generate_insights": _PENDING,
-    "generate_payment_link": _PENDING,
-    "list_bookkeeping_proposals": _PENDING,
-    "mark_reply_read": _PENDING,
-    "mark_sms_read": _PENDING,
-    "notify_practitioner": _PENDING,
-    "plan_content": _PENDING,
-    "propose_brand_kit_from_context": _PENDING,
-    "propose_module_from_intake": _PENDING,
-    "propose_voice_rule": _PENDING,
-    "queue_build_request": _PENDING,
-    "record_edit_pattern": _PENDING,
-    "reject_bookkeeping_proposal": _PENDING,
-    "reject_module_spec": _PENDING,
-    "remove_block_range": _PENDING,
-    "remove_testimonial": _PENDING,
-    "remove_voice_rule": _PENDING,
-    "reschedule_booking": _PENDING,
-    "review_books": _PENDING,
-    "rewrite_draft": _PENDING,
-    "run_market_research": _PENDING,
-    "save_business_model": _PENDING,
-    "save_email_template": _PENDING,
-    "save_launch_plan": _PENDING,
-    "save_note": _PENDING,
-    "save_packages": _PENDING,
-    "save_phase": _PENDING,
-    "save_pricing": _PENDING,
-    "save_projections": _PENDING,
-    "save_swot": _PENDING,
-    "schedule_action": _PENDING,
-    "send_report": _PENDING,
-    "session_summary": _PENDING,
-    "set_availability_day": _PENDING,
-    "set_availability_override": _PENDING,
-    "set_business_timezone": _PENDING,
-    "set_lead_time": _PENDING,
-    "set_site_capability": _PENDING,
-    "set_slot_granularity": _PENDING,
-    "setup_store": _PENDING,
-    "update_contact_health": _PENDING,
-    "update_practitioner_profile_field": _PENDING,
-    "update_product": _PENDING,
-    "update_voice_profile": _PENDING,
-    "update_voice_sample": _PENDING,
-    "update_voice_style": _PENDING,
-    "upgrade_module_archetype": _PENDING,
+    "setup_store": "configures the hosted storefront (tax rate, flat shipping) and also touches "
+                   "Stripe. The Stripe leg was not read closely enough to say whether it only "
+                   "reads configuration or creates objects, and the difference is A versus C. "
+                   "Left pending rather than guessed — default-deny means it behaves as C "
+                   "meanwhile, which is the safe direction.",
 }
 
 
@@ -327,12 +388,26 @@ def may_expose_to_agent(verb: str, allow_writes: bool = False) -> bool:
     return False
 
 
+def is_bulk(verb: str) -> bool:
+    """Does this verb act on a whole set at once? Bulk verbs are never
+    autonomy-eligible whatever their class — the reversibility of one row
+    says nothing about undoing forty of them."""
+    entry = REGISTRY.get(verb)
+    return bool(entry and entry.get("bulk"))
+
+
 def is_autonomy_eligible(verb: str, granted_scope: bool = False) -> bool:
     """May Chief perform this without asking first?
 
     Class A yes. Class B only with an explicit granted scope. Class C never
-    — that is the §2.4 rule and not a knob. Reads are not 'actions' in the
-    autonomy sense and answer False; so does everything unclassified."""
+    — that is the §2.4 rule and not a knob. Bulk verbs never, at any class.
+    Reads are not 'actions' in the autonomy sense and answer False; so does
+    everything unclassified.
+
+    This is about acting UNPROMPTED. A practitioner who asked for the thing
+    has already supplied the approval — see the module docstring."""
+    if is_bulk(verb):
+        return False
     rev = reversibility(verb)
     if rev == "A":
         return True
