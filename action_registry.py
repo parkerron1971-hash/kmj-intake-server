@@ -157,10 +157,13 @@ REGISTRY: Dict[str, Dict[str, str]] = {
                                     "so it is a spend vector on any metered surface"),
 
     # ── writes, class C ──────────────────────────────────────────────
-    "delete_contact":       _w("C", "HARD delete — issues DELETE /contacts, no soft-delete flag "
-                                    "and no archive. Unrecoverable. Contrast delete_module_entry, "
-                                    "which soft-deletes; that inconsistency is a live data-loss "
-                                    "risk independent of any agent surface"),
+    "delete_contact":       _w("C", "HARD delete — issues DELETE /contacts; `contacts` has no "
+                                    "soft-delete column and no archive, so the row is gone. Now "
+                                    "guarded: Chief refuses when anything is attached (sessions "
+                                    "and academy_enrollments CASCADE, eight more tables orphan), "
+                                    "so it can only reach a contact with no history. Stays C — "
+                                    "the guard bounds the blast radius, it does not make the "
+                                    "delete undoable"),
 }
 
 
