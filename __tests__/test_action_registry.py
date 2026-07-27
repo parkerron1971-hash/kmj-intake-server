@@ -185,31 +185,66 @@ def test_nothing_is_class_b_while_there_is_no_outbox():
 
 # ── the invariant chief_action_reasoner only asks for in a comment ───
 
-def test_safe_remap_actions_are_all_registered_class_a():
-    """`chief_action_reasoner.SAFE_REMAP_ACTIONS` promises "reversible +
-    non-sending + non-financial" and asks, in a comment, to stay a subset of
-    ACTION_HANDLERS. That promise is exactly class A — so assert it, and turn
-    a hand-maintained convention into a checked one.
+def test_remap_descriptions_are_all_registered_class_a():
+    """The reasoner's hand-written source list must contain only class-A verbs.
 
-    This is the concrete drift risk the registry retires today: the reasoner
-    composes these verbs autonomously when Chief emits an action with no
-    handler, so a verb quietly promoted into that dict while being class B or
-    C is an autonomy escape."""
+    NOTE this asserts `_REMAP_DESCRIPTIONS`, the hand-edited dict — NOT the
+    derived `SAFE_REMAP_ACTIONS`. Asserting the derived one would be vacuous:
+    it is filtered to class A by construction, so it can never fail. The
+    hand-edited dict is where a mistake actually enters, so that is what gets
+    checked.
+
+    This is the concrete drift risk the registry retires: the reasoner
+    composes these verbs without asking the practitioner, so a verb quietly
+    added while being class C is an autonomy escape. The runtime filter would
+    now drop it, but silently — this test is what makes it loud, before merge."""
     import chief_action_reasoner as car
 
-    not_in_chief = sorted(set(car.SAFE_REMAP_ACTIONS) - set(cos.ACTION_HANDLERS))
+    not_in_chief = sorted(set(car._REMAP_DESCRIPTIONS) - set(cos.ACTION_HANDLERS))
     assert not not_in_chief, (
-        f"SAFE_REMAP_ACTIONS references verb(s) Chief does not have: {not_in_chief}")
+        f"_REMAP_DESCRIPTIONS references verb(s) Chief does not have: {not_in_chief}")
 
     offenders = {}
-    for verb in sorted(car.SAFE_REMAP_ACTIONS):
+    for verb in sorted(car._REMAP_DESCRIPTIONS):
         rev = reg.reversibility(verb)
-        if rev != "A":
-            offenders[verb] = rev or ("unclassified" if verb in reg.UNCLASSIFIED
-                                      else "missing from registry")
+        if rev != "A" or reg.is_bulk(verb):
+            offenders[verb] = ("bulk" if reg.is_bulk(verb) else rev
+                               or ("unclassified" if verb in reg.UNCLASSIFIED
+                                   else "missing from registry"))
     assert not offenders, (
-        f"SAFE_REMAP_ACTIONS must contain only class-A verbs — the reasoner "
-        f"composes them without asking. Offenders: {offenders}")
+        f"_REMAP_DESCRIPTIONS must contain only non-bulk class-A verbs — the "
+        f"reasoner composes them without asking. Offenders: {offenders}")
+
+
+def test_safe_remap_actions_is_derived_not_hand_held():
+    """The allowlist the reasoner actually uses is the filtered view, and with
+    the source list currently clean the two agree exactly. If they ever differ,
+    the filter dropped something — which is the filter working, and the test
+    above will name it."""
+    import chief_action_reasoner as car
+
+    assert set(car.SAFE_REMAP_ACTIONS) <= set(car._REMAP_DESCRIPTIONS), (
+        "the derived allowlist must never exceed its source")
+    for verb in car.SAFE_REMAP_ACTIONS:
+        assert reg.reversibility(verb) == "A" and not reg.is_bulk(verb), (
+            f"{verb}: reached the live allowlist without being non-bulk class A")
+
+
+def test_a_non_class_a_verb_cannot_reach_the_allowlist(monkeypatch):
+    """The filter, exercised rather than assumed. Smuggle a class-C verb into
+    the source dict and rebuild: it must not come out the other side."""
+    import chief_action_reasoner as car
+
+    poisoned = dict(car._REMAP_DESCRIPTIONS)
+    poisoned["send_sms"] = "smuggled — sends a text, class C"
+    poisoned["bulk_approve"] = "smuggled — bulk send"
+    monkeypatch.setattr(car, "_REMAP_DESCRIPTIONS", poisoned)
+
+    rebuilt = car._safe_remap_actions()
+    assert "send_sms" not in rebuilt, "a class-C verb reached the allowlist"
+    assert "bulk_approve" not in rebuilt, "a bulk verb reached the allowlist"
+    assert set(rebuilt) == set(car.SAFE_REMAP_ACTIONS), (
+        "filtering should have removed exactly the smuggled verbs")
 
 
 # ── coverage reporting (informational, never fails on progress) ──────
