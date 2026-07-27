@@ -21,6 +21,10 @@ execution is enforced hard:
     reversible, non-sending, non-financial primitives (drafts QUEUE for
     approval, records are editable). It can never remap to send/publish/
     delete/charge. Worst case is an editable record, never an errant email.
+    That list is no longer maintained by hand: it is `_REMAP_DESCRIPTIONS`
+    FILTERED against `action_registry` class A, so "reversible, non-sending,
+    non-financial" is now a checked property rather than a promise in a
+    comment. A verb that stops qualifying drops out on the next import.
   - Every mapped action still runs through its own handler's validation +
     owner checks — this module picks WHICH known action, never bypasses one.
   - Bounded: at most _MAX_PLAN mapped actions.
@@ -48,12 +52,22 @@ logger = logging.getLogger("chief_action_reasoner")
 _MAX_PLAN = 3  # a remap composes at most this many known primitives
 
 # The SAFE building blocks — the ONLY actions a reasoned remap may use.
-# Every one is reversible + non-sending + non-financial: a wrong guess makes
-# an editable record or a DRAFT (which still needs approval to send), never an
-# irreversible external effect. Descriptions ARE the rubric the model reasons
-# from. Keep this a strict SUBSET of chief_of_staff.ACTION_HANDLERS (the wiring
-# re-validates each type against the live registry too).
-SAFE_REMAP_ACTIONS: Dict[str, str] = {
+# Every one must be reversible + non-sending + non-financial: a wrong guess
+# makes an editable record or a DRAFT (which still needs approval to send),
+# never an irreversible external effect.
+#
+# That requirement used to live in this comment and nowhere else. It is now
+# `action_registry`'s class A, and membership below is FILTERED against it —
+# see _safe_remap_actions(). So the two can no longer disagree: adding a verb
+# here that sends, charges, or hard-deletes does not put it in the allowlist,
+# it gets refused and logged at import.
+#
+# The descriptions stay hand-written, because they are not classification
+# rationales — they ARE the rubric the model reasons from, and they carry the
+# field hints it needs. The registry decides membership; this dict decides
+# wording. Keep it a strict subset of chief_of_staff.ACTION_HANDLERS (the
+# wiring re-validates each type against the live handler table too).
+_REMAP_DESCRIPTIONS: Dict[str, str] = {
     "create_contact":       "Add a new person (lead/client/etc). Fields: name, email?, phone?, status?",
     "update_contact":       "Update a contact. Fields: contact_id, name?, email?, phone?, notes?",
     "update_contact_status":"Set a contact's status. Fields: contact_id, status",
@@ -81,6 +95,50 @@ SAFE_REMAP_ACTIONS: Dict[str, str] = {
     "add_testimonial":      "Add a testimonial to the site. Fields: text, author?",
     "update_business_profile_field": "Set a business profile field. Fields: field, value",
 }
+
+
+def _safe_remap_actions() -> Dict[str, str]:
+    """The allowlist, filtered against `action_registry`.
+
+    A verb earns a place here only if the registry calls it class A — cleanly
+    undoable — and not bulk. Everything else is dropped and named in the log.
+
+    Why filter at runtime when a test already checks this: the test is the
+    loud guard and catches it before merge, but this module executes
+    mutations, so it should not depend on CI having been green. If a
+    non-class-A verb ever reaches the descriptions, the reasoner refuses to
+    offer it to the model at all.
+
+    If `action_registry` cannot be imported, the allowlist is EMPTY, not
+    unfiltered. An empty rubric means the reasoner declines to remap and the
+    dispatcher falls back to today's `_fail` — the module's documented
+    fail-open behavior. Falling back to an unverified list would be the one
+    unsafe reading of "open"."""
+    try:
+        import action_registry
+    except Exception:  # pragma: no cover — a missing sibling module
+        logger.error(
+            "action_registry unavailable — SAFE_REMAP_ACTIONS is empty and the "
+            "reasoner will decline every remap. Fixing the import restores it.")
+        return {}
+
+    safe: Dict[str, str] = {}
+    refused: List[str] = []
+    for verb, desc in _REMAP_DESCRIPTIONS.items():
+        if action_registry.reversibility(verb) == "A" and not action_registry.is_bulk(verb):
+            safe[verb] = desc
+        else:
+            refused.append(verb)
+
+    if refused:
+        logger.error(
+            "REFUSED from SAFE_REMAP_ACTIONS — not class A in action_registry: %s. "
+            "The reasoner composes these without asking the practitioner, so anything "
+            "that sends, charges, or hard-deletes must never appear here.", refused)
+    return safe
+
+
+SAFE_REMAP_ACTIONS: Dict[str, str] = _safe_remap_actions()
 
 
 def _enabled() -> bool:
