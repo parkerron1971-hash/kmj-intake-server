@@ -2451,6 +2451,83 @@ async def handle_update_contact(client, biz, action) -> Dict:
 
 # Delete a contact by id, with name-based fallback. Cascades on the
 # DB side handle related events/sessions/etc; we just DELETE the row.
+# What a contact row takes with it when it goes.
+#
+# `contacts` has no soft-delete column and no deleted_at — the status CHECK
+# allows only lead/active/inactive/churned/vip — so a delete here is a real
+# DELETE. Thirteen tables point at contacts.id, and they do not fail the same
+# way:
+#
+#   sessions, academy_enrollments  — ON DELETE CASCADE. The rows are
+#                                    DESTROYED along with the contact.
+#   invoices, tasks, events, and 5 more — FK ON DELETE SET NULL. The rows
+#                                    survive but stop pointing at anybody.
+#   orders, campaign_sends         — no FK at all. Silently orphaned, with
+#                                    not even a constraint to notice.
+#   sms_messages                   — FK NO ACTION, so the database itself
+#                                    refuses the delete and the practitioner
+#                                    gets a raw error.
+#
+# So "delete this contact", typed into a chat box, can erase an entire
+# appointment history and unattribute the revenue that came with it. The app's
+# own Delete button at least opens a confirmation modal first; Chief had no
+# equivalent, which made the conversational path the most destructive one in
+# the product.
+#
+# The rule below: Chief deletes a contact only when nothing is attached to it
+# — the genuine case, a typo or a duplicate with no history. The moment there
+# is history, Chief declines and says what would have been lost. There is
+# deliberately NO override parameter: an override is something the model can
+# talk itself into setting on a retry, and the whole point is that destroying
+# a client's records should require a human to mean it. That path already
+# exists in the app, with a confirmation dialog that spells out the damage.
+_DEP_PROBE_LIMIT = 26  # enough to say "25+" without paging real volume
+
+_CONTACT_DEPENDENTS = (
+    # (table, singular noun, plural noun, what happens to it)
+    ("sessions",            "session",      "sessions",      "erased"),
+    ("academy_enrollments", "enrollment",   "enrollments",   "erased"),
+    ("invoices",            "invoice",      "invoices",      "orphaned"),
+    ("orders",              "order",        "orders",        "orphaned"),
+    ("sms_messages",        "text message", "text messages", "orphaned"),
+    ("tasks",               "task",         "tasks",         "orphaned"),
+)
+
+
+async def _contact_dependents(client, contact_id: str) -> List[Dict[str, Any]]:
+    """Everything that would be lost or unlinked if this contact were deleted.
+
+    Best-effort per table: a table that errors or doesn't exist in this
+    environment is skipped rather than blocking the whole check. That biases
+    toward under-reporting, which is the safe direction here only because the
+    caller refuses on ANY hit — a missed table can't turn a refusal into a
+    delete, it can only make the explanation shorter than the truth."""
+    found: List[Dict[str, Any]] = []
+    for table, one, many, fate in _CONTACT_DEPENDENTS:
+        try:
+            rows = await _sb(client, "GET",
+                f"/{table}?contact_id=eq.{contact_id}"
+                f"&select=id&limit={_DEP_PROBE_LIMIT}") or []
+        except Exception:
+            continue
+        n = len(rows) if isinstance(rows, list) else 0
+        if n:
+            found.append({"count": n, "one": one, "many": many, "fate": fate,
+                          "capped": n >= _DEP_PROBE_LIMIT})
+    return found
+
+
+def _describe_dependents(found: List[Dict[str, Any]]) -> str:
+    """"4 sessions, 2 invoices and 1 order" — for the refusal message."""
+    parts = []
+    for d in found:
+        n = f"{_DEP_PROBE_LIMIT - 1}+" if d["capped"] else str(d["count"])
+        parts.append(f"{n} {d['one'] if d['count'] == 1 and not d['capped'] else d['many']}")
+    if len(parts) == 1:
+        return parts[0]
+    return ", ".join(parts[:-1]) + f" and {parts[-1]}"
+
+
 async def handle_delete_contact(client, biz, action) -> Dict:
     biz_id = biz["id"]
     contact_id = action.get("contact_id")
@@ -2476,6 +2553,36 @@ async def handle_delete_contact(client, biz, action) -> Dict:
 
     if not contact:
         return _fail("delete_contact", f"contact not found ({contact_id or name or '—'})")
+
+    who = contact.get("name") or "that contact"
+
+    # The guard. Anything attached → decline, and say what would have gone.
+    attached = await _contact_dependents(client, contact["id"])
+    if attached:
+        erased = [d for d in attached if d["fate"] == "erased"]
+        detail = _describe_dependents(attached)
+        consequence = (
+            "Deleting the contact would erase the "
+            f"{' and '.join(d['many'] for d in erased)} for good, and none of "
+            "it comes back."
+            if erased else
+            "Deleting the contact would leave all of it with nobody attached, "
+            "and there's no way to relink it afterwards."
+        )
+        return {
+            "type": "delete_contact",
+            "result": (
+                f"{who} has {detail} on file, so I've left the record alone. "
+                f"{consequence} "
+                f"If you just want them out of your active list, I can mark them "
+                f"inactive or churned instead — that keeps the history and takes "
+                f"one word from you. If the record really does need to be gone "
+                f"permanently, open the contact and use Delete there; it asks you "
+                f"to confirm and spells out exactly what goes with it."
+            ),
+            "label": f"🛡️ Kept {who} — {detail} attached",
+            "nav": _nav("operate", "contacts", contact_id=contact["id"]),
+        }
 
     try:
         await _sb(client, "DELETE", f"/contacts?id=eq.{contact['id']}", None)
@@ -12744,6 +12851,7 @@ ACTIONS — CONTACTS:
   [ACTION:{{"type":"delete_contact","name":"..."}}]
   [ACTION:{{"type":"contact_deep_dive","contact_id":"<uuid>"}}]
     — Full CRUD on contacts. Search by name when contact_id is missing. Ambiguous matches return a candidate list.
+    — delete_contact only removes a contact with NOTHING attached (no sessions, invoices, orders, texts or tasks). If anything is on file the action declines and tells you what would have been lost — that is correct behavior, not an error, so relay it and offer update_contact_status ("inactive" or "churned") as the usual thing they actually wanted. Never promise a permanent delete you cannot perform; permanent removal of a contact WITH history is done by the practitioner in the app, where the confirmation dialog lives.
 
 ACTIONS — SESSIONS:
   [ACTION:{{"type":"create_session","contact_id":"<uuid>","title":"...","session_type":"coaching_session|consultation|discovery_call|follow_up|pastoral_visit|meeting","scheduled_for":"2026-05-01T14:00:00Z","duration_minutes":60}}]
