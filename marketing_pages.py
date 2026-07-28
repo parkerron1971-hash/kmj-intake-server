@@ -696,6 +696,8 @@ REPLICA_KIT_CSS = """
         pointer-events:none;opacity:.92;
         filter:drop-shadow(0 0 26px rgba(124,58,237,.65)) drop-shadow(0 10px 22px rgba(0,0,0,.5));}
       .app.is-mini .brief-mark{display:none;}
+      /* once .brief stacks on phones the mark lands on Chief's buttons */
+      @media (max-width:700px){.brief-mark{display:none;}}
       @media (max-width:1100px){.brief-mark{right:24px;}}
       .brief .date{font-size:7.5px;font-weight:800;letter-spacing:.17em;text-transform:uppercase;color:#C4B5FD;}
       .brief .hi{font-family:var(--font-heading);font-size:23px;font-weight:700;letter-spacing:-.025em;line-height:1.05;}
@@ -838,6 +840,53 @@ REPLICA_KIT_CSS = """
         .cx-b{animation:none !important;opacity:1 !important;transform:none !important;}
       }
 
+
+      /* ── phones: the replicas stop pretending to be a desktop window ──
+         They were previously pinned at desktop pixel widths (748px faces,
+         a 960px hero) inside a horizontally-scrolling strip, so on a 390px
+         screen you saw a clipped middle band — "Invoices" rendered as
+         "ces" and INV-2026-011 as "2026-011". Shrinking that to fit would
+         have put the body type near 4px, so instead the mock RESPONDS the
+         way the real app responds on a phone: the nav rail goes away, the
+         KPI grid halves, and the secondary columns stack. ── */
+      @media (max-width: 700px){
+        .app{font-size:10.5px;}
+        .app-side{display:none;}
+        .app-strip{display:none;}
+        .app-top{padding:8px 10px;gap:8px;}
+        .at-cta, .at-urgent{display:none;}
+        .app-canvas{padding:11px;gap:9px;}
+
+        .kpi-row{grid-template-columns:repeat(2,1fr);}
+        .kpi-row .kpi:nth-child(n+5){display:none;}
+        .kpi .v{font-size:17px;}
+
+        .age{grid-template-columns:repeat(3,1fr);gap:6px;}
+        .age > div:nth-child(-n+2){display:none;}   /* the two $0.00 "nothing here" buckets */
+        .age .v{font-size:12px;}
+        .age .k{font-size:6.5px;letter-spacing:.09em;}
+
+        .qa{grid-template-columns:repeat(4,1fr);}
+        .qa i:nth-child(n+5){display:none;}
+
+        /* the briefing's Chief column sits under it rather than beside */
+        .brief{flex-direction:column;}
+        .chief{width:auto;}
+        .brief .hi{font-size:20px;}
+        .brief .cp{max-width:none;}
+
+        .ah-title{font-size:16px;}
+        .arts{grid-template-columns:repeat(2,1fr);}
+        .art:nth-child(3){display:none;}
+        .chips span:nth-child(n+5){display:none;}
+        .r .id{display:none;}
+      }
+      @media (max-width: 430px){
+        .kpi-row .kpi:nth-child(n+3){display:none;}
+        .qa i:nth-child(n+4){display:none;}
+        .r .amt{font-size:9px;}
+      }
+
       /* mini site (Smart Sites) */
       .site{flex:1;border-radius:8px;overflow:hidden;border:1px solid var(--line);display:flex;
         flex-direction:column;min-height:0;}
@@ -899,8 +948,13 @@ def render_home() -> str:
       .app-scroll{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;
         scrollbar-width:thin;padding-bottom:6px;}
       @media (max-width:980px){
-        .app-scroll{margin:0 -20px;padding:0 20px 8px;}
-        .hero-app .app{width:960px;height:500px;}
+        /* no sideways scroll — the replica is now narrow enough to fit */
+        .app-scroll{overflow:visible;margin:0;padding:0;}
+        .hero-app .app{width:100%;height:auto;min-height:430px;}
+      }
+      @media (max-width:700px){
+        .hero-app .app{min-height:0;}
+        .hero-app{margin-top:36px;}
       }
 
       /* ══════════════════════════════════════════════════════════════
@@ -956,8 +1010,9 @@ def render_home() -> str:
           padding-bottom:8px;margin:0 -20px;scrollbar-width:none;}
         .rooms-viewport::-webkit-scrollbar{display:none;}
         .rooms-ring{position:static;transform:none !important;display:flex;gap:14px;padding:0 20px;}
-        .room-face{position:static;flex:0 0 auto;width:748px;height:376px;margin:0;
+        .room-face{position:static;flex:0 0 auto;width:min(92vw, 720px);height:auto;min-height:340px;margin:0;
           transform:none !important;opacity:1;filter:none;pointer-events:auto;scroll-snap-align:center;}
+        .room-face .app{height:100%;min-height:340px;}
         .rooms-nav{display:none;}
       }
 
