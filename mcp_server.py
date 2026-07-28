@@ -247,23 +247,47 @@ def tool_definitions() -> List[Dict[str, Any]]:
 
 def _audit(*, actor: str, tool: str, ok: bool, duration_ms: int,
            business_id: Optional[str] = None, error: Optional[str] = None,
-           arg_keys: Optional[List[str]] = None) -> None:
-    """Record one MCP call.
+           arg_keys: Optional[List[str]] = None, allowed: bool = True,
+           actor_user_id: Optional[str] = None) -> None:
+    """Record one MCP call — to the log AND to `agent_runs`.
 
-    Build 1 writes to the log. Build 2 adds the `agent_runs` table
-    (generalised from `restricted_module_access_log`) and fills this in —
-    it is deliberately ONE function so that lands in one place rather than
-    being threaded through every call site afterwards.
+    Argument NAMES are recorded, never values. An argument can carry a
+    customer's name, an email, a search phrase; an audit trail that
+    records values becomes a second copy of the data it audits, held
+    longer, under weaker scrutiny, and outside every deletion path.
 
-    Argument NAMES are recorded, never values: an argument may carry a
-    customer's name or a search phrase, and an audit trail should not
-    become a second copy of the data it is auditing.
+    `allowed` and `ok` are different questions and both are kept. A
+    refused call is not an error — it is this table doing its job, and
+    the refusals are the rows worth reading.
+
+    Never fatal. An audit write that could take down the surface it
+    audits would be a worse bug than the one it is guarding against; the
+    log line above always lands, so a DB failure loses the row, not the
+    record.
     """
     logger.info(
-        "[audit] actor=%s tool=%s ok=%s biz=%s dur=%dms args=%s%s",
-        actor, tool, ok, business_id or "-", duration_ms,
+        "[audit] actor=%s tool=%s allowed=%s ok=%s biz=%s dur=%dms args=%s%s",
+        actor, tool, allowed, ok, business_id or "-", duration_ms,
         ",".join(arg_keys or []) or "-",
         f" error={error}" if error else "")
+    try:
+        import sb_clients
+        sb_clients.sb_post_as_service("/agent_runs", {
+            "business_id": business_id,
+            "surface": "mcp",
+            "tool": tool[:200],
+            "actor_user_id": actor_user_id,
+            "actor_email": actor,
+            "allowed": bool(allowed),
+            "ok": bool(ok),
+            "duration_ms": int(duration_ms),
+            # A reason, not a traceback. Exception text in this service
+            # routinely carries table names, ids and query fragments.
+            "error": (error or None) and str(error)[:300],
+            "arg_keys": sorted(arg_keys or []),
+        }, prefer="return=minimal")
+    except Exception as e:
+        logger.warning("[audit] agent_runs write failed (non-fatal): %s", e)
 
 
 # ─── Tenancy ─────────────────────────────────────────────────────────
@@ -293,15 +317,21 @@ async def _resolve_business(client: httpx.AsyncClient,
 # ─── Dispatch ────────────────────────────────────────────────────────
 
 async def _call_tool(name: str, arguments: Dict[str, Any],
-                     user: AuthedUser) -> Tuple[bool, Any]:
-    """Run one exposed verb. Returns (ok, payload)."""
-    # 1. Authorization, from the registry. Not a list kept here.
+                     user: AuthedUser) -> Tuple[bool, bool, Any, Optional[str]]:
+    """Run one exposed verb.
+
+    Returns (allowed, ok, payload, business_id). `allowed` and `ok` are
+    separate on purpose: "we refused this" and "we tried and it failed"
+    are different events, and conflating them in the audit trail loses
+    exactly the distinction a reader cares about.
+    """
+    # Authorization, from the registry. Not a list kept here.
     if not action_registry.may_expose_to_agent(name):
         # Covers unknown verbs, ui verbs, every write, and anything
         # unclassified — all of which the registry answers False for.
         # Note the deliberate absence of a remapper: an unknown tool is an
         # error, never a reinterpretation.
-        return False, f"tool {name!r} is not available on this surface"
+        return False, False, f"tool {name!r} is not available on this surface", None
 
     handler = None
     try:
@@ -312,16 +342,16 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
     if handler is None:
         # The registry says exposable but Chief has no handler: a drift the
         # test suite is supposed to catch before it ships.
-        return False, f"tool {name!r} has no handler"
+        return False, False, f"tool {name!r} has no handler", None
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         biz = await _resolve_business(client, user)
         if not biz:
-            return False, "no business resolved for this account"
+            return True, False, "no business resolved for this account", None
         action = dict(arguments or {})
         action["type"] = name
         result = await handler(client, biz, action)
-    return True, result
+    return True, True, result, str(biz.get("id") or "") or None
 
 
 # ─── JSON-RPC methods ────────────────────────────────────────────────
@@ -365,23 +395,27 @@ async def _handle_rpc(message: Dict[str, Any], user: AuthedUser,
 
         started = int(time.time() * 1000)
         try:
-            ok, payload = await _call_tool(name, arguments, user)
+            allowed, ok, payload, biz_id = await _call_tool(name, arguments, user)
         except Exception as e:
             logger.warning("tool %s raised: %s", name, e)
-            _audit(actor=actor, tool=name, ok=False,
+            _audit(actor=actor, actor_user_id=getattr(user, "id", None),
+                   tool=name, allowed=True, ok=False,
                    duration_ms=int(time.time() * 1000) - started,
                    error=type(e).__name__, arg_keys=sorted(arguments))
             # The exception text is NOT returned. It can carry table names,
             # ids and query fragments, and this is an untrusted caller.
             return _error(req_id, INTERNAL_ERROR, "tool execution failed")
 
-        _audit(actor=actor, tool=name, ok=ok,
+        _audit(actor=actor, actor_user_id=getattr(user, "id", None),
+               tool=name, allowed=allowed, ok=ok, business_id=biz_id,
                duration_ms=int(time.time() * 1000) - started,
                error=None if ok else str(payload)[:200],
                arg_keys=sorted(arguments))
 
         if not ok:
-            return _error(req_id, TOOL_FORBIDDEN, str(payload))
+            return _error(req_id,
+                          TOOL_FORBIDDEN if not allowed else INTERNAL_ERROR,
+                          str(payload))
         # MCP returns tool output as content blocks. Chief handlers return
         # a dict with result + label; both are useful to a reading agent,
         # so the whole payload is serialised rather than flattened to prose.
@@ -414,10 +448,17 @@ async def mcp_endpoint(request: Request,
             None, INTERNAL_ERROR, "MCP surface is disabled"))
 
     actor = (user.email or user.id or "unknown").lower()
+    # The two refusals below happen BEFORE any tool is named, so they used
+    # to leave no trace at all. They are also the two most worth having:
+    # an authenticated non-owner reaching this endpoint, and a caller
+    # hitting the limiter, are the shapes an attempt looks like.
     if actor != PLATFORM_OWNER_EMAIL:
         # 403 rather than 401: the caller IS authenticated, just not
         # permitted. Stage 1 is owner-only by design.
         logger.warning("[mcp] refused non-owner caller %s", actor)
+        _audit(actor=actor, actor_user_id=getattr(user, "id", None),
+               tool="(endpoint)", allowed=False, ok=False, duration_ms=0,
+               error="non-owner caller")
         return JSONResponse(status_code=403, content=_error(
             None, UNAUTHORIZED, "this surface is restricted to the platform owner"))
 
@@ -425,6 +466,9 @@ async def mcp_endpoint(request: Request,
     # right for a practitioner and wrong for an agent that may be looping
     # or holding a stolen credential.
     if not rate_limit.allow_strict("mcp", actor):
+        _audit(actor=actor, actor_user_id=getattr(user, "id", None),
+               tool="(endpoint)", allowed=False, ok=False, duration_ms=0,
+               error="rate limited")
         return JSONResponse(
             status_code=429,
             headers={"Retry-After": str(rate_limit.retry_after("mcp"))},
