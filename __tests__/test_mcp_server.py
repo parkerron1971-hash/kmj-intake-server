@@ -114,7 +114,8 @@ def test_tool_definitions_are_well_formed():
 def test_unknown_tool_is_an_error_not_a_remap():
     """The property this surface exists to hold. Inside Chief an unknown
     verb gets reinterpreted by chief_action_reasoner; here it must not."""
-    ok, msg = _run(mcp._call_tool("definitely_not_a_verb", {}, _User()))
+    allowed, ok, msg, _biz = _run(mcp._call_tool("definitely_not_a_verb", {}, _User()))
+    assert allowed is False, "an unknown tool is REFUSED, not merely failed"
     assert ok is False
     assert "not available" in msg
 
@@ -125,22 +126,23 @@ def test_class_c_verbs_are_refused_at_call_time(verb):
     """Not merely absent from the list — refused if asked for directly.
     A client that hardcodes a name must not get further than one that
     reads the list."""
-    ok, msg = _run(mcp._call_tool(verb, {}, _User()))
+    allowed, ok, msg, _biz = _run(mcp._call_tool(verb, {}, _User()))
+    assert allowed is False, "refused at authorization, before any execution"
     assert ok is False
     assert "not available" in msg
 
 
 @pytest.mark.parametrize("verb", ["navigate", "set_timer"])
 def test_ui_verbs_are_refused_at_call_time(verb):
-    ok, _ = _run(mcp._call_tool(verb, {}, _User()))
-    assert ok is False
+    allowed, ok, _msg, _biz = _run(mcp._call_tool(verb, {}, _User()))
+    assert allowed is False and ok is False
 
 
 def test_write_verbs_are_refused_even_though_they_are_class_a(monkeypatch):
     """Class A is autonomy-eligible for CHIEF. That is a different question
     from whether an outside agent may call it, and the default answer is no."""
-    ok, _ = _run(mcp._call_tool("create_contact", {"name": "x"}, _User()))
-    assert ok is False
+    allowed, ok, _msg, _biz = _run(mcp._call_tool("create_contact", {"name": "x"}, _User()))
+    assert allowed is False and ok is False
 
 
 # ─── JSON-RPC protocol ───────────────────────────────────────────────
@@ -232,8 +234,9 @@ def test_dispatch_goes_straight_to_action_handlers(monkeypatch):
         return {"id": "biz-1", "name": "Test Co"}
     monkeypatch.setattr(mcp, "_resolve_business", _fake_biz)
 
-    ok, payload = _run(mcp._call_tool("catch_up", {}, _User()))
-    assert ok and payload["result"] == "ok"
+    allowed, ok, payload, biz_id = _run(mcp._call_tool("catch_up", {}, _User()))
+    assert allowed and ok and payload["result"] == "ok"
+    assert biz_id == "biz-1", "the resolved business must reach the audit trail"
     assert calls[0]["type"] == "catch_up", "handler must receive its own verb"
 
 
@@ -261,8 +264,12 @@ def test_no_business_resolved_is_a_refusal_not_a_crash(monkeypatch):
     async def _none(client, user):
         return None
     monkeypatch.setattr(mcp, "_resolve_business", _none)
-    ok, msg = _run(mcp._call_tool("catch_up", {}, _User()))
+    allowed, ok, msg, biz_id = _run(mcp._call_tool("catch_up", {}, _User()))
     assert ok is False and "business" in msg
+    assert allowed is True, (
+        "authorization PASSED — it failed at resolution. Conflating the two "
+        "would make a config problem look like an attack in the audit trail.")
+    assert biz_id is None
 
 
 # ─── the limiter fails closed ────────────────────────────────────────
@@ -333,3 +340,125 @@ def test_kill_switch(monkeypatch):
     assert mcp.enabled() is False
     monkeypatch.setenv("MCP_ENABLED", "on")
     assert mcp.enabled() is True
+
+
+# ─── agent_runs (Build 2) ────────────────────────────────────────────
+
+def _capture_rows(monkeypatch):
+    """Intercept the agent_runs write."""
+    rows = []
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_post_as_service",
+                        lambda path, body, prefer=None: rows.append((path, body)))
+    return rows
+
+
+def test_audit_writes_an_agent_runs_row(monkeypatch):
+    rows = _capture_rows(monkeypatch)
+    mcp._audit(actor="owner@x.com", actor_user_id="u1", tool="catch_up",
+               allowed=True, ok=True, duration_ms=42, business_id="biz-1",
+               arg_keys=["limit"])
+    assert len(rows) == 1
+    path, body = rows[0]
+    assert path == "/agent_runs"
+    assert body["tool"] == "catch_up" and body["surface"] == "mcp"
+    assert body["allowed"] is True and body["ok"] is True
+    assert body["business_id"] == "biz-1" and body["actor_user_id"] == "u1"
+    assert body["arg_keys"] == ["limit"]
+
+
+def test_audit_never_records_argument_values(monkeypatch):
+    """The property the table exists to protect. An audit trail that stores
+    values becomes a second copy of the data it audits — held longer, under
+    weaker scrutiny, and outside every deletion path."""
+    rows = _capture_rows(monkeypatch)
+    mcp._audit(actor="owner@x.com", tool="recall_conversation", allowed=True,
+               ok=True, duration_ms=5, arg_keys=["query"])
+    body = rows[0][1]
+    assert body["arg_keys"] == ["query"]
+    blob = json.dumps(body)
+    assert "SECRET" not in blob
+    # arg_keys is text[], not jsonb — there is nowhere convenient to put a
+    # value even by accident.
+    assert isinstance(body["arg_keys"], list)
+    assert all(isinstance(k, str) for k in body["arg_keys"])
+
+
+def test_audit_distinguishes_refused_from_failed(monkeypatch):
+    """`allowed` and `ok` answer different questions. Collapsing them would
+    lose the distinction a reader of this table most needs."""
+    rows = _capture_rows(monkeypatch)
+    mcp._audit(actor="a", tool="send_sms", allowed=False, ok=False, duration_ms=1)
+    mcp._audit(actor="a", tool="catch_up", allowed=True, ok=False, duration_ms=9)
+    refused, failed = rows[0][1], rows[1][1]
+    assert refused["allowed"] is False and refused["ok"] is False
+    assert failed["allowed"] is True and failed["ok"] is False
+
+
+def test_audit_truncates_error_text(monkeypatch):
+    """A reason, not a traceback — exception text here routinely carries
+    table names, ids and query fragments."""
+    rows = _capture_rows(monkeypatch)
+    mcp._audit(actor="a", tool="catch_up", allowed=True, ok=False,
+               duration_ms=1, error="x" * 2000)
+    assert len(rows[0][1]["error"]) <= 300
+
+
+def test_audit_failure_is_never_fatal(monkeypatch, caplog):
+    """An audit write that could take down the surface it audits would be a
+    worse bug than the one it guards against."""
+    import logging, sb_clients
+    def _boom(*a, **k):
+        raise RuntimeError("supabase down")
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", _boom)
+    with caplog.at_level(logging.INFO, logger="mcp_server"):
+        mcp._audit(actor="a", tool="catch_up", allowed=True, ok=True, duration_ms=1)
+    assert "[audit]" in caplog.text, "the log line must land even when the DB write fails"
+    assert "non-fatal" in caplog.text
+
+
+def test_endpoint_refusals_are_recorded(monkeypatch):
+    """A non-owner reaching this endpoint and a caller hitting the limiter
+    both happen BEFORE a tool is named. They used to leave no trace, and
+    they are the two rows most worth having."""
+    rows = _capture_rows(monkeypatch)
+    mcp._audit(actor="stranger@x.com", tool="(endpoint)", allowed=False,
+               ok=False, duration_ms=0, error="non-owner caller")
+    body = rows[0][1]
+    assert body["allowed"] is False
+    assert body["tool"] == "(endpoint)"
+    assert body["business_id"] is None, "no business is resolved before refusal"
+
+
+def test_migration_declares_arg_keys_as_text_array():
+    """text[] not jsonb, so a value has nowhere convenient to go."""
+    sql = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+        "supabase/APPLY-2026-07-28-agent-runs.sql").read_text(encoding="utf-8")
+    ddl = "\n".join(line.split("--")[0] for line in sql.splitlines())
+    table = ddl.split("CREATE TABLE IF NOT EXISTS public.agent_runs")[1].split(");")[0]
+    assert "arg_keys      text[]" in table or "arg_keys text[]" in table.replace("  ", " ")
+    assert "allowed" in table and "ok" in table
+
+
+def test_migration_has_rls_on_and_no_policies():
+    sql = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+        "supabase/APPLY-2026-07-28-agent-runs.sql").read_text(encoding="utf-8")
+    assert "ENABLE ROW LEVEL SECURITY" in sql
+    assert "CREATE POLICY" not in sql, "service-role only, like the table it models"
+
+
+def test_migration_revokes_the_table_grants():
+    """RLS-with-no-policies is a consequence of absence; a revoked grant is
+    a decision.
+
+    Supabase grants SELECT on public tables to anon/authenticated by
+    default. With RLS on and no policies those roles get zero rows — safe
+    today, but only because no policy exists. Add one permissive policy
+    later, for any reason, and the standing grant makes it public in the
+    same breath. restricted_module_access_log revokes; so must this."""
+    sql = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+        "supabase/APPLY-2026-07-28-agent-runs.sql").read_text(encoding="utf-8")
+    ddl = "\n".join(line.split("--")[0] for line in sql.splitlines())
+    assert "REVOKE ALL ON public.agent_runs FROM anon, authenticated" in ddl
+    # Found while verifying agent_runs: Feed 2's table had the same gap.
+    assert "REVOKE ALL ON public.vertical_knowledge FROM anon, authenticated" in ddl
