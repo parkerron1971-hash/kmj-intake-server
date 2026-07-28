@@ -96,6 +96,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 # work on Haiku. Kevin's 2026-07-03 ruling (drafts ride the
 # conversational tier) is preserved as the draft-lane default.
 import chief_models
+import fallback_brain
 CHIEF_MODEL = chief_models.model_for("chat")
 DRAFT_MODEL = chief_models.model_for("draft")
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
@@ -439,7 +440,11 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         pass
     key = _anthropic_key()
     if not key:
-        return ""
+        # Backup brain (2026-07-12): no primary key at all — go straight
+        # to the fallback provider rather than muting Chief.
+        return await fallback_brain.call_fallback(
+            client, system, messages, max_tokens, business_id,
+            reason="no ANTHROPIC_API_KEY")
     # Chief Layers arc — callers pick a lane (chat/voice/deep) via
     # chief_models.model_for; no explicit model keeps the chat default.
     model = model or CHIEF_MODEL
@@ -503,7 +508,17 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                         input_tokens=0, output_tokens=0, business_id=business_id,
                         duration_ms=int(time.time() * 1000) - started_ms, ok=False,
                         error=f"{resp.status_code}")
-                    return ""
+                    # Backup brain (2026-07-12): no text reached the sink
+                    # yet, so the fallback reply can be delivered whole.
+                    fb = await fallback_brain.call_fallback(
+                        client, system, messages, max_tokens, business_id,
+                        reason=f"stream {resp.status_code}")
+                    if fb and stream_sink is not None:
+                        try:
+                            stream_sink(fb)
+                        except Exception:
+                            pass
+                    return fb
                 async for line in resp.aiter_lines():
                     if not line or not line.startswith("data:"):
                         continue
@@ -536,7 +551,19 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
             await log_api_usage(endpoint="/chief/backend", model=model,
                 input_tokens=in_tok, output_tokens=out_tok, business_id=business_id,
                 duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=str(e))
-            return "".join(full_parts).strip()
+            partial = "".join(full_parts).strip()
+            if partial:
+                return partial
+            # Nothing arrived at all — try the backup brain.
+            fb = await fallback_brain.call_fallback(
+                client, system, messages, max_tokens, business_id,
+                reason=f"stream drop: {e}")
+            if fb and stream_sink is not None:
+                try:
+                    stream_sink(fb)
+                except Exception:
+                    pass
+            return fb
         await log_api_usage(
             endpoint="/chief/backend", model=model,
             input_tokens=in_tok, output_tokens=out_tok,
@@ -577,7 +604,22 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
             input_tokens=0, output_tokens=0, business_id=business_id,
             duration_ms=int(time.time() * 1000) - started_ms, ok=False,
             error=last_err or "exhausted retries")
-        return ""
+        # Backup Brain (#103, 2026-07-12). Anthropic has now failed three
+        # times with backoff, so this is not a hiccup — it is an outage, a
+        # rate-limit wall, or a bad key. One shot on the fallback provider
+        # before conceding the turn.
+        #
+        # Note this composes BETTER than the original PR, which failed over
+        # on the very first error. The retry loop landed separately on
+        # 2026-07-17 and handles the transient case, so the fallback now
+        # fires only when Anthropic is genuinely unavailable — fewer
+        # cross-provider turns, and each one actually justified.
+        #
+        # call_fallback returns "" itself when disabled or when the
+        # fallback also fails, so this function's contract is unchanged.
+        return await fallback_brain.call_fallback(
+            client, system, messages, max_tokens, business_id,
+            reason=last_err or "exhausted retries")
     data = resp.json()
     usage = data.get("usage", {}) if isinstance(data, dict) else {}
     # Arc 20B quality gate — observe the cache working in prod logs:
