@@ -266,6 +266,8 @@ and data rates may apply. Reply <strong>STOP</strong> to unsubscribe at any time
 <p>The Service relies on the following third parties, each with its own privacy
 practices:</p>
 <ul>
+  <li><strong>Anthropic</strong> &mdash; the AI provider that powers Chief and the assistant features. Your business data and the content you ask Chief about (which may include your customers&rsquo; names, messages, and contact details) are sent to Anthropic to generate responses. Anthropic does not train its models on data submitted through its API.</li>
+  <li><strong>OpenAI</strong> &mdash; used for voice transcription, text-to-speech, and related AI features. Audio and text you send to those features are processed by OpenAI. OpenAI does not train its models on data submitted through its API.</li>
   <li><strong>Meta Platforms (Facebook and Instagram)</strong> &mdash; for publishing to connected accounts.</li>
   <li><strong>Supabase</strong> &mdash; for secure data storage.</li>
   <li><strong>Railway</strong> &mdash; for application hosting.</li>
@@ -273,6 +275,15 @@ practices:</p>
   <li><strong>Stripe</strong> &mdash; for payment processing.</li>
   <li><strong>Plaid</strong> &mdash; for bank connections you authorize.</li>
 </ul>
+
+<h2>How we use AI</h2>
+<p>Chief and several features of the Service are powered by third-party AI providers
+(Anthropic and OpenAI, listed above). To generate responses, draft messages, and
+answer questions, we send relevant portions of your business data &mdash; which can
+include your customers&rsquo; names, email and message content, and contact details
+&mdash; to those providers. They process this data only to return a result to us and,
+per their API terms, do not use it to train their models. AI output can be imperfect;
+you remain responsible for reviewing anything sent to your customers.</p>
 
 <h2>Data retention</h2>
 <p>We retain your information for as long as your account is active or as needed to
