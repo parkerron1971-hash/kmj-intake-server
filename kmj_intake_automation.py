@@ -134,6 +134,13 @@ try:
 except Exception as _e:
     print(f"   [warn] telemetry router not mounted: {_e}")
 app.include_router(intake_router)
+# First-party anonymous site analytics (POST /api/track is public;
+# GET /admin/traffic is platform-owner only). See site_analytics.py.
+try:
+    from site_analytics import router as site_analytics_router
+    app.include_router(site_analytics_router)
+except Exception as _e:  # never block boot on an analytics import
+    logging.getLogger(__name__).warning(f"site_analytics not loaded: {_e}")
 app.include_router(nurture_router)
 app.include_router(session_router)
 app.include_router(contract_router)

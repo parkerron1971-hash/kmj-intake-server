@@ -361,6 +361,48 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
     }});
   }})();
 </script>
+
+<script>
+/* First-party, anonymous traffic. No cookie is set: the session id lives
+   in sessionStorage and dies with the tab, so it cannot follow anyone
+   across visits or across sites. Do Not Track is honoured here AND again
+   server-side. Nothing blocks render; failures are swallowed on purpose. */
+(function () {{
+  try {{
+    if (navigator.doNotTrack === '1' || window.doNotTrack === '1') return;
+    var KEY = '_sol_s';
+    var sid = sessionStorage.getItem(KEY);
+    if (!sid) {{
+      sid = (Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 24);
+      sessionStorage.setItem(KEY, sid);
+    }}
+    var w = window.innerWidth || 1024;
+    var device = w < 700 ? 'mobile' : (w < 1024 ? 'tablet' : 'desktop');
+
+    function send(event) {{
+      var body = JSON.stringify({{
+        s: sid, p: location.pathname, r: document.referrer || null,
+        d: device, e: event
+      }});
+      /* sendBeacon survives the page unloading; fetch is the fallback */
+      if (navigator.sendBeacon) {{
+        navigator.sendBeacon('/api/track', new Blob([body], {{ type: 'application/json' }}));
+      }} else {{
+        fetch('/api/track', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                              body: body, keepalive: true }}).catch(function () {{}});
+      }}
+    }}
+
+    send('view');
+    /* the two conversions worth knowing about */
+    document.addEventListener('click', function (e) {{
+      var a = e.target && e.target.closest && e.target.closest('a[href*="get-started"], .btn-primary, .nav-cta');
+      if (a) send('cta');
+    }}, {{ passive: true }});
+    window.addEventListener('solutionist:applied', function () {{ send('submit'); }});
+  }} catch (e) {{ /* analytics must never break the page */ }}
+}})();
+</script>
 {extra_scripts}
 </body>
 </html>"""
@@ -963,6 +1005,24 @@ def render_home() -> str:
         .hero-app{margin-top:36px;}
       }
 
+
+      /* ── trust band: this product asks for Stripe, bank connections and
+         a whole client list. Answering "what happens to my data" directly
+         under the hero is the honest place for it. Every claim here is
+         already documented in /privacy — nothing new is promised. ── */
+      .trust{border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+        padding:30px 0;background:color-mix(in srgb, var(--accent) 3%, transparent);}
+      .trust-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:26px;}
+      @media (max-width:900px){.trust-grid{grid-template-columns:repeat(2,1fr);gap:22px;}}
+      @media (max-width:560px){.trust-grid{grid-template-columns:1fr;gap:18px;}}
+      .trust-item{display:flex;gap:11px;align-items:flex-start;}
+      .trust-item svg{width:17px;height:17px;flex-shrink:0;margin-top:1px;color:var(--accent);}
+      .trust-item b{display:block;font-size:13px;font-weight:600;color:var(--text-primary);
+        letter-spacing:-.01em;margin-bottom:3px;}
+      .trust-item span{font-size:12.5px;color:var(--text-muted);line-height:1.5;}
+      .trust-more{margin-top:22px;text-align:center;font-size:12.5px;color:var(--text-dim);}
+      .trust-more a{color:var(--text-secondary);text-decoration:underline;text-underline-offset:3px;}
+
       /* ══════════════════════════════════════════════════════════════
          CHIEF strip
          ══════════════════════════════════════════════════════════════ */
@@ -1189,6 +1249,21 @@ def render_home() -> str:
           </div>
         </div>
       </div>
+    </div>
+  </div>
+</section>
+
+
+<section class="trust">
+  <div class="container-xl">
+    <div class="trust-grid reveal">
+        <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span><b>Your data stays yours</b>Never sold, never rented, and never used to train anyone&rsquo;s models.</span></div>
+        <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><span><b>Nothing goes out without you</b>Chief drafts and suggests. You approve. Every send is an explicit action.</span></div>
+        <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span><b>Credentials never reach the browser</b>Connected account tokens are stored server-side only. Your browser never sees them.</span></div>
+        <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg><span><b>Named subprocessors</b>Supabase, Stripe, Plaid, Anthropic and OpenAI. Listed, not hidden.</span></div>
+    </div>
+    <div class="trust-more reveal">
+      Full detail in the <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms</a>.
     </div>
   </div>
 </section>
@@ -2380,6 +2455,7 @@ def render_get_started() -> str:
         honeypot:    form.website.value  // honeypot field
       };
       try {
+        try { window.dispatchEvent(new Event('solutionist:applied')); } catch (e) {}
         var res = await fetch('/api/leads', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

@@ -229,7 +229,14 @@ are your responsibility and are not covered by this policy.</p>
       login (OAuth), a Page access token and basic information about the Page and linked
       Instagram account (such as the Page name and ID). We never receive or store your
       Facebook or Instagram password.</li>
-  <li><strong>Usage information:</strong> basic technical data such as log records needed to operate
+  <li><strong>Website analytics (anonymous):</strong> when you browse our public
+      marketing site we record the page path, the referring site&rsquo;s domain, a coarse
+      device type (mobile, tablet or desktop), and a random session identifier that is
+      stored only for the life of the browser tab. We deliberately do <strong>not</strong>
+      record your IP address, your browser&rsquo;s user-agent string, or any cookie, and this
+      data is never linked to your account. It cannot identify you and is not used to
+      track you across other websites. We honour the Do Not Track browser setting.</li>
+    <li><strong>Usage information:</strong> basic technical data such as log records needed to operate
       and secure the Service.</li>
 </ul>
 
