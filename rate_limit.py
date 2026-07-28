@@ -27,6 +27,10 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "proxy":  (int(os.environ.get("RL_PROXY_PER_MIN", "60")), 60),
     # Interview v3 (B3) — the follow-up probe's per-business hourly budget.
     "interview_probe": (int(os.environ.get("RL_INTERVIEW_PROBE_PER_HOUR", "6")), 3600),
+    # The agent-facing MCP surface. Tighter than the practitioner buckets
+    # and checked with allow_strict() — an external agent that loops is a
+    # different problem from a person clicking twice.
+    "mcp": (int(os.environ.get("RL_MCP_PER_MIN", "20")), 60),
 }
 _DEFAULT = (60, 60)
 
@@ -46,23 +50,49 @@ def client_ip(request) -> str:
         return "unknown"
 
 
+def _check(bucket: str, key: str) -> bool:
+    """The window arithmetic, with no error handling. RAISES on trouble —
+    the two public wrappers below decide what a failure means, and they
+    disagree on purpose."""
+    max_req, window = _LIMITS.get(bucket, _DEFAULT)
+    now = time.time()
+    bkey = (bucket, key or "unknown")
+    b = _buckets.get(bkey)
+    if not b or now - b["start"] > window:
+        _buckets[bkey] = {"start": now, "count": 1}
+        return True
+    if b["count"] >= max_req:
+        return False
+    b["count"] += 1
+    return True
+
+
 def allow(bucket: str, key: str) -> bool:
     """True if this (bucket, key) is under its limit for the current
-    window. Fail-open on any error."""
+    window. Fail-OPEN on any error."""
     try:
-        max_req, window = _LIMITS.get(bucket, _DEFAULT)
-        now = time.time()
-        bkey = (bucket, key or "unknown")
-        b = _buckets.get(bkey)
-        if not b or now - b["start"] > window:
-            _buckets[bkey] = {"start": now, "count": 1}
-            return True
-        if b["count"] >= max_req:
-            return False
-        b["count"] += 1
-        return True
+        return _check(bucket, key)
     except Exception:
         return True
+
+
+def allow_strict(bucket: str, key: str) -> bool:
+    """`allow`, but FAIL-CLOSED.
+
+    Every bucket above fails open, which is right for a practitioner: a
+    limiter glitch must never stop someone running their own business.
+    It is wrong for an external agent. On that surface the caller is not
+    a person waiting on a screen, the credential may be stolen, and
+    "the limiter broke so everything was permitted" is the failure you
+    least want. Same window arithmetic, opposite answer when it breaks.
+
+    Kept separate from `allow` rather than adding a flag, so that no
+    existing caller can acquire this behaviour by accident.
+    """
+    try:
+        return _check(bucket, key)
+    except Exception:
+        return False
 
 
 def retry_after(bucket: str) -> int:
