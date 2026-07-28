@@ -203,22 +203,31 @@ def _seed_rows_for(vertical: str) -> List[Dict[str, str]]:
 
 
 def seed_tick(verticals: Optional[List[str]] = None) -> Dict[str, int]:
-    """Project Feed 1 into the table. Safe to run repeatedly — the unique
-    index makes it converge rather than accumulate.
+    """Project Feed 1 into the table.
 
-    Not scheduled: seeds change only when someone edits the Python, so this
-    runs on demand (a deploy hook, or by hand after editing a profile)."""
+    Skips content that is already there. The unique index would make a
+    blind re-run converge anyway, but `upsert` embeds BEFORE it writes, so
+    a blind run would pay for ~165 embeddings every time to produce zero
+    new rows. Diffing first makes this cheap enough to schedule, which is
+    what stops Feed 1 depending on someone remembering to run it.
+
+    Idempotent and safe to call as often as you like."""
     if not _enabled():
-        return {"written": 0, "verticals": 0}
+        return {"written": 0, "skipped": 0, "verticals": 0}
     import vertical_registry as reg
 
     keys = verticals or list(reg.canonical_keys())
-    written = 0
+    written = skipped = 0
     for vertical in keys:
+        have = {r.get("content") for r in list_for_vertical(vertical, source=SOURCE_SEED)}
         for row in _seed_rows_for(vertical):
+            if row["content"] in have:
+                skipped += 1
+                continue
             if upsert(vertical, row["kind"], row["content"],
                       source=SOURCE_SEED, confidence=0.9):
                 written += 1
-    logger.info(f"[vk] seed_tick wrote/refreshed {written} rows "
-                f"across {len(keys)} verticals")
-    return {"written": written, "verticals": len(keys)}
+    if written:
+        logger.info(f"[vk] seed_tick wrote {written} new rows "
+                    f"({skipped} already present) across {len(keys)} verticals")
+    return {"written": written, "skipped": skipped, "verticals": len(keys)}

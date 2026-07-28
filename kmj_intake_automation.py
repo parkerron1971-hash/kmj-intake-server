@@ -773,6 +773,19 @@ async def startup():
                           "interval", hours=24, id="feed2_distill")
     except Exception as e:
         print(f"   [warn] feed2 distillation job not scheduled: {e}")
+    # Feed 1 → rows. Projects the vertical_intelligence profiles into
+    # vertical_knowledge so seeded knowledge lives where Feed 2's does.
+    # Weekly and diff-first: it writes only what is genuinely new, so the
+    # steady state costs one cheap read per vertical and no embeddings.
+    # Scheduled rather than manual because "remember to run the seeder
+    # after editing a profile" is the kind of step that gets forgotten
+    # exactly once and then stays wrong. Kill switch: VERTICAL_KNOWLEDGE=off.
+    try:
+        import vertical_knowledge as _vk
+        scheduler.add_job(g("vertical_seed", _vk.seed_tick),
+                          "interval", hours=168, id="vertical_seed")
+    except Exception as e:
+        print(f"   [warn] vertical seed job not scheduled: {e}")
     # One calendar (2026-07-10) — mirror bookings into sessions so the
     # calendar, Chief's context, and SMS reminders all see them.
     # Kill switch: BOOKING_SESSION_SYNC=off.

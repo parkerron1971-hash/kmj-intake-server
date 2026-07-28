@@ -377,3 +377,43 @@ def test_evidence_count_records_the_weakest_signal(monkeypatch):
     assert out["written"] == 1
     assert captured["evidence_count"] == 3, (
         "evidence_count should be the weakest supporting signal, not the strongest")
+
+
+# ─── Feed 1 seeding ──────────────────────────────────────────────────
+
+def test_seed_tick_skips_content_already_present(monkeypatch):
+    """The reason this is schedulable: `upsert` embeds BEFORE it writes, so
+    a blind re-run would pay for every embedding again to produce nothing.
+    Diffing first makes the steady state one cheap read per vertical."""
+    monkeypatch.setattr(vk, "_enabled", lambda: True)
+    monkeypatch.setattr(vk, "list_for_vertical",
+                        lambda v, source=None, limit=200: [
+                            {"content": "Voice hallmark: already here"}])
+    monkeypatch.setattr(vk, "_seed_rows_for", lambda v: [
+        {"kind": "voice", "content": "Voice hallmark: already here"},
+        {"kind": "voice", "content": "Voice hallmark: brand new"},
+    ])
+    embedded = []
+    monkeypatch.setattr(vk.chief_memory_semantic, "embed",
+                        lambda t: embedded.append(t) or None)
+    monkeypatch.setattr(vk.sb_clients, "sb_post_as_service",
+                        lambda p, b, prefer=None: {})
+
+    out = vk.seed_tick(["coach"])
+    assert out["written"] == 1 and out["skipped"] == 1
+    assert embedded == ["Voice hallmark: brand new"], (
+        "an already-present seed must not be re-embedded")
+
+
+def test_seed_tick_is_idempotent(monkeypatch):
+    """Second run over an unchanged profile writes nothing at all."""
+    monkeypatch.setattr(vk, "_enabled", lambda: True)
+    rows = [{"kind": "voice", "content": "Voice hallmark: warm"}]
+    monkeypatch.setattr(vk, "_seed_rows_for", lambda v: rows)
+    monkeypatch.setattr(vk, "list_for_vertical",
+                        lambda v, source=None, limit=200: [
+                            {"content": r["content"]} for r in rows])
+    monkeypatch.setattr(vk.chief_memory_semantic, "embed",
+                        lambda t: pytest.fail("should not embed on a no-op run"))
+    out = vk.seed_tick(["coach"])
+    assert out == {"written": 0, "skipped": 1, "verticals": 1}

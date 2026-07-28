@@ -60,7 +60,8 @@ WHAT CLASS C DOES AND DOES NOT MEAN
   would hand out autonomy against a safety net that isn't there.
 
 DEFAULT-DENY IS WHAT MAKES A PARTIAL REGISTRY SAFE
-  127 of 128 verbs are classified; `setup_store` remains `UNCLASSIFIED`.
+  All 128 verbs are classified. `UNCLASSIFIED` is empty and should stay that way,
+  but it exists because "not decided yet" is a better entry than a guess.
   Every accessor below returns the *refusing* answer for a verb it does not
   know: not exposable, not autonomy-eligible, reversibility None. So an
   unclassified verb behaves exactly like a class-C one until somebody rules
@@ -316,6 +317,20 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                     "class is whatever it schedules, so it inherits the worst — "
                                     "otherwise it is a hole straight through this table. The "
                                     "scheduled verb must be checked at execution time too"),
+    "setup_store":          _w("C", "sets storefront tax rate and flat shipping. The Stripe leg "
+                                    "turned out to be a READ (select=stripe_account_id, to warn "
+                                    "when checkout would refuse) — it creates no Stripe objects, "
+                                    "so that was not what decided this.\n"
+                                    "        What decided it: the SETTING is cleanly reversible, "
+                                    "but its effect is not. A wrong tax rate is corrected in one "
+                                    "edit, while the orders that checked out at that rate in the "
+                                    "meantime already charged real customers the wrong amount. "
+                                    "Fixing the value does not unwind them. Same shape as "
+                                    "create_invoice's auto_send: reversible switch, unattended "
+                                    "downstream money effect.\n"
+                                    "        Note also that with no arguments this verb is a "
+                                    "pure status check. A verb classes at its most dangerous "
+                                    "path, not its most common one"),
 }
 
 
@@ -333,11 +348,13 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
 _PENDING = "not yet classified"
 
 UNCLASSIFIED: Dict[str, str] = {
-    "setup_store": "configures the hosted storefront (tax rate, flat shipping) and also touches "
-                   "Stripe. The Stripe leg was not read closely enough to say whether it only "
-                   "reads configuration or creates objects, and the difference is A versus C. "
-                   "Left pending rather than guessed — default-deny means it behaves as C "
-                   "meanwhile, which is the safe direction.",
+    # Empty, and the drift test keeps it honest: a verb added to
+    # ACTION_HANDLERS without a classification fails there rather than
+    # silently inheriting deny-by-default and quietly not working.
+    #
+    # Adding an entry here is a legitimate move — "I have not decided yet"
+    # beats a guess, and default-deny makes a pending verb behave as class
+    # C meanwhile. What is NOT legitimate is leaving a verb in neither map.
 }
 
 
