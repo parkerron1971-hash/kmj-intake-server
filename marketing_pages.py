@@ -781,6 +781,75 @@ REPLICA_KIT_CSS = """
       .chief-in{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;font-size:9px;
         color:var(--ink-3);background:rgba(255,255,255,.04);border:1px solid var(--line);}
       .chief-in .go{margin-left:auto;width:14px;height:14px;border-radius:4px;background:var(--gold);}
+      /* ── the hero replica answers a question ──────────────────────
+         The Chief panel types a question and answers it, on a 15s
+         loop. Every string is HARDCODED — this makes no request to
+         anything. It is the same fiction as the rest of the replica
+         (Jordan Reyes is not real, $12,480 is not real), just moving.
+         A live endpoint here would be an unauthenticated LLM surface
+         that every crawler on the internet could bill us for.
+
+         The numbers agree with the panel's own resting state: it says
+         8 overdue / $1,865, so the answer names two of those eight
+         rather than inventing a separate set of figures.
+
+         Both faces are stacked, face A in flow and face B absolute on
+         top of it, so the panel height is whatever face A needs and
+         the swap cannot shift the hero. Everything is opacity and
+         transform, nothing that triggers layout.
+
+         One shared 15s timeline; each piece picks its moment with
+         keyframe percentages. Character stagger is animation-delay,
+         which permanently phase-shifts that character's own loop —
+         which is exactly the intent. */
+      .chief-body{position:relative;display:flex;flex-direction:column;gap:6px;}
+      .chief-note{font-size:8px;color:var(--ink-3);opacity:.8;letter-spacing:.01em;}
+      .cf{display:flex;flex-direction:column;gap:6px;}
+      .cf-b{position:absolute;inset:0;opacity:0;}
+      .cf-a{animation:cfA 15s ease infinite;}
+      .cf-b{animation:cfB 15s ease infinite;}
+      @keyframes cfA{0%,19%{opacity:1;}24%,85%{opacity:0;}91%,100%{opacity:1;}}
+      @keyframes cfB{0%,23%{opacity:0;}28%,84%{opacity:1;}88%,100%{opacity:0;}}
+      /* rows land one after another rather than as a block */
+      .cf-b > *{opacity:0;transform:translateY(3px);animation:cfRow 15s ease infinite;}
+      .cf-b > *:nth-child(1){animation-delay:.00s;}
+      .cf-b > *:nth-child(2){animation-delay:.13s;}
+      .cf-b > *:nth-child(3){animation-delay:.26s;}
+      .cf-b > *:nth-child(4){animation-delay:.39s;}
+      .cf-b > *:nth-child(5){animation-delay:.52s;}
+      .cf-b > *:nth-child(6){animation-delay:.65s;}
+      @keyframes cfRow{0%,24%{opacity:0;transform:translateY(3px);}
+                       29%,84%{opacity:1;transform:translateY(0);}
+                       87%,100%{opacity:0;transform:translateY(3px);}}
+
+      .cin-wrap{position:relative;flex:1;min-width:0;overflow:hidden;white-space:nowrap;}
+      .cin-ph{display:block;animation:cinPh 15s ease infinite;}
+      @keyframes cinPh{0%,11%{opacity:1;}13%,88%{opacity:0;}92%,100%{opacity:1;}}
+      .cin-q{position:absolute;left:0;top:0;white-space:nowrap;color:var(--ink-1,#fff);}
+      .cin-q i{display:inline-block;max-width:0;overflow:hidden;opacity:0;font-style:normal;
+        vertical-align:bottom;animation:cinCh 15s linear infinite;}
+      @keyframes cinCh{0%,12.5%{max-width:0;opacity:0;}
+                       14%,86%{max-width:1.6em;opacity:1;}
+                       88%,100%{max-width:0;opacity:0;}}
+      /* caret rides the end of the typed text because it is inline after it */
+      .cin-q::after{content:'';display:inline-block;width:1px;height:8px;
+        vertical-align:-1px;background:var(--gold);animation:cinCar 15s steps(1) infinite;}
+      @keyframes cinCar{0%,11%{opacity:0;}
+                        12%,34%{opacity:1;}35%{opacity:0;}37%{opacity:1;}
+                        39%{opacity:0;}41%{opacity:1;}43%,100%{opacity:0;}}
+
+      /* let people stop it and read */
+      .chief:hover .cf-a,.chief:hover .cf-b,.chief:hover .cf-b > *,
+      .chief:hover .cin-ph,.chief:hover .cin-q i,.chief:hover .cin-q::after{
+        animation-play-state:paused;}
+
+      /* rest on the honest static state, no motion at all */
+      @media (prefers-reduced-motion: reduce){
+        .chief .cf-b,.chief .cin-q{display:none;}
+        .chief .cf-a,.chief .cin-ph{opacity:1;}
+        .chief *{animation:none !important;}
+      }
+
 
       /* generic panel + list rows */
       .pnl{border-radius:9px;background:var(--pane);border:1px solid var(--line);padding:9px;
@@ -969,12 +1038,12 @@ def render_home() -> str:
       /* ══════════════════════════════════════════════════════════════
          HERO — copy over a full-width Mission Control replica
          ══════════════════════════════════════════════════════════════ */
-      .hero{position:relative;padding:72px 0 20px;overflow:hidden;}
+      .hero{position:relative;padding:88px 0 20px;overflow:hidden;}
       .hero::before{content:'';position:absolute;inset:-160px 0 auto;height:620px;pointer-events:none;
         background:radial-gradient(52% 70% at 50% 0%, var(--glow), transparent 72%);opacity:.55;}
       .hero .container-xl{position:relative;z-index:1;}
       .hero-copy{max-width:780px;}
-      .hero h1{margin:20px 0 20px;font-size:clamp(42px,6.2vw,68px);line-height:1.02;}
+      .hero h1{margin:0 0 22px;font-size:clamp(46px,7vw,80px);line-height:1.01;}
       .hero .lead{max-width:600px;margin:0 0 32px;font-size:17px;}
       .hero-ctas{display:flex;flex-wrap:wrap;gap:12px;align-items:center;}
       .hero-meta{display:flex;flex-wrap:wrap;align-items:center;gap:18px;margin-top:26px;}
@@ -1178,14 +1247,13 @@ def render_home() -> str:
 <section class="hero">
   <div class="container-xl">
     <div class="hero-copy">
-      <span class="eyebrow reveal">For solo practitioners + small studios</span>
-      <h1 class="reveal reveal-delay-1">Every problem<br>has a <span class="gradient-text">solution.</span></h1>
-      <p class="lead reveal reveal-delay-2">One workspace that runs your whole practice: contacts, invoices, sessions, content and goals, all commanded by an AI Chief of Staff that knows your business. Eight tools, replaced.</p>
-      <div class="hero-ctas reveal reveal-delay-3">
+      <h1 class="reveal">Every problem<br>has a <span class="gradient-text">solution.</span></h1>
+      <p class="lead reveal reveal-delay-1">One workspace that runs your whole business: contacts, invoices, sessions, content and goals, all commanded by an AI Chief of Staff that knows your business. Eight tools, replaced.</p>
+      <div class="hero-ctas reveal reveal-delay-2">
         <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
         <a class="btn-secondary" href="#rooms">Look inside</a>
       </div>
-      <div class="hero-meta reveal reveal-delay-3">
+      <div class="hero-meta reveal reveal-delay-2">
         <span class="stat-block"><span class="big">8</span><span>tools replaced by one workspace</span></span>
         <span class="hero-note">Currently in private beta &middot; Apply for access</span>
       </div>
@@ -1218,13 +1286,25 @@ def render_home() -> str:
                   <img class="brief-mark" src="/assets/mark.webp" alt="" width="128" height="128" loading="lazy">
                   <div class="chief">
                     <div class="chief-h">Chief AI<span class="on">Online</span></div>
-                    <div class="chief-lead">I&rsquo;ve analyzed your day. Here&rsquo;s what I found:</div>
-                    <div class="chief-f"><span class="sq warn"></span><span class="g">8 invoices overdue</span><span class="amt">$1,865</span></div>
-                    <div class="chief-f"><span class="sq"></span><span class="g">2 drafts waiting for you</span><span class="tag">Needs you</span></div>
-                    <div class="chief-f"><span class="sq ok"></span><span class="g">$12,480 collected this month</span></div>
-                    <div class="chief-ask">Would you like me to handle these?</div>
-                    <div class="chief-btns"><b>Yes, handle it</b><i>Review first</i></div>
-                    <div class="chief-in">Ask Chief anything&hellip;<span class="go"></span></div>
+                    <div class="chief-body">
+                      <div class="cf cf-a">
+                        <div class="chief-lead">I&rsquo;ve analyzed your day. Here&rsquo;s what I found:</div>
+                        <div class="chief-f"><span class="sq warn"></span><span class="g">8 invoices overdue</span><span class="amt">$1,865</span></div>
+                        <div class="chief-f"><span class="sq"></span><span class="g">2 drafts waiting for you</span><span class="tag">Needs you</span></div>
+                        <div class="chief-f"><span class="sq ok"></span><span class="g">$12,480 collected this month</span></div>
+                        <div class="chief-ask">Would you like me to handle these?</div>
+                        <div class="chief-btns"><b>Yes, handle it</b><i>Review first</i></div>
+                      </div>
+                      <div class="cf cf-b" aria-hidden="true">
+                        <div class="chief-lead">Of the 8, two are past 20 days:</div>
+                        <div class="chief-f"><span class="sq warn"></span><span class="g">Marcus Bell &middot; 22 days</span><span class="amt">$420</span></div>
+                        <div class="chief-f"><span class="sq warn"></span><span class="g">Danielle Ortiz &middot; 24 days</span><span class="amt">$310</span></div>
+                        <div class="chief-ask">Send both a reminder?</div>
+                        <div class="chief-btns"><b>Yes, send them</b><i>Review first</i></div>
+                        <div class="chief-note">Drafted, not sent. Nothing leaves without you.</div>
+                      </div>
+                    </div>
+                    <div class="chief-in"><span class="cin-wrap"><span class="cin-ph">Ask Chief anything&hellip;</span><span class="cin-q" aria-hidden="true"><i style="animation-delay:0.00s">W</i><i style="animation-delay:0.05s">h</i><i style="animation-delay:0.10s">o</i><i style="animation-delay:0.15s">&nbsp;</i><i style="animation-delay:0.20s">h</i><i style="animation-delay:0.25s">a</i><i style="animation-delay:0.30s">s</i><i style="animation-delay:0.35s">n</i><i style="animation-delay:0.40s">&rsquo;</i><i style="animation-delay:0.45s">t</i><i style="animation-delay:0.50s">&nbsp;</i><i style="animation-delay:0.55s">p</i><i style="animation-delay:0.60s">a</i><i style="animation-delay:0.65s">i</i><i style="animation-delay:0.70s">d</i><i style="animation-delay:0.75s">&nbsp;</i><i style="animation-delay:0.80s">m</i><i style="animation-delay:0.85s">e</i><i style="animation-delay:0.90s">?</i></span></span><span class="go"></span></div>
                   </div>
                 </div>
 
@@ -1647,8 +1727,8 @@ def render_home() -> str:
 </script>
 """
     return _render_shell(
-        title="One workspace that runs your whole practice",
-        description="The Solutionist System is one AI-powered workspace that replaces 8+ tools for solo practitioners. Contacts, invoices, sessions, content, goals, and a Chief of Staff that knows your business.",
+        title="One workspace that runs your whole business",
+        description="The Solutionist System is one AI-powered workspace that replaces 8+ tools for people running a business on their own. Contacts, invoices, sessions, content, goals, and a Chief of Staff that knows your business.",
         content_html=body, path="/", extra_css=extra_css, extra_scripts=extra_scripts,
     )
 
@@ -1750,7 +1830,7 @@ def render_features() -> str:
       <div class="reveal reveal-delay-1">
         <div class="fs-eyebrow"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="7" x="14" y="3" rx="1"/><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1"/></svg>Build</div>
         <h2>Sites, brand and intake, all yours.</h2>
-        <p>Spin up a practitioner site, set your brand kit (colors, fonts, logo), capture leads through intake forms, and wire up the integrations you need.</p>
+        <p>Spin up your own site, set your brand kit (colors, fonts, logo), capture leads through intake forms, and wire up the integrations you need.</p>
         <ul class="fs-list">
           <li>Practitioner sites</li><li>Brand kits</li><li>Intake forms</li><li>Custom modules</li>
           <li>Print materials</li><li>Booking page</li><li>Link page</li><li>Email templates</li>
@@ -2127,7 +2207,7 @@ def render_faq() -> str:
     <div class="faq-list reveal">
       <details class="faq-item">
         <summary>Who is this actually for?</summary>
-        <div class="faq-body"><p>Solo practitioners and small studios. The people we built it for: pastors, ministry leaders, coaches, consultants, creatives, agencies-of-one, and small service businesses. If you run your whole show, from sales and delivery to marketing and finances, Solutionist is for you. If you have a 20-person team with a dedicated ops person, it's overkill.</p></div>
+        <div class="faq-body"><p>People who run the whole thing themselves: pastors, ministry leaders, coaches, consultants, creatives, agencies-of-one, and small service businesses. If you run your whole show, from sales and delivery to marketing and finances, Solutionist is for you. If you have a 20-person team with a dedicated ops person, it's overkill.</p></div>
       </details>
       <details class="faq-item">
         <summary>Do I need a team to use this?</summary>
@@ -2303,7 +2383,7 @@ def render_about() -> str:
 """
     return _render_shell(
         title="About",
-        description="Built by Kevin McCloud Jr. at The Solutionist System LLC. A Michigan-based company building one workspace for solo practitioners.",
+        description="Built by Kevin McCloud Jr. at The Solutionist System LLC. A Michigan-based company building one workspace for small businesses.",
         content_html=body, path="/about", active="about", extra_css=extra_css,
     )
 
@@ -2510,7 +2590,7 @@ def render_get_started() -> str:
             <option value="coach">Coach</option>
             <option value="consultant">Consultant</option>
             <option value="creative">Creative</option>
-            <option value="practitioner">Practitioner</option>
+            <option value="practitioner">Service Provider</option>
             <option value="solo_studio">Solo Studio</option>
             <option value="other">Other</option>
           </select>
