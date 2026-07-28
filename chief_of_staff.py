@@ -615,11 +615,22 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         # fires only when Anthropic is genuinely unavailable — fewer
         # cross-provider turns, and each one actually justified.
         #
-        # call_fallback returns "" itself when disabled or when the
-        # fallback also fails, so this function's contract is unchanged.
-        return await fallback_brain.call_fallback(
-            client, system, messages, max_tokens, business_id,
-            reason=last_err or "exhausted retries")
+        # call_fallback documents itself as returning "" on any failure,
+        # and mostly does — but it catches httpx.HTTPError and
+        # (ValueError, AttributeError, IndexError) specifically, so a
+        # KeyError or TypeError on an unexpected OpenAI response shape
+        # would escape. This runs on a turn Anthropic has ALREADY failed,
+        # where the established behaviour is a graceful mute; letting an
+        # exception through here would upgrade that to a 500. Belt and
+        # braces, so the backup brain can never be worse than no backup
+        # brain.
+        try:
+            return await fallback_brain.call_fallback(
+                client, system, messages, max_tokens, business_id,
+                reason=last_err or "exhausted retries")
+        except Exception as e:  # pragma: no cover — defensive
+            logger.warning(f"fallback brain raised, conceding turn: {e}")
+            return ""
     data = resp.json()
     usage = data.get("usage", {}) if isinstance(data, dict) else {}
     # Arc 20B quality gate — observe the cache working in prod logs:
