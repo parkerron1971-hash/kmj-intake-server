@@ -119,3 +119,111 @@ def test_handles_empty_and_none():
     for empty in (None, "", []):
         out = fb._fallback_system(empty)
         assert "CANNOT take actions" in out, "the rules must survive an empty prompt"
+
+
+# ─── owner notification: two channels that fail differently ──────────
+
+def _reset_window():
+    fb._last_notified = 0.0
+
+
+def test_push_disabled_is_reported_not_swallowed(monkeypatch, caplog):
+    """VAPID unset makes send_to_user return 0 with no error and no log —
+    which is how the first live test looked like 'the notification never
+    fired'. It had fired; only the push half was invisible."""
+    import logging
+    _reset_window()
+
+    class _WD:
+        @staticmethod
+        async def _log_finding(c, h, t, d, pending): return None
+        @staticmethod
+        async def _owner_user_id(c, h): return "owner-1"
+
+    monkeypatch.setitem(sys.modules, "platform_watchdog", _WD)
+    monkeypatch.setitem(sys.modules, "lead_admin",
+                        type("M", (), {"_service_headers": staticmethod(lambda: {})}))
+    pushes = []
+    monkeypatch.setitem(sys.modules, "push_notifications", type("P", (), {
+        "push_enabled": staticmethod(lambda: False),
+        "send_to_user": staticmethod(lambda *a, **k: pushes.append(1) or 0)}))
+
+    import asyncio
+    with caplog.at_level(logging.INFO, logger="fallback_brain"):
+        asyncio.run(fb._notify_owner("anthropic down"))
+    text = caplog.text
+    assert "VAPID" in text, "a disabled push must say so"
+    assert "Mission Control entry was still written" in text
+    assert not pushes, "must not attempt a send when push is disabled"
+
+
+def test_push_delivery_count_is_logged(monkeypatch, caplog):
+    """send_to_user returns a device count. Discarding it is what made
+    'did the owner get told?' unanswerable."""
+    import logging, asyncio
+    _reset_window()
+
+    class _WD:
+        @staticmethod
+        async def _log_finding(c, h, t, d, pending): return None
+        @staticmethod
+        async def _owner_user_id(c, h): return "owner-1"
+
+    monkeypatch.setitem(sys.modules, "platform_watchdog", _WD)
+    monkeypatch.setitem(sys.modules, "lead_admin",
+                        type("M", (), {"_service_headers": staticmethod(lambda: {})}))
+    monkeypatch.setitem(sys.modules, "push_notifications", type("P", (), {
+        "push_enabled": staticmethod(lambda: True),
+        "send_to_user": staticmethod(lambda *a, **k: 2)}))
+
+    with caplog.at_level(logging.INFO, logger="fallback_brain"):
+        asyncio.run(fb._notify_owner("anthropic down"))
+    assert "delivered to 2 device(s)" in caplog.text
+
+
+def test_zero_devices_is_a_warning_not_a_success(monkeypatch, caplog):
+    import logging, asyncio
+    _reset_window()
+
+    class _WD:
+        @staticmethod
+        async def _log_finding(c, h, t, d, pending): return None
+        @staticmethod
+        async def _owner_user_id(c, h): return "owner-1"
+
+    monkeypatch.setitem(sys.modules, "platform_watchdog", _WD)
+    monkeypatch.setitem(sys.modules, "lead_admin",
+                        type("M", (), {"_service_headers": staticmethod(lambda: {})}))
+    monkeypatch.setitem(sys.modules, "push_notifications", type("P", (), {
+        "push_enabled": staticmethod(lambda: True),
+        "send_to_user": staticmethod(lambda *a, **k: 0)}))
+
+    with caplog.at_level(logging.INFO, logger="fallback_brain"):
+        asyncio.run(fb._notify_owner("anthropic down"))
+    assert "reached 0 devices" in caplog.text
+
+
+def test_notification_is_once_per_window(monkeypatch, caplog):
+    """One push per outage, not one per failed turn."""
+    import logging, asyncio
+    _reset_window()
+    calls = []
+
+    class _WD:
+        @staticmethod
+        async def _log_finding(c, h, t, d, pending): calls.append(1)
+        @staticmethod
+        async def _owner_user_id(c, h): return None
+
+    monkeypatch.setitem(sys.modules, "platform_watchdog", _WD)
+    monkeypatch.setitem(sys.modules, "lead_admin",
+                        type("M", (), {"_service_headers": staticmethod(lambda: {})}))
+    monkeypatch.setitem(sys.modules, "push_notifications", type("P", (), {
+        "push_enabled": staticmethod(lambda: False),
+        "send_to_user": staticmethod(lambda *a, **k: 0)}))
+
+    with caplog.at_level(logging.INFO, logger="fallback_brain"):
+        asyncio.run(fb._notify_owner("first"))
+        asyncio.run(fb._notify_owner("second"))
+    assert len(calls) == 1, "second call within the window must stay quiet"
+    assert "already notified this window" in caplog.text
