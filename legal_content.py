@@ -48,7 +48,7 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>{title} — The Solutionist System</title>
+<title>{title} &middot; The Solutionist System</title>
 <meta name="description" content="{description}">
 <meta property="og:title" content="{title} — The Solutionist System">
 <meta property="og:description" content="{description}">
@@ -220,23 +220,23 @@ are your responsibility and are not covered by this policy.</p>
 
 <h2>Information we collect</h2>
 <ul>
-  <li><strong>Account information</strong> &mdash; the name, email address, and login credentials you
+  <li><strong>Account information:</strong> the name, email address, and login credentials you
       provide when you create an account.</li>
-  <li><strong>Content you create</strong> &mdash; posts, drafts, scheduled content, uploaded images, and
+  <li><strong>Content you create:</strong> posts, drafts, scheduled content, uploaded images, and
       other material you produce within the Service.</li>
-  <li><strong>Connected social account information</strong> &mdash; when you choose to connect a Facebook
+  <li><strong>Connected social account information:</strong> when you choose to connect a Facebook
       Page or Instagram Business account, we receive, through Meta&rsquo;s official secure
       login (OAuth), a Page access token and basic information about the Page and linked
       Instagram account (such as the Page name and ID). We never receive or store your
       Facebook or Instagram password.</li>
-  <li><strong>Usage information</strong> &mdash; basic technical data such as log records needed to operate
+  <li><strong>Usage information:</strong> basic technical data such as log records needed to operate
       and secure the Service.</li>
 </ul>
 
 <h2>How we use your information</h2>
 <ul>
   <li>To provide and operate the Service, including saving and organizing your content.</li>
-  <li>To publish content to your connected Facebook Page or Instagram account &mdash; but only
+  <li>To publish content to your connected Facebook Page or Instagram account, but only
       content that you yourself create, schedule, or approve. We never post on your
       behalf without your action.</li>
   <li>To respond to your support requests.</li>
@@ -266,7 +266,7 @@ to operate the Service.</p>
 <h2>SMS / Text Messaging</h2>
 <p><strong>Consent.</strong> When you opt in to receive SMS messages from the Solutionist
 System, we collect and use your mobile number solely to send you the messages you
-consented to &mdash; booking confirmations, appointment reminders, account notifications,
+consented to: booking confirmations, appointment reminders, account notifications,
 customer-support replies, and occasional service updates. You may opt in by entering
 your mobile number and agreeing to receive texts on our website or booking pages
 ({DOMAIN}), or by texting a keyword to our number to begin a conversation. Consent to
@@ -287,22 +287,22 @@ and data rates may apply. Reply <strong>STOP</strong> to unsubscribe at any time
 <p>The Service relies on the following third parties, each with its own privacy
 practices:</p>
 <ul>
-  <li><strong>Anthropic</strong> &mdash; the AI provider that powers Chief and the assistant features. Your business data and the content you ask Chief about (which may include your customers&rsquo; names, messages, and contact details) are sent to Anthropic to generate responses. Anthropic does not train its models on data submitted through its API.</li>
-  <li><strong>OpenAI</strong> &mdash; used for voice transcription, text-to-speech, and related AI features. Audio and text you send to those features are processed by OpenAI. OpenAI does not train its models on data submitted through its API.</li>
-  <li><strong>Meta Platforms (Facebook and Instagram)</strong> &mdash; for publishing to connected accounts.</li>
-  <li><strong>Supabase</strong> &mdash; for secure data storage.</li>
-  <li><strong>Railway</strong> &mdash; for application hosting.</li>
-  <li><strong>Twilio</strong> &mdash; for delivering SMS messages you have opted in to receive.</li>
-  <li><strong>Stripe</strong> &mdash; for payment processing.</li>
-  <li><strong>Plaid</strong> &mdash; for bank connections you authorize.</li>
+  <li><strong>Anthropic</strong>: the AI provider that powers Chief and the assistant features. Your business data and the content you ask Chief about (which may include your customers&rsquo; names, messages, and contact details) are sent to Anthropic to generate responses. Anthropic does not train its models on data submitted through its API.</li>
+  <li><strong>OpenAI</strong>: used for voice transcription, text-to-speech, and related AI features. Audio and text you send to those features are processed by OpenAI. OpenAI does not train its models on data submitted through its API.</li>
+  <li><strong>Meta Platforms (Facebook and Instagram)</strong>: for publishing to connected accounts.</li>
+  <li><strong>Supabase</strong>: for secure data storage.</li>
+  <li><strong>Railway</strong>: for application hosting.</li>
+  <li><strong>Twilio</strong>: for delivering SMS messages you have opted in to receive.</li>
+  <li><strong>Stripe</strong>: for payment processing.</li>
+  <li><strong>Plaid</strong>: for bank connections you authorize.</li>
 </ul>
 
 <h2>How we use AI</h2>
 <p>Chief and several features of the Service are powered by third-party AI providers
 (Anthropic and OpenAI, listed above). To generate responses, draft messages, and
-answer questions, we send relevant portions of your business data &mdash; which can
+answer questions, we send relevant portions of your business data, which can
 include your customers&rsquo; names, email and message content, and contact details
-&mdash; to those providers. They process this data only to return a result to us and,
+to those providers. They process this data only to return a result to us and,
 per their API terms, do not use it to train their models. AI output can be imperfect;
 you remain responsible for reviewing anything sent to your customers.</p>
 
@@ -345,7 +345,7 @@ def render_data_deletion_html() -> str:
 <p>You have the right to delete your data from the Solutionist System at any time.
 There are two ways to do this:</p>
 
-<h2>Option 1 &mdash; Disconnect within the app (immediate)</h2>
+<h2>Option 1: Disconnect within the app (immediate)</h2>
 <p>To remove a connected Facebook or Instagram account and delete its stored access
 data:</p>
 <ol>
@@ -356,7 +356,7 @@ data:</p>
 <p>This immediately and permanently deletes the access token and associated connection
 data for that account from our systems.</p>
 
-<h2>Option 2 &mdash; Request full data deletion by email</h2>
+<h2>Option 2: Request full data deletion by email</h2>
 <p>To request deletion of your entire account and all associated data, email us at
 <strong><a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a></strong> from the email address associated with your
 account, with the subject line &ldquo;Data Deletion Request.&rdquo;</p>
@@ -371,7 +371,7 @@ platforms and must be removed there directly, as we do not control content once 
 is published to your accounts.</p>
 
 <h2>Contact</h2>
-<p>{BUSINESS_NAME} &mdash; <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a></p>
+<p>{BUSINESS_NAME} &middot; <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a></p>
 """
     return render_page(
         title="Data Deletion Instructions",
@@ -496,7 +496,7 @@ to the amounts you paid us in the twelve (12) months before the claim arose.</p>
 
 <h2>11. Indemnification</h2>
 <p>You will indemnify and hold us harmless from claims arising out of your content, your
-use of the Service in violation of these Terms, or your violation of law &mdash;
+use of the Service in violation of these Terms, or your violation of law,
 including telecom and messaging regulations in connection with messages you direct the
 Service to send.</p>
 
@@ -565,7 +565,7 @@ HELP_ARTICLES: List[Dict[str, str]] = [
             "&ldquo;Connect Facebook.&rdquo; A secure Facebook login window will open. Sign in, choose the Page "
             "you want to connect, and approve the permissions. Your Page will then appear in your connected "
             "accounts list. Note: you must connect a Facebook <strong>Page</strong> (a business/brand page) "
-            "&mdash; personal profiles cannot be connected for publishing.</p>"
+            "Personal profiles cannot be connected for publishing.</p>"
         ),
     },
     {
@@ -623,7 +623,7 @@ HELP_ARTICLES: List[Dict[str, str]] = [
         "title": "Building your first site",
         "body": (
             "<p>Use the Build tools to create a website for your business. The Solutionist System "
-            "guides you through layout, content, and branding. Your generated site is yours &mdash; "
+            "guides you through layout, content, and branding. Your generated site is yours. "
             "remember that any site you publish for your own customers may need its own privacy "
             "policy for its visitors.</p>"
         ),
@@ -664,7 +664,7 @@ def render_sms_page_html() -> str:
     body = f"""
 <span class="badge">Text Messaging</span>
 <h1>Get texts from The Solutionist System</h1>
-<span class="meta">Booking confirmations, appointment reminders, and account updates &mdash; straight to your phone.</span>
+<span class="meta">Booking confirmations, appointment reminders, and account updates, straight to your phone.</span>
 
 <p>The Solutionist System sends SMS messages such as booking confirmations, appointment
 reminders, account notifications, and customer-support replies on behalf of the
@@ -707,7 +707,7 @@ time and messaging ends immediately; reply <strong>HELP</strong> for help.</p>
 
 <h2>Or text a keyword</h2>
 <p>Each business on our platform has its own keyword. Text that keyword to our number and
-you&rsquo;ll be connected with them &mdash; texting the keyword is your opt-in, and we&rsquo;ll
+you&rsquo;ll be connected with them. Texting the keyword is your opt-in, and we&rsquo;ll
 confirm with the same message shown above.</p>
 
 <h2>The fine print</h2>
@@ -715,7 +715,7 @@ confirm with the same message shown above.</p>
   <li>Message frequency varies. Message and data rates may apply.</li>
   <li>Reply <strong>STOP</strong> to cancel at any time; reply <strong>HELP</strong> for help,
       or email <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>.</li>
-  <li>We never sell, rent, or share your mobile opt-in information &mdash; details in our
+  <li>We never sell, rent, or share your mobile opt-in information. Details are in our
       <a href="/privacy">Privacy Policy</a>.</li>
   <li>Carriers are not liable for delayed or undelivered messages.</li>
 </ul>
