@@ -29,6 +29,7 @@ Env:
 
 import json
 import logging
+import re
 import os
 import time
 from typing import Any, Dict, List, Optional
@@ -98,6 +99,88 @@ def _flatten_system(system: Any) -> str:
                 .replace("[[CHIEF_CACHE_SPLIT]]", "\n").strip())
 
 
+# ─── The trim (2026-07-28) ───────────────────────────────────────────
+# Forwarding Chief's whole system prompt is what made this feature
+# impossible: ~33,500 tokens against a per-minute ceiling, so the request
+# was rejected before the model saw a word of it.
+#
+# The prompt carries three segments, marked for Anthropic's cache:
+#   1  universal identity + rules      (above [[CHIEF_GLOBAL_SPLIT]])
+#   2  operating manual + the ~128-verb ACTION catalogue
+#   3  live business state             (below [[CHIEF_CACHE_SPLIT]])
+#
+# Segment 2 is the bulk, and a backup brain does not need it — because
+# the backup brain does not ACT. That is a deliberate narrowing, not
+# only a size saving: a degraded model emitting [ACTION:{...}] tags that
+# create, send, invoice or book is the one combination worth refusing.
+# It answers, it explains, it promises the action for when the primary is
+# back. Everything today's registry work says about class-C verbs argues
+# the same way.
+#
+# So: a compact purpose-written manual, a slice of segment 2's head for
+# voice and vertical, and as much of segment 3 as fits — segment 3 being
+# the part that actually answers "how did this week go".
+
+# Matches the [ACTION:{...}] tags the primary prompt teaches by example.
+_ACTION_TAG_RE = re.compile(r"\[ACTION:.*?\]\]?", re.S)
+
+FALLBACK_VOICE_CHARS = 3_000      # segment 2 head — who this business is
+FALLBACK_STATE_CHARS = 9_000      # segment 3 — the live numbers
+FALLBACK_MAX_MESSAGES = 8         # recent turns only
+
+_BACKUP_MANUAL = """You are Chief, the operating intelligence for this business.
+
+You are running as a BACKUP because the primary model is unavailable. Two
+rules follow from that, and they matter more than anything else here:
+
+1. You CANNOT take actions right now. No creating, editing, sending,
+   invoicing, booking, publishing or deleting — none of it is wired up on
+   this path. Never emit an [ACTION:...] tag; it will not run.
+2. If asked to DO something, say plainly that you will handle it as soon
+   as the connection is back, and answer whatever part of the question you
+   can answer with what you know.
+
+Otherwise be yourself: direct, warm, concrete. Lead with the answer. Use
+the real names and numbers below rather than generalities. Keep it short —
+you are covering a gap, not writing an essay."""
+
+
+def _fallback_system(system: Any) -> str:
+    """The trimmed system prompt: small enough to actually send."""
+    raw = str(system or "") if not isinstance(system, list) else _flatten_system(system)
+
+    # Markers are present because the fallback is handed the ORIGINAL
+    # string, not the block list built for Anthropic's cache.
+    if "[[CHIEF_CACHE_SPLIT]]" in raw:
+        stable, _, dynamic = raw.partition("[[CHIEF_CACHE_SPLIT]]")
+    else:
+        stable, dynamic = raw, ""
+    if "[[CHIEF_GLOBAL_SPLIT]]" in stable:
+        _universal, _, per_business = stable.partition("[[CHIEF_GLOBAL_SPLIT]]")
+    else:
+        per_business = stable
+
+    parts = [_BACKUP_MANUAL]
+    # Scrub action-tag examples out of the voice slice. Telling the model
+    # "never emit [ACTION:...]" while handing it worked examples of
+    # exactly that is an instruction fighting a demonstration, and
+    # demonstrations usually win. Cheaper to remove them than to hope.
+    voice = _ACTION_TAG_RE.sub("", per_business)[:FALLBACK_VOICE_CHARS].strip()
+    if voice:
+        parts.append("=== HOW THIS BUSINESS SOUNDS ===\n" + voice)
+    state = dynamic.strip()[:FALLBACK_STATE_CHARS].strip()
+    if state:
+        parts.append("=== LIVE BUSINESS STATE ===\n" + state)
+    return "\n\n".join(parts)
+
+
+def _trim_messages(messages: List[Dict]) -> List[Dict]:
+    """Recent turns only. History is unbounded on the primary path, where
+    it is cached; here every token is paid for and counted against the
+    per-minute ceiling that broke this feature in the first place."""
+    return messages[-FALLBACK_MAX_MESSAGES:] if len(messages) > FALLBACK_MAX_MESSAGES else messages
+
+
 def _flatten_content(content: Any) -> str:
     """Anthropic message content may be a string or a list of blocks."""
     if isinstance(content, list):
@@ -161,8 +244,8 @@ async def call_fallback(client: httpx.AsyncClient, system: Any,
     logger.info("[fallback] attempting %s (primary failed: %s)", model, reason[:120])
 
     oai_messages: List[Dict[str, str]] = [
-        {"role": "system", "content": _flatten_system(system)}]
-    for m in messages:
+        {"role": "system", "content": _fallback_system(system)}]
+    for m in _trim_messages(messages):
         role = m.get("role") or "user"
         if role not in ("user", "assistant"):
             role = "user"
