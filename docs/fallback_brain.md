@@ -51,7 +51,7 @@ real OpenAI pricing.
 | Env | Default | Meaning |
 |---|---|---|
 | `FALLBACK_BRAIN` | `on` | kill switch (`off` restores old mute behavior) |
-| `FALLBACK_BRAIN_MODEL` | `gpt-4o` | any OpenAI chat model id |
+| `FALLBACK_BRAIN_MODEL` | `gpt-4o-mini` | any OpenAI chat model id |
 | `OPENAI_API_KEY` | (already set) | shared with TTS + inference gate |
 
 ## The bigger resilience picture
@@ -62,3 +62,38 @@ API-free intelligence — write-time embeddings on chief_memories
 Tier-1 rule graduation — so each API call leaves behind an artifact
 that makes future calls unnecessary. Chief's per-business smarts then
 live in OUR database, portable across any provider.
+
+
+## Why `gpt-4o-mini` and not `gpt-4o`
+
+Changed after the first live test (2026-07-28), which is the only reason
+we know.
+
+Chief's prompt is ~33,500 tokens — the operating manual, the business
+context, and the dynamic state block. Anthropic caches that, so on the
+primary path it is cheap. OpenAI has no equivalent cache, and `gpt-4o` on
+this org's tier carries a **30,000 TPM** ceiling.
+
+So one Chief turn is larger than the entire per-minute budget:
+
+```
+Request too large for gpt-4o … on tokens per min (TPM):
+Limit 30000, Requested 33565
+```
+
+That is not an intermittent rate-limit. It is arithmetic — the backup
+brain could never once have answered, on any turn, for any practitioner.
+It had been merged and unmerged for two weeks looking fine.
+
+`gpt-4o-mini`'s ceiling on the same tier is far higher, so 33.5k fits.
+It is also roughly **17× cheaper per turn** (~$0.005 vs ~$0.084) on a
+path that pays full price for the whole manual every time.
+
+The quality dip is the trade this document always described. If it stops
+being worth it: raise the OpenAI tier, then set
+`FALLBACK_BRAIN_MODEL=gpt-4o`.
+
+**The general lesson**, worth more than the fix: a fallback that is never
+exercised is a fallback that does not work. This one was wired correctly
+at four call sites, metered, documented, and completely non-functional.
+Nothing short of running it would have shown that.
