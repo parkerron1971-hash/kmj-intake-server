@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi.responses import HTMLResponse
 from auth_supabase import require_user, AuthedUser
 from pydantic import BaseModel
 import pii_mask
@@ -85,6 +86,28 @@ class SendEmailResponse(BaseModel):
     ok: bool
     id: Optional[str] = None
     provider_response: Optional[Dict[str, Any]] = None
+
+
+def _unsub_secret() -> str:
+    return (os.environ.get("EMAIL_UNSUB_SECRET")
+            or os.environ.get("CUSTOMER_TOKEN_SECRET")
+            or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "solutionist"))
+
+
+def _unsub_sig(email: str) -> str:
+    return hmac.new(_unsub_secret().encode(), (email or "").strip().lower().encode(),
+                    hashlib.sha256).hexdigest()[:32]
+
+
+def _unsubscribe_url(email: str) -> str:
+    domain = os.environ.get("APP_DOMAIN", "https://mysolutionist.app").rstrip("/")
+    addr = (email or "").strip().lower()
+    return f"{domain}/email/unsubscribe?e={_urlq(addr)}&s={_unsub_sig(addr)}"
+
+
+def _urlq(v: str) -> str:
+    from urllib.parse import quote
+    return quote(v, safe="")
 
 
 def _format_address(email: str, name: Optional[str]) -> str:
@@ -196,6 +219,17 @@ async def send_via_resend(
         "from": _format_address(from_email, from_name),
         "to": [_format_address(to_email, to_name)],
         "subject": subject or "(no subject)",
+        # CAN-SPAM / bulk-sender compliance (beta-readiness audit): every
+        # send carries a one-click unsubscribe. The URL is signed so it
+        # can't be forged; hitting it adds the address to the suppression
+        # list that already gates all sends.
+        "headers": {
+            "List-Unsubscribe": (
+                f"<{_unsubscribe_url(to_email)}>, "
+                f"<mailto:{os.environ.get('UNSUBSCRIBE_EMAIL', 'unsubscribe@mysolutionist.app')}"
+                f"?subject=unsubscribe>"),
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
     }
     if _body_is_html(body):
         payload["html"] = body
@@ -857,6 +891,41 @@ def _extract_open_event(payload: Dict[str, Any]) -> Dict[str, Any]:
         "subject": (data.get("subject") or "").strip(),
         "opened_at": payload.get("created_at") or data.get("opened_at") or datetime.now(timezone.utc).isoformat(),
     }
+
+
+async def _do_unsubscribe(email: str, sig: str) -> bool:
+    """Verify the signed unsubscribe link and add the address to the
+    suppression list (the same gate every send already checks)."""
+    addr = (email or "").strip().lower()
+    if not addr or not hmac.compare_digest(sig or "", _unsub_sig(addr)):
+        return False
+    await add_suppression(addr, "unsubscribed", "list-unsubscribe")
+    _dom = addr.partition("@")[2]
+    logger.info(f"[UNSUB] {addr[:1]}***@{_dom} unsubscribed")
+    return True
+
+
+@router.get("/email/unsubscribe")
+async def unsubscribe_get(e: str = "", s: str = ""):
+    """Browser-facing unsubscribe (the link in the List-Unsubscribe
+    header + email footer)."""
+    ok = await _do_unsubscribe(e, s)
+    msg = ("You're unsubscribed. You won't receive further marketing emails."
+           if ok else "That unsubscribe link is invalid or expired.")
+    return HTMLResponse(
+        f"<!doctype html><html><body style='font-family:system-ui;max-width:480px;"
+        f"margin:80px auto;padding:0 24px;text-align:center;color:#1b2030'>"
+        f"<h2 style='font-weight:700'>{'Unsubscribed' if ok else 'Link problem'}</h2>"
+        f"<p style='color:#566079;line-height:1.6'>{msg}</p></body></html>",
+        status_code=200 if ok else 400)
+
+
+@router.post("/email/unsubscribe")
+async def unsubscribe_post(e: str = "", s: str = ""):
+    """One-click unsubscribe (List-Unsubscribe-Post) — mail providers
+    POST this directly, no page render."""
+    ok = await _do_unsubscribe(e, s)
+    return {"ok": ok}
 
 
 @router.post("/email/webhook")
