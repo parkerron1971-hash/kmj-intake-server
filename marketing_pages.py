@@ -56,34 +56,40 @@ if not logger.handlers:
 
 SHARED_CSS = """
   :root {
-    /* ── "Ember & Ink" (2026-07-27). The violet→cyan dark-SaaS palette
-       had become the house style of every AI product on the internet;
-       this is warm near-black + molten brass instead. Bone text rather
-       than #fff, ember as the heat accent, and teal held in reserve for
-       data only — so the S-mark's magenta/cyan reads as a jewel against
-       metal instead of competing with a matching gradient. ── */
-    --bg: #0C0A0A;
-    --bg-2: #16110E;
-    --surface: rgba(245,239,230,0.045);
-    --surface-2: rgba(245,239,230,0.075);
-    --border: rgba(245,239,230,0.10);
-    --border-strong: rgba(245,239,230,0.20);
-    --text-primary: #F5EFE6;
-    --text-secondary: #D9CFC1;
-    --text-muted: #A89C8C;
-    --text-dim: #7A7065;
-    --accent: #E6A24B;
-    --accent-2: #C9822F;
-    --hot: #FF6B35;
-    --ink-on-accent: #1A1206;
-    --info: #4ECDC4;
-    --success: #7BC49A;
-    --warning: #E6A24B;
-    --danger: #E5533D;
-    --glow: rgba(230, 162, 75, 0.30);
-    --glow-ember: rgba(255, 107, 53, 0.26);
-    --glow-cyan: rgba(255, 107, 53, 0.22);
-    --font-heading: 'Fraunces', Georgia, 'Times New Roman', serif;
+    /* ── Blue-led. Same violet/cyan family the site has always used,
+       re-weighted so electric blue carries the brand and violet drops to
+       a rare accent. Flat solid colour, no gradient text.
+
+       NOTE --amber: that is the product's own action colour (Quick
+       Create, New Invoice, Chase Overdue, Chief AI). It is used ONLY
+       inside the product replicas so they read as genuine screenshots —
+       never on site chrome. ── */
+    --bg: #08090C;
+    --bg-2: #0E1015;
+    --bg-3: #141821;
+    --surface: rgba(255,255,255,0.035);
+    --surface-2: rgba(255,255,255,0.065);
+    --border: rgba(255,255,255,0.09);
+    --border-strong: rgba(255,255,255,0.17);
+    --text-primary: #F7F8FA;
+    --text-secondary: #C9CDD6;
+    --text-muted: #949AA6;
+    --text-dim: #6B707B;
+    --accent: #2E7DFF;
+    --accent-2: #1D63E6;
+    --info: #22D3EE;
+    --violet: #7C3AED;
+    --amber: #C9A84C;
+    --success: #22C55E;
+    --warning: #F5C542;
+    --danger: #EF4444;
+    --hot: #F97316;
+    --ink-on-accent: #FFFFFF;
+    --glow: rgba(46,125,255,0.30);
+    --glow-2: rgba(34,211,238,0.20);
+    --glow-cyan: rgba(34,211,238,0.20);
+    --glow-ember: rgba(46,125,255,0.18);
+    --font-heading: 'Inter Tight', 'Inter', system-ui, sans-serif;
     --font-body: 'Inter', system-ui, sans-serif;
   }
   *{margin:0;padding:0;box-sizing:border-box;}
@@ -95,29 +101,29 @@ SHARED_CSS = """
   .container{max-width:1140px;margin:0 auto;padding:0 28px;}
   .container-narrow{max-width:820px;margin:0 auto;padding:0 28px;}
   .eyebrow{display:inline-flex;align-items:center;gap:8px;padding:5px 14px;font-size:10px;font-weight:700;letter-spacing:2.4px;text-transform:uppercase;color:var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent);border:1px solid color-mix(in srgb, var(--accent) 28%, transparent);border-radius:99px;}
-  .gradient-text{background:linear-gradient(120deg, var(--accent), var(--hot));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
-  h1,h2,h3{font-family:var(--font-heading);font-optical-sizing:auto;letter-spacing:-0.01em;line-height:1.08;}
-  h1{font-size:clamp(40px, 6vw, 64px);font-weight:600;}
-  h2{font-size:clamp(30px, 4.2vw, 44px);font-weight:600;margin-bottom:14px;}
+  .gradient-text{color:var(--accent);-webkit-text-fill-color:currentColor;background:none;}
+  h1,h2,h3{font-family:var(--font-heading);letter-spacing:-0.032em;line-height:1.04;}
+  h1{font-size:clamp(42px, 6.2vw, 68px);font-weight:700;}
+  h2{font-size:clamp(30px, 4.2vw, 46px);font-weight:700;letter-spacing:-0.03em;margin-bottom:14px;}
   h3{font-size:18px;font-weight:600;color:var(--text-primary);margin-bottom:6px;}
   p{color:var(--text-secondary);font-size:16px;}
   .lead{font-size:18px;color:var(--text-muted);line-height:1.65;}
 
   /* ─── nav ─── */
-  .nav{position:sticky;top:0;z-index:50;background:rgba(12,10,10,0.82);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--border);}
+  .nav{position:sticky;top:0;z-index:50;background:rgba(8,9,12,0.82);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--border);}
   .nav-inner{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;max-width:1140px;margin:0 auto;}
   .brand{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;display:inline-flex;align-items:center;gap:10px;}
   .brand .logo{height:32px;width:auto;display:block;filter:drop-shadow(0 0 8px var(--glow));}
   .footer .brand .logo{height:28px;}
-  .brand .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--hot));box-shadow:0 0 8px var(--glow);}
+  .brand .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--info));box-shadow:0 0 8px var(--glow);}
   .brand-text{display:inline-block;}
   @media (max-width: 540px){.brand-text{display:none;}}
   .nav-links{display:flex;align-items:center;gap:22px;font-size:13px;font-weight:500;}
   .nav-links a{color:var(--text-muted);transition:color 0.15s;position:relative;}
   .nav-links a:hover, .nav-links a.is-active{color:var(--text-primary);}
-  .nav-links a.is-active::after{content:'';position:absolute;left:0;right:0;bottom:-18px;height:2px;background:linear-gradient(90deg, var(--accent), var(--hot));border-radius:2px;}
+  .nav-links a.is-active::after{content:'';position:absolute;left:0;right:0;bottom:-18px;height:2px;background:linear-gradient(90deg, var(--accent), var(--info));border-radius:2px;}
   .nav-cta{padding:8px 16px;background:var(--accent);color:var(--ink-on-accent) !important;border-radius:8px;font-weight:700;font-size:13px;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;}
-  .nav-cta:hover{transform:translateY(-1px);background:#F0B265;box-shadow:0 4px 20px color-mix(in srgb, var(--accent) 45%, transparent);}
+  .nav-cta:hover{transform:translateY(-1px);background:var(--accent-2);box-shadow:0 4px 20px color-mix(in srgb, var(--accent) 45%, transparent);}
   .nav-cta.is-active::after{display:none;}
   .nav-login{padding:7px 15px;border:1px solid var(--border-strong);border-radius:8px;color:var(--text-primary) !important;font-weight:600;font-size:13px;transition:border-color 0.15s, background 0.15s;}
   .nav-login:hover{border-color:var(--accent);background:var(--surface);}
@@ -127,8 +133,8 @@ SHARED_CSS = """
     .brand-text{white-space:nowrap;}}
 
   /* ─── buttons ─── */
-  .btn-primary{display:inline-flex;align-items:center;gap:8px;padding:14px 28px;background:var(--accent);color:var(--ink-on-accent);font-weight:700;font-size:14px;letter-spacing:.01em;border-radius:10px;border:none;cursor:pointer;box-shadow:0 6px 26px color-mix(in srgb, var(--accent) 32%, transparent), inset 0 1px 0 rgba(255,255,255,.28);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;font-family:inherit;}
-  .btn-primary:hover{transform:translateY(-2px);background:#F0B265;box-shadow:0 10px 34px color-mix(in srgb, var(--accent) 46%, transparent), inset 0 1px 0 rgba(255,255,255,.34);}
+  .btn-primary{display:inline-flex;align-items:center;gap:8px;padding:14px 28px;background:var(--accent);color:var(--ink-on-accent);font-weight:700;font-size:14px;letter-spacing:.01em;border-radius:10px;border:none;cursor:pointer;box-shadow:0 6px 24px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;font-family:inherit;}
+  .btn-primary:hover{transform:translateY(-2px);background:var(--accent-2);box-shadow:0 10px 34px color-mix(in srgb, var(--accent) 42%, transparent);}
   .btn-secondary{display:inline-flex;align-items:center;gap:8px;padding:13px 22px;background:var(--surface);color:var(--text-primary);font-weight:600;font-size:14px;border-radius:10px;border:1px solid var(--border-strong);cursor:pointer;transition:background 0.15s, border-color 0.15s;font-family:inherit;}
   .btn-secondary:hover{background:var(--surface-2);border-color:color-mix(in srgb, var(--accent) 50%, transparent);}
 
@@ -168,7 +174,7 @@ SHARED_CSS = """
 
   /* ─── stat block ─── */
   .stat-block{display:inline-flex;align-items:baseline;gap:8px;margin-top:6px;padding:8px 16px;background:var(--surface);border:1px solid var(--border);border-radius:99px;font-size:13px;color:var(--text-muted);}
-  .stat-block .big{font-family:var(--font-heading);font-size:24px;font-weight:600;color:transparent;background:linear-gradient(120deg, var(--accent), var(--hot));-webkit-background-clip:text;background-clip:text;line-height:1;}
+  .stat-block .big{font-family:var(--font-heading);font-size:24px;font-weight:700;color:var(--accent);line-height:1;}
   .stat-block .big::after{content:'';display:inline-block;width:4px;height:4px;border-radius:50%;background:var(--accent);margin-left:6px;box-shadow:0 0 6px var(--glow);animation:brandPulse 1.8s ease-in-out infinite;}
 
   /* ─── footer ─── */
@@ -263,7 +269,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 <link rel="apple-touch-icon" href="/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>{shared_css}{extra_css}</style>
 </head>
 <body>
@@ -389,486 +395,680 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
 # HOME — trimmed: hero + features overview + audience + why + CTA
 # ══════════════════════════════════════════════════════════════════════
 
+FEATURES_SCRIPT = """
+<script>
+(function () {
+  /* Count the KPI numerals up when their panel scrolls into view. The
+     numbers are the point of those panels — landing on the final value
+     with no motion made them read as flat screenshots. */
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var nums = [].slice.call(document.querySelectorAll('.fx-num'));
+  if (!nums.length) return;
+
+  function fmt(v, prefix) {
+    return (prefix || '') + Math.round(v).toLocaleString('en-US');
+  }
+  function run(el) {
+    var to = Number(el.dataset.to || 0), prefix = el.dataset.prefix || '';
+    if (reduced) { el.textContent = fmt(to, prefix); return; }
+    var dur = 1100, t0 = null;
+    function step(ts) {
+      if (t0 === null) t0 = ts;
+      var p = Math.min(1, (ts - t0) / dur);
+      el.textContent = fmt(to * (1 - Math.pow(1 - p, 3)), prefix);   /* easeOutCubic */
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  if (!('IntersectionObserver' in window)) { nums.forEach(run); return; }
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting) { run(e.target); io.unobserve(e.target); }
+    });
+  }, { threshold: 0.4 });
+  nums.forEach(function (n) { io.observe(n); });
+})();
+</script>
+"""
+
+FEATURES_FX_CSS = """
+      /* ── feature visuals: every abstract mv-* shape is replaced by a
+         real product panel, each animating the ONE thing that section is
+         actually about. Panels reuse the replica kit, so the features
+         page and the home wheel are visibly the same software. ── */
+      /* .fs-visual is still a centring flex box from the old abstract
+         shapes — without display:block the panel and its caption laid out
+         as flex siblings in a ROW and the app shrank to a corner. */
+      /* Qualified with .fs-visual on purpose: the page's own .fs-visual
+         rule is emitted AFTER this block at equal specificity, so a bare
+         .fsv lost every tie — the panel stayed a centring flex box and
+         laid the app and its caption out side by side. */
+      .fs-visual.fsv{display:block;background:transparent;border:0;padding:0;min-height:0;
+        position:relative;overflow:visible;}
+      .fs-visual.fsv::before{display:none;}
+      .fs-visual.fsv .app{width:100%;height:322px;}
+      .fsv-cap{margin-top:11px;font-size:11.5px;color:var(--text-dim);display:flex;align-items:center;gap:8px;}
+      .fsv-cap .dot{width:6px;height:6px;border-radius:50%;background:var(--success);
+        box-shadow:0 0 8px var(--success);flex-shrink:0;}
+
+      /* rows arriving in sequence */
+      @keyframes fxRise{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
+      .fx-seq > *{opacity:0;animation:fxRise .55s ease forwards;}
+      .fx-seq > *:nth-child(1){animation-delay:.10s;} .fx-seq > *:nth-child(2){animation-delay:.24s;}
+      .fx-seq > *:nth-child(3){animation-delay:.38s;} .fx-seq > *:nth-child(4){animation-delay:.52s;}
+      .fx-seq > *:nth-child(5){animation-delay:.66s;} .fx-seq > *:nth-child(6){animation-delay:.80s;}
+
+      /* an invoice settling: SENT flips to PAID and a green sweep runs through */
+      .fx-settle{position:relative;overflow:hidden;}
+      .fx-settle::after{content:'';position:absolute;inset:0;pointer-events:none;
+        background:linear-gradient(90deg,transparent,rgba(34,197,94,.22),transparent);
+        transform:translateX(-100%);animation:fxSweep 5.5s ease-in-out infinite;}
+      @keyframes fxSweep{0%,45%{transform:translateX(-100%);}70%,100%{transform:translateX(100%);}}
+      .fx-flip{position:relative;display:inline-grid;}
+      .fx-flip > *{grid-area:1/1;}
+      .fx-flip .a{animation:fxOut 5.5s ease-in-out infinite;}
+      .fx-flip .b{animation:fxIn  5.5s ease-in-out infinite;}
+      @keyframes fxOut{0%,52%{opacity:1;}62%,100%{opacity:0;}}
+      @keyframes fxIn {0%,52%{opacity:0;}62%,100%{opacity:1;}}
+
+      /* growth bars */
+      .fx-chart{display:flex;align-items:flex-end;gap:7px;height:104px;padding:0 2px;}
+      .fx-chart i{flex:1;border-radius:3px 3px 0 0;transform-origin:bottom;transform:scaleY(.06);
+        background:linear-gradient(180deg,var(--accent),color-mix(in srgb,var(--accent) 35%,transparent));
+        animation:fxGrow 1s cubic-bezier(.22,1,.36,1) forwards;}
+      .fx-chart i:nth-child(1){height:34%;animation-delay:.05s;}
+      .fx-chart i:nth-child(2){height:52%;animation-delay:.13s;}
+      .fx-chart i:nth-child(3){height:44%;animation-delay:.21s;}
+      .fx-chart i:nth-child(4){height:68%;animation-delay:.29s;}
+      .fx-chart i:nth-child(5){height:60%;animation-delay:.37s;}
+      .fx-chart i:nth-child(6){height:84%;animation-delay:.45s;}
+      .fx-chart i:nth-child(7){height:100%;animation-delay:.53s;
+        background:linear-gradient(180deg,var(--info),color-mix(in srgb,var(--info) 35%,transparent));}
+      @keyframes fxGrow{to{transform:scaleY(1);}}
+      .fx-axis{display:flex;justify-content:space-between;font-size:7.5px;color:var(--ink-3);
+        letter-spacing:.08em;text-transform:uppercase;margin-top:5px;}
+
+      /* a site composing itself, band by band */
+      .fx-compose{flex:1;border-radius:8px;overflow:hidden;border:1px solid var(--line);
+        display:flex;flex-direction:column;min-height:0;}
+      .fx-compose > *{opacity:0;animation:fxRise .6s ease forwards;}
+      .fx-compose > *:nth-child(1){animation-delay:.15s;}
+      .fx-compose > *:nth-child(2){animation-delay:.75s;}
+      .fx-compose > *:nth-child(3){animation-delay:1.35s;}
+
+      /* publish: one post, two channels */
+      .fx-pub{display:flex;align-items:center;gap:12px;}
+      .fx-pub .ch{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex-shrink:0;
+        font-size:13px;font-weight:800;color:#fff;}
+      .fx-pub .fb{background:#1877F2;} .fx-pub .ig{background:linear-gradient(135deg,#833AB4,#FD1D1D,#FCB045);}
+      .fx-pub .wire{flex:1;height:2px;border-radius:2px;position:relative;background:rgba(255,255,255,.09);overflow:hidden;}
+      .fx-pub .wire::after{content:'';position:absolute;inset:0;width:42%;border-radius:2px;
+        background:linear-gradient(90deg,transparent,var(--accent),var(--info),transparent);
+        animation:fxWire 2.3s linear infinite;}
+      @keyframes fxWire{from{transform:translateX(-110%);}to{transform:translateX(340%);}}
+
+      /* the count-up numerals get their value written by JS on reveal */
+      .fx-num{font-variant-numeric:tabular-nums;}
+
+      @media (prefers-reduced-motion: reduce){
+        .fx-seq > *,.fx-compose > *{opacity:1 !important;animation:none !important;}
+        .fx-settle::after,.fx-flip .a,.fx-flip .b,.fx-pub .wire::after{animation:none !important;}
+        .fx-flip .a{opacity:0;} .fx-flip .b{opacity:1;}
+        .fx-chart i{transform:scaleY(1);animation:none !important;}
+      }
+"""
+
+REPLICA_KIT_CSS = """
+      /* ══════════════════════════════════════════════════════════════
+         THE REPLICA KIT
+         One UI vocabulary traced from the real product, reused by the
+         hero, the six room faces and the features page.
+
+         Colour note: inside .app we deliberately switch to the PRODUCT's
+         own palette — amber actions, violet briefing, magenta/cyan mark —
+         because that is what the software actually looks like. The blue
+         site chrome frames it; it does not repaint it.
+         ══════════════════════════════════════════════════════════════ */
+      .app{--ink:#F3F5F8;--ink-2:#AEB4C0;--ink-3:#767D8B;
+        --pane:#0F1218;--pane-2:#151A23;--line:rgba(255,255,255,.08);
+        --gold:#C9A84C;--vio:#7C3AED;
+        display:flex;flex-direction:column;overflow:hidden;border-radius:14px;
+        background:#0B0D12;border:1px solid var(--border-strong);
+        box-shadow:0 40px 100px rgba(0,0,0,.65), 0 0 0 1px rgba(0,0,0,.5);
+        font-size:11px;line-height:1.4;color:var(--ink);}
+
+      /* ── top bar ── */
+      .app-top{display:flex;align-items:center;gap:12px;padding:9px 12px;flex-shrink:0;
+        border-bottom:1px solid var(--line);background:#0C0F14;}
+      .at-mark{width:17px;height:17px;flex-shrink:0;border-radius:5px;
+        background:linear-gradient(135deg,#E879F9,#22D3EE);}
+      .at-search{flex:1;min-width:0;display:flex;align-items:center;gap:7px;height:25px;padding:0 9px;
+        border-radius:7px;background:var(--pane);border:1px solid var(--line);color:var(--ink-3);font-size:10.5px;}
+      .at-search .kbd{margin-left:auto;padding:1px 5px;border-radius:4px;font-size:8.5px;
+        background:rgba(255,255,255,.06);border:1px solid var(--line);}
+      .at-cta{padding:5px 10px;border-radius:7px;background:var(--gold);color:#1A1405;
+        font-size:10px;font-weight:700;white-space:nowrap;}
+      .at-urgent{display:inline-flex;align-items:center;gap:5px;font-size:9.5px;font-weight:600;color:#F87171;white-space:nowrap;}
+      .at-urgent::before{content:'';width:5px;height:5px;border-radius:50%;background:#EF4444;}
+      .at-av{width:20px;height:20px;border-radius:6px;flex-shrink:0;
+        background:linear-gradient(135deg,#3B82F6,#7C3AED);}
+
+      /* ── the workspace strip under the top bar ── */
+      .app-strip{display:flex;align-items:center;gap:9px;padding:6px 12px;flex-shrink:0;
+        border-bottom:1px solid var(--line);background:#0A0D11;font-size:9px;
+        letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);}
+      .app-strip .biz{color:var(--ink-2);letter-spacing:.04em;text-transform:none;font-size:10.5px;font-weight:600;}
+      .app-strip .sp{margin-left:auto;}
+      .app-strip .tab{padding:3px 8px;border-radius:5px;}
+      .app-strip .tab.on{background:color-mix(in srgb, var(--gold) 16%, transparent);color:var(--gold);
+        border:1px solid color-mix(in srgb, var(--gold) 34%, transparent);}
+
+      .app-body{flex:1;display:flex;min-height:0;}
+
+      /* ── sidebar ── */
+      .app-side{width:168px;flex-shrink:0;display:flex;flex-direction:column;gap:1px;
+        padding:9px 7px;border-right:1px solid var(--line);background:#0A0D11;overflow:hidden;}
+      .app.is-mini .app-side{width:136px;}
+      .as-user{display:flex;align-items:center;gap:7px;padding:6px 6px 9px;margin-bottom:4px;
+        border-bottom:1px solid var(--line);}
+      .as-user .av{width:19px;height:19px;border-radius:6px;flex-shrink:0;
+        background:linear-gradient(135deg,#F59E0B,#EF4444);}
+      .as-user .nm{font-size:10px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .as-user .nm span{display:block;font-size:8px;font-weight:500;color:var(--ink-3);}
+      .as-plan{margin-left:auto;padding:1px 5px;border-radius:4px;font-size:7.5px;font-weight:800;
+        letter-spacing:.1em;color:var(--gold);border:1px solid color-mix(in srgb, var(--gold) 40%, transparent);}
+      .app.is-mini .as-plan{display:none;}
+      .as-sec{display:flex;align-items:center;gap:5px;margin:9px 0 3px;padding:0 6px;white-space:nowrap;
+        font-size:7.5px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);}
+      /* the mini sidebar is ~136px — full tracking wrapped "MISSION CONTROL"
+         onto two lines and shoved the whole nav down */
+      .app.is-mini .as-sec{letter-spacing:.08em;font-size:7px;}
+      .app.is-mini .as-user .nm{font-size:9px;}
+      .as-sec::before{content:'';width:4px;height:4px;border-radius:50%;background:var(--gold);flex-shrink:0;}
+      .as-item{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:6px;
+        color:var(--ink-2);font-size:10px;white-space:nowrap;overflow:hidden;position:relative;}
+      .as-item .ic{width:13px;height:13px;flex-shrink:0;border-radius:4px;
+        background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);}
+      .as-item.is-on .ic{background:color-mix(in srgb, var(--gold) 30%, transparent);
+        border-color:color-mix(in srgb, var(--gold) 55%, transparent);}
+      .as-item.is-on{background:rgba(255,255,255,.07);color:var(--ink);font-weight:600;}
+      .as-item.is-on::before{content:'';position:absolute;left:0;top:5px;bottom:5px;width:2px;
+        border-radius:0 2px 2px 0;background:var(--gold);}
+      .as-item .ct{margin-left:auto;font-size:8.5px;color:var(--ink-3);}
+      .as-chief{margin-top:auto;display:flex;align-items:center;gap:6px;padding:7px 8px;border-radius:8px;
+        font-size:9.5px;font-weight:700;color:var(--gold);
+        background:color-mix(in srgb, var(--gold) 11%, transparent);
+        border:1px solid color-mix(in srgb, var(--gold) 32%, transparent);}
+      .as-chief::before{content:'';width:5px;height:5px;border-radius:50%;background:#22C55E;flex-shrink:0;
+        box-shadow:0 0 7px #22C55E;}
+      .as-chief .on{margin-left:auto;font-size:7.5px;letter-spacing:.1em;color:#22C55E;}
+
+      /* ── canvas ── */
+      .app-canvas{flex:1;min-width:0;padding:13px;display:flex;flex-direction:column;gap:11px;overflow:hidden;}
+
+      /* the app's signature header block: rule → eyebrow → title → substat */
+      .ah-rule{width:26px;height:2px;border-radius:2px;background:var(--gold);}
+      .ah-eyebrow{font-size:8px;font-weight:800;letter-spacing:.19em;text-transform:uppercase;color:var(--ink-3);}
+      .ah-title{font-family:var(--font-heading);font-size:19px;font-weight:700;letter-spacing:-.02em;line-height:1.1;}
+      .ah-sub{font-size:9.5px;color:var(--ink-3);}
+      .ah-row{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;}
+      .ah-btn{padding:5px 10px;border-radius:6px;background:var(--gold);color:#1A1405;
+        font-size:9.5px;font-weight:700;white-space:nowrap;flex-shrink:0;}
+
+      /* KPI cards */
+      .kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;}
+      .kpi{padding:9px 10px;border-radius:9px;background:var(--pane);border:1px solid var(--line);
+        display:flex;flex-direction:column;gap:3px;min-width:0;overflow:hidden;}
+      .kpi .k{font-size:7.5px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      .kpi .v{font-family:var(--font-heading);font-size:19px;font-weight:700;letter-spacing:-.02em;line-height:1.05;}
+      .kpi .v.gold{color:var(--gold);} .kpi .v.up{color:#22C55E;} .kpi .v.warn{color:#F87171;}
+      .kpi .f{font-size:8.5px;color:var(--ink-3);}
+      .kpi .f.up{color:#22C55E;}
+      .kpi-ico{display:none;}
+
+      /* the violet briefing panel + Chief */
+      .brief{position:relative;border-radius:11px;padding:13px;display:flex;gap:12px;min-height:0;overflow:hidden;
+        border:1px solid color-mix(in srgb, var(--vio) 34%, transparent);
+        background:linear-gradient(125deg, color-mix(in srgb, var(--vio) 34%, #0B0D12),
+                                            color-mix(in srgb, #1E1B4B 70%, #0B0D12) 55%,
+                                            color-mix(in srgb, #22D3EE 9%, #0B0D12));}
+      .brief-l{position:relative;z-index:1;flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;}
+      /* the real briefing has the S-mark floating in it — without this the
+         panel reads as an empty purple slab under the greeting */
+      .brief-mark{position:absolute;right:232px;bottom:-14px;width:128px;height:128px;
+        pointer-events:none;opacity:.92;
+        filter:drop-shadow(0 0 26px rgba(124,58,237,.65)) drop-shadow(0 10px 22px rgba(0,0,0,.5));}
+      .app.is-mini .brief-mark{display:none;}
+      @media (max-width:1100px){.brief-mark{right:24px;}}
+      .brief .date{font-size:7.5px;font-weight:800;letter-spacing:.17em;text-transform:uppercase;color:#C4B5FD;}
+      .brief .hi{font-family:var(--font-heading);font-size:23px;font-weight:700;letter-spacing:-.025em;line-height:1.05;}
+      .brief .hi b{color:var(--gold);font-weight:700;}
+      .brief .cp{font-size:9.5px;color:#CBD5E1;max-width:250px;}
+      .brief-btns{display:flex;align-items:center;gap:9px;margin-top:2px;}
+      .brief-btns .lnk{font-size:9.5px;color:#C4B5FD;text-decoration:underline;text-underline-offset:2px;}
+
+      .chief{width:220px;flex-shrink:0;border-radius:9px;padding:9px;display:flex;flex-direction:column;gap:6px;
+        background:rgba(6,8,13,.62);border:1px solid rgba(255,255,255,.11);}
+      .app.is-mini .chief{display:none;}
+      .chief-h{display:flex;align-items:center;gap:5px;font-size:8px;font-weight:800;
+        letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2);}
+      .chief-h .on{margin-left:auto;display:inline-flex;align-items:center;gap:3px;color:#22C55E;letter-spacing:.08em;}
+      .chief-h .on::before{content:'';width:4px;height:4px;border-radius:50%;background:#22C55E;box-shadow:0 0 6px #22C55E;}
+      .chief-lead{font-size:9px;color:var(--ink-3);}
+      .chief-f{display:flex;align-items:center;gap:6px;padding:5px 7px;border-radius:6px;
+        background:rgba(255,255,255,.045);border:1px solid var(--line);font-size:9px;}
+      .chief-f .sq{width:13px;height:13px;border-radius:4px;flex-shrink:0;
+        background:color-mix(in srgb, var(--vio) 40%, transparent);}
+      .chief-f .sq.warn{background:color-mix(in srgb, #EF4444 40%, transparent);}
+      .chief-f .sq.ok{background:color-mix(in srgb, #22C55E 40%, transparent);}
+      .chief-f .g{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .chief-f .amt{color:var(--gold);font-weight:700;font-size:8.5px;}
+      .chief-f .tag{font-size:7px;font-weight:800;letter-spacing:.08em;padding:1px 4px;border-radius:3px;
+        color:#F5C542;background:rgba(245,197,66,.14);}
+      .chief-ask{font-size:9px;color:var(--ink-2);margin-top:1px;}
+      .chief-btns{display:flex;gap:6px;}
+      .chief-btns b{flex:1;text-align:center;padding:5px;border-radius:6px;font-size:9px;font-weight:700;
+        background:var(--gold);color:#1A1405;}
+      .chief-btns i{flex:1;text-align:center;padding:5px;border-radius:6px;font-size:9px;font-style:normal;
+        border:1px solid rgba(255,255,255,.16);color:var(--ink-2);}
+      .chief-in{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;font-size:9px;
+        color:var(--ink-3);background:rgba(255,255,255,.04);border:1px solid var(--line);}
+      .chief-in .go{margin-left:auto;width:14px;height:14px;border-radius:4px;background:var(--gold);}
+
+      /* generic panel + list rows */
+      .pnl{border-radius:9px;background:var(--pane);border:1px solid var(--line);padding:9px;
+        display:flex;flex-direction:column;gap:6px;min-height:0;overflow:hidden;}
+      .pnl-h{display:flex;align-items:center;gap:6px;font-size:8px;font-weight:800;
+        letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);}
+      .pnl-h .ct{margin-left:auto;padding:1px 5px;border-radius:4px;font-size:7.5px;
+        color:var(--gold);background:color-mix(in srgb, var(--gold) 14%, transparent);}
+      .r{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:6px;font-size:9.5px;
+        background:rgba(255,255,255,.028);border:1px solid var(--line);position:relative;overflow:hidden;}
+      .r .bar{position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--vio);
+        border-radius:0;padding:0;border:0;flex:none;}
+      /* modifiers are spelled out: single letters collided with the row
+         class .r and the grow class .g, which turned these 2px status bars
+         into stretched blocks over the invoice IDs. */
+      .r .bar.grn{background:#22C55E;} .r .bar.red{background:#EF4444;} .r .bar.amb{background:var(--gold);}
+      .r .id{font-size:8px;letter-spacing:.06em;color:var(--ink-3);flex-shrink:0;}
+      .r .nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .r .nm span{display:block;font-size:8px;font-weight:400;color:var(--ink-3);}
+      .r .g{flex:1;min-width:0;}
+      .r .amt{font-weight:600;flex-shrink:0;font-size:9.5px;}
+      .r .av{width:17px;height:17px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;
+        font-size:7px;font-weight:800;color:#08090C;}
+      .pill{padding:2px 6px;border-radius:4px;font-size:7px;font-weight:800;letter-spacing:.1em;
+        text-transform:uppercase;flex-shrink:0;}
+      .pill.paid{color:#22C55E;background:rgba(34,197,94,.14);border:1px solid rgba(34,197,94,.32);}
+      .pill.sent{color:var(--gold);background:color-mix(in srgb, var(--gold) 14%, transparent);
+        border:1px solid color-mix(in srgb, var(--gold) 32%, transparent);}
+      .pill.due{color:#F87171;background:rgba(239,68,68,.14);border:1px solid rgba(239,68,68,.32);}
+      .pill.draft{color:var(--ink-3);border:1px solid var(--line);}
+      .pill.ok{color:#22C55E;border:1px solid rgba(34,197,94,.3);background:rgba(34,197,94,.08);}
+      .pill.live{color:#22D3EE;background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.3);}
+
+      /* aging buckets (Operate) */
+      .age{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;}
+      .age > div{padding:7px 8px;border-radius:8px;background:var(--pane);border:1px solid var(--line);}
+      .age .k{font-size:7px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);}
+      .age .v{font-family:var(--font-heading);font-size:13px;font-weight:700;margin-top:2px;}
+      .age .s{font-size:7.5px;color:var(--ink-3);}
+      .age .hot{border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.07);}
+      .age .hot .v{color:#F87171;}
+      .age .cta{background:var(--gold);border-color:var(--gold);color:#1A1405;}
+      .age .cta .k,.age .cta .s{color:rgba(26,20,5,.72);}
+      .age .cta .v{color:#1A1405;font-size:11px;}
+
+      /* filter chips */
+      .chips{display:flex;flex-wrap:wrap;gap:5px;}
+      .chips span{padding:3px 8px;border-radius:99px;font-size:8.5px;color:var(--ink-2);
+        border:1px solid var(--line);display:inline-flex;align-items:center;gap:5px;}
+      .chips span b{color:var(--ink-3);font-size:7.5px;}
+      .chips span.on{background:color-mix(in srgb, var(--gold) 16%, transparent);color:var(--gold);
+        border-color:color-mix(in srgb, var(--gold) 36%, transparent);}
+      .chips span.on b{color:var(--gold);}
+
+      /* quick actions */
+      .qa-h{display:flex;align-items:center;gap:6px;font-size:8px;font-weight:800;
+        letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);}
+      .qa-h .hint{margin-left:auto;font-size:8px;letter-spacing:.02em;text-transform:none;font-style:italic;}
+      .qa{display:grid;grid-template-columns:repeat(9,1fr);gap:7px;}
+      .qa i{border-radius:8px;background:var(--pane);border:1px solid var(--line);font-style:normal;
+        padding:7px 4px;display:flex;flex-direction:column;align-items:center;gap:5px;
+        font-size:7.5px;line-height:1.25;text-align:center;color:var(--ink-3);
+        white-space:nowrap;overflow:hidden;}
+      .qa i::before{content:'';width:17px;height:17px;border-radius:5px;flex-shrink:0;
+        background:color-mix(in srgb, var(--c,#7C3AED) 30%, transparent);
+        border:1px solid color-mix(in srgb, var(--c,#7C3AED) 58%, transparent);}
+
+      /* progress ring (Academy) */
+      .ring{width:64px;height:64px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;
+        background:conic-gradient(var(--gold) 0turn .62turn, rgba(255,255,255,.07) .62turn 1turn);}
+      .ring i{width:48px;height:48px;border-radius:50%;background:#0B0D12;display:grid;place-items:center;
+        font-family:var(--font-heading);font-size:14px;font-weight:700;font-style:normal;}
+
+      /* brand swatches + artifacts (Studio) */
+      .sw{display:flex;gap:5px;}
+      .sw i{width:22px;height:22px;border-radius:6px;border:1px solid rgba(255,255,255,.18);}
+      .arts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;flex:1;min-height:0;}
+      .art{border-radius:8px;border:1px solid var(--line);padding:8px;display:flex;flex-direction:column;
+        justify-content:space-between;background:linear-gradient(160deg, rgba(124,58,237,.14), transparent);}
+      .art .c{font-size:7px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);}
+      .art .m{font-family:var(--font-heading);font-size:12px;font-weight:700;}
+      .art .l{height:2.5px;border-radius:2px;background:rgba(255,255,255,.1);margin-top:4px;}
+      .art .l.s{width:58%;}
+
+      /* the Chief transcript replays itself — one line at a time */
+      .cx{height:330px;}
+      .cx .app-canvas{justify-content:flex-end;gap:8px;}
+      .cx-b{max-width:80%;padding:8px 11px;border-radius:11px;font-size:11px;line-height:1.5;
+        opacity:0;animation:cxIn .5s ease forwards;}
+      .cx-b.you{align-self:flex-end;background:rgba(255,255,255,.06);border:1px solid var(--line);
+        border-bottom-right-radius:3px;color:var(--ink-2);}
+      .cx-b.ai{align-self:flex-start;border-bottom-left-radius:3px;color:var(--ink);
+        background:color-mix(in srgb, var(--vio) 22%, transparent);
+        border:1px solid color-mix(in srgb, var(--vio) 42%, transparent);}
+      .cx-b.act{align-self:flex-start;font-size:9.5px;font-weight:800;letter-spacing:.08em;
+        text-transform:uppercase;color:#22C55E;background:rgba(34,197,94,.12);
+        border:1px solid rgba(34,197,94,.3);padding:6px 10px;border-radius:7px;}
+      .cx-b b{color:var(--gold);}
+      @keyframes cxIn{from{opacity:0;transform:translateY(9px);}to{opacity:1;transform:none;}}
+      .cx-b:nth-child(1){animation-delay:.15s;} .cx-b:nth-child(2){animation-delay:1.5s;}
+      .cx-b:nth-child(3){animation-delay:3.1s;} .cx-b:nth-child(4){animation-delay:4.3s;}
+      .cx-b:nth-child(5){animation-delay:5.6s;}
+
+      @media (prefers-reduced-motion: reduce){
+        .cx-b{animation:none !important;opacity:1 !important;transform:none !important;}
+      }
+
+      /* mini site (Smart Sites) */
+      .site{flex:1;border-radius:8px;overflow:hidden;border:1px solid var(--line);display:flex;
+        flex-direction:column;min-height:0;}
+      .site .band{padding:13px 11px;display:flex;flex-direction:column;gap:4px;
+        background:linear-gradient(135deg, rgba(124,58,237,.3), rgba(34,211,238,.12));}
+      .site .band .t{font-family:var(--font-heading);font-size:13px;font-weight:700;letter-spacing:-.02em;}
+      .site .band .s{font-size:8.5px;color:var(--ink-2);}
+      .site .cards{flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:9px;}
+      .site .cards i{border-radius:5px;background:var(--pane);border:1px solid var(--line);}
+"""
+
+
 def render_home() -> str:
-    # ── "Ember & Ink" 3D home (Kevin's ruling 2026-07-27: the violet→cyan
-    #    dark-SaaS palette was everywhere, and the old page DESCRIBED the
-    #    system without ever showing it). Two changes carry the rebuild:
-    #      1. a real CSS-3D scene graph (perspective + preserve-3d), not
-    #         flat divs with a spin — the deck is an object you can tilt;
-    #      2. the rooms are rendered as live HTML mockups of the actual
-    #         product on a 3D carousel, so a visitor SEES Mission Control,
-    #         Chief, Operate, the Studio, the Academy and Smart Sites
-    #         without clicking a video.
-    #    Zero dependencies — no three.js, no build step. Everything below
-    #    degrades to flat layout under prefers-reduced-motion and to a
-    #    scroll-snap strip under 900px.
+    # ── Pass 2 (2026-07-27, Kevin's redirect). Three changes:
+    #      1. blue leads (see :root) — the ember/brass pass read purple-
+    #         adjacent to him and he asked to flip the original palette
+    #         so blue carries it instead of violet/pink;
+    #      2. the hero orbit is GONE. "the orbit at the top should be
+    #         different. in the system this is not there." It has been
+    #         replaced by a detailed replica of the real Mission Control;
+    #      3. every product surface is now drawn with the replica kit,
+    #         traced from the live app, per "I want this to look like the
+    #         replica of the system itself. very detailed like it."
+    #    Restraint follows bridgemind.ai, which Kevin cited as the target:
+    #    flat colour, hairline borders, no glow stacking, generous air.
     extra_css = """
-      /* ══ layout: break the 1140 cage on the cinematic sections ══ */
       .container-xl{max-width:1340px;margin:0 auto;padding:0 32px;}
       @media (max-width:640px){.container-xl{padding:0 20px;}}
 
+""" + REPLICA_KIT_CSS + """
+
       /* ══════════════════════════════════════════════════════════════
-         01 — THE COMMAND DECK (hero)
-         A true 3D scene: .deck-stage owns the perspective, .deck-tilt
-         takes pointer parallax, .deck holds the world rotation, and the
-         chips ride two orbital rings inside it. Each chip billboards
-         (counter-rotates) so its label always faces the camera while its
-         POSITION stays in 3D — that is what separates this from a flat
-         ring of absolutely-positioned labels.
+         HERO — copy over a full-width Mission Control replica
          ══════════════════════════════════════════════════════════════ */
-      .hero{position:relative;padding:64px 0 92px;overflow:hidden;}
-      .hero::before{content:'';position:absolute;inset:-120px 0 auto;height:620px;pointer-events:none;
-        background:radial-gradient(58% 78% at 50% 0%, var(--glow), transparent 72%);}
-      /* Ember haze low and warm — the light source sits under the deck */
-      .hero::after{content:'';position:absolute;left:50%;bottom:-180px;width:900px;height:420px;
-        transform:translateX(-50%);pointer-events:none;opacity:.5;
-        background:radial-gradient(50% 50% at 50% 50%, var(--glow-ember), transparent 70%);filter:blur(20px);}
+      .hero{position:relative;padding:72px 0 20px;overflow:hidden;}
+      .hero::before{content:'';position:absolute;inset:-160px 0 auto;height:620px;pointer-events:none;
+        background:radial-gradient(52% 70% at 50% 0%, var(--glow), transparent 72%);opacity:.55;}
       .hero .container-xl{position:relative;z-index:1;}
-      .hero-grid{display:grid;grid-template-columns:1.02fr .98fr;gap:40px;align-items:center;}
-      .hero h1{margin:20px 0 22px;max-width:660px;font-size:clamp(42px,5.6vw,72px);line-height:1.02;}
-      .hero .lead{max-width:540px;margin:0 0 34px;}
-      .hero-ctas{display:flex;flex-wrap:wrap;gap:12px;}
-      .hero-note{margin-top:22px;font-size:12px;color:var(--text-dim);letter-spacing:.02em;}
-      .hero-rule{width:64px;height:2px;margin:26px 0 0;border-radius:2px;
-        background:linear-gradient(90deg, var(--accent), transparent);}
+      .hero-copy{max-width:780px;}
+      .hero h1{margin:20px 0 20px;font-size:clamp(42px,6.2vw,68px);line-height:1.02;}
+      .hero .lead{max-width:600px;margin:0 0 32px;font-size:17px;}
+      .hero-ctas{display:flex;flex-wrap:wrap;gap:12px;align-items:center;}
+      .hero-meta{display:flex;flex-wrap:wrap;align-items:center;gap:18px;margin-top:26px;}
+      .hero-note{font-size:12.5px;color:var(--text-dim);}
 
-      /* Perspective is deliberately long. At 1250px a 536px-wide ring
-         projects with so much divergence that concentric orbits stop
-         reading as concentric; ~2100 keeps real depth (chips still scale
-         front-to-back) while the rings stay legibly co-axial. */
-      .deck-stage{position:relative;height:540px;perspective:2100px;perspective-origin:50% 50%;}
-      .deck-tilt{position:absolute;inset:0;transform-style:preserve-3d;
-        transform:rotateX(var(--py,0deg)) rotateY(var(--px,0deg));
-        transition:transform .5s cubic-bezier(.22,1,.36,1);will-change:transform;}
-      .deck{position:absolute;inset:0;transform-style:preserve-3d;
-        transform:rotateX(var(--tilt)) translateY(10px);--tilt:57deg;}
+      .hero-app{margin-top:52px;}
+      .hero-app-cap{display:flex;align-items:center;gap:9px;margin-bottom:11px;font-size:11.5px;
+        color:var(--text-dim);letter-spacing:.02em;}
+      .hero-app-cap b{color:var(--text-secondary);font-weight:600;}
+      .hero-app-cap .dot{width:6px;height:6px;border-radius:50%;background:var(--success);
+        box-shadow:0 0 8px var(--success);flex-shrink:0;}
+      .hero-app .app{height:540px;}
+      .hero-2col{display:grid;grid-template-columns:1fr 226px;gap:10px;flex:1;min-height:0;}
+      @media (max-width:1100px){.hero-2col{grid-template-columns:1fr;} .hero-2col > .pnl{display:none;}}
 
-      /* the orbital planes — circles lying IN the deck, so perspective
-         turns them into ellipses for free. They have to carry real
-         weight: at 26% on a #0C0A0A ground the strokes vanished and the
-         chips read as scattered labels instead of an orbit. */
-      .deck-plane{position:absolute;top:50%;left:50%;border-radius:50%;
-        border:1px solid color-mix(in srgb, var(--accent) 52%, transparent);
-        transform:translate(-50%,-50%);pointer-events:none;
-        box-shadow:0 0 26px color-mix(in srgb, var(--accent) 14%, transparent),
-                   inset 0 0 34px color-mix(in srgb, var(--accent) 7%, transparent);}
-      .deck-plane.pl1{width:calc(var(--r1) * 2);height:calc(var(--r1) * 2);
-        border-style:dashed;border-color:color-mix(in srgb, var(--accent) 40%, transparent);}
-      /* a brighter leading arc so the plane itself reads as turning */
-      .deck-plane.pl2{width:calc(var(--r2) * 2);height:calc(var(--r2) * 2);
-        border-width:1.5px;border-top-color:color-mix(in srgb, var(--accent) 92%, #fff);
-        animation:deckPlaneSpin 28s linear infinite;}
-      .deck-plane.pl3{width:calc(var(--r1) * 1.42);height:calc(var(--r1) * 1.42);
-        border-color:color-mix(in srgb, var(--hot) 34%, transparent);
-        border-top-color:color-mix(in srgb, var(--hot) 80%, transparent);
-        animation:deckPlaneSpin 40s linear infinite reverse;}
-      /* NB: the plane spin MUST re-state translate(-50%,-50%) — an
-         animated `transform` replaces the base one outright, and without
-         the centering here each ring drifts half its own width off-axis
-         (which is exactly what it looked like: scattered ovals). rotateZ,
-         not rotateY: the plane already lies in the tilted deck, so Z-spin
-         travels the bright arc around the rim without tipping it out. */
-      @keyframes deckPlaneSpin{
-        from{transform:translate(-50%,-50%) rotateZ(0deg);}
-        to  {transform:translate(-50%,-50%) rotateZ(360deg);}}
-      /* the deck floor — a warm pool of light the rings sit on */
-      .deck-floor{position:absolute;top:50%;left:50%;width:calc(var(--r1) * 2.3);height:calc(var(--r1) * 2.3);
-        transform:translate(-50%,-50%);border-radius:50%;pointer-events:none;
-        background:radial-gradient(circle, color-mix(in srgb, var(--accent) 22%, transparent), transparent 66%);
-        filter:blur(16px);}
-      /* the anchor: a cast shadow lying IN the deck, directly under the
-         core. Without it the mark reads as detached from the rings
-         rather than hovering above them. */
-      .deck-shadow{position:absolute;top:50%;left:50%;width:calc(var(--r2) * 1.25);height:calc(var(--r2) * 1.25);
-        transform:translate(-50%,-50%);border-radius:50%;pointer-events:none;
-        background:radial-gradient(circle, rgba(0,0,0,.85) 0%, rgba(0,0,0,.5) 44%, transparent 70%);
-        filter:blur(10px);}
-      /* the pedestal: a bright rim right under the core. A black shadow on
-         a #0C0A0A ground is nearly invisible — the anchor has to be LIGHT,
-         so the mark reads as standing over the deck rather than drifting
-         above it with nothing beneath. */
-      .deck-pedestal{position:absolute;top:50%;left:50%;width:calc(var(--r2) * 0.94);height:calc(var(--r2) * 0.94);
-        transform:translate(-50%,-50%);border-radius:50%;pointer-events:none;
-        border:1px solid color-mix(in srgb, var(--accent) 68%, transparent);
-        box-shadow:0 0 22px color-mix(in srgb, var(--accent) 28%, transparent),
-                   inset 0 0 26px color-mix(in srgb, var(--accent) 15%, transparent);}
-
-      /* ring 1 (outer, 5 chips) + ring 2 (inner, 4 chips, counter-spin) */
-      .deck-ring{position:absolute;inset:0;transform-style:preserve-3d;}
-      .deck-ring.rA{animation:deckSpin 46s linear infinite;}
-      /* Ring B rides a second shell ~44px above the deck (again: local Y
-         is the normal). Two shells at different heights stop A's and B's
-         labels from colliding as they cross — they used to overlap head-on
-         whenever the two rings lined up. The lift has to live INSIDE the
-         keyframe, since an animated transform replaces the base one. */
-      .deck-ring.rB{animation:deckSpinLift 34s linear infinite reverse;}
-      @keyframes deckSpin{to{transform:rotateY(360deg);}}
-      @keyframes deckSpinLift{
-        from{transform:translateY(-44px) rotateY(0deg);}
-        to  {transform:translateY(-44px) rotateY(360deg);}}
-
-      .chip-slot{position:absolute;top:50%;left:50%;transform-style:preserve-3d;
-        transform:translate(-50%,-50%) rotateY(var(--a)) translateZ(var(--r));}
-      /* billboard: undoes the ring's spin at exactly the same rate, so the
-         label never turns edge-on. Paired durations with .rA / .rB. */
-      .chip-bb{transform-style:preserve-3d;}
-      .rA .chip-bb{animation:deckSpin 46s linear infinite reverse;}
-      .rB .chip-bb{animation:deckSpin 34s linear infinite;}
-      /* The node stays IN the orbital plane (no X counter-rotation), so it
-         reads as a body actually riding the ring; the label then floats
-         above it. Without this the billboarded labels looked like they
-         were hovering off the rings by accident. */
-      .chip-node{position:absolute;top:50%;left:50%;width:13px;height:13px;margin:-6.5px 0 0 -6.5px;
-        border-radius:50%;background:var(--accent);
-        box-shadow:0 0 12px color-mix(in srgb, var(--accent) 85%, transparent),
-                   0 0 3px color-mix(in srgb, #fff 60%, transparent);}
-      .is-hot-slot .chip-node{background:var(--hot);
-        box-shadow:0 0 12px color-mix(in srgb, var(--hot) 85%, transparent),
-                   0 0 3px color-mix(in srgb, #fff 55%, transparent);}
-      .deck-chip{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;
-        padding:9px 14px;border-radius:11px;font-size:12.5px;font-weight:600;letter-spacing:.01em;
-        color:var(--text-secondary);background:color-mix(in srgb, var(--bg-2) 82%, transparent);
-        border:1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
-        backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
-        box-shadow:0 10px 30px rgba(0,0,0,.55), 0 0 0 1px rgba(0,0,0,.2);
-        /* undo the slot's own Y rotation + the deck's world tilt, then lift
-           the label clear of its node. The trailing translateY runs in the
-           already-counter-rotated (screen-aligned) frame, so it moves
-           straight up on screen regardless of where the chip is in orbit. */
-        transform:rotateY(calc(-1 * var(--a))) rotateX(calc(-1 * var(--tilt))) translateY(-27px);}
-      .deck-chip .ci{font-style:normal;font-size:13px;line-height:1;
-        color:var(--accent);filter:drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 60%, transparent));}
-      .deck-chip.is-hot{border-color:color-mix(in srgb, var(--hot) 40%, transparent);}
-      .deck-chip.is-hot .ci{color:var(--hot);filter:drop-shadow(0 0 6px color-mix(in srgb, var(--hot) 60%, transparent));}
-
-      /* the core — stands upright at the middle of the discs, lifted off
-         the floor along the deck normal, then counter-tilted to face us */
-      .deck-core{position:absolute;top:50%;left:50%;width:190px;height:190px;
-        transform-style:preserve-3d;
-        /* translateY, NOT translateZ. The chip rings trace circles in the
-           local XZ plane, so the disc's normal is local Y — a translateZ
-           here slid the mark backwards ACROSS the deck (which merely looks
-           like "up" once tilted) and left it hovering off its own pedestal.
-           Negative Y is the true lift off the deck. */
-        transform:translate(-50%,-50%) translateY(-62px) rotateX(calc(-1 * var(--tilt)));}
-      .core-halo{position:absolute;inset:6px;border-radius:50%;filter:blur(20px);
-        background:radial-gradient(circle, color-mix(in srgb, var(--accent) 46%, transparent),
-                                            color-mix(in srgb, var(--hot) 16%, transparent) 55%, transparent 72%);
-        animation:corePulse 4.2s ease-in-out infinite;}
-      .core-logo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-        animation:coreFloat 6s ease-in-out infinite;}
-      .core-logo img{width:146px;height:146px;display:block;
-        filter:drop-shadow(0 0 34px color-mix(in srgb, var(--accent) 48%, transparent))
-               drop-shadow(0 18px 34px rgba(0,0,0,.7));}
-      @keyframes coreFloat{0%,100%{transform:translateY(0);}50%{transform:translateY(-13px);}}
-      @keyframes corePulse{0%,100%{transform:scale(1);opacity:.9;}50%{transform:scale(1.08);opacity:1;}}
-
-      /* desktop ring radii; shrunk on smaller stages via the same vars */
-      .deck{--r1:268px;--r2:180px;}
-      @media (max-width:1180px){.deck{--r1:218px;--r2:146px;}
-        .deck-core{width:160px;height:160px;} .core-logo img{width:124px;height:124px;}}
-      @media (max-width:900px){
-        .hero{padding:44px 0 72px;}
-        .hero-grid{grid-template-columns:1fr;text-align:center;gap:20px;}
-        .hero h1{margin:18px auto 20px;} .hero .lead{margin:0 auto 30px;}
-        .hero-ctas{justify-content:center;} .hero-copy .stat-block{margin:0 auto;}
-        .hero-rule{margin:26px auto 0;}
-        .deck-stage{height:400px;}
-        .deck{--r1:156px;--r2:102px;--tilt:54deg;}
-        .deck-core{width:126px;height:126px;} .core-logo img{width:104px;height:104px;}
-        .deck-chip{font-size:11px;padding:7px 11px;gap:6px;}
-      }
-      /* Phones can't carry nine labels on two rings — at ~390px the inner
-         ring's chips collided with the outer ring's on every pass. Drop
-         ring B's LABELS only: its nodes and orbit still read as a second
-         shell, and those four modules are all named further down the page. */
-      @media (max-width:560px){
-        .rB .deck-chip{display:none;}
-        .deck-chip{font-size:10.5px;padding:6px 10px;}
-      }
-      @media (max-width:420px){
-        .deck-stage{height:330px;} .deck{--r1:126px;--r2:80px;}
-        .deck-core{width:104px;height:104px;} .core-logo img{width:86px;height:86px;}
-        .deck-chip{font-size:10px;padding:5px 9px;}
+      /* the replica is the hero image — below ~980px it stops being
+         readable at any scale, so it scrolls horizontally at real size
+         rather than shrinking into illegible mush */
+      .app-scroll{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;
+        scrollbar-width:thin;padding-bottom:6px;}
+      @media (max-width:980px){
+        .app-scroll{margin:0 -20px;padding:0 20px 8px;}
+        .hero-app .app{width:960px;height:500px;}
       }
 
       /* ══════════════════════════════════════════════════════════════
-         02 — ASK, AND IT MOVES (Chief, on a tilted pane)
+         CHIEF strip
          ══════════════════════════════════════════════════════════════ */
-      .ask{position:relative;padding:96px 0;border-top:1px solid var(--border);overflow:hidden;}
-      .ask::before{content:'';position:absolute;inset:0;pointer-events:none;opacity:.5;
-        background:radial-gradient(46% 60% at 78% 40%, var(--glow), transparent 70%);}
-      .ask .container-xl{position:relative;z-index:1;}
-      .ask-grid{display:grid;grid-template-columns:.86fr 1.14fr;gap:56px;align-items:center;}
+      .ask{position:relative;padding:104px 0;border-top:1px solid var(--border);}
+      .ask-grid{display:grid;grid-template-columns:.88fr 1.12fr;gap:60px;align-items:center;}
       @media (max-width:980px){.ask-grid{grid-template-columns:1fr;gap:36px;}}
-      .ask-copy h2{margin-bottom:16px;}
-      .ask-list{list-style:none;margin-top:26px;display:grid;gap:14px;}
+      .ask-list{list-style:none;margin-top:28px;display:grid;gap:16px;}
       .ask-list li{display:flex;gap:13px;align-items:flex-start;font-size:14.5px;color:var(--text-muted);line-height:1.55;}
-      .ask-list .n{flex-shrink:0;width:24px;height:24px;border-radius:7px;display:grid;place-items:center;
-        font-family:var(--font-heading);font-size:12px;font-weight:600;color:var(--accent);
-        background:color-mix(in srgb, var(--accent) 12%, transparent);
-        border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);}
+      .ask-list .n{flex-shrink:0;width:23px;height:23px;border-radius:6px;display:grid;place-items:center;
+        font-family:var(--font-heading);font-size:11px;font-weight:700;color:var(--accent);
+        background:color-mix(in srgb, var(--accent) 13%, transparent);
+        border:1px solid color-mix(in srgb, var(--accent) 32%, transparent);}
       .ask-list b{color:var(--text-primary);font-weight:600;}
 
-      .pane-stage{perspective:1500px;}
-      .pane{transform-style:preserve-3d;transform:rotateY(-13deg) rotateX(5deg) translateZ(0);
-        transition:transform .7s cubic-bezier(.22,1,.36,1);}
-      .pane-stage:hover .pane{transform:rotateY(-6deg) rotateX(2deg) translateZ(24px);}
-      @media (max-width:980px){.pane{transform:rotateY(0deg) rotateX(0deg);}}
-
       /* ══════════════════════════════════════════════════════════════
-         03 — THE ROOMS (3D carousel of real product surfaces)
+         THE ROOMS — a carousel of real product surfaces
          ══════════════════════════════════════════════════════════════ */
-      .rooms{padding:96px 0 84px;border-top:1px solid var(--border);position:relative;overflow:hidden;}
-      .rooms::before{content:'';position:absolute;inset:auto 0 -10% 0;height:420px;pointer-events:none;opacity:.5;
-        background:radial-gradient(50% 60% at 50% 100%, var(--glow-ember), transparent 70%);}
+      .rooms{padding:104px 0 88px;border-top:1px solid var(--border);position:relative;overflow:hidden;}
       .rooms .container-xl{position:relative;z-index:1;}
-      .rooms-tabs{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin:0 auto 40px;max-width:900px;}
-      .room-tab{padding:8px 15px;border-radius:99px;font-size:12.5px;font-weight:600;letter-spacing:.01em;
+      .rooms-tabs{display:flex;flex-wrap:wrap;justify-content:center;gap:7px;margin:0 auto 40px;max-width:940px;}
+      .room-tab{padding:8px 15px;border-radius:99px;font-size:12.5px;font-weight:600;
         color:var(--text-muted);background:transparent;border:1px solid var(--border);
         cursor:pointer;font-family:inherit;transition:color .18s, border-color .18s, background .18s;}
       .room-tab:hover{color:var(--text-primary);border-color:var(--border-strong);}
-      .room-tab[aria-selected="true"]{color:var(--ink-on-accent);background:var(--accent);
-        border-color:var(--accent);box-shadow:0 6px 20px color-mix(in srgb, var(--accent) 30%, transparent);}
+      .room-tab[aria-selected="true"]{color:var(--ink-on-accent);background:var(--accent);border-color:var(--accent);}
 
-      /* 6 faces at 60° apart: the ring radius that just clears them is
-         (width/2)/tan(30°) ≈ width × 0.866. The ring is then pushed back
-         by the same amount so the front face lands at z=0 (scale 1:1). */
-      .rooms-viewport{position:relative;height:412px;perspective:1600px;perspective-origin:50% 45%;}
+      .rooms-viewport{position:relative;height:432px;perspective:1900px;perspective-origin:50% 46%;}
       .rooms-ring{position:absolute;inset:0;transform-style:preserve-3d;
-        transform:translateZ(-620px) rotateY(var(--ry,0deg));
+        transform:translateZ(-660px) rotateY(var(--ry,0deg));
         transition:transform .85s cubic-bezier(.4,.9,.25,1);will-change:transform;}
-      .room-face{position:absolute;top:50%;left:50%;width:700px;height:356px;margin:-178px 0 0 -350px;
-        transform:rotateY(var(--fa)) translateZ(620px);
-        opacity:.26;filter:blur(3px) saturate(.55);pointer-events:none;
+      .room-face{position:absolute;top:50%;left:50%;width:748px;height:376px;margin:-188px 0 0 -374px;
+        transform:rotateY(var(--fa)) translateZ(660px);
+        opacity:.2;filter:blur(3px) saturate(.5);pointer-events:none;
         transition:opacity .5s ease, filter .5s ease;}
       .room-face.is-active{opacity:1;filter:none;pointer-events:auto;}
-      .room-face .mock{height:100%;}
+      .room-face .app{height:100%;}
 
       .rooms-nav{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:34px;}
-      .rooms-arrow{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;cursor:pointer;
+      .rooms-arrow{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;cursor:pointer;
         background:var(--surface);border:1px solid var(--border-strong);color:var(--text-secondary);
         font-size:16px;font-family:inherit;transition:background .18s, border-color .18s, color .18s;}
       .rooms-arrow:hover{background:var(--surface-2);border-color:var(--accent);color:var(--accent);}
-      .rooms-count{font-family:var(--font-heading);font-size:13px;color:var(--text-dim);
-        letter-spacing:.16em;min-width:64px;text-align:center;}
-      .room-caption{text-align:center;max-width:600px;margin:22px auto 0;font-size:14px;
-        color:var(--text-muted);line-height:1.6;min-height:44px;}
+      .rooms-count{font-family:var(--font-heading);font-size:12.5px;color:var(--text-dim);
+        letter-spacing:.16em;min-width:66px;text-align:center;}
+      .room-caption{text-align:center;max-width:640px;margin:22px auto 0;font-size:14.5px;
+        color:var(--text-muted);line-height:1.6;min-height:46px;}
 
-      /* mobile: the ring becomes a snap strip — no perspective, no blur */
-      @media (max-width:900px){
+      @media (max-width:1000px){
         .rooms-viewport{height:auto;perspective:none;overflow-x:auto;overflow-y:hidden;
           scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;
           padding-bottom:8px;margin:0 -20px;scrollbar-width:none;}
         .rooms-viewport::-webkit-scrollbar{display:none;}
         .rooms-ring{position:static;transform:none !important;display:flex;gap:14px;padding:0 20px;}
-        .room-face{position:static;flex:0 0 auto;width:min(84vw,470px);height:340px;margin:0;
+        .room-face{position:static;flex:0 0 auto;width:748px;height:376px;margin:0;
           transform:none !important;opacity:1;filter:none;pointer-events:auto;scroll-snap-align:center;}
         .rooms-nav{display:none;}
       }
 
-      /* ══ the mock kit — one small UI vocabulary all six rooms share ══ */
-      .mock{border-radius:16px;overflow:hidden;display:flex;flex-direction:column;
-        background:linear-gradient(180deg, var(--bg-2), var(--bg));
-        border:1px solid var(--border-strong);
-        box-shadow:0 40px 90px rgba(0,0,0,.6), 0 0 0 1px rgba(0,0,0,.4),
-                   0 0 60px color-mix(in srgb, var(--accent) 8%, transparent);}
-      .mock-bar{display:flex;align-items:center;gap:7px;padding:11px 15px;flex-shrink:0;
-        border-bottom:1px solid var(--border);background:color-mix(in srgb, #000 28%, var(--bg-2));}
-      .mock-bar i{width:9px;height:9px;border-radius:50%;background:var(--border-strong);font-style:normal;}
-      .mock-bar i:nth-child(1){background:#E5533D;}
-      .mock-bar i:nth-child(2){background:var(--accent);}
-      .mock-bar i:nth-child(3){background:var(--success);}
-      .mock-bar em{margin-left:8px;font-style:normal;font-size:10.5px;letter-spacing:.16em;
-        text-transform:uppercase;color:var(--text-dim);}
-      .mock-body{flex:1;padding:18px;display:flex;flex-direction:column;gap:14px;min-height:0;overflow:hidden;}
-      .m-eyebrow{font-size:9.5px;font-weight:800;letter-spacing:.2em;text-transform:uppercase;color:var(--accent);}
-      .m-h{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);line-height:1.2;}
-      .m-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;}
-      .m-tile{padding:11px 12px;border-radius:11px;background:var(--surface);border:1px solid var(--border);}
-      .m-tile .k{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-dim);}
-      .m-tile .v{font-family:var(--font-heading);font-size:20px;font-weight:600;color:var(--text-primary);
-        line-height:1.15;margin-top:5px;}
-      .m-tile .v.accent{color:var(--accent);}
-      .m-tile .v.hot{color:var(--hot);}
-      .m-cols{display:grid;grid-template-columns:1.25fr .75fr;gap:12px;flex:1;min-height:0;}
-      .m-panel{border-radius:11px;background:var(--surface);border:1px solid var(--border);padding:12px;
-        display:flex;flex-direction:column;gap:9px;min-height:0;overflow:hidden;}
-      .m-row{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--text-secondary);}
-      .m-row .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0;}
-      .m-row .dot.cool{background:var(--info);} .m-row .dot.hot{background:var(--hot);}
-      .m-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      .m-row .t{font-size:10.5px;color:var(--text-dim);flex-shrink:0;}
-      .m-pill{padding:3px 9px;border-radius:99px;font-size:9.5px;font-weight:700;letter-spacing:.08em;
-        text-transform:uppercase;flex-shrink:0;}
-      .m-pill.paid{color:var(--success);background:color-mix(in srgb, var(--success) 14%, transparent);
-        border:1px solid color-mix(in srgb, var(--success) 32%, transparent);}
-      .m-pill.sent{color:var(--info);background:color-mix(in srgb, var(--info) 12%, transparent);
-        border:1px solid color-mix(in srgb, var(--info) 30%, transparent);}
-      .m-pill.due{color:var(--hot);background:color-mix(in srgb, var(--hot) 14%, transparent);
-        border:1px solid color-mix(in srgb, var(--hot) 34%, transparent);}
-      .m-bar{height:5px;border-radius:3px;background:var(--surface-2);overflow:hidden;}
-      .m-bar span{display:block;height:100%;border-radius:3px;
-        background:linear-gradient(90deg, var(--accent), var(--hot));}
-      .m-label{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-dim);}
-
-      /* chat bubbles (Chief) */
-      .m-chat{display:flex;flex-direction:column;gap:10px;flex:1;justify-content:flex-end;min-height:0;}
-      .m-bubble{max-width:82%;padding:10px 13px;border-radius:13px;font-size:12px;line-height:1.5;}
-      .m-bubble.you{align-self:flex-end;background:var(--surface-2);color:var(--text-secondary);
-        border:1px solid var(--border);border-bottom-right-radius:4px;}
-      .m-bubble.chief{align-self:flex-start;border-bottom-left-radius:4px;color:var(--text-primary);
-        background:color-mix(in srgb, var(--accent) 11%, transparent);
-        border:1px solid color-mix(in srgb, var(--accent) 28%, transparent);}
-      .m-act{display:inline-flex;align-items:center;gap:7px;align-self:flex-start;padding:6px 11px;
-        border-radius:8px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
-        color:var(--success);background:color-mix(in srgb, var(--success) 12%, transparent);
-        border:1px solid color-mix(in srgb, var(--success) 30%, transparent);}
-
-      /* swatches (Studio) */
-      .m-swatches{display:flex;gap:7px;}
-      .m-swatches span{width:30px;height:30px;border-radius:8px;border:1px solid var(--border-strong);}
-      .m-arts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;flex:1;min-height:0;}
-      .m-art{border-radius:10px;border:1px solid var(--border);padding:10px;display:flex;
-        flex-direction:column;justify-content:space-between;
-        background:linear-gradient(160deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent);}
-      .m-art .cap{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-dim);}
-      .m-art .mk{font-family:var(--font-heading);font-size:14px;font-weight:600;color:var(--text-primary);}
-      .m-art .ln{height:3px;border-radius:2px;background:var(--surface-2);margin-top:5px;}
-      .m-art .ln.s{width:60%;}
-
-      /* progress ring (Academy) */
-      .m-ring{width:88px;height:88px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;
-        background:conic-gradient(var(--accent) 0turn 0.62turn, var(--surface-2) 0.62turn 1turn);}
-      .m-ring .in{width:66px;height:66px;border-radius:50%;background:var(--bg-2);display:grid;place-items:center;
-        font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);}
-
-      /* mini site (Smart Sites) */
-      .m-site{flex:1;border-radius:10px;overflow:hidden;border:1px solid var(--border);display:flex;
-        flex-direction:column;min-height:0;}
-      .m-site .band{padding:16px 14px;display:flex;flex-direction:column;gap:6px;
-        background:linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, transparent),
-                                            color-mix(in srgb, var(--hot) 10%, transparent));}
-      .m-site .band .t{font-family:var(--font-heading);font-size:15px;font-weight:600;color:var(--text-primary);}
-      .m-site .band .s{font-size:10.5px;color:var(--text-muted);}
-      .m-site .cards{flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:11px;}
-      .m-site .cards div{border-radius:7px;background:var(--surface);border:1px solid var(--border);}
-
       /* ══════════════════════════════════════════════════════════════
-         04 — WHY / audience / CTA
+         rest of page
          ══════════════════════════════════════════════════════════════ */
-      .demo-section{padding:88px 0;border-top:1px solid var(--border);}
-      .demo-frame{max-width:880px;margin:0 auto;border-radius:18px;overflow:hidden;
-        border:1px solid var(--border-strong);background:var(--surface);
-        box-shadow:0 40px 90px rgba(0,0,0,.6);}
+      .demo-section{padding:96px 0;border-top:1px solid var(--border);}
+      .demo-frame{max-width:900px;margin:0 auto;border-radius:14px;overflow:hidden;
+        border:1px solid var(--border-strong);background:var(--surface);box-shadow:0 40px 90px rgba(0,0,0,.6);}
       .demo-chrome{display:flex;align-items:center;gap:7px;padding:11px 16px;border-bottom:1px solid var(--border);
-        background:color-mix(in srgb, #000 28%, var(--bg-2));}
+        background:#0C0F14;}
       .demo-chrome span{width:10px;height:10px;border-radius:50%;background:var(--border-strong);}
-      .demo-chrome span:nth-child(1){background:#E5533D;}
-      .demo-chrome span:nth-child(2){background:var(--accent);}
+      .demo-chrome span:nth-child(1){background:#EF4444;}
+      .demo-chrome span:nth-child(2){background:var(--warning);}
       .demo-chrome span:nth-child(3){background:var(--success);}
       .demo-chrome em{margin-left:10px;font-style:normal;font-size:11px;letter-spacing:.16em;
         text-transform:uppercase;color:var(--text-dim);}
       .demo-video{width:100%;display:block;aspect-ratio:16/9;background:#000;}
       .demo-caption{text-align:center;margin-top:18px;font-size:13px;color:var(--text-dim);}
 
-      .sec-num{font-family:var(--font-heading);font-size:13px;font-weight:600;line-height:1;
-        letter-spacing:.3em;color:color-mix(in srgb, var(--accent) 76%, var(--text-dim));
-        display:block;margin-bottom:14px;}
+      .sec-num{font-family:var(--font-heading);font-size:12px;font-weight:700;line-height:1;
+        letter-spacing:.28em;color:var(--accent);display:block;margin-bottom:14px;}
 
-      .audience{padding:76px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);
-        background:linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent) 4%, transparent), transparent);}
+      .audience{padding:80px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
       .audience-grid{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;}
       .audience-pill{display:inline-flex;align-items:center;gap:9px;padding:11px 20px;background:var(--surface);
         border:1px solid var(--border);border-radius:99px;font-size:14px;font-weight:500;
-        color:var(--text-secondary);transition:border-color .18s, background .18s, transform .18s;}
-      .audience-pill:hover{border-color:color-mix(in srgb, var(--accent) 45%, transparent);
-        background:color-mix(in srgb, var(--accent) 8%, transparent);transform:translateY(-2px);}
+        color:var(--text-secondary);transition:border-color .18s, background .18s;}
+      .audience-pill:hover{border-color:color-mix(in srgb, var(--accent) 48%, transparent);
+        background:color-mix(in srgb, var(--accent) 8%, transparent);}
       .audience-pill .emoji{font-size:17px;}
 
-      .why-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;}
+      .why-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;}
       @media (max-width:760px){.why-grid{grid-template-columns:1fr;}}
-      .why-card{display:flex;gap:16px;border-radius:16px;}
-      .why-card .check{flex-shrink:0;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;
-        font-family:var(--font-heading);font-size:13px;font-weight:600;color:var(--accent);
-        background:color-mix(in srgb, var(--accent) 12%, transparent);
+      .why-card{display:flex;gap:16px;border-radius:14px;}
+      .why-card .check{flex-shrink:0;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;
+        font-family:var(--font-heading);font-size:12px;font-weight:700;color:var(--accent);
+        background:color-mix(in srgb, var(--accent) 13%, transparent);
         border:1px solid color-mix(in srgb, var(--accent) 32%, transparent);}
       .why-card p{font-size:14px;color:var(--text-muted);}
 
-      .final-cta{padding:110px 0;text-align:center;position:relative;overflow:hidden;}
-      .final-cta::before{content:'';position:absolute;inset:0;pointer-events:none;opacity:.7;
-        background:radial-gradient(56% 100% at 50% 50%, var(--glow), transparent 66%);}
-      .final-cta::after{content:'';position:absolute;left:50%;top:50%;width:520px;height:520px;
-        transform:translate(-50%,-50%);pointer-events:none;opacity:.4;border-radius:50%;
-        background:radial-gradient(circle, var(--glow-ember), transparent 66%);filter:blur(30px);}
+      .final-cta{padding:112px 0;text-align:center;position:relative;overflow:hidden;}
+      .final-cta::before{content:'';position:absolute;inset:0;pointer-events:none;opacity:.55;
+        background:radial-gradient(52% 100% at 50% 50%, var(--glow), transparent 68%);}
       .final-cta .container{position:relative;z-index:1;}
-      .final-cta h2{margin-bottom:14px;}
       .final-cta p{max-width:520px;margin:0 auto 34px;color:var(--text-muted);}
 
-      /* ══ depth reveal — home overrides the shell's flat translateY so
-         every section ARRIVES from Z instead of sliding up ══ */
-      .reveal{opacity:0;transform:perspective(1200px) translate3d(0,26px,-90px) rotateX(7deg);
+      .reveal{opacity:0;transform:translateY(20px);
         transition:opacity .7s cubic-bezier(.22,1,.36,1), transform .7s cubic-bezier(.22,1,.36,1);}
-      .reveal.visible{opacity:1;transform:perspective(1200px) translate3d(0,0,0) rotateX(0deg);}
+      .reveal.visible{opacity:1;transform:none;}
 
       @media (prefers-reduced-motion: reduce){
-        .deck-ring,.chip-bb,.deck-plane,.core-halo,.core-logo,.deck-tilt{animation:none !important;transition:none !important;}
-        .rooms-ring,.pane,.room-face{transition:none !important;}
+        .rooms-ring,.room-face{transition:none !important;}
         .reveal{transform:none !important;}
       }
     """
-    body = """
-<section class="hero">
-  <span class="orb orb-1" aria-hidden></span>
-  <span class="orb orb-2" aria-hidden></span>
-  <div class="container-xl">
-    <div class="hero-grid">
-      <div class="hero-copy">
-        <span class="eyebrow reveal">For solo practitioners + small studios</span>
-        <h1 class="reveal reveal-delay-1">Every problem<br>has a <span class="gradient-text">solution.</span></h1>
-        <p class="lead reveal reveal-delay-2">One workspace that runs your whole practice — contacts, invoices, sessions, content, goals — commanded by an AI Chief of Staff that knows your business. Eight tools, replaced.</p>
-        <div class="hero-ctas reveal reveal-delay-3">
-          <a class="btn-primary" href="/get-started">Start Solving →</a>
-          <a class="btn-secondary" href="#rooms">Look inside</a>
-        </div>
-        <div class="reveal reveal-delay-3" style="margin-top:20px;">
-          <span class="stat-block"><span class="big">8</span><span>tools replaced by one workspace</span></span>
-        </div>
-        <div class="hero-rule reveal reveal-delay-3" aria-hidden="true"></div>
-        <div class="hero-note reveal reveal-delay-3">Currently in private beta · Apply for access</div>
+
+    # ── the Mission Control replica, reused at two sizes ──────────────
+    SIDEBAR = """
+        <div class="app-side">
+          <div class="as-user"><span class="av"></span>
+            <span class="nm">Jordan Reyes<span>Reyes &amp; Co.</span></span>
+            <span class="as-plan">STARTER</span></div>
+          <div class="as-sec">Mission Control</div>
+          <div class="as-item is-on"><span class="ic"></span>Dashboard</div>
+          <div class="as-item"><span class="ic"></span>Operations</div>
+          <div class="as-item"><span class="ic"></span>Notifications<span class="ct">15</span></div>
+          <div class="as-sec">Workspace</div>
+          <div class="as-item"><span class="ic"></span>Clients</div>
+          <div class="as-item"><span class="ic"></span>Inbox</div>
+          <div class="as-item"><span class="ic"></span>Schedule</div>
+          <div class="as-item"><span class="ic"></span>Projects</div>
+          <div class="as-sec">Finance</div>
+          <div class="as-item"><span class="ic"></span>Invoices</div>
+          <div class="as-item"><span class="ic"></span>Payments</div>
+          <div class="as-item"><span class="ic"></span>Revenue</div>
+          <div class="as-chief">Chief AI<span class="on">Online</span></div>
+        </div>"""
+
+    TOPBAR = """
+      <div class="app-top">
+        <span class="at-mark"></span>
+        <span class="at-search">Ask the AI anything&hellip;<span class="kbd">&#8984;K</span></span>
+        <span class="at-cta">+ Quick Create</span>
+        <span class="at-urgent">Urgent</span>
+        <span class="at-av"></span>
       </div>
+      <div class="app-strip">
+        <span class="biz">Reyes &amp; Co.</span>
+        <span class="sp">Foundation Track 4/7</span>
+        <span class="tab">Studio</span>
+        <span class="tab on">Mission Control</span>
+        <span class="tab">Solutionist System</span>
+      </div>"""
 
-      <div class="deck-stage reveal reveal-delay-2" id="deckStage" aria-hidden="true">
-        <div class="deck-tilt" id="deckTilt">
-          <div class="deck">
-            <span class="deck-floor"></span>
-            <span class="deck-shadow"></span>
-            <span class="deck-pedestal"></span>
-            <span class="deck-plane pl1"></span>
-            <span class="deck-plane pl2"></span>
-            <span class="deck-plane pl3"></span>
+    body = ("""
+<section class="hero">
+  <div class="container-xl">
+    <div class="hero-copy">
+      <span class="eyebrow reveal">For solo practitioners + small studios</span>
+      <h1 class="reveal reveal-delay-1">Every problem<br>has a <span class="gradient-text">solution.</span></h1>
+      <p class="lead reveal reveal-delay-2">One workspace that runs your whole practice &mdash; contacts, invoices, sessions, content, goals &mdash; commanded by an AI Chief of Staff that knows your business. Eight tools, replaced.</p>
+      <div class="hero-ctas reveal reveal-delay-3">
+        <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
+        <a class="btn-secondary" href="#rooms">Look inside</a>
+      </div>
+      <div class="hero-meta reveal reveal-delay-3">
+        <span class="stat-block"><span class="big">8</span><span>tools replaced by one workspace</span></span>
+        <span class="hero-note">Currently in private beta &middot; Apply for access</span>
+      </div>
+    </div>
 
-            <div class="deck-ring rA">
-              <div class="chip-slot" style="--a:0deg;--r:var(--r1);"><span class="chip-node"></span><div class="chip-bb"><span class="deck-chip"><i class="ci">◈</i>Finance</span></div></div>
-              <div class="chip-slot" style="--a:72deg;--r:var(--r1);"><span class="chip-node"></span><div class="chip-bb"><span class="deck-chip"><i class="ci">✎</i>Content</span></div></div>
-              <div class="chip-slot" style="--a:144deg;--r:var(--r1);"><span class="chip-node"></span><div class="chip-bb"><span class="deck-chip"><i class="ci">↗</i>Growth</span></div></div>
-              <div class="chip-slot" style="--a:216deg;--r:var(--r1);"><span class="chip-node"></span><div class="chip-bb"><span class="deck-chip"><i class="ci">◔</i>Analytics</span></div></div>
-              <div class="chip-slot" style="--a:288deg;--r:var(--r1);"><span class="chip-node"></span><div class="chip-bb"><span class="deck-chip"><i class="ci">✦</i>Branding</span></div></div>
-            </div>
+    <div class="hero-app reveal reveal-delay-3">
+      <div class="hero-app-cap"><span class="dot"></span><b>Mission Control</b> &mdash; the first thing you see every day</div>
+      <div class="app-scroll">
+        <div class="app">"""
+    + TOPBAR + """
+          <div class="app-body">"""
+    + SIDEBAR + """
+            <div class="app-canvas">
+              <div class="kpi-row">
+                <div class="kpi"><span class="kpi-ico"></span><span class="k">Revenue &middot; this month</span><span class="v gold">$12,480</span><span class="f up">&#9650; 18% vs last mo</span></div>
+                <div class="kpi"><span class="kpi-ico"></span><span class="k">Active clients</span><span class="v">17</span><span class="f">all in good standing</span></div>
+                <div class="kpi"><span class="kpi-ico"></span><span class="k">Projects in progress</span><span class="v">3</span><span class="f">open board &rarr;</span></div>
+                <div class="kpi"><span class="kpi-ico"></span><span class="k">Tasks today</span><span class="v">7</span><span class="f">2 due by 5:00</span></div>
+                <div class="kpi"><span class="kpi-ico"></span><span class="k">Business health</span><span class="v up">61%</span><span class="f">steady</span></div>
+              </div>
 
-            <div class="deck-ring rB">
-              <div class="chip-slot is-hot-slot" style="--a:45deg;--r:var(--r2);"><span class="chip-node"></span><div class="chip-bb"><span class="deck-chip is-hot"><i class="ci">⚡</i>Autopilot</span></div></div>
-              <div class="chip-slot" style="--a:135deg;--r:var(--r2);"><span class="chip-node"></span><div class="chip-bb"><span class="deck-chip"><i class="ci">☑</i>Operate</span></div></div>
-              <div class="chip-slot" style="--a:225deg;--r:var(--r2);"><span class="chip-node"></span><div class="chip-bb"><span class="deck-chip"><i class="ci">♞</i>Strategy</span></div></div>
-              <div class="chip-slot" style="--a:315deg;--r:var(--r2);"><span class="chip-node"></span><div class="chip-bb"><span class="deck-chip"><i class="ci">◎</i>Vision</span></div></div>
-            </div>
+              <div class="hero-2col">
+                <div class="brief">
+                  <div class="brief-l">
+                    <span class="date">Monday, July 27 &middot; Evening edition</span>
+                    <span class="hi">Good evening,<br><b>Jordan</b> &#128075;</span>
+                    <span class="cp">2 things need you today. Chief has them queued &mdash; one word clears the deck.</span>
+                    <span class="brief-btns"><span class="ah-btn">Focus Mode &rarr;</span><span class="lnk">Read today&rsquo;s briefing</span></span>
+                  </div>
+                  <img class="brief-mark" src="/assets/mark.webp" alt="" width="128" height="128" loading="lazy">
+                  <div class="chief">
+                    <div class="chief-h">Chief AI<span class="on">Online</span></div>
+                    <div class="chief-lead">I&rsquo;ve analyzed your day. Here&rsquo;s what I found:</div>
+                    <div class="chief-f"><span class="sq warn"></span><span class="g">8 invoices overdue</span><span class="amt">$1,865</span></div>
+                    <div class="chief-f"><span class="sq"></span><span class="g">2 drafts waiting for you</span><span class="tag">Needs you</span></div>
+                    <div class="chief-f"><span class="sq ok"></span><span class="g">$12,480 collected this month</span></div>
+                    <div class="chief-ask">Would you like me to handle these?</div>
+                    <div class="chief-btns"><b>Yes, handle it</b><i>Review first</i></div>
+                    <div class="chief-in">Ask Chief anything&hellip;<span class="go"></span></div>
+                  </div>
+                </div>
 
-            <div class="deck-core">
-              <span class="core-halo"></span>
-              <picture class="core-logo">
-                <source srcset="/assets/mark.webp" type="image/webp">
-                <img src="/assets/mark.png" alt="" width="158" height="158" loading="eager">
-              </picture>
+                <div class="pnl">
+                  <div class="pnl-h">AI Suggestions<span class="ct">4</span></div>
+                  <div class="r"><span class="bar red"></span><span class="nm g">INV-2026-010 overdue<span>Marcus Bell &middot; 38 days</span></span><span class="pill sent">Remind</span></div>
+                  <div class="r"><span class="bar red"></span><span class="nm g">INV-2026-002 overdue<span>Grace Chapel &middot; 59 days</span></span><span class="pill sent">Remind</span></div>
+                  <div class="r"><span class="bar amb"></span><span class="nm g">2 drafts pending review<span>from your last agent run</span></span><span class="pill draft">Open</span></div>
+                  <div class="r"><span class="bar"></span><span class="nm g">Tia&rsquo;s card expires in 6 days<span>update payment method</span></span><span class="pill draft">Fix</span></div>
+                </div>
+              </div>
+
+              <div class="qa-h">Quick Actions<span class="hint">one click, Chief handles the rest</span></div>
+              <div class="qa">
+                <i style="--c:#3B82F6">Draft Email</i><i style="--c:#EF4444">Chase Overdue</i>
+                <i style="--c:#F59E0B">New Invoice</i><i style="--c:#22C55E">Add Contact</i>
+                <i style="--c:#06B6D4">Book Session</i><i style="--c:#A855F7">Create a Post</i>
+                <i style="--c:#7C3AED">Run Autopilot</i><i style="--c:#C9A84C">Set a Goal</i>
+                <i style="--c:#64748B">Custom</i>
+              </div>
             </div>
           </div>
         </div>
@@ -881,29 +1081,25 @@ def render_home() -> str:
   <div class="container-xl">
     <div class="ask-grid">
       <div class="ask-copy">
-        <span class="sec-num reveal" aria-hidden="true">01</span>
+        <span class="sec-num reveal">01</span>
         <span class="eyebrow reveal">The Chief of Staff</span>
         <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Ask once. The whole system <span class="gradient-text">moves.</span></h2>
-        <p class="lead reveal reveal-delay-2">Chief isn't a chatbot bolted onto a dashboard. It reads your real contacts, invoices, calendar and goals every turn — then acts on them.</p>
+        <p class="lead reveal reveal-delay-2">Chief isn&rsquo;t a chatbot bolted onto a dashboard. It reads your real contacts, invoices, calendar and goals every turn &mdash; then acts on them.</p>
         <ul class="ask-list reveal reveal-delay-3">
-          <li><span class="n">1</span><span>You ask in plain words — typed or spoken. <b>No menus to learn.</b></span></li>
-          <li><span class="n">2</span><span>Chief reads your live data, not a generic model's guess. <b>It knows your numbers.</b></span></li>
-          <li><span class="n">3</span><span>It does the work — drafts, sends, books, files. <b>Autopilot handles the routine while you sleep.</b></span></li>
+          <li><span class="n">1</span><span>You ask in plain words &mdash; typed or spoken. <b>No menus to learn.</b></span></li>
+          <li><span class="n">2</span><span>Chief reads your live data, not a generic model&rsquo;s guess. <b>It knows your numbers.</b></span></li>
+          <li><span class="n">3</span><span>It does the work &mdash; drafts, sends, books, files. <b>Autopilot runs while you sleep.</b></span></li>
         </ul>
       </div>
-      <div class="pane-stage reveal reveal-delay-2">
-        <div class="pane">
-          <div class="mock" style="height:404px;">
-            <div class="mock-bar"><i></i><i></i><i></i><em>Chief of Staff</em></div>
-            <div class="mock-body">
-              <div class="m-chat">
-                <div class="m-bubble you">Who owes me money?</div>
-                <div class="m-bubble chief">Three invoices are past due — <b>$2,140</b> total. Marcus (18 days), Grace Chapel (11), Tia (4). Want me to send reminders?</div>
-                <div class="m-bubble you">Yes, and book Marcus for Thursday.</div>
-                <div class="m-bubble chief">Done. Reminders sent from your address, and Marcus is on Thursday at 2:00 PM — invite went out.</div>
-                <span class="m-act">✓ 3 reminders sent · 1 session booked</span>
-              </div>
-            </div>
+      <div class="reveal reveal-delay-2">
+        <div class="app cx">
+          <div class="app-top"><span class="at-mark"></span><span class="at-search">Chief of Staff<span class="kbd">&#8984;K</span></span><span class="at-av"></span></div>
+          <div class="app-canvas">
+            <div class="cx-b you">Who owes me money?</div>
+            <div class="cx-b ai">Three invoices are past due &mdash; <b>$2,140</b> total. Marcus (18 days), Grace Chapel (11), Tia (4). Want me to send reminders?</div>
+            <div class="cx-b you">Yes, and book Marcus for Thursday.</div>
+            <div class="cx-b ai">Done. Reminders sent from your address, and Marcus is on Thursday at 2:00&nbsp;PM &mdash; invite went out.</div>
+            <div class="cx-b act">&#10003; 3 reminders sent &middot; 1 session booked</div>
           </div>
         </div>
       </div>
@@ -914,51 +1110,47 @@ def render_home() -> str:
 <section class="rooms" id="rooms">
   <div class="container-xl">
     <div class="section-head reveal">
-      <span class="sec-num" aria-hidden="true">02</span>
+      <span class="sec-num">02</span>
       <span class="eyebrow">Look inside</span>
       <h2>Six rooms. <span class="gradient-text">One brain.</span></h2>
-      <p>Each room is built for what happens in it — and they all share your contacts, your brand, and your Chief.</p>
+      <p>Each room is built for what happens in it &mdash; and they all share your contacts, your brand, and your Chief.</p>
     </div>
 
     <div class="rooms-tabs reveal" role="tablist" aria-label="Rooms">
       <button class="room-tab" role="tab" aria-selected="true"  data-i="0">Mission Control</button>
       <button class="room-tab" role="tab" aria-selected="false" data-i="1">Operate</button>
-      <button class="room-tab" role="tab" aria-selected="false" data-i="2">The Studio</button>
-      <button class="room-tab" role="tab" aria-selected="false" data-i="3">The Academy</button>
-      <button class="room-tab" role="tab" aria-selected="false" data-i="4">Smart Sites</button>
-      <button class="room-tab" role="tab" aria-selected="false" data-i="5">Autopilot</button>
+      <button class="room-tab" role="tab" aria-selected="false" data-i="2">Clients</button>
+      <button class="room-tab" role="tab" aria-selected="false" data-i="3">The Studio</button>
+      <button class="room-tab" role="tab" aria-selected="false" data-i="4">The Academy</button>
+      <button class="room-tab" role="tab" aria-selected="false" data-i="5">Smart Sites</button>
     </div>
 
     <div class="rooms-viewport reveal" id="roomsViewport">
       <div class="rooms-ring" id="roomsRing">
 
         <div class="room-face is-active" style="--fa:0deg;" data-i="0"
-             data-caption="Your AI core with live module satellites, four stat cards counting your real numbers, today's schedule, and what needs attention — the first thing you see every day.">
-          <div class="mock">
-            <div class="mock-bar"><i></i><i></i><i></i><em>Mission Control</em></div>
-            <div class="mock-body">
-              <div class="m-tiles">
-                <div class="m-tile"><div class="k">Collected</div><div class="v accent">$12,480</div></div>
-                <div class="m-tile"><div class="k">Past due</div><div class="v hot">3</div></div>
-                <div class="m-tile"><div class="k">Sessions</div><div class="v">4</div></div>
-                <div class="m-tile"><div class="k">Tasks</div><div class="v">7</div></div>
-              </div>
-              <div class="m-cols">
-                <div class="m-panel">
-                  <span class="m-label">Today</span>
-                  <div class="m-row"><span class="dot"></span><span class="grow">Discovery call — Marcus Bell</span><span class="t">9:00</span></div>
-                  <div class="m-row"><span class="dot cool"></span><span class="grow">Grace Chapel — planning session</span><span class="t">11:30</span></div>
-                  <div class="m-row"><span class="dot hot"></span><span class="grow">Follow up: 3 overdue invoices</span><span class="t">2:00</span></div>
-                  <div class="m-row"><span class="dot"></span><span class="grow">Draft October newsletter</span><span class="t">4:15</span></div>
-                  <div class="m-row"><span class="dot cool"></span><span class="grow">Tia Randall — check-in call</span><span class="t">5:30</span></div>
+             data-caption="Your whole practice on one screen — real numbers counting, today's schedule, and Chief telling you what actually needs you before you've had coffee.">
+          <div class="app is-mini">
+            <div class="app-body">""" + SIDEBAR + """
+              <div class="app-canvas">
+                <div class="ah-rule"></div>
+                <div class="ah-row"><div><div class="ah-eyebrow">Mission Control</div>
+                  <div class="ah-title">Good evening, Jordan</div>
+                  <div class="ah-sub">2 things need you today &middot; Chief has them queued</div></div>
+                  <span class="ah-btn">Focus Mode &rarr;</span></div>
+                <div class="kpi-row">
+                  <div class="kpi"><span class="k">Revenue</span><span class="v gold">$12,480</span><span class="f up">&#9650; 18%</span></div>
+                  <div class="kpi"><span class="k">Clients</span><span class="v">17</span><span class="f">good standing</span></div>
+                  <div class="kpi"><span class="k">Projects</span><span class="v">3</span><span class="f">in progress</span></div>
+                  <div class="kpi"><span class="k">Tasks</span><span class="v">7</span><span class="f">2 due by 5:00</span></div>
+                  <div class="kpi"><span class="k">Health</span><span class="v up">61%</span><span class="f">steady</span></div>
                 </div>
-                <div class="m-panel">
-                  <span class="m-label">Goal · Q4</span>
-                  <div class="m-h">$40k</div>
-                  <div class="m-bar"><span style="width:62%"></span></div>
-                  <div class="m-row"><span class="t">62% — on pace</span></div>
-                  <span class="m-label" style="margin-top:4px;">Modules</span>
-                  <div class="m-row"><span class="dot"></span><span class="grow">9 live</span></div>
+                <div class="pnl" style="flex:1;">
+                  <div class="pnl-h">Today<span class="ct">5</span></div>
+                  <div class="r"><span class="bar"></span><span class="g nm">Discovery call &mdash; Marcus Bell<span>45 min &middot; video</span></span><span class="amt">9:00</span></div>
+                  <div class="r"><span class="bar amb"></span><span class="g nm">Grace Chapel &mdash; planning session<span>on site</span></span><span class="amt">11:30</span></div>
+                  <div class="r"><span class="bar red"></span><span class="g nm">Follow up: 3 overdue invoices<span>Chief drafted all three</span></span><span class="amt">2:00</span></div>
+                  <div class="r"><span class="bar"></span><span class="g nm">Draft October newsletter<span>outline ready</span></span><span class="amt">4:15</span></div>
                 </div>
               </div>
             </div>
@@ -966,117 +1158,129 @@ def render_home() -> str:
         </div>
 
         <div class="room-face" style="--fa:60deg;" data-i="1"
-             data-caption="Contacts, invoices, calendar, tasks, email + SMS hubs, bookkeeping with reconciliation — the plumbing that keeps clients moving, all talking to each other.">
-          <div class="mock">
-            <div class="mock-bar"><i></i><i></i><i></i><em>Operate · Invoices</em></div>
-            <div class="mock-body">
-              <div style="display:flex;align-items:baseline;justify-content:space-between;">
-                <span class="m-eyebrow">Accounts receivable</span>
-                <span class="m-label">This month</span>
+             data-caption="Invoices, payments and bookkeeping that reconcile themselves. Chief chases what's late so you don't have to write another awkward email.">
+          <div class="app is-mini">
+            <div class="app-body">""" + SIDEBAR + """
+              <div class="app-canvas">
+                <div class="ah-rule"></div>
+                <div class="ah-row"><div><div class="ah-eyebrow">Operate &middot; Invoices</div>
+                  <div class="ah-title">Invoices</div>
+                  <div class="ah-sub">$1,865.00 outstanding &middot; $12,480 paid &middot; 2 drafts</div></div>
+                  <span class="ah-btn">+ New Invoice</span></div>
+                <div class="age">
+                  <div><div class="k">Current</div><div class="v">$0.00</div><div class="s">nothing here</div></div>
+                  <div><div class="k">1&ndash;30 days</div><div class="v">$0.00</div><div class="s">nothing here</div></div>
+                  <div class="hot"><div class="k">31&ndash;60 days</div><div class="v">$1,265</div><div class="s">7 past due</div></div>
+                  <div class="hot"><div class="k">60+ days</div><div class="v">$600</div><div class="s">1 past due</div></div>
+                  <div class="cta"><div class="k">Chase all overdue</div><div class="v">$1,865</div><div class="s">8 invoices</div></div>
+                </div>
+                <div class="pnl" style="flex:1;">
+                  <div class="r"><span class="bar red"></span><span class="id">INV-2026-011</span><span class="g nm">Marcus Bell<span>1 item &middot; due Jun 26</span></span><span class="amt">$640</span><span class="pill due">Overdue</span></div>
+                  <div class="r"><span class="bar red"></span><span class="id">INV-2026-010</span><span class="g nm">Grace Chapel<span>1 item &middot; due Jun 20</span></span><span class="amt">$1,200</span><span class="pill due">Overdue</span></div>
+                  <div class="r"><span class="bar amb"></span><span class="id">INV-2026-009</span><span class="g nm">Northside Co-op<span>3 items &middot; due Jul 15</span></span><span class="amt">$2,400</span><span class="pill sent">Sent</span></div>
+                  <div class="r"><span class="bar grn"></span><span class="id">INV-2026-008</span><span class="g nm">J. Okafor<span>paid via card</span></span><span class="amt">$850</span><span class="pill paid">Paid</span></div>
+                  <div class="r"><span class="bar grn"></span><span class="id">INV-2026-007</span><span class="g nm">Rivera Studio<span>paid via check</span></span><span class="amt">$1,150</span><span class="pill paid">Paid</span></div>
+                </div>
               </div>
-              <div class="m-panel" style="flex:1;gap:11px;">
-                <div class="m-row"><span class="grow">#1042 · Marcus Bell</span><span class="t">$640</span><span class="m-pill due">Overdue</span></div>
-                <div class="m-row"><span class="grow">#1041 · Grace Chapel</span><span class="t">$1,200</span><span class="m-pill due">Overdue</span></div>
-                <div class="m-row"><span class="grow">#1040 · Tia Randall</span><span class="t">$300</span><span class="m-pill due">Overdue</span></div>
-                <div class="m-row"><span class="grow">#1039 · Northside Co-op</span><span class="t">$2,400</span><span class="m-pill sent">Sent</span></div>
-                <div class="m-row"><span class="grow">#1038 · J. Okafor</span><span class="t">$850</span><span class="m-pill paid">Paid</span></div>
-                <div class="m-row"><span class="grow">#1037 · Rivera Studio</span><span class="t">$1,150</span><span class="m-pill paid">Paid</span></div>
-                <div class="m-row"><span class="grow">#1036 · Bethel Youth</span><span class="t">$475</span><span class="m-pill paid">Paid</span></div>
-              </div>
-              <div class="m-row"><span class="dot"></span><span class="grow">Reconciled to your bank feed 6 minutes ago</span></div>
             </div>
           </div>
         </div>
 
         <div class="room-face" style="--fa:120deg;" data-i="2"
-             data-caption="Walk into a storefront built from your own brand. Try your identity on real artifacts — business card, invoice, social post — and watch everything repaint as you edit.">
-          <div class="mock">
-            <div class="mock-bar"><i></i><i></i><i></i><em>The Creative Studio · Fitting Room</em></div>
-            <div class="mock-body">
-              <span class="m-eyebrow">Your brand DNA</span>
-              <div style="display:flex;align-items:center;gap:14px;">
-                <div class="m-swatches">
-                  <span style="background:#E6A24B"></span><span style="background:#FF6B35"></span>
-                  <span style="background:#16110E"></span><span style="background:#F5EFE6"></span>
-                  <span style="background:#4ECDC4"></span>
+             data-caption="The client register — every person you serve, their standing, their history, and who's gone quiet. Update a contact once; every room sees it.">
+          <div class="app is-mini">
+            <div class="app-body">""" + SIDEBAR + """
+              <div class="app-canvas">
+                <div class="ah-rule"></div>
+                <div class="ah-row"><div><div class="ah-eyebrow">The Client Register</div>
+                  <div class="ah-title">Clients</div>
+                  <div class="ah-sub">17 clients &middot; 17 in good standing</div></div>
+                  <span class="ah-btn">+ Add</span></div>
+                <div class="chips">
+                  <span class="on">All Clients <b>17</b></span><span>New Leads &middot; 30d <b>3</b></span>
+                  <span>Standing at Risk <b>0</b></span><span>Hot Leads <b>0</b></span>
+                  <span>Not Contacted <b>13</b></span><span>Has Unpaid Invoice <b>2</b></span>
                 </div>
-                <div style="flex:1;">
-                  <div class="m-h" style="font-size:15px;">Warm · Grounded · Direct</div>
-                  <span class="m-label">Fraunces / Inter · generous spacing</span>
+                <div class="pnl" style="flex:1;">
+                  <div class="r"><span class="av" style="background:#3B82F6">MB</span><span class="g nm">Marcus Bell<span>marcus@&hellip; &middot; 17d ago</span></span><span class="pill ok">Good standing</span></div>
+                  <div class="r"><span class="av" style="background:#22C55E">GC</span><span class="g nm">Grace Chapel<span>hello@&hellip; &middot; 4d ago</span></span><span class="pill ok">Good standing</span></div>
+                  <div class="r"><span class="av" style="background:#A855F7">TR</span><span class="g nm">Tia Randall<span>tia@&hellip; &middot; 63d silent</span></span><span class="pill sent">Check in</span></div>
+                  <div class="r"><span class="av" style="background:#F59E0B">NC</span><span class="g nm">Northside Co-op<span>ops@&hellip; &middot; 18d ago</span></span><span class="pill ok">Good standing</span></div>
+                  <div class="r"><span class="av" style="background:#EF4444">JO</span><span class="g nm">J. Okafor<span>j@&hellip; &middot; 2d ago</span></span><span class="pill ok">Good standing</span></div>
                 </div>
               </div>
-              <div class="m-arts">
-                <div class="m-art"><span class="cap">Card</span><div><div class="mk">KMJ</div><div class="ln"></div><div class="ln s"></div></div></div>
-                <div class="m-art"><span class="cap">Invoice</span><div><div class="mk">$1,200</div><div class="ln"></div><div class="ln s"></div></div></div>
-                <div class="m-art"><span class="cap">Post</span><div><div class="mk">Launch</div><div class="ln"></div><div class="ln s"></div></div></div>
-              </div>
-              <div class="m-row"><span class="dot"></span><span class="grow">Change one color — every artifact repaints live</span></div>
             </div>
           </div>
         </div>
 
         <div class="room-face" style="--fa:180deg;" data-i="3"
-             data-caption="A dedicated Strategy Coach walks you through eight courses — discovery to launch plan — with a degree ring, sealed courses, and a diploma when you graduate.">
-          <div class="mock">
-            <div class="mock-bar"><i></i><i></i><i></i><em>The Academy · Foundation Track</em></div>
-            <div class="mock-body">
-              <div style="display:flex;align-items:center;gap:16px;">
-                <div class="m-ring"><span class="in">62%</span></div>
-                <div style="flex:1;">
-                  <span class="m-eyebrow">Foundation Track</span>
-                  <div class="m-h" style="margin-top:4px;">5 of 8 courses sealed</div>
-                  <span class="m-label">Diploma unlocks at 8</span>
+             data-caption="Walk into a storefront built from your own brand. Try your identity on real artifacts — card, invoice, social post — and watch everything repaint as you edit.">
+          <div class="app is-mini">
+            <div class="app-body">""" + SIDEBAR + """
+              <div class="app-canvas">
+                <div class="ah-rule"></div>
+                <div class="ah-row"><div><div class="ah-eyebrow">The Creative Studio &middot; Fitting Room</div>
+                  <div class="ah-title">Brand Studio</div>
+                  <div class="ah-sub">Warm &middot; Grounded &middot; Direct</div></div>
+                  <span class="ah-btn">Apply to all</span></div>
+                <div class="pnl">
+                  <div class="pnl-h">Your brand DNA</div>
+                  <div style="display:flex;align-items:center;gap:12px;">
+                    <span class="sw"><i style="background:#2E7DFF"></i><i style="background:#22D3EE"></i><i style="background:#7C3AED"></i><i style="background:#0E1015"></i><i style="background:#F7F8FA"></i></span>
+                    <span class="ah-sub" style="flex:1;">Inter Tight / Inter &middot; generous spacing &middot; 14px radius</span>
+                  </div>
                 </div>
-              </div>
-              <div class="m-panel" style="flex:1;">
-                <div class="m-row"><span class="dot"></span><span class="grow">01 · Who you serve</span><span class="m-pill paid">Sealed</span></div>
-                <div class="m-row"><span class="dot"></span><span class="grow">02 · What you actually sell</span><span class="m-pill paid">Sealed</span></div>
-                <div class="m-row"><span class="dot"></span><span class="grow">03 · Pricing with a spine</span><span class="m-pill paid">Sealed</span></div>
-                <div class="m-row"><span class="dot cool"></span><span class="grow">04 · Your offer ladder</span><span class="m-pill sent">In progress</span></div>
-                <div class="m-row"><span class="dot"></span><span class="grow">05 · The launch plan</span><span class="t">Locked</span></div>
+                <div class="arts">
+                  <div class="art"><span class="c">Business card</span><span><span class="m">R&amp;Co</span><span class="l"></span><span class="l s"></span></span></div>
+                  <div class="art"><span class="c">Invoice</span><span><span class="m">$1,200</span><span class="l"></span><span class="l s"></span></span></div>
+                  <div class="art"><span class="c">Social post</span><span><span class="m">Launch</span><span class="l"></span><span class="l s"></span></span></div>
+                </div>
+                <div class="r"><span class="bar"></span><span class="g">Change one color &mdash; every artifact repaints live</span><span class="pill live">Live</span></div>
               </div>
             </div>
           </div>
         </div>
 
         <div class="room-face" style="--fa:240deg;" data-i="4"
-             data-caption="Your site is composed from your brand DNA and your own words — typography, spacing and motion reasoned from who you are, live on your own link in minutes.">
-          <div class="mock">
-            <div class="mock-bar"><i></i><i></i><i></i><em>Smart Sites · Live</em></div>
-            <div class="mock-body">
-              <div style="display:flex;align-items:baseline;justify-content:space-between;">
-                <span class="m-eyebrow">Composed, not templated</span>
-                <span class="m-label">yoursite.mysolutionist.app</span>
-              </div>
-              <div class="m-site">
-                <div class="band">
-                  <div class="t">Counsel that holds up.</div>
-                  <div class="s">Family mediation · Grand Rapids, MI</div>
+             data-caption="A dedicated Strategy Coach walks you through eight courses — discovery to launch plan — with a degree ring, sealed courses, and a diploma when you graduate.">
+          <div class="app is-mini">
+            <div class="app-body">""" + SIDEBAR + """
+              <div class="app-canvas">
+                <div class="ah-rule"></div>
+                <div class="ah-eyebrow">The Academy &middot; Foundation Track</div>
+                <div style="display:flex;align-items:center;gap:14px;">
+                  <span class="ring"><i>62%</i></span>
+                  <span style="flex:1;"><span class="ah-title" style="display:block;">5 of 8 courses sealed</span>
+                  <span class="ah-sub">Diploma unlocks at 8 &middot; Strategy Coach standing by</span></span>
                 </div>
-                <div class="cards"><div></div><div></div><div></div></div>
+                <div class="pnl" style="flex:1;">
+                  <div class="r"><span class="bar grn"></span><span class="g nm">01 &middot; Who you serve<span>sealed Jun 2</span></span><span class="pill paid">Sealed</span></div>
+                  <div class="r"><span class="bar grn"></span><span class="g nm">02 &middot; What you actually sell<span>sealed Jun 9</span></span><span class="pill paid">Sealed</span></div>
+                  <div class="r"><span class="bar grn"></span><span class="g nm">03 &middot; Pricing with a spine<span>sealed Jun 21</span></span><span class="pill paid">Sealed</span></div>
+                  <div class="r"><span class="bar amb"></span><span class="g nm">04 &middot; Your offer ladder<span>2 of 5 lessons</span></span><span class="pill sent">In progress</span></div>
+                  <div class="r"><span class="bar"></span><span class="g nm">05 &middot; The launch plan<span>unlocks after 04</span></span><span class="pill draft">Locked</span></div>
+                </div>
               </div>
-              <div class="m-row"><span class="dot"></span><span class="grow">Typography and spacing reasoned from your brand — not a theme</span></div>
             </div>
           </div>
         </div>
 
         <div class="room-face" style="--fa:300deg;" data-i="5"
-             data-caption="Set the rules once. Chief works your follow-ups, reminders and drafts on schedule — and shows you every action it took, so nothing happens behind your back.">
-          <div class="mock">
-            <div class="mock-bar"><i></i><i></i><i></i><em>Autopilot · Overnight</em></div>
-            <div class="mock-body">
-              <div style="display:flex;align-items:baseline;justify-content:space-between;">
-                <span class="m-eyebrow">Ran while you slept</span>
-                <span class="m-label">04:00 — 07:30</span>
+             data-caption="Your site is composed from your brand DNA and your own words — typography, spacing and motion reasoned from who you are, live on your own link in minutes.">
+          <div class="app is-mini">
+            <div class="app-body">""" + SIDEBAR + """
+              <div class="app-canvas">
+                <div class="ah-rule"></div>
+                <div class="ah-row"><div><div class="ah-eyebrow">Smart Sites &middot; Composed, not templated</div>
+                  <div class="ah-title">Your site</div>
+                  <div class="ah-sub">counsel.mysolutionist.app &middot; published 6 min ago</div></div>
+                  <span class="ah-btn">Publish</span></div>
+                <div class="site">
+                  <div class="band"><span class="t">Counsel that holds up.</span><span class="s">Family mediation &middot; Grand Rapids, MI</span></div>
+                  <div class="cards"><i></i><i></i><i></i></div>
+                </div>
+                <div class="r"><span class="bar"></span><span class="g">Typography and spacing reasoned from your brand &mdash; not a theme</span><span class="pill live">Live</span></div>
               </div>
-              <div class="m-panel" style="flex:1;gap:11px;">
-                <div class="m-row"><span class="dot"></span><span class="grow">Sent 3 invoice reminders</span><span class="m-pill paid">Done</span></div>
-                <div class="m-row"><span class="dot"></span><span class="grow">Drafted follow-up to Northside Co-op</span><span class="m-pill sent">Review</span></div>
-                <div class="m-row"><span class="dot"></span><span class="grow">Prepped notes for 9:00 discovery call</span><span class="m-pill paid">Done</span></div>
-                <div class="m-row"><span class="dot cool"></span><span class="grow">Reconciled 14 bank transactions</span><span class="m-pill paid">Done</span></div>
-                <div class="m-row"><span class="dot hot"></span><span class="grow">Flagged: Tia's card expires in 6 days</span><span class="m-pill due">You</span></div>
-              </div>
-              <div class="m-row"><span class="dot"></span><span class="grow">Every action logged — approve, undo, or change the rules anytime</span></div>
             </div>
           </div>
         </div>
@@ -1085,14 +1289,14 @@ def render_home() -> str:
     </div>
 
     <div class="rooms-nav">
-      <button class="rooms-arrow" id="roomPrev" aria-label="Previous room">‹</button>
+      <button class="rooms-arrow" id="roomPrev" aria-label="Previous room">&lsaquo;</button>
       <span class="rooms-count" id="roomCount">01 / 06</span>
-      <button class="rooms-arrow" id="roomNext" aria-label="Next room">›</button>
+      <button class="rooms-arrow" id="roomNext" aria-label="Next room">&rsaquo;</button>
     </div>
-    <p class="room-caption" id="roomCaption">Your AI core with live module satellites, four stat cards counting your real numbers, today's schedule, and what needs attention — the first thing you see every day.</p>
+    <p class="room-caption" id="roomCaption">Your whole practice on one screen &mdash; real numbers counting, today&rsquo;s schedule, and Chief telling you what actually needs you before you&rsquo;ve had coffee.</p>
 
     <div style="text-align:center;margin-top:36px;" class="reveal">
-      <a class="btn-secondary" href="/features">Explore every feature in depth →</a>
+      <a class="btn-secondary" href="/features">Explore every feature in depth &rarr;</a>
     </div>
   </div>
 </section>
@@ -1100,10 +1304,10 @@ def render_home() -> str:
 <section id="demo" class="demo-section">
   <div class="container">
     <div class="section-head reveal">
-      <span class="sec-num" aria-hidden="true">03</span>
+      <span class="sec-num">03</span>
       <span class="eyebrow">See it move</span>
       <h2>Fifty-five seconds, <span class="gradient-text">end to end.</span></h2>
-      <p>The real system, scene by scene — Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</p>
+      <p>The real system, scene by scene &mdash; Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</p>
     </div>
     <div class="demo-frame reveal">
       <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
@@ -1118,18 +1322,18 @@ def render_home() -> str:
 <section id="audience" class="audience">
   <div class="container">
     <div class="section-head" style="margin-bottom:34px;">
-      <span class="sec-num reveal" aria-hidden="true">04</span>
-      <span class="eyebrow reveal">Who it's for</span>
+      <span class="sec-num reveal">04</span>
+      <span class="eyebrow reveal">Who it&rsquo;s for</span>
       <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Built for people who serve people.</h2>
     </div>
     <div class="audience-grid reveal reveal-delay-2">
-      <span class="audience-pill"><span class="emoji">⛪</span> Pastors</span>
-      <span class="audience-pill"><span class="emoji">✝️</span> Ministry Leaders</span>
-      <span class="audience-pill"><span class="emoji">🎯</span> Coaches</span>
-      <span class="audience-pill"><span class="emoji">💼</span> Consultants</span>
-      <span class="audience-pill"><span class="emoji">🎨</span> Creatives</span>
-      <span class="audience-pill"><span class="emoji">🧘</span> Practitioners</span>
-      <span class="audience-pill"><span class="emoji">🏠</span> Solo Studios</span>
+      <span class="audience-pill"><span class="emoji">&#9962;</span> Pastors</span>
+      <span class="audience-pill"><span class="emoji">&#10013;</span> Ministry Leaders</span>
+      <span class="audience-pill"><span class="emoji">&#127919;</span> Coaches</span>
+      <span class="audience-pill"><span class="emoji">&#128188;</span> Consultants</span>
+      <span class="audience-pill"><span class="emoji">&#127912;</span> Creatives</span>
+      <span class="audience-pill"><span class="emoji">&#129496;</span> Practitioners</span>
+      <span class="audience-pill"><span class="emoji">&#127968;</span> Solo Studios</span>
     </div>
   </div>
 </section>
@@ -1137,27 +1341,19 @@ def render_home() -> str:
 <section>
   <div class="container">
     <div class="section-head reveal">
-      <span class="sec-num" aria-hidden="true">05</span>
+      <span class="sec-num">05</span>
       <span class="eyebrow">Why Solutionist</span>
       <h2>One workspace replacing the chaos of eight.</h2>
     </div>
     <div class="why-grid">
-      <div class="card why-card reveal">
-        <div class="check">01</div>
-        <div><h3>One brain, not eight</h3><p>Your CRM, invoicing, calendar, content and analytics all talk to each other. Update a contact once; every tool sees it.</p></div>
-      </div>
-      <div class="card why-card reveal reveal-delay-1">
-        <div class="check">02</div>
-        <div><h3>AI that knows your business</h3><p>Chief reads your real data every turn — not a generic LLM. Asks for context once, then uses it forever.</p></div>
-      </div>
-      <div class="card why-card reveal">
-        <div class="check">03</div>
-        <div><h3>Real-time, not weekly reports</h3><p>Every metric updates as data changes. No CSV exports, no waiting for someone to refresh.</p></div>
-      </div>
-      <div class="card why-card reveal reveal-delay-1">
-        <div class="check">04</div>
-        <div><h3>Built for solo, not enterprise</h3><p>No teams, no seat math, no Slack-integration sprawl. Designed for one operator running their whole practice.</p></div>
-      </div>
+      <div class="card why-card reveal"><div class="check">01</div>
+        <div><h3>One brain, not eight</h3><p>Your CRM, invoicing, calendar, content and analytics all talk to each other. Update a contact once; every tool sees it.</p></div></div>
+      <div class="card why-card reveal reveal-delay-1"><div class="check">02</div>
+        <div><h3>AI that knows your business</h3><p>Chief reads your real data every turn &mdash; not a generic LLM. Asks for context once, then uses it forever.</p></div></div>
+      <div class="card why-card reveal"><div class="check">03</div>
+        <div><h3>Real-time, not weekly reports</h3><p>Every metric updates as data changes. No CSV exports, no waiting for someone to refresh.</p></div></div>
+      <div class="card why-card reveal reveal-delay-1"><div class="check">04</div>
+        <div><h3>Built for solo, not enterprise</h3><p>No teams, no seat math, no Slack-integration sprawl. Designed for one operator running their whole practice.</p></div></div>
     </div>
   </div>
 </section>
@@ -1166,151 +1362,106 @@ def render_home() -> str:
   <div class="container">
     <span class="eyebrow reveal">Ready when you are</span>
     <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Run your practice <span class="gradient-text">from one place.</span></h2>
-    <p class="reveal reveal-delay-2">Currently in private beta. Apply for access — we'll set you up and walk you through onboarding.</p>
-    <a class="btn-primary reveal reveal-delay-3" href="/get-started">Apply for Access →</a>
+    <p class="reveal reveal-delay-2">Currently in private beta. Apply for access &mdash; we&rsquo;ll set you up and walk you through onboarding.</p>
+    <a class="btn-primary reveal reveal-delay-3" href="/get-started">Apply for Access &rarr;</a>
   </div>
 </section>
-"""
+""")
+
     extra_scripts = """
 <script>
 (function () {
   var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  /* ── hero: pointer parallax on the command deck ──
-     Tilts the whole scene as one object. Pointer-coarse devices and
-     reduced-motion users get the static tilt the CSS already sets. */
-  var stage = document.getElementById('deckStage');
-  var tilt  = document.getElementById('deckTilt');
-  var fine  = window.matchMedia && window.matchMedia('(pointer: fine)').matches;
-  if (stage && tilt && fine && !reduced) {
-    var raf = 0, tx = 0, ty = 0;
-    function apply() {
-      raf = 0;
-      tilt.style.setProperty('--px', tx.toFixed(2) + 'deg');
-      tilt.style.setProperty('--py', ty.toFixed(2) + 'deg');
-    }
-    stage.addEventListener('mousemove', function (e) {
-      var r = stage.getBoundingClientRect();
-      tx = ((e.clientX - r.left) / r.width  - 0.5) * 16;   /* yaw   */
-      ty = ((e.clientY - r.top)  / r.height - 0.5) * -11;  /* pitch */
-      if (!raf) raf = requestAnimationFrame(apply);
-    });
-    stage.addEventListener('mouseleave', function () {
-      tx = 0; ty = 0;
-      if (!raf) raf = requestAnimationFrame(apply);
-    });
-  }
-
-  /* ── rooms: the 3D carousel ── */
   var ring    = document.getElementById('roomsRing');
   var vp      = document.getElementById('roomsViewport');
   var caption = document.getElementById('roomCaption');
   var counter = document.getElementById('roomCount');
-  if (ring) {
-    var faces = [].slice.call(ring.querySelectorAll('.room-face'));
-    var tabs  = [].slice.call(document.querySelectorAll('.room-tab'));
-    var n = faces.length, cur = 0, timer = null, manual = false;
-    var flat = function () {
-      return window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
-    };
+  if (!ring) return;
 
-    function pad(i) { return (i + 1 < 10 ? '0' : '') + (i + 1); }
+  var faces = [].slice.call(ring.querySelectorAll('.room-face'));
+  var tabs  = [].slice.call(document.querySelectorAll('.room-tab'));
+  var n = faces.length, cur = 0, timer = null, manual = false;
+  var flat = function () {
+    return window.matchMedia && window.matchMedia('(max-width: 1000px)').matches;
+  };
+  function pad(i) { return (i + 1 < 10 ? '0' : '') + (i + 1); }
 
-    function show(i, fromUser) {
-      cur = ((i % n) + n) % n;
-      if (fromUser) { manual = true; if (timer) { clearInterval(timer); timer = null; } }
-
-      /* On phones the ring is a snap strip — scroll instead of rotate.
-         Deliberately NOT scrollIntoView: on a horizontally-scrolling
-         container it still scrolls the PAGE vertically to reach the
-         element, so the strip yanked the whole document down to the
-         rooms section. Driving scrollLeft moves only the container. */
-      if (flat()) {
-        var f = faces[cur];
-        if (f && vp) {
-          var target = f.offsetLeft - (vp.clientWidth - f.offsetWidth) / 2;
-          if (vp.scrollTo) vp.scrollTo({ left: target, behavior: reduced ? 'auto' : 'smooth' });
-          else vp.scrollLeft = target;
-        }
-      } else {
-        ring.style.setProperty('--ry', (-60 * cur) + 'deg');
-      }
-
-      for (var f = 0; f < n; f++) faces[f].classList.toggle('is-active', f === cur);
-      for (var t = 0; t < tabs.length; t++) {
-        tabs[t].setAttribute('aria-selected', String(Number(tabs[t].dataset.i) === cur));
-      }
-      if (caption) caption.textContent = faces[cur].dataset.caption || '';
-      if (counter) counter.textContent = pad(cur) + ' / ' + pad(n - 1);
+  function paint() {
+    for (var f = 0; f < n; f++) faces[f].classList.toggle('is-active', f === cur);
+    for (var t = 0; t < tabs.length; t++) {
+      tabs[t].setAttribute('aria-selected', String(Number(tabs[t].dataset.i) === cur));
     }
-
-    tabs.forEach(function (b) {
-      b.addEventListener('click', function () { show(Number(b.dataset.i), true); });
-    });
-    var prev = document.getElementById('roomPrev');
-    var next = document.getElementById('roomNext');
-    if (prev) prev.addEventListener('click', function () { show(cur - 1, true); });
-    if (next) next.addEventListener('click', function () { show(cur + 1, true); });
-
-    /* keyboard: arrows move the carousel when it has focus within */
-    if (vp) {
-      vp.addEventListener('keydown', function (e) {
-        if (e.key === 'ArrowRight') { show(cur + 1, true); e.preventDefault(); }
-        if (e.key === 'ArrowLeft')  { show(cur - 1, true); e.preventDefault(); }
-      });
-    }
-
-    /* On phones the user scrolls the strip directly — keep the tabs and
-       caption honest by tracking which face is centred. */
-    if (vp) {
-      var sT = null;
-      vp.addEventListener('scroll', function () {
-        if (!flat()) return;
-        if (sT) clearTimeout(sT);
-        sT = setTimeout(function () {
-          var mid = vp.scrollLeft + vp.clientWidth / 2, best = 0, bestD = Infinity;
-          for (var f = 0; f < n; f++) {
-            var c = faces[f].offsetLeft + faces[f].offsetWidth / 2;
-            var d = Math.abs(c - mid);
-            if (d < bestD) { bestD = d; best = f; }
-          }
-          if (best !== cur) {
-            cur = best;
-            for (var g = 0; g < n; g++) faces[g].classList.toggle('is-active', g === cur);
-            for (var t2 = 0; t2 < tabs.length; t2++) {
-              tabs[t2].setAttribute('aria-selected', String(Number(tabs[t2].dataset.i) === cur));
-            }
-            if (caption) caption.textContent = faces[cur].dataset.caption || '';
-            if (counter) counter.textContent = pad(cur) + ' / ' + pad(n - 1);
-          }
-        }, 90);
-      }, { passive: true });
-    }
-
-    /* auto-advance until the visitor takes the wheel; paused off-screen
-       and on hover so it never spins at a nobody. */
-    if (!reduced) {
-      var start = function () {
-        /* never auto-advance the phone strip: it fights the reader's own
-           swipe and moves content under their thumb mid-read */
-        if (manual || timer || flat()) return;
-        timer = setInterval(function () { show(cur + 1, false); }, 6000);
-      };
-      var stop = function () { if (timer) { clearInterval(timer); timer = null; } };
-      if ('IntersectionObserver' in window) {
-        new IntersectionObserver(function (es) {
-          es.forEach(function (e) { e.isIntersecting ? start() : stop(); });
-        }, { threshold: 0.35 }).observe(vp || ring);
-      } else { start(); }
-      if (vp) {
-        vp.addEventListener('mouseenter', stop);
-        vp.addEventListener('mouseleave', start);
-        vp.addEventListener('focusin', stop);
-      }
-    }
-
-    show(0, false);
+    if (caption) caption.textContent = faces[cur].dataset.caption || '';
+    if (counter) counter.textContent = pad(cur) + ' / ' + pad(n - 1);
   }
+
+  function show(i, fromUser) {
+    cur = ((i % n) + n) % n;
+    if (fromUser) { manual = true; if (timer) { clearInterval(timer); timer = null; } }
+    /* NOT scrollIntoView: on a horizontally-scrolling container it still
+       scrolls the PAGE vertically to reach the element, which yanked the
+       whole document down to this section every time it advanced. */
+    if (flat()) {
+      var f = faces[cur];
+      if (f && vp) {
+        var target = f.offsetLeft - (vp.clientWidth - f.offsetWidth) / 2;
+        if (vp.scrollTo) vp.scrollTo({ left: target, behavior: reduced ? 'auto' : 'smooth' });
+        else vp.scrollLeft = target;
+      }
+    } else {
+      ring.style.setProperty('--ry', (-60 * cur) + 'deg');
+    }
+    paint();
+  }
+
+  tabs.forEach(function (b) {
+    b.addEventListener('click', function () { show(Number(b.dataset.i), true); });
+  });
+  var prev = document.getElementById('roomPrev');
+  var next = document.getElementById('roomNext');
+  if (prev) prev.addEventListener('click', function () { show(cur - 1, true); });
+  if (next) next.addEventListener('click', function () { show(cur + 1, true); });
+
+  if (vp) {
+    vp.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight') { show(cur + 1, true); e.preventDefault(); }
+      if (e.key === 'ArrowLeft')  { show(cur - 1, true); e.preventDefault(); }
+    });
+    var sT = null;
+    vp.addEventListener('scroll', function () {
+      if (!flat()) return;
+      if (sT) clearTimeout(sT);
+      sT = setTimeout(function () {
+        var mid = vp.scrollLeft + vp.clientWidth / 2, best = 0, bestD = Infinity;
+        for (var f = 0; f < n; f++) {
+          var c = faces[f].offsetLeft + faces[f].offsetWidth / 2;
+          var d = Math.abs(c - mid);
+          if (d < bestD) { bestD = d; best = f; }
+        }
+        if (best !== cur) { cur = best; paint(); }
+      }, 90);
+    }, { passive: true });
+  }
+
+  if (!reduced) {
+    var start = function () {
+      /* never auto-advance the phone strip — it fights the reader's swipe */
+      if (manual || timer || flat()) return;
+      timer = setInterval(function () { show(cur + 1, false); }, 6500);
+    };
+    var stop = function () { if (timer) { clearInterval(timer); timer = null; } };
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver(function (es) {
+        es.forEach(function (e) { e.isIntersecting ? start() : stop(); });
+      }, { threshold: 0.35 }).observe(vp || ring);
+    } else { start(); }
+    if (vp) {
+      vp.addEventListener('mouseenter', stop);
+      vp.addEventListener('mouseleave', start);
+      vp.addEventListener('focusin', stop);
+    }
+  }
+  show(0, false);
 })();
 </script>
 """
@@ -1326,7 +1477,7 @@ def render_home() -> str:
 # ══════════════════════════════════════════════════════════════════════
 
 def render_features() -> str:
-    extra_css = """
+    extra_css = REPLICA_KIT_CSS + FEATURES_FX_CSS + """
       .feature-section{padding:64px 0;border-bottom:1px solid var(--border);}
       .feature-section:last-of-type{border-bottom:none;}
       .fs-grid{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;}
@@ -1361,8 +1512,29 @@ def render_features() -> str:
           <li>Wake-word listening</li><li>Activity feed</li><li>Smart notifications</li>
         </ul>
       </div>
-      <div class="fs-visual reveal reveal-delay-1" aria-hidden>
-        <div class="inner"><div class="mv-orbit"><span class="center"></span><span class="moon"></span><span class="moon moon-2"></span></div></div>
+      <div class="fs-visual fsv reveal reveal-delay-1">
+        <div class="app">
+          <div class="app-top"><span class="at-mark"></span>
+            <span class="at-search">Ask the AI anything&hellip;<span class="kbd">&#8984;K</span></span>
+            <span class="at-cta">+ Quick Create</span><span class="at-av"></span></div>
+          <div class="app-canvas">
+            <div class="kpi-row" style="grid-template-columns:repeat(3,1fr);">
+              <div class="kpi"><span class="k">Revenue &middot; this month</span>
+                <span class="v gold fx-num" data-to="12480" data-prefix="$">$0</span><span class="f up">&#9650; 18%</span></div>
+              <div class="kpi"><span class="k">Active clients</span>
+                <span class="v fx-num" data-to="17">0</span><span class="f">good standing</span></div>
+              <div class="kpi"><span class="k">Tasks today</span>
+                <span class="v fx-num" data-to="7">0</span><span class="f">2 due by 5:00</span></div>
+            </div>
+            <div class="pnl fx-seq" style="flex:1;">
+              <div class="pnl-h">Today<span class="ct">4</span></div>
+              <div class="r"><span class="bar"></span><span class="g nm">Discovery call &mdash; Marcus Bell<span>45 min &middot; video</span></span><span class="amt">9:00</span></div>
+              <div class="r"><span class="bar amb"></span><span class="g nm">Grace Chapel &mdash; planning session<span>on site</span></span><span class="amt">11:30</span></div>
+              <div class="r"><span class="bar red"></span><span class="g nm">Follow up: 3 overdue invoices<span>Chief drafted all three</span></span><span class="amt">2:00</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="fsv-cap"><span class="dot"></span>Your real numbers, counting as the data changes.</div>
       </div>
     </div>
   </div>
@@ -1371,8 +1543,29 @@ def render_features() -> str:
 <section class="feature-section">
   <div class="container">
     <div class="fs-grid">
-      <div class="fs-visual reveal" aria-hidden>
-        <div class="inner"><div class="mv-stack"><span></span><span></span><span></span></div></div>
+      <div class="fs-visual fsv reveal">
+        <div class="app">
+          <div class="app-top"><span class="at-mark"></span>
+            <span class="at-search">counsel.mysolutionist.app</span>
+            <span class="at-cta">Publish</span></div>
+          <div class="app-canvas">
+            <div class="ah-rule"></div>
+            <div class="ah-eyebrow">Smart Sites &middot; composing</div>
+            <div class="fx-compose">
+              <div class="band" style="padding:15px 13px;display:flex;flex-direction:column;gap:5px;
+                background:linear-gradient(135deg,rgba(46,125,255,.3),rgba(34,211,238,.12));">
+                <span style="font-family:var(--font-heading);font-size:15px;font-weight:700;letter-spacing:-.02em;">Counsel that holds up.</span>
+                <span style="font-size:9px;color:var(--ink-2);">Family mediation &middot; Grand Rapids, MI</span></div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;padding:10px;">
+                <span style="height:46px;border-radius:6px;background:var(--pane);border:1px solid var(--line);"></span>
+                <span style="height:46px;border-radius:6px;background:var(--pane);border:1px solid var(--line);"></span>
+                <span style="height:46px;border-radius:6px;background:var(--pane);border:1px solid var(--line);"></span></div>
+              <div style="padding:0 10px 10px;"><span class="r"><span class="bar"></span>
+                <span class="g">Book a consultation</span><span class="pill live">Wired</span></span></div>
+            </div>
+          </div>
+        </div>
+        <div class="fsv-cap"><span class="dot"></span>Composed from your brand DNA &mdash; section by section, not a template.</div>
       </div>
       <div class="reveal reveal-delay-1">
         <div class="fs-eyebrow">🧱 Build</div>
@@ -1400,8 +1593,30 @@ def render_features() -> str:
           <li>Email hub</li><li>SMS hub</li><li>Projects</li><li>Documents</li><li>Autopilot agents</li>
         </ul>
       </div>
-      <div class="fs-visual reveal reveal-delay-1" aria-hidden>
-        <div class="inner"><div class="mv-grid"><span></span><span></span><span></span><span class="live"></span><span></span><span></span><span class="live"></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span class="live"></span></div></div>
+      <div class="fs-visual fsv reveal reveal-delay-1">
+        <div class="app">
+          <div class="app-top"><span class="at-mark"></span>
+            <span class="at-search">Operate &middot; Invoices</span><span class="at-cta">+ New Invoice</span></div>
+          <div class="app-canvas">
+            <div class="age" style="grid-template-columns:repeat(3,1fr);">
+              <div><div class="k">Outstanding</div><div class="v">$1,865</div><div class="s">8 invoices</div></div>
+              <div class="hot"><div class="k">Past due</div><div class="v">$1,265</div><div class="s">7 invoices</div></div>
+              <div class="cta"><div class="k">Chase all overdue</div><div class="v">Send</div><div class="s">Chief drafts each one</div></div>
+            </div>
+            <div class="pnl fx-seq" style="flex:1;">
+              <div class="r fx-settle"><span class="bar grn"></span><span class="id">INV-2026-009</span>
+                <span class="g nm">Northside Co-op<span>3 items &middot; due Jul 15</span></span><span class="amt">$2,400</span>
+                <span class="fx-flip"><span class="pill sent a">Sent</span><span class="pill paid b">Paid</span></span></div>
+              <div class="r"><span class="bar red"></span><span class="id">INV-2026-011</span>
+                <span class="g nm">Marcus Bell<span>1 item &middot; due Jun 26</span></span><span class="amt">$640</span><span class="pill due">Overdue</span></div>
+              <div class="r"><span class="bar amb"></span><span class="id">INV-2026-010</span>
+                <span class="g nm">Grace Chapel<span>reminder sent by Chief</span></span><span class="amt">$1,200</span><span class="pill sent">Sent</span></div>
+              <div class="r"><span class="bar grn"></span><span class="id">INV-2026-008</span>
+                <span class="g nm">J. Okafor<span>paid via card</span></span><span class="amt">$850</span><span class="pill paid">Paid</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="fsv-cap"><span class="dot"></span>Payments land and reconcile themselves &mdash; no CSV, no chasing.</div>
       </div>
     </div>
   </div>
@@ -1410,8 +1625,23 @@ def render_features() -> str:
 <section class="feature-section">
   <div class="container">
     <div class="fs-grid">
-      <div class="fs-visual reveal" aria-hidden>
-        <div class="inner"><div class="mv-bars"><span></span><span></span><span></span><span></span><span></span></div></div>
+      <div class="fs-visual fsv reveal">
+        <div class="app">
+          <div class="app-top"><span class="at-mark"></span>
+            <span class="at-search">Grow &middot; Revenue</span><span class="at-cta">Set a Goal</span></div>
+          <div class="app-canvas">
+            <div class="ah-rule"></div>
+            <div class="ah-row"><div><div class="ah-eyebrow">Q4 goal</div>
+              <div class="ah-title"><span class="fx-num" data-to="40000" data-prefix="$">$0</span></div>
+              <div class="ah-sub">62% of target &middot; on pace</div></div>
+              <span class="ring" style="width:52px;height:52px;"><i style="width:38px;height:38px;font-size:11px;">62%</i></span></div>
+            <div class="pnl" style="flex:1;">
+              <div class="fx-chart"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="fx-axis"><span>Apr</span><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span><span>Sep</span><span>Oct</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="fsv-cap"><span class="dot"></span>Every metric updates as the data changes &mdash; not on a weekly report.</div>
       </div>
       <div class="reveal reveal-delay-1">
         <div class="fs-eyebrow">📈 Grow</div>
@@ -1442,8 +1672,18 @@ def render_features() -> str:
           <li>Direct publishing</li><li>Report generation</li><li>Insight + tactical input</li>
         </ul>
       </div>
-      <div class="fs-visual reveal reveal-delay-1" aria-hidden>
-        <div class="inner"><div class="mv-spark"><span class="core"></span></div></div>
+      <div class="fs-visual fsv reveal">
+        <div class="app cx" style="height:308px;">
+          <div class="app-top"><span class="at-mark"></span>
+            <span class="at-search">Chief of Staff</span><span class="at-av"></span></div>
+          <div class="app-canvas">
+            <div class="cx-b you">Who owes me money?</div>
+            <div class="cx-b ai">Three invoices are past due &mdash; <b>$2,140</b> total. Want me to send reminders?</div>
+            <div class="cx-b you">Yes, and book Marcus for Thursday.</div>
+            <div class="cx-b act">&#10003; 3 reminders sent &middot; 1 session booked</div>
+          </div>
+        </div>
+        <div class="fsv-cap"><span class="dot"></span>It reads your live data every turn &mdash; then does the work.</div>
       </div>
     </div>
   </div>
@@ -1452,8 +1692,29 @@ def render_features() -> str:
 <section class="feature-section">
   <div class="container">
     <div class="fs-grid">
-      <div class="fs-visual reveal" aria-hidden>
-        <div class="inner"><div class="mv-publish"><span class="platform fb">f</span><span class="flow"></span><span class="platform ig">📷</span></div></div>
+      <div class="fs-visual fsv reveal">
+        <div class="app">
+          <div class="app-top"><span class="at-mark"></span>
+            <span class="at-search">Grow &middot; Content Studio</span><span class="at-cta">Publish</span></div>
+          <div class="app-canvas">
+            <div class="pnl">
+              <div class="pnl-h">Draft &middot; ready to send</div>
+              <div style="font-size:10.5px;color:var(--ink-2);line-height:1.55;">
+                &ldquo;Three seats left for the October intensive. If you&rsquo;ve been putting
+                off the hard conversation about your numbers &mdash; this is the room for it.&rdquo;</div>
+            </div>
+            <div class="pnl" style="flex:1;justify-content:center;">
+              <div class="fx-pub">
+                <span class="ch fb">f</span><span class="wire"></span>
+                <span style="font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);white-space:nowrap;">One post</span>
+                <span class="wire"></span><span class="ch ig">&#9673;</span>
+              </div>
+              <div class="fx-axis" style="justify-content:center;gap:26px;">
+                <span>Facebook &middot; scheduled 9:00</span><span>Instagram &middot; scheduled 9:00</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="fsv-cap"><span class="dot"></span>Write once. Chief adapts and schedules it per channel.</div>
       </div>
       <div class="reveal reveal-delay-1">
         <div class="fs-eyebrow">📣 Publish to Facebook + Instagram</div>
@@ -1481,7 +1742,7 @@ def render_features() -> str:
     return _render_shell(
         title="Features",
         description="Every surface in the Solutionist System: Command Center, Build, Operate, Grow, Chief of Staff, and Publish.",
-        content_html=body, path="/features", active="features", extra_css=extra_css,
+        content_html=body, path="/features", active="features", extra_css=extra_css, extra_scripts=FEATURES_SCRIPT,
     )
 
 
@@ -2186,7 +2447,7 @@ async def handle_lead_intake(req: LeadIntakeRequest) -> Dict[str, Any]:
         # Owner notification
         owner_subject = f"New lead: {name} ({role or 'no role'})"
         owner_body = f"""<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#222;padding:20px;max-width:600px;margin:0 auto;background:#fff;">
-<h2 style="color:#8F5A16;margin-bottom:18px;">New beta application</h2>
+<h2 style="color:#1D63E6;margin-bottom:18px;">New beta application</h2>
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <tr><td style="padding:8px 0;color:#666;width:140px;">Name</td><td style="padding:8px 0;font-weight:600;">{_html.escape(name)}</td></tr>
 <tr><td style="padding:8px 0;color:#666;">Email</td><td style="padding:8px 0;font-weight:600;"><a href="mailto:{_html.escape(email)}">{_html.escape(email)}</a></td></tr>
@@ -2211,7 +2472,7 @@ async def handle_lead_intake(req: LeadIntakeRequest) -> Dict[str, Any]:
         # Lead confirmation
         lead_subject = "Got your application — welcome to Solutionist"
         lead_body = f"""<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#222;padding:20px;max-width:600px;margin:0 auto;background:#fff;line-height:1.65;">
-<h2 style="color:#8F5A16;margin-bottom:14px;">Thanks for applying, {_html.escape(name.split()[0])}.</h2>
+<h2 style="color:#1D63E6;margin-bottom:14px;">Thanks for applying, {_html.escape(name.split()[0])}.</h2>
 <p style="font-size:15px;color:#333;">We got your application for the Solutionist System private beta. Here's what happens next:</p>
 <ol style="font-size:14px;color:#444;padding-left:20px;margin:18px 0;">
 <li style="margin-bottom:8px;"><strong>Kevin will reach out within 24 hours</strong> — usually faster. He'll ask a few questions to make sure we're a fit for what you're building.</li>
