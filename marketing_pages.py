@@ -969,12 +969,12 @@ def render_home() -> str:
       /* ══════════════════════════════════════════════════════════════
          HERO — copy over a full-width Mission Control replica
          ══════════════════════════════════════════════════════════════ */
-      .hero{position:relative;padding:72px 0 20px;overflow:hidden;}
+      .hero{position:relative;padding:88px 0 20px;overflow:hidden;}
       .hero::before{content:'';position:absolute;inset:-160px 0 auto;height:620px;pointer-events:none;
         background:radial-gradient(52% 70% at 50% 0%, var(--glow), transparent 72%);opacity:.55;}
       .hero .container-xl{position:relative;z-index:1;}
       .hero-copy{max-width:780px;}
-      .hero h1{margin:20px 0 20px;font-size:clamp(42px,6.2vw,68px);line-height:1.02;}
+      .hero h1{margin:0 0 22px;font-size:clamp(46px,7vw,80px);line-height:1.01;}
       .hero .lead{max-width:600px;margin:0 0 32px;font-size:17px;}
       .hero-ctas{display:flex;flex-wrap:wrap;gap:12px;align-items:center;}
       .hero-meta{display:flex;flex-wrap:wrap;align-items:center;gap:18px;margin-top:26px;}
@@ -1178,14 +1178,13 @@ def render_home() -> str:
 <section class="hero">
   <div class="container-xl">
     <div class="hero-copy">
-      <span class="eyebrow reveal">For solo practitioners + small studios</span>
-      <h1 class="reveal reveal-delay-1">Every problem<br>has a <span class="gradient-text">solution.</span></h1>
-      <p class="lead reveal reveal-delay-2">One workspace that runs your whole practice: contacts, invoices, sessions, content and goals, all commanded by an AI Chief of Staff that knows your business. Eight tools, replaced.</p>
-      <div class="hero-ctas reveal reveal-delay-3">
+      <h1 class="reveal">Every problem<br>has a <span class="gradient-text">solution.</span></h1>
+      <p class="lead reveal reveal-delay-1">One workspace that runs your whole business: contacts, invoices, sessions, content and goals, all commanded by an AI Chief of Staff that knows your business. Eight tools, replaced.</p>
+      <div class="hero-ctas reveal reveal-delay-2">
         <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
         <a class="btn-secondary" href="#rooms">Look inside</a>
       </div>
-      <div class="hero-meta reveal reveal-delay-3">
+      <div class="hero-meta reveal reveal-delay-2">
         <span class="stat-block"><span class="big">8</span><span>tools replaced by one workspace</span></span>
         <span class="hero-note">Currently in private beta &middot; Apply for access</span>
       </div>
@@ -1647,8 +1646,8 @@ def render_home() -> str:
 </script>
 """
     return _render_shell(
-        title="One workspace that runs your whole practice",
-        description="The Solutionist System is one AI-powered workspace that replaces 8+ tools for solo practitioners. Contacts, invoices, sessions, content, goals, and a Chief of Staff that knows your business.",
+        title="One workspace that runs your whole business",
+        description="The Solutionist System is one AI-powered workspace that replaces 8+ tools for people running a business on their own. Contacts, invoices, sessions, content, goals, and a Chief of Staff that knows your business.",
         content_html=body, path="/", extra_css=extra_css, extra_scripts=extra_scripts,
     )
 
@@ -1750,7 +1749,7 @@ def render_features() -> str:
       <div class="reveal reveal-delay-1">
         <div class="fs-eyebrow"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="7" x="14" y="3" rx="1"/><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1"/></svg>Build</div>
         <h2>Sites, brand and intake, all yours.</h2>
-        <p>Spin up a practitioner site, set your brand kit (colors, fonts, logo), capture leads through intake forms, and wire up the integrations you need.</p>
+        <p>Spin up your own site, set your brand kit (colors, fonts, logo), capture leads through intake forms, and wire up the integrations you need.</p>
         <ul class="fs-list">
           <li>Practitioner sites</li><li>Brand kits</li><li>Intake forms</li><li>Custom modules</li>
           <li>Print materials</li><li>Booking page</li><li>Link page</li><li>Email templates</li>
@@ -2127,7 +2126,7 @@ def render_faq() -> str:
     <div class="faq-list reveal">
       <details class="faq-item">
         <summary>Who is this actually for?</summary>
-        <div class="faq-body"><p>Solo practitioners and small studios. The people we built it for: pastors, ministry leaders, coaches, consultants, creatives, agencies-of-one, and small service businesses. If you run your whole show, from sales and delivery to marketing and finances, Solutionist is for you. If you have a 20-person team with a dedicated ops person, it's overkill.</p></div>
+        <div class="faq-body"><p>People who run the whole thing themselves: pastors, ministry leaders, coaches, consultants, creatives, agencies-of-one, and small service businesses. If you run your whole show, from sales and delivery to marketing and finances, Solutionist is for you. If you have a 20-person team with a dedicated ops person, it's overkill.</p></div>
       </details>
       <details class="faq-item">
         <summary>Do I need a team to use this?</summary>
@@ -2303,7 +2302,7 @@ def render_about() -> str:
 """
     return _render_shell(
         title="About",
-        description="Built by Kevin McCloud Jr. at The Solutionist System LLC. A Michigan-based company building one workspace for solo practitioners.",
+        description="Built by Kevin McCloud Jr. at The Solutionist System LLC. A Michigan-based company building one workspace for small businesses.",
         content_html=body, path="/about", active="about", extra_css=extra_css,
     )
 
@@ -2510,7 +2509,7 @@ def render_get_started() -> str:
             <option value="coach">Coach</option>
             <option value="consultant">Consultant</option>
             <option value="creative">Creative</option>
-            <option value="practitioner">Practitioner</option>
+            <option value="practitioner">Service Provider</option>
             <option value="solo_studio">Solo Studio</option>
             <option value="other">Other</option>
           </select>
