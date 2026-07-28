@@ -32,6 +32,18 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 logger = logging.getLogger("fallback_brain")
+# Every other module in this service attaches its own handler; this one
+# did not, which made the feature undebuggable in exactly the situation
+# it exists for. A bare logger's records depend on whatever uvicorn left
+# the root config in, so a failed failover could produce NO log line at
+# all — and silence reads identically to "the code never ran". First live
+# test of this feature lost an hour to that ambiguity.
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] fallback: %(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 
@@ -113,9 +125,18 @@ async def call_fallback(client: httpx.AsyncClient, system: Any,
     """One attempt against the fallback provider. Returns '' on any
     failure so the caller's existing mute-path handling stands."""
     if not enabled():
+        # Say WHICH gate closed. "Disabled" and "no key" are different
+        # problems with different fixes, and from the outside both look
+        # like Chief going quiet.
+        logger.warning(
+            "[fallback] NOT attempted — %s",
+            "FALLBACK_BRAIN=off" if (os.environ.get("FALLBACK_BRAIN") or "on"
+                                     ).strip().lower() == "off"
+            else "OPENAI_API_KEY is not set")
         return ""
     key = os.environ.get("OPENAI_API_KEY", "").strip()
     model = _model()
+    logger.info("[fallback] attempting %s (primary failed: %s)", model, reason[:120])
 
     oai_messages: List[Dict[str, str]] = [
         {"role": "system", "content": _flatten_system(system)}]
