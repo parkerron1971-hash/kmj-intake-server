@@ -416,4 +416,47 @@ def test_seed_tick_is_idempotent(monkeypatch):
     monkeypatch.setattr(vk.chief_memory_semantic, "embed",
                         lambda t: pytest.fail("should not embed on a no-op run"))
     out = vk.seed_tick(["coach"])
-    assert out == {"written": 0, "skipped": 1, "verticals": 1}
+    assert out["written"] == 0 and out["skipped"] == 1
+    assert out["verticals"] == 1 and out["failed"] == 0
+
+
+def test_one_bad_vertical_does_not_stop_the_others(monkeypatch):
+    """Without a per-vertical guard, a malformed profile raises, the
+    remaining verticals never seed, and the scheduler wrapper swallows it —
+    failing silently AND partially. A bad vertical must cost that vertical
+    and nothing else."""
+    monkeypatch.setattr(vk, "_enabled", lambda: True)
+    monkeypatch.setattr(vk, "list_for_vertical", lambda v, source=None, limit=200: [])
+    monkeypatch.setattr(vk.chief_memory_semantic, "embed", lambda t: None)
+    monkeypatch.setattr(vk.sb_clients, "sb_post_as_service",
+                        lambda p, b, prefer=None: {})
+
+    def _rows(vertical):
+        if vertical == "broken":
+            raise ValueError("malformed profile")
+        return [{"kind": "voice", "content": f"Voice hallmark for {vertical}"}]
+
+    monkeypatch.setattr(vk, "_seed_rows_for", _rows)
+
+    out = vk.seed_tick(["coach", "broken", "lawyer"])
+    assert out["failed"] == 1
+    assert out["written"] == 2, "the healthy verticals must still seed"
+
+
+def test_seed_tick_reports_failures_rather_than_hiding_them():
+    """`failed` is in the return shape so a partial run is visible to
+    whoever reads the job's output, not just to the log."""
+    import inspect
+    assert '"failed"' in inspect.getsource(vk.seed_tick)
+
+
+def test_min_businesses_is_documented_as_load_bearing():
+    """The product UI promises client data never leaves the account. For
+    names that promise rests on this floor, not on scrubbing — so the
+    constant carries a warning saying so. If this test fails, someone
+    removed the explanation of why the number cannot be lowered."""
+    import inspect
+    src = inspect.getsource(vd)
+    head = src[:src.index("MIN_BUSINESSES = 3")]
+    assert "never leave your account" in head, (
+        "the link between MIN_BUSINESSES and the UI promise must stay documented")

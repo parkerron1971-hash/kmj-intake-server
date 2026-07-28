@@ -211,23 +211,46 @@ def seed_tick(verticals: Optional[List[str]] = None) -> Dict[str, int]:
     new rows. Diffing first makes this cheap enough to schedule, which is
     what stops Feed 1 depending on someone remembering to run it.
 
+    WHAT READS THESE ROWS TODAY: nothing. `vertical_context.
+    build_vertical_learned_block` filters retrieval to source='learned',
+    deliberately, so seeds don't repeat the static block that already
+    carries them. Seeding is groundwork — P1.1's point was to get Feed 1
+    out of Python so it can grow without a deploy, and that is only
+    realised once something EDITS rows instead of editing the profiles.
+    Nothing does yet. Populating now means the substrate is real rather
+    than theoretical, and it costs pennies; it does not mean Feed 1 is
+    finished.
+
     Idempotent and safe to call as often as you like."""
     if not _enabled():
-        return {"written": 0, "skipped": 0, "verticals": 0}
+        return {"written": 0, "skipped": 0, "verticals": 0, "failed": 0}
     import vertical_registry as reg
 
     keys = verticals or list(reg.canonical_keys())
-    written = skipped = 0
+    written = skipped = failed = 0
     for vertical in keys:
-        have = {r.get("content") for r in list_for_vertical(vertical, source=SOURCE_SEED)}
-        for row in _seed_rows_for(vertical):
-            if row["content"] in have:
-                skipped += 1
-                continue
-            if upsert(vertical, row["kind"], row["content"],
-                      source=SOURCE_SEED, confidence=0.9):
-                written += 1
-    if written:
+        # Per-vertical guard. Without it one malformed profile raises, the
+        # remaining verticals never seed, and the scheduler wrapper
+        # swallows the exception — so it would fail silently AND
+        # partially, which is the worst of both. A bad vertical should
+        # cost that vertical and nothing else.
+        try:
+            have = {r.get("content")
+                    for r in list_for_vertical(vertical, source=SOURCE_SEED)}
+            for row in _seed_rows_for(vertical):
+                if row["content"] in have:
+                    skipped += 1
+                    continue
+                if upsert(vertical, row["kind"], row["content"],
+                          source=SOURCE_SEED, confidence=0.9):
+                    written += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(f"[vk] seed_tick skipped '{vertical}': {e}")
+
+    if written or failed:
         logger.info(f"[vk] seed_tick wrote {written} new rows "
-                    f"({skipped} already present) across {len(keys)} verticals")
-    return {"written": written, "skipped": skipped, "verticals": len(keys)}
+                    f"({skipped} already present, {failed} verticals failed) "
+                    f"across {len(keys)} verticals")
+    return {"written": written, "skipped": skipped,
+            "verticals": len(keys), "failed": failed}

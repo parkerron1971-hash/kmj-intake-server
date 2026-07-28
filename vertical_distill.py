@@ -71,6 +71,21 @@ logger = logging.getLogger("vertical_distill")
 # The k-anonymity floor. Three is the smallest number for which "several
 # businesses do this" is a fair description; below it, a pattern is one
 # business's habit wearing a plural.
+#
+# THIS NUMBER IS LOAD-BEARING ON A PROMISE MADE TO PRACTITIONERS.
+# Settings → Chief & agents tells them "your clients, your messages, and
+# your numbers never leave your account." Two thirds of that is
+# structural: message bodies are never read, and _scrub strips numbers.
+# CLIENT NAMES ARE NOT. _scrub cannot reliably recognise a name, and the
+# fields that do get used (a template's `situation`, an override reason)
+# are practitioner-written free text.
+#
+# What actually protects a name is this floor: it can only travel if
+# MIN_BUSINESSES separate businesses independently wrote the identical
+# string containing it. At 3 that is vanishingly unlikely. At 1 it is
+# certain. So lowering this does not merely weaken a heuristic — it makes
+# a sentence in the product UI untrue. Raise it freely; do not lower it
+# without changing that copy first.
 MIN_BUSINESSES = 3
 
 # How far back evidence is gathered, and how much of it reaches the model.
