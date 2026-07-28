@@ -433,6 +433,61 @@ FEATURES_SCRIPT = """
 """
 
 FEATURES_FX_CSS = """
+      /* ── command palette (features §1) ── */
+      .pal{border-radius:10px;border:1px solid var(--line);background:var(--pane-2);overflow:hidden;
+        box-shadow:0 18px 44px rgba(0,0,0,.55);}
+      .pal-in{display:flex;align-items:center;gap:8px;padding:10px 12px;font-size:12px;
+        border-bottom:1px solid var(--line);color:var(--ink);}
+      .pal-ico{width:12px;height:12px;border-radius:50%;flex-shrink:0;
+        border:1.5px solid var(--ink-3);}
+      .pal-q{display:inline-block;overflow:hidden;white-space:nowrap;vertical-align:bottom;
+        animation:palType 6s steps(21) infinite;}
+      @keyframes palType{0%{width:0;}40%{width:21ch;}100%{width:21ch;}}
+      .pal-in .caret{width:1.5px;height:13px;background:var(--gold);flex-shrink:0;
+        animation:palCaret 1.05s step-end infinite;}
+      @keyframes palCaret{50%{opacity:0;}}
+      .pal-kbd{margin-left:auto;padding:1px 5px;border-radius:4px;font-size:8.5px;color:var(--ink-3);
+        background:rgba(255,255,255,.06);border:1px solid var(--line);flex-shrink:0;}
+      .pal-r{display:flex;align-items:center;gap:9px;padding:7px 12px;font-size:10.5px;color:var(--ink-2);}
+      .pal-r.on{background:rgba(255,255,255,.07);color:var(--ink);}
+      .pal-d{width:6px;height:6px;border-radius:50%;background:var(--c,#2E7DFF);flex-shrink:0;}
+      .pal-r .k{margin-left:auto;font-size:8.5px;color:var(--ink-3);flex-shrink:0;
+        border:1px solid var(--line);padding:0 5px;border-radius:4px;}
+      .pal-voice{display:flex;align-items:center;gap:9px;margin-top:11px;font-size:9.5px;color:var(--ink-3);}
+      .pal-voice .hint{margin-left:auto;}
+      .pal-voice .wave{display:inline-flex;align-items:center;gap:2px;height:14px;flex-shrink:0;}
+      .pal-voice .wave i{width:2px;border-radius:1px;background:var(--gold);height:30%;
+        animation:palWave 1.1s ease-in-out infinite;}
+      .pal-voice .wave i:nth-child(2){animation-delay:-.9s;} .pal-voice .wave i:nth-child(3){animation-delay:-.75s;}
+      .pal-voice .wave i:nth-child(4){animation-delay:-.6s;}  .pal-voice .wave i:nth-child(5){animation-delay:-.45s;}
+      .pal-voice .wave i:nth-child(6){animation-delay:-.3s;}  .pal-voice .wave i:nth-child(7){animation-delay:-.15s;}
+      @keyframes palWave{0%,100%{height:26%;}50%{height:100%;}}
+
+      /* ── unified inbox + contact record (features §3) ── */
+      .inbox{display:grid;grid-template-columns:1.25fr .75fr;gap:9px;flex:1;min-height:0;}
+      .pill.mail{color:#7DD3FC;background:rgba(125,211,252,.12);border:1px solid rgba(125,211,252,.3);}
+      .pill.sms{color:#C4B5FD;background:rgba(196,181,253,.12);border:1px solid rgba(196,181,253,.3);}
+      .rec{gap:8px;}
+      .rec-h{display:flex;align-items:center;gap:8px;}
+      .rec-h .av{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;
+        font-size:8.5px;font-weight:800;color:#08090C;flex-shrink:0;}
+      .rec-h .nm{font-size:11px;font-weight:600;color:var(--ink);line-height:1.25;}
+      .rec-h .nm span{display:block;font-size:8.5px;font-weight:400;color:var(--ink-3);}
+      .rec-g{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;}
+      .rec-g div{padding:6px;border-radius:7px;background:rgba(255,255,255,.03);
+        border:1px solid var(--line);text-align:center;}
+      .rec-g b{display:block;font-family:var(--font-heading);font-size:12px;font-weight:700;color:var(--ink);}
+      .rec-g span{font-size:7px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);}
+      .rec-t{display:flex;flex-direction:column;gap:6px;font-size:9px;color:var(--ink-2);}
+      .rec-t div{display:flex;align-items:center;gap:7px;}
+      .rec-t .d{width:5px;height:5px;border-radius:50%;background:var(--gold);flex-shrink:0;}
+      @media (max-width:520px){.inbox{grid-template-columns:1fr;} .rec{display:none;}}
+
+      @media (prefers-reduced-motion: reduce){
+        .pal-q{animation:none !important;width:21ch !important;}
+        .pal-in .caret,.pal-voice .wave i{animation:none !important;}
+      }
+
       /* ── feature visuals: every abstract mv-* shape is replaced by a
          real product panel, each animating the ONE thing that section is
          actually about. Panels reuse the replica kit, so the features
@@ -1117,47 +1172,18 @@ def render_home() -> str:
     </div>
 
     <div class="rooms-tabs reveal" role="tablist" aria-label="Rooms">
-      <button class="room-tab" role="tab" aria-selected="true"  data-i="0">Mission Control</button>
-      <button class="room-tab" role="tab" aria-selected="false" data-i="1">Operate</button>
-      <button class="room-tab" role="tab" aria-selected="false" data-i="2">Clients</button>
-      <button class="room-tab" role="tab" aria-selected="false" data-i="3">The Studio</button>
-      <button class="room-tab" role="tab" aria-selected="false" data-i="4">The Academy</button>
-      <button class="room-tab" role="tab" aria-selected="false" data-i="5">Smart Sites</button>
+      <button class="room-tab" role="tab" aria-selected="true" data-i="0">Operate</button>
+      <button class="room-tab" role="tab" aria-selected="false" data-i="1">Clients</button>
+      <button class="room-tab" role="tab" aria-selected="false" data-i="2">The Studio</button>
+      <button class="room-tab" role="tab" aria-selected="false" data-i="3">The Academy</button>
+      <button class="room-tab" role="tab" aria-selected="false" data-i="4">Smart Sites</button>
+      <button class="room-tab" role="tab" aria-selected="false" data-i="5">Autopilot</button>
     </div>
 
     <div class="rooms-viewport reveal" id="roomsViewport">
       <div class="rooms-ring" id="roomsRing">
 
         <div class="room-face is-active" style="--fa:0deg;" data-i="0"
-             data-caption="Your whole practice on one screen — real numbers counting, today's schedule, and Chief telling you what actually needs you before you've had coffee.">
-          <div class="app is-mini">
-            <div class="app-body">""" + SIDEBAR + """
-              <div class="app-canvas">
-                <div class="ah-rule"></div>
-                <div class="ah-row"><div><div class="ah-eyebrow">Mission Control</div>
-                  <div class="ah-title">Good evening, Jordan</div>
-                  <div class="ah-sub">2 things need you today &middot; Chief has them queued</div></div>
-                  <span class="ah-btn">Focus Mode &rarr;</span></div>
-                <div class="kpi-row">
-                  <div class="kpi"><span class="k">Revenue</span><span class="v gold">$12,480</span><span class="f up">&#9650; 18%</span></div>
-                  <div class="kpi"><span class="k">Clients</span><span class="v">17</span><span class="f">good standing</span></div>
-                  <div class="kpi"><span class="k">Projects</span><span class="v">3</span><span class="f">in progress</span></div>
-                  <div class="kpi"><span class="k">Tasks</span><span class="v">7</span><span class="f">2 due by 5:00</span></div>
-                  <div class="kpi"><span class="k">Health</span><span class="v up">61%</span><span class="f">steady</span></div>
-                </div>
-                <div class="pnl" style="flex:1;">
-                  <div class="pnl-h">Today<span class="ct">5</span></div>
-                  <div class="r"><span class="bar"></span><span class="g nm">Discovery call &mdash; Marcus Bell<span>45 min &middot; video</span></span><span class="amt">9:00</span></div>
-                  <div class="r"><span class="bar amb"></span><span class="g nm">Grace Chapel &mdash; planning session<span>on site</span></span><span class="amt">11:30</span></div>
-                  <div class="r"><span class="bar red"></span><span class="g nm">Follow up: 3 overdue invoices<span>Chief drafted all three</span></span><span class="amt">2:00</span></div>
-                  <div class="r"><span class="bar"></span><span class="g nm">Draft October newsletter<span>outline ready</span></span><span class="amt">4:15</span></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="room-face" style="--fa:60deg;" data-i="1"
              data-caption="Invoices, payments and bookkeeping that reconcile themselves. Chief chases what's late so you don't have to write another awkward email.">
           <div class="app is-mini">
             <div class="app-body">""" + SIDEBAR + """
@@ -1185,8 +1211,7 @@ def render_home() -> str:
             </div>
           </div>
         </div>
-
-        <div class="room-face" style="--fa:120deg;" data-i="2"
+        <div class="room-face" style="--fa:60deg;" data-i="1"
              data-caption="The client register — every person you serve, their standing, their history, and who's gone quiet. Update a contact once; every room sees it.">
           <div class="app is-mini">
             <div class="app-body">""" + SIDEBAR + """
@@ -1212,8 +1237,7 @@ def render_home() -> str:
             </div>
           </div>
         </div>
-
-        <div class="room-face" style="--fa:180deg;" data-i="3"
+        <div class="room-face" style="--fa:120deg;" data-i="2"
              data-caption="Walk into a storefront built from your own brand. Try your identity on real artifacts — card, invoice, social post — and watch everything repaint as you edit.">
           <div class="app is-mini">
             <div class="app-body">""" + SIDEBAR + """
@@ -1240,8 +1264,7 @@ def render_home() -> str:
             </div>
           </div>
         </div>
-
-        <div class="room-face" style="--fa:240deg;" data-i="4"
+        <div class="room-face" style="--fa:180deg;" data-i="3"
              data-caption="A dedicated Strategy Coach walks you through eight courses — discovery to launch plan — with a degree ring, sealed courses, and a diploma when you graduate.">
           <div class="app is-mini">
             <div class="app-body">""" + SIDEBAR + """
@@ -1264,8 +1287,7 @@ def render_home() -> str:
             </div>
           </div>
         </div>
-
-        <div class="room-face" style="--fa:300deg;" data-i="5"
+        <div class="room-face" style="--fa:240deg;" data-i="4"
              data-caption="Your site is composed from your brand DNA and your own words — typography, spacing and motion reasoned from who you are, live on your own link in minutes.">
           <div class="app is-mini">
             <div class="app-body">""" + SIDEBAR + """
@@ -1284,6 +1306,29 @@ def render_home() -> str:
             </div>
           </div>
         </div>
+        <div class="room-face" style="--fa:300deg;" data-i="5"
+             data-caption="Set the rules once. Chief works your follow-ups, reminders and drafts on schedule overnight &mdash; and logs every action it took, so nothing happens behind your back.">
+          <div class="app is-mini">
+            <div class="app-body">""" + SIDEBAR + """
+              <div class="app-canvas">
+                <div class="ah-rule"></div>
+                <div class="ah-row"><div><div class="ah-eyebrow">Autopilot &middot; Overnight run</div>
+                  <div class="ah-title">Ran while you slept</div>
+                  <div class="ah-sub">04:00 &ndash; 07:30 &middot; 12 actions &middot; 1 needs you</div></div>
+                  <span class="ah-btn">Rules</span></div>
+                <div class="pnl" style="flex:1;">
+                  <div class="pnl-h">Action log<span class="ct">12</span></div>
+                  <div class="r"><span class="bar grn"></span><span class="g nm">Sent 3 invoice reminders<span>from your address &middot; 04:12</span></span><span class="pill paid">Done</span></div>
+                  <div class="r"><span class="bar amb"></span><span class="g nm">Drafted follow-up to Northside Co-op<span>waiting on your approval &middot; 05:03</span></span><span class="pill sent">Review</span></div>
+                  <div class="r"><span class="bar grn"></span><span class="g nm">Prepped notes for 9:00 discovery call<span>pulled last 3 conversations &middot; 06:20</span></span><span class="pill paid">Done</span></div>
+                  <div class="r"><span class="bar grn"></span><span class="g nm">Reconciled 14 bank transactions<span>matched to invoices &middot; 07:01</span></span><span class="pill paid">Done</span></div>
+                  <div class="r"><span class="bar red"></span><span class="g nm">Flagged: Tia&rsquo;s card expires in 6 days<span>needs a human &middot; 07:28</span></span><span class="pill due">You</span></div>
+                </div>
+                <div class="r"><span class="bar"></span><span class="g">Every action logged &mdash; approve, undo, or change the rules anytime</span><span class="pill live">Logged</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
 
       </div>
     </div>
@@ -1293,7 +1338,7 @@ def render_home() -> str:
       <span class="rooms-count" id="roomCount">01 / 06</span>
       <button class="rooms-arrow" id="roomNext" aria-label="Next room">&rsaquo;</button>
     </div>
-    <p class="room-caption" id="roomCaption">Your whole practice on one screen &mdash; real numbers counting, today&rsquo;s schedule, and Chief telling you what actually needs you before you&rsquo;ve had coffee.</p>
+    <p class="room-caption" id="roomCaption">Invoices, payments and bookkeeping that reconcile themselves. Chief chases what's late so you don't have to write another awkward email.</p>
 
     <div style="text-align:center;margin-top:36px;" class="reveal">
       <a class="btn-secondary" href="/features">Explore every feature in depth &rarr;</a>
@@ -1515,26 +1560,25 @@ def render_features() -> str:
       <div class="fs-visual fsv reveal reveal-delay-1">
         <div class="app">
           <div class="app-top"><span class="at-mark"></span>
-            <span class="at-search">Ask the AI anything&hellip;<span class="kbd">&#8984;K</span></span>
-            <span class="at-cta">+ Quick Create</span><span class="at-av"></span></div>
-          <div class="app-canvas">
-            <div class="kpi-row" style="grid-template-columns:repeat(3,1fr);">
-              <div class="kpi"><span class="k">Revenue &middot; this month</span>
-                <span class="v gold fx-num" data-to="12480" data-prefix="$">$0</span><span class="f up">&#9650; 18%</span></div>
-              <div class="kpi"><span class="k">Active clients</span>
-                <span class="v fx-num" data-to="17">0</span><span class="f">good standing</span></div>
-              <div class="kpi"><span class="k">Tasks today</span>
-                <span class="v fx-num" data-to="7">0</span><span class="f">2 due by 5:00</span></div>
+            <span class="at-search">Mission Control</span><span class="at-av"></span></div>
+          <div class="app-canvas" style="justify-content:center;">
+            <div class="pal">
+              <div class="pal-in"><span class="pal-ico"></span>
+                <span class="pal-q">book marcus thursday</span><span class="caret"></span>
+                <span class="pal-kbd">&#8984;K</span></div>
+              <div class="pal-r on"><span class="pal-d" style="--c:#22C55E"></span>Book a session &mdash; Marcus Bell, Thu 2:00&nbsp;PM<span class="k">&crarr;</span></div>
+              <div class="pal-r"><span class="pal-d" style="--c:#2E7DFF"></span>Draft an email to Marcus Bell<span class="k">&darr;</span></div>
+              <div class="pal-r"><span class="pal-d" style="--c:#EF4444"></span>Chase 3 overdue invoices<span class="k">&darr;</span></div>
+              <div class="pal-r"><span class="pal-d" style="--c:#C9A84C"></span>Open Marcus Bell&rsquo;s record<span class="k">&darr;</span></div>
             </div>
-            <div class="pnl fx-seq" style="flex:1;">
-              <div class="pnl-h">Today<span class="ct">4</span></div>
-              <div class="r"><span class="bar"></span><span class="g nm">Discovery call &mdash; Marcus Bell<span>45 min &middot; video</span></span><span class="amt">9:00</span></div>
-              <div class="r"><span class="bar amb"></span><span class="g nm">Grace Chapel &mdash; planning session<span>on site</span></span><span class="amt">11:30</span></div>
-              <div class="r"><span class="bar red"></span><span class="g nm">Follow up: 3 overdue invoices<span>Chief drafted all three</span></span><span class="amt">2:00</span></div>
+            <div class="pal-voice">
+              <span class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+              <span>Listening &mdash; say &ldquo;Hey Chief&rdquo;</span>
+              <span class="hint">or press &#8984;K</span>
             </div>
           </div>
         </div>
-        <div class="fsv-cap"><span class="dot"></span>Your real numbers, counting as the data changes.</div>
+        <div class="fsv-cap"><span class="dot"></span>One bar for everything &mdash; type it, or just say it out loud.</div>
       </div>
     </div>
   </div>
@@ -1596,27 +1640,40 @@ def render_features() -> str:
       <div class="fs-visual fsv reveal reveal-delay-1">
         <div class="app">
           <div class="app-top"><span class="at-mark"></span>
-            <span class="at-search">Operate &middot; Invoices</span><span class="at-cta">+ New Invoice</span></div>
+            <span class="at-search">Operate &middot; Inbox</span><span class="at-cta">+ New</span></div>
           <div class="app-canvas">
-            <div class="age" style="grid-template-columns:repeat(3,1fr);">
-              <div><div class="k">Outstanding</div><div class="v">$1,865</div><div class="s">8 invoices</div></div>
-              <div class="hot"><div class="k">Past due</div><div class="v">$1,265</div><div class="s">7 invoices</div></div>
-              <div class="cta"><div class="k">Chase all overdue</div><div class="v">Send</div><div class="s">Chief drafts each one</div></div>
+            <div class="inbox">
+              <div class="pnl fx-seq" style="min-height:0;">
+                <div class="pnl-h">All channels<span class="ct">6</span></div>
+                <div class="r"><span class="bar red"></span><span class="pill mail">Email</span>
+                  <span class="g nm">Marcus Bell<span>Re: Thursday &mdash; can we push to 3?</span></span><span class="amt">9:04</span></div>
+                <div class="r"><span class="bar amb"></span><span class="pill sms">SMS</span>
+                  <span class="g nm">Tia Randall<span>Got it, thank you!</span></span><span class="amt">8:41</span></div>
+                <div class="r"><span class="bar"></span><span class="pill mail">Email</span>
+                  <span class="g nm">Grace Chapel<span>Invoice received &mdash; paying Friday</span></span><span class="amt">Tue</span></div>
+                <div class="r"><span class="bar"></span><span class="pill sms">SMS</span>
+                  <span class="g nm">J. Okafor<span>Confirming next week</span></span><span class="amt">Tue</span></div>
+              </div>
+              <div class="pnl rec">
+                <div class="rec-h"><span class="av" style="background:#3B82F6">MB</span>
+                  <span class="nm">Marcus Bell<span>Client since Mar 2026</span></span></div>
+                <span class="pill ok" style="align-self:flex-start;">Good standing</span>
+                <div class="rec-g">
+                  <div><b>4</b><span>Sessions</span></div>
+                  <div><b>$3,140</b><span>Billed</span></div>
+                  <div><b>1</b><span>Overdue</span></div>
+                </div>
+                <div class="rec-t">
+                  <div><span class="d"></span>Session booked &middot; Thu 2:00</div>
+                  <div><span class="d"></span>Invoice sent &middot; $640</div>
+                  <div><span class="d"></span>Note added by Chief</div>
+                </div>
+              </div>
             </div>
-            <div class="pnl fx-seq" style="flex:1;">
-              <div class="r fx-settle"><span class="bar grn"></span><span class="id">INV-2026-009</span>
-                <span class="g nm">Northside Co-op<span>3 items &middot; due Jul 15</span></span><span class="amt">$2,400</span>
-                <span class="fx-flip"><span class="pill sent a">Sent</span><span class="pill paid b">Paid</span></span></div>
-              <div class="r"><span class="bar red"></span><span class="id">INV-2026-011</span>
-                <span class="g nm">Marcus Bell<span>1 item &middot; due Jun 26</span></span><span class="amt">$640</span><span class="pill due">Overdue</span></div>
-              <div class="r"><span class="bar amb"></span><span class="id">INV-2026-010</span>
-                <span class="g nm">Grace Chapel<span>reminder sent by Chief</span></span><span class="amt">$1,200</span><span class="pill sent">Sent</span></div>
-              <div class="r"><span class="bar grn"></span><span class="id">INV-2026-008</span>
-                <span class="g nm">J. Okafor<span>paid via card</span></span><span class="amt">$850</span><span class="pill paid">Paid</span></div>
-            </div>
+            <div class="r"><span class="bar"></span><span class="g">Email, SMS, calendar and billing &mdash; one contact, one thread, one search bar</span><span class="pill live">Unified</span></div>
           </div>
         </div>
-        <div class="fsv-cap"><span class="dot"></span>Payments land and reconcile themselves &mdash; no CSV, no chasing.</div>
+        <div class="fsv-cap"><span class="dot"></span>Every channel lands on the same record &mdash; nothing to reconcile by hand.</div>
       </div>
     </div>
   </div>
