@@ -141,6 +141,17 @@ try:
     app.include_router(site_analytics_router)
 except Exception as _e:  # never block boot on an analytics import
     logging.getLogger(__name__).warning(f"site_analytics not loaded: {_e}")
+# The agent-facing MCP surface (Stage 1, 2026-07-28): read-only, and
+# owner-only until Build 3's scoped tokens land. POST /mcp speaks JSON-RPC
+# 2.0; the tool list is DERIVED from action_registry.may_expose_to_agent,
+# so it cannot drift from the classification. Kill switch: MCP_ENABLED=off.
+# Mounted inside a try/except like the analytics router above — an
+# experimental surface must never be able to stop the service booting.
+try:
+    from mcp_server import router as mcp_router
+    app.include_router(mcp_router)
+except Exception as _e:
+    logging.getLogger(__name__).warning(f"mcp_server not loaded: {_e}")
 app.include_router(nurture_router)
 app.include_router(session_router)
 app.include_router(contract_router)
