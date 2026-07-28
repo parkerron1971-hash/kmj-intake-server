@@ -68,12 +68,14 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 import action_registry
 import rate_limit
-from auth_supabase import AuthedUser, require_user
+from mcp_tokens import SCOPE_READ
+from auth_supabase import AuthedUser, optional_user, require_user
 
 logger = logging.getLogger("mcp_server")
 if not logger.handlers:
@@ -98,6 +100,29 @@ PLATFORM_OWNER_EMAIL = os.environ.get(
 
 def enabled() -> bool:
     return (os.environ.get("MCP_ENABLED") or "on").strip().lower() != "off"
+
+
+class Caller:
+    """Who is on the other end, normalised across both credential kinds.
+
+    A scoped token carries its business in a signed claim. An owner JWT
+    does not, and resolves to the owner's own business instead. Everything
+    downstream reads this object rather than branching on which kind
+    arrived — the branch happens once, at the door.
+    """
+
+    __slots__ = ("kind", "actor", "user_id", "business_id", "scopes", "jti")
+
+    def __init__(self, kind: str, actor: str, *, user_id: Optional[str] = None,
+                 business_id: Optional[str] = None,
+                 scopes: Optional[List[str]] = None,
+                 jti: Optional[str] = None):
+        self.kind = kind                  # 'token' | 'owner_jwt'
+        self.actor = actor
+        self.user_id = user_id
+        self.business_id = business_id    # set ONLY by a signed claim
+        self.scopes = scopes or []
+        self.jti = jti
 
 
 # ─── JSON-RPC 2.0 ────────────────────────────────────────────────────
@@ -292,21 +317,37 @@ def _audit(*, actor: str, tool: str, ok: bool, duration_ms: int,
 
 # ─── Tenancy ─────────────────────────────────────────────────────────
 
+async def _business_by_id(client: httpx.AsyncClient,
+                          business_id: str) -> Optional[Dict[str, Any]]:
+    import sb_clients
+    r = await client.get(
+        f"{sb_clients.sb_url()}/rest/v1/businesses",
+        headers=sb_clients.sb_headers_service(),
+        params={"id": f"eq.{business_id}", "select": "*", "limit": "1"})
+    if r.status_code >= 400:
+        return None
+    data = r.json() or []
+    return data[0] if data else None
+
+
 async def _resolve_business(client: httpx.AsyncClient,
-                            user: AuthedUser) -> Optional[Dict[str, Any]]:
+                            caller: "Caller") -> Optional[Dict[str, Any]]:
     """THE business for this caller. Singular on purpose.
 
-    Build 3 replaces this with a scoped token whose claims name one
-    business. Until then the owner's own business is resolved from their
-    verified JWT — same guarantee, narrower source: the caller never names
-    a business, so a cross-business request is not blocked, it is
+    Two credential kinds, one guarantee. A scoped token names its business
+    in a SIGNED claim; an owner JWT resolves to the owner's own business.
+    Neither path reads a business id from the request body, a query string
+    or a header — so a cross-business request is not blocked, it is
     unrepresentable.
     """
+    if caller.business_id:
+        return await _business_by_id(client, caller.business_id)
+
     import sb_clients
     rows = await client.get(
         f"{sb_clients.sb_url()}/rest/v1/businesses",
         headers=sb_clients.sb_headers_service(),
-        params={"owner_id": f"eq.{user.id}", "select": "*",
+        params={"owner_id": f"eq.{caller.user_id}", "select": "*",
                 "order": "created_at.asc", "limit": "1"})
     if rows.status_code >= 400:
         return None
@@ -317,7 +358,7 @@ async def _resolve_business(client: httpx.AsyncClient,
 # ─── Dispatch ────────────────────────────────────────────────────────
 
 async def _call_tool(name: str, arguments: Dict[str, Any],
-                     user: AuthedUser) -> Tuple[bool, bool, Any, Optional[str]]:
+                     caller: Caller) -> Tuple[bool, bool, Any, Optional[str]]:
     """Run one exposed verb.
 
     Returns (allowed, ok, payload, business_id). `allowed` and `ok` are
@@ -325,6 +366,13 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
     are different events, and conflating them in the audit trail loses
     exactly the distinction a reader cares about.
     """
+    # Scope check first. Today every exposed verb is a read and every
+    # token carries 'read', so this is not yet load-bearing — but a scope
+    # system that is only wired up when it starts mattering is one that
+    # gets wired up wrong.
+    if caller.kind == "token" and SCOPE_READ not in caller.scopes:
+        return False, False, "token lacks the 'read' scope", None
+
     # Authorization, from the registry. Not a list kept here.
     if not action_registry.may_expose_to_agent(name):
         # Covers unknown verbs, ui verbs, every write, and anything
@@ -345,7 +393,7 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
         return False, False, f"tool {name!r} has no handler", None
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        biz = await _resolve_business(client, user)
+        biz = await _resolve_business(client, caller)
         if not biz:
             return True, False, "no business resolved for this account", None
         action = dict(arguments or {})
@@ -356,7 +404,7 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
 
 # ─── JSON-RPC methods ────────────────────────────────────────────────
 
-async def _handle_rpc(message: Dict[str, Any], user: AuthedUser,
+async def _handle_rpc(message: Dict[str, Any], caller: Caller,
                       actor: str) -> Optional[Dict[str, Any]]:
     """One JSON-RPC message. Returns the response, or None for a
     notification (which by spec gets no reply)."""
@@ -395,10 +443,10 @@ async def _handle_rpc(message: Dict[str, Any], user: AuthedUser,
 
         started = int(time.time() * 1000)
         try:
-            allowed, ok, payload, biz_id = await _call_tool(name, arguments, user)
+            allowed, ok, payload, biz_id = await _call_tool(name, arguments, caller)
         except Exception as e:
             logger.warning("tool %s raised: %s", name, e)
-            _audit(actor=actor, actor_user_id=getattr(user, "id", None),
+            _audit(actor=actor, actor_user_id=caller.user_id,
                    tool=name, allowed=True, ok=False,
                    duration_ms=int(time.time() * 1000) - started,
                    error=type(e).__name__, arg_keys=sorted(arguments))
@@ -406,7 +454,7 @@ async def _handle_rpc(message: Dict[str, Any], user: AuthedUser,
             # ids and query fragments, and this is an untrusted caller.
             return _error(req_id, INTERNAL_ERROR, "tool execution failed")
 
-        _audit(actor=actor, actor_user_id=getattr(user, "id", None),
+        _audit(actor=actor, actor_user_id=caller.user_id,
                tool=name, allowed=allowed, ok=ok, business_id=biz_id,
                duration_ms=int(time.time() * 1000) - started,
                error=None if ok else str(payload)[:200],
@@ -432,31 +480,100 @@ async def _handle_rpc(message: Dict[str, Any], user: AuthedUser,
 
 # ─── Transport ───────────────────────────────────────────────────────
 
+def _caller_from_token(request: Request) -> Optional[Caller]:
+    """A scoped token, if one was presented and it holds up.
+
+    Looked for FIRST, because it is the credential this surface is
+    actually for — an owner JWT is the fallback for a browser, not the
+    intended path for an agent.
+
+    Returns None when no token was presented (so the JWT path runs), and
+    raises _TokenRefused when one was presented but failed — those are
+    different outcomes and must not collapse into "try the other thing".
+    """
+    header = request.headers.get("authorization") or ""
+    scheme, _, value = header.partition(" ")
+    if scheme.lower() != "bearer" or not value.strip():
+        return None
+    raw = value.strip()
+
+    # A Supabase JWT is also a bearer token. Ours is `<b64>.<b64>` (two
+    # parts); a JWT has three. Anything with three parts is not for us —
+    # hand it to the JWT path rather than failing it here.
+    if raw.count(".") != 1:
+        return None
+
+    import mcp_tokens
+    claims = mcp_tokens.verify_mcp_token(raw)
+    if not claims:
+        raise _TokenRefused("invalid or expired token")
+    jti = str(claims.get("jti") or "")
+    if mcp_tokens.is_revoked(jti):
+        raise _TokenRefused("token has been revoked")
+    mcp_tokens.touch(jti)
+    return Caller(
+        "token", f"token:{(claims.get('label') or jti)[:40]}",
+        business_id=str(claims.get("biz") or "") or None,
+        scopes=list(claims.get("scp") or []),
+        jti=jti)
+
+
+class _TokenRefused(Exception):
+    """A token WAS presented and did not hold up. Distinct from 'no token',
+    so a bad credential can never silently fall through to another one."""
+
+
 @router.post("")
 @router.post("/")
 async def mcp_endpoint(request: Request,
-                       user: AuthedUser = Depends(require_user)):
+                       user: Optional[AuthedUser] = Depends(optional_user)):
     """Streamable HTTP endpoint. JSON-RPC 2.0 in, JSON out.
 
-    Auth in Build 1 is the owner's own Supabase JWT — the surface is
-    explicitly single-tenant, so the narrowest credential that already
-    exists is the right one. Build 3 adds scoped tokens; this dependency
-    is the seam that swaps.
+    Two credential kinds, checked in that order:
+
+      scoped token   what this surface is FOR. Names its business in a
+                     signed claim, carries scopes, revocable, nameable.
+      owner JWT      the fallback, so a browser session still works.
+                     Owner-only, resolves to the owner's own business.
+
+    `optional_user` rather than `require_user` because a scoped token is
+    NOT a Supabase JWT — requiring one would reject the intended
+    credential before this function ever ran. Absence of BOTH is still a
+    401; the endpoint is not open.
     """
     if not enabled():
         return JSONResponse(status_code=503, content=_error(
             None, INTERNAL_ERROR, "MCP surface is disabled"))
 
-    actor = (user.email or user.id or "unknown").lower()
+    # Token first. A presented-but-bad token is refused outright rather
+    # than falling through to the JWT path — silent fallback between
+    # credentials is how a revoked key keeps working.
+    try:
+        caller = _caller_from_token(request)
+    except _TokenRefused as e:
+        logger.warning("[mcp] token refused: %s", e)
+        _audit(actor="token:invalid", tool="(endpoint)", allowed=False,
+               ok=False, duration_ms=0, error=str(e))
+        return JSONResponse(status_code=401, content=_error(
+            None, UNAUTHORIZED, str(e)))
+
+    if caller is None:
+        if user is None:
+            return JSONResponse(status_code=401, content=_error(
+                None, UNAUTHORIZED, "authentication required"))
+        caller = Caller("owner_jwt", (user.email or user.id or "unknown").lower(),
+                        user_id=user.id, scopes=[SCOPE_READ])
+
+    actor = caller.actor
     # The two refusals below happen BEFORE any tool is named, so they used
     # to leave no trace at all. They are also the two most worth having:
     # an authenticated non-owner reaching this endpoint, and a caller
     # hitting the limiter, are the shapes an attempt looks like.
-    if actor != PLATFORM_OWNER_EMAIL:
+    if caller.kind == "owner_jwt" and actor != PLATFORM_OWNER_EMAIL:
         # 403 rather than 401: the caller IS authenticated, just not
         # permitted. Stage 1 is owner-only by design.
         logger.warning("[mcp] refused non-owner caller %s", actor)
-        _audit(actor=actor, actor_user_id=getattr(user, "id", None),
+        _audit(actor=actor, actor_user_id=caller.user_id,
                tool="(endpoint)", allowed=False, ok=False, duration_ms=0,
                error="non-owner caller")
         return JSONResponse(status_code=403, content=_error(
@@ -466,7 +583,7 @@ async def mcp_endpoint(request: Request,
     # right for a practitioner and wrong for an agent that may be looping
     # or holding a stolen credential.
     if not rate_limit.allow_strict("mcp", actor):
-        _audit(actor=actor, actor_user_id=getattr(user, "id", None),
+        _audit(actor=actor, actor_user_id=caller.user_id,
                tool="(endpoint)", allowed=False, ok=False, duration_ms=0,
                error="rate limited")
         return JSONResponse(
@@ -491,7 +608,7 @@ async def mcp_endpoint(request: Request,
             if not isinstance(msg, dict):
                 responses.append(_error(None, INVALID_REQUEST, "malformed message"))
                 continue
-            r = await _handle_rpc(msg, user, actor)
+            r = await _handle_rpc(msg, caller, actor)
             if r is not None:
                 responses.append(r)
         # An all-notification batch gets 202 and no body, per spec.
@@ -503,10 +620,80 @@ async def mcp_endpoint(request: Request,
         return JSONResponse(status_code=400, content=_error(
             None, INVALID_REQUEST, "expected an object or array"))
 
-    response = await _handle_rpc(body, user, actor)
+    response = await _handle_rpc(body, caller, actor)
     if response is None:
         return JSONResponse(status_code=202, content=None)
     return JSONResponse(content=response)
+
+
+# ─── Token management (owner-only, JWT-only) ─────────────────────────
+# Deliberately NOT reachable with an MCP token. A credential that can mint
+# more credentials is a privilege-escalation ladder, and "read-only agent
+# surface" would stop being true the moment one of its tokens could issue
+# another. These three require a browser session as the platform owner.
+
+class _MintBody(BaseModel):
+    label: str = "unnamed"
+    ttl_days: int = 90
+
+
+@router.post("/tokens")
+async def mint_token(body: _MintBody,
+                     user: AuthedUser = Depends(require_user)):
+    """Mint a scoped token. Returns the plaintext ONCE."""
+    if (user.email or "").lower() != PLATFORM_OWNER_EMAIL:
+        raise HTTPException(status_code=403, detail="platform owner only")
+    import mcp_tokens
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        biz = await _resolve_business(
+            client, Caller("owner_jwt", "owner", user_id=user.id))
+    if not biz:
+        raise HTTPException(status_code=400, detail="no business for this account")
+    ttl = max(1, min(int(body.ttl_days or 90), 365)) * 24 * 60 * 60
+    token, row = mcp_tokens.mint(
+        str(biz["id"]), label=body.label, ttl_seconds=ttl,
+        created_by=(user.email or user.id))
+    return {
+        "token": token,          # the only time this is ever returned
+        "jti": row["jti"],
+        "label": row["label"],
+        "scopes": row["scopes"],
+        "expires_at": row["expires_at"],
+        "note": ("Copy this now — it is stored only as a hash and cannot be "
+                 "shown again. Revoking is instant if it leaks."),
+    }
+
+
+@router.get("/tokens")
+async def list_tokens_endpoint(user: AuthedUser = Depends(require_user)):
+    if (user.email or "").lower() != PLATFORM_OWNER_EMAIL:
+        raise HTTPException(status_code=403, detail="platform owner only")
+    import mcp_tokens
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        biz = await _resolve_business(
+            client, Caller("owner_jwt", "owner", user_id=user.id))
+    if not biz:
+        return {"tokens": []}
+    return {"tokens": mcp_tokens.list_tokens(str(biz["id"]))}
+
+
+@router.delete("/tokens/{jti}")
+async def revoke_token(jti: str, user: AuthedUser = Depends(require_user)):
+    if (user.email or "").lower() != PLATFORM_OWNER_EMAIL:
+        raise HTTPException(status_code=403, detail="platform owner only")
+    import mcp_tokens
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        biz = await _resolve_business(
+            client, Caller("owner_jwt", "owner", user_id=user.id))
+    if not biz:
+        raise HTTPException(status_code=400, detail="no business for this account")
+    # Scoped by business as well as jti — revocation is a write, and writes
+    # get the same tenancy treatment as reads.
+    ok = mcp_tokens.revoke(str(biz["id"]), jti)
+    _audit(actor=(user.email or "owner").lower(), actor_user_id=user.id,
+           tool="(revoke)", allowed=True, ok=ok, duration_ms=0,
+           business_id=str(biz["id"]))
+    return {"ok": ok}
 
 
 @router.get("/health")

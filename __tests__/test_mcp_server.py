@@ -37,6 +37,16 @@ class _User:
         self.id = uid
 
 
+def _caller(kind="owner_jwt", **kw):
+    """The normalised caller the dispatch path takes. Build 3 replaced the
+    raw AuthedUser with this so a scoped token and an owner JWT reach the
+    same code by the same shape."""
+    kw.setdefault("scopes", ["read"])
+    if kind == "owner_jwt":
+        kw.setdefault("user_id", "owner-1")
+    return mcp.Caller(kind, "owner", **kw)
+
+
 def _rpc(method, params=None, req_id=1):
     m = {"jsonrpc": "2.0", "method": method}
     if req_id is not None:
@@ -114,7 +124,7 @@ def test_tool_definitions_are_well_formed():
 def test_unknown_tool_is_an_error_not_a_remap():
     """The property this surface exists to hold. Inside Chief an unknown
     verb gets reinterpreted by chief_action_reasoner; here it must not."""
-    allowed, ok, msg, _biz = _run(mcp._call_tool("definitely_not_a_verb", {}, _User()))
+    allowed, ok, msg, _biz = _run(mcp._call_tool("definitely_not_a_verb", {}, _caller()))
     assert allowed is False, "an unknown tool is REFUSED, not merely failed"
     assert ok is False
     assert "not available" in msg
@@ -126,7 +136,7 @@ def test_class_c_verbs_are_refused_at_call_time(verb):
     """Not merely absent from the list — refused if asked for directly.
     A client that hardcodes a name must not get further than one that
     reads the list."""
-    allowed, ok, msg, _biz = _run(mcp._call_tool(verb, {}, _User()))
+    allowed, ok, msg, _biz = _run(mcp._call_tool(verb, {}, _caller()))
     assert allowed is False, "refused at authorization, before any execution"
     assert ok is False
     assert "not available" in msg
@@ -134,28 +144,28 @@ def test_class_c_verbs_are_refused_at_call_time(verb):
 
 @pytest.mark.parametrize("verb", ["navigate", "set_timer"])
 def test_ui_verbs_are_refused_at_call_time(verb):
-    allowed, ok, _msg, _biz = _run(mcp._call_tool(verb, {}, _User()))
+    allowed, ok, _msg, _biz = _run(mcp._call_tool(verb, {}, _caller()))
     assert allowed is False and ok is False
 
 
 def test_write_verbs_are_refused_even_though_they_are_class_a(monkeypatch):
     """Class A is autonomy-eligible for CHIEF. That is a different question
     from whether an outside agent may call it, and the default answer is no."""
-    allowed, ok, _msg, _biz = _run(mcp._call_tool("create_contact", {"name": "x"}, _User()))
+    allowed, ok, _msg, _biz = _run(mcp._call_tool("create_contact", {"name": "x"}, _caller()))
     assert allowed is False and ok is False
 
 
 # ─── JSON-RPC protocol ───────────────────────────────────────────────
 
 def test_initialize_returns_protocol_and_capabilities():
-    r = _run(mcp._handle_rpc(_rpc("initialize"), _User(), "owner"))
+    r = _run(mcp._handle_rpc(_rpc("initialize"), _caller(), "owner"))
     assert r["result"]["protocolVersion"] == mcp.PROTOCOL_VERSION
     assert "tools" in r["result"]["capabilities"]
     assert r["result"]["serverInfo"]["name"] == mcp.SERVER_NAME
 
 
 def test_initialize_instructions_state_the_read_only_posture():
-    r = _run(mcp._handle_rpc(_rpc("initialize"), _User(), "owner"))
+    r = _run(mcp._handle_rpc(_rpc("initialize"), _caller(), "owner"))
     text = r["result"]["instructions"].lower()
     assert "read" in text
     assert "nothing writes" in text or "cannot do it" in text
@@ -164,52 +174,52 @@ def test_initialize_instructions_state_the_read_only_posture():
 def test_initialized_notification_gets_no_reply():
     """Notifications have no id and, per JSON-RPC, no response."""
     r = _run(mcp._handle_rpc(
-        {"jsonrpc": "2.0", "method": "notifications/initialized"}, _User(), "owner"))
+        {"jsonrpc": "2.0", "method": "notifications/initialized"}, _caller(), "owner"))
     assert r is None
 
 
 def test_ping():
-    r = _run(mcp._handle_rpc(_rpc("ping"), _User(), "owner"))
+    r = _run(mcp._handle_rpc(_rpc("ping"), _caller(), "owner"))
     assert r["result"] == {}
 
 
 def test_tools_list_shape():
-    r = _run(mcp._handle_rpc(_rpc("tools/list"), _User(), "owner"))
+    r = _run(mcp._handle_rpc(_rpc("tools/list"), _caller(), "owner"))
     tools = r["result"]["tools"]
     assert len(tools) == 16
     assert {"name", "description", "inputSchema"} <= set(tools[0])
 
 
 def test_unknown_method_is_method_not_found():
-    r = _run(mcp._handle_rpc(_rpc("tools/destroy"), _User(), "owner"))
+    r = _run(mcp._handle_rpc(_rpc("tools/destroy"), _caller(), "owner"))
     assert r["error"]["code"] == mcp.METHOD_NOT_FOUND
 
 
 def test_tools_call_requires_a_name():
-    r = _run(mcp._handle_rpc(_rpc("tools/call", {"arguments": {}}), _User(), "owner"))
+    r = _run(mcp._handle_rpc(_rpc("tools/call", {"arguments": {}}), _caller(), "owner"))
     assert r["error"]["code"] == mcp.INVALID_PARAMS
 
 
 def test_tools_call_rejects_non_object_arguments():
     r = _run(mcp._handle_rpc(
-        _rpc("tools/call", {"name": "catch_up", "arguments": "nope"}), _User(), "owner"))
+        _rpc("tools/call", {"name": "catch_up", "arguments": "nope"}), _caller(), "owner"))
     assert r["error"]["code"] == mcp.INVALID_PARAMS
 
 
 def test_forbidden_tool_returns_a_json_rpc_error():
     r = _run(mcp._handle_rpc(
-        _rpc("tools/call", {"name": "send_sms", "arguments": {}}), _User(), "owner"))
+        _rpc("tools/call", {"name": "send_sms", "arguments": {}}), _caller(), "owner"))
     assert r["error"]["code"] == mcp.TOOL_FORBIDDEN
 
 
 def test_handler_exceptions_do_not_leak_internals(monkeypatch):
     """An untrusted caller must not learn table names, ids or query
     fragments from an error message."""
-    async def _boom(name, arguments, user):
+    async def _boom(name, arguments, caller):
         raise RuntimeError("relation public.contacts business_id=eq.abc123 failed")
     monkeypatch.setattr(mcp, "_call_tool", _boom)
     r = _run(mcp._handle_rpc(
-        _rpc("tools/call", {"name": "catch_up", "arguments": {}}), _User(), "owner"))
+        _rpc("tools/call", {"name": "catch_up", "arguments": {}}), _caller(), "owner"))
     assert r["error"]["code"] == mcp.INTERNAL_ERROR
     blob = json.dumps(r)
     for leak in ("contacts", "business_id", "abc123", "relation"):
@@ -230,11 +240,11 @@ def test_dispatch_goes_straight_to_action_handlers(monkeypatch):
 
     monkeypatch.setitem(chief_of_staff.ACTION_HANDLERS, "catch_up", _fake_handler)
 
-    async def _fake_biz(client, user):
+    async def _fake_biz(client, caller):
         return {"id": "biz-1", "name": "Test Co"}
     monkeypatch.setattr(mcp, "_resolve_business", _fake_biz)
 
-    allowed, ok, payload, biz_id = _run(mcp._call_tool("catch_up", {}, _User()))
+    allowed, ok, payload, biz_id = _run(mcp._call_tool("catch_up", {}, _caller()))
     assert allowed and ok and payload["result"] == "ok"
     assert biz_id == "biz-1", "the resolved business must reach the audit trail"
     assert calls[0]["type"] == "catch_up", "handler must receive its own verb"
@@ -252,19 +262,19 @@ def test_arguments_cannot_override_the_verb(monkeypatch):
 
     monkeypatch.setitem(chief_of_staff.ACTION_HANDLERS, "catch_up", _fake_handler)
 
-    async def _fake_biz(client, user):
+    async def _fake_biz(client, caller):
         return {"id": "biz-1"}
     monkeypatch.setattr(mcp, "_resolve_business", _fake_biz)
 
-    _run(mcp._call_tool("catch_up", {"type": "send_sms", "message": "hi"}, _User()))
+    _run(mcp._call_tool("catch_up", {"type": "send_sms", "message": "hi"}, _caller()))
     assert seen["type"] == "catch_up", "the caller must not be able to rewrite `type`"
 
 
 def test_no_business_resolved_is_a_refusal_not_a_crash(monkeypatch):
-    async def _none(client, user):
+    async def _none(client, caller):
         return None
     monkeypatch.setattr(mcp, "_resolve_business", _none)
-    allowed, ok, msg, biz_id = _run(mcp._call_tool("catch_up", {}, _User()))
+    allowed, ok, msg, biz_id = _run(mcp._call_tool("catch_up", {}, _caller()))
     assert ok is False and "business" in msg
     assert allowed is True, (
         "authorization PASSED — it failed at resolution. Conflating the two "
@@ -315,12 +325,12 @@ def test_audit_records_argument_names_never_values(caplog):
 
 def test_every_tools_call_is_audited(monkeypatch, caplog):
     import logging
-    async def _ok(name, arguments, user):
+    async def _ok(name, arguments, caller):
         return True, {"result": "ok", "label": "x"}
     monkeypatch.setattr(mcp, "_call_tool", _ok)
     with caplog.at_level(logging.INFO, logger="mcp_server"):
         _run(mcp._handle_rpc(
-            _rpc("tools/call", {"name": "catch_up", "arguments": {}}), _User(), "owner"))
+            _rpc("tools/call", {"name": "catch_up", "arguments": {}}), _caller(), "owner"))
     assert "[audit]" in caplog.text
 
 
@@ -329,7 +339,7 @@ def test_refusals_are_audited_too(caplog):
     import logging
     with caplog.at_level(logging.INFO, logger="mcp_server"):
         _run(mcp._handle_rpc(
-            _rpc("tools/call", {"name": "send_sms", "arguments": {}}), _User(), "owner"))
+            _rpc("tools/call", {"name": "send_sms", "arguments": {}}), _caller(), "owner"))
     assert "[audit]" in caplog.text and "ok=False" in caplog.text
 
 
