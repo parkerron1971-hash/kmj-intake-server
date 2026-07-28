@@ -19,7 +19,11 @@ Design constraints:
 
 Env:
   FALLBACK_BRAIN        'on' (default) | 'off' — kill switch.
-  FALLBACK_BRAIN_MODEL  OpenAI model id, default 'gpt-4o'.
+  FALLBACK_BRAIN_MODEL  OpenAI model id, default 'gpt-4o-mini'.
+                        NOT gpt-4o: Chief's ~33.5k-token prompt
+                        exceeds gpt-4o's 30k TPM ceiling on this
+                        org's tier, so it 429'd every time. See
+                        _model() for the full reasoning.
   OPENAI_API_KEY        already configured (TTS / inference gate).
 """
 
@@ -61,7 +65,25 @@ def enabled() -> bool:
 
 
 def _model() -> str:
-    return (os.environ.get("FALLBACK_BRAIN_MODEL") or "gpt-4o").strip()
+    # gpt-4o-mini, not gpt-4o, and the live test is why.
+    #
+    # Chief's prompt is ~33,500 tokens (operating manual + business
+    # context + dynamic state). On Anthropic that is cached and cheap. On
+    # OpenAI there is no cache, and gpt-4o on this org's tier has a
+    # 30,000 TPM ceiling — so a SINGLE Chief turn exceeded the per-minute
+    # budget and the fallback returned 429 every time. Not intermittent:
+    # arithmetic. The backup brain could never once have answered.
+    #
+    # gpt-4o-mini's ceiling on the same tier is far higher, so 33.5k fits.
+    # It is also ~17x cheaper per turn (~$0.005 vs ~$0.084) on a path with
+    # no prompt caching, which matters because every fallback turn pays
+    # full freight for that whole manual.
+    #
+    # Quality dips, as the spec always said it would — this keeps people
+    # moving during an outage, it is not the same brain. Raising the
+    # OpenAI tier and setting FALLBACK_BRAIN_MODEL=gpt-4o is the upgrade
+    # path if that trade stops being worth it.
+    return (os.environ.get("FALLBACK_BRAIN_MODEL") or "gpt-4o-mini").strip()
 
 
 def _flatten_system(system: Any) -> str:
