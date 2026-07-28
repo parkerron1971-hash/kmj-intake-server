@@ -48,7 +48,11 @@ if not logger.handlers:
     _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] fallback: %(message)s"))
     logger.addHandler(_h)
     logger.setLevel(logging.INFO)
-    logger.propagate = False
+    # No propagate=False. Every sibling module leaves propagation on, and
+    # turning it off here also made the logger invisible to pytest's
+    # caplog — i.e. it would have blocked the very tests that prove these
+    # messages exist. Matching house style is worth more than avoiding a
+    # duplicate line if some future root handler appears.
 
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 
@@ -191,10 +195,25 @@ def _flatten_content(content: Any) -> str:
 
 
 async def _notify_owner(reason: str) -> None:
-    """Tell Kevin the backup brain engaged — once per window."""
+    """Tell Kevin the backup brain engaged — once per window.
+
+    Two independent channels, and they fail differently, which is why the
+    outcome of each is logged rather than assumed:
+
+      platform_changelog  the operator log Mission Control reads. Works.
+      web push            silently returns 0 when VAPID keys are not
+                          configured — no error, no log, nothing to see.
+
+    The first live test looked like "the notification never fired". It
+    had: the changelog row was written the same second the fallback
+    answered. What could not be seen was whether the PUSH went anywhere,
+    because send_to_user's return value was being discarded. An
+    unobservable half-success is the thing worth fixing here.
+    """
     global _last_notified
     now = time.time()
     if now - _last_notified < _NOTIFY_WINDOW_S:
+        logger.info("[fallback] owner already notified this window — staying quiet")
         return
     _last_notified = now
     try:
@@ -212,13 +231,33 @@ async def _notify_owner(reason: str) -> None:
                 "no practitioner saw an outage.",
                 pending=True)
             owner = await wd._owner_user_id(c, headers)
-        if owner:
-            push_notifications.send_to_user(
-                owner,
-                title="Chief switched to the backup brain",
-                body=f"Anthropic is erroring; replies are running on {_model()}. "
-                     "The system is fine — check Mission Control when you can.",
-                nav="studio")
+        logger.info("[fallback] operator log written to platform_changelog")
+
+        if not owner:
+            logger.warning("[fallback] no owner user id resolved — push skipped")
+            return
+        if not push_notifications.push_enabled():
+            # Not an error, and not silent any more. VAPID is optional; the
+            # changelog entry still landed, so the information exists — it
+            # just will not reach a phone until the keys are set.
+            logger.warning(
+                "[fallback] push NOT sent — VAPID_PRIVATE_KEY/VAPID_PUBLIC_KEY "
+                "not configured. The Mission Control entry was still written.")
+            return
+        sent = push_notifications.send_to_user(
+            owner,
+            title="Chief switched to the backup brain",
+            body=f"Anthropic is erroring; replies are running on {_model()}. "
+                 "The system is fine — check Mission Control when you can.",
+            nav="studio")
+        # send_to_user returns how many devices it reached; discarding that
+        # was how "did Kevin get told?" became unanswerable.
+        if sent:
+            logger.info("[fallback] push delivered to %d device(s)", sent)
+        else:
+            logger.warning(
+                "[fallback] push reached 0 devices — owner has no registered "
+                "subscription, or every endpoint rejected it")
     except Exception as e:
         logger.warning(f"[fallback] owner notify failed (non-fatal): {e}")
 
