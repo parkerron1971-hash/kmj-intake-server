@@ -781,6 +781,75 @@ REPLICA_KIT_CSS = """
       .chief-in{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;font-size:9px;
         color:var(--ink-3);background:rgba(255,255,255,.04);border:1px solid var(--line);}
       .chief-in .go{margin-left:auto;width:14px;height:14px;border-radius:4px;background:var(--gold);}
+      /* ── the hero replica answers a question ──────────────────────
+         The Chief panel types a question and answers it, on a 15s
+         loop. Every string is HARDCODED — this makes no request to
+         anything. It is the same fiction as the rest of the replica
+         (Jordan Reyes is not real, $12,480 is not real), just moving.
+         A live endpoint here would be an unauthenticated LLM surface
+         that every crawler on the internet could bill us for.
+
+         The numbers agree with the panel's own resting state: it says
+         8 overdue / $1,865, so the answer names two of those eight
+         rather than inventing a separate set of figures.
+
+         Both faces are stacked, face A in flow and face B absolute on
+         top of it, so the panel height is whatever face A needs and
+         the swap cannot shift the hero. Everything is opacity and
+         transform, nothing that triggers layout.
+
+         One shared 15s timeline; each piece picks its moment with
+         keyframe percentages. Character stagger is animation-delay,
+         which permanently phase-shifts that character's own loop —
+         which is exactly the intent. */
+      .chief-body{position:relative;display:flex;flex-direction:column;gap:6px;}
+      .chief-note{font-size:8px;color:var(--ink-3);opacity:.8;letter-spacing:.01em;}
+      .cf{display:flex;flex-direction:column;gap:6px;}
+      .cf-b{position:absolute;inset:0;opacity:0;}
+      .cf-a{animation:cfA 15s ease infinite;}
+      .cf-b{animation:cfB 15s ease infinite;}
+      @keyframes cfA{0%,19%{opacity:1;}24%,85%{opacity:0;}91%,100%{opacity:1;}}
+      @keyframes cfB{0%,23%{opacity:0;}28%,84%{opacity:1;}88%,100%{opacity:0;}}
+      /* rows land one after another rather than as a block */
+      .cf-b > *{opacity:0;transform:translateY(3px);animation:cfRow 15s ease infinite;}
+      .cf-b > *:nth-child(1){animation-delay:.00s;}
+      .cf-b > *:nth-child(2){animation-delay:.13s;}
+      .cf-b > *:nth-child(3){animation-delay:.26s;}
+      .cf-b > *:nth-child(4){animation-delay:.39s;}
+      .cf-b > *:nth-child(5){animation-delay:.52s;}
+      .cf-b > *:nth-child(6){animation-delay:.65s;}
+      @keyframes cfRow{0%,24%{opacity:0;transform:translateY(3px);}
+                       29%,84%{opacity:1;transform:translateY(0);}
+                       87%,100%{opacity:0;transform:translateY(3px);}}
+
+      .cin-wrap{position:relative;flex:1;min-width:0;overflow:hidden;white-space:nowrap;}
+      .cin-ph{display:block;animation:cinPh 15s ease infinite;}
+      @keyframes cinPh{0%,11%{opacity:1;}13%,88%{opacity:0;}92%,100%{opacity:1;}}
+      .cin-q{position:absolute;left:0;top:0;white-space:nowrap;color:var(--ink-1,#fff);}
+      .cin-q i{display:inline-block;max-width:0;overflow:hidden;opacity:0;font-style:normal;
+        vertical-align:bottom;animation:cinCh 15s linear infinite;}
+      @keyframes cinCh{0%,12.5%{max-width:0;opacity:0;}
+                       14%,86%{max-width:1.6em;opacity:1;}
+                       88%,100%{max-width:0;opacity:0;}}
+      /* caret rides the end of the typed text because it is inline after it */
+      .cin-q::after{content:'';display:inline-block;width:1px;height:8px;
+        vertical-align:-1px;background:var(--gold);animation:cinCar 15s steps(1) infinite;}
+      @keyframes cinCar{0%,11%{opacity:0;}
+                        12%,34%{opacity:1;}35%{opacity:0;}37%{opacity:1;}
+                        39%{opacity:0;}41%{opacity:1;}43%,100%{opacity:0;}}
+
+      /* let people stop it and read */
+      .chief:hover .cf-a,.chief:hover .cf-b,.chief:hover .cf-b > *,
+      .chief:hover .cin-ph,.chief:hover .cin-q i,.chief:hover .cin-q::after{
+        animation-play-state:paused;}
+
+      /* rest on the honest static state, no motion at all */
+      @media (prefers-reduced-motion: reduce){
+        .chief .cf-b,.chief .cin-q{display:none;}
+        .chief .cf-a,.chief .cin-ph{opacity:1;}
+        .chief *{animation:none !important;}
+      }
+
 
       /* generic panel + list rows */
       .pnl{border-radius:9px;background:var(--pane);border:1px solid var(--line);padding:9px;
@@ -1217,13 +1286,25 @@ def render_home() -> str:
                   <img class="brief-mark" src="/assets/mark.webp" alt="" width="128" height="128" loading="lazy">
                   <div class="chief">
                     <div class="chief-h">Chief AI<span class="on">Online</span></div>
-                    <div class="chief-lead">I&rsquo;ve analyzed your day. Here&rsquo;s what I found:</div>
-                    <div class="chief-f"><span class="sq warn"></span><span class="g">8 invoices overdue</span><span class="amt">$1,865</span></div>
-                    <div class="chief-f"><span class="sq"></span><span class="g">2 drafts waiting for you</span><span class="tag">Needs you</span></div>
-                    <div class="chief-f"><span class="sq ok"></span><span class="g">$12,480 collected this month</span></div>
-                    <div class="chief-ask">Would you like me to handle these?</div>
-                    <div class="chief-btns"><b>Yes, handle it</b><i>Review first</i></div>
-                    <div class="chief-in">Ask Chief anything&hellip;<span class="go"></span></div>
+                    <div class="chief-body">
+                      <div class="cf cf-a">
+                        <div class="chief-lead">I&rsquo;ve analyzed your day. Here&rsquo;s what I found:</div>
+                        <div class="chief-f"><span class="sq warn"></span><span class="g">8 invoices overdue</span><span class="amt">$1,865</span></div>
+                        <div class="chief-f"><span class="sq"></span><span class="g">2 drafts waiting for you</span><span class="tag">Needs you</span></div>
+                        <div class="chief-f"><span class="sq ok"></span><span class="g">$12,480 collected this month</span></div>
+                        <div class="chief-ask">Would you like me to handle these?</div>
+                        <div class="chief-btns"><b>Yes, handle it</b><i>Review first</i></div>
+                      </div>
+                      <div class="cf cf-b" aria-hidden="true">
+                        <div class="chief-lead">Of the 8, two are past 20 days:</div>
+                        <div class="chief-f"><span class="sq warn"></span><span class="g">Marcus Bell &middot; 22 days</span><span class="amt">$420</span></div>
+                        <div class="chief-f"><span class="sq warn"></span><span class="g">Danielle Ortiz &middot; 24 days</span><span class="amt">$310</span></div>
+                        <div class="chief-ask">Send both a reminder?</div>
+                        <div class="chief-btns"><b>Yes, send them</b><i>Review first</i></div>
+                        <div class="chief-note">Drafted, not sent. Nothing leaves without you.</div>
+                      </div>
+                    </div>
+                    <div class="chief-in"><span class="cin-wrap"><span class="cin-ph">Ask Chief anything&hellip;</span><span class="cin-q" aria-hidden="true"><i style="animation-delay:0.00s">W</i><i style="animation-delay:0.05s">h</i><i style="animation-delay:0.10s">o</i><i style="animation-delay:0.15s">&nbsp;</i><i style="animation-delay:0.20s">h</i><i style="animation-delay:0.25s">a</i><i style="animation-delay:0.30s">s</i><i style="animation-delay:0.35s">n</i><i style="animation-delay:0.40s">&rsquo;</i><i style="animation-delay:0.45s">t</i><i style="animation-delay:0.50s">&nbsp;</i><i style="animation-delay:0.55s">p</i><i style="animation-delay:0.60s">a</i><i style="animation-delay:0.65s">i</i><i style="animation-delay:0.70s">d</i><i style="animation-delay:0.75s">&nbsp;</i><i style="animation-delay:0.80s">m</i><i style="animation-delay:0.85s">e</i><i style="animation-delay:0.90s">?</i></span></span><span class="go"></span></div>
                   </div>
                 </div>
 
