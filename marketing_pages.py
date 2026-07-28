@@ -227,6 +227,12 @@ SHARED_CSS = """
   .mv-publish .flow{flex:1;min-width:16px;max-width:24px;height:2px;background:linear-gradient(90deg, transparent, var(--accent), var(--hot), transparent);background-size:200% 100%;animation:flowSweep 2.4s linear infinite;border-radius:2px;}
   @keyframes flowSweep{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
 
+  /* ─── inline icons (replaced the decorative emoji) ─── */
+  .pill-ico{width:16px;height:16px;flex-shrink:0;opacity:.85;}
+  .audience-pill{gap:9px;}
+  .fs-ico{width:15px;height:15px;flex-shrink:0;vertical-align:-2px;margin-right:7px;}
+  .fs-eyebrow{display:inline-flex;align-items:center;}
+
   /* ─── reduced motion, site-wide ───
      The shell has always run several ambient loops (logo glow, brand dot,
      drifting orbs, every mini-visual) with no reduced-motion escape at
@@ -251,7 +257,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>{title} — The Solutionist System</title>
+<title>{title} &middot; The Solutionist System</title>
 <meta name="description" content="{description}">
 <meta property="og:title" content="{og_title}">
 <meta property="og:description" content="{description}">
@@ -377,7 +383,7 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
     return SHELL_TEMPLATE.format(
         title=_html.escape(title),
         description=_html.escape(description),
-        og_title=_html.escape(f"{title} — {SITE_NAME}"),
+        og_title=_html.escape(f"{title} · {SITE_NAME}"),
         path=path,
         shared_css=SHARED_CSS,
         extra_css=extra_css,
@@ -1114,7 +1120,7 @@ def render_home() -> str:
     <div class="hero-copy">
       <span class="eyebrow reveal">For solo practitioners + small studios</span>
       <h1 class="reveal reveal-delay-1">Every problem<br>has a <span class="gradient-text">solution.</span></h1>
-      <p class="lead reveal reveal-delay-2">One workspace that runs your whole practice &mdash; contacts, invoices, sessions, content, goals &mdash; commanded by an AI Chief of Staff that knows your business. Eight tools, replaced.</p>
+      <p class="lead reveal reveal-delay-2">One workspace that runs your whole practice: contacts, invoices, sessions, content and goals, all commanded by an AI Chief of Staff that knows your business. Eight tools, replaced.</p>
       <div class="hero-ctas reveal reveal-delay-3">
         <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
         <a class="btn-secondary" href="#rooms">Look inside</a>
@@ -1126,7 +1132,7 @@ def render_home() -> str:
     </div>
 
     <div class="hero-app reveal reveal-delay-3">
-      <div class="hero-app-cap"><span class="dot"></span><b>Mission Control</b> &mdash; the first thing you see every day</div>
+      <div class="hero-app-cap"><span class="dot"></span><b>Mission Control</b> &middot; the first thing you see every day</div>
       <div class="app-scroll">
         <div class="app">"""
     + TOPBAR + """
@@ -1145,8 +1151,8 @@ def render_home() -> str:
                 <div class="brief">
                   <div class="brief-l">
                     <span class="date">Monday, July 27 &middot; Evening edition</span>
-                    <span class="hi">Good evening,<br><b>Jordan</b> &#128075;</span>
-                    <span class="cp">2 things need you today. Chief has them queued &mdash; one word clears the deck.</span>
+                    <span class="hi">Good evening,<br><b>Jordan</b></span>
+                    <span class="cp">2 things need you today. Chief has them queued, and one word clears the deck.</span>
                     <span class="brief-btns"><span class="ah-btn">Focus Mode &rarr;</span><span class="lnk">Read today&rsquo;s briefing</span></span>
                   </div>
                   <img class="brief-mark" src="/assets/mark.webp" alt="" width="128" height="128" loading="lazy">
@@ -1194,11 +1200,11 @@ def render_home() -> str:
         <span class="sec-num reveal">01</span>
         <span class="eyebrow reveal">The Chief of Staff</span>
         <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Ask once. The whole system <span class="gradient-text">moves.</span></h2>
-        <p class="lead reveal reveal-delay-2">Chief isn&rsquo;t a chatbot bolted onto a dashboard. It reads your real contacts, invoices, calendar and goals every turn &mdash; then acts on them.</p>
+        <p class="lead reveal reveal-delay-2">Chief isn&rsquo;t a chatbot bolted onto a dashboard. It reads your real contacts, invoices, calendar and goals every turn, then acts on them.</p>
         <ul class="ask-list reveal reveal-delay-3">
-          <li><span class="n">1</span><span>You ask in plain words &mdash; typed or spoken. <b>No menus to learn.</b></span></li>
+          <li><span class="n">1</span><span>You ask in plain words, typed or spoken. <b>No menus to learn.</b></span></li>
           <li><span class="n">2</span><span>Chief reads your live data, not a generic model&rsquo;s guess. <b>It knows your numbers.</b></span></li>
-          <li><span class="n">3</span><span>It does the work &mdash; drafts, sends, books, files. <b>Autopilot runs while you sleep.</b></span></li>
+          <li><span class="n">3</span><span>It does the work: drafts, sends, books, files. <b>Autopilot runs while you sleep.</b></span></li>
         </ul>
       </div>
       <div class="reveal reveal-delay-2">
@@ -1206,9 +1212,9 @@ def render_home() -> str:
           <div class="app-top"><span class="at-mark"></span><span class="at-search">Chief of Staff<span class="kbd">&#8984;K</span></span><span class="at-av"></span></div>
           <div class="app-canvas">
             <div class="cx-b you">Who owes me money?</div>
-            <div class="cx-b ai">Three invoices are past due &mdash; <b>$2,140</b> total. Marcus (18 days), Grace Chapel (11), Tia (4). Want me to send reminders?</div>
+            <div class="cx-b ai">Three invoices are past due, <b>$2,140</b> total. Marcus (18 days), Grace Chapel (11), Tia (4). Want me to send reminders?</div>
             <div class="cx-b you">Yes, and book Marcus for Thursday.</div>
-            <div class="cx-b ai">Done. Reminders sent from your address, and Marcus is on Thursday at 2:00&nbsp;PM &mdash; invite went out.</div>
+            <div class="cx-b ai">Done. Reminders sent from your address, and Marcus is on Thursday at 2:00&nbsp;PM, and the invite went out.</div>
             <div class="cx-b act">&#10003; 3 reminders sent &middot; 1 session booked</div>
           </div>
         </div>
@@ -1223,7 +1229,7 @@ def render_home() -> str:
       <span class="sec-num">02</span>
       <span class="eyebrow">Look inside</span>
       <h2>Six rooms. <span class="gradient-text">One brain.</span></h2>
-      <p>Each room is built for what happens in it &mdash; and they all share your contacts, your brand, and your Chief.</p>
+      <p>Each room is built for what happens in it, and they all share your contacts, your brand, and your Chief.</p>
     </div>
 
     <div class="rooms-tabs reveal" role="tablist" aria-label="Rooms">
@@ -1314,7 +1320,7 @@ def render_home() -> str:
                   <div class="art"><span class="c">Invoice</span><span><span class="m">$1,200</span><span class="l"></span><span class="l s"></span></span></div>
                   <div class="art"><span class="c">Social post</span><span><span class="m">Launch</span><span class="l"></span><span class="l s"></span></span></div>
                 </div>
-                <div class="r"><span class="bar"></span><span class="g">Change one color &mdash; every artifact repaints live</span><span class="pill live">Live</span></div>
+                <div class="r"><span class="bar"></span><span class="g">Change one color and every artifact repaints live</span><span class="pill live">Live</span></div>
               </div>
             </div>
           </div>
@@ -1356,13 +1362,13 @@ def render_home() -> str:
                   <div class="band"><span class="t">Counsel that holds up.</span><span class="s">Family mediation &middot; Grand Rapids, MI</span></div>
                   <div class="cards"><i></i><i></i><i></i></div>
                 </div>
-                <div class="r"><span class="bar"></span><span class="g">Typography and spacing reasoned from your brand &mdash; not a theme</span><span class="pill live">Live</span></div>
+                <div class="r"><span class="bar"></span><span class="g">Typography and spacing reasoned from your brand, not a theme</span><span class="pill live">Live</span></div>
               </div>
             </div>
           </div>
         </div>
         <div class="room-face" style="--fa:300deg;" data-i="5"
-             data-caption="Set the rules once. Chief works your follow-ups, reminders and drafts on schedule overnight &mdash; and logs every action it took, so nothing happens behind your back.">
+             data-caption="Set the rules once. Chief works your follow-ups, reminders and drafts on schedule overnight, and logs every action it took, so nothing happens behind your back.">
           <div class="app is-mini">
             <div class="app-body">""" + SIDEBAR + """
               <div class="app-canvas">
@@ -1379,7 +1385,7 @@ def render_home() -> str:
                   <div class="r"><span class="bar grn"></span><span class="g nm">Reconciled 14 bank transactions<span>matched to invoices &middot; 07:01</span></span><span class="pill paid">Done</span></div>
                   <div class="r"><span class="bar red"></span><span class="g nm">Flagged: Tia&rsquo;s card expires in 6 days<span>needs a human &middot; 07:28</span></span><span class="pill due">You</span></div>
                 </div>
-                <div class="r"><span class="bar"></span><span class="g">Every action logged &mdash; approve, undo, or change the rules anytime</span><span class="pill live">Logged</span></div>
+                <div class="r"><span class="bar"></span><span class="g">Every action logged. Approve, undo, or change the rules anytime</span><span class="pill live">Logged</span></div>
               </div>
             </div>
           </div>
@@ -1407,7 +1413,7 @@ def render_home() -> str:
       <span class="sec-num">03</span>
       <span class="eyebrow">See it move</span>
       <h2>Fifty-five seconds, <span class="gradient-text">end to end.</span></h2>
-      <p>The real system, scene by scene &mdash; Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</p>
+      <p>The real system, scene by scene: Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</p>
     </div>
     <div class="demo-frame reveal">
       <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
@@ -1427,13 +1433,13 @@ def render_home() -> str:
       <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Built for people who serve people.</h2>
     </div>
     <div class="audience-grid reveal reveal-delay-2">
-      <span class="audience-pill"><span class="emoji">&#9962;</span> Pastors</span>
-      <span class="audience-pill"><span class="emoji">&#10013;</span> Ministry Leaders</span>
-      <span class="audience-pill"><span class="emoji">&#127919;</span> Coaches</span>
-      <span class="audience-pill"><span class="emoji">&#128188;</span> Consultants</span>
-      <span class="audience-pill"><span class="emoji">&#127912;</span> Creatives</span>
-      <span class="audience-pill"><span class="emoji">&#129496;</span> Practitioners</span>
-      <span class="audience-pill"><span class="emoji">&#127968;</span> Solo Studios</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 22h18"/><path d="M6 18v-7M10 18v-7M14 18v-7M18 18v-7"/><path d="M12 2 3 8h18Z"/></svg> Pastors</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg> Ministry Leaders</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> Coaches</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="7" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> Consultants</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1a1.6 1.6 0 0 1 1.7-1.7H16c3 0 5.5-2.5 5.5-5.6C22 6 17.5 2 12 2Z"/></svg> Creatives</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> Practitioners</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> Solo Studios</span>
     </div>
   </div>
 </section>
@@ -1449,7 +1455,7 @@ def render_home() -> str:
       <div class="card why-card reveal"><div class="check">01</div>
         <div><h3>One brain, not eight</h3><p>Your CRM, invoicing, calendar, content and analytics all talk to each other. Update a contact once; every tool sees it.</p></div></div>
       <div class="card why-card reveal reveal-delay-1"><div class="check">02</div>
-        <div><h3>AI that knows your business</h3><p>Chief reads your real data every turn &mdash; not a generic LLM. Asks for context once, then uses it forever.</p></div></div>
+        <div><h3>AI that knows your business</h3><p>Chief reads your real data every turn, not a generic LLM. Asks for context once, then uses it forever.</p></div></div>
       <div class="card why-card reveal"><div class="check">03</div>
         <div><h3>Real-time, not weekly reports</h3><p>Every metric updates as data changes. No CSV exports, no waiting for someone to refresh.</p></div></div>
       <div class="card why-card reveal reveal-delay-1"><div class="check">04</div>
@@ -1462,7 +1468,7 @@ def render_home() -> str:
   <div class="container">
     <span class="eyebrow reveal">Ready when you are</span>
     <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Run your practice <span class="gradient-text">from one place.</span></h2>
-    <p class="reveal reveal-delay-2">Currently in private beta. Apply for access &mdash; we&rsquo;ll set you up and walk you through onboarding.</p>
+    <p class="reveal reveal-delay-2">Currently in private beta. Apply for access and we&rsquo;ll set you up and walk you through onboarding.</p>
     <a class="btn-primary reveal reveal-delay-3" href="/get-started">Apply for Access &rarr;</a>
   </div>
 </section>
@@ -1604,7 +1610,7 @@ def render_features() -> str:
   <div class="container">
     <div class="fs-grid">
       <div class="reveal">
-        <div class="fs-eyebrow">🏠 Command Center</div>
+        <div class="fs-eyebrow"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>Command Center</div>
         <h2>Your daily mission control.</h2>
         <p>The first thing you see when you open the app. Today's schedule, who needs your attention, what shipped overnight, and Chief one tap away.</p>
         <ul class="fs-list">
@@ -1621,19 +1627,19 @@ def render_features() -> str:
               <div class="pal-in"><span class="pal-ico"></span>
                 <span class="pal-q">book marcus thursday</span><span class="caret"></span>
                 <span class="pal-kbd">&#8984;K</span></div>
-              <div class="pal-r on"><span class="pal-d" style="--c:#22C55E"></span>Book a session &mdash; Marcus Bell, Thu 2:00&nbsp;PM<span class="k">&crarr;</span></div>
+              <div class="pal-r on"><span class="pal-d" style="--c:#22C55E"></span>Book a session &middot; Marcus Bell, Thu 2:00&nbsp;PM<span class="k">&crarr;</span></div>
               <div class="pal-r"><span class="pal-d" style="--c:#2E7DFF"></span>Draft an email to Marcus Bell<span class="k">&darr;</span></div>
               <div class="pal-r"><span class="pal-d" style="--c:#EF4444"></span>Chase 3 overdue invoices<span class="k">&darr;</span></div>
               <div class="pal-r"><span class="pal-d" style="--c:#C9A84C"></span>Open Marcus Bell&rsquo;s record<span class="k">&darr;</span></div>
             </div>
             <div class="pal-voice">
               <span class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
-              <span>Listening &mdash; say &ldquo;Hey Chief&rdquo;</span>
+              <span>Listening &middot; say &ldquo;Hey Chief&rdquo;</span>
               <span class="hint">or press &#8984;K</span>
             </div>
           </div>
         </div>
-        <div class="fsv-cap"><span class="dot"></span>One bar for everything &mdash; type it, or just say it out loud.</div>
+        <div class="fsv-cap"><span class="dot"></span>One bar for everything. Type it, or just say it out loud.</div>
       </div>
     </div>
   </div>
@@ -1664,11 +1670,11 @@ def render_features() -> str:
             </div>
           </div>
         </div>
-        <div class="fsv-cap"><span class="dot"></span>Composed from your brand DNA &mdash; section by section, not a template.</div>
+        <div class="fsv-cap"><span class="dot"></span>Composed from your brand DNA, section by section, not a template.</div>
       </div>
       <div class="reveal reveal-delay-1">
-        <div class="fs-eyebrow">🧱 Build</div>
-        <h2>Sites, brand, intake — all yours.</h2>
+        <div class="fs-eyebrow"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="7" height="7" x="14" y="3" rx="1"/><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1"/></svg>Build</div>
+        <h2>Sites, brand and intake, all yours.</h2>
         <p>Spin up a practitioner site, set your brand kit (colors, fonts, logo), capture leads through intake forms, and wire up the integrations you need.</p>
         <ul class="fs-list">
           <li>Practitioner sites</li><li>Brand kits</li><li>Intake forms</li><li>Custom modules</li>
@@ -1684,9 +1690,9 @@ def render_features() -> str:
   <div class="container">
     <div class="fs-grid">
       <div class="reveal">
-        <div class="fs-eyebrow">⚙️ Operate</div>
+        <div class="fs-eyebrow"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Operate</div>
         <h2>The day-to-day plumbing.</h2>
-        <p>Track contacts, send branded invoices, manage your calendar, run tasks, handle email and SMS — all from one screen with one search bar.</p>
+        <p>Track contacts, send branded invoices, manage your calendar, run tasks, handle email and SMS, all from one screen with one search bar.</p>
         <ul class="fs-list">
           <li>Contacts (CRM)</li><li>Invoices &amp; payments</li><li>Calendar</li><li>Tasks</li>
           <li>Email hub</li><li>SMS hub</li><li>Projects</li><li>Documents</li><li>Autopilot agents</li>
@@ -1701,11 +1707,11 @@ def render_features() -> str:
               <div class="pnl fx-seq" style="min-height:0;">
                 <div class="pnl-h">All channels<span class="ct">6</span></div>
                 <div class="r"><span class="bar red"></span><span class="pill mail">Email</span>
-                  <span class="g nm">Marcus Bell<span>Re: Thursday &mdash; can we push to 3?</span></span><span class="amt">9:04</span></div>
+                  <span class="g nm">Marcus Bell<span>Re: Thursday, can we push to 3?</span></span><span class="amt">9:04</span></div>
                 <div class="r"><span class="bar amb"></span><span class="pill sms">SMS</span>
                   <span class="g nm">Tia Randall<span>Got it, thank you!</span></span><span class="amt">8:41</span></div>
                 <div class="r"><span class="bar"></span><span class="pill mail">Email</span>
-                  <span class="g nm">Grace Chapel<span>Invoice received &mdash; paying Friday</span></span><span class="amt">Tue</span></div>
+                  <span class="g nm">Grace Chapel<span>Invoice received, paying Friday</span></span><span class="amt">Tue</span></div>
                 <div class="r"><span class="bar"></span><span class="pill sms">SMS</span>
                   <span class="g nm">J. Okafor<span>Confirming next week</span></span><span class="amt">Tue</span></div>
               </div>
@@ -1725,10 +1731,10 @@ def render_features() -> str:
                 </div>
               </div>
             </div>
-            <div class="r"><span class="bar"></span><span class="g">Email, SMS, calendar and billing &mdash; one contact, one thread, one search bar</span><span class="pill live">Unified</span></div>
+            <div class="r"><span class="bar"></span><span class="g">Email, SMS, calendar and billing on one contact, one thread, one search bar</span><span class="pill live">Unified</span></div>
           </div>
         </div>
-        <div class="fsv-cap"><span class="dot"></span>Every channel lands on the same record &mdash; nothing to reconcile by hand.</div>
+        <div class="fsv-cap"><span class="dot"></span>Every channel lands on the same record. Nothing to reconcile by hand.</div>
       </div>
     </div>
   </div>
@@ -1753,10 +1759,10 @@ def render_features() -> str:
             </div>
           </div>
         </div>
-        <div class="fsv-cap"><span class="dot"></span>Every metric updates as the data changes &mdash; not on a weekly report.</div>
+        <div class="fsv-cap"><span class="dot"></span>Every metric updates as the data changes, not on a weekly report.</div>
       </div>
       <div class="reveal reveal-delay-1">
-        <div class="fs-eyebrow">📈 Grow</div>
+        <div class="fs-eyebrow"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>Grow</div>
         <h2>Where strategy meets data.</h2>
         <p>Revenue analytics with an allocator, expense tracking, goals across five lenses (Business / Team Building / Personal / Custom), a real sales funnel with drop-off insights, and a full content calendar.</p>
         <ul class="fs-list">
@@ -1775,9 +1781,9 @@ def render_features() -> str:
   <div class="container">
     <div class="fs-grid">
       <div class="reveal">
-        <div class="fs-eyebrow">🤖 Chief of Staff</div>
+        <div class="fs-eyebrow"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3-1.9 5.8L4 10.7l6.1 1.9L12 18.4l1.9-5.8 6.1-1.9-6.1-1.9z"/><path d="M19 3v4M21 5h-4"/></svg>Chief of Staff</div>
         <h2>An AI that knows your business.</h2>
-        <p>Not a generic LLM. Chief reads your real contacts, invoices, goals, content, and brand on every turn. Ask for input, delegate actions, get tactical guidance — by chat or by voice.</p>
+        <p>Not a generic LLM. Chief reads your real contacts, invoices, goals, content, and brand on every turn. Ask for input, delegate actions, get tactical guidance, by chat or by voice.</p>
         <ul class="fs-list">
           <li>Voice mode</li><li>Memory + standing instructions</li>
           <li>Action delegation</li><li>Goal coaching</li><li>Content drafting</li>
@@ -1790,12 +1796,12 @@ def render_features() -> str:
             <span class="at-search">Chief of Staff</span><span class="at-av"></span></div>
           <div class="app-canvas">
             <div class="cx-b you">Who owes me money?</div>
-            <div class="cx-b ai">Three invoices are past due &mdash; <b>$2,140</b> total. Want me to send reminders?</div>
+            <div class="cx-b ai">Three invoices are past due, <b>$2,140</b> total. Want me to send reminders?</div>
             <div class="cx-b you">Yes, and book Marcus for Thursday.</div>
             <div class="cx-b act">&#10003; 3 reminders sent &middot; 1 session booked</div>
           </div>
         </div>
-        <div class="fsv-cap"><span class="dot"></span>It reads your live data every turn &mdash; then does the work.</div>
+        <div class="fsv-cap"><span class="dot"></span>It reads your live data every turn, then does the work.</div>
       </div>
     </div>
   </div>
@@ -1813,7 +1819,7 @@ def render_features() -> str:
               <div class="pnl-h">Draft &middot; ready to send</div>
               <div style="font-size:10.5px;color:var(--ink-2);line-height:1.55;">
                 &ldquo;Three seats left for the October intensive. If you&rsquo;ve been putting
-                off the hard conversation about your numbers &mdash; this is the room for it.&rdquo;</div>
+                off the hard conversation about your numbers, this is the room for it.&rdquo;</div>
             </div>
             <div class="pnl" style="flex:1;justify-content:center;">
               <div class="fx-pub">
@@ -1829,7 +1835,7 @@ def render_features() -> str:
         <div class="fsv-cap"><span class="dot"></span>Write once. Chief adapts and schedules it per channel.</div>
       </div>
       <div class="reveal reveal-delay-1">
-        <div class="fs-eyebrow">📣 Publish to Facebook + Instagram</div>
+        <div class="fs-eyebrow"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>Publish to Facebook + Instagram</div>
         <h2>One workspace, every channel.</h2>
         <p>Connect your Facebook Page once. Draft posts in the Content tab, publish to your Page (and linked Instagram Business account) in one click. Engagement lives next to your goals.</p>
         <ul class="fs-list">
@@ -1846,7 +1852,7 @@ def render_features() -> str:
   <div class="container">
     <span class="eyebrow reveal">Ready to try it?</span>
     <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Apply for access today.</h2>
-    <p class="reveal reveal-delay-2">Private beta — we'll set you up and walk you through onboarding personally.</p>
+    <p class="reveal reveal-delay-2">Private beta. We'll set you up and walk you through onboarding personally.</p>
     <a class="btn-primary reveal reveal-delay-3" href="/get-started">Apply for Access →</a>
   </div>
 </section>
@@ -1911,7 +1917,7 @@ def render_compare() -> str:
     <div class="section-head reveal">
       <span class="eyebrow">Real cost breakdown</span>
       <h2>The math on the 8-tool stack.</h2>
-      <p>Conservative pricing — most operators end up paying more once they hit usage tiers.</p>
+      <p>Conservative pricing. Most operators end up paying more once they hit usage tiers.</p>
     </div>
     <div class="cost-grid">
       <div class="cost-card alt reveal">
@@ -1942,7 +1948,7 @@ def render_compare() -> str:
           <li><span>Chief of Staff (AI)</span><span>✓</span></li>
         </ul>
         <div class="cost-total"><span class="label">Pricing TBD</span><span class="price">Private beta</span></div>
-        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">We're growing carefully. Apply for access — early users get grandfathered pricing once we launch publicly.</p>
+        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">We're growing carefully. Apply for access and early users get grandfathered pricing once we launch publicly.</p>
       </div>
     </div>
   </div>
@@ -1985,15 +1991,15 @@ def render_compare() -> str:
     <div class="switch-grid">
       <div class="switch-card reveal">
         <h3>From Notion</h3>
-        <p>Notion is a blank canvas — flexible but you build everything yourself, and there's no AI that reads your business data. Solutionist comes opinionated: contacts work like contacts, invoices work like invoices, goals work like goals. You skip the database-design stage.</p>
+        <p>Notion is a blank canvas, flexible but you build everything yourself, and there's no AI that reads your business data. Solutionist comes opinionated: contacts work like contacts, invoices work like invoices, goals work like goals. You skip the database-design stage.</p>
       </div>
       <div class="switch-card reveal reveal-delay-1">
         <h3>From HubSpot</h3>
-        <p>HubSpot is enterprise CRM at scale — sales-team assumptions, deal pipelines built for B2B reps, and pricing that doesn't fit a solo practice. Solutionist is purpose-built for one operator running their whole business, not a sales team managing leads.</p>
+        <p>HubSpot is enterprise CRM at scale, with sales-team assumptions, deal pipelines built for B2B reps, and pricing that doesn't fit a solo practice. Solutionist is purpose-built for one operator running their whole business, not a sales team managing leads.</p>
       </div>
       <div class="switch-card reveal reveal-delay-2">
         <h3>From "I'll just use ChatGPT"</h3>
-        <p>ChatGPT is brilliant but generic — every conversation starts cold. Chief reads your real contacts, invoices, goals, content, and brand on every turn. Ask "how am I doing on my goals?" and you get a real answer, not a checklist of what to consider.</p>
+        <p>ChatGPT is brilliant but generic, and every conversation starts cold. Chief reads your real contacts, invoices, goals, content, and brand on every turn. Ask "how am I doing on my goals?" and you get a real answer, not a checklist of what to consider.</p>
       </div>
     </div>
   </div>
@@ -2046,49 +2052,49 @@ def render_faq() -> str:
     <div class="faq-list reveal">
       <details class="faq-item">
         <summary>Who is this actually for?</summary>
-        <div class="faq-body"><p>Solo practitioners and small studios. The people we built it for: pastors, ministry leaders, coaches, consultants, creatives, agencies-of-one, and small service businesses. If you run your whole show — sales, delivery, marketing, finances — Solutionist is for you. If you have a 20-person team with a dedicated ops person, it's overkill.</p></div>
+        <div class="faq-body"><p>Solo practitioners and small studios. The people we built it for: pastors, ministry leaders, coaches, consultants, creatives, agencies-of-one, and small service businesses. If you run your whole show, from sales and delivery to marketing and finances, Solutionist is for you. If you have a 20-person team with a dedicated ops person, it's overkill.</p></div>
       </details>
       <details class="faq-item">
         <summary>Do I need a team to use this?</summary>
-        <div class="faq-body"><p>No. The whole product assumes one operator. No seat math, no "add a teammate" friction, no admin role management. If you grow to a team later, the data model supports it — but it's not the default.</p></div>
+        <div class="faq-body"><p>No. The whole product assumes one operator. No seat math, no "add a teammate" friction, no admin role management. If you grow to a team later, the data model supports it, but it's not the default.</p></div>
       </details>
       <details class="faq-item">
         <summary>What about pricing?</summary>
-        <div class="faq-body"><p>We're in private beta right now. Pricing is coming when we open public access. Apply for access — if you're a fit, we'll get you in early and grandfather you on whatever pricing launches.</p></div>
+        <div class="faq-body"><p>We're in private beta right now. Pricing is coming when we open public access. Apply for access. If you're a fit, we'll get you in early and grandfather you on whatever pricing launches.</p></div>
       </details>
       <details class="faq-item">
         <summary>How is this different from Notion, HubSpot, or just using ChatGPT?</summary>
         <div class="faq-body">
-          <p><strong>Notion</strong> is a blank canvas — you'd build all this yourself, and it doesn't have an AI that knows your actual business data.</p>
+          <p><strong>Notion</strong> is a blank canvas, so you'd build all this yourself, and it doesn't have an AI that knows your actual business data.</p>
           <p><strong>HubSpot</strong> is enterprise CRM with a steep learning curve, sales-team assumptions, and pricing that doesn't fit a solo practice.</p>
-          <p><strong>ChatGPT</strong> is generic — you have to re-explain your business every time. Chief reads your real contacts, invoices, goals, content, and brand on every turn.</p>
+          <p><strong>ChatGPT</strong> is generic, so you have to re-explain your business every time. Chief reads your real contacts, invoices, goals, content, and brand on every turn.</p>
           <p>Solutionist is purpose-built for solo operators with AI woven through every surface.</p>
           <p>See the full <a href="/compare" style="color:var(--accent);">comparison page</a> for the side-by-side.</p>
         </div>
       </details>
       <details class="faq-item">
         <summary>Does the AI replace my judgment?</summary>
-        <div class="faq-body"><p>No. Chief drafts, suggests, and assists — it never sends without you approving (except for explicit actions you ask it to take, like "send this email" or "publish this post"). It's an instrument, not a replacement.</p></div>
+        <div class="faq-body"><p>No. Chief drafts, suggests, and assists. It never sends without you approving (except for explicit actions you ask it to take, like "send this email" or "publish this post"). It's an instrument, not a replacement.</p></div>
       </details>
       <details class="faq-item">
-        <summary>What about my existing tools — do I have to move everything?</summary>
-        <div class="faq-body"><p>No. Connect what you want (Stripe for payments, Facebook for publishing, Resend for email). The rest stays. Solutionist is opinionated about workflow but not greedy — you can keep Calendly or your existing email tool and Solutionist will work around it.</p></div>
+        <summary>What about my existing tools? Do I have to move everything?</summary>
+        <div class="faq-body"><p>No. Connect what you want (Stripe for payments, Facebook for publishing, Resend for email). The rest stays. Solutionist is opinionated about workflow but not greedy, so you can keep Calendly or your existing email tool and Solutionist will work around it.</p></div>
       </details>
       <details class="faq-item">
         <summary>How secure is my data?</summary>
-        <div class="faq-body"><p>Connected social account tokens and other credentials are stored server-side only — your browser never sees them. We use Supabase for data storage and Railway for hosting. You can disconnect any integration immediately from the app, which deletes the stored token. Full details in the <a href="/privacy" style="color:var(--accent);">Privacy Policy</a>.</p></div>
+        <div class="faq-body"><p>Connected social account tokens and other credentials are stored server-side only, and your browser never sees them. We use Supabase for data storage and Railway for hosting. You can disconnect any integration immediately from the app, which deletes the stored token. Full details in the <a href="/privacy" style="color:var(--accent);">Privacy Policy</a>.</p></div>
       </details>
       <details class="faq-item">
         <summary>Does it work for churches and ministries?</summary>
-        <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry — pastors, ministry leaders, faith-based coaches. The product is single-operator: one person, one workspace. If you need multi-staff role management or church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
+        <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry: pastors, ministry leaders, faith-based coaches. The product is single-operator: one person, one workspace. If you need multi-staff role management or church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
       </details>
       <details class="faq-item">
         <summary>Can the AI publish to my social accounts?</summary>
-        <div class="faq-body"><p>Yes — once you connect your Facebook Page (and linked Instagram Business account). Chief can draft, schedule, and publish directly. You approve each post; nothing goes out without your action. Connect from <strong>Build → Integrations → Social Publishing</strong>.</p></div>
+        <div class="faq-body"><p>Yes, once you connect your Facebook Page (and linked Instagram Business account). Chief can draft, schedule, and publish directly. You approve each post; nothing goes out without your action. Connect from <strong>Build → Integrations → Social Publishing</strong>.</p></div>
       </details>
       <details class="faq-item">
         <summary>When can I sign up?</summary>
-        <div class="faq-body"><p>Now — <a href="/get-started" style="color:var(--accent);">apply for access</a> with a few sentences about your practice. If we're a fit, we'll onboard you within a few days.</p></div>
+        <div class="faq-body"><p>Right now. <a href="/get-started" style="color:var(--accent);">apply for access</a> with a few sentences about your practice. If we're a fit, we'll onboard you within a few days.</p></div>
       </details>
     </div>
     <div style="text-align:center;margin-top:48px;" class="reveal reveal-delay-2">
@@ -2149,7 +2155,7 @@ def render_about() -> str:
       <div class="founder-body">
         <p>I built the Solutionist System because I was tired of running my own business across eight tools that didn't talk to each other.</p>
         <p>Every solo operator I know lives in the same chaos: Notion for notes, Stripe for invoices, Calendly for booking, Buffer for content, a spreadsheet for goals, a CRM nobody actually uses. The friction between tools eats more time than the actual work.</p>
-        <p>So we built one workspace where everything lives together — with an AI Chief of Staff that actually knows your business, not generic prompts. We're growing it carefully in private beta. If you're a coach, pastor, ministry leader, consultant, or solo studio, I'd love to talk.</p>
+        <p>So we built one workspace where everything lives together, with an AI Chief of Staff that actually knows your business, not generic prompts. We're growing it carefully in private beta. If you're a coach, pastor, ministry leader, consultant, or solo studio, I'd love to talk.</p>
         <div class="founder-sig">
           Kevin McCloud Jr.
           <span class="small">Founder &middot; The Solutionist System LLC</span>
@@ -2174,7 +2180,7 @@ def render_about() -> str:
       <div class="principle reveal reveal-delay-1">
         <div class="num">02</div>
         <h3>AI in service of judgment, not instead of it.</h3>
-        <p>Chief drafts, suggests, and assists. You approve. Actions are explicit. No autonomous decisions on your behalf without your sign-off — your business stays your business.</p>
+        <p>Chief drafts, suggests, and assists. You approve. Actions are explicit. No autonomous decisions on your behalf without your sign-off. Your business stays your business.</p>
       </div>
       <div class="principle reveal reveal-delay-2">
         <div class="num">03</div>
@@ -2198,7 +2204,7 @@ def render_about() -> str:
       </div>
       <div class="company-card reveal reveal-delay-1">
         <h3>What we ship</h3>
-        <p>The Solutionist System — one product, no spinouts, no pivots. Built to last for the people who use it.</p>
+        <p>The Solutionist System: one product, no spinouts, no pivots. Built to last for the people who use it.</p>
       </div>
       <div class="company-card reveal">
         <h3>Stack</h3>
@@ -2206,7 +2212,7 @@ def render_about() -> str:
       </div>
       <div class="company-card reveal reveal-delay-1">
         <h3>Contact</h3>
-        <p><a href="mailto:kmjcreativesolution@gmail.com" style="color:var(--accent);">kmjcreativesolution@gmail.com</a> — replies usually within a day.</p>
+        <p><a href="mailto:kmjcreativesolution@gmail.com" style="color:var(--accent);">kmjcreativesolution@gmail.com</a>. Replies usually within a day.</p>
       </div>
     </div>
   </div>
@@ -2215,7 +2221,7 @@ def render_about() -> str:
 <section class="final-cta" style="padding:80px 0;">
   <div class="container">
     <span class="eyebrow reveal">Want to talk?</span>
-    <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Apply for access — or just say hi.</h2>
+    <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Apply for access, or just say hi.</h2>
     <a class="btn-primary reveal reveal-delay-3" href="/get-started" style="margin-top:14px;">Apply for Access →</a>
   </div>
 </section>
@@ -2240,7 +2246,7 @@ def render_download() -> str:
     if PLAY_STORE_URL:
         play_block = f"""<a class="nav-cta" style="display:inline-block;font-size:14px;padding:11px 20px;" href="{_html.escape(PLAY_STORE_URL)}">Get it on Google Play</a>"""
     else:
-        play_block = """<span class="dl-soon">Play Store &mdash; coming soon</span>"""
+        play_block = """<span class="dl-soon">Play Store, coming soon</span>"""
     if ANDROID_APK_URL:
         android_block = f"""
           <a class="nav-cta" style="display:inline-block;font-size:14px;padding:11px 20px;" href="{_html.escape(ANDROID_APK_URL)}">Download the Android app (APK)</a>
@@ -2269,13 +2275,13 @@ def render_download() -> str:
         desktop_block = f"""
           <span class="dl-soon">Coming soon</span>
           <p class="dl-note">The desktop app is in final packaging. Everything it does,
-             the web app does today &mdash; same account, same data, same Chief.</p>"""
+             the web app does today: same account, same data, same Chief.</p>"""
     content = f"""
 <section class="hero" style="padding-top:96px;padding-bottom:40px;text-align:center;">
   <div class="container">
     <h1 class="reveal">Solutionist, wherever you work.</h1>
     <p class="reveal" style="color:var(--text-muted);max-width:560px;margin:18px auto 0;">
-      One account, one system &mdash; phone, tablet, and desktop.
+      One account, one system: phone, tablet, and desktop.
       The web app at <a href="{APP_URL}" style="color:var(--accent);">{APP_URL.replace("https://", "")}</a> works everywhere today.
     </p>
   </div>
@@ -2289,7 +2295,7 @@ def render_download() -> str:
       </div>
       <div class="company-card reveal reveal-delay-1">
         <h3>iPhone &amp; iPad</h3>
-        <p class="dl-note">Installs as an app straight from Safari &mdash; no App Store needed.</p>
+        <p class="dl-note">Installs as an app straight from Safari. No App Store needed.</p>
         <details class="dl-steps" open>
           <summary>Install steps</summary>
           <ol>
@@ -2422,7 +2428,7 @@ def render_get_started() -> str:
         <div class="form-row">
           <label>What do you do?</label>
           <select name="role">
-            <option value="">— pick what fits best —</option>
+            <option value="">Pick what fits best</option>
             <option value="pastor">Pastor</option>
             <option value="ministry_leader">Ministry Leader</option>
             <option value="coach">Coach</option>
@@ -2439,7 +2445,7 @@ def render_get_started() -> str:
         </div>
         <div class="form-row">
           <label>How did you hear about us?</label>
-          <input type="text" name="source" autocomplete="off" placeholder="Optional — Twitter, friend referral, search, etc.">
+          <input type="text" name="source" autocomplete="off" placeholder="Optional: Twitter, friend referral, search, etc.">
         </div>
         <div class="honeypot" aria-hidden>
           <label>Website</label>
@@ -2454,19 +2460,19 @@ def render_get_started() -> str:
         <ul class="next-list">
           <li>
             <span class="num">1</span>
-            <span class="text"><strong>Quick confirmation email</strong> — you'll get a "we got it" email within a minute of submitting.</span>
+            <span class="text"><strong>Quick confirmation email.</strong> You'll get a "we got it" email within a minute of submitting.</span>
           </li>
           <li>
             <span class="num">2</span>
-            <span class="text"><strong>Kevin reaches out within 24 hours</strong> — usually faster. He'll ask a few questions to make sure Solutionist is a fit for your practice.</span>
+            <span class="text"><strong>Kevin reaches out within 24 hours,</strong> usually faster. He'll ask a few questions to make sure Solutionist is a fit for your practice.</span>
           </li>
           <li>
             <span class="num">3</span>
-            <span class="text"><strong>Personal onboarding</strong> — if it's a fit, we set up your account and walk you through it together (~30 min).</span>
+            <span class="text"><strong>Personal onboarding.</strong> If it's a fit, we set up your account and walk you through it together (~30 min).</span>
           </li>
           <li>
             <span class="num">4</span>
-            <span class="text"><strong>You start running your practice from one place</strong> — and grandfather in on whatever pricing we launch publicly.</span>
+            <span class="text"><strong>You start running your practice from one place,</strong> and grandfather in on whatever pricing we launch publicly.</span>
           </li>
         </ul>
       </aside>
@@ -2587,11 +2593,11 @@ async def handle_lead_intake(req: LeadIntakeRequest) -> Dict[str, Any]:
 <h2 style="color:#1D63E6;margin-bottom:14px;">Thanks for applying, {_html.escape(name.split()[0])}.</h2>
 <p style="font-size:15px;color:#333;">We got your application for the Solutionist System private beta. Here's what happens next:</p>
 <ol style="font-size:14px;color:#444;padding-left:20px;margin:18px 0;">
-<li style="margin-bottom:8px;"><strong>Kevin will reach out within 24 hours</strong> — usually faster. He'll ask a few questions to make sure we're a fit for what you're building.</li>
-<li style="margin-bottom:8px;"><strong>If it's a fit, we'll set up personal onboarding</strong> — about 30 minutes, we walk you through the workspace and get you running.</li>
+<li style="margin-bottom:8px;"><strong>Kevin will reach out within 24 hours,</strong> usually faster. He'll ask a few questions to make sure we're a fit for what you're building.</li>
+<li style="margin-bottom:8px;"><strong>If it's a fit, we'll set up personal onboarding:</strong> about 30 minutes, we walk you through the workspace and get you running.</li>
 <li><strong>You'll get grandfathered pricing</strong> when we launch publicly.</li>
 </ol>
-<p style="font-size:14px;color:#666;margin-top:18px;">Questions before then? Just reply to this email — it goes straight to Kevin.</p>
+<p style="font-size:14px;color:#666;margin-top:18px;">Questions before then? Just reply to this email. It goes straight to Kevin.</p>
 <p style="margin-top:24px;font-size:14px;color:#444;">Talk soon,<br><strong>Kevin McCloud Jr.</strong><br>Founder, The Solutionist System LLC</p>
 </body></html>"""
         try:
