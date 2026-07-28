@@ -12612,7 +12612,8 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          time_block: str = "",
                          sentiment: str = "relaxed",
                          habit_block: str = "",
-                         bookkeeping_block: str = "") -> str:
+                         bookkeeping_block: str = "",
+                         learned_block: str = "") -> str:
     # Strategy Coach mode is a different persona entirely.
     if mode == "strategy_coach":
         return _build_coach_prompt(ctx, is_greeting, resume_note=resume_note)
@@ -13375,6 +13376,8 @@ manual):
 {view_block}
 {strategy_block}
 
+{learned_block}
+
 {priorities_block}
 
 {time_block}
@@ -13976,6 +13979,20 @@ async def chief_chat(
             except Exception as e:  # pragma: no cover
                 logger.warning(f"bookkeeping context failed: {e}")
 
+            # Feed 2 (LAYER_TWO_ARCHITECTURE §6) — what OTHER businesses in
+            # this vertical have taught the system, retrieved for what the
+            # practitioner just said. Sync module run off-thread, "" when
+            # there is nothing learned yet. Lands in the DYNAMIC tail, not
+            # the cached region: it changes with every message, so caching
+            # it would break the 3-segment prompt cache.
+            learned_block = ""
+            try:
+                import vertical_context as _vctx
+                learned_block = await asyncio.to_thread(
+                    _vctx.build_vertical_learned_block, biz, req.message or "")
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"vertical learned context failed: {e}")
+
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,
@@ -13991,6 +14008,7 @@ async def chief_chat(
                 sentiment=sentiment,
                 habit_block=habit_block,
                 bookkeeping_block=bookkeeping_block,
+                learned_block=learned_block,
             )
 
             # JIT capture: prepend a directive at the very top of the prompt

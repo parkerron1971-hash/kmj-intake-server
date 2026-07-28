@@ -107,6 +107,65 @@ def build_vertical_context_block(business: Optional[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+# Feed 2's block is capped separately from the block above, which promises
+# <600 chars median / 1500 ceiling. Learned knowledge is additive, so it
+# gets its own budget rather than eating that one.
+LEARNED_BLOCK_MAX_CHARS = 700
+LEARNED_MAX_ITEMS = 5
+
+
+def build_vertical_learned_block(business: Optional[Dict[str, Any]],
+                                 query_text: str) -> str:
+    """Feed 2 — what OTHER businesses in this vertical have taught the
+    system, retrieved for the situation at hand.
+
+    Separate from `build_vertical_context_block` on purpose, and not merged
+    into it, for three reasons: this one does I/O and can be slow, it is
+    situation-dependent where the other is constant per business, and it
+    must be droppable without touching the block that has worked for a
+    year.
+
+    Returns "" — not a placeholder — when there is nothing, so callers can
+    concatenate unconditionally and get exactly today's prompt back if Feed
+    2 is empty, disabled, or broken. Never raises."""
+    try:
+        bt = ((business or {}).get("type") or "").lower().strip()
+        if not bt or not (query_text or "").strip():
+            return ""
+        import vertical_knowledge as vk
+        rows = vk.match(bt, query_text, limit=LEARNED_MAX_ITEMS)
+        if not rows:
+            return ""
+
+        out, used = [], 0
+        for r in rows:
+            content = (r.get("content") or "").strip()
+            if not content:
+                continue
+            # Seeded knowledge is already in the block above; only surface
+            # what was actually LEARNED, or the prompt says it twice.
+            if r.get("source") != "learned":
+                continue
+            if used + len(content) > LEARNED_BLOCK_MAX_CHARS:
+                break
+            out.append(f"- {content}")
+            used += len(content)
+        if not out:
+            return ""
+
+        # The framing matters. These are observed tendencies across a
+        # category, not instructions and not facts about THIS business —
+        # Chief should weigh them, and the business's own data always wins.
+        return ("=== WHAT WORKS FOR BUSINESSES LIKE THIS ===\n"
+                "Patterns observed across other businesses of this type. "
+                "Useful priors, not rules — this business's own history and "
+                "stated preferences always win.\n" + "\n".join(out))
+    except Exception:
+        # Vertical context has worked without Feed 2 for a year. It keeps
+        # working the moment anything here breaks.
+        return ""
+
+
 # Local cache of the keys (avoids importing the whole dict twice).
 VERTICAL_INTELLIGENCE_KEYS = set(list_known_verticals())
 

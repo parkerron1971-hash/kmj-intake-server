@@ -761,6 +761,18 @@ async def startup():
                           "interval", hours=6, id="chief_insights")
     except Exception as e:
         print(f"   [warn] chief insights job not scheduled: {e}")
+    # Feed 2 (LAYER_TWO_ARCHITECTURE §6, 2026-07-27) — the cross-account
+    # distillation job: what businesses in a vertical teach Chief becomes
+    # knowledge the next business in that vertical starts with. Daily, one
+    # vertical per run (spend stays flat as verticals multiply). The
+    # k-anonymity floor and the per-business contribution toggle live
+    # inside vertical_distill. Kill switch: FEED2=off.
+    try:
+        import vertical_distill as _vdistill
+        scheduler.add_job(g("feed2_distill", _vdistill.tick),
+                          "interval", hours=24, id="feed2_distill")
+    except Exception as e:
+        print(f"   [warn] feed2 distillation job not scheduled: {e}")
     # One calendar (2026-07-10) — mirror bookings into sessions so the
     # calendar, Chief's context, and SMS reminders all see them.
     # Kill switch: BOOKING_SESSION_SYNC=off.
