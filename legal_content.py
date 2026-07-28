@@ -28,6 +28,10 @@ CONTACT_EMAIL = "kmjcreativesolution@gmail.com"
 DOMAIN = "mysolutionist.app"
 
 
+# The web app's home — same value marketing_pages.APP_URL uses.
+APP_URL = "https://system.mysolutionist.app"
+
+
 def _address_line() -> str:
     """Postal address line for contact blocks — empty string when no
     public address is configured (renders nothing, no placeholder)."""
@@ -51,22 +55,26 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
 <meta property="og:image" content="https://mysolutionist.app/assets/og.png">
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="apple-touch-icon" href="/favicon.png">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  /* Mirrors the marketing site so legal pages feel like the same product. */
+  /* Mirrors the marketing site so legal pages feel like the same product.
+     KEEP IN SYNC with marketing_pages.SHARED_CSS :root — these four pages
+     are rendered here, not by the marketing shell, so a repalette there
+     does NOT reach them. (It didn't: they sat on the old violet for a
+     full pass.) */
   :root {{
-    --bg: #0a0a0e;
-    --bg-2: #11111a;
-    --surface: rgba(255,255,255,0.04);
-    --border: rgba(255,255,255,0.08);
-    --text-primary: #fafafa;
-    --text-secondary: #d4d4d4;
-    --text-muted: #a1a1a1;
-    --text-dim: #737373;
-    --accent: #7c3aed;
-    --info: #06b6d4;
-    --glow: rgba(124, 58, 237, 0.35);
-    --font-heading: 'Space Grotesk', system-ui, sans-serif;
+    --bg: #08090C;
+    --bg-2: #0E1015;
+    --surface: rgba(255,255,255,0.035);
+    --border: rgba(255,255,255,0.09);
+    --text-primary: #F7F8FA;
+    --text-secondary: #C9CDD6;
+    --text-muted: #949AA6;
+    --text-dim: #6B707B;
+    --accent: #2E7DFF;
+    --info: #22D3EE;
+    --glow: rgba(46, 125, 255, 0.30);
+    --font-heading: 'Inter Tight', 'Inter', system-ui, sans-serif;
     --font-body: 'Inter', system-ui, sans-serif;
   }}
   *{{margin:0;padding:0;box-sizing:border-box;}}
@@ -86,12 +94,22 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
   .nav-links{{display:flex;gap:18px;font-size:13px;font-weight:500;}}
   .nav-links a{{color:var(--text-muted);text-decoration:none;transition:color 0.15s;}}
   .nav-links a:hover{{color:var(--text-primary);}}
+  .nav-links{{align-items:center;}}
+  .nav-login{{padding:7px 15px;border:1px solid rgba(255,255,255,0.17);border-radius:8px;
+    color:var(--text-primary) !important;font-weight:600;transition:border-color .15s, background .15s;}}
+  .nav-login:hover{{border-color:var(--accent);background:var(--surface);}}
+  .nav-cta{{padding:8px 16px;background:var(--accent);color:#fff !important;border-radius:8px;
+    font-weight:700;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 30%, transparent);
+    transition:background .15s;}}
+  .nav-cta:hover{{background:#1D63E6;}}
+  @media (max-width: 760px){{.nav-links{{gap:10px;font-size:12px;}}
+    .nav-links a:not(.nav-cta):not(.nav-login){{display:none;}}}}
   .page{{position:relative;padding:64px 24px 32px;}}
   .page::before{{content:'';position:absolute;inset:-40px 0 auto;height:280px;background:radial-gradient(60% 80% at 50% 0%, var(--glow), transparent 70%);pointer-events:none;opacity:0.6;}}
   .wrap{{max-width:820px;margin:0 auto;position:relative;}}
   .badge{{display:inline-flex;align-items:center;gap:8px;padding:5px 14px;font-size:10px;font-weight:700;letter-spacing:2.4px;text-transform:uppercase;color:var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent);border:1px solid color-mix(in srgb, var(--accent) 28%, transparent);border-radius:99px;margin-bottom:18px;}}
-  h1{{font-family:var(--font-heading);font-size:clamp(32px, 5vw, 48px);font-weight:600;line-height:1.1;letter-spacing:-0.015em;color:var(--text-primary);margin-bottom:8px;}}
-  h2{{font-family:var(--font-heading);font-size:24px;font-weight:600;color:var(--text-primary);margin-top:38px;margin-bottom:14px;line-height:1.2;letter-spacing:-0.01em;}}
+  h1{{font-family:var(--font-heading);font-size:clamp(32px, 5vw, 48px);font-weight:700;line-height:1.06;letter-spacing:-0.03em;color:var(--text-primary);margin-bottom:8px;}}
+  h2{{font-family:var(--font-heading);font-size:24px;font-weight:700;color:var(--text-primary);margin-top:38px;margin-bottom:14px;line-height:1.2;letter-spacing:-0.025em;}}
   h2::before{{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--info));margin-right:10px;vertical-align:middle;transform:translateY(-2px);box-shadow:0 0 8px var(--glow);}}
   h3{{font-family:var(--font-body);font-size:16px;font-weight:600;color:var(--text-primary);margin-top:22px;margin-bottom:6px;}}
   p{{color:var(--text-secondary);margin-bottom:14px;font-size:15px;}}
@@ -135,6 +153,8 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
       <a href="/privacy">Privacy</a>
       <a href="/terms">Terms</a>
       <a href="mailto:{contact_email}">Contact</a>
+      <a class="nav-login" href="{app_url}">Log in</a>
+      <a class="nav-cta" href="/get-started">Get Started</a>
     </div>
   </div>
 </nav>
@@ -171,6 +191,7 @@ def render_page(*, title: str, description: str, content_html: str) -> str:
         contact_email=_html.escape(CONTACT_EMAIL),
         business_name=_html.escape(BUSINESS_NAME),
         year=datetime.date.today().year,
+        app_url=APP_URL,
         content=content_html,
     )
 
@@ -668,7 +689,7 @@ business&rsquo;s keyword to our number.</p>
     See our <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Service</a>.</span>
   </label>
   <button id="sms-submit" type="submit" disabled
-          style="margin-top:16px;padding:12px 26px;border-radius:11px;border:0;cursor:pointer;font-family:inherit;font-size:14px;font-weight:700;color:#fff;background:linear-gradient(100deg,var(--accent),var(--info));opacity:.5;">
+          style="margin-top:16px;padding:12px 26px;border-radius:11px;border:0;cursor:pointer;font-family:inherit;font-size:14px;font-weight:700;color:#fff;background:var(--accent);opacity:.5;">
     Sign up for texts
   </button>
   <div id="sms-msg" style="margin-top:12px;font-size:13px;"></div>
