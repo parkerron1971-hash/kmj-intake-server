@@ -39,6 +39,15 @@ CANONICAL: Dict[str, Dict] = {
     "financial_educator": {"label": "Financial Educator",  "aliases": ["educator"]},
     "fitness_wellness":   {"label": "Fitness / Wellness",  "aliases": ["fitness", "wellness", "trainer"]},
     "service_provider":   {"label": "Service Provider",    "aliases": ["service", "freelance"]},
+    # Private practice mental health. Launched with clinical records OUT OF
+    # SCOPE (vertical_scope.py) — scheduling, billing and admin only, so the
+    # platform never becomes a HIPAA business associate. Not a permanent
+    # limitation; a narrowed launch pending a BAA posture.
+    "therapist":          {"label": "Therapist / Counselor",
+                           "aliases": ["therapy", "therapists", "counselor", "counsellor",
+                                       "counseling", "counselling", "psychotherapist",
+                                       "psychotherapy", "mental_health", "lmft", "lcsw",
+                                       "lpc", "psychologist"]},
     "personal_services":  {"label": "Personal Services",   "aliases": []},
     # Trades. Distinct from service_provider (the deliberate generic
     # baseline) because the work has a shape service_provider does not

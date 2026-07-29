@@ -4516,6 +4516,25 @@ async def handle_ensure_module(client, biz, action) -> Dict:
     if not name:
         return _fail("ensure_module", "module_name required")
 
+    # Vertical scope guard. Therapists launch with clinical records out of
+    # scope, and that ruling is only real if the create path enforces it —
+    # a prompt instruction can be talked past, and a practitioner can type
+    # the module name by hand. Checks the field labels too: a module called
+    # "Sessions" whose fields are diagnosis and treatment plan is as out of
+    # scope as one called "Clinical Notes".
+    try:
+        import vertical_scope
+        schema_preview = action.get("schema") or {}
+        field_labels = " ".join(str(k) for k in schema_preview) \
+            if isinstance(schema_preview, dict) else ""
+        ok, refusal = vertical_scope.check_module_scope(
+            biz.get("type"), name, action.get("description"), field_labels)
+        if not ok:
+            return {"type": "ensure_module", "result": f"refused: {refusal}",
+                    "label": "Out of scope", "nav": None}
+    except Exception as e:
+        logger.warning(f"[scope] ensure_module guard error (allowing): {e}")
+
     existing = await _sb(client, "GET",
         f"/custom_modules?business_id=eq.{biz['id']}&name=eq.{name}&is_active=eq.true&limit=1&select=id,name")
     if existing:
@@ -10136,6 +10155,32 @@ async def handle_accept_module_spec(client, biz, action):
         import module_spec_generator as msg
     except Exception as e:
         return _fail("accept_module_spec", f"generator unavailable: {e}")
+
+    # Scope guard on the OTHER create path. ensure_module is the hand-typed
+    # route; this is the one where an LLM-authored spec gets materialized,
+    # and it is the likelier of the two to drift into clinical territory
+    # because nobody typed the name.
+    try:
+        import vertical_scope
+        rows = await _aio.to_thread(
+            sb_clients.sb_get_as_service,
+            f"/module_specs?id=eq.{spec_id}&business_id=eq.{biz['id']}"
+            "&select=draft_json&limit=1") or []
+        draft = (rows[0].get("draft_json") or {}) if rows else {}
+        fields = draft.get("fields") or []
+        labels = " ".join(
+            str(f.get("label") or f.get("name") or "")
+            for f in fields if isinstance(f, dict))
+        ok, refusal = vertical_scope.check_module_scope(
+            biz.get("type"), draft.get("name"), draft.get("slug"),
+            draft.get("description"), labels)
+        if not ok:
+            return {"type": "accept_module_spec",
+                    "result": f"refused: {refusal}",
+                    "label": "Out of scope", "nav": None}
+    except Exception as e:
+        logger.warning(f"[scope] accept_module_spec guard error (allowing): {e}")
+
     res = await _aio.to_thread(msg.materialize_spec, spec_id)
     if not res.get("ok"):
         return _fail("accept_module_spec", res.get("error", "materialize failed"))

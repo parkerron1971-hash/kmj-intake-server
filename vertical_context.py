@@ -104,6 +104,24 @@ def build_vertical_context_block(business: Optional[Dict[str, Any]]) -> str:
             lines.append("Typical invoice lines for this vertical: " + " · ".join(parts))
 
     lines.append("Apply this voice in every practitioner-facing reply.")
+
+    # Out-of-scope block, when the vertical has one. Appended LAST so it is
+    # the final instruction Chief reads about this business, and so it cannot
+    # be softened by anything above it.
+    #
+    # This is belt-and-braces, not the enforcement: vertical_scope guards the
+    # module-create paths themselves. What this prevents is Chief cheerfully
+    # OFFERING to build something it will then be refused, which reads as a
+    # broken product rather than a deliberate boundary.
+    try:
+        import vertical_scope
+        scope_block = vertical_scope.prompt_block(business_type)
+        if scope_block:
+            lines.append("")
+            lines.append(scope_block)
+    except Exception:
+        pass
+
     return "\n".join(lines)
 
 
@@ -212,6 +230,12 @@ def _vertical_specific_reminders(bt: str, profile: Dict[str, Any]) -> list:
     if bt == "personal_services":
         return [
             "Plain talk about price + time",
+        ]
+    if bt == "therapist":
+        return [
+            "Clinical records are OUT OF SCOPE — scheduling, billing, admin only",
+            "Never summarise or store session content",
+            "Confirmations may be read by someone other than the client",
         ]
     if bt == "contractor":
         return [

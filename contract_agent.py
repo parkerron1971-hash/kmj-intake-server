@@ -126,6 +126,10 @@ PROPOSAL_FRAMING: Dict[str, str] = {
     "contractor":         "a WORK AGREEMENT / job bid — scope of work, materials "
                           "and labor broken out, deposit, payment schedule, and "
                           "how change orders are handled and priced",
+    "therapist":          "a PRACTICE AGREEMENT / informed-consent and policies "
+                          "document — fees, session length, cancellation window "
+                          "and fee, contact between sessions, and the limits of "
+                          "confidentiality. NOT a treatment plan and NOT clinical",
     "service_provider":   "a service agreement with scope, schedule, and pricing",
     "personal_services":  "a service agreement covering the services booked, "
                           "pricing, and cancellation terms",
@@ -161,6 +165,13 @@ PROPOSAL_GUIDANCE: Dict[str, str] = {
                           "balance stated as amounts and dates. Say explicitly "
                           "what is NOT included, and that changes to the scope "
                           "are priced as a change order before the work is done.",
+    "therapist":          "Plain, calm, and administrative. Fees, session "
+                          "length, cancellation window and fee, how to reach "
+                          "you between sessions, and the limits of "
+                          "confidentiality stated factually. Say nothing "
+                          "clinical: no diagnosis, no treatment approach, no "
+                          "predicted outcome. This is a business agreement, "
+                          "not a clinical document.",
     "service_provider":   "Plain talk about scope, schedule, and price.",
     "personal_services":  "Plain talk about price, time, and cancellation. Short "
                           "and transactional — this is not a legal brief.",

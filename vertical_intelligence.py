@@ -671,6 +671,75 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
              "headline": "Log estimates so you can see what you bid, what you won, and at what price."},
         ],
     }),
+    "therapist": VerticalProfile({
+        "voice": {
+            "register": "careful, sparse, non-clinical",
+            "formality": "professional and quiet",
+            "hallmarks": [
+                "uses 'Client' and 'Session'",
+                "says less rather than more about any individual",
+                "treats the cancellation policy as a boundary, not a preference",
+                "keeps to scheduling, billing and admin",
+            ],
+            "taboo": [
+                "clinical language — diagnosis, symptoms, treatment",
+                "speculating about a client's state",
+                "summarising session content",
+                "therapeutic warmth — this is an admin tool",
+            ],
+        },
+        "onboarding_questions": [
+            {"id": "license_type", "prompt": "What license do you practise under?", "kind": "select",
+             "options": ["lcsw", "lmft", "lpc", "psychologist", "psychiatrist", "other"]},
+            {"id": "practice_model", "prompt": "Private pay, insurance, or both?", "kind": "select",
+             "options": ["private_pay", "insurance", "both", "sliding_scale"]},
+            {"id": "session_cadence", "prompt": "Typical session cadence?", "kind": "select",
+             "options": ["weekly", "biweekly", "monthly", "varies"]},
+            {"id": "cancellation_policy", "prompt": "What is your cancellation window and fee?", "kind": "text"},
+            # Deliberately NOT asked: anything about presenting concerns,
+            # modality specifics, or client population. The system does not
+            # need it and should not hold it.
+        ],
+        "offering_suggestions": [
+            {"name": "Initial Consultation", "price": 0, "duration_min": 15,
+             "description": "Brief no-charge call to check fit before scheduling."},
+            {"name": "Individual Session", "price": 150, "duration_min": 50,
+             "description": "Standard 50-minute session."},
+            {"name": "Extended Session", "price": 220, "duration_min": 80,
+             "description": "Longer session where the work calls for it."},
+        ],
+        "invoice_line_templates": [
+            {"description": "Individual session (50 min)", "kind": "flat"},
+            {"description": "Extended session (80 min)", "kind": "flat"},
+            {"description": "Late cancellation fee", "kind": "flat",
+             "hint": "Per your stated cancellation window."},
+            {"description": "Superbill — client submits to insurer", "kind": "flat",
+             "hint": "A receipt for the client to file. The platform does not "
+                     "bill insurers."},
+        ],
+        "email_voice": {
+            "booking_confirmation": {
+                "tone_note": "Short, plain and warm-neutral. Confirm the time and "
+                             "the cancellation window. Say NOTHING about the "
+                             "content or purpose of the session — a confirmation "
+                             "email is often read by someone other than the client.",
+            },
+        },
+        "empty_state_nudges": {
+            "bookings": "No sessions scheduled. Set your weekly availability and cancellation window first.",
+            "customers": "No clients yet. They'll appear here once you schedule or invoice.",
+            "invoices": "No invoices yet. Set your session rate and whether you issue superbills.",
+            "offerings": "No session types yet. Common: a brief consult, a standard 50-minute session, and an extended one.",
+        },
+        "module_suggestions": [
+            # Scheduling and billing only, by design. Nothing here proposes a
+            # clinical record, and vertical_scope refuses one if asked.
+            {"slug": "sessions", "archetype": "booking_calendar",
+             "headline": "Set up a Session calendar with your cancellation window built in."},
+            {"slug": "superbills", "archetype": "fallback_generic",
+             "headline": "Track superbills issued so clients can file with their insurer."},
+        ],
+    }),
     "service_provider": GENERIC,
     "custom": GENERIC,
 }
