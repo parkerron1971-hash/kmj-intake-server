@@ -12678,7 +12678,8 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          sentiment: str = "relaxed",
                          habit_block: str = "",
                          bookkeeping_block: str = "",
-                         learned_block: str = "") -> str:
+                         learned_block: str = "",
+                         growth_block: str = "") -> str:
     # Strategy Coach mode is a different persona entirely.
     if mode == "strategy_coach":
         return _build_coach_prompt(ctx, is_greeting, resume_note=resume_note)
@@ -13455,6 +13456,8 @@ manual):
 
 {session_context}
 
+{growth_block}
+
 {sentiment_block}
 
 {whatif_block}
@@ -14058,6 +14061,27 @@ async def chief_chat(
             except Exception as e:  # pragma: no cover
                 logger.warning(f"vertical learned context failed: {e}")
 
+            # THE GROWTH DOCTRINE — marketing law, loaded only on turns
+            # that are actually about growth (or when the practitioner is
+            # standing in a marketing room). Pure, synchronous, no I/O:
+            # the whole cost is a substring scan. Gated rather than
+            # always-on for the 2026-07-16 reason — an ungated per-turn
+            # injector ends up inside personas that should never see it —
+            # and because ~700 tokens on every bookkeeping question is
+            # rent nobody is paying for.
+            growth_block = ""
+            try:
+                import growth_doctrine as _growth
+                _view = req.current_context
+                growth_block = _growth.context_block(
+                    req.message or "",
+                    mode=req.mode,
+                    tab=(_view.tab if _view else None),
+                    sub_tab=(_view.sub_tab if _view else None),
+                )
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"growth doctrine block failed: {e}")
+
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,
@@ -14074,6 +14098,7 @@ async def chief_chat(
                 habit_block=habit_block,
                 bookkeeping_block=bookkeeping_block,
                 learned_block=learned_block,
+                growth_block=growth_block,
             )
 
             # JIT capture: prepend a directive at the very top of the prompt
