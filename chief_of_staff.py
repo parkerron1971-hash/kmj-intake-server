@@ -97,6 +97,12 @@ from chief_time_actions import (
     handle_unbilled_time,
     handle_write_off_time,
 )
+# Contribution statements. Both verbs are SENSITIVE in the registry —
+# giving history never reaches an agent surface.
+from chief_giving_actions import (
+    handle_giving_statement,
+    handle_giving_statements_run,
+)
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -10459,6 +10465,8 @@ ACTION_HANDLERS = {
     "bill_time_to_retainer":           handle_bill_time_to_retainer,
     "unbilled_time":                   handle_unbilled_time,
     "write_off_time":                  handle_write_off_time,
+    "giving_statement":                handle_giving_statement,
+    "giving_statements_run":           handle_giving_statements_run,
     "set_availability_day":       handle_set_availability_day,
     "set_availability_override":  handle_set_availability_override,
     "add_block_range":            handle_add_block_range,
