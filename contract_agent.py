@@ -99,6 +99,99 @@ async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str, ma
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# VERTICAL FRAMING
+# ═══════════════════════════════════════════════════════════════════════
+
+# What KIND of document each vertical's "contract" actually is. A church does
+# not sign a scope of work and a law firm does not sign a program outline, so
+# this decides the shape before the model writes a word.
+#
+# Keys are canonical vertical_registry keys. GENERIC covers 'custom' and any
+# type that predates the registry.
+_GENERIC_FRAMING = "a professional engagement proposal"
+
+PROPOSAL_FRAMING: Dict[str, str] = {
+    "coach":              "a coaching program outline with session structure, "
+                          "package terms, and the outcomes the client is working toward",
+    "consultant":         "a scope of work with deliverables, milestones, timeline, "
+                          "and the terms of the engagement",
+    "creative":           "a creative services proposal with project scope, "
+                          "revision rounds, deliverables, and timeline",
+    "course_creator":     "a program enrollment agreement covering curriculum, "
+                          "cohort dates, access terms, and what the student receives",
+    "financial_educator": "an educational program agreement — explicitly education, "
+                          "NOT personalized financial advice",
+    "fitness_wellness":   "a training or wellness program agreement with session "
+                          "structure, and no clinical or medical claims",
+    "service_provider":   "a service agreement with scope, schedule, and pricing",
+    "personal_services":  "a service agreement covering the services booked, "
+                          "pricing, and cancellation terms",
+    "lawyer":             "an ENGAGEMENT LETTER — scope of representation, fee "
+                          "structure, retainer and trust-account terms, and the "
+                          "limits of the engagement. Never predict an outcome",
+    "ministry":           "a partnership proposal for ministry engagement — "
+                          "covenant language, shared mission, and how the "
+                          "partnership serves the congregation",
+    "nonprofit":          "a program partnership proposal with mission alignment, "
+                          "impact metrics, and reporting commitments",
+    "custom":             _GENERIC_FRAMING,
+}
+
+# Per-vertical drafting guidance injected alongside the framing. Replaces the
+# old hardcoded prose list, which named legacy types the system no longer
+# stamps ('Church', 'Coaching', 'Freelance') and silently omitted lawyers.
+PROPOSAL_GUIDANCE: Dict[str, str] = {
+    "coach":              "Transformation journey, session cadence, accountability. "
+                          "Outcome-focused without promising specific results.",
+    "consultant":         "Scope, deliverables, milestones, ROI. Crisp and "
+                          "executive — no filler.",
+    "creative":           "Creative vision, project milestones, revision rounds, "
+                          "collaboration style.",
+    "course_creator":     "Curriculum is the product. Be concrete about what is "
+                          "taught, in what order, and over what period.",
+    "financial_educator": "Education, not personalized financial advice. Say so "
+                          "plainly in the document.",
+    "fitness_wellness":   "Program structure and progression. No clinical claims, "
+                          "no diagnosis, no treatment language.",
+    "service_provider":   "Plain talk about scope, schedule, and price.",
+    "personal_services":  "Plain talk about price, time, and cancellation. Short "
+                          "and transactional — this is not a legal brief.",
+    "lawyer":             "Formal. Scope of representation and its LIMITS, fee "
+                          "structure, retainer handling. Trust funds stay separate "
+                          "from operating funds. Never speculate on outcomes and "
+                          "never state a legal conclusion.",
+    "ministry":           "Partnership language, ministry impact, spiritual "
+                          "alignment. Pastoral, never salesy.",
+    "nonprofit":          "Mission alignment, community impact, collaboration, "
+                          "and how impact will be reported.",
+    "custom":             "Professional and clear. Scope, terms, next steps.",
+}
+
+
+def _canonical_type(business_type: Optional[str]) -> str:
+    """Canonical vertical key for a raw businesses.type value.
+
+    Falls back to 'custom' when vertical_registry is unavailable rather than
+    raising — a contract that drafts with generic framing is a worse document,
+    but a contract that fails to draft at all is a broken feature.
+    """
+    try:
+        import vertical_registry
+        return vertical_registry.resolve(business_type)
+    except Exception:
+        return "custom"
+
+
+def _proposal_framing(business_type: Optional[str]) -> str:
+    return PROPOSAL_FRAMING.get(_canonical_type(business_type), _GENERIC_FRAMING)
+
+
+def _proposal_guidance(business_type: Optional[str]) -> str:
+    return PROPOSAL_GUIDANCE.get(_canonical_type(business_type),
+                                 PROPOSAL_GUIDANCE["custom"])
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # CORE LOGIC
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -153,28 +246,28 @@ async def _draft_proposal(
     submission = metadata.get("submission", {})
     submission_text = "\n".join(f"- {k}: {v}" for k, v in submission.items() if v) if submission else "No intake data"
 
-    # Business-type-specific framing
-    type_framing = {
-        "church": "a partnership proposal for ministry engagement",
-        "coaching": "a coaching program outline with session details and expected outcomes",
-        "agency": "a professional scope of work with deliverables and timeline",
-        "nonprofit": "a program partnership proposal with impact metrics",
-        "ecommerce": "a creative services proposal with project scope",
-        "general": "a professional engagement proposal",
-    }
-    proposal_type = type_framing.get(biz_type, type_framing["general"])
+    # Business-type-specific framing.
+    #
+    # Keyed on CANONICAL vertical keys (vertical_registry.CANONICAL), never on
+    # raw businesses.type. The two are not the same string: intake stamps the
+    # canonical value ('ministry', 'coach', 'creative') while this map was
+    # historically keyed on the legacy aliases ('church', 'coaching', 'agency').
+    # Every canonical vertical fell through to the generic framing as a result,
+    # and lawyer/consultant had no entry at all — the exact two verticals whose
+    # archetypes are built around engagement letters. resolve() collapses the
+    # alias table so both spellings land on the same framing.
+    #
+    # test_contract_vertical_framing.py asserts this map covers every canonical
+    # key, so a new vertical cannot be added without a framing decision.
+    proposal_type = _proposal_framing(biz_type)
 
     system_prompt = f"""You are the Contract Agent for {biz_name}. Draft {proposal_type} from {practitioner} to {name}.
 
 Voice profile: tone is "{tone}", personality is "{personality}", audience is "{audience}", style is "{', '.join(comm_style) if comm_style else tone}".
 {_voice_directive}
 
-This is a {biz_type} business. Adapt completely:
-- Church: partnership language, ministry impact, spiritual alignment
-- Coaching: transformation journey, session structure, accountability
-- Consulting: scope, deliverables, timeline, ROI
-- Nonprofit: mission alignment, community impact, collaboration
-- Freelance: creative vision, project milestones, collaboration style
+This is a {_canonical_type(biz_type)} business. Adapt completely:
+{_proposal_guidance(biz_type)}
 
 The proposal should include:
 1. A personalized opening referencing their specific situation and needs
@@ -250,7 +343,14 @@ Draft the proposal."""
         "business_id": biz_id,
         "contact_id": contact_id,
         "event_type": "contract_draft_created",
-        "data": {"lead_score": lead_score, "proposal_type": biz_type},
+        # proposal_type has always recorded the raw businesses.type here; kept
+        # as-is for any existing consumer, with the canonical key alongside it
+        # so downstream reads can group by vertical without re-resolving.
+        "data": {
+            "lead_score": lead_score,
+            "proposal_type": biz_type,
+            "business_type": _canonical_type(biz_type),
+        },
         "source": "contract_agent",
     })
 
