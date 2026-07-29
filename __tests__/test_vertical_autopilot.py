@@ -21,9 +21,20 @@ import vertical_registry
 # ── coverage: no vertical ships with nothing ─────────────────────────
 
 def test_every_canonical_vertical_has_a_default_job():
+    """Asserts on DEFAULT_AUTOPILOT membership, NOT on defaults_for().
+
+    defaults_for() falls back to the 'custom' briefing for anything it does
+    not recognise, which is right at runtime — a vertical with no autopilot
+    is worse than a generic one. But it also means defaults_for() can never
+    return empty, so writing this test against it made it unfailable: adding
+    'contractor' to the registry did not trip it, which is exactly the bug
+    it was supposed to catch.
+    """
     missing = [k for k in vertical_registry.canonical_keys()
-               if not va.defaults_for(k)]
-    assert not missing, f"verticals with no default autopilot: {missing}"
+               if k not in va.DEFAULT_AUTOPILOT]
+    assert not missing, (
+        f"verticals with no default autopilot of their own: {missing}. "
+        "They would silently inherit the generic weekly briefing.")
 
 
 def test_barber_gets_the_rebooking_cadence():

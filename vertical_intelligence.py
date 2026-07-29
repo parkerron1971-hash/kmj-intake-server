@@ -605,6 +605,72 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
              "headline": "Start with a Booking Calendar so guests can schedule their visit."},
         ],
     }),
+    "contractor": VerticalProfile({
+        "voice": {
+            "register": "practical, dispatch-minded, straight about cost",
+            "formality": "plain",
+            "hallmarks": [
+                "uses 'Customer' and 'Job' — never 'Client' or 'Engagement'",
+                "quotes before work starts, never after",
+                "separates materials from labor",
+                "treats a change order as a new agreement, not a favor",
+            ],
+            "taboo": [
+                "vague pricing ('we'll see what it runs')",
+                "committing to a date without a window",
+                "advice that needs a license the practitioner may not hold",
+            ],
+        },
+        "onboarding_questions": [
+            {"id": "trades", "prompt": "What trades or work do you take on?", "kind": "text"},
+            {"id": "crew_size", "prompt": "Do you work solo or run a crew?", "kind": "select",
+             "options": ["solo", "small_crew", "multiple_crews"]},
+            {"id": "pricing_model", "prompt": "How do you price a job?", "kind": "multiselect",
+             "options": ["hourly", "flat_bid", "time_and_materials", "cost_plus"]},
+            {"id": "deposit_policy", "prompt": "Do you take a deposit before starting?", "kind": "boolean"},
+            {"id": "emergency_calls", "prompt": "Do you take emergency or after-hours calls?", "kind": "boolean"},
+            {"id": "licensed_trades", "prompt": "Which of your trades require a license or permit?", "kind": "text"},
+        ],
+        "offering_suggestions": [
+            {"name": "Estimate Visit", "price": 0, "duration_min": 45,
+             "description": "On-site look at the work before quoting. Free or credited toward the job."},
+            {"name": "Service Call", "price": 150, "duration_min": 60,
+             "description": "Standard call-out — diagnose and fix small work in one visit."},
+            {"name": "Emergency Call-Out", "price": 300, "duration_min": 90,
+             "description": "After-hours or same-day response at a premium rate."},
+            {"name": "Project Bid", "price": 0, "duration_min": 0,
+             "description": "Quoted per job. Deposit up front, progress billing, balance on completion."},
+        ],
+        "invoice_line_templates": [
+            {"description": "Labor", "kind": "hourly", "hint": "rate × hours, per worker"},
+            {"description": "Materials", "kind": "flat", "hint": "Itemize or attach the supplier receipt."},
+            {"description": "Deposit received", "kind": "flat", "hint": "Credit against the job total."},
+            {"description": "Change order", "kind": "flat", "hint": "Work added after the original bid was accepted."},
+            {"description": "Permit / inspection fee", "kind": "flat"},
+            {"description": "Trip / call-out charge", "kind": "flat"},
+        ],
+        "email_voice": {
+            "booking_confirmation": {
+                "tone_note": "Short and practical. Confirm the DATE AND ARRIVAL WINDOW, not a "
+                             "precise time. Say what the customer needs to do first — clear "
+                             "access, move vehicles, pets away, someone over 18 on site.",
+            },
+        },
+        "empty_state_nudges": {
+            "bookings": "No visits scheduled. Set your arrival windows so customers can book a slot that works.",
+            "customers": "No customers yet. They'll appear here after their first estimate or call-out.",
+            "invoices": "No invoices yet. Most trades bill a deposit first, then the balance on completion.",
+            "offerings": "No services yet. Common: an estimate visit, a standard service call, and an emergency rate.",
+        },
+        "module_suggestions": [
+            {"slug": "jobs", "archetype": "fallback_generic",
+             "headline": "Track jobs from estimate through completion — site address, scope, and status."},
+            {"slug": "visits", "archetype": "booking_calendar",
+             "headline": "Set up a Visit calendar with arrival windows instead of exact times."},
+            {"slug": "estimates", "archetype": "fallback_generic",
+             "headline": "Log estimates so you can see what you bid, what you won, and at what price."},
+        ],
+    }),
     "service_provider": GENERIC,
     "custom": GENERIC,
 }

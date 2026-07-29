@@ -159,6 +159,14 @@ DEFAULT_AUTOPILOT: Dict[str, List[Dict[str, Any]]] = {
              "Drafts check-ins for clients who have missed sessions."),
     ],
 
+    # An estimate that never gets followed up is the trade's classic leak:
+    # the work was quoted, the customer went quiet, and nobody called back.
+    "contractor": [
+        _job("estimate_followup", "Estimate follow-ups", "nurture", "weekly", 12,
+             "Drafts a follow-up for customers who got a quote and haven't "
+             "answered. A bid with no follow-up is a job given away."),
+    ],
+
     # The two deliberately-generic verticals still get the briefing — a
     # generic voice is not a reason to ship no autopilot at all.
     "service_provider": [
