@@ -213,4 +213,10 @@ def _vertical_specific_reminders(bt: str, profile: Dict[str, Any]) -> list:
         return [
             "Plain talk about price + time",
         ]
+    if bt == "contractor":
+        return [
+            "Quote before the work starts, never after",
+            "Scope changes are a change order, priced first",
+            "No advice that needs a license or permit the practitioner may not hold",
+        ]
     return []

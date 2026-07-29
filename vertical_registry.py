@@ -40,6 +40,19 @@ CANONICAL: Dict[str, Dict] = {
     "fitness_wellness":   {"label": "Fitness / Wellness",  "aliases": ["fitness", "wellness", "trainer"]},
     "service_provider":   {"label": "Service Provider",    "aliases": ["service", "freelance"]},
     "personal_services":  {"label": "Personal Services",   "aliases": []},
+    # Trades. Distinct from service_provider (the deliberate generic
+    # baseline) because the work has a shape service_provider does not
+    # model: a JOB at a site, quoted before it starts, with materials and
+    # labor billed separately and a deposit taken up front. Aliases cover
+    # the trades that self-describe by craft rather than by "contractor".
+    "contractor":         {"label": "Contractor / Trades",
+                           "aliases": ["contracting", "general_contractor", "trades",
+                                       "tradesman", "handyman", "builder", "remodeler",
+                                       "plumber", "plumbing", "electrician", "electrical",
+                                       "hvac", "roofer", "roofing", "landscaper",
+                                       "landscaping", "painter", "painting",
+                                       "carpenter", "carpentry", "flooring",
+                                       "construction"]},
     "lawyer":             {"label": "Lawyer / Law Firm",
                            "aliases": ["law", "law_firm", "law_practice", "lawyers",
                                        "attorney", "attorneys", "legal", "legal_services"]},

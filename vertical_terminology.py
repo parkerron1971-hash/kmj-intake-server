@@ -223,6 +223,30 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         # says "appointment" and "booking"; overriding them would be change
         # for its own sake.
     },
+    "contractor": {
+        # Trades — plumbing, electrical, HVAC, roofing, remodel, landscape.
+        #
+        # 'customer' deliberately stays BASE. This is the one vertical where
+        # the generic noun is already the right one: a contractor says
+        # Customer, not Client and not Guest. Overriding it would be change
+        # for its own sake.
+        #
+        # What DOES need its own word is the unit of work. A contractor does
+        # not book a "service" or run an "engagement" — they run a JOB, at a
+        # site, with a start and an end.
+        "service":      "Job",
+        "services":     "Jobs",
+        # The price list they quote from is still Services — that is the
+        # menu, distinct from the Job that gets scheduled off it.
+        "offering":     "Service",
+        "offerings":    "Services",
+        # Dispatch language. Nobody in the trades has an "appointment" —
+        # they have a visit, a call-out, or a window.
+        "appointment":  "Visit",
+        "appointments": "Visits",
+        "booking":      "Visit",
+        "bookings":     "Visits",
+    },
     "service_provider": {
         # Intentionally generic baseline.
     },

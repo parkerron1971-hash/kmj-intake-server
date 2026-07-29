@@ -123,6 +123,9 @@ PROPOSAL_FRAMING: Dict[str, str] = {
                           "NOT personalized financial advice",
     "fitness_wellness":   "a training or wellness program agreement with session "
                           "structure, and no clinical or medical claims",
+    "contractor":         "a WORK AGREEMENT / job bid — scope of work, materials "
+                          "and labor broken out, deposit, payment schedule, and "
+                          "how change orders are handled and priced",
     "service_provider":   "a service agreement with scope, schedule, and pricing",
     "personal_services":  "a service agreement covering the services booked, "
                           "pricing, and cancellation terms",
@@ -153,6 +156,11 @@ PROPOSAL_GUIDANCE: Dict[str, str] = {
                           "plainly in the document.",
     "fitness_wellness":   "Program structure and progression. No clinical claims, "
                           "no diagnosis, no treatment language.",
+    "contractor":         "Scope of work in plain terms. Materials and labor "
+                          "separated. Deposit, progress payments, and final "
+                          "balance stated as amounts and dates. Say explicitly "
+                          "what is NOT included, and that changes to the scope "
+                          "are priced as a change order before the work is done.",
     "service_provider":   "Plain talk about scope, schedule, and price.",
     "personal_services":  "Plain talk about price, time, and cancellation. Short "
                           "and transactional — this is not a legal brief.",
