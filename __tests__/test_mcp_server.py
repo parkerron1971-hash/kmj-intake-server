@@ -94,15 +94,16 @@ def test_the_exposed_read_verbs_and_nothing_else():
     number is the tripwire: add a read verb and this fails, forcing a
     deliberate call about whether an outside agent should see it.
 
-    It has already earned its keep twice — `check_balance` (17) and
-    `unbilled_time` (18) each tripped it, and each got a deliberate yes:
-    contact_deep_dive already exposes a superset of the first, and
-    show_revenue already ships business financials like the second.
+    It has already earned its keep three times — `check_balance` (17),
+    `unbilled_time` (18) and `what_undo` (19) each tripped it, and each got a
+    deliberate yes. It has also produced a deliberate NO: the giving-statement
+    reads are marked `sensitive` in action_registry and never reach here at
+    all, which is the mechanism to reach for when the answer is no.
 
     Bump this ONLY together with a TOOL_SCHEMAS entry and a reason.
     """
     tools = mcp.exposed_tools()
-    assert len(tools) == 18, (
+    assert len(tools) == 19, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
