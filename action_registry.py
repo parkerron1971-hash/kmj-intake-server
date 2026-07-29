@@ -88,8 +88,22 @@ EFFECTS = (READ, UI, WRITE)
 REVERSIBILITY_CLASSES = ("A", "B", "C")
 
 
-def _r(why: str) -> Dict[str, str]:
-    return {"effect": READ, "why": why}
+def _r(why: str, sensitive: bool = False) -> Dict[str, Any]:
+    """A read. `sensitive=True` marks one that must NOT leave the app even
+    though it changes nothing.
+
+    Until this existed, `read` and `safe to hand an outside agent` were the
+    same bit, and exposure was derived from effect alone. Donor giving
+    records are where those two come apart: a church's giving history is
+    among the most confidential data it holds — many churches restrict it
+    from their own staff — and it is unambiguously a read.
+
+    'Cannot break anything' and 'may be read by a third party' are different
+    questions. This is the second one."""
+    entry: Dict[str, Any] = {"effect": READ, "why": why}
+    if sensitive:
+        entry["sensitive"] = True
+    return entry
 
 
 def _ui(why: str) -> Dict[str, str]:
@@ -131,6 +145,16 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                               "prepaid and not yet consumed"),
     "unbilled_time":       _r("totals unbilled time_entries — hours worked and not yet "
                               "charged, for one client or the whole firm"),
+    # SENSITIVE. Reads, and they change nothing — but a congregation's giving
+    # history is among the most confidential data a church holds. Many
+    # churches deliberately keep it from their own staff, and Chief's own
+    # ministry reminder is that "giving is access-isolated, not
+    # transactional". It does not go on an agent surface.
+    "giving_statement":    _r("one donor's annual contribution statement (IRS Pub 1771 "
+                              "shape). Computes from paid gifts; persists nothing",
+                              sensitive=True),
+    "giving_statements_run": _r("every donor's giving totals for a tax year — the January "
+                                "mailing list. Read-only", sensitive=True),
 
     # ── UI directives ────────────────────────────────────────────────
     # Verified: pass-throughs the frontend acts on. No persistence.
@@ -415,6 +439,16 @@ def is_read_only(verb: str) -> bool:
     return effect(verb) == READ
 
 
+def is_sensitive(verb: str) -> bool:
+    """Confidential enough that it never leaves the app, whatever its
+    effect. Unknown verbs answer True — the refusing answer, consistent
+    with every other accessor here."""
+    entry = REGISTRY.get(verb)
+    if not entry:
+        return True
+    return bool(entry.get("sensitive"))
+
+
 def may_expose_to_agent(verb: str, allow_writes: bool = False) -> bool:
     """May an outside agent call this verb?
 
@@ -422,7 +456,14 @@ def may_expose_to_agent(verb: str, allow_writes: bool = False) -> bool:
     UI verbs are never exposed — an off-app caller has no UI to drive, so
     exposing them would be noise at best. With `allow_writes=True` a
     granted-scope surface may additionally reach class A and B writes;
-    class C never qualifies, and neither does anything unclassified."""
+    class C never qualifies, and neither does anything unclassified.
+
+    A verb marked `sensitive` is refused regardless. Read-ness answers
+    "can this break anything"; sensitivity answers "may a third party see
+    it". Those are different questions and donor giving records are where
+    they diverge."""
+    if is_sensitive(verb):
+        return False
     kind = effect(verb)
     if kind == READ:
         return True

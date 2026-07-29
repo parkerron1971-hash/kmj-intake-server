@@ -128,8 +128,18 @@ def test_ui_verbs_are_never_exposed():
 
 
 def test_reads_are_exposable_and_writes_are_not_by_default():
-    """The open-on-read / closed-on-write rule, asserted rather than trusted."""
-    reads = [v for v in reg.REGISTRY if reg.effect(v) == reg.READ]
+    """The open-on-read / closed-on-write rule, asserted rather than trusted.
+
+    Reads marked `sensitive` are the ONE exception and are excluded here.
+    Read-ness answers "can this break anything"; sensitivity answers "may a
+    third party see it". Those came apart the moment giving statements
+    landed — a congregation's giving history is unambiguously a read and
+    unambiguously must not leave the app. test_sensitive_reads_are_never_
+    exposable below is the other half of this rule, so the exclusion cannot
+    become a hole.
+    """
+    reads = [v for v in reg.REGISTRY
+             if reg.effect(v) == reg.READ and not reg.is_sensitive(v)]
     writes = [v for v in reg.REGISTRY if reg.effect(v) == reg.WRITE]
     assert reads and writes, "expected both reads and writes in the registry"
     for verb in reads:
@@ -137,6 +147,17 @@ def test_reads_are_exposable_and_writes_are_not_by_default():
     for verb in writes:
         assert not reg.may_expose_to_agent(verb), (
             f"{verb}: writes must not be exposable on the default read-only surface")
+
+
+def test_sensitive_reads_are_never_exposable():
+    """The exclusion above is only safe because this holds."""
+    sensitive = [v for v in reg.REGISTRY
+                 if reg.effect(v) == reg.READ and reg.is_sensitive(v)]
+    assert sensitive, "expected at least one sensitive read (giving statements)"
+    for verb in sensitive:
+        assert not reg.may_expose_to_agent(verb), (
+            f"{verb}: marked sensitive but still reachable by an outside agent")
+        assert not reg.may_expose_to_agent(verb, allow_writes=True)
 
 
 def test_class_b_needs_a_granted_scope():
