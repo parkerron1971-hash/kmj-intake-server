@@ -203,7 +203,25 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "restricted_fund":  "Designated fund",
     },
     "personal_services": {
-        # Closest-to-generic vertical (barbers, salons). Keep BASE as-is.
+        # Barbers, salons, lash/brow, esthetics, massage, tattoo.
+        #
+        # This block was empty for a year on the reasoning that personal
+        # services is "closest to generic". Sitting in the chair says
+        # otherwise: nobody in this trade calls the person in front of them
+        # a Customer. They are a GUEST, and that word is the whole posture
+        # of the vertical — hospitality, not transaction.
+        "customer":     "Guest",
+        "customers":    "Guests",
+        "contact":      "Guest",
+        "contacts":     "Guests",
+        # The menu on the wall is a list of Services, and what a guest picks
+        # from it is a Service — not an "Offering", which is retail language
+        # this trade does not use.
+        "offering":     "Service",
+        "offerings":    "Services",
+        # appointment / booking deliberately stay BASE. A barber genuinely
+        # says "appointment" and "booking"; overriding them would be change
+        # for its own sake.
     },
     "service_provider": {
         # Intentionally generic baseline.

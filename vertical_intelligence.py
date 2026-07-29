@@ -562,7 +562,7 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
             "register": "friendly, practical, neighborhood-aware",
             "formality": "casual",
             "hallmarks": [
-                "uses 'Customer' and 'Service'",
+                "uses 'Guest' and 'Service' — never 'Customer'",
                 "respects regulars + walk-ins both",
                 "speaks plainly about price + time",
             ],
@@ -596,13 +596,13 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
         },
         "empty_state_nudges": {
             "bookings": "No bookings yet. Want to enable walk-in scheduling alongside appointments?",
-            "customers": "No customers yet. Share your booking link to get the first one in.",
+            "customers": "No guests yet. Share your booking link to get the first one in the chair.",
             "invoices": "No invoices yet. Set up your service prices first.",
-            "offerings": "No offerings yet. Common: 2-3 main services + a popular add-on.",
+            "offerings": "No services yet. Common: 2-3 main services + a popular add-on.",
         },
         "module_suggestions": [
             {"slug": "bookings", "archetype": "booking_calendar",
-             "headline": "Start with a Booking Calendar so customers can schedule their visit."},
+             "headline": "Start with a Booking Calendar so guests can schedule their visit."},
         ],
     }),
     "service_provider": GENERIC,
