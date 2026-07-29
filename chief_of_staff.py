@@ -84,6 +84,12 @@ from chief_contract_actions import (
     handle_contract_pdf,
     handle_draft_contract,
 )
+# Customer drawdown ledger — what a client prepaid and has not used yet.
+from chief_balance_actions import (
+    handle_check_balance,
+    handle_consume_balance,
+    handle_grant_balance,
+)
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -10434,6 +10440,12 @@ ACTION_HANDLERS = {
     # e-signature provider (see chief_contract_actions module docstring).
     "draft_contract":                  handle_draft_contract,
     "contract_pdf":                    handle_contract_pdf,
+    # Drawdown ledger. Bookkeeping ABOUT money, not movement OF it — these
+    # reach no Stripe object and post no GL entry, which is why they are
+    # class A while create_invoice is C.
+    "grant_balance":                   handle_grant_balance,
+    "consume_balance":                 handle_consume_balance,
+    "check_balance":                   handle_check_balance,
     "set_availability_day":       handle_set_availability_day,
     "set_availability_override":  handle_set_availability_override,
     "add_block_range":            handle_add_block_range,
