@@ -152,6 +152,19 @@ try:
     app.include_router(mcp_router)
 except Exception as _e:
     logging.getLogger(__name__).warning(f"mcp_server not loaded: {_e}")
+# OAuth 2.1 in front of that surface (2026-07-29). Exists so the connector
+# can be added on claude.ai — which is the ONLY way a phone can reach it,
+# since iOS/Android cannot run a local MCP server. Serves /.well-known
+# discovery, RFC 7591 registration, a consent screen, and /oauth/token.
+# The access token it issues is an ordinary mcp_tokens credential, so
+# mcp_server's auth path is unchanged and revocation still works from
+# Mission Control. Same try/except: an auth surface that fails to import
+# must not stop the service booting.
+try:
+    from mcp_oauth import router as mcp_oauth_router
+    app.include_router(mcp_oauth_router)
+except Exception as _e:
+    logging.getLogger(__name__).warning(f"mcp_oauth not loaded: {_e}")
 app.include_router(nurture_router)
 app.include_router(session_router)
 app.include_router(contract_router)

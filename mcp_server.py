@@ -553,6 +553,34 @@ class _TokenRefused(Exception):
     so a bad credential can never silently fall through to another one."""
 
 
+def _unauthorized(message: str) -> JSONResponse:
+    """A 401 that says where to go and get authorized.
+
+    RFC 9728 §5.1: without this header a client holding only a URL learns
+    that it was refused and nothing about what to do next. It is the first
+    link in the discovery chain — WWW-Authenticate names the protected-
+    resource metadata, that names the authorization server, and that names
+    the endpoints. Claude.ai's connector flow starts by reading exactly
+    this header off exactly this response.
+
+    Deliberately still a JSON-RPC error body: a client that came here
+    speaking JSON-RPC should not have to parse two different shapes
+    depending on whether it was authenticated.
+    """
+    try:
+        import mcp_oauth
+        base = mcp_oauth.base_url()
+    except Exception:
+        base = (os.environ.get("MCP_PUBLIC_BASE_URL") or "").rstrip("/")
+    header = 'Bearer realm="mcp"'
+    if base:
+        header += f', resource_metadata="{base}/.well-known/oauth-protected-resource"'
+    return JSONResponse(
+        status_code=401,
+        headers={"WWW-Authenticate": header},
+        content=_error(None, UNAUTHORIZED, message))
+
+
 @router.post("")
 @router.post("/")
 async def mcp_endpoint(request: Request,
@@ -584,13 +612,11 @@ async def mcp_endpoint(request: Request,
         logger.warning("[mcp] token refused: %s", e)
         _audit(actor="token:invalid", tool="(endpoint)", allowed=False,
                ok=False, duration_ms=0, error=str(e))
-        return JSONResponse(status_code=401, content=_error(
-            None, UNAUTHORIZED, str(e)))
+        return _unauthorized(str(e))
 
     if caller is None:
         if user is None:
-            return JSONResponse(status_code=401, content=_error(
-                None, UNAUTHORIZED, "authentication required"))
+            return _unauthorized("authentication required")
         caller = Caller("owner_jwt", (user.email or user.id or "unknown").lower(),
                         user_id=user.id, scopes=[SCOPE_READ])
 
