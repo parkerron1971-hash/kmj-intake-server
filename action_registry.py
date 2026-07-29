@@ -129,6 +129,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "site_health":         _r("reads site + booking config and reports"),
     "check_balance":       _r("reads the customer_balances view — what a client has "
                               "prepaid and not yet consumed"),
+    "unbilled_time":       _r("totals unbilled time_entries — hours worked and not yet "
+                              "charged, for one client or the whole firm"),
 
     # ── UI directives ────────────────────────────────────────────────
     # Verified: pass-throughs the frontend acts on. No persistence.
@@ -270,6 +272,17 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "hour was delivered. Refuses to overdraw unless explicitly "
                                       "told to, and reverses its own row if it loses a concurrent "
                                       "draw. Same reasoning as grant_balance"),
+    "log_time":               _w("A", "inserts a time_entries row — records that work was done. "
+                                      "Status starts 'unbilled', so nothing has been charged to "
+                                      "anyone; a wrong entry is edited or written off"),
+    "bill_time_to_retainer":  _w("A", "moves a prepaid retainer balance the client already funded "
+                                      "and flips the entry to 'billed'. Posts no GL entry and "
+                                      "reaches no Stripe object — same reasoning as "
+                                      "consume_balance, which it delegates to. The ledger row id "
+                                      "is stored on the entry so the same hours cannot be billed "
+                                      "twice"),
+    "write_off_time":         _w("A", "flips an unbilled entry to 'written_off'. The row survives "
+                                      "and the status is editable back"),
     "draft_contract":         _w("A", "drafts an engagement letter for one contact — a draft, and "
                                       "there is no send_for_signature verb to pair it with yet"),
 
