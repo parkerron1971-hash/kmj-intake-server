@@ -273,6 +273,102 @@ class SmsSendError(RuntimeError):
         self.status = status
 
 
+# ─── Sender identity on outbound (Direct model) ──────────────────────
+
+MAX_BRAND_PREFIX = 32
+OPTOUT_TAIL = " Reply STOP to opt out."
+
+
+def compose_outbound_body(business_name: Optional[str], message: str,
+                          *, include_optout: bool = False) -> str:
+    """Lead every practitioner-initiated text with the business name.
+
+    WHY THIS EXISTS
+      The platform runs ONE registered A2P 10DLC brand and one number for
+      every business (sms_routing's Direct model). That is the compliant,
+      zero-per-operator-cost way to do multi-tenant SMS, and inbound routing
+      solves recipient→business perfectly via keyword binding.
+
+      The hole was outbound. sms_routing's own auto-replies already brand
+      themselves ("Solutionist System: You're now connected with X"), but
+      Chief-initiated sends and broadcasts went out as the bare message. So
+      a rebooking nudge arrived from an unrecognised number with nothing
+      saying which business sent it.
+
+      That is not just confusing, it is corrosive: unrecognised outbound is
+      what earns STOP replies and spam reports, and on a SHARED campaign
+      those land on every operator on the number, not just the sender. On a
+      one-number model sender recognition matters more, not less.
+
+      Under Direct the registered SENDER stays the platform — sms_routing's
+      docstring is explicit that a practitioner's name may appear in the
+      BODY only. This puts it exactly there, and nowhere else.
+
+    Idempotent: a message that already opens with the business name is left
+    alone, so Chief writing "Craft & Co here —" does not become
+    "Craft & Co: Craft & Co here —".
+    """
+    body = (message or "").strip()
+    name = (business_name or "").strip()
+    if not body:
+        return body
+    if not name:
+        return body + (OPTOUT_TAIL if include_optout and "STOP" not in body.upper() else "")
+
+    # Long names would eat the segment; the recipient only needs enough to
+    # recognise who this is.
+    if len(name) > MAX_BRAND_PREFIX:
+        name = name[:MAX_BRAND_PREFIX - 1].rstrip() + "…"
+
+    # Already self-identified? Compare on letters/digits only so
+    # "Craft & Co" matches "Craft and Co" poorly but "Craft & Co:" exactly.
+    lead = body[:len(name) + 2].lower()
+    if lead.startswith(name.lower()):
+        out = body
+    else:
+        out = f"{name}: {body}"
+
+    if include_optout and "STOP" not in out.upper():
+        out += OPTOUT_TAIL
+    return out
+
+
+async def _is_first_outbound(client: httpx.AsyncClient, business_id: str,
+                             to_clean: str) -> bool:
+    """True when this business has never texted this number before.
+
+    Opt-out language belongs on the FIRST message to someone, not stapled to
+    every one of them — CTIA guidance wants it discoverable, and repeating it
+    on every text burns characters and reads like spam. Fails CLOSED (returns
+    False) on any error: a missing tagline is better than a duplicated one on
+    every message because a read hiccuped.
+    """
+    if not business_id or not to_clean:
+        return False
+    try:
+        rows = await _sb_get(
+            client,
+            f"/sms_messages?business_id=eq.{business_id}"
+            f"&phone_number=eq.{_pq(to_clean)}"
+            "&direction=eq.outbound&select=id&limit=1") or []
+        return len(rows) == 0
+    except Exception as e:
+        logger.warning(f"[SMS] first-outbound check failed, omitting opt-out tail: {e}")
+        return False
+
+
+async def _business_name(client: httpx.AsyncClient, business_id: str) -> str:
+    if not business_id:
+        return ""
+    try:
+        rows = await _sb_get(
+            client, f"/businesses?id=eq.{business_id}&select=name&limit=1") or []
+        return (rows[0].get("name") if rows else "") or ""
+    except Exception as e:
+        logger.warning(f"[SMS] business name lookup failed: {e}")
+        return ""
+
+
 async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
                         to: str, message: str,
                         contact_id: Optional[str] = None) -> Dict[str, Any]:
@@ -307,6 +403,20 @@ async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
         match = await _find_contact_by_phone(client, business_id, to_clean)
         if match:
             contact_id = match.get("id")
+
+    # Sender identity. One number serves every business, so the body is the
+    # only place the recipient learns who is texting them. Composed HERE, in
+    # the single seam every practitioner-initiated send passes through, so
+    # Chief, the scheduler, broadcasts and booking alerts all inherit it
+    # rather than each remembering to prefix. (sms_routing's auto-replies
+    # brand themselves and do not come through here.)
+    #
+    # The composed body is what gets STORED as well as sent — the
+    # practitioner's thread must show what the customer actually received,
+    # not the draft it was written from.
+    biz_name = await _business_name(client, business_id)
+    first_time = await _is_first_outbound(client, business_id, to_clean)
+    message = compose_outbound_body(biz_name, message, include_optout=first_time)
 
     if use_twilio:
         try:
