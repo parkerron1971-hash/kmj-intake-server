@@ -108,13 +108,12 @@ def _authorize(business_id: str, module_id: str, user: AuthedUser) -> Dict[str, 
     if not biz:
         _audit(business_id, module_id, None, user, "denied", {"reason": "business not found"})
         raise HTTPException(status_code=404, detail="business not found")
-    if str(biz[0].get("owner_id")) != str(user.id):
-        _audit(business_id, module_id, None, user, "denied", {"reason": "not owner"})
-        raise HTTPException(status_code=403, detail="not authorized for this business")
+
+    is_owner = str(biz[0].get("owner_id")) == str(user.id)
 
     mod = _sb("GET",
               f"/custom_modules?id=eq.{module_id}&business_id=eq.{business_id}"
-              f"&select=id,name,agent_config&limit=1") or []
+              f"&select=id,name,agent_config,restricted_min_role&limit=1") or []
     if not mod:
         _audit(business_id, module_id, None, user, "denied", {"reason": "module not found"})
         raise HTTPException(status_code=404, detail="module not found")
@@ -123,7 +122,75 @@ def _authorize(business_id: str, module_id: str, user: AuthedUser) -> Dict[str, 
         # Non-restricted modules must NOT use this path (they live in module_entries).
         _audit(business_id, module_id, None, user, "denied", {"reason": "not a restricted module"})
         raise HTTPException(status_code=400, detail="module is not access-restricted")
+
+    # 25b seam, closed. The owner always passes; anyone else needs the module
+    # to have opted in to delegation AND to hold a sufficient role.
+    #
+    # restricted_min_role is NULL by default, which means owner-only — the
+    # exact behaviour that existed before this. Nothing widened by adding the
+    # column; a business opts in per module. That default matters: giving is
+    # the most confidential data a church holds, and many deliberately keep
+    # it from their own staff.
+    if not is_owner:
+        min_role = (mod[0].get("restricted_min_role") or "").strip()
+        if not min_role:
+            _audit(business_id, module_id, None, user, "denied",
+                   {"reason": "not owner; module is owner-only"})
+            raise HTTPException(status_code=403,
+                                detail="not authorized for this business")
+        role = _role_for(business_id, user)
+        if not _role_at_least(role, min_role):
+            _audit(business_id, module_id, None, user, "denied",
+                   {"reason": "role below module minimum",
+                    "role": role or "none", "required": min_role})
+            raise HTTPException(
+                status_code=403,
+                detail=f"this module requires the '{min_role}' role or higher")
+        # NOT audited as a separate "granted" row on purpose. The access log
+        # constrains `action` to list/read/create/update/delete/denied, and
+        # the operation the caller went on to perform is audited with its own
+        # real action a moment later — so a grant already leaves a trail.
+        # Inventing a seventh action value here would have violated the CHECK
+        # and, because _audit is best-effort, failed silently: a role-granted
+        # access to financial data that logged nothing at all.
+
     return mod[0]
+
+
+# Ascending. 'viewer' is deliberately absent from the ALLOWED minimums (see
+# the migration) but present here, because a viewer can still be the CALLER
+# and must be compared and refused rather than crashing the lookup.
+_ROLE_ORDER = ("viewer", "member", "manager", "admin")
+
+
+def _role_at_least(role: Optional[str], minimum: str) -> bool:
+    """True when `role` ranks at or above `minimum`. Unknown or missing role
+    answers False — the refusing answer, matching the posture everywhere
+    else in this file."""
+    if not role:
+        return False
+    try:
+        return _ROLE_ORDER.index(role) >= _ROLE_ORDER.index(minimum)
+    except ValueError:
+        return False
+
+
+def _role_for(business_id: str, user: AuthedUser) -> Optional[str]:
+    """The caller's ACTIVE role on this business, or None.
+
+    status must be 'active' — an invited-but-not-accepted or revoked
+    collaborator holds a role row and must not be let in on it. That is the
+    difference between a row existing and a person having access.
+    """
+    try:
+        rows = _sb("GET",
+                   f"/business_users?business_id=eq.{business_id}"
+                   f"&user_id=eq.{user.id}&status=eq.active"
+                   f"&select=role&limit=1") or []
+        return (rows[0].get("role") if rows else None)
+    except Exception as e:
+        logger.warning(f"[restricted] role lookup failed, denying: {e}")
+        return None
 
 
 # ──────────────────────────────────────────────────────────────
