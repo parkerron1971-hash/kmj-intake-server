@@ -125,6 +125,22 @@ def seed_from_onboarding(body: SeedFromOnboardingBody, user: AuthedUser = Depend
     except Exception as e:
         logger.warning(f"seed-from-onboarding blueprint provision failed (non-fatal): {e}")
 
+    # Queue this vertical's default autopilot — the one recurring job the
+    # vertical would miss (a barber's rebooking cadence, a lawyer's deadline
+    # sweep). Idempotent per (business, job key), so re-running onboarding
+    # cannot stack duplicate schedules. Non-fatal for the same reason the
+    # blueprint walk above is: a business must finish onboarding even if its
+    # autopilot did not queue.
+    try:
+        import vertical_autopilot
+        vertical_autopilot.seed_defaults(
+            business_id=body.business_id,
+            business_type=body.business_type,
+            owner_id=str(user.id),
+        )
+    except Exception as e:
+        logger.warning(f"seed-from-onboarding autopilot seed failed (non-fatal): {e}")
+
     return JSONResponse({"ok": True, "profile": row})
 
 
