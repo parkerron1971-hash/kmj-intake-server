@@ -275,6 +275,23 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "label": "Generic Module",
         "operate_group": None,
     },
+    "work_pipeline": {
+        # Work in progress moving through stages. ONE archetype covering a
+        # lawyer's Matters, a contractor's Jobs, a creative's Projects and a
+        # consultant's Engagements — the same shape with different words.
+        # Stage names come from archetype_params, the noun from useTerm, so
+        # the vertical differences are configuration rather than four
+        # components.
+        #
+        # NOT single-instance: a firm can legitimately run Matters AND a
+        # separate Referrals pipeline. booking_calendar is single-instance
+        # because a business has one calendar; that reasoning does not carry.
+        "config_surface": "build",
+        "daily_use_surface": "operate",
+        "chief_can_suggest": True,
+        "label": "Pipeline",
+        "operate_group": None,
+    },
     "booking_calendar": {
         "config_surface": "build",       # services + schema config
         "daily_use_surface": "operate",  # the BookingCalendar week-grid hero
