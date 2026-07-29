@@ -426,6 +426,20 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
         return JSONResponse({"error": "Keep broadcasts under 1200 characters."}, 400)
 
     async with httpx.AsyncClient() as client:
+        # Sender identity. A broadcast goes to people who may not have
+        # texted in for months, from a number shared with every other
+        # business on the platform — it is the single most likely outbound
+        # to be read as spam. So it leads with the business name, the same
+        # way send_sms_core does for one-to-one sends.
+        #
+        # Composed ONCE outside the loop: the body is identical for every
+        # recipient, and the opt-out tail is unconditional here rather than
+        # first-contact-only. A broadcast is bulk unsolicited-feeling
+        # traffic; every one of them carries the way out.
+        biz_name = await _biz_name(client, body.business_id)
+        from sms_service import compose_outbound_body
+        msg = compose_outbound_body(biz_name, msg, include_optout=True)
+
         contacts = await _sb_get(
             client,
             f"/contacts?business_id=eq.{body.business_id}&phone=not.is.null"
