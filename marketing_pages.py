@@ -740,7 +740,7 @@ REPLICA_KIT_CSS = """
       .brief-l{position:relative;z-index:1;flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;}
       /* the real briefing has the S-mark floating in it — without this the
          panel reads as an empty purple slab under the greeting */
-      .brief-mark{position:absolute;right:6px;bottom:-20px;width:128px;height:128px;
+      .brief-mark{position:absolute;right:14%;bottom:10px;width:128px;height:128px;
         pointer-events:none;opacity:.92;
         filter:drop-shadow(0 0 26px rgba(124,58,237,.65)) drop-shadow(0 10px 22px rgba(0,0,0,.5));}
       .app.is-mini .brief-mark{display:none;}
@@ -1430,12 +1430,12 @@ def render_home() -> str:
     <div class="section-head reveal">
       <span class="sec-num">02</span>
       <span class="eyebrow">The shape of it</span>
-      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">A church sees Members.<br>A nonprofit sees Donors.<br>Same system.</h2>
+      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">A contractor sees Jobs.<br>A nonprofit sees Donors.<br>Same system.</h2>
     </div>
 
     <div class="shape-body reveal reveal-delay-2">
       <p>Open any other tool and the first job is learning its language. Its menus, its idea of what a &ldquo;deal&rdquo; is, its version of a week that looks nothing like yours.</p>
-      <p>This works the other way around. Say you cut hair, or you pastor a church, or you practise law. The system rebuilds itself: what your people are called, how money actually moves in your trade, what a normal week looks like, what Chief pays attention to and what it leaves alone.</p>
+      <p>This works the other way around. Say you cut hair, or you run job sites, or you practise law. The system rebuilds itself: what your people are called, how money actually moves in your trade, what a normal week looks like, what Chief pays attention to and what it leaves alone.</p>
       <p>Two people open the same product and see two different worlds. Neither one has to translate.</p>
     </div>
 
