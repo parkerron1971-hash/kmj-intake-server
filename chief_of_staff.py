@@ -90,6 +90,13 @@ from chief_balance_actions import (
     handle_consume_balance,
     handle_grant_balance,
 )
+# Billable time — the other half of the hourly money model.
+from chief_time_actions import (
+    handle_bill_time_to_retainer,
+    handle_log_time,
+    handle_unbilled_time,
+    handle_write_off_time,
+)
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -10446,6 +10453,12 @@ ACTION_HANDLERS = {
     "grant_balance":                   handle_grant_balance,
     "consume_balance":                 handle_consume_balance,
     "check_balance":                   handle_check_balance,
+    # Billable time. Minutes are integers because legal billing runs in
+    # tenths of an hour and float drift becomes a fee dispute.
+    "log_time":                        handle_log_time,
+    "bill_time_to_retainer":           handle_bill_time_to_retainer,
+    "unbilled_time":                   handle_unbilled_time,
+    "write_off_time":                  handle_write_off_time,
     "set_availability_day":       handle_set_availability_day,
     "set_availability_override":  handle_set_availability_override,
     "add_block_range":            handle_add_block_range,

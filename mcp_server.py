@@ -192,6 +192,17 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         _obj({"contact_id": {"type": "string",
                              "description": "The contact's uuid."}},
              ["contact_id"])),
+    # Exposed on the same reasoning as show_revenue, which already ships
+    # business financials: this is work done and not yet charged. Contact
+    # id is OPTIONAL here — firm-wide "what am I owed" is the more common
+    # question than any single client's.
+    "unbilled_time": (
+        "Hours worked and not yet billed — for the whole business, or for "
+        "one person if you pass a contact id. Returns entry count, total "
+        "hours, and the amount where rates are set.",
+        _obj({"contact_id": {"type": "string",
+                             "description": "Optional. Narrow to one "
+                                            "contact's unbilled time."}})),
     "contact_deep_dive": (
         "Everything on file for ONE person: history, sessions, invoices, "
         "notes. Requires the contact's id.",

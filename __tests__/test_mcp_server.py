@@ -94,14 +94,15 @@ def test_the_exposed_read_verbs_and_nothing_else():
     number is the tripwire: add a read verb and this fails, forcing a
     deliberate call about whether an outside agent should see it.
 
-    It has already earned its keep once — `check_balance` (17) tripped it,
-    and the answer was yes, because contact_deep_dive already exposes a
-    superset of the same person's data.
+    It has already earned its keep twice — `check_balance` (17) and
+    `unbilled_time` (18) each tripped it, and each got a deliberate yes:
+    contact_deep_dive already exposes a superset of the first, and
+    show_revenue already ships business financials like the second.
 
     Bump this ONLY together with a TOOL_SCHEMAS entry and a reason.
     """
     tools = mcp.exposed_tools()
-    assert len(tools) == 17, (
+    assert len(tools) == 18, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
