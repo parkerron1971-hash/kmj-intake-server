@@ -103,6 +103,11 @@ from chief_giving_actions import (
     handle_giving_statement,
     handle_giving_statements_run,
 )
+# Undo — makes action_registry's class A a thing a practitioner can press.
+from chief_undo_actions import (
+    handle_undo_last,
+    handle_what_undo,
+)
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -10512,6 +10517,8 @@ ACTION_HANDLERS = {
     "write_off_time":                  handle_write_off_time,
     "giving_statement":                handle_giving_statement,
     "giving_statements_run":           handle_giving_statements_run,
+    "undo_last":                       handle_undo_last,
+    "what_undo":                       handle_what_undo,
     "set_availability_day":       handle_set_availability_day,
     "set_availability_override":  handle_set_availability_override,
     "add_block_range":            handle_add_block_range,
@@ -11002,10 +11009,46 @@ async def _execute_actions(client, biz, actions: List[Dict]) -> List[Dict]:
         try:
             res = await handler(client, biz, resolved)
             results.append(res)
+            # Record it if it can be taken back. Both halves are needed: the
+            # payload says what was asked for, the result carries the ids of
+            # whatever got created — create_module_entry is not reversible
+            # from the request alone. Best-effort; a failed log must never
+            # break the action that already succeeded.
+            try:
+                await _record_undoable(client, biz, atype, resolved, res)
+            except Exception as e:
+                logger.warning(f"[undo] record failed for {atype}: {e}")
         except Exception as e:
             logger.exception(f"Action {atype} raised: {e}")
             results.append(_fail(atype, str(e)[:200]))
     return results
+
+
+async def _record_undoable(client, biz, atype: str, action: Dict, result: Dict) -> None:
+    """Log an action to chief_undo_log when a real inverse exists for it.
+
+    Deliberately silent for everything else — logging un-undoable actions
+    would make `undo_last` walk a history of things it must refuse, and the
+    practitioner would meet 'I can't undo that' repeatedly instead of
+    reaching the thing they actually wanted back.
+    """
+    import action_inverse
+    if not action_inverse.can_undo(atype):
+        return
+    if _action_failed(result):
+        return
+    # No inverse buildable for THIS instance (a missing id, usually) — then
+    # it is not undoable in practice, whatever the verb allows in principle.
+    if action_inverse.build_inverse(atype, action, result) is None:
+        return
+    await _sb(client, "POST", "/chief_undo_log", {
+        "business_id": biz["id"],
+        "user_id": biz.get("owner_id"),
+        "action_type": atype,
+        "action_json": action or {},
+        "result_json": result or {},
+        "status": "undoable",
+    })
 
 
 # ═══════════════════════════════════════════════════════════════════════

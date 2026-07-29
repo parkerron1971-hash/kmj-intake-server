@@ -141,6 +141,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "recall_conversation": _r("searches prior conversation"),
     "show_revenue":        _r("reads revenue figures"),
     "site_health":         _r("reads site + booking config and reports"),
+    "what_undo":           _r("reports what undo_last WOULD reverse. Pure read — undo is "
+                              "frightening in proportion to how vague it is"),
     "check_balance":       _r("reads the customer_balances view — what a client has "
                               "prepaid and not yet consumed"),
     "unbilled_time":       _r("totals unbilled time_entries — hours worked and not yet "
@@ -285,6 +287,12 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "upgrade_module_archetype":   _w("A", "refines an existing module's archetype params"),
     "contract_pdf":           _w("A", "renders an existing draft as a branded PDF and returns the "
                                       "URL. Produces an artifact; sends nothing"),
+    "undo_last":              _w("A", "runs the INVERSE of the most recent reversible action, "
+                                      "from action_inverse's hand-judged table. Its own class is "
+                                      "A because every inverse it can build is itself a class A "
+                                      "handler — it cannot reach a class C verb, because no class "
+                                      "C verb has an inverse registered. A failed undo leaves the "
+                                      "row undoable rather than marking it done"),
     "grant_balance":          _w("A", "appends a POSITIVE row to customer_ledger — records that a "
                                       "client prepaid for sessions/hours/a deposit. Money-ADJACENT "
                                       "but not money-touching: reaches no Stripe object and posts "

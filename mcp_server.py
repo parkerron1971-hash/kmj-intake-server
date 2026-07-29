@@ -185,6 +185,13 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
     # sessions, invoices and notes — a prepaid balance is a subset of that.
     # "How many sessions does Marcus have left" is also one of the questions
     # an outside agent is most usefully asked.
+    # Exposed: this reports what the LAST change was, which is app-state
+    # metadata of the same class as list_scheduled and catch_up — both
+    # already on the surface. Note undo_last itself is a WRITE and stays off.
+    "what_undo": (
+        "What the most recent reversible action was, and what undoing it "
+        "would do. Reports only — it does not undo anything.",
+        _NO_ARGS),
     "check_balance": (
         "What ONE person has prepaid and not yet used — package sessions, "
         "retainer hours or money, a deposit, or gift-card value. Requires "
