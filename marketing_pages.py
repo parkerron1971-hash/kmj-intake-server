@@ -113,7 +113,7 @@ SHARED_CSS = """
   .nav{position:sticky;top:0;z-index:50;background:rgba(8,9,12,0.82);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--border);}
   .nav-inner{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;max-width:1140px;margin:0 auto;}
   .brand{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;display:inline-flex;align-items:center;gap:10px;}
-  .brand .logo{height:32px;width:auto;display:block;filter:drop-shadow(0 0 8px var(--glow));}
+  .brand .logo{height:32px;width:32px;object-fit:contain;display:block;flex-shrink:0;filter:drop-shadow(0 0 8px var(--glow));}
   .footer .brand .logo{height:28px;}
   .brand .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--info));box-shadow:0 0 8px var(--glow);}
   .brand-text{display:inline-block;}
@@ -122,10 +122,10 @@ SHARED_CSS = """
   .nav-links a{color:var(--text-muted);transition:color 0.15s;position:relative;}
   .nav-links a:hover, .nav-links a.is-active{color:var(--text-primary);}
   .nav-links a.is-active::after{content:'';position:absolute;left:0;right:0;bottom:-18px;height:2px;background:linear-gradient(90deg, var(--accent), var(--info));border-radius:2px;}
-  .nav-cta{padding:8px 16px;background:var(--accent);color:var(--ink-on-accent) !important;border-radius:8px;font-weight:700;font-size:13px;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;}
+  .nav-cta{white-space:nowrap;padding:8px 16px;background:var(--accent);color:var(--ink-on-accent) !important;border-radius:8px;font-weight:700;font-size:13px;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;}
   .nav-cta:hover{transform:translateY(-1px);background:var(--accent-2);box-shadow:0 4px 20px color-mix(in srgb, var(--accent) 45%, transparent);}
   .nav-cta.is-active::after{display:none;}
-  .nav-login{padding:7px 15px;border:1px solid var(--border-strong);border-radius:8px;color:var(--text-primary) !important;font-weight:600;font-size:13px;transition:border-color 0.15s, background 0.15s;}
+  .nav-login{white-space:nowrap;padding:7px 15px;border:1px solid var(--border-strong);border-radius:8px;color:var(--text-primary) !important;font-weight:600;font-size:13px;transition:border-color 0.15s, background 0.15s;}
   .nav-login:hover{border-color:var(--accent);background:var(--surface);}
   /* 900, not 760: at ~768 every link still showed, which wrapped both the
      brand and "Get the App" onto extra lines and buckled the whole bar. */
@@ -740,13 +740,12 @@ REPLICA_KIT_CSS = """
       .brief-l{position:relative;z-index:1;flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;}
       /* the real briefing has the S-mark floating in it — without this the
          panel reads as an empty purple slab under the greeting */
-      .brief-mark{position:absolute;right:232px;bottom:-14px;width:128px;height:128px;
+      .brief-mark{position:absolute;right:6px;bottom:-20px;width:128px;height:128px;
         pointer-events:none;opacity:.92;
         filter:drop-shadow(0 0 26px rgba(124,58,237,.65)) drop-shadow(0 10px 22px rgba(0,0,0,.5));}
       .app.is-mini .brief-mark{display:none;}
       /* once .brief stacks on phones the mark lands on Chief's buttons */
       @media (max-width:700px){.brief-mark{display:none;}}
-      @media (max-width:1100px){.brief-mark{right:24px;}}
       .brief .date{font-size:7.5px;font-weight:800;letter-spacing:.17em;text-transform:uppercase;color:#C4B5FD;}
       .brief .hi{font-family:var(--font-heading);font-size:23px;font-weight:700;letter-spacing:-.025em;line-height:1.05;}
       .brief .hi b{color:var(--gold);font-weight:700;}
@@ -1324,8 +1323,8 @@ def render_home() -> str:
                     <span class="hi">Good evening,<br><b>Jordan</b></span>
                     <span class="cp">2 things need you today. Chief has them queued, and one word clears the deck.</span>
                     <span class="brief-btns"><span class="ah-btn">Focus Mode &rarr;</span><span class="lnk">Read today&rsquo;s briefing</span></span>
+                    <img class="brief-mark" src="/assets/mark.webp" alt="" width="128" height="128" loading="lazy">
                   </div>
-                  <img class="brief-mark" src="/assets/mark.webp" alt="" width="128" height="128" loading="lazy">
                   <div class="chief">
                     <div class="chief-h">Chief AI<span class="on">Online</span></div>
                     <div class="chief-body">
