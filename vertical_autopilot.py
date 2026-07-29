@@ -167,6 +167,15 @@ DEFAULT_AUTOPILOT: Dict[str, List[Dict[str, Any]]] = {
              "answered. A bid with no follow-up is a job given away."),
     ],
 
+    # A practice runs on the schedule holding. Note this is the BRIEFING and
+    # not a nurture run: drafting outreach to therapy clients on a timer is
+    # exactly the kind of automation this vertical should not have.
+    "therapist": [
+        _job("practice_review", "Practice review", "briefing", "weekly", 12,
+             "Weekly read on the schedule, cancellations and unpaid "
+             "invoices. Admin only — never client outreach."),
+    ],
+
     # The two deliberately-generic verticals still get the briefing — a
     # generic voice is not a reason to ship no autopilot at all.
     "service_provider": [

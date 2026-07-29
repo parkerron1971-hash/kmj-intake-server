@@ -247,6 +247,21 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "booking":      "Visit",
         "bookings":     "Visits",
     },
+    "therapist": {
+        # Private practice mental health. Deliberately plain: a therapist
+        # says Client and Session, and the platform's job here is scheduling
+        # and billing, not clinical language it has no business holding.
+        "customer":     "Client",
+        "customers":    "Clients",
+        "contact":      "Client",
+        "contacts":     "Clients",
+        "service":      "Session",
+        "services":     "Sessions",
+        "appointment":  "Session",
+        "appointments": "Sessions",
+        "booking":      "Session",
+        "bookings":     "Sessions",
+    },
     "service_provider": {
         # Intentionally generic baseline.
     },
