@@ -275,6 +275,22 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "label": "Generic Module",
         "operate_group": None,
     },
+    "event_roster": {
+        # An occasion and the people attached to it. Covers headcount RSVP
+        # AND named volunteer roles — those looked like two features and are
+        # one: both are slots filled by people, counted or named. A church
+        # picnic has a headcount AND needs three volunteers to run it.
+        #
+        # Deliberately NOT work_pipeline. That archetype is many items each
+        # holding one stage; this is the inverted cardinality (one occasion,
+        # many people). Forcing it in would have produced a board where every
+        # card read "attending".
+        "config_surface": "build",
+        "daily_use_surface": "operate",
+        "chief_can_suggest": True,
+        "label": "Roster",
+        "operate_group": "schedule",
+    },
     "work_pipeline": {
         # Work in progress moving through stages. ONE archetype covering a
         # lawyer's Matters, a contractor's Jobs, a creative's Projects and a

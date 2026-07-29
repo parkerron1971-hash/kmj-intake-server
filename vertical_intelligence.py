@@ -446,8 +446,10 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
         "module_suggestions": [
             {"slug": "counseling", "archetype": "booking_calendar",
              "headline": "Open pastoral counseling availability so members can request time."},
-            {"slug": "event-rsvp", "archetype": "fallback_generic",
+            {"slug": "event-rsvp", "archetype": "event_roster",
              "headline": "Track RSVPs for upcoming events (childcare, dietary, accessibility)."},
+            {"slug": "serving-roster", "archetype": "event_roster",
+             "headline": "Build the serving roster each week — greeters, nursery, sound — and see what's still unfilled."},
         ],
     }),
     # Secular donation-funded orgs. Distinct from ministry (faith) but the
@@ -507,8 +509,10 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
         "module_suggestions": [
             {"slug": "programs", "archetype": "fallback_generic",
              "headline": "Track your programs and who's enrolled in each."},
-            {"slug": "event-rsvp", "archetype": "fallback_generic",
+            {"slug": "event-rsvp", "archetype": "event_roster",
              "headline": "Track event RSVPs and sponsorships."},
+            {"slug": "volunteer-roster", "archetype": "event_roster",
+             "headline": "Schedule volunteers per event and see which shifts are still open."},
         ],
     }),
     "financial_educator": VerticalProfile({

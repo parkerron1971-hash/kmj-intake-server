@@ -34,6 +34,54 @@ def _all_suggestions():
 
 # ─── the enum is real ────────────────────────────────────────────────
 
+def test_event_roster_is_registered():
+    assert "event_roster" in msg.ARCHETYPE_METADATA
+
+
+def test_event_roster_is_suggestable():
+    assert "event_roster" in msg.suggestable_archetypes()
+
+
+def test_event_roster_is_not_single_instance():
+    """A church runs a weekly serving roster AND one-off event RSVPs. Both
+    are this archetype and both must be able to exist."""
+    assert "event_roster" not in msg._SINGLE_INSTANCE_ARCHETYPES
+
+
+@pytest.mark.parametrize("vertical,slug", [
+    ("ministry",  "event-rsvp"),
+    ("ministry",  "serving-roster"),
+    ("nonprofit", "event-rsvp"),
+    ("nonprofit", "volunteer-roster"),
+])
+def test_occasions_use_the_roster(vertical, slug):
+    """The audit found ministries had event RSVP on the generic fallback and
+    NO volunteer roster suggestion at all. Both now exist."""
+    match = next((m for m in vi.get_module_suggestions(vertical)
+                  if m.get("slug") == slug), None)
+    assert match, f"{vertical} no longer suggests {slug}"
+    assert match["archetype"] == "event_roster"
+
+
+def test_roster_and_pipeline_are_not_the_same_archetype():
+    """The distinction that justifies two archetypes: work_pipeline is many
+    items each holding ONE stage; event_roster is ONE occasion holding MANY
+    people. If a future sweep collapses them, this is the tripwire."""
+    assert "event_roster" != "work_pipeline"
+    assert msg.ARCHETYPE_METADATA["event_roster"]["label"] !=         msg.ARCHETYPE_METADATA["work_pipeline"]["label"]
+
+
+def test_no_occasion_suggestion_landed_on_the_pipeline():
+    """RSVPs and rosters must never be routed to work_pipeline — that would
+    render every attendee as a card in an 'attending' column."""
+    for vertical, m in _all_suggestions():
+        slug = m.get("slug") or ""
+        if "rsvp" in slug or "roster" in slug:
+            assert m["archetype"] == "event_roster", (
+                f"{vertical}/{slug} is an occasion but uses "
+                f"{m['archetype']}")
+
+
 def test_work_pipeline_is_registered():
     assert "work_pipeline" in msg.ARCHETYPE_METADATA
 
