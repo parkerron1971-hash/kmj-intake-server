@@ -85,9 +85,26 @@ def test_no_schema_describes_a_verb_that_is_not_exposed():
     assert not stale, f"schemas for non-exposed verbs: {stale}"
 
 
-def test_the_16_read_verbs_and_nothing_else():
+def test_the_exposed_read_verbs_and_nothing_else():
+    """The literal count is the POINT, not an accident.
+
+    Exposure is derived — any verb classified `read` in action_registry
+    lands on the agent surface automatically. That is convenient and it is
+    also how a surface widens without anyone deciding to widen it. This
+    number is the tripwire: add a read verb and this fails, forcing a
+    deliberate call about whether an outside agent should see it.
+
+    It has already earned its keep once — `check_balance` (17) tripped it,
+    and the answer was yes, because contact_deep_dive already exposes a
+    superset of the same person's data.
+
+    Bump this ONLY together with a TOOL_SCHEMAS entry and a reason.
+    """
     tools = mcp.exposed_tools()
-    assert len(tools) == 16
+    assert len(tools) == 17, (
+        f"agent-facing surface changed: {sorted(tools)}. If a verb was "
+        "added, decide whether an outside caller should see it, give it a "
+        "TOOL_SCHEMAS entry, and update this count on purpose.")
     for verb in tools:
         assert action_registry.effect(verb) == action_registry.READ
 
@@ -184,9 +201,17 @@ def test_ping():
 
 
 def test_tools_list_shape():
+    """Asserts the RPC returns what exposed_tools() says it should.
+
+    This used to hardcode the count a second time, which meant adding one
+    read verb failed in two places for one reason. The tripwire belongs in
+    test_the_exposed_read_verbs_and_nothing_else, which exists to force that
+    decision; here we only care that the RPC agrees with it and that the
+    shape is right.
+    """
     r = _run(mcp._handle_rpc(_rpc("tools/list"), _caller(), "owner"))
     tools = r["result"]["tools"]
-    assert len(tools) == 16
+    assert len(tools) == len(mcp.exposed_tools())
     assert {"name", "description", "inputSchema"} <= set(tools[0])
 
 

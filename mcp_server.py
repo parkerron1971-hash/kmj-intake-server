@@ -180,6 +180,18 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
     "check_goals": (
         "Progress against every active goal, computed from live data.",
         _NO_ARGS),
+    # Deliberately exposed. This is strictly LESS revealing than
+    # contact_deep_dive, which already ships the same person's full history,
+    # sessions, invoices and notes — a prepaid balance is a subset of that.
+    # "How many sessions does Marcus have left" is also one of the questions
+    # an outside agent is most usefully asked.
+    "check_balance": (
+        "What ONE person has prepaid and not yet used — package sessions, "
+        "retainer hours or money, a deposit, or gift-card value. Requires "
+        "the contact's id.",
+        _obj({"contact_id": {"type": "string",
+                             "description": "The contact's uuid."}},
+             ["contact_id"])),
     "contact_deep_dive": (
         "Everything on file for ONE person: history, sessions, invoices, "
         "notes. Requires the contact's id.",

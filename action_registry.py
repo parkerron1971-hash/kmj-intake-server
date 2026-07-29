@@ -127,6 +127,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "recall_conversation": _r("searches prior conversation"),
     "show_revenue":        _r("reads revenue figures"),
     "site_health":         _r("reads site + booking config and reports"),
+    "check_balance":       _r("reads the customer_balances view — what a client has "
+                              "prepaid and not yet consumed"),
 
     # ── UI directives ────────────────────────────────────────────────
     # Verified: pass-throughs the frontend acts on. No persistence.
@@ -257,6 +259,17 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "upgrade_module_archetype":   _w("A", "refines an existing module's archetype params"),
     "contract_pdf":           _w("A", "renders an existing draft as a branded PDF and returns the "
                                       "URL. Produces an artifact; sends nothing"),
+    "grant_balance":          _w("A", "appends a POSITIVE row to customer_ledger — records that a "
+                                      "client prepaid for sessions/hours/a deposit. Money-ADJACENT "
+                                      "but not money-touching: reaches no Stripe object and posts "
+                                      "no GL entry, so the create_invoice reasoning for C does not "
+                                      "apply. The ledger is append-only, so a wrong grant is "
+                                      "corrected by an adjusting row rather than an edit — which is "
+                                      "the class A test, not a weaker version of it"),
+    "consume_balance":        _w("A", "appends a NEGATIVE row — records that a prepaid session or "
+                                      "hour was delivered. Refuses to overdraw unless explicitly "
+                                      "told to, and reverses its own row if it loses a concurrent "
+                                      "draw. Same reasoning as grant_balance"),
     "draft_contract":         _w("A", "drafts an engagement letter for one contact — a draft, and "
                                       "there is no send_for_signature verb to pair it with yet"),
 
