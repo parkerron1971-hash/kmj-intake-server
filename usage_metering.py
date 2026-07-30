@@ -38,7 +38,27 @@ logger = logging.getLogger("usage_metering")
 # Endpoint → unit weight (default 1). Disclosed at point of use in the UI.
 UNIT_WEIGHTS: Dict[str, int] = {
     "/composer/hero": 5,
-    "/director/build": 25,
+    # FULL SITE BUILD = ONE 25-unit action (2026-07-30 weight-hole fix).
+    # compose_site logs a single zero-cost marker row ("/composer/compose")
+    # when a full LLM compose ships; the constituent authoring endpoints
+    # below keep their rows for cost analytics at weight 0 so one build
+    # never bills per-LLM-call. The old key — "/director/build" — matched
+    # an endpoint NOTHING ever logged (build-with-loop was retired into
+    # compose_site), so the 25 weight silently never applied and a $1-2
+    # build metered as a handful of weight-1 rows.
+    "/composer/compose": 25,
+    "/director/build": 25,           # legacy engine marker, kept for old rows
+    "/composer/canvas": 0,           # one-mind page author (build-internal)
+    "/composer/canvas-review": 0,    # vision-loop repair (build-internal)
+    "/composer/builder-v2": 0,       # v2 builder (build-internal)
+    "/composer/builder-v2-eyes": 0,  # v2 vision walk (build-internal)
+    # Spec authoring/revision is deliberately "pennies" (Arc 3: only
+    # decided designs pay for builds) — and compose_spec_llm logs the
+    # same label inside every build. The build marker carries the bill.
+    "/composer/spec": 0,
+    # /composer/atelier stays default-1: a Studio select-to-talk edit is
+    # one action, and the 2-3 bespoke fragments inside a build add only
+    # their honest handful on top of the marker.
     # Voice (2026-07-15): standard OpenAI TTS is included with every plan —
     # weight 0 keeps the rows attributable for analytics without billing
     # them (the default weight of 1 would otherwise start charging units
@@ -72,10 +92,20 @@ def weight_for(endpoint: Optional[str]) -> int:
 
 
 def weighted_usage_this_month(business_id: str) -> int:
-    rows = sb_clients.sb_get_as_service(
-        f"/api_usage?business_id=eq.{business_id}"
-        f"&created_at=gte.{_month_start_iso()}&select=endpoint&limit=10000") or []
-    return sum(weight_for(r.get("endpoint")) for r in rows)
+    # Paginated: the old single limit=10000 read silently under-counted
+    # any business past 10k rows/month. Terminates on the first short
+    # page; the offset ceiling is a runaway guard, not a real bound.
+    total, offset, page = 0, 0, 10000
+    while offset <= 200_000:
+        rows = sb_clients.sb_get_as_service(
+            f"/api_usage?business_id=eq.{business_id}"
+            f"&created_at=gte.{_month_start_iso()}&select=endpoint"
+            f"&limit={page}&offset={offset}") or []
+        total += sum(weight_for(r.get("endpoint")) for r in rows)
+        if len(rows) < page:
+            break
+        offset += page
+    return total
 
 
 def _biz_row(business_id: str) -> Optional[Dict[str, Any]]:

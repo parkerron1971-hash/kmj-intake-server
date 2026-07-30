@@ -191,3 +191,27 @@ def test_invite_requires_owner_and_valid_role(fake):
     with pytest.raises(HTTPException) as e:
         asyncio.run(bu.invite("b1", bu.InviteBody(email="a@x.com", role="owner"), _User()))
     assert e.value.status_code == 400
+
+
+def test_build_marker_weights(fake, monkeypatch):
+    """Weight-hole fix (2026-07-30): a shipped full build bills as ONE
+    25-unit marker row (/composer/compose); the authoring calls inside it
+    (canvas, canvas-review, builder-v2 + eyes, spec) are weight 0 so a
+    build never bills per-LLM-call. Hero refresh stays 5, chat stays 1."""
+    import usage_metering as um
+    fb = fake
+    _biz(fb, "b1", plan="price_starter")
+    now_iso = datetime.now(timezone.utc).replace(day=2).isoformat()
+    build_rows = ["/composer/compose", "/composer/canvas",
+                  "/composer/canvas-review", "/composer/builder-v2",
+                  "/composer/builder-v2-eyes", "/composer/spec",
+                  "/composer/spec"]
+    extra_rows = ["/composer/hero", "/ai/proxy", "/chief/backend"]
+    for i, ep in enumerate(build_rows + extra_rows):
+        fb.rows("api_usage").append({"id": f"w{i}", "business_id": "b1",
+                                     "created_at": now_iso, "endpoint": ep})
+    # 25 (marker) + 0×6 (build internals) + 5 (hero) + 1 + 1 (chat) = 32
+    assert um.weighted_usage_this_month("b1") == 32
+    assert um.weight_for("/composer/compose") == 25
+    assert um.weight_for("/composer/atelier") == 1   # select-to-talk edit
+    assert um.weight_for("/director/build") == 25    # legacy rows still count
