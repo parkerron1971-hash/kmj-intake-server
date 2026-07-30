@@ -715,7 +715,26 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
         "current_period_end":      _ts_to_iso(sub_obj.get("current_period_end")),
         "cancel_at_period_end":    bool(sub_obj.get("cancel_at_period_end")),
     }
-    await _patch_business(business_id, patch)
+    # 7/30 tier arc — businesses.tier was DEAD DATA: written once as
+    # 'starter' at onboarding and never touched by Stripe, so every
+    # tier-chip and upsell-exemption read lied. Store the resolved plan
+    # key alongside the raw price id (founder → professional). Canceled
+    # subscriptions drop back to 'starter'. Requires the 2026-07-30
+    # tier-vocab migration (the old CHECK only allowed starter|pro|
+    # enterprise) — fails soft via retry-without-tier if unapplied.
+    import feature_gates as fg
+    plan_key = fg.price_to_plan().get(price_id or "")
+    if status_value == "canceled":
+        patch["tier"] = "starter"
+    elif plan_key and status_value in ("trialing", "active"):
+        patch["tier"] = plan_key
+    try:
+        await _patch_business(business_id, patch)
+    except Exception:
+        # Unknown column / stale CHECK — ship the billing truth without
+        # the tier mirror rather than losing the webhook.
+        patch.pop("tier", None)
+        await _patch_business(business_id, patch)
     logger.info(f"Updated business {business_id} → {status_value} ({price_id})")
 
 
