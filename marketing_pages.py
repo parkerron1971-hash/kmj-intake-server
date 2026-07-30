@@ -264,13 +264,13 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 <meta property="og:url" content="https://mysolutionist.app{path}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="The Solutionist System">
-<meta property="og:image" content="https://mysolutionist.app/assets/og.png">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=2">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="{og_title}">
 <meta name="twitter:description" content="{description}">
-<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=2">
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="apple-touch-icon" href="/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1118,9 +1118,8 @@ def render_home() -> str:
          already documented in /privacy — nothing new is promised. ── */
       .trust{border-top:1px solid var(--border);border-bottom:1px solid var(--border);
         padding:30px 0;background:color-mix(in srgb, var(--accent) 3%, transparent);}
-      .trust-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:26px;}
-      @media (max-width:900px){.trust-grid{grid-template-columns:repeat(2,1fr);gap:22px;}}
-      @media (max-width:560px){.trust-grid{grid-template-columns:1fr;gap:18px;}}
+      .trust-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;max-width:1020px;margin:0 auto;}
+      @media (max-width:860px){.trust-grid{grid-template-columns:1fr;gap:18px;}}
       .trust-item{display:flex;gap:11px;align-items:flex-start;}
       .trust-item svg{width:17px;height:17px;flex-shrink:0;margin-top:1px;color:var(--accent);}
       .trust-item b{display:block;font-size:13px;font-weight:600;color:var(--text-primary);
@@ -1288,15 +1287,15 @@ def render_home() -> str:
   <div class="container-xl">
     <div class="hero-copy">
       <h1 class="reveal">Every problem<br>has a <span class="gradient-text">solution.</span></h1>
-      <p class="hero-turn reveal reveal-delay-1">Not a system you learn.<br><span class="gradient-text">A system that learns you.</span></p>
-      <p class="lead reveal reveal-delay-2">Tell it what you do. The whole thing reshapes around your trade: what your people are called, how money moves in your work, what a normal week looks like. Then Chief runs it, and never moves without your say-so.</p>
+      <p class="hero-turn reveal reveal-delay-1">Not a system you teach.<br><span class="gradient-text">A system that already knows your business.</span></p>
+      <p class="lead reveal reveal-delay-2">Tell it what you do and the whole system is already shaped around your line of work: your words, your people, the way you get paid, the way your week runs. Chief handles the rest, logs every move, and never acts without your say-so.</p>
       <div class="hero-ctas reveal reveal-delay-3">
         <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
         <a class="btn-secondary" href="#rooms">Look inside</a>
       </div>
       <div class="hero-meta reveal reveal-delay-3">
-        <span class="stat-block"><span class="big">11</span><span>trades it reshapes itself for</span></span>
-        <span class="hero-note">Currently in private beta &middot; Apply for access</span>
+        <span class="stat-block"><span class="big">7</span><span>business types it already knows</span></span>
+        <span class="hero-note">Currently in private beta &middot; Every action logged and reversible</span>
       </div>
     </div>
 
@@ -1379,14 +1378,14 @@ def render_home() -> str:
   <div class="container-xl">
     <div class="trust-head reveal">
       <span class="eyebrow">The part most people skip</span>
-      <h2>It works for you. Not on you.</h2>
-      <p>Everyone is shipping an agent this year. Very few will tell you what it is allowed to do without asking. Here is ours, in plain terms.</p>
+      <h2>Autonomous, not unsupervised.</h2>
+      <p>Chief runs your week on its own. It also asks first on anything that touches money, messages a client, or can&rsquo;t be taken back. Every action it takes is written down, explained in plain language, and reversible.</p>
+      <p style="margin-top:8px;">Most AI will do what you ask. The question worth asking is what it does when you&rsquo;re not looking.</p>
     </div>
     <div class="trust-grid reveal">
-        <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span><b>Your data stays yours</b>Never sold, never rented, and never used to train anyone&rsquo;s models.</span></div>
-        <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><span><b>Nothing goes out without you</b>Chief drafts and suggests. You approve. Every send is an explicit action.</span></div>
-        <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span><b>Credentials never reach the browser</b>Connected account tokens are stored server-side only. Your browser never sees them.</span></div>
-        <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg><span><b>Nothing irreversible happens alone</b>Sends, payments and deletions are proposal-only by design. That is a rule in the system, not a preference you can flip.</span></div>
+        <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg><span><b>Asks before it acts</b>Refunds, bulk messages, anything irreversible: your call, every time.</span></div>
+        <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg><span><b>Shows its work</b>Every action logged in plain English. No black box, no mystery charges.</span></div>
+        <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/></svg><span><b>Undo means undo</b>If Chief gets it wrong, you take it back. That&rsquo;s a feature, not an apology.</span></div>
     </div>
     <div class="trust-more reveal">
       Full detail in the <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms</a>, including how to export everything or delete your account.
@@ -1394,11 +1393,26 @@ def render_home() -> str:
   </div>
 </section>
 
+<section class="shape">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="sec-num">01</span>
+      <span class="eyebrow">The engine</span>
+      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">The AI world moves fast.<br><span class="gradient-text">You don&rsquo;t have to.</span></h2>
+    </div>
+    <div class="shape-body reveal reveal-delay-2">
+      <p>Every few months someone announces a smarter model. For most businesses that&rsquo;s another thing to learn, another tool to evaluate, another migration nobody has time for.</p>
+      <p>Here it&rsquo;s just a better engine dropped into the same car. Your workflows don&rsquo;t change. Your data doesn&rsquo;t move. You don&rsquo;t retrain. The system you opened this morning quietly got sharper overnight, and you find out because the work got easier, not because you got an email about it.</p>
+    </div>
+    <p class="shape-close reveal">We are not in the AI business. We&rsquo;re in the how-your-business-actually-runs business. The AI is just the engine, and engines are supposed to get better.</p>
+  </div>
+</section>
+
 <section class="ask">
   <div class="container-xl">
     <div class="ask-grid">
       <div class="ask-copy">
-        <span class="sec-num reveal">01</span>
+        <span class="sec-num reveal">02</span>
         <span class="eyebrow reveal">The Chief of Staff</span>
         <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Ask once. The whole system <span class="gradient-text">moves.</span></h2>
         <p class="lead reveal reveal-delay-2">Chief isn&rsquo;t a chatbot bolted onto a dashboard. It reads your real contacts, invoices, calendar and goals every turn, then acts on them.</p>
@@ -1428,15 +1442,14 @@ def render_home() -> str:
 <section class="shape">
   <div class="container">
     <div class="section-head reveal">
-      <span class="sec-num">02</span>
+      <span class="sec-num">03</span>
       <span class="eyebrow">The shape of it</span>
-      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">A contractor sees Jobs.<br>A nonprofit sees Donors.<br>Same system.</h2>
+      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Why it already speaks <span class="gradient-text">your language.</span></h2>
     </div>
 
     <div class="shape-body reveal reveal-delay-2">
-      <p>Open any other tool and the first job is learning its language. Its menus, its idea of what a &ldquo;deal&rdquo; is, its version of a week that looks nothing like yours.</p>
-      <p>This works the other way around. Say you cut hair, or you run job sites, or you practise law. The system rebuilds itself: what your people are called, how money actually moves in your trade, what a normal week looks like, what Chief pays attention to and what it leaves alone.</p>
-      <p>Two people open the same product and see two different worlds. Neither one has to translate.</p>
+      <p>A salon doesn&rsquo;t have &ldquo;clients.&rdquo; It has regulars. A contractor doesn&rsquo;t book &ldquo;appointments&rdquo; &mdash; they schedule jobs. A bookkeeper&rsquo;s late-payment nudge sounds nothing like a therapist&rsquo;s.</p>
+      <p>Tell the system what you do and it loads the whole world of your specialty: the vocabulary, the workflows, the rhythm of the week, what should happen automatically and what should never happen without you. Not a blank assistant waiting to be trained. A system that showed up knowing.</p>
     </div>
 
     <div class="shape-steps reveal reveal-delay-2">
@@ -1445,14 +1458,14 @@ def render_home() -> str:
       <div class="shape-step"><span class="n">3</span><b>Chief works inside it.</b><span>It is not guessing at your business. It is standing in it.</span></div>
     </div>
 
-    <p class="shape-close reveal">The AI underneath keeps getting smarter. What stays scarce is an AI that already knows what kind of business it is inside of. That is this.</p>
+    <p class="shape-close reveal">One system instead of eight subscriptions, and unlike the eight, this one actually knows what your business is.</p>
   </div>
 </section>
 
 <section class="rooms" id="rooms">
   <div class="container-xl">
     <div class="section-head reveal">
-      <span class="sec-num">03</span>
+      <span class="sec-num">04</span>
       <span class="eyebrow">Look inside</span>
       <h2>Six rooms. <span class="gradient-text">One brain.</span></h2>
       <p>Each room is built for what happens in it, and they all share your contacts, your brand, and your Chief.</p>
@@ -1636,7 +1649,7 @@ def render_home() -> str:
 <section id="demo" class="demo-section">
   <div class="container">
     <div class="section-head reveal">
-      <span class="sec-num">04</span>
+      <span class="sec-num">05</span>
       <span class="eyebrow">See it move</span>
       <h2>Fifty-five seconds, <span class="gradient-text">end to end.</span></h2>
       <p>The real system, scene by scene: Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</p>
@@ -1654,24 +1667,21 @@ def render_home() -> str:
 <section id="audience" class="audience">
   <div class="container">
     <div class="section-head" style="margin-bottom:34px;">
-      <span class="sec-num reveal">05</span>
+      <span class="sec-num reveal">06</span>
       <span class="eyebrow reveal">Who it&rsquo;s for</span>
       <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Built for people who serve people.</h2>
     </div>
     <div class="audience-grid reveal reveal-delay-2">
       <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> Coaches</span>
       <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="7" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> Consultants</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/></svg> Creatives</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg> Course creators</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.42 4.58a5.4 5.4 0 0 0-7.65 0l-.77.78-.77-.78a5.4 5.4 0 0 0-7.65 7.65l8.42 8.42 8.42-8.42a5.4 5.4 0 0 0 0-7.65z"/></svg> Fitness &amp; wellness</span>
       <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7a4 4 0 0 1 8 0v7"/><path d="M8 10V3"/><path d="M14 21V8l6-3v16"/></svg> Barbers &amp; salons</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l8.8 8.8 8.8-8.8a5.5 5.5 0 0 0 0-7.8z"/></svg> Therapists</span>
       <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> Contractors</span>
       <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 14h6zM19 7l-3 7h6z"/></svg> Attorneys</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 22h18"/><path d="M6 18v-7M10 18v-7M14 18v-7M18 18v-7"/><path d="M12 2 3 8h18Z"/></svg> Ministries</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l8.8 8.8 8.8-8.8a5.5 5.5 0 0 0 0-7.8z"/></svg> Nonprofits</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Financial educators</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 22h18"/><path d="M6 18v-7M10 18v-7M14 18v-7M18 18v-7"/><path d="M12 2 3 8h18Z"/></svg> Ministries &amp; churches</span>
     </div>
     <p class="audience-note reveal reveal-delay-2">Each one gets its own version of the system, not a generic one with your logo dropped in.</p>
+    <p class="audience-note reveal reveal-delay-2" style="margin-top:10px;">Two of those come with the scope stated up front. For therapists, the system runs the practice &mdash; scheduling, billing, reminders &mdash; and deliberately keeps clinical notes and records out; those stay in your EHR. For attorneys, it runs the office &mdash; clients, matters, invoicing &mdash; while trust accounting stays with your dedicated provider.</p>
 
   </div>
 </section>
@@ -1679,7 +1689,7 @@ def render_home() -> str:
 <section>
   <div class="container">
     <div class="section-head reveal">
-      <span class="sec-num">06</span>
+      <span class="sec-num">07</span>
       <span class="eyebrow">Why Solutionist</span>
       <h2>One workspace replacing the chaos of eight.</h2>
     </div>
@@ -1700,7 +1710,7 @@ def render_home() -> str:
 <section class="pricing">
   <div class="container">
     <div class="section-head reveal">
-      <span class="sec-num">07</span>
+      <span class="sec-num">08</span>
       <span class="eyebrow">What it costs</span>
       <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Priced for one person running the whole thing.</h2>
     </div>
@@ -1721,7 +1731,7 @@ def render_home() -> str:
         <p>Everything in Professional, plus higher limits and priority onboarding.</p>
       </div>
     </div>
-    <p class="price-note reveal">Beta pricing, grandfathered for good. If we raise prices later, yours does not move.</p>
+    <p class="price-note reveal">Annual plans save about 17%. Running more than one business, or a whole network? That tier is custom &mdash; <a href="/get-started" style="color:var(--accent);">talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
   </div>
 </section>
 
@@ -1834,7 +1844,7 @@ def render_home() -> str:
 """
     return _render_shell(
         title="One workspace that runs your whole business",
-        description="Not a system you learn. A system that learns you. Tell it what you do and everything reshapes around your trade, run by an AI chief of staff that never acts without your approval.",
+        description="The business system that already knows how yours runs. Bookings, clients, invoices, and an AI chief of staff that logs every move and never acts without your approval.",
         content_html=body, path="/", extra_css=extra_css, extra_scripts=extra_scripts,
     )
 
@@ -2162,6 +2172,7 @@ def render_compare() -> str:
       .switch-card{padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:14px;}
       .switch-card h3{font-family:var(--font-heading);color:var(--text-primary);font-size:16px;margin-bottom:10px;}
       .switch-card p{font-size:14px;color:var(--text-muted);line-height:1.6;}
+      .switch-card p + p{margin-top:10px;}
     """
     body = """
 <section class="page-hero">
@@ -2208,8 +2219,8 @@ def render_compare() -> str:
           <li><span>Practitioner site + brand kit</span><span>✓</span></li>
           <li><span>Chief of Staff (AI)</span><span>✓</span></li>
         </ul>
-        <div class="cost-total"><span class="label">Pricing TBD</span><span class="price">Private beta</span></div>
-        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">We're growing carefully. Apply for access and early users get grandfathered pricing once we launch publicly.</p>
+        <div class="cost-total"><span class="label">From</span><span class="price">$79 /mo</span></div>
+        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Practice $399, about 17% off on annual. Currently in private beta: apply for access, and beta pricing is grandfathered for good.</p>
       </div>
     </div>
   </div>
@@ -2259,8 +2270,11 @@ def render_compare() -> str:
         <p>HubSpot is enterprise CRM at scale, with sales-team assumptions, deal pipelines built for B2B reps, and pricing that doesn't fit a one-person business. Solutionist is purpose-built for one operator running their whole business, not a sales team managing leads.</p>
       </div>
       <div class="switch-card reveal reveal-delay-2">
-        <h3>From "I'll just use ChatGPT"</h3>
-        <p>ChatGPT is brilliant and starts every conversation with amnesia. You paste context, it helps, the context evaporates. Chief reads your live contacts, invoices, calendar, goals and brand on every single turn, because it lives where that data lives. Ask "how am I doing on my goals?" and you get your actual numbers, not a thoughtful list of things to consider.</p>
+        <h3>From &ldquo;I&rsquo;ll just build my own agent&rdquo;</h3>
+        <p>You can. The tools are genuinely good now, and you&rsquo;ll have something impressive running in an afternoon.</p>
+        <p>Then it double-books a client. Then it promises a refund policy you don&rsquo;t have. Then it forgets what happened last Tuesday. Not because the AI isn&rsquo;t smart, but because smart isn&rsquo;t the same as dependable, and dependable is built, not prompted.</p>
+        <p>That&rsquo;s the part that took us since January: knowing what a booking agent must never do, what has to be logged, what has to ask first, what a week in your line of work actually looks like. You&rsquo;d be starting that from zero, and everything your business teaches it would live in a tool you have to maintain forever.</p>
+        <p>Ours shows up already knowing your business. And it keeps everything it learns about yours specifically.</p>
       </div>
     </div>
   </div>
@@ -2402,7 +2416,7 @@ def render_about() -> str:
   <div class="container">
     <span class="eyebrow reveal">About</span>
     <h1 class="reveal reveal-delay-1">Built by a solo operator, <span class="gradient-text">for solo operators.</span></h1>
-    <p class="lead reveal reveal-delay-2" style="max-width:680px;margin:14px auto 0;">A small Michigan LLC building software for the people who actually do the work.</p>
+    <p class="lead reveal reveal-delay-2" style="max-width:680px;margin:14px auto 0;">A small Michigan LLC building a system for the people who actually do the work.</p>
   </div>
 </section>
 

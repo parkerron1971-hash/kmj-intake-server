@@ -52,7 +52,7 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
 <meta name="description" content="{description}">
 <meta property="og:title" content="{title} — The Solutionist System">
 <meta property="og:description" content="{description}">
-<meta property="og:image" content="https://mysolutionist.app/assets/og.png">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=2">
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="apple-touch-icon" href="/favicon.png">
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
