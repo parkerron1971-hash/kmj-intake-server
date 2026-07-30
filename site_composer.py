@@ -5209,15 +5209,23 @@ def connect_domain(body: DomainConnectBody,
     # Cloudflare for SaaS: register the custom hostname so Cloudflare issues +
     # auto-renews the TLS cert and fronts the domain (scales past Railway's
     # per-service cap). Fail-open to plain ownership verification.
+    # Certs are PER HOSTNAME, so www needs its own registration — without it,
+    # www serves no cert at all (HANDSHAKE_FAILURE) even though our own DNS
+    # instructions tell the practitioner to point www here.
     import cloudflare_saas
     cf = cloudflare_saas.create_custom_hostname(domain) if cloudflare_saas.enabled() else None
+    cf_www = (cloudflare_saas.create_custom_hostname(f"www.{domain}", apex=domain)
+              if cf else None)
     if cf:
         cfg["custom_domain_cf_id"] = cf.get("id")
+    if cf_www:
+        cfg["custom_domain_cf_www_id"] = cf_www.get("id")
     sb_clients.sb_patch_as_service(
         f"/business_sites?business_id=eq.{body.business_id}", {"site_config": cfg})
     if cf:
         return {"ok": True, "domain": domain, "status": "pending",
-                "cert": "cloudflare", "dns": cf["dns"]}
+                "cert": "cloudflare",
+                "dns": (cf["dns"] or []) + ((cf_www or {}).get("dns") or [])}
     return {
         "ok": True, "domain": domain, "status": "pending", "cert": "manual",
         "dns": [
@@ -5248,18 +5256,40 @@ def verify_domain(body: DomainVerifyBody,
     if not domain:
         raise HTTPException(400, "No domain connected yet.")
     # Cloudflare path: the domain is verified once BOTH the hostname and the
-    # SSL cert are active on Cloudflare's edge.
+    # SSL cert are active on Cloudflare's edge. www is checked alongside —
+    # and re-registered if missing, which backfills domains connected before
+    # www registration existed — but never blocks verification: the apex
+    # governs "verified", www reports its own state.
     import cloudflare_saas
     if cloudflare_saas.enabled():
         st = cloudflare_saas.hostname_status(domain) or {}
         hs, ss = st.get("hostname_status"), st.get("ssl_status")
+        www = f"www.{domain}"
+        st_www = cloudflare_saas.hostname_status(www, apex=domain) or {}
+        if not st_www.get("found"):
+            # Self-heal (create is idempotent): connected pre-www-fix.
+            created = cloudflare_saas.create_custom_hostname(www, apex=domain)
+            if created:
+                cfg["custom_domain_cf_www_id"] = created.get("id")
+                st_www = {"found": True, **created}
+                # Persist now — the pending path below returns without patching.
+                sb_clients.sb_patch_as_service(
+                    f"/business_sites?business_id=eq.{body.business_id}",
+                    {"site_config": cfg})
+        www_ok = bool(st_www.get("active"))
+        www_dns = st_www.get("dns") or []
         if st.get("active"):
             cfg["custom_domain_status"] = "verified"
             sb_clients.sb_patch_as_service(
                 f"/business_sites?business_id=eq.{body.business_id}", {"site_config": cfg})
+            message = ("Your domain is live over HTTPS. 🎉" if www_ok else
+                       (f"Your domain is live over HTTPS. 🎉 The www version "
+                        f"({www}) is still finishing — make sure its records "
+                        "below are added, then check back."))
             return {"ok": True, "status": "verified", "domain": domain,
-                    "domain_ok": True, "cert_ok": True,
-                    "message": "Your domain is live over HTTPS. 🎉"}
+                    "domain_ok": True, "cert_ok": True, "www_ok": www_ok,
+                    "dns": ([] if www_ok else www_dns),
+                    "message": message}
         domain_ok = (hs == "active")
         cert_ok = (ss == "active")
         if not domain_ok:
@@ -5274,8 +5304,8 @@ def verify_domain(body: DomainVerifyBody,
         else:
             message = "Almost there — finishing setup. Check back in a moment."
         return {"ok": False, "status": "pending", "domain": domain,
-                "dns": st.get("dns") or [],
-                "domain_ok": domain_ok, "cert_ok": cert_ok,
+                "dns": (st.get("dns") or []) + www_dns,
+                "domain_ok": domain_ok, "cert_ok": cert_ok, "www_ok": www_ok,
                 "hostname_status": hs, "ssl_status": ss, "message": message}
     # Manual fallback (no Cloudflare configured): ownership TXT check.
     token = cfg.get("custom_domain_token")
@@ -5305,9 +5335,11 @@ def disconnect_domain(body: DomainVerifyBody,
         try:
             import cloudflare_saas
             cloudflare_saas.delete_custom_hostname(domain)
+            cloudflare_saas.delete_custom_hostname(f"www.{domain}")
         except Exception:
             pass
-    for k in ("custom_domain", "custom_domain_status", "custom_domain_token", "custom_domain_cf_id"):
+    for k in ("custom_domain", "custom_domain_status", "custom_domain_token",
+              "custom_domain_cf_id", "custom_domain_cf_www_id"):
         cfg.pop(k, None)
     sb_clients.sb_patch_as_service(
         f"/business_sites?business_id=eq.{body.business_id}", {"site_config": cfg})

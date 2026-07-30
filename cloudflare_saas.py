@@ -66,7 +66,11 @@ def _dcv_records(ssl: Dict[str, Any], domain: str) -> List[Dict[str, str]]:
     """The ONE SSL-validation record the practitioner adds. We create the
     hostname with the TXT method, so we surface only the TXT record (never
     both TXT + a delegation CNAME — a CNAME can't coexist with a TXT at the
-    same name, which silently breaks validation)."""
+    same name, which silently breaks validation).
+
+    `domain` is the REGISTERED domain (what the DNS provider appends to
+    record names) — for the www hostname pass the apex, so the record name
+    renders as '_acme-challenge.www', not '_acme-challenge'."""
     out: List[Dict[str, str]] = []
     for rec in (ssl.get("validation_records") or []):
         if rec.get("txt_name"):
@@ -96,16 +100,21 @@ def _find(hostname: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _shape(ch: Dict[str, Any]) -> Dict[str, Any]:
+def _shape(ch: Dict[str, Any], apex: Optional[str] = None) -> Dict[str, Any]:
+    """`apex` = the registered domain, when the hostname is a subdomain of it
+    (www). Record names are shortened relative to the apex — DNS providers
+    append the registered domain, never the full www hostname."""
     ssl = ch.get("ssl") or {}
     hostname = str(ch.get("hostname") or "")
+    base = apex or hostname
     dns: List[Dict[str, str]] = []
     tgt = cname_target()
     if tgt:
-        dns.append({"type": "CNAME", "host": "@", "value": tgt,
-                    "note": "Points your domain at your site. Add a second CNAME with "
-                            "Name 'www' and the same value."})
-    dns += _dcv_records(ssl, hostname)
+        host = _short_host(hostname, base)
+        note = ("Points your domain at your site." if host == "@"
+                else f"Points {hostname} at your site.")
+        dns.append({"type": "CNAME", "host": host, "value": tgt, "note": note})
+    dns += _dcv_records(ssl, base)
     active = ch.get("status") == "active" and ssl.get("status") == "active"
     return {
         "id": ch.get("id"),
@@ -117,15 +126,17 @@ def _shape(ch: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def create_custom_hostname(hostname: str) -> Optional[Dict[str, Any]]:
+def create_custom_hostname(hostname: str, apex: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Register (idempotently) a custom hostname; Cloudflare starts issuing the
     cert. Returns {id, cname_target, dns[], hostname_status, ssl_status, active}
-    or None when disabled / on error (caller falls back)."""
+    or None when disabled / on error (caller falls back). Certs are issued
+    PER HOSTNAME — the apex and www are separate registrations; pass `apex`
+    when registering www so the DNS instructions name records correctly."""
     if not enabled() or not hostname:
         return None
     existing = _find(hostname)
     if existing:
-        return _shape(existing)
+        return _shape(existing, apex)
     try:
         r = httpx.post(
             f"{_API}/zones/{_zone()}/custom_hostnames", headers=_headers(),
@@ -136,13 +147,13 @@ def create_custom_hostname(hostname: str) -> Optional[Dict[str, Any]]:
         if r.status_code >= 400:
             logger.warning(f"[cf] create {hostname} → {r.status_code}: {r.text[:200]}")
             return None
-        return _shape(r.json().get("result") or {})
+        return _shape(r.json().get("result") or {}, apex)
     except Exception as e:
         logger.warning(f"[cf] create failed for {hostname}: {e}")
         return None
 
 
-def hostname_status(hostname: str) -> Optional[Dict[str, Any]]:
+def hostname_status(hostname: str, apex: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Poll a custom hostname's live status (hostname + SSL). None when
     disabled; {found: False} when not registered."""
     if not enabled() or not hostname:
@@ -150,7 +161,7 @@ def hostname_status(hostname: str) -> Optional[Dict[str, Any]]:
     ch = _find(hostname)
     if not ch:
         return {"found": False}
-    return {"found": True, **_shape(ch)}
+    return {"found": True, **_shape(ch, apex)}
 
 
 def delete_custom_hostname(hostname: str) -> None:
