@@ -4055,6 +4055,22 @@ def compose_site(business_id: str, brief_notes: str = "",
         except Exception as _e:
             logger.warning(f"[composer] multi-page build skipped (non-fatal): {_e}")
 
+    # Arc 19 weight-hole fix (2026-07-30): THE one billable row for this
+    # build — weighted 25 by usage_metering.UNIT_WEIGHTS while the per-call
+    # authoring rows above it are weight 0. Only a shipped LLM compose
+    # bills: a blocked build raises out of render_and_persist before this
+    # line, and deterministic/fallback composes (source != "llm") are free.
+    if use_llm and source == "llm":
+        try:
+            from api_usage_logger import log_api_usage_sync
+            log_api_usage_sync(
+                endpoint="/composer/compose", model="site-build-marker",
+                input_tokens=0, output_tokens=0, business_id=business_id,
+                task_type="site_build_marker", cost_cents_override=0.0)
+        except Exception as _mk_e:
+            logger.warning(f"[composer] build marker row failed "
+                           f"(non-fatal): {_mk_e}")
+
     _report_progress(progress_cb, 100, "Done")
     return {"composition_source": source, "design_rationale_id": dro_id,
             "dro_status": dro_status, "dro_summary": dro_summary, **result}

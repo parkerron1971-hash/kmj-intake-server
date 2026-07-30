@@ -180,7 +180,9 @@ def has_feature(business_row: Optional[Dict[str, Any]], feature: str) -> bool:
     plan = plan_of(business_row)
     if not plan:
         return False
-    return _PLAN_RANK[plan] >= _PLAN_RANK[min_plan]
+    # .get guards: an unknown tier name (future plan key, bad comp value)
+    # must read as rank 0, not crash the gate.
+    return _PLAN_RANK.get(plan, 0) >= _PLAN_RANK.get(min_plan, 99)
 
 
 def entitlements(business_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
