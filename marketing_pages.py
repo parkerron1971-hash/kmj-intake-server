@@ -1128,6 +1128,9 @@ def render_home() -> str:
       .trust-head{max-width:680px;margin:0 auto 30px;text-align:center;}
       .trust-head h2{margin:12px 0 10px;font-size:clamp(24px,3vw,34px);letter-spacing:-.02em;}
       .trust-head p{font-size:14.5px;color:var(--text-muted);line-height:1.6;margin:0;}
+      .trust-kicker{max-width:600px;margin:30px auto 0;text-align:center;font-family:var(--font-heading);
+        font-size:16.5px;line-height:1.55;letter-spacing:-.01em;color:var(--text-muted);}
+      .trust-kicker span{color:var(--text-primary);font-weight:600;}
       .trust-more{margin-top:22px;text-align:center;font-size:12.5px;color:var(--text-dim);}
       .trust-more a{color:var(--text-secondary);text-decoration:underline;text-underline-offset:3px;}
 
@@ -1380,13 +1383,13 @@ def render_home() -> str:
       <span class="eyebrow">The part most people skip</span>
       <h2>Autonomous, not unsupervised.</h2>
       <p>Chief runs your week on its own. It also asks first on anything that touches money, messages a client, or can&rsquo;t be taken back. Every action it takes is written down, explained in plain language, and reversible.</p>
-      <p style="margin-top:8px;">Most AI will do what you ask. The question worth asking is what it does when you&rsquo;re not looking.</p>
     </div>
     <div class="trust-grid reveal">
         <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg><span><b>Asks before it acts</b>Refunds, bulk messages, anything irreversible: your call, every time.</span></div>
         <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg><span><b>Shows its work</b>Every action logged in plain English. No black box, no mystery charges.</span></div>
         <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/></svg><span><b>Undo means undo</b>If Chief gets it wrong, you take it back. That&rsquo;s a feature, not an apology.</span></div>
     </div>
+    <p class="trust-kicker reveal">Most AI will do what you ask. <span>The question worth asking is what it does when you&rsquo;re not looking.</span></p>
     <div class="trust-more reveal">
       Full detail in the <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms</a>, including how to export everything or delete your account.
     </div>
@@ -1404,7 +1407,7 @@ def render_home() -> str:
       <p>Every few months someone announces a smarter model. For most businesses that&rsquo;s another thing to learn, another tool to evaluate, another migration nobody has time for.</p>
       <p>Here it&rsquo;s just a better engine dropped into the same car. Your workflows don&rsquo;t change. Your data doesn&rsquo;t move. You don&rsquo;t retrain. The system you opened this morning quietly got sharper overnight, and you find out because the work got easier, not because you got an email about it.</p>
     </div>
-    <p class="shape-close reveal">We are not in the AI business. We&rsquo;re in the how-your-business-actually-runs business. The AI is just the engine, and engines are supposed to get better.</p>
+    <p class="shape-close reveal">We are not in the AI business. We&rsquo;re in the <b style="color:var(--text-primary);">how-your-business-actually-runs business.</b> The AI is just the engine, and engines are supposed to get better.</p>
   </div>
 </section>
 
