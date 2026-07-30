@@ -1660,8 +1660,8 @@ def render_home() -> str:
     <div class="demo-frame reveal">
       <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
       <video class="demo-video" controls playsinline preload="metadata" poster="/assets/demo-poster.jpg?v=2">
-        <source src="/assets/demo.mp4?v=2" type="video/mp4">
-        Your browser doesn't support embedded video - <a href="/assets/demo.mp4?v=2">download the demo</a>.
+        <source src="/assets/demo.mp4?v=3" type="video/mp4">
+        Your browser doesn't support embedded video - <a href="/assets/demo.mp4?v=3">download the demo</a>.
       </video>
     </div>
   </div>
