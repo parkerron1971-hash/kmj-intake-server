@@ -4387,6 +4387,12 @@ class ComposeBody(BaseModel):
 def compose(body: ComposeBody,
             session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
     _require_owner(body.business_id, session.user.id)
+    # 7/30 tier arc — the most expensive action on the platform finally
+    # checks the allowance (dormant behind BILLING_ENFORCE; deterministic
+    # composes stay free).
+    if body.use_llm:
+        import billing_limits
+        billing_limits.require_units(body.business_id)
     result = compose_site(body.business_id, body.brief_notes or "", body.use_llm,
                           design_prefs=body.design_prefs, refine=body.refine)
     return {"ok": True, **result}

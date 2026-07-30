@@ -635,6 +635,22 @@ async def mcp_endpoint(request: Request,
         return JSONResponse(status_code=403, content=_error(
             None, UNAUTHORIZED, "this surface is restricted to the platform owner"))
 
+    # 7/30 tier arc — a scoped token names its business in a signed claim;
+    # if that business's subscription has since LOCKED, the token goes
+    # quiet too (dormant behind BILLING_ENFORCE, fail-open inside).
+    # Owner-JWT callers are the platform owner and resolve later.
+    if caller.kind == "token" and caller.business_id:
+        try:
+            import billing_limits
+            billing_limits.require_live_access(str(caller.business_id))
+        except HTTPException as e:
+            _audit(actor=actor, tool="(endpoint)", allowed=False,
+                   ok=False, duration_ms=0, error="subscription locked")
+            return JSONResponse(status_code=402, content=_error(
+                None, UNAUTHORIZED,
+                (e.detail or {}).get("message", "subscription ended")
+                if isinstance(e.detail, dict) else "subscription ended"))
+
     # Fail CLOSED. Every other bucket in this service fails open, which is
     # right for a practitioner and wrong for an agent that may be looping
     # or holding a stolen credential.

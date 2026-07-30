@@ -58,6 +58,47 @@ def require_feature(business_id: str, feature: str) -> None:
     })
 
 
+def require_units(business_id: str) -> None:
+    """The 402 gate for AI-action surfaces (compose, director, Chief).
+    Delegates to the weighted metering gate — allowance first, then
+    credits; grandfather, fail-open, and the BILLING_ENFORCE dormancy
+    all live inside usage_metering.can_interact()."""
+    if chief_can_send(business_id):
+        return
+    raise HTTPException(status_code=402, detail={
+        "error": "out_of_units",
+        "message": ("You're out of AI actions for this month. Top up "
+                    "credits in Settings → Billing to keep going — "
+                    "bookings, invoices, and bookkeeping never stop."),
+    })
+
+
+def require_live_access(business_id: str) -> None:
+    """The 402 gate for a LOCKED subscription (canceled / trial expired).
+    Until now access_state was advisory — the frontend showed the paywall
+    while a valid JWT kept full API access. Grace passes (warn upstream,
+    don't block); dormant while BILLING_ENFORCE is off; fails open."""
+    import usage_metering
+    try:
+        if not feature_gates.enforcement_on():
+            return
+        biz_row = usage_metering._biz_row(business_id)
+        gf = usage_metering.is_grandfathered_business(business_id, biz_row)
+        state = feature_gates.access_state(biz_row, gf)
+    except Exception as e:
+        logger.warning(f"require_live_access failed open: {e}")
+        return
+    if (state or {}).get("state") != "locked":
+        return
+    raise HTTPException(status_code=402, detail={
+        "error": "subscription_locked",
+        "reason": (state or {}).get("reason"),
+        "message": ("This account's subscription has ended. Restart it in "
+                    "Settings → Billing to keep using AI features and "
+                    "campaigns — your data is safe and exports stay open."),
+    })
+
+
 def _month_start_iso() -> str:
     now = datetime.now(timezone.utc)
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
