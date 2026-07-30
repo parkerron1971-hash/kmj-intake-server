@@ -5708,7 +5708,13 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
 async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResponse:
     """Look up a site by its custom domain.
     Pass 3: same flag check as _serve_site_by_slug.
-    Pass 3.8g: forwards `path` for multi-page routing."""
+    Pass 3.8g: forwards `path` for multi-page routing.
+    www resolves to the same site: connect stores the APEX only (its
+    normalizer strips www), so a www visitor's raw Host would match nothing
+    and 404 — strip it here, covering both call sites."""
+    domain = str(domain or "").lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
     async with httpx.AsyncClient() as client:
         sites = await _sb(client,
             f"/business_sites?site_config->>custom_domain=eq.{domain}"
