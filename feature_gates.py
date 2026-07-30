@@ -39,7 +39,10 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
     "accountant_collaborator": "practice",
     "audit_trail": "practice",
     "vertical_reports": "practice",        # Trust Reconciliation, 990 prep (I.10)
-    "multi_seat": "practice",              # NOT BUILT YET — do not market until shipped
+    "multi_seat": "practice",              # seat CAPS enforce via business_users_router
+                                           # (max_seats limit); the frontend still hides
+                                           # this key from plan cards (HIDDEN_FEATURES)
+                                           # until the full team experience ships
 }
 
 # Numeric limits per tier (gate-ready scaffold; UNENFORCED like everything

@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+import billing_limits
 
 logger = logging.getLogger("contractors_router")
 
@@ -114,6 +115,7 @@ class ContractorBody(BaseModel):
 def create_contractor(body: ContractorBody,
                       user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(body.business_id, user)
+    billing_limits.require_feature(body.business_id, "contractor_payments")
     if not (body.name or "").strip():
         raise HTTPException(400, "name is required")
     if body.default_category not in _BUCKETS:
@@ -163,6 +165,7 @@ async def onboarding_link(contractor_id: str,
     the link when possible; always returns it so the practitioner can share
     it manually (collaborators pattern)."""
     c = _owner_for_contractor(contractor_id, user)
+    billing_limits.require_feature(str(c["business_id"]), "contractor_payments")
     biz_rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{c['business_id']}&select=name&limit=1") or [{}]
     biz_name = biz_rows[0].get("name") or "the business"
@@ -253,6 +256,7 @@ async def pay(contractor_id: str, body: PayBody,
     c = _owner_for_contractor(contractor_id, user)
     if str(c["business_id"]) != body.business_id:
         raise HTTPException(403, "contractor belongs to a different business")
+    billing_limits.require_feature(body.business_id, "contractor_payments")
     if body.amount <= 0:
         raise HTTPException(400, "amount must be positive")
     if c.get("onboarding_status") != "active" or not c.get("stripe_account_id"):

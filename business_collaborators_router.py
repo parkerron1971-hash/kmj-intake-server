@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+import billing_limits
 
 logger = logging.getLogger("business_collaborators_router")
 
@@ -113,6 +114,9 @@ def accountant_overview(biz: str, user: AuthedUser = Depends(require_user)) -> D
 async def invite(biz: str, body: InviteBody,
                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz_row = _owner(biz, user)
+    # Gate the INVITE only: accepting an already-sent invite and revoking
+    # access must never be plan-locked.
+    billing_limits.require_feature(biz, "accountant_collaborator")
     if body.role not in ("accountant", "viewer", "editor"):
         raise HTTPException(400, "invalid role")
     email = (body.email or "").strip().lower()

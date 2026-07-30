@@ -17,10 +17,45 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from fastapi import HTTPException
+
 import sb_clients
 import feature_gates
 
 logger = logging.getLogger("billing_limits")
+
+
+def require_feature(business_id: str, feature: str) -> None:
+    """The 402 gate for tier features — the first production caller of
+    feature_gates.has_feature() (7/30 tier audit: the feature→tier map
+    had ZERO callers, so every plan shipped identical software).
+
+    GATE-READY + DORMANT like everything in this module: with
+    BILLING_ENFORCE off has_feature() answers True and this never
+    raises. Grandfathered owners always pass. Fails OPEN on lookup
+    errors — a billing hiccup must never take a feature down. The 402
+    payload shape is the contract the frontend's upgrade prompt reads:
+    {error: "feature_locked", feature, required_plan, message}."""
+    import usage_metering
+    try:
+        if not feature_gates.enforcement_on():
+            return
+        biz_row = usage_metering._biz_row(business_id)
+        if usage_metering.is_grandfathered_business(business_id, biz_row):
+            return
+        if feature_gates.has_feature(biz_row, feature):
+            return
+    except Exception as e:
+        logger.warning(f"require_feature({feature}) failed open: {e}")
+        return
+    min_plan = feature_gates.FEATURE_MIN_PLAN.get(feature, "professional")
+    raise HTTPException(status_code=402, detail={
+        "error": "feature_locked",
+        "feature": feature,
+        "required_plan": min_plan,
+        "message": (f"This is a {min_plan.title()}-plan feature. "
+                    "Upgrade in Settings → Billing to unlock it."),
+    })
 
 
 def _month_start_iso() -> str:
