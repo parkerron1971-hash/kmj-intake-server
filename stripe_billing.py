@@ -375,6 +375,16 @@ async def billing_entitlements(biz: str, user: AuthedUser = Depends(require_user
     out["trial_ends_at"] = business.get("trial_ends_at")
     out["current_period_end"] = business.get("current_period_end")
     out["cancel_at_period_end"] = business.get("cancel_at_period_end")
+    # 7/30 tier arc — the frontend FeatureGate reads this one payload;
+    # grandfather/comp must ride along or the gate would lie to the
+    # exact accounts require_feature() waves through.
+    try:
+        import usage_metering
+        out["grandfathered"] = usage_metering.is_grandfathered_business(
+            biz, business)
+    except Exception:
+        out["grandfathered"] = False
+    out["comp_tier"] = (business.get("comp_tier") or None)
     return out
 
 

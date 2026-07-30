@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+import billing_limits
 import gl_engine
 
 logger = logging.getLogger("accounting_periods_router")
@@ -106,6 +107,7 @@ class GenerateBody(BaseModel):
 def generate(biz: str, year: Optional[int] = None,
              user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "period_close")
     y = year or datetime.now(timezone.utc).year
     return gl_engine.generate_periods(biz, y)
 
@@ -114,6 +116,7 @@ def generate(biz: str, year: Optional[int] = None,
 def close(period_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     ctx = _owner_for_period(period_id, user)
     biz_id = str(ctx["period"]["business_id"])
+    billing_limits.require_feature(biz_id, "period_close")
     try:
         # Category D — two-signature close: when enabled, the initiator's
         # close becomes a pending proposal the OTHER party (accountant ↔
@@ -159,6 +162,7 @@ def reopen(period_id: str, body: ReopenBody,
     if not (body.reason or "").strip():
         raise HTTPException(400, "a reason is required to reopen a closed period")
     ctx = _owner_for_period(period_id, user)
+    billing_limits.require_feature(str(ctx["period"]["business_id"]), "period_close")
     try:
         return gl_engine.reopen_period(str(ctx["period"]["business_id"]), period_id,
                                        reopened_by=str(user.id), reason=body.reason.strip())

@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+import billing_limits
 import reports_engine
 import gl_reports
 import gl_reports_t2
@@ -25,6 +26,23 @@ import gl_reports_t4
 logger = logging.getLogger("reports_router")
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+# 7/30 tier audit — report → plan feature (billing_limits.require_feature;
+# dormant until BILLING_ENFORCE). The map's principle: GL-authoritative
+# analytical reports are Professional (reports_full); vertical compliance
+# deliverables are Practice. Starter keeps the operational core — P&L,
+# agings, cash flow, balance sheet, bank reconciliation, statements —
+# so basic CSV/PDF export always remains as the data escape hatch.
+_REPORT_FEATURES: Dict[str, str] = {
+    "trial_balance": "reports_full", "general_ledger": "reports_full",
+    "revenue": "reports_full", "expenses_detail": "reports_full",
+    "budget_vs_actual": "reports_full", "profitability": "reports_full",
+    "trends": "reports_full",
+    "summary_1099": "contractor_payments",
+    "trust_reconciliation": "vertical_reports", "donors": "vertical_reports",
+    "prep_990": "vertical_reports",
+    "audit_trail": "audit_trail",
+}
 
 
 def _gl_or_fallback(biz: str, gl_fn, h3a_fn) -> Dict[str, Any]:
@@ -126,6 +144,8 @@ def pl(biz: str, period: str = "this_month", comparison: Optional[str] = None,
        from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
        user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz_row = _owner(biz, user)
+    if comparison:  # the comparison view is the reports_full part of P&L
+        billing_limits.require_feature(biz, "reports_full")
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
     b = _basis_for(biz_row, basis)
     out = _gl_or_fallback(
@@ -199,6 +219,7 @@ def balance_sheet(biz: str, as_of: Optional[str] = None,
 def trial_balance(biz: str, as_of: Optional[str] = None,
                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "reports_full")
     if not gl_reports.gl_active(biz):
         return {"ok": True, "report": "trial_balance", "accounts": [],
                 "totals": {"debits": 0, "credits": 0, "difference": 0, "balanced": True},
@@ -212,6 +233,7 @@ def general_ledger(biz: str, account: Optional[str] = None,
                    from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "reports_full")
     if period and not (from_ or to):
         s, e = reports_engine.period_bounds(period)
         from_, to = s.isoformat(), e.isoformat()
@@ -269,6 +291,7 @@ def _summary_1099(biz: str, year: int) -> Dict[str, Any]:
 def summary_1099(biz: str, year: Optional[int] = None,
                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "contractor_payments")
     from datetime import datetime as _dt, timezone as _tz
     y = year or _dt.now(_tz.utc).year
     return _summary_1099(biz, y)
@@ -297,6 +320,7 @@ def accountant_iif(biz: str, year: Optional[int] = None,
                    user: AuthedUser = Depends(require_user)) -> Response:
     """QuickBooks-importable IIF of the General Ledger."""
     _owner_or_accountant(biz, user)
+    billing_limits.require_feature(biz, "accountant_package")
     import accountant_export
     if not gl_reports.gl_active(biz):
         raise HTTPException(409, "No General Ledger yet — run Backfill in Admin first.")
@@ -311,6 +335,7 @@ def accountant_package(biz: str, year: Optional[int] = None,
                        user: AuthedUser = Depends(require_user)) -> Response:
     """Year-end ZIP: branded PDFs + CSVs + IIF + cover note."""
     biz_row = _owner_or_accountant(biz, user)
+    billing_limits.require_feature(biz, "accountant_package")
     import accountant_export
     y = _package_year(year)
     blob, _ = accountant_export.build_package_zip(
@@ -327,6 +352,7 @@ async def accountant_send(biz: str, year: Optional[int] = None,
     """Email the year-end package to the accountant (active collaborator, or
     Financial Settings accountant_email). Returns the draft + send result."""
     biz_row = _owner(biz, user)
+    billing_limits.require_feature(biz, "accountant_package")
     import accountant_export
     import base64
     y = _package_year(year)
@@ -363,6 +389,7 @@ async def accountant_send(biz: str, year: Optional[int] = None,
 def journal(biz: str, limit: int = 50, offset: int = 0,
             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "reports_full")
     if not gl_reports.gl_active(biz):
         return {"ok": True, "report": "journal", "entries": [], "has_more": False,
                 "note": "No General Ledger yet — run Backfill in Admin."}
@@ -401,6 +428,7 @@ def revenue(biz: str, period: str = "this_month",
             from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz_row = _owner(biz, user)
+    billing_limits.require_feature(biz, "reports_full")
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
     if not gl_reports.gl_active(biz):
         return _needs_gl("revenue", total_revenue=0, by_account=[], by_source=[],
@@ -416,6 +444,7 @@ def expenses_detail(biz: str, period: str = "this_month",
                     from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz_row = _owner(biz, user)
+    billing_limits.require_feature(biz, "reports_full")
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
     if not gl_reports.gl_active(biz):
         return _needs_gl("expenses_detail", total_expenses=0, by_account=[],
@@ -443,6 +472,7 @@ class BudgetsBody(BaseModel):
 def get_budgets(biz: str, year: int, month: int,
                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "reports_full")
     return {"ok": True, "budgets": gl_reports_t3.list_budgets(biz, year, month),
             "categories": list(gl_reports_t3.BUDGET_CATEGORIES)}
 
@@ -451,6 +481,7 @@ def get_budgets(biz: str, year: int, month: int,
 def put_budgets(biz: str, body: BudgetsBody,
                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "reports_full")
     if not (1 <= body.month <= 12):
         raise HTTPException(400, "month must be 1-12")
     return gl_reports_t3.upsert_budgets(
@@ -463,6 +494,7 @@ def budget_vs_actual(biz: str, period: str = "this_month",
                      from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                      user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz_row = _owner(biz, user)
+    billing_limits.require_feature(biz, "reports_full")
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
     if not gl_reports.gl_active(biz):
         return _needs_gl("budget_vs_actual", rows=[], has_any_budget=False)
@@ -475,6 +507,7 @@ def budget_vs_actual(biz: str, period: str = "this_month",
 @router.get("/cash-forecast")
 def cash_forecast(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "reports_full")
     if not gl_reports.gl_active(biz):
         return _needs_gl("cash_forecast", horizons=[], monthly_history=[])
     return gl_reports_t3.cash_flow_forecast(biz)
@@ -485,6 +518,7 @@ def profitability(biz: str, period: str = "this_year",
                   from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz_row = _owner(biz, user)
+    billing_limits.require_feature(biz, "reports_full")
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
     if not gl_reports.gl_active(biz):
         return _needs_gl("profitability", by_customer=[], by_offering=[])
@@ -497,6 +531,7 @@ def profitability(biz: str, period: str = "this_year",
 @router.get("/trends")
 def trends_report(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "reports_full")
     if not gl_reports.gl_active(biz):
         return _needs_gl("trends", monthly=[], seasonality=[], momentum={})
     return gl_reports_t3.trends(biz)
@@ -508,6 +543,7 @@ def trends_report(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[st
 def trust_reconciliation(biz: str, as_of: Optional[str] = None,
                          user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "vertical_reports")
     if not gl_reports.gl_active(biz):
         return _needs_gl("trust_reconciliation", three_way={}, by_client=[], activity=[])
     return gl_reports_t4.trust_reconciliation(biz, as_of)
@@ -518,6 +554,7 @@ def donors(biz: str, period: str = "this_year",
            from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
            user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz_row = _owner(biz, user)
+    billing_limits.require_feature(biz, "vertical_reports")
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
     try:
         return gl_reports_t4.donor_report(biz, period, from_, to)
@@ -529,6 +566,7 @@ def donors(biz: str, period: str = "this_year",
 def prep_990(biz: str, year: Optional[int] = None,
              user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "vertical_reports")
     if not gl_reports.gl_active(biz):
         return _needs_gl("prep_990", contributions=[], functional_expenses=[],
                          net_assets=[], sme_flags=[])
@@ -553,6 +591,7 @@ def audit_trail_report(biz: str, source_type: Optional[str] = None,
                        to: Optional[str] = None,
                        user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "audit_trail")
     return gl_reports_t4.audit_trail(biz, source_type=source_type,
                                      date_from=from_, date_to=to)
 
@@ -621,6 +660,10 @@ def export(biz: str, report: str, format: str = "csv",
     biz_row = _owner(biz, user)
     if report not in _REPORT_TITLES:
         raise HTTPException(400, "unknown report")
+    # Exports gate exactly like their screens; Starter reports (P&L,
+    # agings, cash flow, balance sheet, statements, bank rec) stay free.
+    if report in _REPORT_FEATURES:
+        billing_limits.require_feature(biz, _REPORT_FEATURES[report])
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
     try:
         # Phase I.4 — exports use the same authoritative source as the screen.

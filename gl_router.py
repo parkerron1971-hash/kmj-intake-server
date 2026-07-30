@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+import billing_limits
 import gl_engine
 import reports_engine
 
@@ -67,6 +68,7 @@ def _scan_non_usd(biz: str) -> Dict[str, Any]:
 @router.post("/backfill")
 def backfill(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     b = _owner(biz, user)
+    billing_limits.require_feature(biz, "general_ledger")
     nonusd = _scan_non_usd(biz)
     if nonusd["non_usd_count"] > 0:
         # GL-8 stop: don't guess FX.
@@ -84,6 +86,7 @@ def backfill(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, An
 @router.post("/backfill/reverse")
 def reverse(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "general_ledger")
     out = gl_engine.reverse_backfill(biz)
     _log_admin(biz, "reverse", out, user)
     return out
@@ -92,6 +95,7 @@ def reverse(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any
 @router.get("/trial-balance")
 def trial_balance(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(biz, user)
+    billing_limits.require_feature(biz, "general_ledger")
     lines = gl_engine.read_ledger(biz)
     tb = gl_engine.trial_balance(lines)
     tb["ok"] = True
@@ -146,6 +150,7 @@ def verify(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]
     H.3a/H.1 engine, over all-time. All deltas must be ~0. Drains this
     business's queue first so the result reflects the latest source state."""
     _owner(biz, user)
+    billing_limits.require_feature(biz, "general_ledger")
     try:
         gl_engine.process_queue(biz)
     except Exception as e:
@@ -209,6 +214,7 @@ def trust_status(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str
     in-balance books. Ledger MECHANICS only — the formal per-client three-way
     reconciliation REPORT is I.10 + SME ruling."""
     _owner(biz, user)
+    billing_limits.require_feature(biz, "vertical_ledgers")
     import gl_reports
     taccts = sb_clients.sb_get_as_service(
         f"/plaid_accounts?business_id=eq.{biz}&is_trust_account=is.true"
