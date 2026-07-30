@@ -265,6 +265,8 @@ async def plan_campaign(body: PlanBody, user: AuthedUser = Depends(require_user)
     nothing sends until the practitioner reviews and launches."""
     biz = _load_business(body.business_id)
     _require_owner(user, biz)
+    import billing_limits
+    billing_limits.require_units(body.business_id)   # Chief drafts = an AI action
     audience = body.audience if (body.audience or {}).get("kind") in AUDIENCE_KINDS \
         else {"kind": "silent", "days_silent": 30}
     contacts = _resolve_audience(biz["id"], audience)
@@ -352,6 +354,10 @@ async def launch_campaign(campaign_id: str, body: LaunchBody,
     camp = _load_campaign(campaign_id)
     biz = _load_business(camp["business_id"])
     _require_owner(user, biz)
+    # A locked (canceled/expired) account must not bulk-send — Twilio
+    # spend on a dead subscription. Dormant behind BILLING_ENFORCE.
+    import billing_limits
+    billing_limits.require_live_access(camp["business_id"])
     if camp.get("status") not in ("draft", "paused"):
         raise HTTPException(409, f"Campaign is {camp.get('status')}.")
     touches = _clean_touches(camp.get("touches"))

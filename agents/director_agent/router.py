@@ -159,6 +159,8 @@ def build_with_loop(
         if str(owner_rows[0].get("owner_id")) != str(session.user.id):
             raise HTTPException(status_code=403,
                                 detail="not authorized for this business")
+        import billing_limits
+        billing_limits.require_units(req.business_id)
         logger.warning(
             "[director.build-with-loop] DEPRECATED path hit — rerouting to "
             f"the Module Composer for business {req.business_id[:8]} "
@@ -258,6 +260,8 @@ def refine(
     within the last 10 minutes (prevents double-spend on parallel
     refine requests).
     """
+    import billing_limits
+    billing_limits.require_units(req.business_id)
     result = run_refine(
         business_id=req.business_id,
         user_text=req.user_text,

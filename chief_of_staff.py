@@ -14043,6 +14043,17 @@ async def chief_chat(
         except Exception:
             pass
 
+        # 7/30 tier arc — the Chief backend never consulted the allowance
+        # (only /ai/proxy did). Dormant behind BILLING_ENFORCE; the 402
+        # payload is the frontend top-up prompt's contract.
+        try:
+            import billing_limits
+            billing_limits.require_units(req.business_id)
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
         async with httpx.AsyncClient() as client:
             # Recurrence "cron" — generate any due invoice instances
             # before we load context so they show up this turn. Cheap
@@ -14761,6 +14772,8 @@ async def chief_insights_run(
         f"/businesses?id=eq.{business_id}&select=id,owner_id&limit=1") or []
     if not rows or str(rows[0].get("owner_id")) != str(user_session.user.id):
         raise HTTPException(403, "not your business")
+    import billing_limits
+    billing_limits.require_units(business_id)
     import chief_insights
     result = await asyncio.to_thread(
         chief_insights.run_for_business, business_id, force)
