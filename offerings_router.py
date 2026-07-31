@@ -128,6 +128,23 @@ class OfferingCreateBody(BaseModel):
     inventory_qty: Optional[int] = Field(default=None, ge=0)
     requires_shipping: Optional[bool] = None
     fulfillment_note: Optional[str] = Field(default=None, max_length=600)
+    # Barber-money — deposits + no-show fee (columns from
+    # APPLY-2026-07-31-barber-money.sql; pass-through only when set,
+    # same deploy-order pattern as the Arc 27 fields).
+    requires_deposit: Optional[bool] = None
+    deposit_type: Optional[str] = None
+    deposit_amount: Optional[float] = Field(default=None, ge=0)
+    no_show_fee_cents: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("deposit_type")
+    @classmethod
+    def _dep_type_ok(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        v = v.strip().lower()
+        if v not in ("percent", "flat"):
+            raise ValueError("deposit_type must be 'percent' or 'flat'")
+        return v
 
     @field_validator("category")
     @classmethod
@@ -158,6 +175,21 @@ class OfferingPatchBody(BaseModel):
     inventory_qty: Optional[int] = Field(default=None, ge=0)
     requires_shipping: Optional[bool] = None
     fulfillment_note: Optional[str] = Field(default=None, max_length=600)
+    # Barber-money — deposits + no-show fee.
+    requires_deposit: Optional[bool] = None
+    deposit_type: Optional[str] = None
+    deposit_amount: Optional[float] = Field(default=None, ge=0)
+    no_show_fee_cents: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("deposit_type")
+    @classmethod
+    def _dep_type_ok(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        v = v.strip().lower()
+        if v not in ("percent", "flat"):
+            raise ValueError("deposit_type must be 'percent' or 'flat'")
+        return v
 
     @field_validator("category")
     @classmethod
@@ -229,6 +261,12 @@ def create_offering(body: OfferingCreateBody, user: AuthedUser = Depends(require
         **({"inventory_qty": body.inventory_qty} if body.inventory_qty is not None else {}),
         **({"requires_shipping": body.requires_shipping} if body.requires_shipping is not None else {}),
         **({"fulfillment_note": body.fulfillment_note} if body.fulfillment_note is not None else {}),
+        # Barber-money — only included when set (deploy-order safety:
+        # PostgREST rejects unknown columns pre-migration).
+        **({"requires_deposit": body.requires_deposit} if body.requires_deposit is not None else {}),
+        **({"deposit_type": body.deposit_type} if body.deposit_type is not None else {}),
+        **({"deposit_amount": body.deposit_amount} if body.deposit_amount is not None else {}),
+        **({"no_show_fee_cents": body.no_show_fee_cents} if body.no_show_fee_cents is not None else {}),
     })
     if not (isinstance(created, list) and created):
         logger.warning(
@@ -268,6 +306,13 @@ def patch_offering(
     if body.inventory_qty is not None:         update["inventory_qty"] = body.inventory_qty
     if body.requires_shipping is not None:     update["requires_shipping"] = body.requires_shipping
     if body.fulfillment_note is not None:      update["fulfillment_note"] = body.fulfillment_note or None
+    # Barber-money — deposits + no-show fee. Frozen per-booking copies
+    # (data.no_show_fee_cents, deposit_paid_cents) are NOT touched by
+    # edits here — same P5 non-propagation rule as price.
+    if body.requires_deposit is not None:      update["requires_deposit"] = body.requires_deposit
+    if body.deposit_type is not None:          update["deposit_type"] = body.deposit_type
+    if body.deposit_amount is not None:        update["deposit_amount"] = body.deposit_amount
+    if body.no_show_fee_cents is not None:     update["no_show_fee_cents"] = body.no_show_fee_cents
     if not update:
         raise HTTPException(status_code=400, detail="no fields to update")
 

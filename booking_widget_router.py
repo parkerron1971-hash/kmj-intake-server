@@ -229,6 +229,51 @@ def _offerings_for_categories(business_id: str, categories: List[str]) -> List[D
         f"&order=name.asc&select=id,name,slug,description,category,"
         f"current_price,currency,duration_min,show_price_to_customer"
     ) or []
+    return _merge_money_config(business_id, rows)
+
+
+def _merge_money_config(business_id: str,
+                        rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Barber-money — decorate customer-safe offerings with the deposit
+    + no-show-fee facts the wizard displays ("$X deposit to book",
+    "Card kept on file; no-show fee $X per our policy").
+
+    A SEPARATE fail-soft query on purpose: the deposit columns may not
+    exist until the barber-money migration applies, and folding them
+    into the main select would 400 the whole offerings list (no
+    services on the widget = broken bookings). Any error here reads as
+    no-deposit / no-fee. deposit_cents is computed server-side by the
+    same compute_deposit_cents the checkout charges with — the widget
+    only ever displays what the server would charge."""
+    if not rows:
+        return rows
+    try:
+        from payments_core import compute_deposit_cents
+        ids = ",".join(str(r.get("id")) for r in rows if r.get("id"))
+        cfg_rows = sb_clients.sb_get_as_service(
+            f"/offerings?business_id=eq.{business_id}&id=in.({ids})"
+            f"&select=id,requires_deposit,deposit_type,deposit_amount,"
+            f"no_show_fee_cents"
+        ) or []
+        cfg = {str(c.get("id")): c for c in cfg_rows}
+        for r in rows:
+            c = cfg.get(str(r.get("id"))) or {}
+            price = r.get("current_price")
+            price_cents = int(round(float(price) * 100)) if price is not None else 0
+            dep = compute_deposit_cents(c, price_cents)
+            r["requires_deposit"] = bool(dep)
+            r["deposit_cents"] = dep
+            try:
+                fee = int(c.get("no_show_fee_cents") or 0)
+            except (TypeError, ValueError):
+                fee = 0
+            r["no_show_fee_cents"] = fee if fee > 0 else None
+    except Exception as e:
+        logger.warning(f"offering money-config merge failed soft: {e}")
+        for r in rows:
+            r.setdefault("requires_deposit", False)
+            r.setdefault("deposit_cents", None)
+            r.setdefault("no_show_fee_cents", None)
     return rows
 
 
