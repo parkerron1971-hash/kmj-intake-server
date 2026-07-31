@@ -325,3 +325,80 @@ def list_transfers(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[s
         f"/outbound_transfers?business_id=eq.{biz}"
         f"&order=created_at.desc&select=*,contractors(name)&limit=500") or []
     return {"ok": True, "transfers": rows}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Rails Arc 2 — W-9 tax profile for MANUALLY-paid contractors
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Stripe Express contractors never need this (Stripe Tax Reporting owns
+# their W-9 + 1099-NEC). This is for the 1099 Summary's "Manual 1099
+# needed" rows. The TIN is Fernet-encrypted (tin_crypto) — the full
+# value decrypts only inside the 1099 draft-PDF endpoint.
+
+
+class TaxProfileBody(BaseModel):
+    tax_name: str                       # legal name as it appears on the W-9
+    tax_id_type: str                    # 'ssn' | 'ein'
+    tin: str = ""                       # full 9 digits; empty = keep existing
+    address_line1: str = ""
+    address_line2: str = ""
+    city: str = ""
+    state: str = ""
+    zip: str = ""
+
+
+@router.put("/{contractor_id}/tax-profile")
+def put_tax_profile(contractor_id: str, body: TaxProfileBody,
+                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import tin_crypto
+
+    c = _owner_for_contractor(contractor_id, user)
+    if body.tax_id_type not in ("ssn", "ein"):
+        raise HTTPException(400, "tax_id_type must be 'ssn' or 'ein'")
+    if not (body.tax_name or "").strip():
+        raise HTTPException(400, "tax_name is required")
+
+    patch: Dict[str, Any] = {
+        "tax_name": body.tax_name.strip()[:120],
+        "tax_id_type": body.tax_id_type,
+        "tax_address": {
+            "line1": body.address_line1.strip()[:120],
+            "line2": body.address_line2.strip()[:120],
+            "city": body.city.strip()[:80],
+            "state": body.state.strip()[:40],
+            "zip": body.zip.strip()[:20],
+        },
+        "w9_received_at": _now_iso(),
+    }
+    if (body.tin or "").strip():
+        ciphertext, last4 = tin_crypto.encrypt_tin(body.tin)
+        patch["tin_encrypted"] = ciphertext
+        patch["tin_last4"] = last4
+    elif not c.get("tin_encrypted"):
+        raise HTTPException(400, "tin is required (none on file yet)")
+
+    sb_clients.sb_patch_as_service(f"/contractors?id=eq.{contractor_id}", patch)
+    logger.info(f"[f1] tax profile saved contractor={contractor_id[:8]} "
+                f"type={body.tax_id_type} tin_updated={bool((body.tin or '').strip())}")
+    return {"ok": True, "tin_last4": patch.get("tin_last4") or c.get("tin_last4")}
+
+
+@router.get("/{contractor_id}/tax-profile")
+def get_tax_profile(contractor_id: str,
+                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Everything EXCEPT the TIN — display shows last4 only. The full
+    TIN appears nowhere but the draft PDF."""
+    c = _owner_for_contractor(contractor_id, user)
+    return {
+        "ok": True,
+        "contractor_id": contractor_id,
+        "name": c.get("name"),
+        "tax_name": c.get("tax_name"),
+        "tax_id_type": c.get("tax_id_type"),
+        "tin_last4": c.get("tin_last4"),
+        "has_tin": bool(c.get("tin_encrypted")),
+        "tax_address": c.get("tax_address") or {},
+        "w9_received_at": c.get("w9_received_at"),
+        "stripe_managed": bool(c.get("stripe_account_id")),
+    }
