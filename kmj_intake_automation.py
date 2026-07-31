@@ -200,6 +200,7 @@ app.include_router(contacts_router)
 app.include_router(offerings_router)
 # Phase D.1.1 — availability + slot computation (customer-facing anon)
 app.include_router(availability_router)
+import booking_series; app.include_router(booking_series.router)  # weekly series (operator-side, authed) — one line by design
 # Phase D.2.1 — hosted booking page (practitioner-side config + URL resolver).
 # Registered BEFORE public_site_router so its /booking-page/... routes
 # match before the public_site `/{path:path}` catch-all.

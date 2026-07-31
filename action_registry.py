@@ -60,7 +60,7 @@ WHAT CLASS C DOES AND DOES NOT MEAN
   would hand out autonomy against a safety net that isn't there.
 
 DEFAULT-DENY IS WHAT MAKES A PARTIAL REGISTRY SAFE
-  All 139 verbs are classified. `UNCLASSIFIED` is empty and should stay that way,
+  All 141 verbs are classified. `UNCLASSIFIED` is empty and should stay that way,
   but it exists because "not decided yet" is a better entry than a guess.
   Every accessor below returns the *refusing* answer for a verb it does not
   know: not exposable, not autonomy-eligible, reversibility None. So an
@@ -349,6 +349,18 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "create_booking":       _w("C", "creates the appointment AND emails the client a confirmation "
                                     "(send_confirmation defaults true). The send is what makes this "
                                     "C while cancel/reschedule are A"),
+    "create_recurring_booking": _w("C", "books a weekly series (up to 26 occurrences) onto a "
+                                        "client's calendar in one verb. Sends NO email (unlike "
+                                        "create_booking — verified), but a standing commitment on "
+                                        "a client's next six months is not something Chief should "
+                                        "invent unprompted; mirrors create_booking's C. Single "
+                                        "series target, not the bulk flag — one client, one slot"),
+    "cancel_recurring_booking": _w("C", "cancels every FUTURE occurrence of a series in one verb "
+                                        "(past entries untouched, rescheduled-detached ones "
+                                        "skipped). One cancel_booking is class A; erasing a "
+                                        "client's standing slot for months is a different blast "
+                                        "radius, so the cheap safe answer applies. Single series "
+                                        "target, not bulk"),
     "create_invoice":       _w("C", "money-touching, which §2.4 makes C on its own. Also accepts "
                                     "auto_send on a recurrence, arming future unattended sends — a "
                                     "standing rule, not a one-off write. (Revised from an earlier "

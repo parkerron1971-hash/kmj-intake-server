@@ -69,7 +69,9 @@ from voice_depth_agent import chief_voice_context_block as voice_chief_context_b
 # P0.1 — booking verbs, kept in their own module (chief_bookkeeping pattern).
 from chief_booking_actions import (
     handle_cancel_booking,
+    handle_cancel_recurring_booking,
     handle_create_booking,
+    handle_create_recurring_booking,
     handle_reschedule_booking,
 )
 # P0.2 — bookkeeping verbs over the existing chief_bookkeeping engine.
@@ -10520,6 +10522,11 @@ ACTION_HANDLERS = {
     "create_booking":             handle_create_booking,
     "reschedule_booking":         handle_reschedule_booking,
     "cancel_booking":             handle_cancel_booking,
+    # Weekly series — the standing slot ("book Maria every Tuesday at 2").
+    # Same widget write path as create_booking, times N; conflicts skip
+    # and are named in the result. See booking_series module docstring.
+    "create_recurring_booking":   handle_create_recurring_booking,
+    "cancel_recurring_booking":   handle_cancel_recurring_booking,
     # P0.2 — bookkeeping was reachable only through its own router; these make
     # the existing proposal engine conversational.
     "review_books":                    handle_review_books,
