@@ -115,9 +115,8 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "legacy": True,
     },
     "contract_signed": {
-        "source": "declared by payment_agent; e-sign arc will emit it for real",
-        "payload": ["contract_ref"],
-        "legacy": True,
+        "source": "boldsign_router refresh (a completed signature)",
+        "payload": ["contract_ref", "title", "signer_email"],
     },
     "document_uploaded": {
         "source": "DocumentsPanel (frontend insert)",

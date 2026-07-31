@@ -238,6 +238,9 @@ app.include_router(quickbooks_connect_router)
 # Rails Arc 4 — the unified audit log (append-only; reads owner-gated)
 from audit_log import router as audit_router
 app.include_router(audit_router)
+# Rails demand-driven — e-sign via BoldSign (proposal → signature → payment)
+from boldsign_router import router as boldsign_router
+app.include_router(boldsign_router)
 # Phase I.3 — Period closing
 from accounting_periods_router import router as accounting_periods_router
 app.include_router(accounting_periods_router)
