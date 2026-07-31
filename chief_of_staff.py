@@ -14506,6 +14506,21 @@ async def chief_chat(
             except Exception as e:  # pragma: no cover
                 logger.warning(f"chief_activity hook failed: {e}")
 
+            # Rails Arc 4 — the unified audit log records EVERY executed
+            # action, including failures and navigation (chief_activity
+            # deliberately skips both). Best-effort; never blocks.
+            try:
+                import audit_log
+                audit_log.record_chief_turn(
+                    user_id=getattr(getattr(user_session, "user", None), "id", None),
+                    business_id=biz.get("id"),
+                    source=req.client_surface,
+                    taken=taken,
+                    action_failed=_action_failed,
+                )
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"audit hook failed: {e}")
+
             # Final scrub: if `clean` is empty (parse fall-through) we
             # serve `raw`, which may still contain the hint markers we
             # injected into history. Belt-and-suspenders so nothing
