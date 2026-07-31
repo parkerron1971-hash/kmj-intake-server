@@ -230,9 +230,11 @@ app.include_router(bills_router)
 # Phase I.1 — Double-entry General Ledger (backfill + verify)
 from gl_router import router as gl_router
 app.include_router(gl_router)
-# Rails Arc 1 — the QuickBooks bridge (mapping layer; OAuth + push in 1b)
+# Rails Arc 1 — the QuickBooks bridge (mapping layer + OAuth + journal push)
 from quickbooks_router import router as quickbooks_router
+from quickbooks_router import connect_router as quickbooks_connect_router
 app.include_router(quickbooks_router)
+app.include_router(quickbooks_connect_router)
 # Phase I.3 — Period closing
 from accounting_periods_router import router as accounting_periods_router
 app.include_router(accounting_periods_router)

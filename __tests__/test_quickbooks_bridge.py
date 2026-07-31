@@ -78,7 +78,7 @@ def test_iif_defines_each_external_account_once():
 
 
 def test_quickbooks_routes_exist_and_require_auth():
-    from quickbooks_router import router
+    from quickbooks_router import router, connect_router
     from auth_supabase import require_user
 
     by_path = {}
@@ -86,7 +86,66 @@ def test_quickbooks_routes_exist_and_require_auth():
         by_path.setdefault(r.path, set()).update(getattr(r, "methods", set()))
     assert "GET" in by_path.get("/quickbooks/mappings", set())
     assert "PUT" in by_path.get("/quickbooks/mappings", set())
+    assert "GET" in by_path.get("/quickbooks/status", set())
+    assert "DELETE" in by_path.get("/quickbooks/disconnect", set())
+    assert "POST" in by_path.get("/quickbooks/sync-accounts", set())
+    assert "POST" in by_path.get("/quickbooks/push", set())
 
+    # Everything under /quickbooks is authed. The OAuth entry/callback
+    # (connect_router) are browser redirects — unauthenticated by
+    # design, protected by the signed state instead.
     for r in router.routes:
         deps = [d.call for d in r.dependant.dependencies]
         assert require_user in deps, f"{r.path} is missing require_user"
+
+    connect_paths = {r.path for r in connect_router.routes}
+    assert "/connect/quickbooks" in connect_paths
+    assert "/connect/quickbooks/callback" in connect_paths
+
+
+def test_oauth_state_round_trips_and_rejects_tampering():
+    from quickbooks_router import _make_state, _verify_state
+
+    with mock.patch.dict("os.environ", {"QB_CLIENT_SECRET": "test-secret"}):
+        state = _make_state("biz-123")
+        assert _verify_state(state) == "biz-123"
+        assert _verify_state(state + "x") is None
+        body, sig = state.split(".", 1)
+        assert _verify_state(f"{body}0.{sig}") is None
+        assert _verify_state("") is None
+
+
+def test_qbo_journal_payload_shape_and_docnumber_cap():
+    from quickbooks_router import _build_qbo_journal, DOCNUMBER_MAX
+
+    je = {"id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "entry_date": "2026-03-05", "description": "Pay contractor"}
+    lines = [
+        {"account_code": "5100", "debit": 250, "credit": 0, "memo": "labor"},
+        {"account_code": "1000", "debit": 0, "credit": 250, "memo": ""},
+    ]
+    payload = _build_qbo_journal(je, lines, {"5100": "77", "1000": "35"})
+
+    assert payload["TxnDate"] == "2026-03-05"
+    assert len(payload["DocNumber"]) <= DOCNUMBER_MAX
+    assert payload["DocNumber"].startswith("SOL-")
+    debit, credit = payload["Line"]
+    assert debit["Amount"] == 250 and credit["Amount"] == 250
+    assert debit["JournalEntryLineDetail"]["PostingType"] == "Debit"
+    assert credit["JournalEntryLineDetail"]["PostingType"] == "Credit"
+    assert debit["JournalEntryLineDetail"]["AccountRef"]["value"] == "77"
+    assert credit["JournalEntryLineDetail"]["AccountRef"]["value"] == "35"
+
+
+def test_qbo_journal_refuses_unmapped_accounts_by_name():
+    import pytest
+    from quickbooks_router import _build_qbo_journal
+
+    je = {"id": "je1", "entry_date": "2026-03-05", "description": ""}
+    lines = [
+        {"account_code": "5100", "debit": 250, "credit": 0, "memo": ""},
+        {"account_code": "1000", "debit": 0, "credit": 250, "memo": ""},
+    ]
+    with pytest.raises(ValueError) as exc:
+        _build_qbo_journal(je, lines, {"5100": "77"})  # 1000 unmapped
+    assert "1000" in str(exc.value)
