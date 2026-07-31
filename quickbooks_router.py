@@ -8,16 +8,25 @@ of accounts → their chart of accounts, configured once per business.
 Every export (IIF today, QBO API journal pushes in Arc 1b) resolves
 account names through it.
 
-This pass (Arc 1a — no Intuit credentials needed):
-  GET /quickbooks/mappings?biz=   — our COA joined with any mappings,
-                                    plus the business's book-of-record
-  PUT /quickbooks/mappings?biz=   — upsert mappings (list of
-                                    {account_code, external_name});
-                                    empty external_name deletes
+Surface:
+  GET    /quickbooks/mappings?biz=  — our COA joined with any mappings,
+                                      plus the business's book-of-record
+  PUT    /quickbooks/mappings?biz=  — upsert mappings; empty name clears
+  GET    /connect/quickbooks        — Intuit OAuth entry (signed state)
+  GET    /connect/quickbooks/callback
+  GET    /quickbooks/status?biz=
+  DELETE /quickbooks/disconnect?biz=
+  POST   /quickbooks/sync-accounts?biz= — their real COA (id+name) for
+                                      the mapping picklist; auto-links
+                                      exact-name matches
+  POST   /quickbooks/push?biz=      — the year's journal entries into
+                                      QBO, idempotent via
+                                      quickbooks_pushed_entries; refuses
+                                      cleanly while accounts are unmapped
 
-Arc 1b adds: /connect/quickbooks OAuth, fetching the real QBO account
-list (external_id), and the journal push. QB_CLIENT_ID/QB_CLIENT_SECRET
-are already on Railway waiting for it.
+Env: QB_CLIENT_ID / QB_CLIENT_SECRET (Railway), QB_ENVIRONMENT
+(sandbox default), QB_REDIRECT_URI (defaults to the production
+callback registered in the Intuit portal), QB_FRONTEND_RETURN_URL.
 
 Book-of-record (source-of-truth ruling, set per business):
   businesses.settings.financial.book_of_record = 'solutionist' (default)
@@ -28,11 +37,20 @@ Book-of-record (source-of-truth ruling, set per business):
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+import os
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlencode
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 import sb_clients
@@ -41,8 +59,88 @@ from auth_supabase import AuthedUser, require_user
 logger = logging.getLogger("quickbooks_router")
 
 router = APIRouter(prefix="/quickbooks", tags=["quickbooks"])
+# OAuth entry/callback live outside the /quickbooks prefix so the
+# redirect URI registered in the Intuit portal
+# (…/connect/quickbooks/callback) matches exactly.
+connect_router = APIRouter(tags=["quickbooks"])
 
 PROVIDER = "quickbooks"
+
+# ─── Intuit endpoints ────────────────────────────────────────────────
+QB_AUTH_URL = "https://appcenter.intuit.com/connect/oauth2"
+QB_TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+QB_REVOKE_URL = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
+QB_SCOPE = "com.intuit.quickbooks.accounting"
+QB_MINORVERSION = "75"
+HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=15.0, pool=10.0)
+# QBO caps DocNumber at 21 chars — a breadcrumb, not the dedupe (the
+# quickbooks_pushed_entries table is).
+DOCNUMBER_MAX = 21
+
+
+def _client_id() -> str:
+    v = os.environ.get("QB_CLIENT_ID", "").strip()
+    if not v:
+        raise HTTPException(500, "QB_CLIENT_ID not configured")
+    return v
+
+
+def _client_secret() -> str:
+    v = os.environ.get("QB_CLIENT_SECRET", "").strip()
+    if not v:
+        raise HTTPException(500, "QB_CLIENT_SECRET not configured")
+    return v
+
+
+def _environment() -> str:
+    v = (os.environ.get("QB_ENVIRONMENT") or "sandbox").strip().lower()
+    return v if v in ("sandbox", "production") else "sandbox"
+
+
+def _api_base() -> str:
+    return ("https://quickbooks.api.intuit.com" if _environment() == "production"
+            else "https://sandbox-quickbooks.api.intuit.com")
+
+
+def _redirect_uri() -> str:
+    return os.environ.get(
+        "QB_REDIRECT_URI",
+        "https://kmj-intake-server-production.up.railway.app/connect/quickbooks/callback")
+
+
+def _frontend_return_url() -> str:
+    return os.environ.get("QB_FRONTEND_RETURN_URL",
+                          os.environ.get("META_FRONTEND_RETURN_URL",
+                                         "https://mysolutionist.app"))
+
+
+# ─── State signing (CSRF protection, stateless — meta_oauth pattern).
+# HMAC key = the client secret: server-side already, no new env var.
+
+def _make_state(business_id: str) -> str:
+    payload = {"business_id": business_id, "ts": int(time.time())}
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    body = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    sig = hmac.new(_client_secret().encode("utf-8"),
+                   body.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def _verify_state(state: str, max_age_s: int = 900) -> Optional[str]:
+    """Returns the business_id, or None on any tamper/expiry."""
+    try:
+        body, sig = (state or "").split(".", 1)
+        expected = hmac.new(_client_secret().encode("utf-8"),
+                            body.encode("ascii"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        pad = "=" * (-len(body) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(body + pad))
+        if int(time.time()) - int(payload.get("ts") or 0) > max_age_s:
+            return None
+        return payload.get("business_id") or None
+    except Exception:
+        return None
 
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
@@ -130,3 +228,347 @@ def put_mappings(biz: str, body: PutMappingsBody,
     logger.info(f"[qb] mappings updated biz={biz[:8]} saved={saved} "
                 f"cleared={cleared} skipped={len(skipped)}")
     return {"ok": True, "saved": saved, "cleared": cleared, "skipped": skipped}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Arc 1b — the live QBO connection (OAuth, account sync, journal push)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _get_connection(biz: str) -> Optional[Dict[str, Any]]:
+    rows = sb_clients.sb_get_as_service(
+        f"/quickbooks_connections?business_id=eq.{biz}&limit=1") or []
+    return rows[0] if rows else None
+
+
+def _save_tokens(biz: str, tok: Dict[str, Any], realm_id: Optional[str] = None,
+                 company_name: Optional[str] = None) -> None:
+    """Upsert the token pair. Intuit ROTATES the refresh token — always
+    store the pair returned by the latest exchange/refresh."""
+    now = datetime.now(timezone.utc)
+    row: Dict[str, Any] = {
+        "business_id": biz,
+        "access_token": tok["access_token"],
+        "refresh_token": tok["refresh_token"],
+        "access_expires_at": (now + timedelta(seconds=int(tok.get("expires_in") or 3600))).isoformat(),
+        "refresh_expires_at": (now + timedelta(seconds=int(tok.get("x_refresh_token_expires_in") or 8726400))).isoformat(),
+        "environment": _environment(),
+        "status": "connected",
+        "last_error": None,
+        "updated_at": now.isoformat(),
+    }
+    if realm_id:
+        row["realm_id"] = realm_id
+    if company_name:
+        row["company_name"] = company_name
+    sb_clients.sb_post_as_service(
+        "/quickbooks_connections?on_conflict=business_id", row,
+        prefer="resolution=merge-duplicates,return=representation")
+
+
+async def _token_request(form: Dict[str, str]) -> Dict[str, Any]:
+    basic = base64.b64encode(f"{_client_id()}:{_client_secret()}".encode()).decode()
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.post(QB_TOKEN_URL, data=form, headers={
+            "Authorization": f"Basic {basic}",
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+        })
+    if r.status_code >= 400:
+        logger.error(f"[qb] token endpoint {r.status_code}: {r.text[:300]}")
+        raise HTTPException(502, f"Intuit token exchange failed ({r.status_code})")
+    return r.json()
+
+
+async def _fresh_access_token(biz: str) -> Tuple[str, str]:
+    """(access_token, realm_id) — refreshing (and re-storing the rotated
+    pair) when the access token is expired or nearly so."""
+    conn = _get_connection(biz)
+    if not conn or conn.get("status") != "connected":
+        raise HTTPException(409, "QuickBooks is not connected for this business")
+    exp = conn.get("access_expires_at") or ""
+    try:
+        expires = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+    except ValueError:
+        expires = datetime.now(timezone.utc)
+    if expires > datetime.now(timezone.utc) + timedelta(minutes=3):
+        return conn["access_token"], conn["realm_id"]
+    tok = await _token_request({
+        "grant_type": "refresh_token",
+        "refresh_token": conn["refresh_token"],
+    })
+    _save_tokens(biz, tok, realm_id=conn["realm_id"])
+    return tok["access_token"], conn["realm_id"]
+
+
+async def _qbo_get(biz: str, path: str, params: Dict[str, str]) -> Dict[str, Any]:
+    access, realm = await _fresh_access_token(biz)
+    url = f"{_api_base()}/v3/company/{realm}{path}"
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.get(url, params={**params, "minorversion": QB_MINORVERSION},
+                        headers={"Authorization": f"Bearer {access}",
+                                 "Accept": "application/json"})
+    if r.status_code >= 400:
+        logger.error(f"[qb] GET {path} {r.status_code}: {r.text[:300]}")
+        raise HTTPException(502, f"QuickBooks API error ({r.status_code})")
+    return r.json()
+
+
+async def _qbo_post(biz: str, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    access, realm = await _fresh_access_token(biz)
+    url = f"{_api_base()}/v3/company/{realm}{path}"
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.post(url, params={"minorversion": QB_MINORVERSION}, json=body,
+                         headers={"Authorization": f"Bearer {access}",
+                                  "Accept": "application/json"})
+    if r.status_code >= 400:
+        logger.error(f"[qb] POST {path} {r.status_code}: {r.text[:400]}")
+        raise HTTPException(502, f"QuickBooks API error ({r.status_code}): {r.text[:200]}")
+    return r.json()
+
+
+# ─── OAuth entry + callback (mounted WITHOUT the /quickbooks prefix) ──
+
+@connect_router.get("/connect/quickbooks")
+async def qb_connect(business_id: str):
+    """Redirect to Intuit's consent screen. business_id rides in the
+    signed state param (CSRF-proof, stateless)."""
+    if not business_id:
+        raise HTTPException(400, "business_id required")
+    params = {
+        "client_id": _client_id(),
+        "response_type": "code",
+        "scope": QB_SCOPE,
+        "redirect_uri": _redirect_uri(),
+        "state": _make_state(business_id),
+    }
+    return RedirectResponse(url=f"{QB_AUTH_URL}?{urlencode(params)}", status_code=302)
+
+
+@connect_router.get("/connect/quickbooks/callback")
+async def qb_callback(code: str = "", state: str = "", realmId: str = "", error: str = ""):
+    ret = _frontend_return_url()
+    if error or not code:
+        return RedirectResponse(f"{ret}?qb=error&reason={error or 'no_code'}", status_code=302)
+    biz = _verify_state(state)
+    if not biz:
+        return RedirectResponse(f"{ret}?qb=error&reason=bad_state", status_code=302)
+    if not realmId:
+        return RedirectResponse(f"{ret}?qb=error&reason=no_realm", status_code=302)
+
+    tok = await _token_request({
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": _redirect_uri(),
+    })
+    _save_tokens(biz, tok, realm_id=realmId)
+
+    # Company name — best-effort nicety for the status card.
+    try:
+        info = await _qbo_get(biz, f"/companyinfo/{realmId}", {})
+        name = ((info.get("CompanyInfo") or {}).get("CompanyName") or "").strip()
+        if name:
+            sb_clients.sb_patch_as_service(
+                f"/quickbooks_connections?business_id=eq.{biz}",
+                {"company_name": name})
+    except Exception as e:
+        logger.warning(f"[qb] companyinfo fetch skipped: {e}")
+
+    logger.info(f"[qb] connected biz={biz[:8]} realm={realmId} env={_environment()}")
+    return RedirectResponse(f"{ret}?qb=connected", status_code=302)
+
+
+# ─── Status / disconnect ─────────────────────────────────────────────
+
+@router.get("/status")
+def qb_status(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    conn = _get_connection(biz)
+    if not conn:
+        return {"connected": False, "environment": _environment(),
+                "configured": bool(os.environ.get("QB_CLIENT_ID"))}
+    pushed = sb_clients.sb_get_as_service(
+        f"/quickbooks_pushed_entries?business_id=eq.{biz}"
+        f"&select=pushed_at&order=pushed_at.desc&limit=1") or []
+    return {
+        "connected": conn.get("status") == "connected",
+        "status": conn.get("status"),
+        "company_name": conn.get("company_name"),
+        "environment": conn.get("environment"),
+        "connected_at": conn.get("connected_at"),
+        "last_error": conn.get("last_error"),
+        "last_push_at": pushed[0]["pushed_at"] if pushed else None,
+        "configured": True,
+    }
+
+
+@router.delete("/disconnect")
+async def qb_disconnect(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _owner(biz, user)
+    conn = _get_connection(biz)
+    if not conn:
+        return {"ok": True, "was_connected": False}
+    try:
+        basic = base64.b64encode(f"{_client_id()}:{_client_secret()}".encode()).decode()
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            await c.post(QB_REVOKE_URL, json={"token": conn["refresh_token"]},
+                         headers={"Authorization": f"Basic {basic}",
+                                  "Content-Type": "application/json"})
+    except Exception as e:
+        logger.warning(f"[qb] revoke call failed (continuing): {e}")
+    sb_clients.sb_patch_as_service(
+        f"/quickbooks_connections?business_id=eq.{biz}",
+        {"status": "disconnected", "updated_at": datetime.now(timezone.utc).isoformat()})
+    return {"ok": True, "was_connected": True}
+
+
+# ─── Account sync (their real chart of accounts) ─────────────────────
+
+@router.post("/sync-accounts")
+async def qb_sync_accounts(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Fetch the connected company's Account list so the mapping editor
+    offers THEIR real accounts (name + id) instead of free typing.
+    Also backfills external_id on any mapping whose external_name
+    exactly matches a QBO account."""
+    _owner(biz, user)
+    data = await _qbo_get(biz, "/query", {
+        "query": "select Id, Name, AccountType, AccountSubType from Account "
+                 "where Active = true maxresults 1000"})
+    accounts = ((data.get("QueryResponse") or {}).get("Account")) or []
+    out = [{"id": a.get("Id"), "name": a.get("Name"),
+            "type": a.get("AccountType"), "subtype": a.get("AccountSubType")}
+           for a in accounts]
+
+    # Backfill external_id where names already line up.
+    by_name = {(a["name"] or "").strip().lower(): a for a in out}
+    linked = 0
+    for code, m in get_mappings(biz).items():
+        if m.get("external_id"):
+            continue
+        hit = by_name.get((m.get("external_name") or "").strip().lower())
+        if hit:
+            sb_clients.sb_patch_as_service(
+                f"/coa_external_mappings?business_id=eq.{biz}"
+                f"&provider=eq.{PROVIDER}&account_code=eq.{code}",
+                {"external_id": hit["id"], "external_type": hit["type"]})
+            linked += 1
+
+    return {"ok": True, "accounts": out, "count": len(out), "auto_linked": linked}
+
+
+# ─── The push (push-only by ruling; idempotent by ledger) ────────────
+
+def _build_qbo_journal(je: Dict[str, Any], lines: List[Dict[str, Any]],
+                       account_id_by_code: Dict[str, str]) -> Dict[str, Any]:
+    """Our journal entry + lines -> a QBO JournalEntry payload. Raises
+    ValueError naming any account code that has no mapped QBO id —
+    callers surface that as 'map these accounts first', before anything
+    is pushed."""
+    qbo_lines = []
+    missing: List[str] = []
+    for l in lines:
+        code = l.get("account_code") or ""
+        acct_id = account_id_by_code.get(code)
+        if not acct_id:
+            missing.append(code)
+            continue
+        debit = float(l.get("debit") or 0)
+        credit = float(l.get("credit") or 0)
+        amount = round(debit if debit > 0 else credit, 2)
+        if amount <= 0:
+            continue
+        qbo_lines.append({
+            "Amount": amount,
+            "DetailType": "JournalEntryLineDetail",
+            "Description": (l.get("memo") or je.get("description") or "")[:4000],
+            "JournalEntryLineDetail": {
+                "PostingType": "Debit" if debit > 0 else "Credit",
+                "AccountRef": {"value": acct_id},
+            },
+        })
+    if missing:
+        raise ValueError(",".join(sorted(set(missing))))
+    return {
+        "TxnDate": je.get("entry_date"),
+        "DocNumber": f"SOL-{(je.get('id') or '').replace('-', '')[:17]}"[:DOCNUMBER_MAX],
+        "PrivateNote": f"Solutionist System journal {je.get('id')}"[:4000],
+        "Line": qbo_lines,
+    }
+
+
+class PushBody(BaseModel):
+    year: int
+    limit: int = 200
+
+
+@router.post("/push")
+async def qb_push(biz: str, body: PushBody,
+                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Push the year's active, non-reversal journal entries to QBO,
+    skipping anything already in the idempotency ledger. Refuses cleanly
+    (nothing pushed) when any touched account lacks a mapped QBO id."""
+    _owner(biz, user)
+
+    mappings = get_mappings(biz)
+    account_id_by_code = {c: m["external_id"] for c, m in mappings.items()
+                          if m.get("external_id")}
+
+    jes = sb_clients.sb_get_as_service(
+        f"/journal_entries?business_id=eq.{biz}&status=eq.active"
+        f"&entry_date=gte.{body.year}-01-01&entry_date=lte.{body.year}-12-31"
+        f"&order=entry_date.asc,created_at.asc"
+        f"&select=id,entry_date,description,source_type,is_reversal&limit=10000") or []
+    jes = [j for j in jes if not j.get("is_reversal")]
+
+    already = {r["journal_entry_id"] for r in (sb_clients.sb_get_as_service(
+        f"/quickbooks_pushed_entries?business_id=eq.{biz}"
+        f"&select=journal_entry_id&limit=100000") or [])}
+    todo = [j for j in jes if j["id"] not in already][: max(1, min(body.limit, 500))]
+    if not todo:
+        return {"ok": True, "pushed": 0, "skipped_already": len(already),
+                "remaining": 0, "note": "Everything in range is already in QuickBooks."}
+
+    # Lines for the batch.
+    lines_by_je: Dict[str, List[Dict[str, Any]]] = {}
+    ids = [j["id"] for j in todo]
+    for i in range(0, len(ids), 100):
+        chunk = ids[i:i + 100]
+        rows = sb_clients.sb_get_as_service(
+            f"/ledger_entries?journal_entry_id=in.({','.join(chunk)})"
+            f"&select=journal_entry_id,account_code,debit,credit,memo&limit=10000") or []
+        for l in rows:
+            lines_by_je.setdefault(l["journal_entry_id"], []).append(l)
+
+    # Pre-flight the WHOLE batch before pushing anything.
+    unmapped: set = set()
+    payloads: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    for j in todo:
+        lines = lines_by_je.get(j["id"]) or []
+        if not lines:
+            continue
+        try:
+            payloads.append((j, _build_qbo_journal(j, lines, account_id_by_code)))
+        except ValueError as e:
+            unmapped.update(str(e).split(","))
+    if unmapped:
+        return {"ok": False, "pushed": 0,
+                "unmapped_accounts": sorted(unmapped),
+                "note": "Map these accounts to QuickBooks accounts first "
+                        "(run Load QuickBooks accounts, then save mappings)."}
+
+    pushed = 0
+    for je, payload in payloads:
+        res = await _qbo_post(biz, "/journalentry", payload)
+        qbo_id = ((res.get("JournalEntry") or {}).get("Id")) or ""
+        sb_clients.sb_post_as_service(
+            "/quickbooks_pushed_entries?on_conflict=business_id,journal_entry_id",
+            {"business_id": biz, "journal_entry_id": je["id"],
+             "qbo_journal_id": qbo_id},
+            prefer="resolution=merge-duplicates,return=representation")
+        pushed += 1
+
+    remaining = len(jes) - len(already) - pushed
+    logger.info(f"[qb] push biz={biz[:8]} year={body.year} pushed={pushed} "
+                f"remaining={max(0, remaining)}")
+    return {"ok": True, "pushed": pushed,
+            "skipped_already": len(already & {j['id'] for j in jes}),
+            "remaining": max(0, remaining)}
