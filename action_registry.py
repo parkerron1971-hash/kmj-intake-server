@@ -60,7 +60,7 @@ WHAT CLASS C DOES AND DOES NOT MEAN
   would hand out autonomy against a safety net that isn't there.
 
 DEFAULT-DENY IS WHAT MAKES A PARTIAL REGISTRY SAFE
-  All 141 verbs are classified. `UNCLASSIFIED` is empty and should stay that way,
+  All 149 verbs are classified. `UNCLASSIFIED` is empty and should stay that way,
   but it exists because "not decided yet" is a better entry than a guess.
   Every accessor below returns the *refusing* answer for a verb it does not
   know: not exposable, not autonomy-eligible, reversibility None. So an
@@ -147,6 +147,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                               "prepaid and not yet consumed"),
     "unbilled_time":       _r("totals unbilled time_entries — hours worked and not yet "
                               "charged, for one client or the whole firm"),
+    "campaign_status":     _r("campaigns + send progress from the campaign_sends ledger; "
+                              "replies/bookings surfaced as activity, not attribution"),
+    "list_expenses":       _r("lists business_expenses rows with an honest total; same "
+                              "financial class as show_revenue, which is already exposed"),
     # SENSITIVE. Reads, and they change nothing — but a congregation's giving
     # history is among the most confidential data a church holds. Many
     # churches deliberately keep it from their own staff, and Chief's own
@@ -317,6 +321,15 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "and the status is editable back"),
     "draft_contract":         _w("A", "drafts an engagement letter for one contact — a draft, and "
                                       "there is no send_for_signature verb to pair it with yet"),
+    "plan_campaign":          _w("A", "inserts a campaigns row with status='draft' — the same "
+                                      "shape as draft_email: a reviewable artifact, and nothing "
+                                      "sends until launch_campaign (which is class C). The drafting "
+                                      "call is model spend, said out loud as ever"),
+    "log_expense":            _w("A", "creates a business_expenses row — bookkeeping ABOUT money "
+                                      "already spent, not movement of it (grant_balance reasoning). "
+                                      "The GL pickup is the same trigger path as a UI-created "
+                                      "expense; a wrong row is an edit or delete away from right. "
+                                      "Refuses closed-period dates rather than writing into them"),
 
     # ── writes, class C ──────────────────────────────────────────────
     # Two families: what leaves the system, and what touches money.
@@ -342,6 +355,29 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "send_sms":             _w("C", "Telnyx, immediate, no recall. Becomes B with an outbox"),
     "batch_email":          _w("C", "sends the same body to a list of contacts. Outbound AND bulk",
                                bulk=True),
+    "launch_campaign":      _w("C", "arms a campaign's touches to send to the WHOLE audience over "
+                                    "the following days — outbound AND bulk, batch_email's shape "
+                                    "stretched across a schedule. The chat gate holds it toward "
+                                    "the Campaigns screen (the campaign is already its own "
+                                    "reviewable draft) unless nurture autopilot is full. Becomes "
+                                    "no less C with an outbox — the sweep already spaces sends, "
+                                    "and pausing recalls only what hasn't gone yet", bulk=True),
+    "pause_campaign":       _w("C", "stops a running campaign — protective, single-target, and "
+                                    "run immediately on request. C rather than A because the "
+                                    "campaign lifecycle stays proposal-only end to end: "
+                                    "pause/resume reshapes the send schedule of an in-flight bulk "
+                                    "outreach, and Chief silently pausing a practitioner's launched "
+                                    "campaign is a marketing decision, not a bookkeeping edit"),
+    "update_expense":       _w("C", "edits a financial record: the GL trigger reverses and reposts "
+                                    "the row's journal entries. The edit itself is one PATCH, but "
+                                    "the books it rewrites carry a compliance trail — same family "
+                                    "as mark_invoice_paid. Refuses closed-period dates (both the "
+                                    "row's date and any new one) toward the audited override flow"),
+    "delete_expense":       _w("C", "HARD delete of a business_expenses row; the GL trigger "
+                                    "reverses its ledger entries. Refuses when the expense sits in "
+                                    "a closed accounting period. Also the documented MANUAL "
+                                    "inverse of log_expense until action_inverse rules on an "
+                                    "automatic one"),
     "bulk_approve":         _w("C", "approves and sends every draft matching a filter. Outbound "
                                     "AND bulk — the worst combination in the registry", bulk=True),
     "publish_post":         _w("C", "publishes to Facebook/Instagram via Meta. There is an unpublish, "

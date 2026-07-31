@@ -110,6 +110,23 @@ from chief_undo_actions import (
     handle_undo_last,
     handle_what_undo,
 )
+# Marketing campaigns — the campaigns_router engine, made conversational.
+# launch_campaign is bulk class C: the trust gate below holds it under
+# manual/smart autopilot.
+from chief_campaign_actions import (
+    handle_campaign_status,
+    handle_launch_campaign,
+    handle_pause_campaign,
+    handle_plan_campaign,
+)
+# Manual expenses — business_expenses rows; GL pickup rides the existing
+# gl_sync_queue triggers, so the handlers only write source rows.
+from chief_expense_actions import (
+    handle_delete_expense,
+    handle_list_expenses,
+    handle_log_expense,
+    handle_update_expense,
+)
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -10552,6 +10569,19 @@ ACTION_HANDLERS = {
     "write_off_time":                  handle_write_off_time,
     "giving_statement":                handle_giving_statement,
     "giving_statements_run":           handle_giving_statements_run,
+    # Marketing campaigns (S10). plan drafts and sends nothing; launch is
+    # bulk class C and answers to the trust gate; pause is the protective
+    # single-target C; status reads the sends ledger.
+    "plan_campaign":                   handle_plan_campaign,
+    "launch_campaign":                 handle_launch_campaign,
+    "pause_campaign":                  handle_pause_campaign,
+    "campaign_status":                 handle_campaign_status,
+    # Manual expenses (S10). Rows only — the gl_sync_queue triggers carry
+    # them to the ledger exactly as they do UI-created ones.
+    "log_expense":                     handle_log_expense,
+    "list_expenses":                   handle_list_expenses,
+    "update_expense":                  handle_update_expense,
+    "delete_expense":                  handle_delete_expense,
     "undo_last":                       handle_undo_last,
     "what_undo":                       handle_what_undo,
     "set_availability_day":       handle_set_availability_day,
@@ -11026,10 +11056,12 @@ async def _compose_post_action_reply(
 #   - Single-target class-C verbs (send one SMS, send one invoice)
 #     stay IMMEDIATE — the practitioner asked in chat, and per the
 #     registry's own doctrine that request IS the approval.
-#   - Bulk/broadcast class-C verbs (batch_email, bulk_approve — the
-#     only two, per registry `bulk` flags) route through the EXISTING
-#     approval machinery (agent_queue drafts) unless the business
-#     autopilot level for the relevant domain is 'full'.
+#   - Bulk/broadcast class-C verbs (batch_email, bulk_approve,
+#     launch_campaign — per registry `bulk` flags) route through the
+#     EXISTING approval machinery (agent_queue drafts for batch_email;
+#     the Campaigns screen for launch_campaign, which is already its
+#     own reviewable draft) unless the business autopilot level for the
+#     relevant domain is 'full'.
 #   - At most CLASS_C_TURN_CAP class-C executions per turn.
 #   - Fail CLOSED: a registry lookup that errors, or a live handler the
 #     registry doesn't know, is held rather than run (precedent:
@@ -11037,10 +11069,10 @@ async def _compose_post_action_reply(
 # ─────────────────────────────────────────────────────────────────────
 
 def _bulk_autopilot_domain(atype: str, action: Dict[str, Any]) -> str:
-    """Which autopilot domain governs a bulk send. batch_email is client
-    outreach (nurture); bulk_approve inherits the agent it filters on,
-    falling back to the overall level."""
-    if atype == "batch_email":
+    """Which autopilot domain governs a bulk send. batch_email and
+    launch_campaign are client outreach (nurture); bulk_approve inherits
+    the agent it filters on, falling back to the overall level."""
+    if atype in ("batch_email", "launch_campaign"):
         return "nurture"
     if atype == "bulk_approve":
         f = str((action or {}).get("filter") or "").strip().lower()
@@ -11182,6 +11214,26 @@ async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
             logger.warning(f"[gate] autopilot lookup failed for {atype}; holding: {e}")
         if atype == "batch_email":
             return "handled", await _queue_batch_email_drafts(client, biz, action)
+        if atype == "launch_campaign":
+            # A campaign is ALREADY its own reviewable draft — copying it
+            # into agent_queue would just make a second, worse review
+            # surface. Hold toward the one built for it: the Campaigns
+            # screen, where the audience preview and every touch body sit
+            # next to the Launch button.
+            name = str((action or {}).get("name")
+                       or (action or {}).get("campaign_name") or "").strip()
+            what = f"'{name}'" if name else "that campaign"
+            return "handled", {
+                "type": atype,
+                "result": (f"Failed: launching {what} sends to its whole "
+                           f"audience over the coming days, so I held it — "
+                           f"the campaign is saved and ready. Review and "
+                           f"launch it from GROW → Campaigns, or set the "
+                           f"nurture team's autopilot to full if you want me "
+                           f"launching campaigns myself."),
+                "label": "Held for your approval — launch from Campaigns",
+                "nav": _nav("grow", "campaigns"), "failed": True,
+            }
         # bulk_approve (and any future bulk-sensitive verb with no draft
         # form): there is nothing to queue — approving a batch IS the
         # approval step — so refuse toward the surface built for it.
@@ -13391,6 +13443,13 @@ ACTIONS — INVOICES:
   [ACTION:{{"type":"create_invoice","contact_id":"<uuid>","items":[...],"is_recurring":true,"recurrence_frequency":"monthly","recurrence_start":"2026-05-01","recurrence_end_type":"never","auto_send":true}}]  — recurring invoice template; freq is weekly/biweekly/monthly/quarterly/annually. recurrence_end_type is never/after_count/on_date and recurrence_end_value carries the count or end-date. Server auto-generates each occurrence on its due date.
   [ACTION:{{"type":"cancel_recurring_invoice","invoice_id":"<template-uuid>","mode":"pause|cancel"}}]
 
+ACTIONS — EXPENSES (manual business expenses; they flow to the P&L automatically):
+  [ACTION:{{"type":"log_expense","amount":45.00,"category":"operating","vendor":"Shell","note":"gas","date":"2026-07-31"}}]  — category is one of tax | owner_pay | operating | savings | other (the five bookkeeping buckets; day-to-day costs = operating, defaults to operating). date defaults to today. "I spent $40 on gas" → log_expense, no follow-up questions needed.
+  [ACTION:{{"type":"list_expenses"}}]  — recent expenses with a total. Optional "month":"2026-07" and/or "category" filters.
+  [ACTION:{{"type":"update_expense","expense_id":"<uuid>","amount":54.00}}]  — fix amount/category/date/vendor/note on one expense. list_expenses first to get the id.
+  [ACTION:{{"type":"delete_expense","expense_id":"<uuid>"}}]  — removes one expense; its ledger entries reverse automatically. This is also the undo for a mistaken log_expense.
+  Expenses in a CLOSED accounting period are refused here — closed books need the app's audited override flow (Bookkeeping → Expenses).
+
 ACTIONS — REPORTS:
   [ACTION:{{"type":"send_report","report":"revenue","to_email":"acc@example.com","period":"month","format":"pdf"}}]  — emails a branded revenue report directly to the recipient via Resend. Omit `to_email` to use the saved accountant email (settings.financial.accountant_email). period is day|week|month|quarter|year (default month). format is pdf|csv|both (default pdf).
 
@@ -13507,6 +13566,13 @@ ACTIONS — BATCH EMAIL:
   [ACTION:{{"type":"batch_email","contact_ids":["uuid1","uuid2","uuid3"],"subject":"A note from {{business_name}}","body":"Hi {{contact_name}}, …"}}]
   Use {{contact_name}} and {{business_name}} placeholders — replaced per recipient. Cap is 50 contacts per call. Skipped recipients (no email on file) are reported in the result label.
   NOTE: "create_invoice + send_invoice in one turn" works — emit both in the same response. The server automatically threads the new invoice_id into send_invoice.
+
+ACTIONS — CAMPAIGNS (multi-touch outreach sequences; you are the marketing director):
+  [ACTION:{{"type":"plan_campaign","goal":"win back clients I haven't seen in 60 days","audience":"silent","days_silent":60}}]  — drafts a named campaign (2-4 email/SMS touches in the practitioner's voice) as a DRAFT. Nothing sends. audience is silent|leads|clients|all (silent = quiet for days_silent+ days, default 30).
+  [ACTION:{{"type":"launch_campaign","name":"Spring rebook"}}]  — flips a draft/paused campaign to running; the sweep then sends touches on schedule (opt-outs, suppression and quiet hours enforced per message). Launching reaches the WHOLE audience — always show the draft (plan_campaign's result, or campaign_status) before launching.
+  [ACTION:{{"type":"pause_campaign","name":"Spring rebook"}}]  — stops a running campaign immediately; nothing more sends until relaunched. When the practitioner says "stop the campaign", pause first, ask questions after.
+  [ACTION:{{"type":"campaign_status"}}]  — all campaigns with honest send counts. Pass "name" for one campaign's full results (sends, replies and bookings since launch — labeled activity, never claimed attribution).
+  Campaigns are edited on GROW → Campaigns (touch bodies, timing, audience). "Text everyone about X" as a ONE-OFF is batch_email/send_sms territory; a SEQUENCE over days is a campaign.
 
 ACTIONS — GROW (goals + content + growth objectives):
   [ACTION:{{"type":"create_goal","title":"Reach 50 contacts","category":"contacts","target":50,"period":"quarterly","end":"2026-06-30","auto_track":true,"description":"Building out the outreach pipeline before Q3 launch."}}]

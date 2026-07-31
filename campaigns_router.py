@@ -246,6 +246,95 @@ async def _draft_campaign_with_chief(business: Dict[str, Any], goal: str,
         return fallback
 
 
+# ─── Cores (shared by the HTTP endpoints and Chief's campaign verbs) ─
+#
+# S10 gap-close: campaigns had a full product surface and ZERO
+# Chief-callable actions. The verbs (chief_campaign_actions.py) must not
+# re-derive audience/consent/launch rules — one query shape, one launch
+# check-list, whoever calls. Each core raises the same HTTPExceptions the
+# endpoint always raised, so HTTP behavior is unchanged and the Chief
+# handlers translate them into honest failure labels.
+
+async def plan_campaign_core(biz: Dict[str, Any], goal: str,
+                             audience_in: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Draft a campaign for a goal + audience. Saves a DRAFT row —
+    nothing sends until a launch. Returns {campaign, audience_preview}."""
+    import billing_limits
+    billing_limits.require_units(biz["id"])   # Chief drafts = an AI action
+    audience = audience_in if (audience_in or {}).get("kind") in AUDIENCE_KINDS \
+        else {"kind": "silent", "days_silent": 30}
+    contacts = _resolve_audience(biz["id"], audience)
+    summary = _audience_summary(contacts)
+    draft = await _draft_campaign_with_chief(biz, (goal or "").strip(), audience, summary)
+    rows = sb_clients.sb_post_as_service("/campaigns", {
+        "business_id": biz["id"],
+        "name": draft["name"],
+        "goal": (goal or "").strip() or None,
+        "audience": audience,
+        "touches": draft["touches"],
+        "status": "draft",
+    }) or []
+    row = rows[0] if isinstance(rows, list) and rows else None
+    if not row:
+        raise HTTPException(500, "Campaign insert failed — is the campaigns migration applied?")
+    return {"campaign": row, "audience_preview": summary}
+
+
+def launch_campaign_core(biz: Dict[str, Any], camp: Dict[str, Any],
+                         start_at_override: Optional[str] = None) -> Dict[str, Any]:
+    """Flip a draft/paused campaign to running. The audience count checked
+    here is the SAME query the sweep sends from (honesty contract). The
+    sweep — not the launch — enforces consent, suppression and quiet
+    hours per send. Returns {campaign, audience_preview}."""
+    # A locked (canceled/expired) account must not bulk-send — Twilio
+    # spend on a dead subscription. Dormant behind BILLING_ENFORCE.
+    import billing_limits
+    billing_limits.require_live_access(camp["business_id"])
+    if camp.get("status") not in ("draft", "paused"):
+        raise HTTPException(409, f"Campaign is {camp.get('status')}.")
+    touches = _clean_touches(camp.get("touches"))
+    if not touches:
+        raise HTTPException(400, "Add at least one touch before launching.")
+    summary = _audience_summary(_resolve_audience(biz["id"], camp.get("audience") or {}))
+    if summary["count"] == 0:
+        raise HTTPException(409, "This audience is empty right now — nothing to send.")
+    start_at = camp.get("start_at")
+    if camp.get("status") == "draft" or not start_at:
+        start_at = (start_at_override or _now().isoformat())
+    sb_clients.sb_patch_as_service(f"/campaigns?id=eq.{camp['id']}", {
+        "status": "running", "start_at": start_at,
+        "updated_at": _now().isoformat(),
+    })
+    return {"campaign": _load_campaign(camp["id"]), "audience_preview": summary}
+
+
+def pause_campaign_core(camp: Dict[str, Any]) -> Dict[str, Any]:
+    """Pause a running campaign — the sweep skips non-running rows, so
+    nothing more sends until a relaunch. Returns the updated campaign."""
+    if camp.get("status") != "running":
+        raise HTTPException(409, f"Campaign is {camp.get('status')}.")
+    sb_clients.sb_patch_as_service(f"/campaigns?id=eq.{camp['id']}", {
+        "status": "paused", "updated_at": _now().isoformat()})
+    return _load_campaign(camp["id"])
+
+
+def list_campaigns_core(business_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """Recent campaigns with their sent_total folded in (one query)."""
+    rows = sb_clients.sb_get_as_service(
+        f"/campaigns?business_id=eq.{business_id}"
+        f"&order=created_at.desc&limit={limit}&select=*") or []
+    ids = ",".join(r["id"] for r in rows)
+    counts: Dict[str, int] = {}
+    if ids:
+        sends = sb_clients.sb_get_as_service(
+            f"/campaign_sends?campaign_id=in.({ids})&select=campaign_id") or []
+        for s in sends:
+            counts[s["campaign_id"]] = counts.get(s["campaign_id"], 0) + 1
+    for r in rows:
+        r["sent_total"] = counts.get(r["id"], 0)
+    return rows
+
+
 # ─── Endpoints ───────────────────────────────────────────────────────
 
 class PlanBody(BaseModel):
@@ -271,45 +360,14 @@ async def plan_campaign(body: PlanBody, user: AuthedUser = Depends(require_user)
     nothing sends until the practitioner reviews and launches."""
     biz = _load_business(body.business_id)
     _require_owner(user, biz, min_role="member")
-    import billing_limits
-    billing_limits.require_units(body.business_id)   # Chief drafts = an AI action
-    audience = body.audience if (body.audience or {}).get("kind") in AUDIENCE_KINDS \
-        else {"kind": "silent", "days_silent": 30}
-    contacts = _resolve_audience(biz["id"], audience)
-    summary = _audience_summary(contacts)
-    draft = await _draft_campaign_with_chief(biz, body.goal.strip(), audience, summary)
-    rows = sb_clients.sb_post_as_service("/campaigns", {
-        "business_id": biz["id"],
-        "name": draft["name"],
-        "goal": body.goal.strip() or None,
-        "audience": audience,
-        "touches": draft["touches"],
-        "status": "draft",
-    }) or []
-    row = rows[0] if isinstance(rows, list) and rows else None
-    if not row:
-        raise HTTPException(500, "Campaign insert failed — is the campaigns migration applied?")
-    return {"ok": True, "campaign": row, "audience_preview": summary}
+    return {"ok": True, **(await plan_campaign_core(biz, body.goal, body.audience))}
 
 
 @router.get("")
 async def list_campaigns(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _load_business(business_id)
     _require_owner(user, biz)
-    rows = sb_clients.sb_get_as_service(
-        f"/campaigns?business_id=eq.{business_id}"
-        f"&order=created_at.desc&limit=50&select=*") or []
-    # Send counts in one query, folded per campaign.
-    ids = ",".join(r["id"] for r in rows)
-    counts: Dict[str, int] = {}
-    if ids:
-        sends = sb_clients.sb_get_as_service(
-            f"/campaign_sends?campaign_id=in.({ids})&select=campaign_id") or []
-        for s in sends:
-            counts[s["campaign_id"]] = counts.get(s["campaign_id"], 0) + 1
-    for r in rows:
-        r["sent_total"] = counts.get(r["id"], 0)
-    return {"ok": True, "campaigns": rows}
+    return {"ok": True, "campaigns": list_campaigns_core(business_id)}
 
 
 @router.get("/{campaign_id}")
@@ -360,27 +418,7 @@ async def launch_campaign(campaign_id: str, body: LaunchBody,
     camp = _load_campaign(campaign_id)
     biz = _load_business(camp["business_id"])
     _require_owner(user, biz, min_role="manager")
-    # A locked (canceled/expired) account must not bulk-send — Twilio
-    # spend on a dead subscription. Dormant behind BILLING_ENFORCE.
-    import billing_limits
-    billing_limits.require_live_access(camp["business_id"])
-    if camp.get("status") not in ("draft", "paused"):
-        raise HTTPException(409, f"Campaign is {camp.get('status')}.")
-    touches = _clean_touches(camp.get("touches"))
-    if not touches:
-        raise HTTPException(400, "Add at least one touch before launching.")
-    summary = _audience_summary(_resolve_audience(biz["id"], camp.get("audience") or {}))
-    if summary["count"] == 0:
-        raise HTTPException(409, "This audience is empty right now — nothing to send.")
-    start_at = camp.get("start_at")
-    if camp.get("status") == "draft" or not start_at:
-        start_at = (body.start_at or _now().isoformat())
-    sb_clients.sb_patch_as_service(f"/campaigns?id=eq.{campaign_id}", {
-        "status": "running", "start_at": start_at,
-        "updated_at": _now().isoformat(),
-    })
-    return {"ok": True, "campaign": _load_campaign(campaign_id),
-            "audience_preview": summary}
+    return {"ok": True, **launch_campaign_core(biz, camp, body.start_at)}
 
 
 @router.post("/{campaign_id}/pause")
@@ -388,11 +426,7 @@ async def pause_campaign(campaign_id: str, user: AuthedUser = Depends(require_us
     camp = _load_campaign(campaign_id)
     biz = _load_business(camp["business_id"])
     _require_owner(user, biz, min_role="manager")
-    if camp.get("status") != "running":
-        raise HTTPException(409, f"Campaign is {camp.get('status')}.")
-    sb_clients.sb_patch_as_service(f"/campaigns?id=eq.{campaign_id}", {
-        "status": "paused", "updated_at": _now().isoformat()})
-    return {"ok": True, "campaign": _load_campaign(campaign_id)}
+    return {"ok": True, "campaign": pause_campaign_core(camp)}
 
 
 @router.delete("/{campaign_id}")
