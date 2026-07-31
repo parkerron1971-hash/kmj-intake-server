@@ -53,9 +53,15 @@ _SUGGEST_DAYS = 7
 def _fail(action_type: str, msg: str) -> Dict[str, Any]:
     """Local mirror of chief_of_staff._fail. Duplicated deliberately: importing
     it would make this module depend on the 14k-line file it is trying to stay
-    out of. Messages here are written to be practitioner-presentable already."""
+    out of. Messages here are written to be practitioner-presentable already.
+
+    "failed": True is the machine-readable failure signal (the #345 seam
+    repair) — _action_failed() string-sniffing missed messages like
+    "I couldn't find that booking", so failures here were narrated and
+    audited as successes until the flag."""
     logger.info(f"Action {action_type} failed: {msg}")
-    return {"type": action_type, "result": msg, "label": action_type, "nav": None}
+    return {"type": action_type, "result": msg, "label": action_type, "nav": None,
+            "failed": True}
 
 
 def _nav_calendar() -> Dict[str, Any]:
@@ -417,6 +423,11 @@ def _reschedule_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dic
     data["appointment_at"] = new_when
     data["rescheduled_by"] = "chief"
     data["rescheduled_at"] = datetime.now(timezone.utc).isoformat()
+    # Series semantics: rescheduling ONE occurrence detaches it from
+    # series-level edits (cancel-from-here won't touch it) but keeps the
+    # series_id stamp for provenance. See booking_series module docstring.
+    if data.get("series_id"):
+        data["series_detached"] = True
 
     # Falsy, not `is None`: sb_patch_as_service returns None on a transport/HTTP
     # error AND [] when the filter matched no rows (a stale id, or a booking
@@ -449,7 +460,9 @@ def _reschedule_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dic
     return {
         "type": "reschedule_booking",
         "result": f"moved to {_pretty(new_when)}"
-                  + (f" (was {_pretty(old_when)})" if old_when else ""),
+                  + (f" (was {_pretty(old_when)})" if old_when else "")
+                  + (". This one now stands on its own — weekly-series changes "
+                     "won't move it again." if data.get("series_detached") else ""),
         "label": str(who),
         "booking_id": booking["id"],
         "appointment_at": new_when,
@@ -512,3 +525,186 @@ def _cancel_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[st
 
 async def handle_cancel_booking(client, biz, action) -> Dict[str, Any]:
     return await asyncio.to_thread(_cancel_booking_sync, biz, action)
+
+
+# ─── create_recurring_booking ─────────────────────────────────────────
+# The weekly standing slot ("book Maria every Tuesday at 2"). Delegates
+# to booking_series.create_series, which writes through the SAME widget
+# helpers as create_booking — one booking path, now times N. Conflicting
+# occurrences are skipped and named in the result, never silently eaten.
+# NO confirmation email is sent (26 emails is spam, not confirmation) —
+# a difference from create_booking worth knowing.
+
+def _create_recurring_booking_sync(biz: Dict[str, Any],
+                                   action: Dict[str, Any]) -> Dict[str, Any]:
+    from booking_series import (
+        SERIES_DEFAULT_COUNT, create_series, parse_hhmm, parse_weekday,
+    )
+
+    business_id = biz["id"]
+
+    weekday = parse_weekday(action.get("weekday") or action.get("day")
+                            or action.get("day_of_week"))
+    if weekday is None:
+        return _fail("create_recurring_booking",
+                     "Which day of the week should the sessions repeat on?")
+
+    at = parse_hhmm(action.get("time") or action.get("at")
+                    or action.get("appointment_time"))
+    if at is None:
+        return _fail("create_recurring_booking",
+                     "What time should the weekly session be? (e.g. 14:00)")
+
+    off_res = _resolve_offering(business_id, action)
+    if off_res.get("error"):
+        return _fail("create_recurring_booking", off_res["error"])
+    offering = off_res["offering"]
+    if not offering.get("is_active"):
+        return _fail("create_recurring_booking",
+                     f"{offering.get('name')} isn't active right now.")
+
+    con_res = _resolve_contact(business_id, action)
+    if con_res.get("error"):
+        return _fail("create_recurring_booking", con_res["error"])
+    contact = con_res.get("contact")
+
+    customer_name = (action.get("customer_name") or action.get("contact_name")
+                     or (contact or {}).get("name") or "").strip()
+    if not customer_name:
+        return _fail("create_recurring_booking", "Who is this series for?")
+
+    from datetime import date as _date
+    count = action.get("count") or action.get("weeks") or action.get("sessions")
+    try:
+        count = int(count) if count is not None else None
+    except (TypeError, ValueError):
+        count = None
+    until = None
+    raw_until = (action.get("until_date") or action.get("until") or "").strip()
+    if raw_until:
+        try:
+            until = _date.fromisoformat(raw_until[:10])
+        except ValueError:
+            return _fail("create_recurring_booking",
+                         "I couldn't read that end date — use YYYY-MM-DD.")
+    if count is None and until is None:
+        count = SERIES_DEFAULT_COUNT  # a quarter of weekly sessions
+
+    start_from = None
+    raw_start = (action.get("start_from") or action.get("starting")
+                 or action.get("from_date") or "").strip()
+    if raw_start:
+        try:
+            start_from = _date.fromisoformat(raw_start[:10])
+        except ValueError:
+            return _fail("create_recurring_booking",
+                         "I couldn't read that start date — use YYYY-MM-DD.")
+
+    res = create_series(
+        business_id,
+        offering=offering, contact=contact,
+        customer_name=customer_name,
+        customer_email=(action.get("customer_email") or action.get("email")
+                        or (contact or {}).get("email") or "").strip().lower(),
+        weekday=weekday, at=at,
+        tz_name=(action.get("timezone") or "").strip() or None,
+        start_from=start_from, count=count, until_date=until,
+        notes=str(action.get("notes") or ""),
+        series_id=(action.get("series_id") or "").strip() or None,
+        booked_by="chief_of_staff",
+    )
+    if not res.get("ok"):
+        return _fail("create_recurring_booking",
+                     res.get("error") or "I couldn't book that series just now.")
+
+    return {
+        "type": "create_recurring_booking",
+        # The summary is the honest booked/skipped ledger — e.g.
+        # "12 booked, 2 skipped: Mar 3 (blocked), Mar 17 (conflict)".
+        "result": res["summary"],
+        "label": f"{offering.get('name')} — {customer_name} · weekly",
+        "series_id": res["series_id"],
+        "booked_count": len(res.get("booked") or []),
+        "skipped": res.get("skipped") or [],
+        "contact_id": (contact or {}).get("id"),
+        "offering_id": offering["id"],
+        "nav": _nav_calendar(),
+    }
+
+
+async def handle_create_recurring_booking(client, biz, action) -> Dict[str, Any]:
+    return await asyncio.to_thread(_create_recurring_booking_sync, biz, action)
+
+
+# ─── cancel_recurring_booking ─────────────────────────────────────────
+
+def _find_series_id(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
+    """series_id wins; otherwise resolve by client name → the series behind
+    that client's next upcoming series booking. {"series_id": s} or
+    {"error": msg}."""
+    sid = (action.get("series_id") or "").strip()
+    if sid:
+        return {"series_id": sid}
+
+    name = (action.get("contact_name") or action.get("customer_name")
+            or action.get("name") or "").strip()
+    if not name:
+        return {"error": "Which series? Give me the client's name or the series id."}
+
+    mod = _bookings_module_id(business_id)
+    if not mod:
+        return {"error": "This business has no booking calendar set up yet."}
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = sb_clients.sb_get_as_service(
+        f"/module_entries?module_id=eq.{mod}&business_id=eq.{business_id}"
+        f"&status=eq.active&appointment_at=gte.{now}"
+        f"&select=id,data,appointment_at&order=appointment_at.asc&limit=100") or []
+    needle = name.lower()
+    for r in rows:
+        d = r.get("data") or {}
+        if not d.get("series_id"):
+            continue
+        who = str(d.get("customer_name") or d.get("name") or "").lower()
+        if needle in who:
+            return {"series_id": str(d["series_id"])}
+    return {"error": f"I don't see an upcoming weekly series for {name}."}
+
+
+def _cancel_recurring_booking_sync(biz: Dict[str, Any],
+                                   action: Dict[str, Any]) -> Dict[str, Any]:
+    from booking_series import cancel_series
+
+    business_id = biz["id"]
+    found = _find_series_id(business_id, action)
+    if found.get("error"):
+        return _fail("cancel_recurring_booking", found["error"])
+
+    # Bare "YYYY-MM-DD" means from the START of that day (not _normalize_iso's
+    # 9am appointment default); anything richer goes through the normalizer.
+    raw_from = str(action.get("from_date") or action.get("from") or "").strip()
+    if len(raw_from) == 10:
+        from_iso: Optional[str] = f"{raw_from}T00:00:00Z"
+    else:
+        from_iso = _normalize_iso(raw_from) or None
+    res = cancel_series(business_id, found["series_id"], from_iso=from_iso,
+                        cancelled_by="chief",
+                        reason=str(action.get("reason") or ""))
+    if not res.get("ok"):
+        return _fail("cancel_recurring_booking",
+                     res.get("error") or "I couldn't cancel that series just now.")
+
+    who = (action.get("contact_name") or action.get("customer_name")
+           or "Weekly series")
+    return {
+        "type": "cancel_recurring_booking",
+        "result": res["summary"],
+        "label": str(who),
+        "series_id": found["series_id"],
+        "cancelled_count": res.get("cancelled", 0),
+        "nav": _nav_calendar(),
+    }
+
+
+async def handle_cancel_recurring_booking(client, biz, action) -> Dict[str, Any]:
+    return await asyncio.to_thread(_cancel_recurring_booking_sync, biz, action)
