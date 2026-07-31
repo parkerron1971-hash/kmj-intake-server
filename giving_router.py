@@ -723,6 +723,7 @@ async def send_gift_receipt(business_id: str, *, giver_email: str,
             subject=f"Your gift to {org} — receipt",
             body=body,
             reply_to=None,
+            business_id=business_id,
         )
         logger.info(f"[giving] receipt sent biz={business_id[:8]}")
     except Exception as e:

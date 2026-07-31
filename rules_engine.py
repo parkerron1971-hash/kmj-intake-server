@@ -279,7 +279,8 @@ def _exec_send_template_email(biz_id: str, params: Dict, payload: Dict) -> Dict[
             from_email="hello@mysolutionist.app", from_name=biz_name,
             reply_to=None,
             subject=_interpolate(params.get("subject", ""), payload)[:200],
-            body=_interpolate(params.get("body", ""), payload))
+            body=_interpolate(params.get("body", ""), payload),
+            business_id=biz_id)
         try:
             asyncio.get_running_loop().create_task(coro)
         except RuntimeError:

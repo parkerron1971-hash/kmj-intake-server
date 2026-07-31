@@ -381,7 +381,8 @@ async def _send_receipt(order_id: str) -> None:
               f"Total — ${order['total_cents'] / 100:,.2f}"
               f"{notes_block}\n\n"
               f"Questions? Just reply to this email.\n"
-              f"— {biz.get('name') or ''}"))
+              f"— {biz.get('name') or ''}"),
+        business_id=order.get("business_id"))
 
 
 # ─── Practitioner: orders ─────────────────────────────────────────────

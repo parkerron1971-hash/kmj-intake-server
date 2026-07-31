@@ -110,6 +110,166 @@ def _urlq(v: str) -> str:
     return quote(v, safe="")
 
 
+# ─── Per-business email identity (S6) ────────────────────────────────
+# Operators can send from their own domain. The domain lifecycle
+# (connect → DNS → verify → active) lives in email_domains_router.py and
+# stores its state in businesses.settings.email_domain (a settings blob,
+# same pattern as settings.giving). THIS is the resolution seam: given a
+# business row, return the (from_email, from_name) a business-originated
+# send should use — the verified custom sender when one exists, else the
+# platform default the caller supplied.
+#
+# Resolution NEVER takes sending down: any error falls back to the
+# platform default. Reply routing is deliberately untouched — the routed
+# reply-to (reply+{biz8}+{contact8}@INBOUND_EMAIL_DOMAIN) keeps pointing
+# at the platform's inbound webhook regardless of the custom from, so
+# replies keep landing in the app.
+
+EMAIL_DOMAIN_SETTINGS_KEY = "email_domain"
+
+
+def email_domain_settings(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """settings.email_domain sub-dict; tolerate missing/malformed."""
+    raw = (settings or {}).get(EMAIL_DOMAIN_SETTINGS_KEY) or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def resolve_from_address(
+    business: Optional[Dict[str, Any]],
+    *,
+    default_email: Optional[str] = None,
+    default_name: Optional[str] = None,
+) -> tuple:
+    """(from_email, from_name) for a business-originated send.
+
+    Returns the business's VERIFIED custom sender when one is fully
+    configured; otherwise the platform default for this send type
+    (`default_email`, falling back to RESEND_FROM_EMAIL / the global
+    default). Partial config (no domain, no local part, not verified)
+    always falls back — we never guess half an address.
+    """
+    platform_email = (default_email
+                     or os.environ.get("RESEND_FROM_EMAIL")
+                     or DEFAULT_FROM_EMAIL)
+    try:
+        cfg = email_domain_settings((business or {}).get("settings"))
+        if (cfg.get("status") == "verified"):
+            domain = str(cfg.get("domain") or "").strip().lower().rstrip(".")
+            local = str(cfg.get("from_local_part") or "").strip()
+            if domain and local and "@" not in local:
+                name = (str(cfg.get("from_name") or "").strip()
+                        or default_name
+                        or (business or {}).get("name"))
+                return f"{local}@{domain}", name
+    except Exception:  # malformed settings must never block a send
+        pass
+    return platform_email, default_name
+
+
+def _platform_from_addresses() -> set:
+    """Platform from-addresses a business identity may override. An
+    explicit custom from (e.g. a caller that already resolved one, or a
+    platform stream like invites@/billing@) is never overridden."""
+    addrs = {
+        DEFAULT_FROM_EMAIL,
+        "hello@mysolutionist.app",
+        "receipts@mysolutionist.app",
+        "reports@solutionist.studio",
+        (os.environ.get("RESEND_FROM_EMAIL") or "").strip().lower(),
+    }
+    return {a for a in addrs if a}
+
+
+def _routed_reply_biz_prefix(reply_to: Optional[str]) -> Optional[str]:
+    """First-8 business-id prefix from a routed reply-to
+    (reply+{biz8}+{contact8}@INBOUND_EMAIL_DOMAIN), else None. Lets
+    business-originated sends that already carry the routed reply-to
+    (Chief sends, campaigns) resolve their custom identity without every
+    caller threading business_id through — the same prefix resolution
+    the inbound webhook already trusts."""
+    if not reply_to:
+        return None
+    domain = _inbound_domain()
+    if not domain:
+        return None
+    addr = reply_to.strip().lower()
+    if not addr.endswith(f"@{domain}"):
+        return None
+    local = addr.split("@", 1)[0]
+    if not local.startswith("reply+"):
+        return None
+    parts = local[len("reply+"):].split("+")
+    return parts[0] if parts and parts[0] else None
+
+
+# 60s TTL cache so a campaign blast doesn't re-fetch the same business
+# row per contact. Keyed by the lookup string; stores the row (or None).
+_IDENTITY_CACHE: Dict[str, tuple] = {}
+_IDENTITY_CACHE_TTL = 60.0
+
+
+async def _business_identity_row(
+    business_id: Optional[str] = None,
+    biz_prefix: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Fetch id+name+settings for identity resolution. Fails open (None)."""
+    key = f"id:{business_id}" if business_id else f"pfx:{biz_prefix}"
+    now = _time.monotonic()
+    hit = _IDENTITY_CACHE.get(key)
+    if hit and (now - hit[0]) < _IDENTITY_CACHE_TTL:
+        return hit[1]
+    if not os.environ.get("SUPABASE_SERVICE_ROLE_KEY"):
+        return None
+    params: Dict[str, str] = {"select": "id,name,settings", "limit": "1"}
+    if business_id:
+        params["id"] = f"eq.{business_id}"
+    elif biz_prefix:
+        params["id"] = f"like.{biz_prefix}*"
+    else:
+        return None
+    row: Optional[Dict[str, Any]] = None
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            r = await client.get(
+                f"{os.environ.get('SUPABASE_URL', '')}/rest/v1/businesses",
+                headers=_sb_service_headers(), params=params)
+            if r.status_code < 400:
+                rows = r.json() if r.text else []
+                row = rows[0] if rows else None
+    except Exception:
+        row = None
+    _IDENTITY_CACHE[key] = (now, row)
+    return row
+
+
+async def _apply_business_identity(
+    from_email: str,
+    from_name: Optional[str],
+    business_id: Optional[str],
+    reply_to: Optional[str],
+) -> tuple:
+    """The in-funnel half of the seam: when the caller's from is a
+    platform default and the send is attributable to a business (explicit
+    business_id, or a routed reply-to), swap in that business's verified
+    custom sender. Anything else passes through untouched."""
+    try:
+        if (from_email or "").strip().lower() not in _platform_from_addresses():
+            return from_email, from_name
+        biz = None
+        if business_id:
+            biz = await _business_identity_row(business_id=business_id)
+        else:
+            prefix = _routed_reply_biz_prefix(reply_to)
+            if prefix:
+                biz = await _business_identity_row(biz_prefix=prefix)
+        if not biz:
+            return from_email, from_name
+        return resolve_from_address(
+            biz, default_email=from_email, default_name=from_name)
+    except Exception:  # resolution must never take sending down
+        return from_email, from_name
+
+
 def _format_address(email: str, name: Optional[str]) -> str:
     """Return RFC 5322 `Name <email>` when a name is supplied; otherwise bare email."""
     if not name:
@@ -193,11 +353,20 @@ async def send_via_resend(
     body: str,
     reply_to: Optional[str],
     attachments: Optional[List[Dict[str, Any]]] = None,
+    business_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Low-level Resend client. Raises on API error.
 
     `attachments` is a list of {filename, content (base64) | path (url),
     content_type?} dicts. Passed through to Resend verbatim.
+
+    `business_id` (optional) marks the send as business-originated: when
+    the given from_email is a platform default and that business has a
+    VERIFIED custom sending domain (settings.email_domain), the send goes
+    out as the business's own identity. Sends whose reply_to is the
+    routed inbound address resolve the same way without the param.
+    Suppression, List-Unsubscribe, and reply routing are identical either
+    way — identity only changes the from line.
     """
     key = os.environ.get("RESEND_API_KEY")
     if not key:
@@ -214,6 +383,11 @@ async def send_via_resend(
             f"Not sent: {to_email} {why} previously. Verify the address is right; "
             f"a platform admin can clear it from email_suppressions if it was a mistake."
         )
+
+    # Per-business identity (S6): after the suppression gate, before the
+    # payload — a suppressed address never costs a settings lookup.
+    from_email, from_name = await _apply_business_identity(
+        from_email, from_name, business_id, reply_to)
 
     payload: Dict[str, Any] = {
         "from": _format_address(from_email, from_name),
@@ -305,6 +479,7 @@ async def send_email(req: SendEmailRequest, user: AuthedUser = Depends(require_u
             body=req.body,
             reply_to=req.reply_to or from_email,
             attachments=attachments_list,
+            business_id=req.business_id,
         )
     except RuntimeError as e:
         raise HTTPException(502, str(e))

@@ -532,7 +532,8 @@ async def accountant_send(biz: str, year: Optional[int] = None,
             reply_to=None, subject=subject, body=body,
             attachments=[{"filename": f"{y}_financial_package.zip",
                           "content": base64.b64encode(blob).decode("ascii"),
-                          "content_type": "application/zip"}])
+                          "content_type": "application/zip"}],
+            business_id=biz)
         email_sent = True
     except Exception as e:
         logger.warning(f"[i6] accountant package email failed: {e}")
@@ -805,7 +806,8 @@ async def customer_statement_send(biz: str, contact_id: str,
             reply_to=None, subject=subject, body=body,
             attachments=[{"filename": "statement.pdf",
                           "content": base64.b64encode(pdf).decode("ascii"),
-                          "content_type": "application/pdf"}])
+                          "content_type": "application/pdf"}],
+            business_id=biz)
         email_sent = True
     except Exception as e:
         logger.warning(f"[i8] statement email failed: {e}")

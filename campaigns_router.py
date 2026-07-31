@@ -610,7 +610,8 @@ async def _send_touch(biz, camp, idx, touch, contact,
             from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
             from_name=biz.get("name") or None,
             subject=subject, body=body,
-            reply_to=reply_to or None)
+            reply_to=reply_to or None,
+            business_id=camp["business_id"])
         _log_campaign_event(camp, contact, "campaign_email_sent",
                             {"touch_idx": idx, "subject": subject})
         return "email"
