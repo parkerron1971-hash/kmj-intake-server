@@ -241,6 +241,12 @@ app.include_router(audit_router)
 # Rails demand-driven — e-sign via BoldSign (proposal → signature → payment)
 from boldsign_router import router as boldsign_router
 app.include_router(boldsign_router)
+# Rails demand-driven — receipt capture (Chief reads the photo)
+from receipts_router import router as receipts_router
+app.include_router(receipts_router)
+# Rails demand-driven — payroll interest capture (Gusto, demand-gated)
+from payroll_router import router as payroll_router
+app.include_router(payroll_router)
 # Phase I.3 — Period closing
 from accounting_periods_router import router as accounting_periods_router
 app.include_router(accounting_periods_router)
