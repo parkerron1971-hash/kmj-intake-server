@@ -30,6 +30,50 @@ from fastapi import HTTPException
 logger = logging.getLogger("payments_core")
 
 
+# ─── Barber-money: deposit math (provider-agnostic) ──────────────────
+
+def compute_deposit_cents(offering: Optional[Dict[str, Any]],
+                          price_cents: int) -> Optional[int]:
+    """The ONE place deposit amounts are computed (server-side only —
+    the widget displays what config-anon echoes back from here). Lives
+    on the seam because deposit policy is money math, not a provider
+    behavior — every adapter charges the same computed cents.
+
+    Returns the deposit in cents, or None when the booking should be a
+    normal full-price checkout. FAIL-SOFT by construction: the offerings
+    deposit columns may not exist yet (deploy-order safety), in which
+    case `offering` simply lacks the keys and every read below falls
+    through to None.
+
+    Rules:
+      * requires_deposit must be truthy and deposit_type/amount valid.
+      * percent → round(price_cents * amount / 100) to the cent.
+      * flat    → round(amount * 100).
+      * A computed deposit <= 0 or >= the full price degrades to
+        full-price (None) — a "100% deposit" is just prepayment and a
+        misconfigured $0 deposit must not create a free booking.
+    """
+    o = offering or {}
+    if not o.get("requires_deposit"):
+        return None
+    dtype = (o.get("deposit_type") or "").strip().lower()
+    try:
+        amount = float(o.get("deposit_amount") or 0)
+    except (TypeError, ValueError):
+        return None
+    if amount <= 0 or price_cents <= 0:
+        return None
+    if dtype == "percent":
+        cents = int(round(price_cents * amount / 100.0))
+    elif dtype == "flat":
+        cents = int(round(amount * 100))
+    else:
+        return None
+    if cents <= 0 or cents >= price_cents:
+        return None
+    return cents
+
+
 class PaymentAdapter:
     """Base adapter. Verbs raise 409 unless the provider implements
     them — a caller can always ask, and always gets an honest answer."""
@@ -50,6 +94,12 @@ class PaymentAdapter:
 
     async def create_refund(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         raise HTTPException(409, f"refunds aren't supported by {self.display_name} yet")
+
+    async def charge_saved_payment_method(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        # Barber-money — the operator-triggered no-show fee charges a
+        # card stored at booking checkout. Grown per the seam contract:
+        # a real call site (/payments/charge-no-show) needed the verb.
+        raise HTTPException(409, f"saved-card charges aren't supported by {self.display_name} yet")
 
 
 class StripeAdapter(PaymentAdapter):
@@ -76,6 +126,11 @@ class StripeAdapter(PaymentAdapter):
     async def create_refund(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         from stripe_checkout_helpers import create_refund
         return await create_refund(
+            stripe_account_id=biz_row["stripe_account_id"], **kwargs)
+
+    async def charge_saved_payment_method(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        from stripe_checkout_helpers import charge_saved_payment_method
+        return await charge_saved_payment_method(
             stripe_account_id=biz_row["stripe_account_id"], **kwargs)
 
 

@@ -497,7 +497,15 @@ def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
         return
     pi_id = session.get("payment_intent")
     if source_type == "booking":
-        _mark_booking_paid(source_id, payment_intent_id=pi_id, charge_id=None)
+        # Barber-money: the session metadata carries payment_kind /
+        # deposit_cents / tip_cents, and session.customer is the Stripe
+        # Customer that setup_future_usage stored the card on — the
+        # no-show charge path needs it recorded on the booking.
+        _mark_booking_paid(
+            source_id, payment_intent_id=pi_id, charge_id=None,
+            metadata=session.get("metadata") or {},
+            stripe_customer_id=session.get("customer"),
+        )
     elif source_type == "invoice":
         _mark_invoice_paid(source_id)
     elif source_type == "order":
@@ -569,6 +577,14 @@ def _handle_payment_intent_succeeded(pi: Dict[str, Any]) -> None:
     source_type, source_id = _metadata_source(pi)
     if not source_id or source_type not in ("booking", "order"):
         return
+    md = pi.get("metadata") or {}
+    if md.get("payment_kind") == "no_show_fee":
+        # Barber-money: the no-show fee PI carries source_type='booking'
+        # for the Charges tab, but it is NOT the service payment — it
+        # must never flip paid_at. The charge endpoint already recorded
+        # the fee state on the entry.
+        logger.info(f"no-show fee PI succeeded for booking {source_id} (not a service payment)")
+        return
     charges = ((pi.get("charges") or {}).get("data") or [])
     charge_id = charges[0].get("id") if charges else None
     if source_type == "order":
@@ -577,7 +593,13 @@ def _handle_payment_intent_succeeded(pi: Dict[str, Any]) -> None:
                         charge_id=charge_id, session=None)
         _emit_order_paid(source_id, pi.get("id"))
         return
-    _mark_booking_paid(source_id, payment_intent_id=pi.get("id"), charge_id=charge_id)
+    _mark_booking_paid(
+        source_id, payment_intent_id=pi.get("id"), charge_id=charge_id,
+        metadata=md,
+        # The PI knows which payment method paid — recorded so the
+        # no-show charge can reuse the exact card without a PM listing.
+        payment_method_id=pi.get("payment_method"),
+    )
 
 
 def _emit_order_paid(order_id: str, payment_intent_id: Optional[str]) -> None:
@@ -767,17 +789,63 @@ def _handle_dispute_created(dispute: Dict[str, Any], account_id: Optional[str]) 
     )
 
 
+def _int_or_none(v: Any) -> Optional[int]:
+    try:
+        return int(v) if v is not None and str(v).strip() != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _mark_booking_paid(
     booking_id: str,
     *,
     payment_intent_id: Optional[str],
     charge_id: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+    stripe_customer_id: Optional[str] = None,
+    payment_method_id: Optional[str] = None,
 ) -> None:
-    """Idempotent: only sets paid_at if it's currently NULL."""
+    """Idempotent: only sets paid_at if it's currently NULL.
+
+    Barber-money: the two success channels each know something the other
+    doesn't (session → customer id; PI → payment_method id), so the
+    data-side facts (deposit state, tip, card-on-file refs) are merged
+    EVEN when paid_at is already set — whichever event lands second
+    still contributes its half."""
     rows = sb_clients.sb_get_as_service(
-        f"/module_entries?id=eq.{booking_id}&select=id,paid_at,business_id,contact_id&limit=1"
+        f"/module_entries?id=eq.{booking_id}"
+        f"&select=id,paid_at,business_id,contact_id,data&limit=1"
     ) or []
-    if not rows or rows[0].get("paid_at"):
+    if not rows:
+        return
+    row = rows[0]
+    already_paid = bool(row.get("paid_at"))
+    md = metadata or {}
+
+    # ── Data-side facts (denormalized, like price_at_booking) ──
+    data = dict(row.get("data") or {})
+    updates: Dict[str, Any] = {}
+    if stripe_customer_id and data.get("stripe_customer_id") != stripe_customer_id:
+        updates["stripe_customer_id"] = stripe_customer_id
+    if payment_method_id and data.get("stripe_payment_method_id") != payment_method_id:
+        updates["stripe_payment_method_id"] = payment_method_id
+    tip_cents = _int_or_none(md.get("tip_cents"))
+    if tip_cents and not data.get("tip_cents"):
+        updates["tip_cents"] = tip_cents
+    if md.get("payment_kind") == "deposit" and not data.get("deposit_paid_at"):
+        # Deposit-paid state; remainder_due derivable and denormalized.
+        updates["deposit_paid_at"] = _now_iso()
+        dep = _int_or_none(md.get("deposit_cents"))
+        rem = _int_or_none(md.get("remainder_cents"))
+        if dep is not None:
+            updates["deposit_paid_cents"] = dep
+        if rem is not None:
+            updates["remainder_due_cents"] = rem
+    if updates:
+        sb_clients.sb_patch_as_service(
+            f"/module_entries?id=eq.{booking_id}", {"data": {**data, **updates}})
+
+    if already_paid:
         return
     patch: Dict[str, Any] = {"paid_at": _now_iso()}
     if charge_id:
@@ -787,11 +855,14 @@ def _mark_booking_paid(
     sb_clients.sb_patch_as_service(
         f"/module_entries?id=eq.{booking_id}", patch,
     )
-    logger.info(f"booking {booking_id[:8]} marked paid via webhook")
+    kind = md.get("payment_kind") or "full"
+    logger.info(f"booking {booking_id[:8]} marked paid via webhook (kind={kind})")
     import event_spine
-    event_spine.emit("booking_paid", rows[0].get("business_id"),
-                     {"booking_id": booking_id, "payment_intent_id": payment_intent_id},
-                     contact_id=rows[0].get("contact_id"), source="stripe_webhook")
+    event_spine.emit("booking_paid", row.get("business_id"),
+                     {"booking_id": booking_id, "payment_intent_id": payment_intent_id,
+                      "payment_kind": kind,
+                      **({"tip_cents": tip_cents} if tip_cents else {})},
+                     contact_id=row.get("contact_id"), source="stripe_webhook")
 
 
 # ─── Tiny helpers ────────────────────────────────────────────────────
