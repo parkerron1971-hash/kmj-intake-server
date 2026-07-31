@@ -40,15 +40,16 @@ def test_stripe_connectivity_reads_account_id():
     assert stripe.is_connected({}) is False
 
 
-@pytest.mark.asyncio
-async def test_unimplemented_verbs_409_instead_of_stripe_fallback():
+def test_unimplemented_verbs_409_instead_of_stripe_fallback():
+    import asyncio
+
     square = payments_core.REGISTRY["square"]
     with pytest.raises(HTTPException) as exc:
-        await square.create_booking_checkout({}, booking_id="b1")
+        asyncio.run(square.create_booking_checkout({}, booking_id="b1"))
     assert exc.value.status_code == 409
     assert "Square" in str(exc.value.detail)
     with pytest.raises(HTTPException) as exc2:
-        await square.create_refund({}, charge_id="ch_1")
+        asyncio.run(square.create_refund({}, charge_id="ch_1"))
     assert exc2.value.status_code == 409
 
 
