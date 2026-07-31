@@ -171,11 +171,24 @@ def render_header(rendered_ids: List[str], ctx: Dict[str, Any]) -> Tuple[str, st
             drawer_html = ""
         brand_href = "#top"
 
-    if booking.get("enabled") and booking.get("url"):
+    # Online giving: for a ministry with the give page live, the bar's
+    # CTA is "Give" — a church site's #1 conversion is the offering, not
+    # an appointment. Only nonprofit-family businesses ever have
+    # ctx.giving.enabled (gather_context gates on giving_is_active), so
+    # every other vertical keeps the booking/contact ladder byte-
+    # identical.
+    giving = ctx.get("giving") or {}
+    giving_cta = bool(giving.get("enabled") and giving.get("url"))
+    if giving_cta:
+        cta_href, cta_label = safe_url(giving["url"]), "Give"
+    elif booking.get("enabled") and booking.get("url"):
         cta_href, cta_label = safe_url(booking["url"]), "Book now"
     else:
         cta_href, cta_label = "#contact", "Get in touch"
-    if spec and spec.get("cta_label"):
+    # The authored nav-spec label was written without knowledge of the
+    # give destination — never let a booking-worded label sit on the
+    # give URL (label-intent coherence, Kevin's second ruling).
+    if spec and spec.get("cta_label") and not giving_cta:
         cta_label = safe(str(spec["cta_label"]))
 
     html = f"""

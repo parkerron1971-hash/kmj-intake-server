@@ -56,8 +56,10 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "legacy": True,
     },
     "giving_received": {
-        "source": "chief_of_staff (church vertical)",
-        "payload": ["amount", "fund"],
+        "source": ("chief_of_staff (church vertical manual mark) + "
+                   "giving_router.record_gift (online gifts via the "
+                   "Connect webhook)"),
+        "payload": ["amount", "fund", "invoice_id", "recurring"],
         "legacy": True,
     },
     "payment_refunded": {

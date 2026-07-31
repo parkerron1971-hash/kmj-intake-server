@@ -101,6 +101,11 @@ class PaymentAdapter:
         # a real call site (/payments/charge-no-show) needed the verb.
         raise HTTPException(409, f"saved-card charges aren't supported by {self.display_name} yet")
 
+    async def create_giving_checkout(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        # Online giving (ministry/nonprofit) — grown per the seam
+        # contract: giving_router's public checkout is the call site.
+        raise HTTPException(409, f"online giving isn't supported by {self.display_name} yet")
+
 
 class StripeAdapter(PaymentAdapter):
     """Adapter #1 — wraps the existing, battle-tested helpers. No
@@ -131,6 +136,11 @@ class StripeAdapter(PaymentAdapter):
     async def charge_saved_payment_method(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         from stripe_checkout_helpers import charge_saved_payment_method
         return await charge_saved_payment_method(
+            stripe_account_id=biz_row["stripe_account_id"], **kwargs)
+
+    async def create_giving_checkout(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        from stripe_checkout_helpers import create_giving_checkout
+        return await create_giving_checkout(
             stripe_account_id=biz_row["stripe_account_id"], **kwargs)
 
 
