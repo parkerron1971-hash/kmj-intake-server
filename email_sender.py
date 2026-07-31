@@ -633,7 +633,6 @@ def _strip_html(html: str) -> str:
     return s.strip()
 
 
-@router.post("/email/inbound")
 def _verify_resend_signature(raw_body: bytes, headers: Any) -> bool:
     """Arc 29 — verify the Resend (Svix) webhook signature.
 
@@ -681,6 +680,7 @@ def _verify_resend_signature(raw_body: bytes, headers: Any) -> bool:
         return False
 
 
+@router.post("/email/inbound")
 async def inbound_email(request: Request):
     """Process inbound email replies from Resend.
 
