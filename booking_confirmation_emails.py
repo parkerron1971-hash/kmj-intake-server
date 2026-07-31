@@ -337,6 +337,22 @@ def _vertical_intro_for_email(business_type: Optional[str]) -> str:
         )
     if bt == "personal_services":
         return "Plan to arrive a few minutes early; cancellations are appreciated 24 hours in advance."
+    if bt == "contractor":
+        # Dispatch language — date + arrival window, and what the customer
+        # does before the crew arrives (vertical_intelligence tone note).
+        return (
+            "We'll arrive within the window above on the date shown. "
+            "Please have the work area accessible — vehicles moved, pets "
+            "secured, and someone 18 or older on site."
+        )
+    if bt == "therapist":
+        # Deliberately sparse and neutral — a confirmation email is often
+        # read by someone other than the client, so it says nothing about
+        # the content or purpose of the session. Scheduling only.
+        return (
+            "If you need to reschedule, please reach out as early as you "
+            "can — the cancellation window in this email applies."
+        )
     # Generic / unmapped — use the GENERIC tone_note if it surfaces;
     # otherwise stay silent (don't bloat the email).
     return ""

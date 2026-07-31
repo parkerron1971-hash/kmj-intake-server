@@ -84,6 +84,10 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "appointments": "Consultations",
         "booking":      "Consultation",
         "bookings":     "Consultations",
+        # A lawyer doesn't run "sessions" — every scheduled sit-down is a
+        # consultation ("Schedule Session" read wrong on the lawyer surface).
+        "session":      "Consultation",
+        "sessions":     "Consultations",
         # invoice → keep "Invoice" per F3 ambiguity ruling (Lawyer Invoice over Bill)
         # I.7/I.10 — trust-account language.
         "trust_account":      "Trust account (IOLTA)",
@@ -193,6 +197,10 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "appointments": "Meetings",
         "booking":      "Meeting",
         "bookings":     "Meetings",
+        # Same word for the session noun — a pastor holds meetings,
+        # not "sessions".
+        "session":      "Meeting",
+        "sessions":     "Meetings",
         "member":       "Member",
         # Giving language — a church says "givers/giving", not
         # "donors/donations" (nonprofit) or "customers" (BASE).
@@ -222,6 +230,11 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         # appointment / booking deliberately stay BASE. A barber genuinely
         # says "appointment" and "booking"; overriding them would be change
         # for its own sake.
+        #
+        # But nobody in the chair has a "session" — the session noun maps
+        # to the same word the trade already uses: Appointment.
+        "session":      "Appointment",
+        "sessions":     "Appointments",
     },
     "contractor": {
         # Trades — plumbing, electrical, HVAC, roofing, remodel, landscape.
@@ -229,7 +242,10 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         # 'customer' deliberately stays BASE. This is the one vertical where
         # the generic noun is already the right one: a contractor says
         # Customer, not Client and not Guest. Overriding it would be change
-        # for its own sake.
+        # for its own sake. The CONTACT noun, however, must not leak the
+        # generic "Contact" — the people register is Customers.
+        "contact":      "Customer",
+        "contacts":     "Customers",
         #
         # What DOES need its own word is the unit of work. A contractor does
         # not book a "service" or run an "engagement" — they run a JOB, at a
@@ -246,6 +262,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "appointments": "Visits",
         "booking":      "Visit",
         "bookings":     "Visits",
+        "session":      "Visit",
+        "sessions":     "Visits",
     },
     "therapist": {
         # Private practice mental health. Deliberately plain: a therapist
