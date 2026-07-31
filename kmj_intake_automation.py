@@ -224,6 +224,9 @@ app.include_router(chief_bookkeeping_router)
 # Phase H.3a — Reports suite (P&L, AR Aging, Cash Flow, Balance Sheet)
 from reports_router import router as reports_router
 app.include_router(reports_router)
+# Balance surface (2026-07-31) — the drawdown ledger's HTTP layer
+from customer_balances_router import router as customer_balances_router
+app.include_router(customer_balances_router)
 # Phase H.1 — Accounts Payable (bills + recurring bills)
 from bills_router import router as bills_router
 app.include_router(bills_router)
@@ -880,6 +883,15 @@ async def startup():
                           "interval", minutes=10, id="trusted_proposals")
     except Exception as e:
         print(f"   [warn] trusted autonomy sweep not scheduled: {e}")
+    # Balance surface (2026-07-31) — nightly drawdown sweep: yesterday's
+    # completed sessions each consume one prepaid session (idempotent via
+    # ledger session_id) + expiry warnings. Kill switch: BALANCE_SWEEP=off.
+    try:
+        import balance_sweep as _bsweep
+        scheduler.add_job(g("balance_sweep", _bsweep.sweep_tick),
+                          "cron", hour=9, minute=15, id="balance_sweep")
+    except Exception as e:
+        print(f"   [warn] balance sweep not scheduled: {e}")
     scheduler.start()
     print(f"🚀 KMJ Intake Automation running")
     print(f"   Owner: {OWNER_NAME} | {BUSINESS_NAME}")
