@@ -50,6 +50,10 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "source": "stripe_connect_router checkout (store orders)",
         "payload": ["order_id", "payment_intent_id"],
     },
+    "order_download": {
+        "source": "store_files public download (digital delivery)",
+        "payload": ["order_id", "offering_id", "filename"],
+    },
     "payment_received": {
         "source": "chief_of_staff manual marks",
         "payload": ["invoice_id", "amount"],

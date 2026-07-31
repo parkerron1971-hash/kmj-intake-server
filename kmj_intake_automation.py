@@ -290,6 +290,9 @@ app.include_router(site_composer_router)
 # Arc 27 - e-commerce store (catalog page + multi-item Stripe checkout + orders)
 from store_router import router as store_router
 app.include_router(store_router)
+# Digital delivery (2026-07-31) - hosted product files + validated downloads
+from store_files import router as store_files_router
+app.include_router(store_files_router)
 from rules_router import router as rules_router, proposals_router as chief_proposals_router
 app.include_router(rules_router)
 # Chief-in-your-pocket (2026-06-12) - Web Push (subscribe/test + senders)
