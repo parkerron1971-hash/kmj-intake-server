@@ -101,6 +101,16 @@ def _emit(business: Dict[str, Any]) -> int:
                     "module_name": (s.get("slug") or "").replace("-", " ").title(),
                     "reason": s.get("headline"),
                     "description": s.get("headline"),
+                    # G03 fix — vertical_intelligence declares the archetype
+                    # explicitly ({slug, archetype, headline}). This used to
+                    # be STRIPPED here and re-derived via the booking-only
+                    # _slug_to_archetype heuristic, which meant every
+                    # work_pipeline / event_roster suggestion (lawyer
+                    # matters, ministry rosters, contractor jobs) silently
+                    # mapped to fallback_generic and got filtered by the
+                    # NT8e gate — zero proactive suggestions for four
+                    # verticals. Pass it through.
+                    "archetype": s.get("archetype"),
                 }
                 for s in vi_suggestions if s.get("slug")
             ]
@@ -129,9 +139,11 @@ def _emit(business: Dict[str, Any]) -> int:
     #   (a) maps to a chief_can_suggest archetype
     #   (b) the business doesn't already have
     #   (c) hasn't been suggested before (any non-dismissed state)
-    # Blueprint module_slug → archetype mapping is heuristic for now: if
-    # the slug contains "book" or "appoint", assume booking_calendar.
-    # Future expansion: store archetype directly on blueprint rows.
+    # Archetype resolution: an explicit `archetype` on the row (the
+    # vertical_intelligence path carries one) always wins; the
+    # _slug_to_archetype heuristic is ONLY a fallback for rows that
+    # carry none (business_type_module_blueprint has no archetype
+    # column yet).
     for row in blueprint_rows:
         if inserted >= capacity:
             break
@@ -141,7 +153,7 @@ def _emit(business: Dict[str, Any]) -> int:
             continue
         if slug in existing_slugs:
             continue
-        archetype = _slug_to_archetype(slug)
+        archetype = _resolve_archetype(row)
         if archetype not in ok_archetypes:
             # NT8g — the blueprint mentions something we can't ship cleanly
             # yet. We don't suggest. Future archetype work fills these in.
@@ -171,6 +183,19 @@ def _emit(business: Dict[str, Any]) -> int:
             inserted += 1
 
     return inserted
+
+
+def _resolve_archetype(row: Dict[str, Any]) -> str:
+    """G03 — the archetype a suggestion row maps to. An explicit
+    `archetype` key wins (vertical_intelligence declares one per
+    suggestion); the slug heuristic is only for rows without one. The
+    NT8e suggestable_archetypes gate downstream still filters
+    fallback_generic and anything unknown — this function resolves, it
+    does not authorize."""
+    explicit = (row.get("archetype") or "").strip().lower()
+    if explicit:
+        return explicit
+    return _slug_to_archetype(row.get("module_slug") or "")
 
 
 def _slug_to_archetype(slug: str) -> str:
