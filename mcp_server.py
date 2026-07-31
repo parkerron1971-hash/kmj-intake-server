@@ -269,6 +269,28 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "Suggest a writing-voice rule from observed edits. Returns the "
         "suggestion and stores nothing.",
         _NO_ARGS),
+    # Deliberately exposed (tripwire bump 19 → 21). campaign_status is
+    # operational marketing state — the same class as list_scheduled and
+    # site_health, both already here; audience members are counted, never
+    # named. list_expenses is business financials of the same class as
+    # show_revenue and unbilled_time, both already here. Launching,
+    # pausing, logging and deleting stay writes and stay OFF this surface.
+    "campaign_status": (
+        "Marketing campaigns and their honest send progress — drafts, "
+        "running, paused, completed, with sends/replies/bookings counts. "
+        "Pass a name for one campaign's full results.",
+        _obj({"name": {"type": "string",
+                       "description": "Optional. A campaign name (partial "
+                                      "match) for detailed results."}})),
+    "list_expenses": (
+        "Recent manually-logged business expenses with a total. Optional "
+        "month (YYYY-MM) and category (tax | owner_pay | operating | "
+        "savings | other) filters.",
+        _obj({"month": {"type": "string",
+                        "description": "Optional. YYYY-MM month filter."},
+              "category": {"type": "string",
+                           "description": "Optional. One of the five "
+                                          "expense buckets."}})),
 }
 
 
