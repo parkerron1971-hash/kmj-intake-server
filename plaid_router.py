@@ -56,6 +56,39 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     return rows[0]
 
 
+def _require_reader(business_id: str, user: AuthedUser) -> Dict[str, Any]:
+    """Seat-access arc follow-up (7/31): bank-data READS for the
+    financial-read tier — owner, active accountant collaborator, or any
+    active team seat (viewer+), same ladder as gl_router._access.
+    Every write (link, sync, categorize, match, delete) stays on
+    _require_owner."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=id,name,owner_id&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    row = rows[0]
+    if str(row.get("owner_id")) == str(user.id):
+        return row
+    from business_collaborators_router import is_active_accountant
+    if is_active_accountant(business_id, str(user.id)):
+        return row
+    from business_users_router import require_role
+    require_role(business_id, str(user.id), "viewer")
+    return row
+
+
+def _require_reader_for_tx(transaction_id: str, user: AuthedUser) -> Dict[str, Any]:
+    rows = sb_clients.sb_get_as_service(
+        f"/plaid_transactions?transaction_id=eq.{transaction_id}"
+        f"&select=transaction_id,business_id&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(404, "transaction not found")
+    _require_reader(str(rows[0].get("business_id")), user)
+    return rows[0]
+
+
 def _require_owner_for_item(item_id: str, user: AuthedUser) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/plaid_items?item_id=eq.{item_id}&select=item_id,business_id,status&limit=1"
@@ -426,7 +459,7 @@ async def plaid_webhook(request: Request) -> JSONResponse:
 
 @router.get("/items")
 def list_items(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _require_owner(biz, user)
+    _require_reader(biz, user)
     rows = sb_clients.sb_get_as_service(
         f"/plaid_items?business_id=eq.{biz}"
         f"&select=item_id,institution_id,institution_name,status,"
@@ -438,7 +471,7 @@ def list_items(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, 
 
 @router.get("/accounts")
 def list_accounts(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _require_owner(biz, user)
+    _require_reader(biz, user)
     rows = sb_clients.sb_get_as_service(
         f"/plaid_accounts?business_id=eq.{biz}"
         f"&deleted_at=is.null"
@@ -575,7 +608,7 @@ def list_transactions(
 
     Excluded-from-books rows are hidden unless include_excluded=true, so
     existing callers (Needs Review) keep their pre-v1.5 behavior."""
-    _require_owner(biz, user)
+    _require_reader(biz, user)
 
     # Account scope: explicit selection wins; otherwise all included
     # accounts. Removed accounts never appear.
@@ -637,7 +670,7 @@ def get_transaction(
 ) -> Dict[str, Any]:
     """Single-transaction detail for the drawer, with the owning account's
     name/mask/subtype joined in."""
-    _require_owner_for_tx(transaction_id, user)
+    _require_reader_for_tx(transaction_id, user)
     rows = sb_clients.sb_get_as_service(
         f"/plaid_transactions?transaction_id=eq.{transaction_id}&{_TX_SELECT}&limit=1"
     ) or []
@@ -765,7 +798,7 @@ def cash_flow_summary(biz: str, user: AuthedUser = Depends(require_user)) -> Dic
        unreconciled     — { count, total_inflow, total_outflow }
        by_bucket_mtd    — { tax, owner_pay, operating, savings, other }
     """
-    _require_owner(biz, user)
+    _require_reader(biz, user)
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1).date().isoformat()
     year_start = now.replace(month=1, day=1).date().isoformat()
@@ -857,7 +890,7 @@ class RuleBody(BaseModel):
 
 @router.get("/category-rules")
 def list_rules(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _require_owner(biz, user)
+    _require_reader(biz, user)
     rows = sb_clients.sb_get_as_service(
         f"/category_rules?business_id=eq.{biz}&order=merchant_name.asc"
         f"&select=id,merchant_name,business_category,business_subcategory"
@@ -1344,7 +1377,7 @@ def _recon_unmatched_stripe(biz: str, floor: Optional[str]) -> List[Dict[str, An
 def reconciliation_summary(
     biz: str, user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
-    _require_owner(biz, user)
+    _require_reader(biz, user)
     empty = {"count": 0, "total": 0.0, "mtd_count": 0, "mtd_total": 0.0}
     scope = _recon_scope(biz)
     if scope is None:
@@ -1397,7 +1430,7 @@ def reconciliation_matches(
     match_type: Optional[str] = None,
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
-    _require_owner(biz, user)
+    _require_reader(biz, user)
     scope = _recon_scope(biz, account_id)
     if scope is None:
         return {"ok": True, "matches": [], "has_more": False}
@@ -1415,7 +1448,7 @@ def reconciliation_unmatched(
     date_range: Optional[str] = None,
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
-    _require_owner(biz, user)
+    _require_reader(biz, user)
     floor = _recon_date_floor(date_range)
     if side == "stripe":
         return {"ok": True, "side": "stripe", "unmatched": _recon_unmatched_stripe(biz, floor), "has_more": False}
@@ -1439,7 +1472,7 @@ def reconciliation_suggestions(
       can find Plaid deposits without a live Stripe retrieve.
     side='plaid': `id` is a deposit; we read its amount/date from the row
       and search Stripe payouts in range."""
-    _require_owner(biz, user)
+    _require_reader(biz, user)
     from datetime import date as _date, timedelta
 
     def _parse(d: str) -> Optional[_date]:
@@ -1618,7 +1651,7 @@ def reconciliation_export(
 ) -> Response:
     """Generate a reconciliation report as a direct download (no server-side
     storage). CSV always available; PDF when reportlab is present."""
-    biz_row = _require_owner(biz, user)
+    biz_row = _require_reader(biz, user)
     biz_name = (biz_row.get("name") or "Business")
     floor = _recon_date_floor(date_range)
     scope = _recon_scope(biz)

@@ -61,6 +61,26 @@ def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
     return rows[0]
 
 
+def _reader(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    """Seat-access arc follow-up (7/31): the bills LIST for the
+    financial-read tier (owner / accountant / team seat) — AP aging was
+    already readable via reports, the list behind it should match.
+    All bill writes stay on _owner."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz}&select=id,owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    row = rows[0]
+    if str(row.get("owner_id")) == str(user.id):
+        return row
+    from business_collaborators_router import is_active_accountant
+    if is_active_accountant(biz, str(user.id)):
+        return row
+    from business_users_router import require_role
+    require_role(biz, str(user.id), "viewer")
+    return row
+
+
 def _owner_for_bill(bill_id: str, user: AuthedUser) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/bills?id=eq.{bill_id}&select=id,business_id&limit=1") or []
@@ -178,7 +198,7 @@ def _mark_overdue(business_id: str) -> None:
 @router.get("")
 def list_bills(biz: str, status: Optional[str] = None,
                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)
+    _reader(biz, user)
     _generate_due_recurring_bills(biz)
     _mark_overdue(biz)
     parts = [f"business_id=eq.{biz}"]
