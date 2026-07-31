@@ -335,6 +335,10 @@ app.include_router(stripe_billing_router)
 # ownership verified); the send sweep registers in startup() below.
 from campaigns_router import router as campaigns_api_router
 app.include_router(campaigns_api_router)
+# S6 per-business email identity — /email-domain/* (owner-only). Domain
+# lifecycle against Resend; sends resolve the custom from in email_sender.
+from email_domains_router import router as email_domains_api_router
+app.include_router(email_domains_api_router)
 # Hardening pass 1 — data export + account/business deletion (GDPR
 # portability + erasure). /account/export, DELETE /account/business/{id},
 # DELETE /account. All JWT-authed, ownership verified server-side.

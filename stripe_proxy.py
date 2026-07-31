@@ -575,6 +575,7 @@ async def _deliver_digital_product(
             subject=subject,
             body=body_html,
             reply_to=biz_email,
+            business_id=business_id,
         )
     except Exception as e:
         logger.warning(f"digital delivery: resend send failed: {e}")
