@@ -937,7 +937,7 @@ async def request_fresh_link(body: FreshLinkBody, request: Request) -> Dict[str,
     if rows:
         customer_id = rows[0]["id"]
         token = issue_customer_token(body.business_id, customer_id)
-        _send_fresh_link_email(body.business_id, email_norm, token)
+        await _send_fresh_link_email(body.business_id, email_norm, token)
     return {"ok": True}
 
 
@@ -1323,7 +1323,7 @@ def _create_appointment(
     return None
 
 
-def _send_fresh_link_email(business_id: str, email: str, token: str) -> None:
+async def _send_fresh_link_email(business_id: str, email: str, token: str) -> None:
     """Send the fresh booking-management link via the existing email_sender.
     Quiet on failure — we already returned ok=True to avoid existence leak."""
     try:
@@ -1334,16 +1334,21 @@ def _send_fresh_link_email(business_id: str, email: str, token: str) -> None:
         biz_name = biz[0].get("name", "Your booking") if biz else "Your booking"
         link_base = os.environ.get("WIDGET_LINK_BASE", "https://app.solutionist.studio")
         link = f"{link_base}/booking/{business_id}?token={token}"
-        send_via_resend(
-            to=email,
+        await send_via_resend(
+            to_email=email,
+            to_name=None,
+            from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
+            from_name=biz_name,
             subject=f"{biz_name} — your booking link",
-            html=(
+            body=(
                 f"<p>Here's your fresh link to manage your booking with "
                 f"<strong>{biz_name}</strong>:</p>"
                 f"<p><a href=\"{link}\">{link}</a></p>"
                 f"<p>This link is good for 90 days. If you didn't request it, "
                 f"you can ignore this email.</p>"
             ),
+            reply_to=None,
+            business_id=business_id,
         )
     except Exception as e:
         logger.warning(f"fresh-link email failed for {email}: {e}")
