@@ -12,9 +12,16 @@ Writers call record() (best-effort, never raises). v1 wires the Chief
 chat loop; scheduler/rules/agent writers adopt the same helper
 opportunistically — one function, one table, no bespoke shapes.
 
-Reads go through GET /audit (owner-gated). The table is service-role
-insert only with no update/delete policies: an audit row that can be
-edited is a diary, not an audit.
+Reads go through GET /audit (member+ via the seat ladder — history is
+a trust surface for the whole team, not an owner secret). The table is
+service-role insert only with no update/delete policies: an audit row
+that can be edited is a diary, not an audit.
+
+ACTOR NAMES: the table's actor_type CHECK allows only
+('user','chief','agent','system'). Non-chat writers (the scheduler,
+the trusted-autonomy sweep) therefore write actor_type='system' and
+carry their real identity in actor_id ('scheduler', 'trust-track') —
+the frontend renders actor_id as the display name when present.
 """
 from __future__ import annotations
 
@@ -116,13 +123,18 @@ def record_chief_turn(*, user_id: Optional[str], business_id: Optional[str],
 def read_audit(biz: str, limit: int = 100, failed_only: bool = False,
                verb: Optional[str] = None,
                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    """The practitioner's view of their own audit trail."""
+    """The team's view of the business audit trail.
+
+    Seat visibility (S11): owner-only reads left invited seats staring
+    at an empty History panel. Same require_role ladder as the other
+    routers — any working seat (member+) can read; roles are enforced
+    server-side here regardless of what the client renders."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,owner_id&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
-    if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(403, "not authorized")
+    from business_users_router import require_role
+    require_role(biz, str(user.id), "member")
 
     limit = min(max(limit, 1), 500)
     q = (f"/audit_log?business_id=eq.{biz}"

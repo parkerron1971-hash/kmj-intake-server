@@ -533,6 +533,17 @@ def _run_trusted_sweep_sync() -> None:
                     # Leaves the proposal pending for manual review —
                     # autonomy never force-fails work through.
                     logger.warning(f"[trusted] execute failed {biz}/{ptype}: {e}")
+                    # S11: the FAILURE is audited too — "Chief tried and it
+                    # failed" is exactly what the history surface promises.
+                    # Fail-soft: record() never raises.
+                    import audit_log
+                    audit_log.record(
+                        biz, actor_type="system", actor_id="trust-track",
+                        verb=str(ptype)[:80], ok=False, error=str(e)[:500],
+                        summary=f"Autonomous {ptype} failed — left pending for review",
+                        payload={"proposal_id": p.get("id"),
+                                 "proposal_type": ptype},
+                        source="system")
                     continue
                 sb_clients.sb_patch_as_service(
                     f"/chief_proposals?id=eq.{p['id']}",
@@ -543,6 +554,21 @@ def _run_trusted_sweep_sync() -> None:
                 label = ((p.get("proposed") or {}).get("subject")
                          or (p.get("proposed") or {}).get("title") or ptype)
                 executed_labels.append(str(label)[:80])
+                # S11 audit coverage — one row PER executed proposal,
+                # regardless of whether an owner_id was resolvable (the
+                # activity-rail leg below still needs one). actor_type
+                # must pass the table CHECK, so the sweep's identity
+                # rides actor_id='trust-track'. Fail-soft: record()
+                # never raises, a False return is logged.
+                import audit_log
+                if not audit_log.record(
+                        biz, actor_type="system", actor_id="trust-track",
+                        verb=str(ptype)[:80], ok=True,
+                        summary=f"Handled autonomously: {str(label)[:90]}",
+                        payload={"proposal_id": p.get("id"),
+                                 "proposal_type": ptype},
+                        source="system"):
+                    logger.warning(f"[trusted] audit write failed {biz}/{ptype}")
                 if biz_row.get("owner_id"):
                     try:
                         sb_clients.sb_post_as_service("/chief_activity", {
@@ -556,13 +582,6 @@ def _run_trusted_sweep_sync() -> None:
                         })
                     except Exception as e:
                         logger.warning(f"[trusted] activity log failed: {e}")
-                    import audit_log
-                    audit_log.record(biz, actor_type="chief",
-                                     actor_id=str(biz_row["owner_id"]),
-                                     verb=f"trusted:{ptype}"[:80],
-                                     summary=f"Handled autonomously: {str(label)[:90]}",
-                                     payload={"proposal_id": p.get("id")},
-                                     source="system")
         if executed_labels:
             print(f"[Trusted sweep] {biz_row.get('name') or biz}: "
                   f"executed {len(executed_labels)} — {', '.join(executed_labels[:3])}",

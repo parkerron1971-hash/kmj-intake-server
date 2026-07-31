@@ -171,14 +171,24 @@ def test_not_undoable_entries_are_real_verbs():
         assert verb in ACTION_HANDLERS, f"{verb} has a reason but no handler"
 
 
-def test_a_verb_in_both_maps_resolves_to_not_undoable():
-    """write_off_time is in INVERSES as a placeholder AND in the reason map.
-    The reason map must win, or undo would run a placeholder that returns
-    None and report a confusing failure."""
-    assert "write_off_time" in ai.INVERSES
+def test_write_off_time_contradiction_is_resolved():
+    """S11: write_off_time used to sit in BOTH maps — a dead placeholder
+    inverse (build always returned None) plus a refusal. The refusal is
+    the honest answer (no verb reverses the status flip), so the dead
+    INVERSES entry is gone and must stay gone."""
+    assert "write_off_time" not in ai.INVERSES
     assert "write_off_time" in ai.NOT_UNDOABLE_REASON
     assert ai.can_undo("write_off_time") is False
     assert "write_off_time" not in ai.undoable_verbs()
+    assert ai.why_not("write_off_time")  # a real sentence, not silence
+
+
+def test_no_verb_sits_in_both_maps():
+    """The write_off_time class, generalized: an entry in both maps is a
+    contradiction — an inverse nobody can reach plus a refusal. One map
+    per verb, always."""
+    both = set(ai.INVERSES) & set(ai.NOT_UNDOABLE_REASON)
+    assert both == set(), f"verbs in both INVERSES and NOT_UNDOABLE_REASON: {both}"
 
 
 def test_undo_window_is_short():
