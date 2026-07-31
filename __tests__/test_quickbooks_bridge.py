@@ -77,6 +77,64 @@ def test_iif_defines_each_external_account_once():
     assert len(accnt_rows) == 1
 
 
+_QBO_LIST = [
+    {"id": "35", "name": "Checking", "type": "Bank"},
+    {"id": "77", "name": "Contract Labor", "type": "Expense"},
+    {"id": "80", "name": "Advertising & Marketing", "type": "Expense"},
+    {"id": "45", "name": "Sales", "type": "Income"},
+    {"id": "90", "name": "Software", "type": "Expense"},
+]
+
+
+def test_suggest_exact_name_wins():
+    from quickbooks_router import suggest_qbo_match
+
+    s = suggest_qbo_match({"code": "5200", "name": "Software", "type": "expense"}, _QBO_LIST)
+    assert s and s["external_id"] == "90" and s["confidence"] == 1.0
+
+
+def test_suggest_knows_qbo_vocabulary():
+    from quickbooks_router import suggest_qbo_match
+
+    cash = suggest_qbo_match({"code": "1000", "name": "Cash", "type": "asset"}, _QBO_LIST)
+    assert cash and cash["external_name"] == "Checking"
+
+    sub = suggest_qbo_match({"code": "5100", "name": "Contractors", "type": "expense"}, _QBO_LIST)
+    assert sub and sub["external_name"] == "Contract Labor"
+
+    mkt = suggest_qbo_match({"code": "5300", "name": "Marketing", "type": "expense"}, _QBO_LIST)
+    assert mkt and mkt["external_name"] == "Advertising & Marketing"
+
+
+def test_suggest_never_crosses_account_classes():
+    from quickbooks_router import suggest_qbo_match
+
+    # An income account must never be suggested an Expense match even
+    # when the names are identical.
+    s = suggest_qbo_match({"code": "4000", "name": "Software", "type": "income"},
+                          [{"id": "90", "name": "Software", "type": "Expense"}])
+    assert s is None
+
+
+def test_suggest_stays_quiet_below_confidence():
+    from quickbooks_router import suggest_qbo_match
+
+    s = suggest_qbo_match({"code": "3900", "name": "Zebra Fund", "type": "expense"}, _QBO_LIST)
+    assert s is None
+
+
+def test_activity_aggregation():
+    from quickbooks_router import _activity_by_code
+
+    a = _activity_by_code([
+        {"account_code": "1000", "debit": 100, "credit": 0},
+        {"account_code": "1000", "debit": 0, "credit": 40},
+        {"account_code": "5100", "debit": 250, "credit": 0},
+    ])
+    assert a["1000"] == {"entries": 2, "volume": 140.0}
+    assert a["5100"] == {"entries": 1, "volume": 250.0}
+
+
 def test_quickbooks_routes_exist_and_require_auth():
     from quickbooks_router import router, connect_router
     from auth_supabase import require_user

@@ -161,6 +161,100 @@ def get_mappings(biz: str) -> Dict[str, Dict[str, Any]]:
     return {r["account_code"]: r for r in rows}
 
 
+def _activity_by_code(lines: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Ledger lines -> {code: {entries, volume}}. Volume = total money
+    moved through the account (debits + credits) — the friendliest
+    single signal for 'is this account one you actually use'."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for l in lines:
+        code = l.get("account_code") or ""
+        if not code:
+            continue
+        a = out.setdefault(code, {"entries": 0, "volume": 0.0})
+        a["entries"] += 1
+        a["volume"] += float(l.get("debit") or 0) + float(l.get("credit") or 0)
+    for a in out.values():
+        a["volume"] = round(a["volume"], 2)
+    return out
+
+
+# ─── The suggestion engine (bookkeeping-UX mandate, 7/31) ────────────
+# The user should never hand-translate our chart of accounts into
+# QuickBooks vocabulary — the system knows both languages. Rubric, not
+# lookup table: class guard first (an income account never maps to
+# their expense account), then exact name, then a synonym pass for the
+# terms the two systems genuinely name differently, then fuzzy match.
+
+_QBO_TYPE_CLASS = {
+    "Bank": "asset", "Other Current Asset": "asset", "Fixed Asset": "asset",
+    "Other Asset": "asset", "Accounts Receivable": "asset",
+    "Accounts Payable": "liability", "Credit Card": "liability",
+    "Other Current Liability": "liability", "Long Term Liability": "liability",
+    "Equity": "equity",
+    "Income": "income", "Other Income": "income",
+    "Expense": "expense", "Other Expense": "expense",
+    "Cost of Goods Sold": "expense",
+}
+
+# our normalized token -> tokens that mean the same thing in QBO-land.
+_SYNONYMS = {
+    "cash": ("checking", "bank", "cash on hand"),
+    "contractors": ("subcontractors", "contract labor", "contractor"),
+    "contractor payments": ("subcontractors", "contract labor"),
+    "owner pay": ("owner's pay", "owner draw", "distributions", "personal"),
+    "owner draw": ("owner's pay", "distributions"),
+    "revenue": ("sales", "services", "income", "service income"),
+    "sales": ("sales of product income", "sales", "income"),
+    "software": ("dues & subscriptions", "dues and subscriptions", "office expenses"),
+    "supplies": ("supplies & materials", "supplies and materials", "job supplies"),
+    "tax": ("taxes & licenses", "taxes and licenses", "payroll tax"),
+    "savings": ("savings",),
+    "marketing": ("advertising", "advertising & marketing"),
+}
+
+
+def _norm(s: str) -> str:
+    return " ".join((s or "").lower().replace("&", "and").split())
+
+
+def suggest_qbo_match(our_account: Dict[str, Any],
+                      qbo_accounts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Best QBO account for one of ours, or None below confidence.
+    Returns {external_id, external_name, external_type, confidence}."""
+    import difflib
+
+    our_type = (our_account.get("type") or "").lower()
+    our_name = _norm(our_account.get("name") or "")
+    if not our_name:
+        return None
+
+    candidates = [a for a in qbo_accounts
+                  if _QBO_TYPE_CLASS.get(a.get("type") or "", "?") == our_type]
+    if not candidates:
+        return None
+
+    best, best_score = None, 0.0
+    syn = _SYNONYMS.get(our_name, ())
+    for a in candidates:
+        qn = _norm(a.get("name") or "")
+        if not qn:
+            continue
+        if qn == our_name:
+            score = 1.0
+        elif qn in syn or any(s in qn for s in syn):
+            score = 0.9
+        else:
+            score = difflib.SequenceMatcher(None, our_name, qn).ratio() * 0.85
+        if score > best_score:
+            best, best_score = a, score
+
+    if not best or best_score < 0.55:
+        return None
+    return {"external_id": best.get("id"), "external_name": best.get("name"),
+            "external_type": best.get("type"),
+            "confidence": round(best_score, 2)}
+
+
 @router.get("/mappings")
 def list_mappings(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     b = _owner(biz, user)
@@ -168,6 +262,12 @@ def list_mappings(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[st
         f"/chart_of_accounts?business_id=eq.{biz}"
         f"&select=code,name,type,profit_first_bucket&order=code.asc&limit=500") or []
     mapped = get_mappings(biz)
+    # Bookkeeping-UX mandate: show which accounts the business actually
+    # USES, so mapping stops being a guessing game over 17 rows.
+    lines = sb_clients.sb_get_as_service(
+        f"/ledger_entries?business_id=eq.{biz}"
+        f"&select=account_code,debit,credit&limit=100000") or []
+    activity = _activity_by_code(lines)
     book_of_record = (((b.get("settings") or {}).get("financial") or {})
                       .get("book_of_record") or "solutionist")
     return {
@@ -179,6 +279,8 @@ def list_mappings(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[st
                 "type": a.get("type"),
                 "external_name": (mapped.get(a["code"]) or {}).get("external_name"),
                 "external_id": (mapped.get(a["code"]) or {}).get("external_id"),
+                "entries": (activity.get(a["code"]) or {}).get("entries", 0),
+                "volume": (activity.get(a["code"]) or {}).get("volume", 0.0),
             }
             for a in accounts
         ],
@@ -189,6 +291,10 @@ def list_mappings(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[st
 class MappingItem(BaseModel):
     account_code: str
     external_name: str = ""
+    # Set when the name was picked from the live QBO list / suggestions —
+    # links the mapping immediately instead of waiting for the next
+    # sync-accounts auto-link pass.
+    external_id: str = ""
 
 
 class PutMappingsBody(BaseModel):
@@ -217,12 +323,14 @@ def put_mappings(biz: str, body: PutMappingsBody,
                 f"&provider=eq.{PROVIDER}&account_code=eq.{code}")
             cleared += 1
             continue
+        row = {"business_id": biz, "provider": PROVIDER,
+               "account_code": code, "external_name": name[:120],
+               "updated_at": datetime.now(timezone.utc).isoformat()}
+        if (item.external_id or "").strip():
+            row["external_id"] = item.external_id.strip()[:40]
         sb_clients.sb_post_as_service(
             "/coa_external_mappings?on_conflict=business_id,provider,account_code",
-            {"business_id": biz, "provider": PROVIDER,
-             "account_code": code, "external_name": name[:120],
-             "updated_at": datetime.now(timezone.utc).isoformat()},
-            prefer="resolution=merge-duplicates,return=representation")
+            row, prefer="resolution=merge-duplicates,return=representation")
         saved += 1
 
     logger.info(f"[qb] mappings updated biz={biz[:8]} saved={saved} "
@@ -441,7 +549,8 @@ async def qb_sync_accounts(biz: str, user: AuthedUser = Depends(require_user)) -
     # Backfill external_id where names already line up.
     by_name = {(a["name"] or "").strip().lower(): a for a in out}
     linked = 0
-    for code, m in get_mappings(biz).items():
+    mapped = get_mappings(biz)
+    for code, m in mapped.items():
         if m.get("external_id"):
             continue
         hit = by_name.get((m.get("external_name") or "").strip().lower())
@@ -452,7 +561,22 @@ async def qb_sync_accounts(biz: str, user: AuthedUser = Depends(require_user)) -
                 {"external_id": hit["id"], "external_type": hit["type"]})
             linked += 1
 
-    return {"ok": True, "accounts": out, "count": len(out), "auto_linked": linked}
+    # Bookkeeping-UX mandate: the system speaks both vocabularies, so
+    # it does the matching. Suggestions for every account not yet
+    # mapped — the user reviews and saves instead of translating.
+    ours = sb_clients.sb_get_as_service(
+        f"/chart_of_accounts?business_id=eq.{biz}"
+        f"&select=code,name,type&order=code.asc&limit=500") or []
+    suggestions = []
+    for a in ours:
+        if (mapped.get(a["code"]) or {}).get("external_id"):
+            continue
+        s = suggest_qbo_match(a, out)
+        if s:
+            suggestions.append({"code": a["code"], **s})
+
+    return {"ok": True, "accounts": out, "count": len(out),
+            "auto_linked": linked, "suggestions": suggestions}
 
 
 # ─── The push (push-only by ruling; idempotent by ledger) ────────────
