@@ -170,3 +170,28 @@ def test_verify_payload_tamper_resistance():
     assert verify_webhook_signature(tampered, sig, secret=SECRET) is False
     # And the original still verifies — sanity.
     assert verify_webhook_signature(original, sig, secret=SECRET) is True
+
+
+# ─── _webhook_secret precedence (two-endpoint setup) ─────────────────
+
+def test_webhook_secret_prefers_connect_var(monkeypatch):
+    from stripe_connect_helpers import _webhook_secret
+    monkeypatch.setenv("STRIPE_CONNECT_WEBHOOK_SECRET", "whsec_connect")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_platform")
+    assert _webhook_secret() == "whsec_connect"
+
+
+def test_webhook_secret_falls_back_to_shared_var(monkeypatch):
+    from stripe_connect_helpers import _webhook_secret
+    monkeypatch.delenv("STRIPE_CONNECT_WEBHOOK_SECRET", raising=False)
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_platform")
+    assert _webhook_secret() == "whsec_platform"
+
+
+def test_webhook_secret_raises_when_neither_set(monkeypatch):
+    import pytest
+    from stripe_connect_helpers import _webhook_secret
+    monkeypatch.delenv("STRIPE_CONNECT_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
+    with pytest.raises(RuntimeError):
+        _webhook_secret()
