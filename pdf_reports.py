@@ -952,6 +952,13 @@ def _audit_trail_body(d, s, money_cell, accent, stripe, rule, danger, colors, Ta
     return out
 
 
+def register_builder(key: str, builder) -> None:
+    """Public hook: a vertical module (e.g. superbill.py) registers its
+    body builder without this module importing it — same signature as
+    the builders below."""
+    _BUILDERS[key] = builder
+
+
 _BUILDERS = {
     "balance_sheet": _balance_sheet_body,
     "pl": _pl_body,

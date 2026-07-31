@@ -755,6 +755,89 @@ def audit_trail_report(biz: str, source_type: Optional[str] = None,
                                      date_from=from_, date_to=to)
 
 
+# ─── Therapist superbills (vertical completion) ──────────────────────
+# OWNER-ONLY on purpose, config AND generation: the practitioner block
+# carries the practice EIN/tax id, and the platform's rule is that
+# TIN-class surfaces never open to seats (same as the 1099 draft PDF
+# above and contractors_router's tax-profile). Deliberately NOT in
+# _REPORT_TITLES — the generic /export path is reader-gated, and this
+# report must never ride it. All data reads live in superbill.py behind
+# its table allowlist; no diagnosis input exists on any of these routes.
+
+class SuperbillConfigBody(BaseModel):
+    # extra="forbid": the API surface accepts EXACTLY these fields — a
+    # payload smuggling a diagnosis/code-list field is a 422, not a
+    # silently-dropped key. Test-pinned.
+    model_config = {"extra": "forbid"}
+    practitioner_name: Optional[str] = None
+    license_type: Optional[str] = None
+    license_number: Optional[str] = None
+    npi: Optional[str] = None
+    ein: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    default_fee: Optional[float] = None
+    service_codes: Optional[Dict[str, str]] = None
+
+
+@router.get("/superbill/config")
+def superbill_config(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import superbill
+    _owner(biz, user)
+    return superbill.get_config(biz)
+
+
+@router.put("/superbill/config")
+def superbill_config_save(biz: str, body: SuperbillConfigBody,
+                          user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import superbill
+    _owner(biz, user)
+    return superbill.save_config(biz, body.model_dump(exclude_unset=True))
+
+
+@router.get("/superbill/clients")
+def superbill_clients(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import superbill
+    _owner(biz, user)
+    return {"ok": True, "clients": superbill.list_clients(biz)}
+
+
+@router.get("/superbill")
+def superbill_report(biz: str, contact_id: str, month: Optional[str] = None,
+                     from_: Optional[str] = Query(None, alias="from"),
+                     to: Optional[str] = None,
+                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import superbill
+    _owner(biz, user)
+    billing_limits.require_feature(biz, "vertical_reports")
+    return superbill.build_superbill(biz, contact_id, month, from_, to)
+
+
+@router.get("/superbill/pdf")
+def superbill_pdf(biz: str, contact_id: str, month: Optional[str] = None,
+                  from_: Optional[str] = Query(None, alias="from"),
+                  to: Optional[str] = None,
+                  user: AuthedUser = Depends(require_user)) -> Response:
+    import superbill
+    biz_row = _owner(biz, user)
+    billing_limits.require_feature(biz, "vertical_reports")
+    data = superbill.build_superbill(biz, contact_id, month, from_, to)
+    if not (data.get("practitioner") or {}).get("complete"):
+        raise HTTPException(409, "Practitioner details are incomplete — add your "
+                                 "name, license number and NPI in Superbill setup first.")
+    try:
+        pdf = superbill.render_pdf(data, biz_row.get("settings"),
+                                   generated_by=_generated_by(biz_row, user))
+    except ImportError:
+        raise HTTPException(503, "PDF export unavailable (reportlab missing).")
+    rng = data.get("range") or {}
+    safe = (data.get("client") or {}).get("name") or "client"
+    safe = "".join(ch for ch in safe if ch.isalnum() or ch in " -_").strip().replace(" ", "_")[:40]
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition":
+            f'attachment; filename="superbill_{safe}_{rng.get("from")}_{rng.get("to")}.pdf"'})
+
+
 @router.get("/statement-customers")
 def statement_customers(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner_or_reader(biz, user)
