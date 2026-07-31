@@ -395,7 +395,13 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
     # engine's _resolve_tz.
     business_tz = _business_timezone(business)
 
-    return {
+    # Arrival windows — top-level so the widget can shape the whole
+    # picker ("Arrives between 9:00 AM – 12:00 PM"). Key present ONLY
+    # when a window is configured: plain businesses' config payloads
+    # stay byte-identical.
+    arrival_window = _arrival_window_min(business)
+
+    payload = {
         "business": {
             "id": business["id"],
             "name": business.get("name"),
@@ -429,6 +435,45 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
         # the P5a freshness window check.
         "quoted_at": int(time.time()),
     }
+    if arrival_window:
+        payload["arrival_window_min"] = arrival_window
+    return payload
+
+
+def _arrival_window_min(business: Optional[Dict[str, Any]]) -> Optional[int]:
+    """Arrival windows (contractor scheduling) — read the business-level
+    window from settings.availability.arrival_window_min. See
+    availability.BusinessAvailability for why it lives there and for the
+    double-book semantics (windowed bookings still block duration_min).
+    Tolerant of malformed settings → None (exact-time behavior)."""
+    settings = (business or {}).get("settings") or {}
+    av = settings.get("availability") or {}
+    if not isinstance(av, dict):
+        return None
+    try:
+        v = int(av.get("arrival_window_min") or 0)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def _stamp_arrival_window(
+    business: Optional[Dict[str, Any]],
+    entry_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Denormalize the arrival window onto the booked entry at create
+    time — same discipline as price_at_booking (P5): the promise made to
+    the customer is frozen on the booking, so a later settings change
+    never rewrites what an existing customer was told. Downstream
+    surfaces (confirmation email, calendars) render "between 9:00 and
+    12:00" from this key. No window → input returned untouched, so
+    plain businesses' entries stay byte-identical."""
+    aw = _arrival_window_min(business)
+    if not aw:
+        return entry_data
+    out = dict(entry_data)
+    out["arrival_window_min_at_booking"] = aw
+    return out
 
 
 def _business_timezone(business: Dict[str, Any]) -> Optional[str]:
@@ -699,6 +744,11 @@ async def book_anon(
         business_id, module, body.offering_id, body.quoted_price, entry_data,
     )
 
+    # Arrival windows — freeze the quoted window on the booking (same
+    # denormalize-at-create discipline as price_at_booking). No-op for
+    # businesses without a window.
+    entry_data = _stamp_arrival_window(biz, entry_data)
+
     # Phase D.4 — submit-side double-book guard. The customer's UI
     # showed slots that were free at config-anon time, but two
     # customers can race the same slot. Re-verify before insert.
@@ -777,6 +827,10 @@ async def book(
     if not module:
         raise HTTPException(status_code=404, detail="no bookings module for this business")
 
+    # Loaded once here (arrival-window stamp needs settings BEFORE the
+    # insert) and reused by the best-effort email + SMS blocks below.
+    biz = _business_basics(business_id)
+
     contact_id = ctx.customer_row.get("contact_id")
     entry_data = dict(body.data)
     if contact_id:
@@ -787,6 +841,10 @@ async def book(
     entry_data = _maybe_denormalize_offering(
         business_id, module, body.offering_id, body.quoted_price, entry_data,
     )
+
+    # Arrival windows — same denormalize-at-create discipline as the
+    # anon path.
+    entry_data = _stamp_arrival_window(biz, entry_data)
 
     # Phase D.4 — same submit-side double-book guard as the anon path.
     pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
@@ -803,10 +861,10 @@ async def book(
         raise HTTPException(status_code=500, detail="Something went wrong on our end — please try again.")
 
     # Phase D.4 — confirmation email + .ics for the authed path too.
+    # `biz` was loaded before the insert (arrival-window stamp); reuse it.
     try:
         from booking_confirmation_emails import send_confirmation_email
         import asyncio
-        biz = _business_basics(business_id)
         if biz:
             asyncio.create_task(send_confirmation_email(
                 booking=entry,
@@ -824,10 +882,10 @@ async def book(
             business_id, entry_data, ctx.customer_row.get("name") or "")
 
     # A2P alert #1 — booking-confirmation text, same contract as the
-    # walk-in path. (biz may be unset if the email block failed; fetch
-    # independently so the two best-effort paths can't couple.)
+    # walk-in path. `biz` is the pre-insert load, no longer scoped to
+    # the email try-block, so the two best-effort paths stay decoupled.
     _schedule_confirmation_sms(
-        _business_basics(business_id), entry_data,
+        biz, entry_data,
         ctx.customer_row.get("name") or "", str(appt_iso or ""))
 
     return {"ok": True, "appointment_id": entry["id"]}

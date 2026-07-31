@@ -133,6 +133,37 @@ class BusinessAvailability(BaseModel):
     blocks: List[BlockedRange] = Field(default_factory=list)
     slot_granularity_min: int = Field(default=30, ge=5, le=240)
     lead_time_min: int = Field(default=0, ge=0)
+    # ─── Arrival windows (contractor scheduling) ─────────────────────
+    # When set, this business quotes ARRIVAL WINDOWS rather than exact
+    # times — "we'll arrive between 9:00 and 12:00", the dispatch model
+    # every trade runs on (see vertical_intelligence contractor voice:
+    # "committing to a date without a window" is taboo).
+    #
+    # Why it lives HERE and not on offerings: the window is a
+    # scheduling-communication policy of the business's dispatch model,
+    # not a property of one service — a contractor's whole calendar
+    # works in windows. The availability blob is the scheduling-policy
+    # home, already round-trips through GET/PATCH /availability with
+    # validation for free, and needs no SQL (offerings has no jsonb
+    # column). Bookings denormalize arrival_window_min_at_booking at
+    # create time (like price_at_booking), so per-offering granularity
+    # can be layered later without touching downstream surfaces.
+    #
+    # DOUBLE-BOOK SEMANTICS (load-bearing, decided with the feature):
+    # a windowed booking still consumes its offering's duration_min
+    # against availability overlap. The window is what the CUSTOMER is
+    # told about arrival; the internal schedule blocks the real work
+    # duration from the slot start. The engine's slot math is therefore
+    # unchanged — windows are carried on slots and bookings, never
+    # substituted into the overlap rule.
+    #
+    # None (the default) = exact-time scheduling — byte-identical
+    # behavior for every existing business.
+    arrival_window_min: Optional[int] = Field(
+        default=None, ge=15, le=720,
+        description="minutes in the quoted arrival window (e.g. 180 = "
+                    "'between 9:00 and 12:00'); None = exact times",
+    )
 
     @classmethod
     def from_settings_dict(cls, raw: Optional[dict]) -> "BusinessAvailability":

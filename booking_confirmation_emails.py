@@ -183,6 +183,38 @@ def _fmt_local(dt_utc_iso: str, tz_label: Optional[str]) -> str:
     return fmt
 
 
+def _fmt_when(
+    dt_utc_iso: str,
+    tz_label: Optional[str],
+    arrival_window_min: Optional[int] = None,
+) -> str:
+    """The email's when-line. Plain bookings keep the exact-time render
+    (_fmt_local, unchanged). WINDOWED bookings (contractor scheduling —
+    data.arrival_window_min_at_booking) say the DATE and the ARRIVAL
+    WINDOW, never a precise time: the vertical_intelligence contractor
+    tone note is explicit that committing to an exact time is the thing
+    a trade must not do. Format mirrors _fmt_local's UTC + business-tz
+    label convention."""
+    if not arrival_window_min or arrival_window_min <= 0:
+        return _fmt_local(dt_utc_iso, tz_label)
+    start = _parse_iso(dt_utc_iso)
+    if not start:
+        return dt_utc_iso
+    end = start + timedelta(minutes=int(arrival_window_min))
+    if os.name != "nt":
+        day = start.strftime("%A, %B %-d")
+        s_t = start.strftime("%-I:%M %p")
+        e_t = end.strftime("%-I:%M %p")
+    else:
+        day = start.strftime("%A, %B %d")
+        s_t = start.strftime("%I:%M %p")
+        e_t = end.strftime("%I:%M %p")
+    line = f"{day} — arrival between {s_t} and {e_t} UTC"
+    if tz_label:
+        return f"{line} ({tz_label} business time)"
+    return line
+
+
 def _build_html_body(
     *,
     business_name: str,
@@ -196,6 +228,7 @@ def _build_html_body(
     cancellation_policy: str,
     pay_now_url: Optional[str] = None,
     business_type: Optional[str] = None,
+    arrival_window_min: Optional[int] = None,
 ) -> str:
     name = html.escape(customer_name or "there")
     biz = html.escape(business_name)
@@ -204,7 +237,9 @@ def _build_html_body(
     # VABI v1 — vertical-aware intro line. Lawyers get a confidentiality
     # nudge; coaches an outcome-focused nudge; barbers stay plain.
     intro_extra = _vertical_intro_for_email(business_type)
-    when = html.escape(_fmt_local(appointment_at_iso, tz_label))
+    # Windowed bookings say the date + arrival window; plain bookings
+    # keep the exact-time line (see _fmt_when).
+    when = html.escape(_fmt_when(appointment_at_iso, tz_label, arrival_window_min))
     price_line = ""
     if price is not None:
         try:
@@ -452,6 +487,13 @@ async def send_confirmation_email(
             or ""
         )
         price = data.get("price_at_booking") or data.get("price")
+        # Arrival windows (contractor scheduling) — denormalized on the
+        # entry at book time, like price_at_booking. None/0 = plain
+        # exact-time booking.
+        try:
+            arrival_window_min = int(data.get("arrival_window_min_at_booking") or 0) or None
+        except (TypeError, ValueError):
+            arrival_window_min = None
 
         # If we have an offering_id, pull canonical fields to enrich.
         off = _resolve_offering(biz_id, offering_id) if offering_id else {}
@@ -465,11 +507,16 @@ async def send_confirmation_email(
         hosted_url = _resolve_hosted_url(biz_id)
         location = _business_address(business)
 
-        # Compose .ics
+        # Compose .ics — for windowed bookings the event spans the
+        # ARRIVAL WINDOW when it's longer than the job: the customer's
+        # calendar should block the span they were asked to be
+        # available, not imply the crew arrives at the window's opening
+        # minute.
+        ics_span_min = max(duration_min, arrival_window_min or 0)
         ics_bytes = build_ics(
             booking_id=str(booking.get("id") or ""),
             appointment_at_utc=str(appointment_at or ""),
-            duration_min=duration_min,
+            duration_min=ics_span_min,
             business_name=biz_name,
             service_name=service_name or None,
             description=description,
@@ -519,6 +566,7 @@ async def send_confirmation_email(
             cancellation_policy=DEFAULT_CANCELLATION_POLICY,
             pay_now_url=pay_now_url,
             business_type=business.get("type"),
+            arrival_window_min=arrival_window_min,
         )
 
         # Slug-style filename: easier to identify in mail clients.
