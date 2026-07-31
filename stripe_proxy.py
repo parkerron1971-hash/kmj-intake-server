@@ -852,13 +852,28 @@ def _validate_provider(provider: str) -> str:
 
 @router.get("/payments/connect/{provider}")
 async def payments_connect(provider: str, business_id: Optional[str] = None):
-    """Kick off OAuth for a provider. Today: returns not_implemented."""
+    """Adapter-seam version: answers from the payments_core registry
+    instead of a hardcoded not_implemented. Stripe points at the real
+    Connect flow; others say honestly that only manual links exist."""
+    import payments_core
     p = _validate_provider(provider)
+    adapter = payments_core.REGISTRY[p]
+    if adapter.connectable:
+        return {
+            "status": "connect_available",
+            "provider": p,
+            "business_id": business_id or None,
+            "message": f"Connect {adapter.display_name} from OPERATE → Payments "
+                       f"(the Connect button walks the OAuth flow).",
+        }
     return {
-        "status": "not_implemented",
+        "status": "not_available",
         "provider": p,
         "business_id": business_id or None,
-        "message": f"{p.capitalize()} Connect is coming soon. For now, paste your payment link in BUILD → Integrations → Payment Providers.",
+        "connectable_providers": [a.id for a in payments_core.REGISTRY.values() if a.connectable],
+        "message": f"{adapter.display_name} processing isn't wired yet — paste your "
+                   f"{adapter.display_name} payment link in BUILD → Integrations → "
+                   f"Payment Providers and it appears on invoices today.",
     }
 
 

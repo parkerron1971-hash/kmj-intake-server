@@ -24,12 +24,9 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+import payments_core
 import sb_clients
 from auth_supabase import AuthedUser, require_user
-from stripe_checkout_helpers import (
-    create_booking_checkout,
-    create_refund,
-)
 
 logger = logging.getLogger("stripe_payments_router")
 
@@ -78,11 +75,14 @@ async def booking_checkout(
     business_id = entry["business_id"]
     biz_rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}"
-        f"&select=id,name,stripe_account_id&limit=1"
+        f"&select=id,name,stripe_account_id,settings&limit=1"
     ) or []
-    if not biz_rows or not biz_rows[0].get("stripe_account_id"):
+    # Adapter seam: provider selection + connectivity come from
+    # payments_core — this call site no longer knows it's Stripe.
+    biz = biz_rows[0] if biz_rows else {}
+    provider = payments_core.provider_for(biz)
+    if not biz or not provider.is_connected(biz):
         raise HTTPException(409, "this business doesn't accept online payments")
-    biz = biz_rows[0]
 
     data = entry.get("data") or {}
     price = data.get("price_at_booking") or data.get("price")
@@ -109,8 +109,8 @@ async def booking_checkout(
     cancel_url = body.cancel_url or f"{public_default}?paid=0"
 
     try:
-        session = await create_booking_checkout(
-            stripe_account_id=biz["stripe_account_id"],
+        session = await provider.create_booking_checkout(
+            biz,
             booking_id=booking_id,
             service_name=service_name,
             amount_cents=amount_cents,
@@ -154,14 +154,15 @@ class RefundBody(BaseModel):
 
 def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id,owner_id,stripe_account_id&limit=1"
+        f"/businesses?id=eq.{business_id}"
+        f"&select=id,owner_id,stripe_account_id,settings&limit=1"
     ) or []
     if not rows:
         raise HTTPException(404, "business not found")
     if str(rows[0].get("owner_id")) != str(user.id):
         raise HTTPException(403, "not authorized")
-    if not rows[0].get("stripe_account_id"):
-        raise HTTPException(409, "stripe account not connected")
+    if not payments_core.provider_for(rows[0]).is_connected(rows[0]):
+        raise HTTPException(409, "payment provider not connected")
     return rows[0]
 
 
@@ -173,8 +174,8 @@ async def refund_charge(
 ) -> Dict[str, Any]:
     biz = _require_owner(body.business_id, user)
     try:
-        refund = await create_refund(
-            stripe_account_id=biz["stripe_account_id"],
+        refund = await payments_core.provider_for(biz).create_refund(
+            biz,
             charge_id=charge_id,
             amount_cents=body.amount_cents,
             reason=body.reason,
