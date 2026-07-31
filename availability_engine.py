@@ -321,6 +321,14 @@ def compute_slots(
     # businesses' slot payloads stay byte-identical.
     arrival_window_min = av.arrival_window_min or None
 
+    # Concurrent capacity (multi-chair v1): a slot stays available while
+    # the number of OVERLAPPING bookings is below capacity. capacity=1
+    # (the default) is exactly the old single-occupancy rule — count>=1
+    # ≡ "any overlap" — so plain businesses' slot output is
+    # byte-identical. Validation guarantees 1..20; max() is belt-and-
+    # braces for a hand-built BusinessAvailability in tests.
+    capacity = max(int(av.concurrent_capacity or 1), 1)
+
     # Open-default window for emission
     open_start_hr, open_end_hr = (open_default_window or (0, 24))
     is_open = is_open_default(av)
@@ -361,13 +369,16 @@ def compute_slots(
             if slot_start < earliest:
                 continue
 
-            # Subtract existing bookings
-            conflict = False
+            # Subtract existing bookings — COUNT overlaps vs capacity
+            # (multi-chair v1). The slot dies only when capacity is
+            # full; capacity=1 reproduces the old any-overlap rule.
+            overlap_count = 0
             for b_start, b_end in booked:
                 if _overlaps(slot_start_utc, slot_end_utc, b_start, b_end):
-                    conflict = True
-                    break
-            if conflict:
+                    overlap_count += 1
+                    if overlap_count >= capacity:
+                        break
+            if overlap_count >= capacity:
                 continue
 
             slot: Dict[str, Any] = {

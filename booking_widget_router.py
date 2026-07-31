@@ -476,6 +476,24 @@ def _stamp_arrival_window(
     return out
 
 
+def _concurrent_capacity(business: Optional[Dict[str, Any]]) -> int:
+    """Concurrent capacity (multi-chair v1) — read the business-level
+    capacity from settings.availability.concurrent_capacity. See
+    availability.BusinessAvailability for the semantics (N bookings may
+    overlap the same time; full per-chair assignment stays deferred to
+    v2). Tolerant of malformed settings → 1 (single occupancy), same
+    fail-to-plain discipline as _arrival_window_min."""
+    settings = (business or {}).get("settings") or {}
+    av = settings.get("availability") or {}
+    if not isinstance(av, dict):
+        return 1
+    try:
+        v = int(av.get("concurrent_capacity") or 1)
+    except (TypeError, ValueError):
+        return 1
+    return v if 1 <= v <= 20 else 1
+
+
 def _business_timezone(business: Dict[str, Any]) -> Optional[str]:
     """Phase D.1.3 — resolve the business's canonical timezone for the
     widget's "Business hours: X" label. Same priority as the engine:
@@ -755,7 +773,8 @@ async def book_anon(
     pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
     appt_iso = entry_data.get(pdf) or entry_data.get("appointment_at")
     dur_min = entry_data.get("duration_min_at_booking") or entry_data.get("duration_min") or 0
-    if not _check_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0)):
+    if not _check_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0),
+                                 business=biz):
         raise HTTPException(
             status_code=409,
             detail="Sorry — that time was just booked. Please pick another.",
@@ -850,7 +869,8 @@ async def book(
     pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
     appt_iso = entry_data.get(pdf) or entry_data.get("appointment_at")
     dur_min = entry_data.get("duration_min_at_booking") or entry_data.get("duration_min") or 0
-    if not _check_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0)):
+    if not _check_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0),
+                                 business=biz):
         raise HTTPException(
             status_code=409,
             detail="Sorry — that time was just booked. Please pick another.",
@@ -1072,17 +1092,30 @@ def _check_slot_available(
     business_id: str,
     appointment_at_iso: str,
     duration_min: int,
+    business: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Phase D.4 — submit-side double-book guard.
 
     The customer's UI shows slots that were free at config-anon snapshot
     time, but two customers can race the same slot. This re-verifies at
-    submit-time by querying module_entries for any active booking that
-    overlaps [appointment_at, appointment_at + duration_min).
+    submit-time by querying module_entries for active bookings that
+    overlap [appointment_at, appointment_at + duration_min).
 
-    Returns True when the slot is still free. False on any overlap.
-    Tolerant of malformed timestamps — treats unknown as a conflict (fail
-    closed) only when the input itself is malformed.
+    Concurrent capacity (multi-chair v1): the guard COUNTS overlapping
+    bookings and refuses only when the count has reached the business's
+    settings.availability.concurrent_capacity — an exists-check would
+    close a 3-chair shop after its first booking. capacity=1 (the
+    default) is exactly the old any-overlap rule. When the count fills
+    between this check and the insert, the caller's 409 still fires on
+    the NEXT attempt — same race window as before, now on the last seat
+    instead of the only seat.
+
+    `business` is the already-loaded businesses row (with settings) when
+    the caller has it; when omitted (e.g. booking_series) the settings
+    are fetched here so every caller inherits capacity automatically.
+
+    Returns True while seats remain. Tolerant of malformed timestamps —
+    lets the create proceed only when the input itself is malformed.
 
     The engine's _booking_intervals + _overlaps helpers are the canonical
     overlap math; we reuse them here so the submit path and the
@@ -1124,10 +1157,25 @@ def _check_slot_available(
     if not isinstance(rows, list) or not rows:
         return True
 
+    # Resolve capacity — from the caller's business row when provided,
+    # else a one-row settings fetch (fail-soft → 1).
+    if business is None:
+        try:
+            biz_rows = sb_clients.sb_get_as_service(
+                f"/businesses?id=eq.{business_id}&select=settings&limit=1"
+            ) or []
+            business = biz_rows[0] if biz_rows else None
+        except Exception:
+            business = None
+    capacity = _concurrent_capacity(business)
+
     intervals = _booking_intervals(rows)
+    overlap_count = 0
     for b_start, b_end in intervals:
         if _overlaps(slot_start, slot_end, b_start, b_end):
-            return False
+            overlap_count += 1
+            if overlap_count >= capacity:
+                return False
     return True
 
 

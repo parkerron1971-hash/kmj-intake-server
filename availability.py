@@ -164,6 +164,40 @@ class BusinessAvailability(BaseModel):
         description="minutes in the quoted arrival window (e.g. 180 = "
                     "'between 9:00 and 12:00'); None = exact times",
     )
+    # ─── Concurrent capacity (multi-chair v1) ────────────────────────
+    # How many bookings may OVERLAP the same time. A 3-chair barbershop
+    # sets 3 and three walk-ins can hold the same slot; the engine keeps
+    # a slot available while overlapping bookings < capacity, and the
+    # submit-side race guard COUNTS overlaps against the same number.
+    #
+    # Why it lives HERE and not per-chair/per-staff: full multi-staff
+    # (per-chair assignment, per-provider calendars) is explicitly
+    # deferred to v2 per the D5/D6 rulings above. v1 is pure CAPACITY —
+    # the shop floor as one pool of N seats. Business-level, same home
+    # as arrival_window_min, so it round-trips through GET/PATCH
+    # /availability with validation for free and needs no SQL.
+    #
+    # Default 1 = single-occupancy: byte-identical behavior for every
+    # existing business (count >= 1 is exactly the old "any overlap"
+    # rule). Malformed values degrade to 1, never crash a booking.
+    concurrent_capacity: int = Field(
+        default=1, ge=1, le=20,
+        description="bookings allowed to overlap the same time "
+                    "(chairs/stations); 1 = one customer at a time",
+    )
+
+    @field_validator("concurrent_capacity", mode="before")
+    @classmethod
+    def _capacity_degrade(cls, v: object) -> int:
+        """Malformed / out-of-range capacity degrades to 1 (single
+        occupancy) instead of failing the whole availability blob — a
+        junk capacity value must never collapse a valid weekly schedule
+        to the open default."""
+        try:
+            n = int(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 1
+        return n if 1 <= n <= 20 else 1
 
     @classmethod
     def from_settings_dict(cls, raw: Optional[dict]) -> "BusinessAvailability":
