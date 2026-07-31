@@ -8,6 +8,14 @@ Practitioner + customer-initiated payment surfaces:
        Body: { booking_id, success_url?, cancel_url? }
        Returns: { url, session_id } so the wizard can redirect.
 
+  POST /payments/invoice-checkout   authed, seat-role gated (member+)
+       Practitioner's "send this invoice with a real pay link" path.
+       Body: { invoice_id, business_id?, force? }
+       Returns: { url, id } — a per-invoice Payment Link on the
+       business's connected account, metadata-tagged so the Connect
+       webhook marks exactly this invoice paid (no amount matching).
+       409 when the business has no connected payment account.
+
   POST /payments/charges/{charge_id}/refund    owner-gated
        Body: { amount_cents?, reason? }  amount=None means full refund
 
@@ -141,6 +149,118 @@ def _public_booking_url(business_id: str) -> Optional[str]:
         return f"https://{slug}.mysolutionist.app/book"
     except Exception:
         return None
+
+
+# ─── Invoice pay link (practitioner-initiated, authed) ───────────────
+
+
+class InvoiceCheckoutBody(BaseModel):
+    invoice_id: str
+    # Optional cross-check: when the caller names a business, it must be
+    # the invoice's business (mismatches read as not-found, no leaking).
+    business_id: Optional[str] = None
+    # Regenerate even when a per-invoice link already exists.
+    force: bool = False
+
+
+@router.post("/invoice-checkout")
+async def invoice_checkout(
+    body: InvoiceCheckoutBody,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Create (or reuse) a per-invoice pay link on the business's
+    connected account.
+
+    This replaces the pasted-static-link pattern for Connect businesses:
+    the link carries {source_type: 'invoice', source_id} metadata, so
+    when the customer pays, the Connect webhook flips exactly this
+    invoice — the legacy webhook's match-by-amount fallback (which
+    cross-matches two same-total invoices) never has to run.
+
+    Seat-role gated at member+ (the same rank that can write invoices),
+    resolved through the shared business_users role ladder."""
+    invoice_id = (body.invoice_id or "").strip()
+    if not invoice_id:
+        raise HTTPException(400, "invoice_id required")
+
+    rows = sb_clients.sb_get_as_service(
+        f"/invoices?id=eq.{invoice_id}"
+        f"&select=id,business_id,contact_id,invoice_number,total,currency,"
+        f"status,stripe_payment_url&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(404, "invoice not found")
+    inv = rows[0]
+    business_id = str(inv.get("business_id") or "")
+    if body.business_id and str(body.business_id) != business_id:
+        raise HTTPException(404, "invoice not found")
+
+    from business_users_router import require_role
+    require_role(business_id, str(user.id), "member")
+
+    status = (inv.get("status") or "").lower()
+    if status == "paid":
+        raise HTTPException(409, "invoice is already paid")
+    if status == "cancelled":
+        raise HTTPException(409, "invoice is cancelled")
+
+    biz_rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}"
+        f"&select=id,name,owner_id,stripe_account_id,settings&limit=1"
+    ) or []
+    biz = biz_rows[0] if biz_rows else {}
+    provider = payments_core.provider_for(biz)
+    if not biz or not provider.is_connected(biz):
+        raise HTTPException(
+            409, "this business has no connected payment account — "
+                 "connect Stripe in OPERATE → Payments first")
+
+    try:
+        amount_cents = int(round(float(inv.get("total") or 0) * 100))
+    except Exception:
+        raise HTTPException(409, "invoice total is malformed")
+    if amount_cents <= 0:
+        raise HTTPException(409, "invoice total is zero or negative")
+
+    # Idempotency: an invoice that already carries a link DIFFERENT from
+    # the business's pasted static link already has its own pay link —
+    # hand it back instead of minting a duplicate Stripe object.
+    static_link = str(
+        (((biz.get("settings") or {}).get("payments") or {}).get("stripe_link")) or ""
+    ).strip()
+    existing = str(inv.get("stripe_payment_url") or "").strip()
+    if existing and existing != static_link and not body.force:
+        return {"ok": True, "url": existing, "id": None, "reused": True}
+
+    try:
+        link = await provider.create_invoice_checkout(
+            biz,
+            invoice_id=invoice_id,
+            invoice_number=str(inv.get("invoice_number") or ""),
+            amount_cents=amount_cents,
+            business_id=business_id,
+            currency=str(inv.get("currency") or "usd").lower(),
+        )
+    except RuntimeError as e:
+        logger.warning(
+            f"invoice checkout failed: biz={business_id} invoice={invoice_id} err={e}")
+        raise HTTPException(502, "couldn't create the payment link — please try again")
+
+    url = (link or {}).get("url")
+    if not url:
+        raise HTTPException(502, "payment provider returned no link URL")
+
+    # Persist so the emailed invoice + the Payment Options row use the
+    # per-invoice link, and so GL routes the payment through 1150
+    # Stripe Clearing (a Stripe-linked invoice is not direct cash).
+    sb_clients.sb_patch_as_service(
+        f"/invoices?id=eq.{invoice_id}",
+        {"stripe_payment_url": url},
+    )
+    logger.info(
+        f"invoice pay link ok: biz={business_id[:8]} invoice={invoice_id[:8]} "
+        f"amount_cents={amount_cents} link={link.get('id')}")
+    return {"ok": True, "url": url, "id": link.get("id"), "reused": False}
 
 
 # ─── Refund (practitioner-initiated) ─────────────────────────────────

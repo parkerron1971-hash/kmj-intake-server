@@ -161,6 +161,112 @@ async def create_booking_checkout(
     )
 
 
+def _invoice_link_form(
+    *,
+    price_id: str,
+    invoice_id: str,
+    business_id: Optional[str],
+) -> Dict[str, Any]:
+    """The Payment-Link form for an invoice pay link. Pure so tests can
+    pin the metadata contract without touching Stripe: the webhook's
+    _mark_invoice_paid resolves the invoice from metadata[source_id] —
+    lose these keys and payments fall back to amount-matching."""
+    form: Dict[str, Any] = {
+        "line_items[0][price]": price_id,
+        "line_items[0][quantity]": 1,
+        "metadata[source_type]": "invoice",
+        "metadata[source_id]": invoice_id,
+        # Stripe copies Payment-Link metadata onto every Checkout Session
+        # it spawns, and payment_intent_data mirrors it onto the PI so
+        # charge-level events (refunds) carry the link too.
+        "payment_intent_data[metadata][source_type]": "invoice",
+        "payment_intent_data[metadata][source_id]": invoice_id,
+    }
+    if business_id:
+        form["metadata[business_id]"] = business_id
+        form["payment_intent_data[metadata][business_id]"] = business_id
+    return form
+
+
+async def create_invoice_checkout(
+    *,
+    stripe_account_id: str,
+    invoice_id: str,
+    amount_cents: int,
+    invoice_number: str = "",
+    business_id: Optional[str] = None,
+    currency: str = "usd",
+) -> Dict[str, Any]:
+    """Per-invoice pay link on the connected account (PR 3b, revived).
+
+    Deliberately a Payment Link, NOT a Checkout Session: sessions expire
+    within 24 hours and an emailed invoice is routinely paid days later.
+    Payment Links never expire, and when a customer pays one Stripe
+    emits checkout.session.completed with the link's metadata copied
+    onto the session — so the Connect webhook receives
+    {source_type: 'invoice', source_id: <invoice_id>} and marks exactly
+    this invoice paid. No amount-matching, no cross-matched $500s.
+
+    Returns the Stripe Payment Link dict (key fields: id, url).
+    Raises RuntimeError on Stripe error so the caller can translate to
+    an HTTPException (same contract as create_checkout_session)."""
+    if not stripe_account_id:
+        raise ValueError("stripe_account_id required")
+    if not invoice_id:
+        raise ValueError("invoice_id required")
+    amount_cents = int(amount_cents or 0)
+    if amount_cents <= 0:
+        raise ValueError("amount_cents must be positive")
+
+    name = f"Invoice {invoice_number}".strip() if invoice_number else "Invoice Payment"
+    headers = {"Stripe-Account": stripe_account_id}
+
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        # Step 1 — a one-off Price on the connected account.
+        price_resp = await client.post(
+            f"{STRIPE_API_BASE}/prices",
+            auth=(_secret_key(), ""),
+            headers=headers,
+            data={
+                "unit_amount": amount_cents,
+                "currency": (currency or "usd").lower(),
+                "product_data[name]": name,
+            },
+        )
+        if price_resp.status_code >= 400:
+            logger.warning(
+                f"create_invoice_checkout price failed: {price_resp.status_code} "
+                f"{price_resp.text[:300]}"
+            )
+            raise RuntimeError(
+                f"stripe price create failed ({price_resp.status_code}): "
+                f"{price_resp.text[:200]}"
+            )
+        price_id = (price_resp.json() or {}).get("id")
+        if not price_id:
+            raise RuntimeError("stripe returned no price id")
+
+        # Step 2 — wrap it in a Payment Link carrying the source metadata.
+        link_resp = await client.post(
+            f"{STRIPE_API_BASE}/payment_links",
+            auth=(_secret_key(), ""),
+            headers=headers,
+            data=_invoice_link_form(
+                price_id=price_id, invoice_id=invoice_id, business_id=business_id,
+            ),
+        )
+    if link_resp.status_code >= 400:
+        logger.warning(
+            f"create_invoice_checkout link failed: {link_resp.status_code} "
+            f"{link_resp.text[:300]}"
+        )
+        raise RuntimeError(
+            f"stripe payment link create failed ({link_resp.status_code}): "
+            f"{link_resp.text[:200]}"
+        )
+    return link_resp.json()
+
+
 async def create_refund(
     *,
     stripe_account_id: str,

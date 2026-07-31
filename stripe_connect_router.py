@@ -630,7 +630,14 @@ def _handle_invoice_failed(inv: Dict[str, Any]) -> None:
 
 def _mark_invoice_paid(invoice_id: str) -> None:
     """Mark an existing-system invoices row paid. Idempotent — only
-    flips status when not already 'paid'."""
+    flips status when not already 'paid'.
+
+    payment_method='stripe' is LOAD-BEARING for the books:
+    gl_engine._is_non_stripe_payment() reads it to decide whether the
+    payment debits 1150 Stripe Clearing (money in transit, cleared by
+    the payout flow) or 1000 Cash. Without it, a Connect-checkout
+    payment would post as direct cash and the clearing account would
+    never see it — same pattern booking payments already follow."""
     rows = sb_clients.sb_get_as_service(
         f"/invoices?id=eq.{invoice_id}"
         f"&select=id,status,business_id,contact_id,invoice_number,total&limit=1"
@@ -639,7 +646,7 @@ def _mark_invoice_paid(invoice_id: str) -> None:
         return
     sb_clients.sb_patch_as_service(
         f"/invoices?id=eq.{invoice_id}",
-        {"status": "paid", "paid_at": _now_iso()},
+        {"status": "paid", "paid_at": _now_iso(), "payment_method": "stripe"},
     )
     logger.info(f"invoice {invoice_id[:8]} marked paid via webhook")
     import event_spine
@@ -650,6 +657,42 @@ def _mark_invoice_paid(invoice_id: str) -> None:
                       "total": float(inv.get("total") or 0),
                       "payment_method": "stripe"},
                      contact_id=inv.get("contact_id"), source="stripe_webhook")
+
+    # Practitioner-visible parity with the legacy payment-link rail
+    # (stripe_proxy webhook): a payment notification + a contact-health
+    # bump. Fail-soft — bookkeeping niceties never 500 the webhook.
+    try:
+        total = float(inv.get("total") or 0)
+        contact_id = inv.get("contact_id")
+        contact_name = "Client"
+        if contact_id:
+            crows = sb_clients.sb_get_as_service(
+                f"/contacts?id=eq.{contact_id}&select=name&limit=1") or []
+            if crows:
+                contact_name = crows[0].get("name") or contact_name
+        sb_clients.sb_post_as_service("/chief_notifications", {
+            "business_id": inv.get("business_id"),
+            "type": "success",
+            "title": f"💰 Payment Received — ${total:,.2f}",
+            "body": f"{contact_name} paid Invoice {inv.get('invoice_number')}.",
+            "suggested_action": f"Thank {contact_name}",
+            "status": "unread",
+            "data": {
+                "kind": "invoice_paid",
+                "invoice_id": invoice_id,
+                "invoice_number": inv.get("invoice_number"),
+                "contact_id": contact_id,
+                "contact_name": contact_name,
+                "total": total,
+            },
+        })
+        if contact_id:
+            sb_clients.sb_patch_as_service(
+                f"/contacts?id=eq.{contact_id}",
+                {"health_score": 100, "last_interaction": _now_iso()},
+            )
+    except Exception as e:
+        logger.warning(f"invoice-paid notification failed (fail-soft): {e}")
 
 
 def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
