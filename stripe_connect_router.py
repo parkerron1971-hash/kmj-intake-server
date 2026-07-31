@@ -77,13 +77,15 @@ STRIPE_CALLBACK_URL = os.environ.get(
     "STRIPE_CONNECT_CALLBACK_URL",
     "https://kmj-intake-server-production.up.railway.app/payments/stripe-connect/callback",
 )
+from app_base import app_base_url
+
 FRONTEND_SUCCESS_URL = os.environ.get(
     "STRIPE_CONNECT_RETURN_URL",  # env-var name kept for back-compat
-    "https://app.solutionist.studio/?payments=connected",
+    f"{app_base_url()}/?payments=connected",
 )
 FRONTEND_ERROR_URL = os.environ.get(
     "STRIPE_CONNECT_RETURN_URL_ERROR",
-    "https://app.solutionist.studio/?payments=error",
+    f"{app_base_url()}/?payments=error",
 )
 
 # One-shot CSRF state cache. Memory-only — Stripe round-trips are

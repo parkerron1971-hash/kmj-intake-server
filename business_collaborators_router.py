@@ -22,7 +22,8 @@ logger = logging.getLogger("business_collaborators_router")
 
 router = APIRouter(prefix="/collaborators", tags=["collaborators"])
 
-_APP_BASE = "https://app.solutionist.studio"
+from app_base import app_base_url
+_APP_BASE = app_base_url()
 
 
 def _now_iso() -> str:

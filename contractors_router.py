@@ -36,7 +36,8 @@ router = APIRouter(prefix="/contractors", tags=["contractors"])
 
 STRIPE_API_BASE = "https://api.stripe.com/v1"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=15.0, pool=10.0)
-_APP_BASE = "https://app.solutionist.studio"
+from app_base import app_base_url
+_APP_BASE = app_base_url()
 
 _BUCKETS = ("tax", "owner_pay", "operating", "savings", "other")
 
