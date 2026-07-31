@@ -106,8 +106,8 @@ DEFAULT_AUTOPILOT: Dict[str, List[Dict[str, Any]]] = {
     # date goes missing.
     "lawyer": [
         _job("deadlines", "Matter and deadline sweep", "briefing", "weekdays", 11,
-             "Surfaces matters, deadlines and trust balances every working "
-             "morning."),
+             "Surfaces matters, approaching deadlines, trust and retainer "
+             "balances, and unbilled time every working morning."),
     ],
 
     # Accountability between sessions IS the coaching product. A client who
@@ -122,8 +122,8 @@ DEFAULT_AUTOPILOT: Dict[str, List[Dict[str, Any]]] = {
     "consultant": [
         _job("engagement_review", "Engagement and milestone review", "briefing",
              "weekly", 11,
-             "Weekly read on active engagements, milestones and what is "
-             "slipping."),
+             "Weekly read on active engagements, milestone dates, retainer "
+             "balances, unbilled time and what is slipping."),
     ],
 
     # A first-time attendee who is not contacted within a week usually does
@@ -141,7 +141,8 @@ DEFAULT_AUTOPILOT: Dict[str, List[Dict[str, Any]]] = {
     "creative": [
         _job("project_review", "Project and deliverable review", "briefing",
              "weekly", 11,
-             "Weekly read on live projects, revision rounds and timelines."),
+             "Weekly read on live projects, due dates approaching and work "
+             "that has stalled."),
     ],
 
     "course_creator": [
@@ -151,7 +152,8 @@ DEFAULT_AUTOPILOT: Dict[str, List[Dict[str, Any]]] = {
 
     "financial_educator": [
         _job("program_review", "Program review", "briefing", "weekly", 11,
-             "Weekly read on program enrollment and engagement."),
+             "Weekly read on client engagement plus program balances running "
+             "low or expiring."),
     ],
 
     "fitness_wellness": [

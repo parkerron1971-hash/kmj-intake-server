@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+import briefing_verticals
 import llm_call
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -165,7 +166,8 @@ class GrowthRequest(BaseModel):
     business_id: str
 
 
-async def _gather_briefing_data(client: httpx.AsyncClient, biz_id: str) -> Dict:
+async def _gather_briefing_data(client: httpx.AsyncClient, biz: Dict) -> Dict:
+    biz_id = biz["id"]
     now = datetime.now(timezone.utc)
     window_start = (now - timedelta(days=BRIEFING_WINDOW_DAYS)).isoformat()
     window_end = now.isoformat()
@@ -226,6 +228,14 @@ async def _gather_briefing_data(client: httpx.AsyncClient, biz_id: str) -> Dict:
         f"&select=id,title,scheduled_for&limit=50"
     ) or []
 
+    # Vertical-aware sections (S12): the briefing resolves the business's
+    # vertical INTERNALLY and reads that vertical's real tables — a lawyer's
+    # deadline sweep reads deadlines, a therapist's practice review reads
+    # scheduling+billing only. Nothing plumbed through the scheduler.
+    # gather() never raises — a failed branch degrades to the generic
+    # briefing ({"sections": []}), it does not take the briefing down.
+    vertical_stats = await briefing_verticals.gather(_sb, client, biz)
+
     return {
         "window_start": window_start, "window_end": window_end,
         "new_contacts": new_contacts, "new_contact_count": len(new_contacts),
@@ -237,6 +247,7 @@ async def _gather_briefing_data(client: httpx.AsyncClient, biz_id: str) -> Dict:
         "sessions_completed_count": len(sessions_completed),
         "sessions_upcoming_count": len(sessions_upcoming),
         "sessions_upcoming": sessions_upcoming[:5],
+        "vertical": vertical_stats,
     }
 
 
@@ -254,6 +265,9 @@ def _format_briefing_data_for_ai(stats: Dict) -> str:
                      for p in stats["pending_items"][:5]]
 
     events_lines = [f"- {t}: {n}" for t, n in sorted(stats["event_counts"].items(), key=lambda kv: -kv[1])]
+
+    vertical_block = briefing_verticals.format_for_ai(stats.get("vertical"))
+    vertical_tail = f"\n{vertical_block}\n" if vertical_block else ""
 
     return f"""DATA WINDOW: last 7 days (ending {stats['window_end'][:10]})
 
@@ -279,7 +293,7 @@ AGENT DRAFTS THIS WEEK:
 
 TOP PENDING ITEMS NEEDING REVIEW:
 {chr(10).join(pending_lines) or '  (queue empty)'}
-"""
+{vertical_tail}"""
 
 
 router = APIRouter(tags=["growth_engine"])
@@ -403,6 +417,16 @@ Voice: "{tone}". Keep it under 5 sentences. Reference the session concretely. In
 async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Dict:
     """Generate drafts for actionable items. Returns action records + counts."""
     biz_id = biz["id"]
+
+    # Vertical wall: a therapist's briefing is ADMIN ONLY — its autopilot
+    # job promises "never client outreach", and every draft this phase
+    # creates (check-ins, session follow-ups) IS client outreach. Suppress
+    # the whole phase rather than filtering item-by-item, so a new draft
+    # type added below can never leak through for this vertical.
+    if briefing_verticals.outreach_restricted(biz.get("type")):
+        return {"actions": [], "total_created": 0, "total_skipped": 0,
+                "pending_proposals_count": 0, "outreach_suppressed": True}
+
     now = datetime.now(timezone.utc)
     dedup_cutoff = (now - timedelta(days=ACTION_DEDUP_DAYS)).isoformat()
 
@@ -617,7 +641,7 @@ async def growth_briefing(req: GrowthRequest):
         practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
         voice_tone = voice.get("tone", "warm and direct")
 
-        stats = await _gather_briefing_data(client, req.business_id)
+        stats = await _gather_briefing_data(client, biz)
 
         window_end_dt = datetime.fromisoformat(stats["window_end"].replace("Z", "+00:00"))
         window_start_dt = datetime.fromisoformat(stats["window_start"].replace("Z", "+00:00"))
@@ -652,6 +676,8 @@ Rules:
 - Warm, direct, actionable. No fluff. No corporate hedging.
 - Sound like a trusted advisor over morning coffee, not a software report.
 - Do NOT invent data. Only reference facts in the stats below.
+- Every number in the stats is precomputed from a real query. Repeat numbers EXACTLY as given — never compute, extrapolate, total, or invent a number.
+- If a VERTICAL SECTIONS block appears in the stats, its detail is appended to the briefing verbatim after your letter — reference its numbers in your five sections when they matter, but do NOT reproduce those sections or their headers yourself.
 - Address {practitioner} by name at least once."""
 
         user_msg = _format_briefing_data_for_ai(stats)
@@ -666,6 +692,14 @@ Rules:
                     f"- **At-risk contacts:** {len(stats['at_risk'])}\n"
                     f"- **Sessions completed:** {stats['sessions_completed_count']}\n"
                     f"- **Pending drafts:** {len(stats['pending_items'])}\n")
+
+        # ── Vertical sections (deterministic — the numbers are ours) ──
+        # Rendered from the same precomputed data the model saw. The
+        # letter above is the model's; these lines never are, so a
+        # deadline date cannot be paraphrased into a different date.
+        vertical_section = briefing_verticals.format_markdown(stats.get("vertical"))
+        if vertical_section:
+            body = body.rstrip() + "\n\n" + vertical_section + "\n"
 
         # ── Action generation phase ───────────────────────────────────
         try:
@@ -704,6 +738,8 @@ Rules:
                     "event_counts": stats["event_counts"],
                     "drafts_by_agent": stats["drafts_by_agent"],
                 },
+                "vertical": stats.get("vertical"),
+                "outreach_suppressed": bool(action_result.get("outreach_suppressed")),
                 "actions_generated": action_result["actions"],
                 "total_actions_created": action_result["total_created"],
                 "total_actions_skipped": action_result["total_skipped"],
