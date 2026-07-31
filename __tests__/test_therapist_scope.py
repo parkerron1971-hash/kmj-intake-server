@@ -172,3 +172,207 @@ def test_onboarding_asks_nothing_clinical():
         str(q.get("prompt", "")) for q in vi.get_onboarding_questions("therapist"))
     ok, _ = vs.check_module_scope("therapist", blob)
     assert ok is True
+
+
+# ─── the REST seam is guarded too (R1) ───────────────────────────────
+# The guard used to live only in the two Chief handlers. The endpoints
+# ModuleSpecProposalCard actually calls — POST /module-specs/propose and
+# POST /module-specs/{id}/accept — had none, so a therapist could build
+# "Progress Notes" through the UI with no refusal. These tests hit the
+# router itself, prove the 422 carries the practitioner-readable refusal
+# as a STRING detail (what the card's _structuredErrorMessage renders),
+# and prove the guard is narrow: non-clinical work and other verticals
+# sail through, and reject is never guarded.
+
+import types
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+import auth_supabase
+import module_spec_router as mr
+import module_spec_generator as msg_gen
+import sb_clients
+
+_OWNER = "owner-11111111"
+
+_CLINICAL_DRAFT = {
+    "__kind": "module", "name": "Progress Notes", "slug": "progress-notes",
+    "description": "Session documentation", "schema": {"fields": []},
+}
+_ADMIN_DRAFT = {
+    "__kind": "module", "name": "Superbills", "slug": "superbills",
+    "description": "Reimbursement receipts for clients",
+    "schema": {"fields": [{"name": "amount", "type": "number", "label": "Amount"}]},
+}
+
+
+def _rest_client(monkeypatch, biz_type, spec_rows=None):
+    """Router mounted in a bare app: auth overridden to the owner, Supabase
+    lookups faked at the router's own _sb_get seam."""
+    def fake_sb_get(path):
+        if path.startswith("/businesses"):
+            return [{"owner_id": _OWNER, "type": biz_type}]
+        if path.startswith("/module_specs"):
+            return spec_rows or []
+        return []
+    monkeypatch.setattr(mr, "_sb_get", fake_sb_get)
+
+    app = FastAPI()
+    app.include_router(mr.router)
+    app.dependency_overrides[auth_supabase.require_user] = (
+        lambda: types.SimpleNamespace(id=_OWNER))
+    return TestClient(app)
+
+
+def test_rest_propose_refuses_clinical_for_therapist(monkeypatch):
+    c = _rest_client(monkeypatch, "therapist")
+    r = c.post("/module-specs/propose", json={
+        "business_id": "b1",
+        "intake_excerpt": "I need a progress notes module for my clients",
+    })
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    # STRING detail is load-bearing: the card renders j?.detail only when
+    # it is a string; a list (FastAPI validation shape) falls back to
+    # "HTTP 422" and the practitioner never learns why.
+    assert isinstance(detail, str)
+    assert "out of scope" in detail.lower()
+    assert "hipaa" in detail.lower()
+
+
+def test_rest_propose_refuses_clinical_in_revise_feedback(monkeypatch):
+    """The revise round-trip re-enters propose; 'actually add a treatment
+    plan field' must not be a way around the front door."""
+    c = _rest_client(monkeypatch, "therapist")
+    r = c.post("/module-specs/propose", json={
+        "business_id": "b1",
+        "intake_excerpt": "Track sessions and payments",
+        "revise_feedback": "also add a treatment plan section",
+    })
+    assert r.status_code == 422
+
+
+def test_rest_propose_allows_admin_work_for_therapist(monkeypatch):
+    c = _rest_client(monkeypatch, "therapist")
+    monkeypatch.setattr(mr.msg, "propose_module_from_intake",
+                        lambda *a, **k: {"ok": True,
+                                         "decomposition_reasoning": "r",
+                                         "proposals": [{"spec_id": "s1"}]})
+    r = c.post("/module-specs/propose", json={
+        "business_id": "b1",
+        "intake_excerpt": "Track superbills, cancellations and waitlist",
+    })
+    assert r.status_code == 200
+
+
+def test_rest_propose_other_verticals_unaffected(monkeypatch):
+    c = _rest_client(monkeypatch, "coach")
+    monkeypatch.setattr(mr.msg, "propose_module_from_intake",
+                        lambda *a, **k: {"ok": True,
+                                         "decomposition_reasoning": "r",
+                                         "proposals": [{"spec_id": "s1"}]})
+    r = c.post("/module-specs/propose", json={
+        "business_id": "b1",
+        "intake_excerpt": "I keep progress notes on each coaching client",
+    })
+    assert r.status_code == 200
+
+
+def test_rest_accept_refuses_clinical_draft(monkeypatch):
+    c = _rest_client(monkeypatch, "therapist",
+                     spec_rows=[{"business_id": "b1",
+                                 "draft_json": _CLINICAL_DRAFT}])
+    r = c.post("/module-specs/spec-1/accept")
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert isinstance(detail, str)
+    assert "out of scope" in detail.lower()
+
+
+def test_rest_accept_catches_clinical_fields_under_innocent_name(monkeypatch):
+    sneaky = {"__kind": "module", "name": "Sessions", "slug": "sessions",
+              "schema": {"fields": [{"name": "dx", "type": "text",
+                                     "label": "Diagnosis"}]}}
+    c = _rest_client(monkeypatch, "therapist",
+                     spec_rows=[{"business_id": "b1", "draft_json": sneaky}])
+    assert c.post("/module-specs/spec-1/accept").status_code == 422
+
+
+def test_rest_accept_allows_admin_draft(monkeypatch):
+    c = _rest_client(monkeypatch, "therapist",
+                     spec_rows=[{"business_id": "b1",
+                                 "draft_json": _ADMIN_DRAFT}])
+    monkeypatch.setattr(mr.msg, "materialize_spec",
+                        lambda sid: {"ok": True, "module": {"id": "m1"},
+                                     "workflow_ids": [], "spec_id": sid})
+    assert c.post("/module-specs/spec-1/accept").status_code == 200
+
+
+def test_rest_accept_other_verticals_unaffected(monkeypatch):
+    c = _rest_client(monkeypatch, "coach",
+                     spec_rows=[{"business_id": "b1",
+                                 "draft_json": _CLINICAL_DRAFT}])
+    monkeypatch.setattr(mr.msg, "materialize_spec",
+                        lambda sid: {"ok": True, "module": {"id": "m1"},
+                                     "workflow_ids": [], "spec_id": sid})
+    assert c.post("/module-specs/spec-1/accept").status_code == 200
+
+
+def test_rest_reject_is_never_guarded(monkeypatch):
+    """Rejecting an out-of-scope draft is exactly what a practitioner
+    should be able to do."""
+    c = _rest_client(monkeypatch, "therapist",
+                     spec_rows=[{"business_id": "b1",
+                                 "draft_json": _CLINICAL_DRAFT}])
+    monkeypatch.setattr(mr.msg, "reject_spec",
+                        lambda sid, reason=None: {"ok": True})
+    assert c.post("/module-specs/spec-1/reject", json={}).status_code == 200
+
+
+def test_rest_guard_fails_closed(monkeypatch):
+    """If the scope check itself breaks, the seam refuses — a false
+    refusal is a retry; a false allow is a HIPAA exposure."""
+    def boom(*a, **k):
+        raise RuntimeError("scope check exploded")
+    monkeypatch.setattr(vs, "check_module_scope", boom)
+    c = _rest_client(monkeypatch, "therapist")
+    r = c.post("/module-specs/propose", json={
+        "business_id": "b1",
+        "intake_excerpt": "Track superbills and cancellations",
+    })
+    assert r.status_code == 422
+    assert "couldn't run" in r.json()["detail"]
+
+
+# ─── materialize_spec guards at its own entry (defense in depth) ─────
+# Any future caller — not just the router — inherits the refusal.
+
+def _fake_generator_sb(monkeypatch, biz_rows, draft):
+    def fake_get(path):
+        if path.startswith("/module_specs"):
+            return [{"id": "s1", "business_id": "b1", "status": "draft",
+                     "draft_json": draft}]
+        if path.startswith("/businesses"):
+            return biz_rows
+        return []
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", fake_get)
+
+
+def test_materialize_spec_refuses_clinical_at_entry(monkeypatch):
+    _fake_generator_sb(monkeypatch, [{"type": "therapist"}], _CLINICAL_DRAFT)
+    res = msg_gen.materialize_spec("s1")
+    assert res["ok"] is False
+    assert res["error"] == "module_out_of_scope"
+    assert "out of scope" in res["detail"].lower()
+
+
+def test_materialize_spec_fails_closed_when_lookup_is_down(monkeypatch):
+    """sb_get_as_service returns None on transport failure. The guard must
+    refuse rather than treat 'could not look up the vertical' as 'not a
+    therapist'."""
+    _fake_generator_sb(monkeypatch, None, _ADMIN_DRAFT)
+    res = msg_gen.materialize_spec("s1")
+    assert res["ok"] is False
+    assert res["error"] == "scope_check_unavailable"
+    assert "couldn't run" in res["detail"]
