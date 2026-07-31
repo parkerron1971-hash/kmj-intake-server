@@ -1684,7 +1684,7 @@ def render_home() -> str:
       <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 22h18"/><path d="M6 18v-7M10 18v-7M14 18v-7M18 18v-7"/><path d="M12 2 3 8h18Z"/></svg> Ministries &amp; churches</span>
     </div>
     <p class="audience-note reveal reveal-delay-2">Each one gets its own version of the system, not a generic one with your logo dropped in.</p>
-    <p class="audience-note reveal reveal-delay-2" style="margin-top:10px;">Two of those come with the scope stated up front. For therapists, the system runs the practice &mdash; scheduling, billing, reminders &mdash; and deliberately keeps clinical notes and records out; those stay in your EHR. For attorneys, it runs the office &mdash; clients, matters, invoicing &mdash; while trust accounting stays with your dedicated provider.</p>
+    <p class="audience-note reveal reveal-delay-2" style="margin-top:10px;">Two of those come with the scope stated up front. For therapists, the system runs the practice &mdash; scheduling, billing, reminders &mdash; and deliberately keeps clinical notes and records out; those stay in your EHR. For attorneys, it runs the office &mdash; clients, matters, invoicing &mdash; and reconciles your trust account three ways: book, client ledgers, bank; IOLTA report formats vary by jurisdiction, so filing in your state&rsquo;s format stays with you.</p>
 
   </div>
 </section>

@@ -1333,6 +1333,43 @@ def materialize_offering(spec_id: str) -> Dict[str, Any]:
             "offering_id": offering_id}
 
 
+def _scope_refusal(business_id: str, spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """R1 — HIPAA scope guard at the materialize seam itself, so ANY caller
+    (router, Chief handler, future automation) inherits it rather than each
+    one remembering to wire vertical_scope. Returns a refusal dict shaped
+    like the other materialize failures ({ok:False, error, detail}) or None
+    when the spec is in scope.
+
+    Fails CLOSED: if the check can't run (import failure, business lookup
+    down), refuse — a false refusal is a retry; a false allow is a HIPAA
+    exposure."""
+    try:
+        import vertical_scope
+        biz_rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}&select=type&limit=1")
+        if biz_rows is None:
+            raise RuntimeError("business type lookup failed")
+        biz_type = biz_rows[0].get("type") if biz_rows else None
+        fields = (spec.get("schema") or {}).get("fields") or []
+        labels = " ".join(
+            str(f.get("label") or f.get("name") or "")
+            for f in fields if isinstance(f, dict))
+        ok, refusal = vertical_scope.check_module_scope(
+            biz_type, spec.get("name"), spec.get("slug"),
+            spec.get("description"), labels)
+    except Exception as e:
+        logger.warning(f"[scope] materialize guard could not run (refusing): {e}")
+        return {
+            "ok": False,
+            "error": "scope_check_unavailable",
+            "detail": ("The safety check for this module couldn't run, so "
+                       "nothing was created. Please try again."),
+        }
+    if not ok:
+        return {"ok": False, "error": "module_out_of_scope", "detail": refusal}
+    return None
+
+
 def materialize_spec(spec_id: str) -> Dict[str, Any]:
     """Idempotent on (business_id, slug). Materializes:
       1. custom_modules row (the runtime shape)
@@ -1367,6 +1404,11 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
     slug = spec.get("slug")
     if not slug:
         return {"ok": False, "error": "spec missing slug"}
+
+    # R1 — vertical scope guard before ANY write (see _scope_refusal).
+    refused = _scope_refusal(business_id, spec)
+    if refused:
+        return refused
 
     # Common shape used for both fresh-insert AND upgrade UPDATE.
     write_payload = {
