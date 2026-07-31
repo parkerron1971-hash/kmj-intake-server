@@ -81,9 +81,15 @@ def _load_business(business_id: str) -> Dict[str, Any]:
     return rows[0]
 
 
-def _require_owner(user: AuthedUser, business: Dict[str, Any]) -> None:
-    if business.get("owner_id") != user.id:
-        raise HTTPException(403, "You don't own this business.")
+def _require_owner(user: AuthedUser, business: Dict[str, Any],
+                   min_role: str = "viewer") -> None:
+    """Seat-access arc (7/31): role-ranked. Owner always passes; team
+    seats pass by rank — reads at viewer, draft/edit at member,
+    launch/pause/delete at manager (bulk sends spend Twilio money)."""
+    if business.get("owner_id") == user.id:
+        return
+    from business_users_router import require_role
+    require_role(str(business.get("id")), str(user.id), min_role)
 
 
 def _load_campaign(campaign_id: str) -> Dict[str, Any]:
@@ -264,7 +270,7 @@ async def plan_campaign(body: PlanBody, user: AuthedUser = Depends(require_user)
     """Chief drafts a campaign for a goal + audience. Saved as a DRAFT —
     nothing sends until the practitioner reviews and launches."""
     biz = _load_business(body.business_id)
-    _require_owner(user, biz)
+    _require_owner(user, biz, min_role="member")
     import billing_limits
     billing_limits.require_units(body.business_id)   # Chief drafts = an AI action
     audience = body.audience if (body.audience or {}).get("kind") in AUDIENCE_KINDS \
@@ -329,7 +335,7 @@ async def patch_campaign(campaign_id: str, body: PatchBody,
                          user: AuthedUser = Depends(require_user)):
     camp = _load_campaign(campaign_id)
     biz = _load_business(camp["business_id"])
-    _require_owner(user, biz)
+    _require_owner(user, biz, min_role="member")
     if camp.get("status") not in ("draft", "paused"):
         raise HTTPException(409, "Only draft or paused campaigns can be edited.")
     patch: Dict[str, Any] = {"updated_at": _now().isoformat()}
@@ -353,7 +359,7 @@ async def launch_campaign(campaign_id: str, body: LaunchBody,
                           user: AuthedUser = Depends(require_user)):
     camp = _load_campaign(campaign_id)
     biz = _load_business(camp["business_id"])
-    _require_owner(user, biz)
+    _require_owner(user, biz, min_role="manager")
     # A locked (canceled/expired) account must not bulk-send — Twilio
     # spend on a dead subscription. Dormant behind BILLING_ENFORCE.
     import billing_limits
@@ -381,7 +387,7 @@ async def launch_campaign(campaign_id: str, body: LaunchBody,
 async def pause_campaign(campaign_id: str, user: AuthedUser = Depends(require_user)):
     camp = _load_campaign(campaign_id)
     biz = _load_business(camp["business_id"])
-    _require_owner(user, biz)
+    _require_owner(user, biz, min_role="manager")
     if camp.get("status") != "running":
         raise HTTPException(409, f"Campaign is {camp.get('status')}.")
     sb_clients.sb_patch_as_service(f"/campaigns?id=eq.{campaign_id}", {
@@ -393,7 +399,7 @@ async def pause_campaign(campaign_id: str, user: AuthedUser = Depends(require_us
 async def delete_campaign(campaign_id: str, user: AuthedUser = Depends(require_user)):
     camp = _load_campaign(campaign_id)
     biz = _load_business(camp["business_id"])
-    _require_owner(user, biz)
+    _require_owner(user, biz, min_role="manager")
     if camp.get("status") not in ("draft", "completed", "paused"):
         raise HTTPException(409, "Pause a running campaign before deleting it.")
     sb_clients.sb_delete_as_service(f"/campaigns?id=eq.{campaign_id}")

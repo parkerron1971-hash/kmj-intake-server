@@ -4361,16 +4361,19 @@ def compose_directions(business_id: str,
 # ─── Endpoints ────────────────────────────────────────────────────────
 
 def _require_owner(business_id: str, user_id: str) -> None:
-    """Owner gate shared by every composer endpoint (the exact check
-    /composer/rationale shipped with): 404 for an unknown business,
-    403 when the verified caller isn't its owner. Session-only auth is
-    NOT enough here — these endpoints do service-role writes."""
+    """Access gate shared by every composer endpoint: 404 for an unknown
+    business; the owner passes, and — seat-access arc (7/31) — so does an
+    active team seat at MEMBER or above (Studio/site work is everyday
+    operator work; viewers stay read-only). Session-only auth is NOT
+    enough here — these endpoints do service-role writes."""
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+        f"/businesses?id=eq.{business_id}&select=id,owner_id&limit=1") or []
     if not rows:
         raise HTTPException(status_code=404, detail="business not found")
-    if str(rows[0].get("owner_id")) != str(user_id):
-        raise HTTPException(status_code=403, detail="not authorized for this business")
+    if str(rows[0].get("owner_id")) == str(user_id):
+        return
+    from business_users_router import require_role
+    require_role(business_id, str(user_id), "member")
 
 
 class ComposeBody(BaseModel):

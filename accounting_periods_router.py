@@ -27,22 +27,36 @@ _MONTHS = ["", "January", "February", "March", "April", "May", "June", "July",
            "August", "September", "October", "November", "December"]
 
 
-def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
+def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, Any]:
+    """Seat-access arc (7/31): periods are readable by any active seat or
+    accountant collaborator; generate/close/reopen escalate to manager."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
-    if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(403, "not authorized")
-    return rows[0]
+    row = rows[0]
+    if str(row.get("owner_id")) == str(user.id):
+        return row
+    if min_role == "viewer":
+        from business_collaborators_router import is_active_accountant
+        if is_active_accountant(biz, str(user.id)):
+            return row
+    from business_users_router import require_role
+    require_role(biz, str(user.id), min_role)
+    return row
 
 
-def _owner_for_period(period_id: str, user: AuthedUser) -> Dict[str, Any]:
+def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    return _access(biz, user, "viewer")
+
+
+def _owner_for_period(period_id: str, user: AuthedUser,
+                      min_role: str = "viewer") -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/accounting_periods?id=eq.{period_id}&select=*&limit=1") or []
     if not rows:
         raise HTTPException(404, "period not found")
-    biz = _owner(str(rows[0]["business_id"]), user)
+    biz = _access(str(rows[0]["business_id"]), user, min_role)
     return {"period": rows[0], "biz": biz}
 
 
@@ -106,7 +120,7 @@ class GenerateBody(BaseModel):
 @router.post("/generate")
 def generate(biz: str, year: Optional[int] = None,
              user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)
+    _access(biz, user, "manager")
     billing_limits.require_feature(biz, "period_close")
     y = year or datetime.now(timezone.utc).year
     return gl_engine.generate_periods(biz, y)
@@ -114,7 +128,7 @@ def generate(biz: str, year: Optional[int] = None,
 
 @router.post("/{period_id}/close")
 def close(period_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    ctx = _owner_for_period(period_id, user)
+    ctx = _owner_for_period(period_id, user, min_role="manager")
     biz_id = str(ctx["period"]["business_id"])
     billing_limits.require_feature(biz_id, "period_close")
     try:
@@ -161,7 +175,7 @@ def reopen(period_id: str, body: ReopenBody,
            user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     if not (body.reason or "").strip():
         raise HTTPException(400, "a reason is required to reopen a closed period")
-    ctx = _owner_for_period(period_id, user)
+    ctx = _owner_for_period(period_id, user, min_role="manager")
     billing_limits.require_feature(str(ctx["period"]["business_id"]), "period_close")
     try:
         return gl_engine.reopen_period(str(ctx["period"]["business_id"]), period_id,
