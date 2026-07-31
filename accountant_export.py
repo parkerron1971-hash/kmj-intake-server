@@ -54,10 +54,22 @@ def _clean(s: Any) -> str:
 
 
 def build_iif(biz: str, year: Optional[int] = None) -> str:
-    """The business's GL as a QuickBooks-importable IIF file."""
+    """The business's GL as a QuickBooks-importable IIF file.
+
+    Account names resolve through the per-business mapping layer
+    (coa_external_mappings) — the accountant sees THEIR account names,
+    unmapped accounts fall back to ours.
+    """
+    from quickbooks_router import get_mappings
+
     accounts = sb_clients.sb_get_as_service(
         f"/chart_of_accounts?business_id=eq.{biz}&select=code,name,type&limit=500") or []
-    name_by_code = {a["code"]: a.get("name") or a["code"] for a in accounts}
+    mapped = get_mappings(biz)
+    name_by_code = {
+        a["code"]: ((mapped.get(a["code"]) or {}).get("external_name")
+                    or a.get("name") or a["code"])
+        for a in accounts
+    }
 
     jes = sb_clients.sb_get_as_service(
         f"/journal_entries?business_id=eq.{biz}&status=eq.active"
@@ -83,9 +95,15 @@ def build_iif(biz: str, year: Optional[int] = None) -> str:
     out: List[str] = []
     # Account definitions.
     out.append("!ACCNT\tNAME\tACCNTTYPE")
+    seen_accnt = set()
     for a in sorted(accounts, key=lambda x: x.get("code") or ""):
         qb = _QB_TYPE.get(a["code"]) or _FALLBACK_TYPE.get(a.get("type") or "", "OCASSET")
-        out.append(f"ACCNT\t{_clean(a.get('name'))}\t{qb}")
+        name = _clean(name_by_code.get(a["code"]))
+        # Two codes mapped to one external account define it once.
+        if name in seen_accnt:
+            continue
+        seen_accnt.add(name)
+        out.append(f"ACCNT\t{name}\t{qb}")
     # Transaction schema.
     out.append("!TRNS\tTRNSTYPE\tDATE\tACCNT\tAMOUNT\tMEMO")
     out.append("!SPL\tTRNSTYPE\tDATE\tACCNT\tAMOUNT\tMEMO")
