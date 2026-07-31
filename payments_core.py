@@ -45,6 +45,9 @@ class PaymentAdapter:
     async def create_booking_checkout(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         raise HTTPException(409, f"online checkout isn't supported by {self.display_name} yet")
 
+    async def create_invoice_checkout(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        raise HTTPException(409, f"invoice pay links aren't supported by {self.display_name} yet")
+
     async def create_refund(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         raise HTTPException(409, f"refunds aren't supported by {self.display_name} yet")
 
@@ -63,6 +66,11 @@ class StripeAdapter(PaymentAdapter):
     async def create_booking_checkout(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         from stripe_checkout_helpers import create_booking_checkout
         return await create_booking_checkout(
+            stripe_account_id=biz_row["stripe_account_id"], **kwargs)
+
+    async def create_invoice_checkout(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        from stripe_checkout_helpers import create_invoice_checkout
+        return await create_invoice_checkout(
             stripe_account_id=biz_row["stripe_account_id"], **kwargs)
 
     async def create_refund(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
