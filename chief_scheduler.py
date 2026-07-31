@@ -92,6 +92,17 @@ async def _notify_outcome(biz: Dict[str, Any], row: Dict[str, Any],
             })
         except Exception as e:
             logger.warning(f"[scheduler] activity log failed: {e}")
+        # Audit expansion (7/31) — scheduled executions land in the
+        # unified audit log alongside chat-turn actions.
+        try:
+            import audit_log
+            await asyncio.to_thread(
+                audit_log.record, biz["id"],
+                actor_type="chief", actor_id=str(owner),
+                verb=f"scheduled:{(row.get('action') or {}).get('type')}"[:80],
+                summary=title[:240], source="system")
+        except Exception:
+            pass
 
 
 async def _execute_row(row: Dict[str, Any]) -> None:
