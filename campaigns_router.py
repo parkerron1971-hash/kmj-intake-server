@@ -593,6 +593,17 @@ async def _send_touch(biz, camp, idx, touch, contact,
         if not (sms_alerts.QUIET_SEND_START_HOUR <= now_et.hour
                 < sms_alerts.QUIET_SEND_END_HOUR):
             raise _Defer()
+        # Sender identity + opt-out (the PR #308 rule): a campaign touch
+        # is bulk unsolicited-feeling traffic on the ONE Twilio number
+        # every business shares — exactly the profile /sms/broadcast has.
+        # Brand it the same way: business name leads the body, and every
+        # message carries the way out. compose_outbound_body is idempotent
+        # (a touch Chief drafted as "Craft & Co: ..." is not double-
+        # prefixed) and caps the brand prefix at 32 chars. Composed per
+        # contact because the body is personalized per contact.
+        from sms_service import compose_outbound_body
+        sms_body = compose_outbound_body(
+            biz.get("name"), body, include_optout=True)
         async with httpx.AsyncClient(timeout=30.0) as client:
             if not await sms_alerts.has_sms_consent(client, camp["business_id"], phone):
                 return "skipped"
@@ -602,9 +613,9 @@ async def _send_touch(biz, camp, idx, touch, contact,
             })
             if not claimed:
                 return "skipped"
-            msg_id = await send_platform_sms(phone, body)
+            msg_id = await send_platform_sms(phone, sms_body)
             await store_sms(client, camp["business_id"], contact["id"],
-                            phone, body, "outbound", telnyx_id=msg_id or "")
+                            phone, sms_body, "outbound", telnyx_id=msg_id or "")
         _log_campaign_event(camp, contact, "campaign_sms_sent", {"touch_idx": idx})
         return "sms"
 
