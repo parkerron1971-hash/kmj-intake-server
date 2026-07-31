@@ -31,7 +31,8 @@ logger = logging.getLogger("business_users")
 
 router = APIRouter(prefix="/team", tags=["team"])
 
-_APP_BASE = "https://app.solutionist.studio"
+from app_base import app_base_url
+_APP_BASE = app_base_url()
 # Category D multi-role v2: viewer < member < manager < admin < owner.
 _ROLES = ("admin", "manager", "member", "viewer")
 _ROLE_RANK = {"viewer": 1, "member": 2, "manager": 3, "admin": 4, "owner": 5}

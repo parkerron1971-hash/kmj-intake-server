@@ -154,7 +154,11 @@ def test_seat_cap_and_invite_flow(fake, monkeypatch):
     # Invite (dormant enforcement, but seat math is real).
     out = asyncio.run(bu.invite("b1", bu.InviteBody(email="a@x.com", role="member"), _User()))
     assert out["ok"] and out["member"]["status"] == "invited"
-    assert out["accept_url"].startswith("https://app.solutionist.studio/?team_invite=")
+    # The invite link must point at the app's real home (app_base_url),
+    # not a hardcoded domain — https://app.solutionist.studio never
+    # resolved, so every invite email shipped a dead link.
+    from app_base import app_base_url
+    assert out["accept_url"].startswith(f"{app_base_url()}/?team_invite=")
     assert bl.seat_count("b1") == 2                             # owner + 1 invite
     # Duplicate invite rejected.
     with pytest.raises(HTTPException) as e:

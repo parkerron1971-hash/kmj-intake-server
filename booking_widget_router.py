@@ -1332,7 +1332,8 @@ async def _send_fresh_link_email(business_id: str, email: str, token: str) -> No
             f"/businesses?id=eq.{business_id}&select=name,settings&limit=1"
         ) or []
         biz_name = biz[0].get("name", "Your booking") if biz else "Your booking"
-        link_base = os.environ.get("WIDGET_LINK_BASE", "https://app.solutionist.studio")
+        from app_base import app_base_url
+        link_base = os.environ.get("WIDGET_LINK_BASE") or app_base_url()
         link = f"{link_base}/booking/{business_id}?token={token}"
         await send_via_resend(
             to_email=email,
