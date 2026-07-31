@@ -122,6 +122,21 @@ def _store_settings(biz: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _flag_instant_downloads(items: List[Dict[str, Any]],
+                            biz: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Digital delivery — mark items that have a hosted file attached
+    (settings.store.product_files) so the storefront can show the
+    'Instant download' badge."""
+    try:
+        from store_files import product_files_of
+        files = product_files_of(biz or {})
+    except Exception:
+        files = {}
+    for o in items:
+        o["instant_download"] = bool((files.get(str(o.get("id"))) or {}).get("path"))
+    return items
+
+
 # ─── Customer: store data ─────────────────────────────────────────────
 
 @router.get("/public/store/{slug}")
@@ -132,13 +147,14 @@ def store_data(slug: str) -> Dict[str, Any]:
     if not site:
         raise HTTPException(404, "Store not found")
     biz = _business(site["business_id"]) or {}
-    items = _sellable_offerings(site["business_id"])
+    items = _flag_instant_downloads(_sellable_offerings(site["business_id"]), biz)
     ss = _store_settings(biz)
     return {"ok": True, "business_name": biz.get("name") or "",
             "payments_ready": bool(biz.get("stripe_account_id")),
             "items": [{k: o.get(k) for k in (
                 "id", "name", "description", "category", "current_price",
-                "currency", "image_url", "in_stock", "requires_shipping")}
+                "currency", "image_url", "in_stock", "requires_shipping",
+                "instant_download")}
                 for o in items],
             "tax_rate_pct": ss["tax_rate_pct"],
             "flat_shipping_cents": ss["flat_shipping_cents"]}
@@ -355,19 +371,38 @@ async def _send_receipt(order_id: str) -> None:
         extras += f"\n  Sales tax — ${order['tax_cents'] / 100:,.2f}"
     if order.get("shipping_cents"):
         extras += f"\n  Shipping — ${order['shipping_cents'] / 100:,.2f}"
-    # Per-item fulfillment notes (download links, pickup instructions).
+    # Per-item fulfillment notes (pickup instructions, legacy links).
     notes = []
     offering_ids = [it.get("offering_id") for it in
                     sb_clients.sb_get_as_service(
                         f"/order_items?order_id=eq.{order_id}&select=offering_id&limit=100") or []
                     if it.get("offering_id")]
+    offs: List[Dict[str, Any]] = []
     if offering_ids:
         offs = sb_clients.sb_get_as_service(
             "/offerings?id=in.(" + ",".join(offering_ids) + ")"
-            "&select=name,fulfillment_note&limit=100") or []
+            "&select=id,name,fulfillment_note&limit=100") or []
         notes = [f"{o['name']}: {o['fulfillment_note']}"
                  for o in offs if (o.get("fulfillment_note") or "").strip()]
     notes_block = ("\n\n" + "\n".join(notes)) if notes else ""
+
+    # Digital delivery — a validated instant-download link for every
+    # item with a hosted file. Composes WITH fulfillment_note, not
+    # instead of it.
+    downloads = []
+    try:
+        from store_files import download_url, product_files_of
+        files = product_files_of(biz)
+        for o in offs:
+            if not (files.get(str(o.get("id"))) or {}).get("path"):
+                continue
+            link = download_url(str(order["id"]), str(o["id"]))
+            if link:
+                downloads.append(f"  {o['name']} — {link}")
+    except Exception as e:
+        logger.warning(f"[store] download links skipped for {order_id}: {e}")
+    downloads_block = ("\n\nYour downloads (these links are yours — "
+                       "keep this email):\n" + "\n".join(downloads)) if downloads else ""
 
     from email_sender import send_via_resend
     await send_via_resend(
@@ -379,7 +414,7 @@ async def _send_receipt(order_id: str) -> None:
         body=(f"Thank you for your order from {biz.get('name') or 'us'}!\n\n"
               f"{lines}{extras}\n\n"
               f"Total — ${order['total_cents'] / 100:,.2f}"
-              f"{notes_block}\n\n"
+              f"{downloads_block}{notes_block}\n\n"
               f"Questions? Just reply to this email.\n"
               f"— {biz.get('name') or ''}"),
         business_id=order.get("business_id"))
@@ -433,9 +468,49 @@ def hosted_store_page(slug: str) -> HTMLResponse:
     if not biz:
         raise HTTPException(404, "Business not found")
     from store_page import render_store_page
-    html = render_store_page(slug, biz, _sellable_offerings(site["business_id"]),
-                             _store_settings(biz))
+    items = _flag_instant_downloads(_sellable_offerings(site["business_id"]), biz)
+    html = render_store_page(slug, biz, items, _store_settings(biz))
     return HTMLResponse(html, headers={"X-Solutionist-Source": "store"})
+
+
+def _thank_you_digital(site: Dict[str, Any], biz: Dict[str, Any],
+                       order_id: str) -> Dict[str, Any]:
+    """Digital-delivery state for the thank-you page: ready download
+    links once the webhook has flipped the order to paid, or a
+    'finalizing' flag while the race is still running. Empty dict when
+    the order has no hosted digital items (or isn't this store's)."""
+    if not order_id:
+        return {}
+    try:
+        from store_files import download_url, product_files_of
+        rows = sb_clients.sb_get_as_service(
+            f"/orders?id=eq.{order_id}&business_id=eq.{site['business_id']}"
+            "&select=id,status&limit=1") or []
+        if not rows:
+            return {}
+        files = product_files_of(biz or {})
+        if not files:
+            return {}
+        items = sb_clients.sb_get_as_service(
+            f"/order_items?order_id=eq.{order_id}"
+            "&select=offering_id,name_at_purchase&limit=100") or []
+        digital = [it for it in items
+                   if (files.get(str(it.get("offering_id"))) or {}).get("path")]
+        if not digital:
+            return {}
+        if rows[0].get("status") in ("paid", "fulfilled"):
+            downloads = []
+            for it in digital:
+                link = download_url(order_id, str(it["offering_id"]))
+                if link:
+                    downloads.append({"name": it.get("name_at_purchase") or "Your file",
+                                      "url": link})
+            return {"downloads": downloads} if downloads else {}
+        if rows[0].get("status") == "pending":
+            return {"digital_pending": True}
+    except Exception as e:
+        logger.warning(f"[store] thank-you digital state failed (non-fatal): {e}")
+    return {}
 
 
 @router.get("/public/store/{slug}/thank-you")
@@ -446,6 +521,7 @@ def hosted_store_thanks(slug: str, order: str = "") -> HTMLResponse:
     if not site:
         raise HTTPException(404, "Store not found")
     biz = _business(site["business_id"]) or {"id": site["business_id"]}
+    digital = _thank_you_digital(site, biz, order)
     from store_page import render_thank_you
-    return HTMLResponse(render_thank_you(slug, biz, order),
+    return HTMLResponse(render_thank_you(slug, biz, order, **digital),
                         headers={"X-Solutionist-Source": "store"})

@@ -212,11 +212,13 @@ USER_CHILD_TABLES: List[str] = [
 ]
 
 # Supabase Storage buckets holding business-scoped files (logos, brand,
-# site assets, receipt photos). Objects are stored under a
-# "{business_id}/…" prefix; business-documents nests one level deeper
-# ("{business_id}/receipts/…"), which _delete_storage_objects handles
-# by descending one folder level.
-STORAGE_BUCKETS: List[str] = ["business-assets", "business-documents"]
+# site assets, receipt photos, digital product files). Objects are
+# stored under a "{business_id}/…" prefix; business-documents nests one
+# level deeper ("{business_id}/receipts/…") and product-files likewise
+# ("{business_id}/{offering_id}/…"), which _delete_storage_objects
+# handles by descending one folder level.
+STORAGE_BUCKETS: List[str] = ["business-assets", "business-documents",
+                              "product-files"]
 
 
 def _service_headers() -> Dict[str, str]:

@@ -14,13 +14,25 @@ from __future__ import annotations
 
 import html as _html
 import json as _json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import brand_dna
 
 
 def _esc(v: Any) -> str:
     return _html.escape(str(v or ""))
+
+
+# Digital delivery — shown on items with a hosted file attached. Inline
+# SVG download glyph (this page ships no icon font; emoji is against the
+# icon language).
+_DL_BADGE = (
+    '<span class="st-badge"><svg viewBox="0 0 24 24" fill="none" '
+    'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" '
+    'stroke-linejoin="round" aria-hidden="true">'
+    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>'
+    '<polyline points="7 10 12 15 17 10"/>'
+    '<line x1="12" y1="15" x2="12" y2="3"/></svg>Instant download</span>')
 
 
 _PAGE = """<!DOCTYPE html>
@@ -45,6 +57,8 @@ h1{font-family:var(--sx-font-heading);font-weight:var(--sx-heading-weight);font-
 .st-card-head{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
 .st-card-head h3{font-family:var(--sx-font-heading);font-size:1.08rem;margin:0}
 .st-price{color:var(--sx-accent);font-weight:700;white-space:nowrap}
+.st-badge{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:3px 10px;border-radius:999px;border:1px solid var(--sx-accent);color:var(--sx-accent);font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;align-self:flex-start}
+.st-badge svg{width:12px;height:12px}
 .st-desc{color:var(--sx-muted);font-size:.9rem;margin:8px 0 0}
 .st-card-foot{margin-top:auto;padding-top:14px;display:flex;justify-content:flex-end;align-items:center;gap:10px}
 .st-out{color:var(--sx-muted);font-size:.85rem;font-weight:700}
@@ -145,13 +159,39 @@ _THANKS = """<!DOCTYPE html>
 display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:24px}
 .card{max-width:420px} h1{font-size:1.8rem;margin:0 0 12px}
 p{opacity:.85;line-height:1.6} .ref{color:@ACCENT@;font-weight:700}
-a{color:@ACCENT@}</style></head>
+a{color:@ACCENT@}
+.dl{display:block;margin:10px auto 0;max-width:320px;padding:12px 22px;
+border-radius:10px;background:@ACCENT@;color:@BG@;font-weight:800;
+text-decoration:none;font-size:.95rem}
+.dl-wrap{margin:20px 0 8px}
+.finalizing{margin:20px 0 8px;padding:14px 18px;border:1px solid @ACCENT@;
+border-radius:10px;font-size:.9rem;opacity:.9}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid @ACCENT@;
+border-top-color:transparent;border-radius:50%;vertical-align:-2px;
+margin-right:8px;animation:sp 1s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}</style></head>
 <body><div class="card">
 <h1>Order confirmed \U0001F389</h1>
 <p>Thank you@REF@! A receipt is on its way to your email.</p>
+@DIGITAL@
 <p><a href="/public/store/@SLUG@/page">Back to the store</a></p>
 <p style="font-size:.75rem;opacity:.6">Powered by Solutionist</p>
-</div></body></html>"""
+</div>@REFRESH@</body></html>"""
+
+# Webhook race — the buyer can land here before Stripe's webhook flips
+# the order to paid. Reload gently (5s, capped by ?r= so a stuck order
+# never reloads forever); the email link is the durable fallback.
+_REFRESH_JS = """<script>
+(function(){
+  var p = new URLSearchParams(location.search);
+  var n = parseInt(p.get('r') || '0', 10) || 0;
+  if (n >= 24) return;
+  setTimeout(function(){
+    p.set('r', String(n + 1));
+    location.replace(location.pathname + '?' + p.toString());
+  }, 5000);
+})();
+</script>"""
 
 
 def _dna_from_biz(biz: Dict[str, Any]) -> Dict[str, Any]:
@@ -183,11 +223,12 @@ def render_store_page(slug: str, biz: Dict[str, Any],
                if o.get("in_stock") else "")
         desc = _esc(o.get("description") or "")
         desc_html = f'<p class="st-desc">{desc}</p>' if desc else ""
+        badge = (_DL_BADGE if o.get("instant_download") else "")
         cards.append(
             f'<div class="st-card">{img}<div class="st-card-body">'
             f'<div class="st-card-head"><h3>{_esc(o["name"])}</h3>'
             f'<span class="st-price">${price:,.2f}</span></div>'
-            f'{desc_html}'
+            f'{badge}{desc_html}'
             f'<div class="st-card-foot">{stock}{btn}</div></div></div>')
 
     notes = []
@@ -205,17 +246,37 @@ def render_store_page(slug: str, biz: Dict[str, Any],
             .replace("@SLUG@", _json.dumps(slug)))
 
 
-def render_thank_you(slug: str, biz: Dict[str, Any], order_id: str = "") -> str:
+def render_thank_you(slug: str, biz: Dict[str, Any], order_id: str = "",
+                     downloads: Optional[List[Dict[str, Any]]] = None,
+                     digital_pending: bool = False) -> str:
     try:
         palette = _dna_from_biz(biz)["palette"]
     except Exception:
         palette = {"bg": "#0a0a0a", "text": "#f4f4f4", "accent": "#c9a84c"}
     ref = (f' — order <span class="ref">#{_esc(order_id[:8].upper())}</span>'
            if order_id else "")
+    digital = ""
+    refresh = ""
+    if downloads:
+        links = "".join(
+            f'<a class="dl" href="{_esc(d.get("url"))}">'
+            f'Download {_esc(d.get("name"))}</a>' for d in downloads)
+        digital = (f'<div class="dl-wrap"><p style="margin:0 0 4px">'
+                   f'Your files are ready:</p>{links}'
+                   f'<p style="font-size:.8rem;opacity:.7;margin-top:10px">'
+                   f'These links are also in your receipt email.</p></div>')
+    elif digital_pending:
+        digital = ('<div class="finalizing"><span class="spin"></span>'
+                   'Finalizing your order — your download link is on its '
+                   'way to your email. This page will refresh in a moment.'
+                   '</div>')
+        refresh = _REFRESH_JS
     return (_THANKS
             .replace("@TITLE@", _esc(biz.get("name") or ""))
             .replace("@BG@", palette["bg"])
             .replace("@TEXT@", palette["text"])
             .replace("@ACCENT@", palette["accent"])
             .replace("@REF@", ref)
+            .replace("@DIGITAL@", digital)
+            .replace("@REFRESH@", refresh)
             .replace("@SLUG@", _esc(slug)))
