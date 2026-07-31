@@ -146,6 +146,11 @@ OPENING_SENTINEL_PREFIX = "[SYSTEM:opening_greeting"  # may have :morning/:after
 COACH_OPEN_SENTINEL = "[SYSTEM:strategy_coach_open]"
 COACH_PAUSE_SENTINEL = "[SYSTEM:strategy_coach_pause]"
 MAX_ACTIONS_PER_TURN = 10  # safety cap; delegation chains can issue up to this many in one turn
+# Tighter, second cap for SENSITIVE verbs only (action_registry class C —
+# sends, money, hard deletes). MAX_ACTIONS_PER_TURN bounds the whole turn;
+# this bounds how many irreversible things a single first-pass hallucination
+# can do before a human sees anything. Enforced in _execute_actions.
+CLASS_C_TURN_CAP = 3
 
 # ═══════════════════════════════════════════════════════════════════════
 # CHIEF CHARACTER CORE (from Part A)
@@ -2095,7 +2100,13 @@ def _fail(action_type: str, msg: str) -> Dict:
         # Assume the caller wrote something presentable; still drop a bare
         # "Failed:" prefix so cards read as sentences.
         friendly = (msg or "I couldn't complete that just now — try again in a moment.").strip()
-    return {"type": action_type, "result": friendly, "label": action_type, "nav": None}
+    # "failed": True is the machine-readable failure signal. The Arc-4 voice
+    # pass (ec3250e) removed the "Failed:" text prefix for presentability,
+    # which silently broke every _action_failed() string check downstream —
+    # failed actions were narrated and audited as successes. The flag keeps
+    # the friendly copy AND restores detection.
+    return {"type": action_type, "result": friendly, "label": action_type, "nav": None,
+            "failed": True}
 
 
 def _nav(tab: str, sub: Optional[str] = None, contact_id: Optional[str] = None) -> Dict:
@@ -2244,7 +2255,7 @@ async def handle_draft_and_send(client, biz, action) -> Dict:
     """
     # Step 1 — run the normal draft handler to create the queue row.
     draft_result = await handle_draft_email(client, biz, action)
-    if str(draft_result.get("result", "")).startswith("Failed"):
+    if _action_failed(draft_result):
         return {**draft_result, "type": "draft_and_send"}
 
     queue_id = draft_result.get("queue_id")
@@ -4538,7 +4549,13 @@ async def handle_ensure_module(client, biz, action) -> Dict:
             return {"type": "ensure_module", "result": f"refused: {refusal}",
                     "label": "Out of scope", "nav": None}
     except Exception as e:
-        logger.warning(f"[scope] ensure_module guard error (allowing): {e}")
+        # Fail CLOSED. This guard is a scope-of-practice (HIPAA-adjacent)
+        # boundary — a guard that can't run must refuse, not allow.
+        logger.warning(f"[scope] ensure_module guard error (refusing): {e}")
+        return {"type": "ensure_module",
+                "result": ("Failed: a safety check couldn't run just now, so I "
+                           "didn't create the module. Try again in a moment."),
+                "label": "Module creation held", "nav": None, "failed": True}
 
     existing = await _sb(client, "GET",
         f"/custom_modules?business_id=eq.{biz['id']}&name=eq.{name}&is_active=eq.true&limit=1&select=id,name")
@@ -9515,18 +9532,23 @@ async def handle_record_edit_pattern(client, biz, action) -> Dict:
     context = action.get("context") or ""
     kind = action.get("kind") or "dont"
     if not original or not edited:
-        return {"type": "record_edit_pattern", "result": "skipped: empty"}
+        return {"type": "record_edit_pattern", "result": "skipped: empty", "label": "Voice note"}
     owner_id = biz.get("owner_id") if isinstance(biz, dict) else None
     if not owner_id:
-        return {"type": "record_edit_pattern", "result": "skipped: no owner_id"}
+        return {"type": "record_edit_pattern", "result": "skipped: no owner_id", "label": "Voice note"}
     try:
         await asyncio.to_thread(
             voice_depth_agent.record_edit_observation,
             owner_id, original, edited, context, kind,
         )
-        return {"type": "record_edit_pattern", "result": "observed"}
+        return {"type": "record_edit_pattern", "result": "observed", "label": "Voice note"}
     except Exception as e:
-        return {"type": "record_edit_pattern", "result": f"error: {e}"}
+        # "error: {e}" here used to leak the raw exception AND miss the
+        # failure check (case mismatch → audited as a success).
+        logger.warning(f"record_edit_pattern failed: {e}")
+        return {"type": "record_edit_pattern",
+                "result": "Failed: couldn't record that observation",
+                "label": "Voice note", "failed": True}
 
 
 async def handle_propose_voice_rule(client, biz, action) -> Dict:
@@ -10184,7 +10206,13 @@ async def handle_accept_module_spec(client, biz, action):
                     "result": f"refused: {refusal}",
                     "label": "Out of scope", "nav": None}
     except Exception as e:
-        logger.warning(f"[scope] accept_module_spec guard error (allowing): {e}")
+        # Fail CLOSED. Same scope-of-practice boundary as ensure_module —
+        # a guard that can't run must refuse, not allow.
+        logger.warning(f"[scope] accept_module_spec guard error (refusing): {e}")
+        return {"type": "accept_module_spec",
+                "result": ("Failed: a safety check couldn't run just now, so I "
+                           "didn't accept the module. Try again in a moment."),
+                "label": "Module acceptance held", "nav": None, "failed": True}
 
     res = await _aio.to_thread(msg.materialize_spec, spec_id)
     if not res.get("ok"):
@@ -10649,12 +10677,23 @@ def _resolve_action_references(action: Dict[str, Any], prior_results: List[Dict[
 # Single-pass behavior (no actions emitted) is unchanged. The cost only
 # doubles on action turns.
 #
-# Failure detection: action handlers return {"result": "Failed: <reason>"}
-# via _fail(). Success returns {"result": "<verb>"} or similar non-prefix.
+# Failure detection: _fail() marks its dict with "failed": True (the
+# machine-readable signal; the visible copy stays friendly). Handlers that
+# hand-write failures use a "Failed: <reason>" result. Historical emitters
+# used "failed:", "couldn't ", and "error:" — a case mismatch here once made
+# failed undos audit as successes, so the check is deliberately tolerant.
 
 def _action_failed(taken_item: Dict[str, Any]) -> bool:
-    r = (taken_item or {}).get("result") or ""
-    return isinstance(r, str) and r.startswith("Failed:")
+    item = taken_item or {}
+    if item.get("failed") is True:
+        return True
+    if item.get("ok") is True:
+        return False
+    r = item.get("result") or ""
+    if not isinstance(r, str):
+        return False
+    rl = r.strip().lower()
+    return rl.startswith(("failed:", "couldn't ", "error:"))
 
 
 def _humanize_action_type(atype: str) -> str:
@@ -10689,7 +10728,9 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
         result = t.get("result") or ""
         label = t.get("label") or ""
         if _action_failed(t):
-            reason = result.replace("Failed:", "", 1).strip()
+            reason = result.strip()
+            if reason.lower().startswith("failed:"):
+                reason = reason[len("failed:"):].strip()
             failed.append((atype, label, reason))
         else:
             succeeded.append((atype, label, result))
@@ -10804,7 +10845,9 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
         label = t.get("label") or ""
         if _action_failed(t):
             # Extract the reason after "Failed: "
-            reason = result.replace("Failed:", "", 1).strip()
+            reason = result.strip()
+            if reason.lower().startswith("failed:"):
+                reason = reason[len("failed:"):].strip()
             failed.append((atype, label, reason, t))
         else:
             succeeded.append((atype, label, result, t))
@@ -10965,8 +11008,198 @@ async def _compose_post_action_reply(
     return cleaned_again.strip() or first_pass_clean
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Class-C trust gate — the chat loop finally consults action_registry.
+#
+# Until this existed, _execute_actions ran ANY verb the first-pass LLM
+# emitted; the registry's classifications were enforced at the MCP
+# surface and the autopilot import guard but never on the live chat
+# path. The gate's shape is least-surprise:
+#
+#   - Single-target class-C verbs (send one SMS, send one invoice)
+#     stay IMMEDIATE — the practitioner asked in chat, and per the
+#     registry's own doctrine that request IS the approval.
+#   - Bulk/broadcast class-C verbs (batch_email, bulk_approve — the
+#     only two, per registry `bulk` flags) route through the EXISTING
+#     approval machinery (agent_queue drafts) unless the business
+#     autopilot level for the relevant domain is 'full'.
+#   - At most CLASS_C_TURN_CAP class-C executions per turn.
+#   - Fail CLOSED: a registry lookup that errors, or a live handler the
+#     registry doesn't know, is held rather than run (precedent:
+#     chief_action_reasoner fails to an empty allowlist).
+# ─────────────────────────────────────────────────────────────────────
+
+def _bulk_autopilot_domain(atype: str, action: Dict[str, Any]) -> str:
+    """Which autopilot domain governs a bulk send. batch_email is client
+    outreach (nurture); bulk_approve inherits the agent it filters on,
+    falling back to the overall level."""
+    if atype == "batch_email":
+        return "nurture"
+    if atype == "bulk_approve":
+        f = str((action or {}).get("filter") or "").strip().lower()
+        if f.startswith("agent:"):
+            return f[6:].strip() or "overall"
+    return "overall"
+
+
+async def _queue_batch_email_drafts(client, biz, action: Dict[str, Any]) -> Dict[str, Any]:
+    """A held batch_email becomes one agent_queue DRAFT per recipient —
+    the same rows handle_draft_email writes, so the existing Approval
+    Queue (and _do_approve_one on approval) sends them with zero new
+    machinery. Personalization mirrors handle_batch_email exactly."""
+    contact_ids = action.get("contact_ids") or []
+    subject_tpl = (action.get("subject") or "").strip()
+    body_tpl = (action.get("body") or "").strip()
+    personalize = bool(action.get("personalize", True))
+
+    if not isinstance(contact_ids, list) or not contact_ids:
+        return {"type": "batch_email", "result": "Failed: contact_ids (list) required",
+                "label": "Batch email", "nav": None, "failed": True}
+    if len(contact_ids) > 50:
+        contact_ids = contact_ids[:50]
+    if not subject_tpl or not body_tpl:
+        return {"type": "batch_email", "result": "Failed: subject and body required",
+                "label": "Batch email", "nav": None, "failed": True}
+
+    id_filter = ",".join([f'"{cid}"' for cid in contact_ids])
+    try:
+        contacts = await _sb(
+            client, "GET",
+            f"/contacts?id=in.({id_filter})&business_id=eq.{biz['id']}&select=id,name,email"
+        ) or []
+    except Exception as e:
+        logger.warning(f"[gate] batch_email contact lookup failed while queueing: {e}")
+        contacts = []
+    if not contacts:
+        return {"type": "batch_email",
+                "result": ("Failed: I couldn't find those contacts just now — "
+                           "nothing was sent. Try again in a moment."),
+                "label": "Batch email held", "nav": None, "failed": True}
+
+    biz_name = biz.get("name") or ""
+    rows: List[Dict[str, Any]] = []
+    for c in contacts:
+        name = c.get("name") or "there"
+        subj = subject_tpl.replace("{contact_name}", name).replace("{business_name}", biz_name)
+        body_p = body_tpl.replace("{business_name}", biz_name)
+        if personalize:
+            body_p = body_p.replace("{contact_name}", name)
+        else:
+            body_p = body_p.replace("{contact_name}", "").strip()
+        rows.append({
+            "business_id": biz["id"],
+            "contact_id": c.get("id"),
+            "agent": "chief", "action_type": "email",
+            "subject": subj, "body": body_p,
+            "channel": "email" if (c.get("email") or "").strip() else "in_app",
+            "status": "draft", "priority": action.get("priority", "medium"),
+            "ai_reasoning": ("Chief held a batch email for review — bulk sends go "
+                             "through the Approval Queue unless autopilot is full."),
+            "ai_model": DRAFT_MODEL,
+        })
+
+    try:
+        inserted = await _sb(client, "POST", "/agent_queue", rows)
+    except Exception as e:
+        logger.warning(f"[gate] batch_email draft insert failed: {e}")
+        inserted = None
+    if not inserted:
+        return {"type": "batch_email",
+                "result": ("Failed: I couldn't queue those drafts just now — "
+                           "nothing was sent. Try again in a moment."),
+                "label": "Batch email held", "nav": None, "failed": True}
+
+    n = len(rows)
+    return {
+        "type": "batch_email",
+        "result": (f"queued {n} draft{'s' if n != 1 else ''} for approval — "
+                   f"nothing has been sent yet"),
+        "label": (f"📧 {n} email{'s' if n != 1 else ''} waiting in your "
+                  f"Approval Queue — approve there to send"),
+        "nav": _nav("operate", "queue"),
+        "queued_count": n,
+    }
+
+
+async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
+                        executed_c: int) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Consult action_registry before dispatching a chat action.
+
+    Returns (verdict, result):
+      "pass"    — not class C; dispatch normally, don't count it.
+      "execute" — class C, allowed this turn; dispatch AND count it.
+      "handled" — do NOT dispatch; `result` is the turn's result dict
+                  (a queued-for-approval success or a refusal — always
+                  with both `result` and `label` keys).
+    """
+    registry_ok = True
+    bulk = False
+    try:
+        import action_registry
+        entry = action_registry.classification(atype)
+        if entry is None:
+            # A live handler the registry doesn't know = drift. Default-deny,
+            # same doctrine as the registry's own accessors.
+            registry_ok = False
+        else:
+            if entry.get("effect") != action_registry.WRITE:
+                return "pass", None
+            if entry.get("reversibility") != "C":
+                return "pass", None
+            bulk = bool(entry.get("bulk"))
+    except Exception as e:
+        logger.warning(f"[gate] registry lookup failed for {atype}; failing closed: {e}")
+        registry_ok = False
+
+    if executed_c >= CLASS_C_TURN_CAP:
+        return "handled", {
+            "type": atype,
+            "result": (f"Failed: safety cap — I already took {CLASS_C_TURN_CAP} "
+                       f"sensitive actions this turn, so I held this one. "
+                       f"Ask again and I'll run it on its own."),
+            "label": f"Held: {_humanize_action_type(atype)} (sensitive-action cap)",
+            "nav": None, "failed": True,
+        }
+
+    if registry_ok and not bulk:
+        # Single-target class C: the practitioner asked in chat — that is
+        # the approval (action_registry doctrine: class C means never
+        # UNPROMPTED, not never).
+        return "execute", None
+
+    if registry_ok and bulk:
+        try:
+            if _autopilot_level(biz, _bulk_autopilot_domain(atype, action)) == "full":
+                return "execute", None
+        except Exception as e:
+            logger.warning(f"[gate] autopilot lookup failed for {atype}; holding: {e}")
+        if atype == "batch_email":
+            return "handled", await _queue_batch_email_drafts(client, biz, action)
+        # bulk_approve (and any future bulk-sensitive verb with no draft
+        # form): there is nothing to queue — approving a batch IS the
+        # approval step — so refuse toward the surface built for it.
+        return "handled", {
+            "type": atype,
+            "result": ("Failed: approving a whole batch from chat skips the "
+                       "review those drafts exist for. Open your Approval "
+                       "Queue to send them, or ask me to approve a specific one."),
+            "label": "Held for review in the Approval Queue",
+            "nav": _nav("operate", "queue"), "failed": True,
+        }
+
+    # Registry unavailable or drifted — fail CLOSED for every verb.
+    return "handled", {
+        "type": atype,
+        "result": ("Failed: a safety check couldn't run just now, so I held "
+                   "this action. Try again in a moment."),
+        "label": f"Held: {_humanize_action_type(atype)}",
+        "nav": None, "failed": True,
+    }
+
+
 async def _execute_actions(client, biz, actions: List[Dict]) -> List[Dict]:
     results: List[Dict[str, Any]] = []
+    class_c_executed = 0
     for action in actions:
         atype = action.get("type")
         handler = ACTION_HANDLERS.get(atype)
@@ -11006,6 +11239,26 @@ async def _execute_actions(client, biz, actions: List[Dict]) -> List[Dict]:
         # create_invoice → send_invoice in one turn without knowing the
         # freshly-minted UUID.
         resolved = _resolve_action_references(action, results)
+        # ── Class-C trust gate (see _gate_class_c above) ──
+        try:
+            verdict, gate_res = await _gate_class_c(client, biz, atype, resolved,
+                                                    class_c_executed)
+        except Exception as e:
+            # The gate itself is a safety check; if IT breaks, hold the
+            # action rather than run ungated.
+            logger.exception(f"[gate] gate raised for {atype}; failing closed: {e}")
+            verdict, gate_res = "handled", {
+                "type": atype,
+                "result": ("Failed: a safety check couldn't run just now, so I "
+                           "held this action. Try again in a moment."),
+                "label": f"Held: {_humanize_action_type(atype)}",
+                "nav": None, "failed": True,
+            }
+        if verdict == "handled":
+            results.append(gate_res)
+            continue
+        if verdict == "execute":
+            class_c_executed += 1
         try:
             res = await handler(client, biz, resolved)
             results.append(res)

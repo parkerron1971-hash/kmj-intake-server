@@ -2,7 +2,7 @@
 action_inverse.py — what "undo" actually MEANS, per verb.
 
 THE GAP THIS CLOSES
-  action_registry classifies all 128 verbs by reversibility, and class A
+  action_registry classifies all 139 verbs by reversibility, and class A
   reads "cleanly undoable — a wrong one is an edit away from right". The
   readiness audit found that was a DESIGN JUDGMENT with nothing behind it:
   restore_previous_site was the only verb a practitioner could actually
