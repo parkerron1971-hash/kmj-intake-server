@@ -72,6 +72,20 @@ def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
     return rows[0]
 
 
+@router.get("/my-role")
+def my_role(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """The caller's own standing on a business — drives client-side
+    surface shaping (an accountant collaborator gets the books-only
+    view; team seats get the full app at their rank). Informational,
+    never a security boundary: every router enforces server-side."""
+    r = role_of(biz, str(user.id))
+    accountant = False
+    if not r:
+        from business_collaborators_router import is_active_accountant
+        accountant = is_active_accountant(biz, str(user.id))
+    return {"ok": True, "role": r, "accountant": accountant}
+
+
 class InviteBody(BaseModel):
     email: str
     role: str = "member"
