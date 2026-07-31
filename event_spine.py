@@ -104,6 +104,10 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "legacy": True,
     },
     # ── Workflow / lifecycle ─────────────────────────────────────
+    "contact_form_submitted": {
+        "source": "public_site contact_submit_endpoint (composed-site contact form)",
+        "payload": ["name", "email", "message_preview", "new_contact"],
+    },
     "contact_status_changed": {
         "source": "chief_of_staff",
         "payload": ["from_status", "to_status"],

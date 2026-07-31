@@ -1566,14 +1566,110 @@ def _record_website_sms_consent(business_id: str, phone_raw: str,
         logger.warning(f"[consent] website contact consent record failed: {e}")
 
 
+def _capture_contact_from_form(business_id: str, name: str, email: str,
+                               phone_raw: str, message: str) -> Optional[str]:
+    """Find-or-create the contact for a website contact-form submission
+    (outbound-integrity, 2026-07-31). Before this, a visitor who filled
+    the composed site's contact form ONLY produced a notification email —
+    zero rows in /contacts or /events. The lead evaporated the moment the
+    operator archived the email.
+
+    Dedup: match by email (case-insensitive, LIKE wildcards escaped) or,
+    failing that, by normalized phone — always WITHIN business_id. Found
+    contacts get last_interaction bumped and the message appended to
+    metadata; new ones are created as status='lead' mirroring
+    intake_endpoint / booking_widget conventions.
+
+    Anonymous public endpoint → service-role client only (same client
+    this file already uses), and the caller's rate limiting runs BEFORE
+    this so it cannot become a spam-amplification vector. Best-effort by
+    contract: never raises, never blocks the notification email.
+    """
+    try:
+        import urllib.parse
+
+        import sb_clients
+        from sms_service import normalize_phone
+
+        email_clean = (email or "").strip().lower()
+        phone = normalize_phone(str(phone_raw or ""))
+        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        existing = None
+        if email_clean:
+            # ilike with no wildcards = case-insensitive exact match, but
+            # emails legally contain '_' (a LIKE single-char wildcard) —
+            # escape pattern chars so jo_n@x.com can't match joan@x.com.
+            pattern = (email_clean.replace("\\", "\\\\")
+                       .replace("%", "\\%").replace("_", "\\_"))
+            rows = sb_clients.sb_get_as_service(
+                f"/contacts?business_id=eq.{business_id}"
+                f"&email=ilike.{urllib.parse.quote(pattern, safe='')}"
+                f"&select=id,phone,metadata&limit=1") or []
+            existing = rows[0] if rows else None
+        if existing is None and phone:
+            rows = sb_clients.sb_get_as_service(
+                f"/contacts?business_id=eq.{business_id}"
+                f"&phone=eq.{urllib.parse.quote(phone, safe='')}"
+                f"&select=id,phone,metadata&limit=1") or []
+            existing = rows[0] if rows else None
+
+        msg_entry = {"at": now_iso, "message": (message or "")[:1000]}
+        if existing:
+            contact_id = existing["id"]
+            meta = existing.get("metadata") or {}
+            msgs = list(meta.get("website_form_messages") or [])
+            msgs.append(msg_entry)
+            meta["website_form_messages"] = msgs[-10:]
+            patch: Dict[str, Any] = {"last_interaction": now_iso, "metadata": meta}
+            if phone and not str(existing.get("phone") or "").strip():
+                patch["phone"] = phone
+            sb_clients.sb_patch_as_service(
+                f"/contacts?id=eq.{contact_id}&business_id=eq.{business_id}", patch)
+        else:
+            created = sb_clients.sb_post_as_service("/contacts", {
+                "business_id": business_id,
+                "name": name,
+                "email": email_clean or None,
+                "phone": phone or None,
+                "status": "lead",
+                "source": "website_contact_form",
+                "metadata": {"website_form_messages": [msg_entry]},
+                "last_interaction": now_iso,
+            })
+            if not isinstance(created, list) or not created:
+                logger.warning(
+                    f"[contact-submit] contact create failed biz={business_id[:8]} "
+                    f"— see preceding sb_clients log line")
+                return None
+            contact_id = created[0]["id"]
+
+        import event_spine
+        event_spine.emit(
+            "contact_form_submitted", business_id,
+            {"name": name, "email": email_clean,
+             "message_preview": (message or "")[:160],
+             "new_contact": existing is None},
+            contact_id=contact_id, source="website_contact_form")
+        return contact_id
+    except Exception as e:
+        logger.warning(f"[contact-submit] contact capture failed: {e}")
+        return None
+
+
 @router.post("/sites/{business_id}/contact-submit")
 async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], request: Request):
-    """Send a contact-form submission via Resend.
+    """Capture a contact-form submission as a lead + notify via Resend.
 
     Body: { name, email, message, phone?, sms_consent? }. Rate-limited
     per client IP at 5/min. Returns {ok: true} on success or {ok: false,
     error: str} on email service failure (so the front-end form shows a
     graceful message rather than crashing).
+
+    Lead capture: every valid submission finds-or-creates the contact
+    (dedup by email/phone within the business) and drops a
+    contact_form_submitted event on the spine — see
+    _capture_contact_from_form. The notification email is unchanged.
 
     sms_consent (Arc 1): the composed-site contact form shows an
     UNCHECKED opt-in checkbox + optional phone field when the platform
@@ -1598,6 +1694,13 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     # valid, independent of email-delivery outcome).
     if body.get("sms_consent") is True and str(body.get("phone") or "").strip():
         _record_website_sms_consent(business_id, str(body.get("phone"))[:40], name)
+
+    # Lead capture (outbound-integrity, 2026-07-31): the submission
+    # becomes/updates a contact + a timeline event BEFORE the email leg,
+    # so the visitor exists in /contacts even if Resend hiccups. The rate
+    # limit above already gated this write; best-effort by contract.
+    _capture_contact_from_form(
+        business_id, name, email, str(body.get("phone") or ""), message)
 
     try:
         from brand_engine import get_bundle, _sb_get as be_get
