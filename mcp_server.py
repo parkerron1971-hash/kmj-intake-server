@@ -291,6 +291,17 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
               "category": {"type": "string",
                            "description": "Optional. One of the five "
                                           "expense buckets."}})),
+    # Deliberately exposed (tripwire bump 21 → 22). check_inventory is
+    # operational store state — stock counts and low-stock flags for the
+    # business's own products, the same class as list_offerings and
+    # list_products, both already here. No customer data, no money
+    # figures. adjust_stock stays a write (class C) and stays OFF this
+    # surface.
+    "check_inventory": (
+        "Stock levels for the store's products: tracked quantities, "
+        "low-stock and out-of-stock lists. Read-only — adjusting stock "
+        "is not available here.",
+        _NO_ARGS),
 }
 
 

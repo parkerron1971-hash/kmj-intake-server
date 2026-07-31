@@ -62,6 +62,7 @@ h1{font-family:var(--sx-font-heading);font-weight:var(--sx-heading-weight);font-
 .st-desc{color:var(--sx-muted);font-size:.9rem;margin:8px 0 0}
 .st-card-foot{margin-top:auto;padding-top:14px;display:flex;justify-content:flex-end;align-items:center;gap:10px}
 .st-out{color:var(--sx-muted);font-size:.85rem;font-weight:700}
+.st-low{color:var(--sx-accent);font-size:.8rem;font-weight:700}
 .st-add{padding:9px 18px;border-radius:var(--sx-radius-button);border:1.5px solid var(--sx-accent);background:transparent;color:var(--sx-accent);font-weight:700;font-size:.85rem;cursor:pointer}
 .st-add:hover{background:var(--sx-accent);color:var(--sx-on-accent)}
 .st-bar{position:fixed;left:0;right:0;bottom:0;background:var(--sx-surface);border-top:1px solid var(--sx-border);padding:14px clamp(18px,4vw,40px);display:none;align-items:center;gap:16px;z-index:50}
@@ -217,7 +218,12 @@ def render_store_page(slug: str, biz: Dict[str, Any],
                if str(o.get("image_url") or "").startswith("http")
                else '<div class="st-img st-img-ph"></div>')
         price = float(o.get("current_price") or 0)
-        stock = "" if o.get("in_stock") else '<span class="st-out">Sold out</span>'
+        if not o.get("in_stock"):
+            stock = '<span class="st-out">Sold out</span>'
+        elif o.get("units_left"):
+            stock = f'<span class="st-low">Only {int(o["units_left"])} left</span>'
+        else:
+            stock = ""
         btn = (f'<button class="st-add" data-id="{_esc(o["id"])}" '
                f'data-name="{_esc(o["name"])}" data-price="{price:.2f}">Add to cart</button>'
                if o.get("in_stock") else "")
