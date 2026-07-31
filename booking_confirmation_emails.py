@@ -589,6 +589,7 @@ async def send_confirmation_email(
                 "content": ics_b64,
                 "content_type": "text/calendar",
             }],
+            business_id=biz_id or None,
         )
         logger.info(
             f"confirmation email sent: booking={booking.get('id')} biz={biz_id} "
