@@ -297,6 +297,132 @@ def summary_1099(biz: str, year: Optional[int] = None,
     return _summary_1099(biz, y)
 
 
+# ─── Rails Arc 2 — 1099-NEC drafts (prep tool, never the filer) ──────
+
+def _payer_block(biz_row: Dict[str, Any]) -> Dict[str, Any]:
+    """Payer identity from the business row + settings.financial.payer
+    (the 1099 panel collects EIN/address there)."""
+    fin = ((biz_row.get("settings") or {}).get("financial") or {})
+    payer = (fin.get("payer") or {})
+    city_state_zip = ", ".join(
+        p for p in [payer.get("city"), payer.get("state")] if p)
+    if payer.get("zip"):
+        city_state_zip = f"{city_state_zip} {payer['zip']}".strip(", ")
+    return {
+        "name": payer.get("name") or biz_row.get("name") or "",
+        "ein": payer.get("ein") or "",
+        "line1": payer.get("line1") or "",
+        "line2": payer.get("line2") or "",
+        "city_state_zip": city_state_zip,
+        "phone": payer.get("phone") or "",
+        "complete": bool(payer.get("ein") and payer.get("line1")),
+    }
+
+
+@router.get("/1099-drafts")
+def drafts_1099(biz: str, year: Optional[int] = None,
+                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Draft-readiness for every 'Manual 1099 needed' row: who has a
+    W-9 profile, who's missing one, and whether the payer block is
+    filled in. Stripe-managed rows are excluded — Stripe files those."""
+    b = _owner(biz, user)
+    billing_limits.require_feature(biz, "contractor_payments")
+    from datetime import datetime as _dt, timezone as _tz
+    y = year or _dt.now(_tz.utc).year
+    summary = _summary_1099(biz, y)
+
+    manual = [r for r in summary["rows"]
+              if not r.get("stripe_managed") and r.get("reaches_threshold")]
+    cids = [r["contractor_id"] for r in manual if r.get("contractor_id")]
+    profiles: Dict[str, Dict[str, Any]] = {}
+    if cids:
+        rows = sb_clients.sb_get_as_service(
+            f"/contractors?id=in.({','.join(cids)})"
+            f"&select=id,tax_name,tax_id_type,tin_last4,tin_encrypted,w9_received_at&limit=500") or []
+        profiles = {r["id"]: r for r in rows}
+
+    out = []
+    for r in manual:
+        p = profiles.get(r.get("contractor_id") or "") or {}
+        out.append({
+            "contractor_id": r.get("contractor_id"),
+            "name": r["name"],
+            "total_paid": r["total_paid"],
+            "payments": r["payments"],
+            "has_contractor": bool(r.get("contractor_id")),
+            "has_w9": bool(p.get("tin_encrypted")),
+            "tin_last4": p.get("tin_last4"),
+            "tax_name": p.get("tax_name"),
+            "w9_received_at": p.get("w9_received_at"),
+            "draft_ready": bool(p.get("tin_encrypted")),
+        })
+
+    payer = _payer_block(b)
+    return {
+        "ok": True, "year": y, "rows": out,
+        "payer": {k: payer[k] for k in ("name", "ein", "line1", "line2",
+                                        "city_state_zip", "phone", "complete")},
+        "note": ("Drafts for manually-paid contractors at/above the $600 IRS "
+                 "threshold. Stripe-managed contractors are excluded — Stripe "
+                 "Tax Reporting files those. Prepared by bookkeeping software, "
+                 "not a CPA: review with your tax professional before filing."),
+    }
+
+
+@router.get("/1099-draft/pdf")
+def draft_1099_pdf(biz: str, contractor_id: str, year: Optional[int] = None,
+                   user: AuthedUser = Depends(require_user)) -> Response:
+    """One contractor's draft 1099-NEC. The ONLY place the full TIN is
+    ever decrypted — into the PDF the owner downloads to prepare the
+    real filing."""
+    import form_1099
+    import tin_crypto
+
+    b = _owner(biz, user)
+    billing_limits.require_feature(biz, "contractor_payments")
+    from datetime import datetime as _dt, timezone as _tz
+    y = year or _dt.now(_tz.utc).year
+
+    rows = sb_clients.sb_get_as_service(
+        f"/contractors?id=eq.{contractor_id}&business_id=eq.{biz}&select=*&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "contractor not found")
+    c = rows[0]
+    if c.get("stripe_account_id"):
+        raise HTTPException(409, "Stripe-managed contractor — Stripe Tax Reporting "
+                                 "files their 1099-NEC; no draft needed.")
+    if not c.get("tin_encrypted"):
+        raise HTTPException(409, "No W-9 on file — add the contractor's tax info first.")
+
+    summary = _summary_1099(biz, y)
+    row = next((r for r in summary["rows"]
+                if r.get("contractor_id") == contractor_id), None)
+    if not row:
+        raise HTTPException(404, f"No paid 1099-eligible bills for this contractor in {y}.")
+
+    tin = tin_crypto.decrypt_tin(c["tin_encrypted"])
+    addr = c.get("tax_address") or {}
+    city_state_zip = ", ".join(p for p in [addr.get("city"), addr.get("state")] if p)
+    if addr.get("zip"):
+        city_state_zip = f"{city_state_zip} {addr['zip']}".strip(", ")
+
+    pdf = form_1099.build_draft_pdf(
+        payer=_payer_block(b),
+        recipient={
+            "name": c.get("tax_name") or c.get("name") or "",
+            "tin_display": tin_crypto.format_tin(tin, c.get("tax_id_type") or "ssn"),
+            "line1": addr.get("line1") or "",
+            "line2": addr.get("line2") or "",
+            "city_state_zip": city_state_zip,
+        },
+        year=y,
+        box1_amount=float(row["total_paid"]),
+    )
+    safe_name = (c.get("name") or "contractor").replace(" ", "_")[:40]
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{y}_1099NEC_DRAFT_{safe_name}.pdf"'})
+
+
 # ─── Phase I.6 — accountant exports ──────────────────────────────────
 
 def _package_year(year: Optional[int]) -> int:
