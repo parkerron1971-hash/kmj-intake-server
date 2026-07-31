@@ -418,6 +418,10 @@ def trust_grant(body: TrustGrantBody,
         })
     except Exception as e:
         logger.warning(f"[trust] grant activity log failed: {e}")
+    import audit_log
+    audit_log.record(body.business_id, actor_type="user", actor_id=str(user.id),
+                     verb="trust_granted", summary=f"Trust granted: {ptype}",
+                     payload={"proposal_type": ptype}, source="desktop")
     return {"ok": True, "trusted": sorted(trusted)}
 
 
@@ -552,6 +556,13 @@ def _run_trusted_sweep_sync() -> None:
                         })
                     except Exception as e:
                         logger.warning(f"[trusted] activity log failed: {e}")
+                    import audit_log
+                    audit_log.record(biz, actor_type="chief",
+                                     actor_id=str(biz_row["owner_id"]),
+                                     verb=f"trusted:{ptype}"[:80],
+                                     summary=f"Handled autonomously: {str(label)[:90]}",
+                                     payload={"proposal_id": p.get("id")},
+                                     source="system")
         if executed_labels:
             print(f"[Trusted sweep] {biz_row.get('name') or biz}: "
                   f"executed {len(executed_labels)} — {', '.join(executed_labels[:3])}",

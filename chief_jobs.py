@@ -216,6 +216,12 @@ async def _run(job_id: str, user_id: str, business_id: str, kind: str, params: d
                 "action_type": f"job:{kind}", "label": meta["label"],
                 "summary": _done_summary, "nav": meta.get("nav"),
             }])
+            import audit_log
+            await asyncio.to_thread(
+                audit_log.record, business_id, actor_type="chief",
+                actor_id=user_id, verb=f"job:{kind}"[:80],
+                ok=not (isinstance(result, dict) and result.get("ok") is False),
+                summary=_done_summary, source="system")
         except Exception as e:
             logger.exception(f"[chief_jobs] job {job_id} ({kind}) failed")
             await _sb(client, "PATCH", f"/chief_jobs?id=eq.{job_id}",
@@ -225,6 +231,11 @@ async def _run(job_id: str, user_id: str, business_id: str, kind: str, params: d
                 "action_type": f"job:{kind}", "label": meta["label"],
                 "summary": "couldn't finish — tap to retry", "nav": meta.get("nav"),
             }])
+            import audit_log
+            await asyncio.to_thread(
+                audit_log.record, business_id, actor_type="chief",
+                actor_id=user_id, verb=f"job:{kind}"[:80], ok=False,
+                error=str(e)[:500], summary=meta["label"], source="system")
 
 
 async def enqueue(client: httpx.AsyncClient, *, user_id: str, business_id: str,
