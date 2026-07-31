@@ -26,14 +26,29 @@ router = APIRouter(prefix="/gl", tags=["general_ledger"])
 _EPS = 0.01
 
 
-def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
+def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, Any]:
+    """Seat-access arc (7/31): the GL gate, role-ranked. Owner always
+    passes; active accountant collaborators read; team seats pass by rank
+    (viewer reads, manager verifies, admin rebuilds — see the matrix in
+    business_users_router). Returns the business row like _owner did."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,name,type,owner_id&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
-    if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(403, "not authorized")
-    return rows[0]
+    row = rows[0]
+    if str(row.get("owner_id")) == str(user.id):
+        return row
+    if min_role == "viewer":
+        from business_collaborators_router import is_active_accountant
+        if is_active_accountant(biz, str(user.id)):
+            return row
+    from business_users_router import require_role
+    require_role(biz, str(user.id), min_role)
+    return row
+
+
+def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    return _access(biz, user, "viewer")
 
 
 def _log_admin(biz: str, action_type: str, result: Dict[str, Any], user: AuthedUser) -> None:
@@ -67,7 +82,7 @@ def _scan_non_usd(biz: str) -> Dict[str, Any]:
 
 @router.post("/backfill")
 def backfill(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    b = _owner(biz, user)
+    b = _access(biz, user, "admin")   # rebuilds the whole ledger
     billing_limits.require_feature(biz, "general_ledger")
     nonusd = _scan_non_usd(biz)
     if nonusd["non_usd_count"] > 0:
@@ -85,7 +100,7 @@ def backfill(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, An
 
 @router.post("/backfill/reverse")
 def reverse(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)
+    _access(biz, user, "admin")       # drops the whole ledger
     billing_limits.require_feature(biz, "general_ledger")
     out = gl_engine.reverse_backfill(biz)
     _log_admin(biz, "reverse", out, user)
@@ -149,7 +164,7 @@ def verify(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]
     """The I.1b reconciliation gate: GL (from persisted ledger) vs the current
     H.3a/H.1 engine, over all-time. All deltas must be ~0. Drains this
     business's queue first so the result reflects the latest source state."""
-    _owner(biz, user)
+    _access(biz, user, "manager")     # drains the queue as a side effect
     billing_limits.require_feature(biz, "general_ledger")
     try:
         gl_engine.process_queue(biz)

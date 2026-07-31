@@ -30,13 +30,19 @@ def _now_iso() -> str:
 
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    """Seat-access arc (7/31): collaborator management is an ADMIN
+    surface — the owner passes, and so does an active admin seat. Lower
+    ranks still 403 inside require_role."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,name,owner_id&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
-    if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(403, "not authorized")
-    return rows[0]
+    row = rows[0]
+    if str(row.get("owner_id")) == str(user.id):
+        return row
+    from business_users_router import require_role
+    require_role(biz, str(user.id), "admin")
+    return row
 
 
 def is_active_accountant(business_id: str, user_id: str) -> bool:

@@ -14781,12 +14781,16 @@ async def chief_insights_run(
     user_session: UserSession = Depends(require_user_session),
 ):
     """Chief Layers arc — run the weekly longitudinal analysis for one
-    business on demand (testing / "analyze my trends now"). Owner-gated;
+    business on demand (testing / "analyze my trends now"). Seat-access
+    arc (7/31): owner or member+ seat — running Chief is everyday work;
     `force` bypasses the weekly cadence but never the eligibility gate."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}&select=id,owner_id&limit=1") or []
-    if not rows or str(rows[0].get("owner_id")) != str(user_session.user.id):
-        raise HTTPException(403, "not your business")
+    if not rows:
+        raise HTTPException(404, "business not found")
+    if str(rows[0].get("owner_id")) != str(user_session.user.id):
+        from business_users_router import require_role
+        require_role(business_id, str(user_session.user.id), "member")
     import billing_limits
     billing_limits.require_units(business_id)
     import chief_insights

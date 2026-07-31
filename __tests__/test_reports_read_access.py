@@ -71,17 +71,23 @@ def _fn_body(src: str, name: str) -> str:
     return m.group(0)
 
 
-def test_owner_only_holdouts_stay_owner_only():
+def test_writes_carry_their_matrix_ranks():
+    """7/31 seat-access matrix (Kevin-approved) supersedes the Arc 5
+    owner-only holdouts: budgets + customer statements are MEMBER work,
+    the accountant package send escalates to MANAGER — and the
+    TIN-decrypting 1099 draft stays OWNER ONLY, forever."""
     src = _source()
-    for fn in ("put_budgets", "draft_1099_pdf"):
-        body = _fn_body(src, fn)
-        assert "_owner(biz, user)" in body, f"{fn} lost its owner gate"
-        assert "_owner_or_reader(biz, user)" not in body, f"{fn} opened to readers"
-    for fn in ("accountant_send", "customer_statement_send"):
+    body = _fn_body(src, "draft_1099_pdf")
+    assert "_owner(biz, user)" in body, "1099 draft lost its owner gate"
+    assert "require_role" not in body, "the TIN surface must never open to seats"
+    body = _fn_body(src, "put_budgets")
+    assert 'require_role(biz, str(user.id), "member")' in body
+    for fn, rank in (("accountant_send", "manager"),
+                     ("customer_statement_send", "member")):
         body = re.search(rf"\nasync def {fn}\(.*?(?=\n@router|\ndef |\nasync def |\Z)",
                          src, re.S).group(0)
-        assert "_owner(biz, user)" in body, f"{fn} lost its owner gate"
-        assert "_owner_or_reader(biz, user)" not in body, f"{fn} opened to readers"
+        assert f'require_role(biz, str(user.id), "{rank}")' in body, \
+            f"{fn} must gate at {rank}"
 
 
 def test_report_reads_go_through_the_reader_gate():

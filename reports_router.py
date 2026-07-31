@@ -503,7 +503,10 @@ async def accountant_send(biz: str, year: Optional[int] = None,
                           user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """Email the year-end package to the accountant (active collaborator, or
     Financial Settings accountant_email). Returns the draft + send result."""
-    biz_row = _owner(biz, user)  # send = outward action, owner only
+    # Seat-access arc (7/31 matrix): outward sends escalate to manager.
+    biz_row = _owner_or_reader(biz, user)
+    from business_users_router import require_role
+    require_role(biz, str(user.id), "manager")
     billing_limits.require_feature(biz, "accountant_package")
     import accountant_export
     import base64
@@ -632,7 +635,11 @@ def get_budgets(biz: str, year: int, month: int,
 @router.put("/budgets")
 def put_budgets(biz: str, body: BudgetsBody,
                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)  # write, owner only
+    # Seat-access arc (7/31 matrix): budgets are everyday operator work —
+    # member+ writes (matches the business_budgets RLS write policy).
+    _owner_or_reader(biz, user)
+    from business_users_router import require_role
+    require_role(biz, str(user.id), "member")
     billing_limits.require_feature(biz, "reports_full")
     if not (1 <= body.month <= 12):
         raise HTTPException(400, "month must be 1-12")
@@ -765,7 +772,11 @@ def customer_statement(biz: str, contact_id: str, as_of: Optional[str] = None,
 async def customer_statement_send(biz: str, contact_id: str,
                                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """Email the statement (PDF attached) to the contact's email on file."""
-    biz_row = _owner(biz, user)  # send = outward action, owner only
+    # Seat-access arc (7/31 matrix): statements to customers are everyday
+    # operator work — member+ sends.
+    biz_row = _owner_or_reader(biz, user)
+    from business_users_router import require_role
+    require_role(biz, str(user.id), "member")
     data = gl_reports_t2.customer_statement(biz, contact_id, None)
     contact = data.get("contact") or {}
     to_email = contact.get("email")

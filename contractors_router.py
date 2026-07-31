@@ -52,22 +52,33 @@ def _secret_key() -> str:
     return key
 
 
-def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
+def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, Any]:
+    """Seat-access arc (7/31): contractor lists are readable by any seat;
+    create/onboard/refresh escalate to manager; PAY is admin (it moves
+    real money via Stripe transfer)."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,name,owner_id&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
-    if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(403, "not authorized")
-    return rows[0]
+    row = rows[0]
+    if str(row.get("owner_id")) == str(user.id):
+        return row
+    from business_users_router import require_role
+    require_role(biz, str(user.id), min_role)
+    return row
 
 
-def _owner_for_contractor(contractor_id: str, user: AuthedUser) -> Dict[str, Any]:
+def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    return _access(biz, user, "viewer")
+
+
+def _owner_for_contractor(contractor_id: str, user: AuthedUser,
+                          min_role: str = "viewer") -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/contractors?id=eq.{contractor_id}&select=*&limit=1") or []
     if not rows:
         raise HTTPException(404, "contractor not found")
-    _owner(str(rows[0]["business_id"]), user)
+    _access(str(rows[0]["business_id"]), user, min_role)
     return rows[0]
 
 
@@ -114,7 +125,7 @@ class ContractorBody(BaseModel):
 @router.post("")
 def create_contractor(body: ContractorBody,
                       user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(body.business_id, user)
+    _access(body.business_id, user, "manager")
     billing_limits.require_feature(body.business_id, "contractor_payments")
     if not (body.name or "").strip():
         raise HTTPException(400, "name is required")
@@ -143,7 +154,7 @@ class ContractorPatchBody(BaseModel):
 @router.patch("/{contractor_id}")
 def update_contractor(contractor_id: str, body: ContractorPatchBody,
                       user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner_for_contractor(contractor_id, user)
+    _owner_for_contractor(contractor_id, user, min_role="manager")
     patch: Dict[str, Any] = {"updated_at": _now_iso()}
     for f in ("name", "email", "is_1099_eligible", "notes"):
         v = getattr(body, f)
@@ -164,7 +175,7 @@ async def onboarding_link(contractor_id: str,
     """Create the Express account (once) + a fresh onboarding link. Emails
     the link when possible; always returns it so the practitioner can share
     it manually (collaborators pattern)."""
-    c = _owner_for_contractor(contractor_id, user)
+    c = _owner_for_contractor(contractor_id, user, min_role="manager")
     billing_limits.require_feature(str(c["business_id"]), "contractor_payments")
     biz_rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{c['business_id']}&select=name&limit=1") or [{}]
@@ -219,7 +230,9 @@ async def onboarding_link(contractor_id: str,
 @router.post("/{contractor_id}/refresh-status")
 async def refresh_status(contractor_id: str,
                          user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    c = _owner_for_contractor(contractor_id, user)
+    # Seat-access arc: escalated to manager — this endpoint WRITES the
+    # contractor's onboarding status (viewer seats stay read-only).
+    c = _owner_for_contractor(contractor_id, user, min_role="manager")
     acct_id = c.get("stripe_account_id")
     if not acct_id:
         return {"ok": True, "onboarding_status": c.get("onboarding_status")}
@@ -253,7 +266,7 @@ async def pay(contractor_id: str, body: PayBody,
     """Send a Stripe Transfer (platform balance → contractor Express) and
     record it: outbound_transfers row + auto-created PAID AP bill
     (is_1099_eligible per contractor) → GL books it via the bills pipeline."""
-    c = _owner_for_contractor(contractor_id, user)
+    c = _owner_for_contractor(contractor_id, user, min_role="admin")  # moves money
     if str(c["business_id"]) != body.business_id:
         raise HTTPException(403, "contractor belongs to a different business")
     billing_limits.require_feature(body.business_id, "contractor_payments")
@@ -353,7 +366,9 @@ def put_tax_profile(contractor_id: str, body: TaxProfileBody,
                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     import tin_crypto
 
-    c = _owner_for_contractor(contractor_id, user)
+    # TIN entry is the OWNER's act alone — same rule as the draft-1099
+    # PDF that decrypts it.
+    c = _owner_for_contractor(contractor_id, user, min_role="owner")
     if body.tax_id_type not in ("ssn", "ein"):
         raise HTTPException(400, "tax_id_type must be 'ssn' or 'ein'")
     if not (body.tax_name or "").strip():

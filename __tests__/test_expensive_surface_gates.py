@@ -103,9 +103,15 @@ def test_campaign_launch_blocked_when_locked(fake, monkeypatch):
 
 
 def test_director_refine_gated_on_units(fake, monkeypatch):
+    """Refine checks access first (7/31 seat arc: owner or member+ seat),
+    then the allowance — an owner out of units gets the 402."""
     from agents.director_agent import router as dr
+    _biz(fake, "b1", plan=None, status=None)
+    fake.rows("businesses")[-1]["owner_id"] = "owner1"
     monkeypatch.setattr(bl, "chief_can_send", lambda bid: False)
+    session = type("S", (), {"user": type("U", (), {"id": "owner1"})()})()
     with pytest.raises(HTTPException) as e:
-        dr.refine(dr.RefineRequest(business_id="b1", user_text="fix it"))
+        dr.refine(dr.RefineRequest(business_id="b1", user_text="fix it"),
+                  session)
     assert e.value.status_code == 402
     assert e.value.detail["error"] == "out_of_units"

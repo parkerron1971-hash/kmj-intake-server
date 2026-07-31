@@ -150,15 +150,12 @@ def build_with_loop(
             return JSONResponse(status_code=410, content={
                 "error": "This build engine was retired — sites are composed "
                          "by the Module Composer. POST /composer/compose instead."})
-        # Owner gate (mirrors /composer/rationale): the reroute runs a
+        # Access gate (mirrors /composer/rationale): the reroute runs a
         # full LLM compose that overwrites the live site via service role.
-        owner_rows = sb_clients.sb_get_as_service(
-            f"/businesses?id=eq.{req.business_id}&select=owner_id&limit=1") or []
-        if not owner_rows:
-            raise HTTPException(status_code=404, detail="business not found")
-        if str(owner_rows[0].get("owner_id")) != str(session.user.id):
-            raise HTTPException(status_code=403,
-                                detail="not authorized for this business")
+        # Seat-access arc (7/31 matrix, Kevin-approved): owner passes, and
+        # so does an active MEMBER+ team seat — site builds are everyday
+        # operator work. Anyone else still 403s inside require_role.
+        site_composer._require_owner(req.business_id, str(session.user.id))
         import billing_limits
         billing_limits.require_units(req.business_id)
         logger.warning(
@@ -241,7 +238,7 @@ class RefineRequest(BaseModel):
 @router.post("/refine")
 def refine(
     req: RefineRequest,
-    _: UserSession = Depends(sb_clients.authed_request),
+    session: UserSession = Depends(sb_clients.authed_request),
 ) -> Dict[str, Any]:
     """Run the Director refine flow.
 
@@ -260,6 +257,10 @@ def refine(
     within the last 10 minutes (prevents double-spend on parallel
     refine requests).
     """
+    # Seat-access arc (7/31): same gate as compose — owner or member+
+    # seat; refine kicks a paid rebuild.
+    import site_composer
+    site_composer._require_owner(req.business_id, str(session.user.id))
     import billing_limits
     billing_limits.require_units(req.business_id)
     result = run_refine(
