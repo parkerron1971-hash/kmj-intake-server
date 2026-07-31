@@ -41,7 +41,7 @@ This module ASKS it and never second-guesses it. There is deliberately no
 hand-maintained tool list: a second list would drift from the registry,
 and that drift is a security bug rather than a tidiness one.
 
-Today that yields exactly 16 read verbs. The 5 `ui` verbs are excluded
+Today that yields exactly 19 read verbs. The 5 `ui` verbs are excluded
 (an off-app caller has no UI to drive) and the 22 class-C verbs can never
 appear at any scope.
 

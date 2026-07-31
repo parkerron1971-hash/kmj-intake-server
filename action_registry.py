@@ -60,7 +60,7 @@ WHAT CLASS C DOES AND DOES NOT MEAN
   would hand out autonomy against a safety net that isn't there.
 
 DEFAULT-DENY IS WHAT MAKES A PARTIAL REGISTRY SAFE
-  All 128 verbs are classified. `UNCLASSIFIED` is empty and should stay that way,
+  All 139 verbs are classified. `UNCLASSIFIED` is empty and should stay that way,
   but it exists because "not decided yet" is a better entry than a guess.
   Every accessor below returns the *refusing* answer for a verb it does not
   know: not exposable, not autonomy-eligible, reversibility None. So an

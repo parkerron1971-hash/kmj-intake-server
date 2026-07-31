@@ -1,7 +1,7 @@
 """
 test_action_inverse.py — undo.
 
-action_registry has classified all 128 verbs by reversibility for a while,
+action_registry has classified all 139 verbs by reversibility for a while,
 and class A reads "cleanly undoable". The readiness audit found that was a
 design judgment with nothing behind it — restore_previous_site was the only
 undo a practitioner could actually press.

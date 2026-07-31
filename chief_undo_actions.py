@@ -26,8 +26,13 @@ logger = logging.getLogger("chief_undo_actions")
 
 
 def _fail(action_type: str, msg: str) -> Dict[str, Any]:
-    return {"type": action_type, "result": f"failed: {msg}",
-            "label": msg[:80], "nav": None}
+    # Capital "Failed:" — chief_of_staff._action_failed and the frontend's
+    # .toLowerCase().startsWith('failed') both key off it. The lowercase
+    # "failed:" this used to emit slipped past the audit check and let a
+    # failed undo be narrated as a success. "failed": True is the
+    # belt-and-suspenders machine signal.
+    return {"type": action_type, "result": f"Failed: {msg}",
+            "label": msg[:80], "nav": None, "failed": True}
 
 
 async def _most_recent(client, biz) -> Optional[Dict[str, Any]]:
@@ -83,8 +88,8 @@ async def handle_undo_last(client, biz, action) -> Dict[str, Any]:
         # built cleanly at the time. Reaching here means something about
         # the payload changed shape since.
         return {"type": "undo_last",
-                "result": f"can't undo “{verb}” — {action_inverse.why_not(verb)}",
-                "label": f"Can't undo {verb}", "nav": None}
+                "result": f"Failed: can't undo “{verb}” — {action_inverse.why_not(verb)}",
+                "label": f"Can't undo {verb}", "nav": None, "failed": True}
 
     handler = ACTION_HANDLERS.get(inverse.get("type"))
     if not handler:
@@ -98,10 +103,10 @@ async def handle_undo_last(client, biz, action) -> Dict[str, Any]:
         # how a practitioner ends up believing something was reversed when
         # it was not.
         return {"type": "undo_last",
-                "result": (f"couldn't undo “{verb}” — {res.get('result')}. "
+                "result": (f"Failed: couldn't undo “{verb}” — {res.get('result')}. "
                            f"Nothing changed; you can try again."),
                 "label": f"Undo failed: {verb}",
-                "nav": res.get("nav")}
+                "nav": res.get("nav"), "failed": True}
 
     await _sb(client, "PATCH", f"/chief_undo_log?id=eq.{row['id']}", {
         "status": "undone",
