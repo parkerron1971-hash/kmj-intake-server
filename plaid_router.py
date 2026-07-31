@@ -1180,6 +1180,9 @@ def _handle_transactions_update(item_id: Optional[str]) -> None:
         return
     _sync_transactions_for_item(item["item_id"], item["business_id"], token)
     plaid_reconciliation.reconcile_business(item["business_id"])
+    import event_spine
+    event_spine.emit("bank_transactions_synced", item["business_id"],
+                     {"item_id": item["item_id"]}, source="plaid_webhook")
 
 
 def _handle_item_event(item_id: Optional[str], webhook_code: str) -> None:
@@ -1201,6 +1204,17 @@ def _handle_item_event(item_id: Optional[str], webhook_code: str) -> None:
         )
     except Exception as e:
         logger.warning(f"[plaid] item status patch failed: {e}")
+    # A broken bank connection is a signal the practitioner (and Chief)
+    # must hear — stale books look identical to quiet books otherwise.
+    if status in ("re-auth-required", "revoked", "error"):
+        rows = sb_clients.sb_get_as_service(
+            f"/plaid_items?item_id=eq.{item_id}&select=business_id&limit=1") or []
+        if rows:
+            import event_spine
+            event_spine.emit("bank_connection_broken", rows[0].get("business_id"),
+                             {"item_id": item_id, "status": status,
+                              "webhook_code": webhook_code},
+                             source="plaid_webhook")
 
 
 # ═════════════════════════════════════════════════════════════════════

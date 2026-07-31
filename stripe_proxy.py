@@ -767,22 +767,19 @@ async def stripe_webhook(request: Request):
             if rows:
                 contact_name = rows[0].get("name") or contact_name
 
-        # 3) Timeline event
-        if contact_id:
-            await _sb_post(client, "/events", {
-                "business_id": business_id,
-                "contact_id": contact_id,
-                "event_type": "invoice_paid_auto",
-                "data": {
-                    "invoice_id": invoice_id,
-                    "invoice_number": invoice_number,
-                    "total": total,
-                    "payment_method": "stripe",
-                    "stripe_payment_link": payment_link,
-                    "customer_email": customer_email or None,
-                },
-                "source": "stripe_webhook",
-            })
+        # 3) Timeline event — via the spine (Rails Arc 3). Previously
+        # gated on contact_id, which silently dropped the signal for
+        # contact-less invoices; the spine emits regardless (contact
+        # attaches when known).
+        import event_spine
+        event_spine.emit("invoice_paid_auto", business_id, {
+            "invoice_id": invoice_id,
+            "invoice_number": invoice_number,
+            "total": total,
+            "payment_method": "stripe",
+            "stripe_payment_link": payment_link,
+            "customer_email": customer_email or None,
+        }, contact_id=contact_id, source="stripe_webhook")
 
         # 4) Notification
         await _sb_post(client, "/chief_notifications", {

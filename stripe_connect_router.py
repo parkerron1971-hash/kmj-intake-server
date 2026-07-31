@@ -505,6 +505,7 @@ def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
         from store_router import mark_order_paid
         mark_order_paid(source_id, payment_intent_id=pi_id, charge_id=None,
                         session=session)
+        _emit_order_paid(source_id, pi_id)
     elif source_type == "product":
         # Academy Phase 3 — a payment-link purchase of a products row.
         # When the product is linked to a course, the buyer becomes a
@@ -574,8 +575,29 @@ def _handle_payment_intent_succeeded(pi: Dict[str, Any]) -> None:
         from store_router import mark_order_paid
         mark_order_paid(source_id, payment_intent_id=pi.get("id"),
                         charge_id=charge_id, session=None)
+        _emit_order_paid(source_id, pi.get("id"))
         return
     _mark_booking_paid(source_id, payment_intent_id=pi.get("id"), charge_id=charge_id)
+
+
+def _emit_order_paid(order_id: str, payment_intent_id: Optional[str]) -> None:
+    """Spine signal for a store-order payment. Stripe delivers success
+    on two channels (checkout.session.completed AND
+    payment_intent.succeeded) — dedupe against the events table so the
+    order pays exactly one signal."""
+    import event_spine
+    already = sb_clients.sb_get_as_service(
+        f"/events?event_type=eq.order_paid&data->>order_id=eq.{order_id}"
+        f"&select=id&limit=1") or []
+    if already:
+        return
+    rows = sb_clients.sb_get_as_service(
+        f"/orders?id=eq.{order_id}&select=id,business_id,contact_id&limit=1") or []
+    if not rows:
+        return
+    event_spine.emit("order_paid", rows[0].get("business_id"),
+                     {"order_id": order_id, "payment_intent_id": payment_intent_id},
+                     contact_id=rows[0].get("contact_id"), source="stripe_webhook")
 
 
 def _handle_payment_intent_failed(pi: Dict[str, Any]) -> None:
@@ -610,7 +632,8 @@ def _mark_invoice_paid(invoice_id: str) -> None:
     """Mark an existing-system invoices row paid. Idempotent — only
     flips status when not already 'paid'."""
     rows = sb_clients.sb_get_as_service(
-        f"/invoices?id=eq.{invoice_id}&select=id,status&limit=1"
+        f"/invoices?id=eq.{invoice_id}"
+        f"&select=id,status,business_id,contact_id,invoice_number,total&limit=1"
     ) or []
     if not rows or rows[0].get("status") == "paid":
         return
@@ -619,6 +642,14 @@ def _mark_invoice_paid(invoice_id: str) -> None:
         {"status": "paid", "paid_at": _now_iso()},
     )
     logger.info(f"invoice {invoice_id[:8]} marked paid via webhook")
+    import event_spine
+    inv = rows[0]
+    event_spine.emit("invoice_paid_auto", inv.get("business_id"),
+                     {"invoice_id": invoice_id,
+                      "invoice_number": inv.get("invoice_number"),
+                      "total": float(inv.get("total") or 0),
+                      "payment_method": "stripe"},
+                     contact_id=inv.get("contact_id"), source="stripe_webhook")
 
 
 def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
@@ -632,15 +663,17 @@ def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
     """
     source_type, source_id = _metadata_source(charge)
     refunded_cents = int(charge.get("amount_refunded") or 0)
+    refund_biz: Optional[str] = None
 
     if source_type == "booking" and source_id:
         # Mirror refunded total onto the booking row. We keep it in
         # data.refunded_amount_cents so we don't need another column.
         rows = sb_clients.sb_get_as_service(
-            f"/module_entries?id=eq.{source_id}&select=data&limit=1"
+            f"/module_entries?id=eq.{source_id}&select=data,business_id&limit=1"
         ) or []
         if not rows:
             return
+        refund_biz = rows[0].get("business_id")
         data = dict(rows[0].get("data") or {})
         data["refunded_amount_cents"] = refunded_cents
         data["fully_refunded"] = bool(charge.get("refunded"))
@@ -650,6 +683,9 @@ def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
     elif source_type == "invoice" and source_id:
         # PR 3a additive columns on existing invoices: status stays
         # 'paid'; refund_amount_cents + refunded_at carry the truth.
+        rows = sb_clients.sb_get_as_service(
+            f"/invoices?id=eq.{source_id}&select=business_id&limit=1") or []
+        refund_biz = rows[0].get("business_id") if rows else None
         sb_clients.sb_patch_as_service(
             f"/invoices?id=eq.{source_id}",
             {
@@ -661,8 +697,19 @@ def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
         # Arc 27 — store orders: refund columns; status flips to
         # 'refunded' only on full refund (gl_engine reverses revenue).
         from store_router import record_order_refund
+        rows = sb_clients.sb_get_as_service(
+            f"/orders?id=eq.{source_id}&select=business_id&limit=1") or []
+        refund_biz = rows[0].get("business_id") if rows else None
         record_order_refund(source_id, refunded_cents,
                             fully=bool(charge.get("refunded")))
+
+    if refund_biz:
+        import event_spine
+        event_spine.emit("payment_refunded", refund_biz,
+                         {"source_type": source_type, "source_id": source_id,
+                          "refunded_cents": refunded_cents,
+                          "fully_refunded": bool(charge.get("refunded"))},
+                         source="stripe_webhook")
 
 
 def _handle_dispute_created(dispute: Dict[str, Any], account_id: Optional[str]) -> None:
@@ -685,7 +732,7 @@ def _mark_booking_paid(
 ) -> None:
     """Idempotent: only sets paid_at if it's currently NULL."""
     rows = sb_clients.sb_get_as_service(
-        f"/module_entries?id=eq.{booking_id}&select=id,paid_at&limit=1"
+        f"/module_entries?id=eq.{booking_id}&select=id,paid_at,business_id,contact_id&limit=1"
     ) or []
     if not rows or rows[0].get("paid_at"):
         return
@@ -698,6 +745,10 @@ def _mark_booking_paid(
         f"/module_entries?id=eq.{booking_id}", patch,
     )
     logger.info(f"booking {booking_id[:8]} marked paid via webhook")
+    import event_spine
+    event_spine.emit("booking_paid", rows[0].get("business_id"),
+                     {"booking_id": booking_id, "payment_intent_id": payment_intent_id},
+                     contact_id=rows[0].get("contact_id"), source="stripe_webhook")
 
 
 # ─── Tiny helpers ────────────────────────────────────────────────────

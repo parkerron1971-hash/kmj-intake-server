@@ -929,8 +929,20 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
                           "customer.subscription.updated",
                           "customer.subscription.deleted"):
             await _apply_subscription_state(event_type, obj, business_id)
+            if business_id:
+                import event_spine
+                event_spine.emit("subscription_updated", business_id,
+                                 {"stripe_event": event_type,
+                                  "status": obj.get("status")},
+                                 source="stripe_webhook")
         elif event_type == "invoice.payment_failed":
             await _handle_invoice_payment_failed(obj, business_id)
+            if business_id:
+                import event_spine
+                event_spine.emit("subscription_updated", business_id,
+                                 {"stripe_event": event_type,
+                                  "status": "past_due"},
+                                 source="stripe_webhook")
         elif event_type in ("invoice.payment_succeeded", "invoice.paid"):
             # Recovery: a successful payment clears past_due. (The
             # subscription.updated event also lands; this is defensive.)
@@ -949,6 +961,11 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
                         obj.get("payment_intent") or obj.get("id") or "")
                     if not ok:
                         error_msg = f"credit grant failed for session {obj.get('id')}"
+                    else:
+                        import event_spine
+                        event_spine.emit("credits_granted", business_id,
+                                         {"credit_pack": meta.get("credit_pack") or ""},
+                                         source="stripe_webhook")
                 elif not business_id:
                     error_msg = "credit_pack session missing business_id"
             # Subscription checkouts: the subsequent
@@ -964,6 +981,11 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
                     obj.get("payment_intent") or obj.get("id") or "")
                 if not ok:
                     error_msg = f"credit grant failed for session {obj.get('id')}"
+                else:
+                    import event_spine
+                    event_spine.emit("credits_granted", business_id,
+                                     {"credit_pack": meta.get("credit_pack") or ""},
+                                     source="stripe_webhook")
         else:
             logger.info(f"Ignoring unhandled event type: {event_type}")
     except HTTPException as e:
