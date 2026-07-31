@@ -1451,3 +1451,79 @@ async def platform_inbox_delete(email_id: str, user=Depends(require_owner)):
                                 detail=f"delete failed: {r.text[:200]}")
     return {"ok": True, "deleted": eid}
 
+
+def _reply_subject(subject: str) -> str:
+    """'Invoice question' -> 'Re: Invoice question'; already-Re: subjects
+    pass through untouched (no 'Re: Re:' stacking)."""
+    s = (subject or "").strip()
+    if not s:
+        return "Re: (no subject)"
+    return s if s.lower().startswith("re:") else f"Re: {s}"
+
+
+class InboxReplyBody(BaseModel):
+    body: str
+
+
+@router.post("/inbox/{email_id}/reply")
+async def platform_inbox_reply(
+    email_id: str,
+    payload: InboxReplyBody,
+    user=Depends(require_owner),
+):
+    """Reply from the address the message was sent to (kevin@, support@,
+    ...). Goes through send_via_resend, so the suppression gate applies
+    like every other platform send. The reply is appended to the row's
+    `replies` so the thread stays on the message it belongs to."""
+    from email_sender import send_via_resend
+
+    body_text = (payload.body or "").strip()
+    if not body_text:
+        raise HTTPException(status_code=400, detail="reply body is empty")
+
+    eid = _require_email_uuid(email_id)
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.get(
+            f"{SUPABASE_URL}/rest/v1/platform_emails",
+            headers=_service_headers(),
+            params={"id": f"eq.{eid}", "select": "*", "limit": "1"},
+        )
+        if r.status_code >= 400 or not r.json():
+            raise HTTPException(status_code=404, detail="email not found")
+        row = r.json()[0]
+
+    from_addr = (row.get("to_address") or "").strip().lower()
+    if "@" not in from_addr:
+        from_addr = os.environ.get("RESEND_FROM_EMAIL", "noreply@mysolutionist.app")
+    # kevin@ replies as "Kevin", support@ as "Support" — the domain is
+    # already the identity; the local part is the person.
+    from_name = from_addr.split("@", 1)[0].capitalize()
+
+    try:
+        sent = await send_via_resend(
+            to_email=row["from_email"],
+            to_name=row.get("from_name") or None,
+            from_email=from_addr,
+            from_name=from_name,
+            subject=_reply_subject(row.get("subject") or ""),
+            body=body_text,
+            reply_to=from_addr,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)[:300])
+
+    reply_entry = {
+        "body": body_text,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+        "resend_id": (sent or {}).get("id"),
+    }
+    replies = list(row.get("replies") or []) + [reply_entry]
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        await c.patch(
+            f"{SUPABASE_URL}/rest/v1/platform_emails",
+            headers=_service_headers(),
+            params={"id": f"eq.{eid}"},
+            json={"replies": replies, "read": True},
+        )
+    return {"ok": True, "reply": reply_entry, "reply_count": len(replies)}
+

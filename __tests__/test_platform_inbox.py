@@ -58,6 +58,15 @@ def test_unconfigured_domain_matches_on_local_part_alone():
         assert _match_platform_address(["support@anything.example"]) == "support@anything.example"
 
 
+def test_reply_subject_prefixes_once():
+    from platform_console import _reply_subject
+
+    assert _reply_subject("Verify your account") == "Re: Verify your account"
+    assert _reply_subject("Re: Verify your account") == "Re: Verify your account"
+    assert _reply_subject("RE: shouting") == "RE: shouting"
+    assert _reply_subject("") == "Re: (no subject)"
+
+
 def test_platform_inbox_routes_exist_and_are_owner_gated():
     from platform_console import router
 
@@ -68,6 +77,7 @@ def test_platform_inbox_routes_exist_and_are_owner_gated():
     assert "GET" in by_path.get("/platform/inbox", set())
     assert "GET" in by_path.get("/platform/inbox/{email_id}", set())
     assert "DELETE" in by_path.get("/platform/inbox/{email_id}", set())
+    assert "POST" in by_path.get("/platform/inbox/{email_id}/reply", set())
 
     # Every inbox endpoint must carry the require_owner dependency —
     # this inbox is the platform owner's mail and nobody else's.
