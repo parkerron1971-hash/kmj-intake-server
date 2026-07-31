@@ -221,6 +221,8 @@ class PublicDisplaySlot(BaseModel):
 ArchetypeEnum = Literal[
     "fallback_generic",   # render via DynamicModule + show "new archetype owed" banner
     "booking_calendar",   # C.1 vertical slice — appointment / time-slot tracking
+    "work_pipeline",      # staged work moving toward done — Matters/Jobs/Engagements
+    "event_roster",       # one occasion, many people — RSVP headcount + named roles
 ]
 
 
@@ -306,7 +308,12 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": "operate",
         "chief_can_suggest": True,
         "label": "Pipeline",
-        "operate_group": None,
+        # G03 — operate_group was None, which the sidebar's bucketer
+        # skips entirely (`if (!bucket) continue`): a materialized
+        # pipeline would have been invisible in OPERATE (dead-weight
+        # rule violation). 'work' is a case-b bucket — the sidebar
+        # creates a standalone "Work" group from OPERATE_GROUP_META.
+        "operate_group": "work",
     },
     "booking_calendar": {
         "config_surface": "build",       # services + schema config
@@ -362,10 +369,67 @@ class FallbackGenericParams(BaseModel):
     pass
 
 
+class PipelineStage(BaseModel):
+    """One stage in a work_pipeline. Mirrors the frontend PipelineStage
+    (src/core/components/archetypes/work_pipeline/types.ts). `done` stages
+    are collapsed by default in the board — a closed matter should not
+    crowd out the live ones."""
+    id: str
+    label: str
+    done: bool = False
+
+
+class WorkPipelineParams(BaseModel):
+    """Parameters for the WorkPipeline archetype — staged work moving
+    toward done (a lawyer's Matters, a contractor's Jobs, a consultant's
+    Engagements, a creative's Projects).
+
+    Every field is optional BY DESIGN — the frontend resolveParams()
+    degrades to DEFAULT_STAGES + conventional field names ('stage',
+    'title', 'contact_id', 'due_date', 'value'), so an unconfigured
+    module still renders. When a *_field IS specified, the validator
+    checks it exists in schema.fields (same discipline as
+    booking_calendar's optional field refs)."""
+    stages: Optional[List[PipelineStage]] = None
+    stage_field: Optional[str] = None      # entry.data key holding the stage id
+    title_field: Optional[str] = None      # entry.data key holding the display title
+    contact_field: Optional[str] = None    # entry.data key holding the linked contact id
+    date_field: Optional[str] = None       # entry.data key holding the date that matters
+    value_field: Optional[str] = None      # entry.data key holding the money value
+    item_noun: Optional[str] = None        # what one item is called when useTerm has nothing better
+
+
+class RosterRole(BaseModel):
+    """A named slot to fill on an event_roster occasion. Mirrors the
+    frontend RosterRole (event_roster/types.ts)."""
+    id: str
+    label: str
+    needed: int = Field(default=1, ge=1)
+
+
+class EventRosterParams(BaseModel):
+    """Parameters for the EventRoster archetype — one occasion, many
+    people. Covers headcount RSVP (counted slots via capacity_field)
+    AND named volunteer roles (roles[]); a module can use either or both.
+
+    All fields optional — frontend resolveParams() falls back to
+    conventional names ('title', 'date', 'location', 'capacity',
+    'signups'). Specified *_field refs are checked against schema.fields."""
+    title_field: Optional[str] = None
+    date_field: Optional[str] = None
+    location_field: Optional[str] = None
+    capacity_field: Optional[str] = None   # entry.data key holding the headcount limit (number)
+    signups_field: Optional[str] = None    # entry.data key holding the Signup[] array
+    roles: Optional[List[RosterRole]] = None   # named slots; empty/absent = headcount only
+    occasion_noun: Optional[str] = None    # "Service", "Event", "Gathering"
+
+
 # Validators dispatched by archetype value.
 _ARCHETYPE_PARAM_MODELS: Dict[str, type] = {
     "booking_calendar": BookingCalendarParams,
     "fallback_generic": FallbackGenericParams,
+    "work_pipeline": WorkPipelineParams,
+    "event_roster": EventRosterParams,
 }
 
 
@@ -502,6 +566,49 @@ class ModuleSpec(BaseModel):
                             f"but no offering_categories — required so the "
                             f"widget knows which offerings to source"
                         )
+
+        # work_pipeline-specific: every params field is optional (the
+        # frontend degrades to defaults), but a *specified* field ref must
+        # point at a real schema field — a dangling ref is generator drift.
+        if self.archetype == "work_pipeline":
+            field_names = {f.name for f in self.schema_.fields}
+            for k in ("stage_field", "title_field", "contact_field",
+                      "date_field", "value_field"):
+                v = self.archetype_params.get(k)
+                if v and v not in field_names:
+                    raise ValueError(
+                        f"work_pipeline {k} '{v}' is not in schema.fields "
+                        f"(have: {sorted(field_names)})"
+                    )
+            stages = self.archetype_params.get("stages") or []
+            ids = [s.get("id") for s in stages]
+            if len(ids) != len(set(ids)):
+                raise ValueError(
+                    f"work_pipeline stages have duplicate ids: {ids}"
+                )
+
+        # event_roster-specific: same discipline — specified field refs
+        # must exist; role ids must be unique. signups_field is exempt
+        # from the schema check ON PURPOSE: it names an entry.data key
+        # holding a Signup[] array that the roster UI writes directly —
+        # no FieldType can declare an array, so it never appears in
+        # schema.fields.
+        if self.archetype == "event_roster":
+            field_names = {f.name for f in self.schema_.fields}
+            for k in ("title_field", "date_field", "location_field",
+                      "capacity_field"):
+                v = self.archetype_params.get(k)
+                if v and v not in field_names:
+                    raise ValueError(
+                        f"event_roster {k} '{v}' is not in schema.fields "
+                        f"(have: {sorted(field_names)})"
+                    )
+            roles = self.archetype_params.get("roles") or []
+            role_ids = [r.get("id") for r in roles]
+            if len(role_ids) != len(set(role_ids)):
+                raise ValueError(
+                    f"event_roster roles have duplicate ids: {role_ids}"
+                )
 
         return self
 
@@ -808,19 +915,84 @@ Available archetypes:
           ]
         }
 
+  work_pipeline
+    purpose: STAGED WORK moving toward done — many items, each holding one
+      stage, moving left to right through named columns
+    when to pick: intake describes units of work that progress through
+      stages toward completion — a lawyer's matters, a contractor's jobs or
+      estimates, a consultant's engagements, a creative's projects, a
+      referral pipeline. The tell: each item belongs to one person, sits in
+      exactly one stage at a time, and "where is it?" is the daily question.
+    when NOT to pick: an occasion with people attached (that's
+      event_roster — inverted cardinality); time-slot scheduling (that's
+      booking_calendar); a plain reference list with no progression
+      (fallback_generic).
+    schema requirement: schema SHOULD contain a select field for the stage
+      (its options = the stage ids) plus whatever the vertical needs
+      (title, contact_link, date, value). default_view 'board' with
+      board_column = the stage field is the natural fit.
+    archetype_params (ALL optional — unset keys fall back to sensible
+      defaults in the UI):
+        stages — list of {"id","label","done"?} in left-to-right order;
+                 mark terminal stages done:true (they collapse by default).
+                 Use the vertical's real stage names (a lawyer: intake /
+                 active / waiting / closed; a contractor: estimate /
+                 scheduled / in-progress / invoiced).
+        stage_field — name of the select field holding the stage id
+        title_field — name of the field holding the display title
+        contact_field — name of the contact_link field
+        date_field — name of the date field that matters (due date, start)
+        value_field — name of the number field holding the money value
+        item_noun — what one item is called ("Matter", "Job", "Engagement")
+      Any *_field you set MUST name a field in schema.fields.
+
+  event_roster
+    purpose: ONE OCCASION and the MANY PEOPLE attached to it — a gathering
+      with slots to fill, counted (RSVP headcount) or named (volunteer roles)
+    when to pick: intake describes events, services, gatherings, classes or
+      meetings where the question is "who's coming / who's serving" — church
+      services with volunteer rosters, event RSVPs, workshop signups. Covers
+      headcount AND named roles in one module (a picnic has a headcount AND
+      needs three volunteers to run it).
+    when NOT to pick: staged work (work_pipeline — the inverted
+      cardinality; forcing an occasion in would produce a board where every
+      card reads "attending"); one-on-one time-slot booking
+      (booking_calendar).
+    schema requirement: schema SHOULD contain a text field for the occasion
+      title and a date field for when it happens; optionally location (text)
+      and capacity (number). Do NOT declare a schema field for the signup
+      list — signups live in entry.data as an array the roster UI manages.
+    archetype_params (ALL optional — unset keys fall back to sensible
+      defaults in the UI):
+        title_field — name of the field holding the occasion title
+        date_field — name of the date field for when it happens
+        location_field — name of the text field for where
+        capacity_field — name of the number field holding the headcount limit
+        signups_field — entry.data key for the signup array (default
+                        'signups'; NOT a schema field)
+        roles — list of {"id","label","needed"?} named slots to fill
+                (greeter, nursery, sound). Omit for pure RSVP headcount.
+        occasion_noun — what one occasion is called ("Service", "Event")
+      title/date/location/capacity refs MUST name fields in schema.fields.
+
   fallback_generic
     purpose: explicit "no archetype fits yet" — renders through the generic
       DynamicModule (list/board)
-    when to pick: ANY module whose shape doesn't fit booking_calendar
+    when to pick: ANY module whose shape doesn't fit booking_calendar, \
+work_pipeline or event_roster (e.g. a reference list, a form, a log of \
+receipts — things with no time slots, no stage progression, no attached crowd)
     schema requirement: none
     archetype_params: {}  (empty)
     archetype_fallback_reason REQUIRED: one sentence describing what \
       archetype would have fit (e.g. "needs a RewardProgress archetype for \
       counting visits toward a free service")
 
-Picking discipline: read the intake, decide if booking_calendar fits. If \
-yes, pick it and fill archetype_params from the schema fields you already \
-designed. If no, pick fallback_generic and write the archetype_fallback_reason.
+Picking discipline: read the intake, then ask in order — is it time slots \
+someone books? (booking_calendar) — is it staged work moving toward done? \
+(work_pipeline) — is it an occasion with people to count or roles to fill? \
+(event_roster). Pick the first that fits and fill archetype_params from the \
+schema fields you already designed. If none fit, pick fallback_generic and \
+write the archetype_fallback_reason.
 
 confidence: 'high' if intake is specific, 'medium' if inferred, 'low' if vague.
 
