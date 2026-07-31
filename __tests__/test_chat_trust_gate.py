@@ -369,3 +369,28 @@ def test_accept_module_spec_scope_guard_fails_closed(monkeypatch):
     assert out["result"].startswith("Failed:")
     assert cos._action_failed(out)
     assert out.get("label")
+
+
+# ─── every action module's _fail carries the machine-readable flag ────
+
+def test_all_fail_helpers_carry_failed_flag():
+    """The verification audit found two _fail helpers (bookkeeping,
+    contract) that never got the "failed": True seam — their failures
+    were narrated and audited as successes. This sweeps every
+    chief_*_actions module so a new one can't ship without the flag."""
+    import importlib, pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    mods = sorted(p.stem for p in root.glob("chief_*_actions.py"))
+    assert mods, "no chief action modules found"
+    missing = []
+    for name in mods:
+        mod = importlib.import_module(name)
+        fail = getattr(mod, "_fail", None)
+        if fail is None:
+            continue  # module has no local failure helper
+        out = fail("probe_verb", "probe message")
+        if out.get("failed") is not True and not str(
+            out.get("result", "")
+        ).lower().startswith(("failed:", "couldn't ", "error:")):
+            missing.append(name)
+    assert not missing, f"_fail without detectable failure marker: {missing}"

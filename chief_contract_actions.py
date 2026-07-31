@@ -80,7 +80,15 @@ logger = logging.getLogger("chief_contract_actions")
 
 def _fail(action_type: str, msg: str) -> Dict[str, Any]:
     logger.info(f"Action {action_type} failed: {msg}")
-    return {"type": action_type, "result": msg, "label": action_type, "nav": None}
+    # "failed": True is the machine-readable seam _action_failed reads —
+    # without it a failure here is audited and narrated as a success.
+    return {
+        "type": action_type,
+        "result": msg,
+        "label": action_type,
+        "nav": None,
+        "failed": True,
+    }
 
 
 def _nav_queue() -> Dict[str, Any]:
