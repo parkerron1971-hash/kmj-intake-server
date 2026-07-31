@@ -181,11 +181,36 @@ INVERSES: Dict[str, Inverse] = {
                        "reason": "Undo: " + str(a.get("reason") or "draw")}
                       if a.get("contact_id") and a.get("amount") else None)),
 
-    "write_off_time": Inverse(
-        "log_time",
-        "restore that written-off time",
-        lambda a, r: None),   # placeholder: needs the entry, see NOT_UNDOABLE
+    # add_testimonial's result carries the generated id, and
+    # remove_testimonial by id is an exact-match delete of one array
+    # entry — the registry's own text says "re-addable".
+    "add_testimonial": Inverse(
+        "remove_testimonial",
+        "take that testimonial back off",
+        lambda a, r: ({"type": "remove_testimonial",
+                       "testimonial_id": _first_id(r, "testimonial_id", "id")}
+                      if _first_id(r, "testimonial_id", "id") else None)),
+
+    # create_offering → archive_offering: the codebase's own delete for
+    # offerings is the archive (is_active=false, history preserved), and
+    # archive_offering is itself undoable (see its entry above) — so
+    # this undo can be undone, which is the safest kind.
+    "create_offering": Inverse(
+        "archive_offering",
+        "archive that offering again",
+        lambda a, r: ({"type": "archive_offering",
+                       "offering_id": _first_id(r, "offering_id", "id")}
+                      if _first_id(r, "offering_id", "id") else None)),
 }
+
+# S11 resolution (2026-07-31): write_off_time is GONE from INVERSES. It
+# sat in both maps — a dead placeholder whose build always returned None,
+# while NOT_UNDOABLE_REASON simultaneously refused it. The data model IS
+# deterministic (write_off flips status 'unbilled'→'written_off' and
+# nothing else), but no registered verb performs the reverse flip:
+# log_time INSERTS a new row, it does not restore the old one. Until a
+# restore verb exists in chief_of_staff (follow-up — that file is owned
+# elsewhere this wave), the honest answer is the reason map's.
 
 # Verbs whose class A status is real but whose inverse needs data nobody
 # captures. Listed EXPLICITLY so undo_last can say WHY rather than giving the
@@ -205,6 +230,31 @@ NOT_UNDOABLE_REASON: Dict[str, str] = {
     "update_practitioner_profile_field": "I'd need the previous value, and I don't keep those yet.",
     "write_off_time": "Re-opening written-off time isn't wired yet — edit the entry directly.",
     "set_business_policy": "I'd need the previous policy text, and I don't keep those yet.",
+    # ── S11 audit (2026-07-31): class-A creates REVIEWED and refused. ──
+    # Each of these was studied for an inverse; the refusal is a
+    # documented judgment, not an oversight.
+    #
+    # create_contact: the only deleting verb (delete_contact) is class C
+    # in action_registry — a HARD delete — and the undo containment law
+    # (test_no_inverse_is_a_class_c_verb) forbids reaching class C from
+    # undo. Reclassifying or adding a guarded-delete lane is an
+    # action_registry ruling, owned elsewhere this wave.
+    "create_contact": ("Removing a contact is a hard delete, and undo never "
+                       "reaches those — open the contact and use Delete there."),
+    # No delete verb exists for these creates; inventing one belongs to
+    # chief_of_staff (owned elsewhere this wave), not to undo.
+    "create_task": "There's no verb that deletes a task yet — mark it done or edit it directly.",
+    "create_goal": "There's no verb that removes a goal yet — edit it in Goals directly.",
+    "create_note": "Contact notes have no delete verb yet — the note stays on the record.",
+    # save_note rows carry no id back, and 'forget' matches by content
+    # similarity — close enough to deactivate the WRONG memory. Refused.
+    "save_note": "Notes don't come back with an id I can target safely — remove it in Notes directly.",
+    # log_time's result carries no entry id, and writing it off is not
+    # the same as it never happening.
+    "log_time": "The entry's id isn't captured, and writing it off isn't an undo — edit the entry directly.",
+    # save_email_template UPSERTS by name: undoing an update needs the
+    # previous subject/body, which nothing captures.
+    "save_email_template": "Saving over a template loses the old version, and I don't keep those yet.",
 }
 
 

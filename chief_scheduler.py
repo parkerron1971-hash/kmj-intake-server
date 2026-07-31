@@ -92,17 +92,6 @@ async def _notify_outcome(biz: Dict[str, Any], row: Dict[str, Any],
             })
         except Exception as e:
             logger.warning(f"[scheduler] activity log failed: {e}")
-        # Audit expansion (7/31) — scheduled executions land in the
-        # unified audit log alongside chat-turn actions.
-        try:
-            import audit_log
-            await asyncio.to_thread(
-                audit_log.record, biz["id"],
-                actor_type="chief", actor_id=str(owner),
-                verb=f"scheduled:{(row.get('action') or {}).get('type')}"[:80],
-                summary=title[:240], source="system")
-        except Exception:
-            pass
 
 
 async def _execute_row(row: Dict[str, Any]) -> None:
@@ -137,7 +126,12 @@ async def _execute_row(row: Dict[str, Any]) -> None:
                 async with httpx.AsyncClient() as client:
                     result = await handler(client, biz, action)
                 res_text = str((result or {}).get("result") or "")
-                ok = not res_text.lower().startswith("failed")
+                # "failed": True is the machine-readable failure seam
+                # (PR #345); the "failed…" result-text prefix is the
+                # older convention. Honor both — a failed handler that
+                # audits as ok=true is worse than no audit row.
+                ok = not ((result or {}).get("failed") is True
+                          or res_text.lower().startswith("failed"))
                 detail = (str((result or {}).get("label") or "") or res_text
                           or "done")[:240]
             except Exception as e:
@@ -154,6 +148,28 @@ async def _execute_row(row: Dict[str, Any]) -> None:
             patch["last_error"] = detail[:300]
     await asyncio.to_thread(sb_clients.sb_patch_as_service,
         f"/chief_scheduled_actions?id=eq.{rid}", patch)
+
+    # S11 audit coverage — EVERY scheduled execution lands in the
+    # unified audit log with the ok/failed truth, not just the ones
+    # that also managed to notify. actor_type must pass the table's
+    # CHECK ('user','chief','agent','system'), so the scheduler's
+    # identity rides actor_id + source. Fail-soft by construction:
+    # audit_log.record never raises, and a False return is logged.
+    try:
+        import audit_log
+        wrote = await asyncio.to_thread(
+            audit_log.record, biz["id"],
+            actor_type="system", actor_id="scheduler",
+            verb=(atype or "unknown")[:80],
+            ok=ok, error=(detail[:500] if not ok else None),
+            summary=(str(row.get("label") or "") or detail)[:240],
+            payload={"scheduled_action_id": str(rid),
+                     "recurrence": recurrence or None},
+            source="scheduler")
+        if not wrote:
+            logger.warning(f"[scheduler] audit write failed for {atype} ({str(rid)[:8]})")
+    except Exception as e:
+        logger.warning(f"[scheduler] audit write failed for {atype}: {e}")
 
     await _notify_outcome(biz, row, ok, detail)
     logger.info(f"[scheduler] {('ok' if ok else 'FAIL')} {atype} "

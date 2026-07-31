@@ -54,19 +54,68 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # for deletion (children before parents where tables reference each
 # other). Missing tables (404) are skipped silently so this list can be
 # a superset of any one deployment's schema.
+#
+# S11 trust audit (2026-07-31): reconciled against the live schema —
+# the list had drifted badly since it was written (time_entries,
+# customer_ledger, campaigns, the whole GL cluster, the audit/undo
+# logs and every 7/2x-era table were missing, so export was incomplete
+# and deletion left orphans). "What we delete is what we export" is
+# the module's contract; keep BOTH honest by keeping THIS list honest.
+#
+# Deliberately EXCLUDED (checked, not forgotten):
+#   stripe_webhook_events   — platform-global Stripe event-dedup log,
+#                             no business_id column.
+#   site_events             — anonymous marketing-site traffic, no
+#                             business_id by design (privacy).
+#   vertical_knowledge      — Feed 2 cross-account learning; has NO
+#                             business_id ON PURPOSE (k-anonymity).
+#   usage_* / api_usage / product_events / credit grants internals —
+#                             platform metering + billing records the
+#                             platform must retain for its own books.
+#   email_suppressions      — recipient-keyed deliverability protection;
+#                             deleting it would let a deleted business's
+#                             bounces be re-mailed by the platform.
+#   entity_groups           — owner-keyed (owner_id), no business_id
+#                             column; consolidation groups die with the
+#                             auth user, not with one business.
+#   mcp_oauth_* / referrals / waitlist / scheduler_lease / fx_rates /
+#   platform_* / inference_cache — platform- or user-keyed, not
+#                             business children.
 BUSINESS_CHILD_TABLES: List[str] = [
     "events",
     "agent_queue",
+    "agent_runs",             # MCP agent access trail (business-scoped)
+    "mcp_tokens",             # business-scoped agent tokens
     "chief_memories",
     "chief_conversations",
     "chief_activity",
     "chief_proposals",
+    "chief_bookkeeping_proposals",
+    "chief_learning_signals",
+    "chief_patterns",
+    "chief_playbooks",
+    "chief_templates",
+    "chief_actions",
+    "chief_suggestions",
+    "chief_notifications",
     "chief_jobs",             # beta-readiness audit: was surviving deletion
     "chief_scheduled_actions",
     "chief_insights",
+    "chief_undo_log",
+    "audit_log",              # service-role delete on erasure is the ONE
+                              # sanctioned removal path (GDPR beats
+                              # append-only; RLS has no delete policy,
+                              # the service role bypasses RLS)
+    "insights",
     "notifications",
     "sessions",
     "tasks",
+    # Rules/automation — runs reference their rule.
+    "rule_runs",
+    "practitioner_rules",
+    # Campaigns — sends reference campaigns AND contacts.
+    "campaign_sends",
+    "campaigns",
     # Message content — MUST precede the thread/parent tables below so
     # their NO-ACTION foreign keys don't 409 the delete mid-way.
     "sms_messages",
@@ -75,13 +124,20 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "sms_bindings",
     "sms_opt_outs",
     "email_replies",
+    # Money ABOUT the business — ledgers before the rows they cite.
+    "customer_ledger",        # references contacts, invoices, offerings
+    "time_entries",           # references contacts
     "invoices",
     "bills",
     "orders",
     "order_items",
     "credit_ledger",
+    "business_expenses",
+    "business_budgets",
+    "category_rules",
     "offerings",
     "documents",
+    "esign_documents",
     "foundation_documents",
     "projects",
     "products",
@@ -90,7 +146,12 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "module_records",
     "module_entries",
     "module_specs",
+    # Restricted (clinical/giving) class — entries + their access trail.
+    "restricted_module_access_log",
+    "restricted_module_entries",
     "business_sites",
+    "site_chat_history",
+    "site_content_overrides",
     "business_profiles",
     "business_customers",
     "social_accounts",
@@ -98,19 +159,48 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "design_rationales",
     "design_feedback",
     "goals",
+    "growth_milestones",
+    "growth_objectives",
+    "strategy_tracks",
     "support_tickets",
     "workflows",
     "workflow_definitions",
+    # Academy — lessons/enrollments reference courses.
+    "academy_lessons",
+    "academy_enrollments",
+    "academy_courses",
     "bank_accounts",
     "bank_transactions",
+    "plaid_accounts",
     "plaid_items",
     "plaid_transactions",
     "reconciliations",
+    "connectors",
+    # GL cluster — queue/alarms/pushed-entries cite journal entries, so
+    # they go first; periods and the chart go after the entries that
+    # cite them; the QuickBooks connection row goes last of the cluster.
+    "gl_sync_queue",
+    "gl_divergence_alarms",
+    "gl_admin_actions",
+    "quickbooks_pushed_entries",
     "journal_entries",
     "ledger_entries",
     "ledger_accounts",
+    "period_edit_overrides",  # references accounting_periods
+    "accounting_periods",
+    "coa_external_mappings",  # references chart_of_accounts rows
+    "chart_of_accounts",
+    "quickbooks_connections",
+    # Payroll/contractors — transfers reference contractors.
+    "outbound_transfers",
+    "payroll_interest",
+    "contractors",
     "email_threads",
     "sms_threads",
+    # Team seats + invites die with the business.
+    "business_users",
+    "business_collaborators",
+    "invite_tokens",
     "contacts",          # after the tables that reference contacts
 ]
 
@@ -122,8 +212,11 @@ USER_CHILD_TABLES: List[str] = [
 ]
 
 # Supabase Storage buckets holding business-scoped files (logos, brand,
-# site assets). Objects are stored under a "{business_id}/…" prefix.
-STORAGE_BUCKETS: List[str] = ["business-assets"]
+# site assets, receipt photos). Objects are stored under a
+# "{business_id}/…" prefix; business-documents nests one level deeper
+# ("{business_id}/receipts/…"), which _delete_storage_objects handles
+# by descending one folder level.
+STORAGE_BUCKETS: List[str] = ["business-assets", "business-documents"]
 
 
 def _service_headers() -> Dict[str, str]:
@@ -216,7 +309,26 @@ async def _delete_storage_objects(client: httpx.AsyncClient, business_id: str) -
             )
             if lr.status_code >= 400:
                 continue
-            names = [f"{business_id}/{o['name']}" for o in (lr.json() or []) if o.get("name")]
+            names: List[str] = []
+            for o in (lr.json() or []):
+                if not o.get("name"):
+                    continue
+                # Folder entries come back with no id (receipts live at
+                # "{business_id}/receipts/…") — descend one level so the
+                # files inside don't survive the deletion.
+                if o.get("id") is None:
+                    sub = await client.post(
+                        f"{SUPABASE_URL}/storage/v1/object/list/{bucket}",
+                        headers={**_service_headers(), "Content-Type": "application/json"},
+                        json={"prefix": f"{business_id}/{o['name']}/", "limit": 1000},
+                    )
+                    if sub.status_code < 400:
+                        names.extend(
+                            f"{business_id}/{o['name']}/{s['name']}"
+                            for s in (sub.json() or [])
+                            if s.get("name") and s.get("id") is not None)
+                else:
+                    names.append(f"{business_id}/{o['name']}")
             if not names:
                 continue
             dr = await client.request(
