@@ -58,9 +58,20 @@ def _client_id() -> str:
 
 
 def _webhook_secret() -> str:
-    ws = os.environ.get("STRIPE_WEBHOOK_SECRET") or ""
+    # The Connect endpoint carries its own Stripe signing secret — every
+    # registered endpoint gets a distinct whsec_. STRIPE_WEBHOOK_SECRET
+    # stays the platform-account secret (/billing/webhook reads it
+    # directly), so the fallback keeps a single-endpoint setup working
+    # while a two-endpoint setup sets both vars.
+    ws = (
+        os.environ.get("STRIPE_CONNECT_WEBHOOK_SECRET")
+        or os.environ.get("STRIPE_WEBHOOK_SECRET")
+        or ""
+    )
     if not ws:
-        raise RuntimeError("STRIPE_WEBHOOK_SECRET is not configured")
+        raise RuntimeError(
+            "STRIPE_CONNECT_WEBHOOK_SECRET / STRIPE_WEBHOOK_SECRET is not configured"
+        )
     return ws
 
 
