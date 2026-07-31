@@ -396,6 +396,9 @@ class WorkPipelineParams(BaseModel):
     contact_field: Optional[str] = None    # entry.data key holding the linked contact id
     date_field: Optional[str] = None       # entry.data key holding the date that matters
     value_field: Optional[str] = None      # entry.data key holding the money value
+    location_field: Optional[str] = None   # entry.data key holding WHERE the work happens
+                                           # (site address for a contractor's Job, venue for
+                                           # an on-location shoot) — renders as a map link
     item_noun: Optional[str] = None        # what one item is called when useTerm has nothing better
 
 
@@ -573,7 +576,7 @@ class ModuleSpec(BaseModel):
         if self.archetype == "work_pipeline":
             field_names = {f.name for f in self.schema_.fields}
             for k in ("stage_field", "title_field", "contact_field",
-                      "date_field", "value_field"):
+                      "date_field", "value_field", "location_field"):
                 v = self.archetype_params.get(k)
                 if v and v not in field_names:
                     raise ValueError(
@@ -923,14 +926,18 @@ Available archetypes:
       estimates, a consultant's engagements, a creative's projects, a
       referral pipeline. The tell: each item belongs to one person, sits in
       exactly one stage at a time, and "where is it?" is the daily question.
+      For SITE-BASED work (a contractor's jobs, on-location shoots, home
+      visits) the item also has a PLACE — include a text field for the site
+      address and point location_field at it so each card links to a map.
     when NOT to pick: an occasion with people attached (that's
       event_roster — inverted cardinality); time-slot scheduling (that's
       booking_calendar); a plain reference list with no progression
       (fallback_generic).
     schema requirement: schema SHOULD contain a select field for the stage
       (its options = the stage ids) plus whatever the vertical needs
-      (title, contact_link, date, value). default_view 'board' with
-      board_column = the stage field is the natural fit.
+      (title, contact_link, date, value, and a text field for the site
+      address when the work happens at a location). default_view 'board'
+      with board_column = the stage field is the natural fit.
     archetype_params (ALL optional — unset keys fall back to sensible
       defaults in the UI):
         stages — list of {"id","label","done"?} in left-to-right order;
@@ -943,6 +950,11 @@ Available archetypes:
         contact_field — name of the contact_link field
         date_field — name of the date field that matters (due date, start)
         value_field — name of the number field holding the money value
+        location_field — name of the text field holding WHERE the work
+                 happens (site address / venue). Set it for site-based
+                 work — contractor jobs, on-location shoots, home visits;
+                 the card renders it as a tappable map link. Omit when the
+                 work has no meaningful place.
         item_noun — what one item is called ("Matter", "Job", "Engagement")
       Any *_field you set MUST name a field in schema.fields.
 

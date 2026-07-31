@@ -309,6 +309,18 @@ def compute_slots(
     # Booking intervals (already aware UTC)
     booked = _booking_intervals(existing_bookings or [])
 
+    # Arrival windows (contractor scheduling): when the business quotes
+    # windows, every emitted slot CARRIES the window so the widget can
+    # render "Arrives between 9:00 and 12:00" instead of an exact-time
+    # promise. The slot math itself is deliberately unchanged — a
+    # windowed slot still occupies [start, start+duration) for fit and
+    # overlap purposes (see availability.BusinessAvailability's
+    # double-book semantics note). Window-start density is the existing
+    # slot_granularity_min knob (a contractor wanting 8-11 / 9-12 / 10-1
+    # sets granularity 60). No window set → no key emitted, so plain
+    # businesses' slot payloads stay byte-identical.
+    arrival_window_min = av.arrival_window_min or None
+
     # Open-default window for emission
     open_start_hr, open_end_hr = (open_default_window or (0, 24))
     is_open = is_open_default(av)
@@ -358,11 +370,14 @@ def compute_slots(
             if conflict:
                 continue
 
-            out.append({
+            slot: Dict[str, Any] = {
                 "start_utc": slot_start_utc.isoformat(),
                 "start_local": slot_start.replace(tzinfo=None).isoformat(),
                 "duration_min": offering_duration_min,
-            })
+            }
+            if arrival_window_min:
+                slot["arrival_window_min"] = arrival_window_min
+            out.append(slot)
 
     return out
 

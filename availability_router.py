@@ -198,7 +198,7 @@ def get_available_slots(
         to_date=td,
     )
 
-    return {
+    out = {
         "ok": True,
         "business_id": business_id,
         "offering_id": offering_id,
@@ -209,6 +209,12 @@ def get_available_slots(
         "to": td.isoformat(),
         "slots": slots,
     }
+    # Arrival windows — key present only when the business quotes windows,
+    # so plain businesses' responses stay byte-identical. Each slot in
+    # `slots` also carries arrival_window_min (engine stamps it).
+    if av.arrival_window_min:
+        out["arrival_window_min"] = av.arrival_window_min
+    return out
 
 
 def _is_open_default_dict(raw: Optional[dict]) -> bool:
