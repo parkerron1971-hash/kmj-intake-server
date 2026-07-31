@@ -332,6 +332,7 @@ async def stripe_webhook(request: Request) -> JSONResponse:
       invoice.payment_failed         — mirror Stripe invoice -> local
       charge.refunded                — record refund + flip flag
       charge.dispute.created         — populate stripe_disputes_cache
+      customer.subscription.deleted  — recurring gift ended (giving)
 
     Idempotency: each event lands as one row in stripe_webhook_events
     keyed by event.id. If the row already exists with processed_ok=true,
@@ -402,6 +403,8 @@ async def stripe_webhook(request: Request) -> JSONResponse:
             _handle_invoice_failed(obj)
         elif evt_type == "charge.refunded":
             _handle_charge_refunded(obj)
+        elif evt_type == "customer.subscription.deleted":
+            _handle_subscription_deleted(obj)
         elif evt_type == "charge.dispute.created":
             _handle_dispute_created(obj, account_id)
         else:
@@ -519,6 +522,14 @@ def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
         # When the product is linked to a course, the buyer becomes a
         # contact (find-or-create on email) and is enrolled automatically.
         _handle_product_purchase(source_id, session)
+    elif source_type == "gift":
+        # Online giving — one-time gifts record here as a PAID invoices
+        # row (statements / donor report / 990 all read paid invoices).
+        # Subscription-mode sessions are a deliberate no-op: every cycle
+        # INCLUDING the first arrives as invoice.paid and records there,
+        # so the same dollar can never post twice.
+        from giving_router import record_gift_from_session
+        record_gift_from_session(session)
 
 
 def _handle_product_purchase(product_id: str, session: Dict[str, Any]) -> None:
@@ -632,11 +643,22 @@ def _handle_payment_intent_failed(pi: Dict[str, Any]) -> None:
 
 
 def _handle_invoice_paid(inv: Dict[str, Any]) -> None:
-    """invoice.paid event from Stripe. PR 3a ruling: Solutionist's
-    canonical invoicing path uses Payment Links via stripe_proxy,
-    not Stripe-API Invoices. We don't expect this event in the
-    current architecture; logged for visibility in case a future
-    flow starts using it."""
+    """invoice.paid event from Stripe.
+
+    Online giving: a monthly gift subscription's cycles arrive HERE (the
+    only flow that intentionally uses Stripe-API invoices). The
+    subscription's metadata rides in invoice.subscription_details
+    .metadata — when it says source_type='gift', the cycle records as a
+    paid local invoice (record_gift_from_cycle; idempotent by
+    GIVE-<stripe invoice id> number).
+
+    Everything else keeps the PR 3a ruling: Solutionist's canonical
+    invoicing path uses Payment Links via stripe_proxy, not Stripe-API
+    Invoices — logged for visibility only."""
+    from giving_router import gift_metadata_from_stripe_invoice, record_gift_from_cycle
+    if gift_metadata_from_stripe_invoice(inv).get("source_type") == "gift":
+        record_gift_from_cycle(inv)
+        return
     _, source_id = _metadata_source(inv)
     logger.info(
         f"invoice.paid id={inv.get('id')} source_id={source_id} "
@@ -767,6 +789,28 @@ def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
         refund_biz = rows[0].get("business_id") if rows else None
         record_order_refund(source_id, refunded_cents,
                             fully=bool(charge.get("refunded")))
+    elif source_type == "gift":
+        # Online giving — a refunded gift adjusts the SAME columns the
+        # giving surfaces already read (giving_statements._net_amount
+        # subtracts refund_amount_cents; donor report mirrors it). The
+        # local invoice is keyed GIVE-<stripe ref>: the charge's
+        # payment_intent for one-time gifts, its Stripe invoice id for
+        # subscription cycles — try both.
+        for ref in (charge.get("payment_intent"), charge.get("invoice")):
+            if not ref:
+                continue
+            from urllib.parse import quote as _q
+            rows = sb_clients.sb_get_as_service(
+                f"/invoices?invoice_number=eq.{_q(f'GIVE-{ref}', safe='')}"
+                f"&select=id,business_id&limit=1") or []
+            if rows:
+                refund_biz = rows[0].get("business_id")
+                sb_clients.sb_patch_as_service(
+                    f"/invoices?id=eq.{rows[0]['id']}",
+                    {"refund_amount_cents": refunded_cents,
+                     "refunded_at": _now_iso()},
+                )
+                break
 
     if refund_biz:
         import event_spine
@@ -775,6 +819,46 @@ def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
                           "refunded_cents": refunded_cents,
                           "fully_refunded": bool(charge.get("refunded"))},
                          source="stripe_webhook")
+
+
+def _handle_subscription_deleted(sub: Dict[str, Any]) -> None:
+    """customer.subscription.deleted — for gift subscriptions, tell the
+    operator gracefully. Nothing to unwind: past cycles are real gifts
+    and stay on the books; there simply won't be another invoice.paid.
+    Non-gift subscriptions: logged only (nothing else creates
+    subscriptions on connected accounts today)."""
+    md = sub.get("metadata") or {}
+    if md.get("source_type") != "gift":
+        logger.info(f"subscription.deleted {sub.get('id')} (not a gift — logged only)")
+        return
+    business_id = md.get("business_id")
+    amount = 0.0
+    try:
+        items = ((sub.get("items") or {}).get("data") or [])
+        if items:
+            amount = float(((items[0].get("price") or {}).get("unit_amount") or 0)) / 100.0
+    except Exception:
+        amount = 0.0
+    logger.info(f"recurring gift ended sub={sub.get('id')} biz={business_id}")
+    if not business_id:
+        return
+    try:
+        from giving_router import fund_label
+        label = fund_label(md.get("fund"))
+        sb_clients.sb_post_as_service("/chief_notifications", {
+            "business_id": business_id,
+            "type": "info",
+            "title": "A recurring gift ended",
+            # Sensitivity: no giver name — individual giving stays on
+            # the Donors report + statements surfaces.
+            "body": (f"A monthly gift{f' of ${amount:,.2f}' if amount else ''} "
+                     f"to the {label} was cancelled. Past gifts stay on the books."),
+            "status": "unread",
+            "data": {"kind": "recurring_gift_ended",
+                     "subscription_id": sub.get("id"), "fund": md.get("fund")},
+        })
+    except Exception as e:
+        logger.warning(f"recurring-gift-ended notification failed (fail-soft): {e}")
 
 
 def _handle_dispute_created(dispute: Dict[str, Any], account_id: Optional[str]) -> None:

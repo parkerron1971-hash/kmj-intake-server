@@ -5051,6 +5051,48 @@ async def _serve_booking_page(client, biz_id: Optional[str], slug: str) -> HTMLR
     )
 
 
+async def _serve_give_page(client, biz_id: Optional[str], slug: str) -> HTMLResponse:
+    """Online giving — render the public give page at
+    https://<slug>.mysolutionist.app/give (mirrors _serve_booking_page).
+
+    Gated hard: only a nonprofit-family business (vertical_family
+    .is_nonprofit_like) with settings.giving.enabled AND a connected
+    Stripe account gets the live page; everyone else gets a branded
+    404-status "not available" page. The renderer lives in
+    giving_router.py — pure + unit-tested, same split as
+    booking_page_renderer."""
+    if not biz_id:
+        raise HTTPException(404, "business not found")
+    biz_rows = await _sb_service(
+        client,
+        f"/businesses?id=eq.{biz_id}"
+        f"&select=id,name,type,settings,stripe_account_id&limit=1",
+    )
+    if not biz_rows:
+        raise HTTPException(404, "business not found")
+    business = biz_rows[0]
+    canonical = f"https://{slug}.mysolutionist.app/give"
+
+    from giving_router import (
+        giving_is_active,
+        render_give_page,
+        render_giving_unavailable_page,
+    )
+
+    if not giving_is_active(business):
+        html = render_giving_unavailable_page(business, canonical)
+        return HTMLResponse(
+            content=html, status_code=404, media_type="text/html",
+            headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
+        )
+
+    html = render_give_page(business, canonical, slug, api_origin=_EMBED_ORIGIN)
+    return HTMLResponse(
+        content=html, media_type="text/html",
+        headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
+    )
+
+
 async def _render_offline_page(client: httpx.AsyncClient,
                                biz_id: Optional[str]) -> HTMLResponse:
     """A calm, branded 'temporarily offline' page shown while the practitioner
@@ -5775,6 +5817,10 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         normalized_path = path.rstrip("/") or "/"
         if normalized_path == "/book":
             return await _serve_booking_page(client, biz_id, slug)
+        # Online giving — /give serves the hosted give page (same
+        # always-wins sub-path contract as /book).
+        if normalized_path == "/give":
+            return await _serve_give_page(client, biz_id, slug)
         # ─── Academy Phase 4 — /academy catalog + course pages ─────
         if normalized_path == "/academy" or normalized_path.startswith("/academy/"):
             return await _serve_academy(client, biz_id, normalized_path, standalone=False)
@@ -5852,6 +5898,10 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         _norm = path.rstrip("/") or "/"
         if _norm == "/academy" or _norm.startswith("/academy/"):
             return await _serve_academy(client, biz_id, _norm, standalone=False)
+        # Online giving works on custom domains too — a church that
+        # bought its own domain must not lose /give.
+        if _norm == "/give":
+            return await _serve_give_page(client, biz_id, slug)
 
         if _use_smart_sites(site) and biz_id:
             products = await _sb(client,

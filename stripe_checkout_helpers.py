@@ -32,8 +32,11 @@ STRIPE_API_BASE = "https://api.stripe.com/v1"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=15.0, pool=10.0)
 
 # Closed enum for source_type. Enforced at this seam so misspellings
-# can't reach Stripe.
-ALLOWED_SOURCE_TYPES = {"booking", "consultation", "invoice", "manual", "order"}
+# can't reach Stripe. 'gift' = online giving (giving_router) — the
+# webhook routes it to record_gift_* instead of the invoice/booking
+# markers.
+ALLOWED_SOURCE_TYPES = {"booking", "consultation", "invoice", "manual", "order",
+                        "gift"}
 
 
 def _secret_key() -> str:
@@ -287,6 +290,142 @@ async def create_booking_checkout(
         extra_metadata=parts["extra_metadata"],
         setup_future_usage=parts["setup_future_usage"],
     )
+
+
+def _giving_checkout_form(
+    *,
+    amount_cents: int,
+    fund_display: str,
+    monthly: bool,
+    success_url: str,
+    cancel_url: str,
+    gift_id: str,
+    business_id: str,
+    fund: str,
+    fund_kind: str,
+    giver_name: Optional[str] = None,
+    giver_email: Optional[str] = None,
+    currency: str = "usd",
+) -> Dict[str, Any]:
+    """The Checkout-Session form for a gift. Pure so tests can pin the
+    metadata + mode contract without touching Stripe (same reason
+    _checkout_session_form / _invoice_link_form exist).
+
+    One-time (monthly=False): mode=payment; metadata mirrored onto the
+      payment intent via payment_intent_data so charge-level events
+      (refunds) resolve back to the gift.
+    Monthly (monthly=True): mode=subscription with an INLINE recurring
+      price (price_data + recurring[interval]=month) on the connected
+      account — no pre-created Price objects to manage. Stripe rejects
+      payment_intent_data in subscription mode, so attribution rides
+      subscription_data[metadata] instead: Stripe copies it onto the
+      Subscription and mirrors it into every cycle's
+      invoice.subscription_details.metadata — which is exactly where the
+      webhook's record_gift_from_cycle reads it. That mirror IS the
+      linkage; no linkage table exists on purpose.
+
+    Metadata contract (webhook + Charges tab parse these):
+      source_type='gift', source_id=<minted gift uuid>, business_id,
+      fund, fund_kind ('restricted'|'general'), frequency, giver_name?,
+      giver_email?
+    """
+    amount_cents = int(amount_cents or 0)
+    if amount_cents <= 0:
+        raise ValueError("amount_cents must be positive")
+    if not gift_id or not business_id:
+        raise ValueError("gift_id and business_id required")
+    if fund_kind not in ("restricted", "general"):
+        raise ValueError("fund_kind must be 'restricted' or 'general'")
+
+    metadata: Dict[str, Any] = {
+        "source_type": "gift",
+        "source_id": gift_id,
+        "business_id": business_id,
+        "fund": fund,
+        "fund_kind": fund_kind,
+        "frequency": "monthly" if monthly else "once",
+    }
+    if giver_name:
+        metadata["giver_name"] = giver_name[:120]
+    if giver_email:
+        metadata["giver_email"] = giver_email[:200]
+
+    form: Dict[str, Any] = {
+        "mode": "subscription" if monthly else "payment",
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+    }
+    for k, v in metadata.items():
+        form[f"metadata[{k}]"] = v
+        if monthly:
+            form[f"subscription_data[metadata][{k}]"] = v
+        else:
+            form[f"payment_intent_data[metadata][{k}]"] = v
+    if giver_email:
+        form["customer_email"] = giver_email
+
+    name = (fund_display or "General Fund").strip() or "General Fund"
+    form["line_items[0][quantity]"] = 1
+    form["line_items[0][price_data][currency]"] = (currency or "usd").lower()
+    form["line_items[0][price_data][product_data][name]"] = f"Gift — {name}"
+    form["line_items[0][price_data][unit_amount]"] = amount_cents
+    if monthly:
+        form["line_items[0][price_data][recurring][interval]"] = "month"
+    return form
+
+
+async def create_giving_checkout(
+    *,
+    stripe_account_id: str,
+    gift_id: str,
+    business_id: str,
+    amount_cents: int,
+    fund: str,
+    fund_label: str,
+    fund_kind: str,
+    monthly: bool,
+    giver_name: Optional[str],
+    giver_email: Optional[str],
+    success_url: str,
+    cancel_url: str,
+    currency: str = "usd",
+) -> Dict[str, Any]:
+    """Create the gift Checkout Session on the connected account.
+    Returns the Stripe session dict (key fields: id, url). Raises
+    RuntimeError on Stripe error (same contract as
+    create_checkout_session)."""
+    if not stripe_account_id:
+        raise ValueError("stripe_account_id required")
+    form = _giving_checkout_form(
+        amount_cents=amount_cents,
+        fund_display=fund_label,
+        monthly=monthly,
+        success_url=success_url,
+        cancel_url=cancel_url,
+        gift_id=gift_id,
+        business_id=business_id,
+        fund=fund,
+        fund_kind=fund_kind,
+        giver_name=giver_name,
+        giver_email=giver_email,
+        currency=currency,
+    )
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        resp = await client.post(
+            f"{STRIPE_API_BASE}/checkout/sessions",
+            auth=(_secret_key(), ""),
+            headers={"Stripe-Account": stripe_account_id},
+            data=form,
+        )
+    if resp.status_code >= 400:
+        logger.warning(
+            f"create_giving_checkout failed: {resp.status_code} {resp.text[:300]}"
+        )
+        raise RuntimeError(
+            f"stripe giving checkout create failed ({resp.status_code}): "
+            f"{resp.text[:200]}"
+        )
+    return resp.json()
 
 
 def _invoice_link_form(

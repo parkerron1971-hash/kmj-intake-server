@@ -464,6 +464,18 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "url": booking_url_for_site(site) if (site and slug) else "",
     }
 
+    # Online giving — same connection pattern as booking: composed sites
+    # for ministries/nonprofits link the hosted give page. Enabled only
+    # when the give surface is actually live (nonprofit family + operator
+    # enabled + Stripe connected) so no composed CTA can dead-end.
+    giving = {"enabled": False, "url": ""}
+    try:
+        from giving_router import give_url_for_site, giving_is_active
+        if site and slug and giving_is_active(biz):
+            giving = {"enabled": True, "url": give_url_for_site(site)}
+    except Exception as e:
+        logger.info(f"[composer] giving connection skipped: {e}")
+
     # Only real dict rows the owner left visible reach composed sites —
     # hidden quotes (show_on_website=False) must not render, inflate the
     # statband count, or pad the LLM prompt; legacy string entries are
@@ -738,6 +750,7 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "faq": faq_rows,
         "business_picture": business_picture,
         "booking": booking,
+        "giving": giving,
         "public_modules": _fetch_public_modules(business_id),
         "contact": contact,
         "footer": bundle.get("footer") or {},

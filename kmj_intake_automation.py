@@ -205,6 +205,11 @@ import booking_series; app.include_router(booking_series.router)  # weekly serie
 # Registered BEFORE public_site_router so its /booking-page/... routes
 # match before the public_site `/{path:path}` catch-all.
 app.include_router(booking_page_router)
+# Online giving (ministry/nonprofit) — owner config (/giving/...) + the
+# anonymous checkout (/public/giving/...). Same discipline: BEFORE
+# public_site_router so nothing falls into the subdomain catch-all.
+from giving_router import router as giving_router
+app.include_router(giving_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
