@@ -210,6 +210,12 @@ app.include_router(booking_page_router)
 # public_site_router so nothing falls into the subdomain catch-all.
 from giving_router import router as giving_router
 app.include_router(giving_router)
+# Public event RSVP (event_roster modules) — owner config
+# (/events-public/...) + the anonymous signup (/public/events/...).
+# Same discipline: BEFORE public_site_router so nothing falls into the
+# subdomain catch-all.
+from events_rsvp_router import router as events_rsvp_router
+app.include_router(events_rsvp_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
