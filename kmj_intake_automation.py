@@ -230,6 +230,10 @@ app.include_router(chief_bookkeeping_router)
 # Phase H.3a — Reports suite (P&L, AR Aging, Cash Flow, Balance Sheet)
 from reports_router import router as reports_router
 app.include_router(reports_router)
+# S11 close-out — approve/dismiss agent_queue drafts through the action
+# layer (manager+ seats, audit_log rows) instead of client-side PATCHes
+from approvals_router import router as approvals_router
+app.include_router(approvals_router)
 # Balance surface (2026-07-31) — the drawdown ledger's HTTP layer
 from customer_balances_router import router as customer_balances_router
 app.include_router(customer_balances_router)
