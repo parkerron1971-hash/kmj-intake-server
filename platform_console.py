@@ -1353,3 +1353,101 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
         "usage":         usage,
         "snapshot_keys": list(snapshot.keys()),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PLATFORM INBOX — mail for the platform itself (platform_emails)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# /email/inbound routes mail addressed to kevin@/support@/... (and any
+# otherwise-unresolved mail, flagged catchall) into platform_emails.
+# These endpoints are Mission Control's read side. Service-role reads —
+# the table deliberately has no PostgREST policies.
+
+
+def _require_email_uuid(email_id: str) -> str:
+    """platform_emails ids are uuids; reject anything else before it
+    reaches a PostgREST filter string."""
+    import uuid as _uuid
+    try:
+        return str(_uuid.UUID(email_id))
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="invalid email id")
+
+
+@router.get("/inbox")
+async def platform_inbox_list(
+    limit: int = 50,
+    unread_only: bool = False,
+    user=Depends(require_owner),
+):
+    """List platform inbox mail, newest first, plus the unread count."""
+    limit = min(max(limit, 1), 200)
+    q = ("/platform_emails"
+         "?select=id,to_address,from_email,from_name,subject,read,catchall,received_at"
+         f"&order=received_at.desc&limit={limit}")
+    if unread_only:
+        q += "&read=eq.false"
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.get(f"{SUPABASE_URL}/rest/v1{q}", headers=_service_headers())
+        if r.status_code >= 400:
+            raise HTTPException(status_code=502,
+                                detail=f"inbox read failed: {r.text[:200]}")
+        rows = r.json()
+        unread = 0
+        try:
+            hr = await c.head(
+                f"{SUPABASE_URL}/rest/v1/platform_emails",
+                headers={**_service_headers(), "Prefer": "count=exact", "Range": "0-0"},
+                params={"read": "eq.false"},
+            )
+            cr = hr.headers.get("content-range", "")
+            last = cr.split("/")[-1] if "/" in cr else "0"
+            unread = int(last) if last and last != "*" else 0
+        except Exception:
+            pass
+    return {"emails": rows, "unread": unread}
+
+
+@router.get("/inbox/{email_id}")
+async def platform_inbox_read(email_id: str, user=Depends(require_owner)):
+    """Full message including body_html; opening marks it read."""
+    eid = _require_email_uuid(email_id)
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.get(
+            f"{SUPABASE_URL}/rest/v1/platform_emails",
+            headers=_service_headers(),
+            params={"id": f"eq.{eid}", "select": "*", "limit": "1"},
+        )
+        if r.status_code >= 400 or not r.json():
+            raise HTTPException(status_code=404, detail="email not found")
+        row = r.json()[0]
+        if not row.get("read"):
+            try:
+                await c.patch(
+                    f"{SUPABASE_URL}/rest/v1/platform_emails",
+                    headers=_service_headers(),
+                    params={"id": f"eq.{eid}"},
+                    json={"read": True},
+                )
+                row["read"] = True
+            except Exception:
+                pass
+    return row
+
+
+@router.delete("/inbox/{email_id}")
+async def platform_inbox_delete(email_id: str, user=Depends(require_owner)):
+    eid = _require_email_uuid(email_id)
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.delete(
+            f"{SUPABASE_URL}/rest/v1/platform_emails",
+            headers=_service_headers(),
+            params={"id": f"eq.{eid}"},
+        )
+        if r.status_code >= 400:
+            raise HTTPException(status_code=502,
+                                detail=f"delete failed: {r.text[:200]}")
+    return {"ok": True, "deleted": eid}
+

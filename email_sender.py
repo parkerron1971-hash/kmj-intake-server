@@ -465,6 +465,62 @@ def _parse_routed_address(addr: str) -> Optional[Dict[str, str]]:
     return {"biz_short": parts[0], "contact_short": parts[1]}
 
 
+# Local parts at INBOUND_EMAIL_DOMAIN that belong to the PLATFORM, not to
+# any practitioner business. Mail to these lands in the Mission Control
+# inbox (platform_emails) instead of the contact-reply pipeline.
+PLATFORM_INBOX_DEFAULT_LOCALS = "kevin,support,hello,admin,info,billing,contact"
+
+
+def _platform_local_parts() -> List[str]:
+    raw = os.environ.get("PLATFORM_INBOX_ADDRESSES") or PLATFORM_INBOX_DEFAULT_LOCALS
+    return [p.strip().lower() for p in raw.split(",") if p.strip()]
+
+
+def _match_platform_address(to_addresses: List[str]) -> Optional[str]:
+    """First recipient that is a named platform address (kevin@<domain>,
+    support@<domain>, ...). When INBOUND_EMAIL_DOMAIN is configured the
+    domain must match exactly; when it isn't, match on local part alone
+    so a misconfigured deploy still routes rather than drops."""
+    domain = _inbound_domain()
+    locals_ = set(_platform_local_parts())
+    for addr in to_addresses:
+        if "@" not in addr:
+            continue
+        local, _, dom = addr.partition("@")
+        if domain and dom != domain:
+            continue
+        if local in locals_:
+            return addr
+    return None
+
+
+async def _store_platform_email(
+    client: httpx.AsyncClient,
+    parsed: Dict[str, Any],
+    to_address: str,
+    catchall: bool,
+) -> Optional[str]:
+    """Persist an inbound message to the Mission Control inbox. Full HTML
+    on purpose — verification links must survive intact."""
+    row = {
+        "to_address": to_address,
+        "from_email": parsed["from_email"],
+        "from_name": parsed.get("from_name") or "",
+        "subject": parsed["subject"],
+        "body_text": (parsed.get("raw_text") or parsed.get("body") or "")[:50000],
+        "body_html": (parsed.get("raw_html_full") or "")[:500000] or None,
+        "message_id": parsed["message_id"] or None,
+        "in_reply_to": parsed["in_reply_to"] or None,
+        "catchall": catchall,
+    }
+    inserted = await _sb_post(client, "/platform_emails", row)
+    if isinstance(inserted, list) and inserted:
+        return inserted[0].get("id")
+    if isinstance(inserted, dict):
+        return inserted.get("id")
+    return None
+
+
 def _extract_inbound(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize Resend's inbound payload to a consistent shape.
 
@@ -519,6 +575,9 @@ def _extract_inbound(payload: Dict[str, Any]) -> Dict[str, Any]:
         "body": str(body),
         "raw_text": str(text),
         "raw_html": str(html)[:5000],
+        # Untruncated HTML for the platform inbox — a verification email's
+        # click-through link routinely lives past the 5 KB preview cap.
+        "raw_html_full": str(html),
         "in_reply_to": str(in_reply_to),
         "message_id": str(message_id),
     }
@@ -687,8 +746,13 @@ async def inbound_email(request: Request):
     Resolution priority:
       1. Parse `reply+{biz}+{contact}@<INBOUND_EMAIL_DOMAIN>` from the
          To/Cc address — most reliable, scoped to the original send.
-      2. Fall back to email-based match against the contacts table —
+      2. Named platform addresses (kevin@/support@/... — see
+         PLATFORM_INBOX_ADDRESSES) → platform_emails, read by Mission
+         Control's /platform/inbox.
+      3. Fall back to email-based match against the contacts table —
          catches replies sent to a static address (legacy / direct).
+      4. Catch-all: anything still unresolved lands in platform_emails
+         flagged catchall=true. Mail to the domain never dies silently.
 
     Always returns 200 so Resend doesn't retry; failures are logged.
     """
@@ -725,6 +789,7 @@ async def inbound_email(request: Request):
             if fetched["text"] or fetched["html"]:
                 parsed["raw_text"] = fetched["text"]
                 parsed["raw_html"] = (fetched["html"] or "")[:5000]
+                parsed["raw_html_full"] = fetched["html"] or ""
                 parsed["body"] = fetched["text"] or _strip_html(fetched["html"])
                 logger.info(
                     f"[INBOUND] fetched body from Resend API: "
@@ -755,13 +820,33 @@ async def inbound_email(request: Request):
             routed = True
             break
 
-        # ── 2. Email-based fallback ──────────────────────────────────
+        # ── 2. Named platform addresses → Mission Control inbox ─────
+        # kevin@/support@/... at the inbound domain is mail for the
+        # PLATFORM, not for any practitioner business — route it there
+        # even when the sender happens to match a contact.
+        if not business_id:
+            platform_addr = _match_platform_address(parsed["to_addresses"])
+            if platform_addr:
+                pid = await _store_platform_email(client, parsed, platform_addr, catchall=False)
+                logger.info(
+                    f"[INBOUND] platform inbox: to={platform_addr} "
+                    f"from={pii_mask.mask_email(from_email)} id={pid}")
+                return {"status": "platform_inbox", "to": platform_addr, "id": pid}
+
+        # ── 3. Email-based fallback ──────────────────────────────────
         if not business_id:
             rows = await _sb_get(client,
                 f"/contacts?email=eq.{from_email}&select=id,name,business_id,health_score&limit=1")
             if not rows:
-                logger.info(f"[INBOUND] unknown sender: {from_email} to={parsed['to_addresses']}")
-                return {"status": "unknown_sender", "from": from_email}
+                # Nothing claimed it — catch-all into the Mission Control
+                # inbox instead of dropping. Mail to this domain must
+                # never die silently again.
+                addr = parsed["to_addresses"][0] if parsed["to_addresses"] else ""
+                pid = await _store_platform_email(client, parsed, addr, catchall=True)
+                logger.info(
+                    f"[INBOUND] catch-all -> platform inbox: to={addr} "
+                    f"from={pii_mask.mask_email(from_email)} id={pid}")
+                return {"status": "platform_catchall", "id": pid}
             contact = rows[0]
             business_id = contact.get("business_id")
             contact_id = contact.get("id")
@@ -776,7 +861,7 @@ async def inbound_email(request: Request):
         clean_body = _strip_quoted_reply(parsed["body"])
         from_name = parsed.get("from_name") or contact_name or ""
 
-        # ── 3. Persist to email_replies table ────────────────────────
+        # ── 4. Persist to email_replies table ────────────────────────
         # The Email Hub UI reads from this table directly; the events
         # entry below remains for the contact timeline + activity feed.
         reply_row = {
@@ -803,7 +888,7 @@ async def inbound_email(request: Request):
         elif isinstance(inserted, dict):
             reply_id = inserted.get("id")
 
-        # ── 4. Event on the contact's timeline ───────────────────────
+        # ── 5. Event on the contact's timeline ───────────────────────
         await _sb_post(client, "/events", {
             "business_id": business_id,
             "contact_id": contact_id,
@@ -821,7 +906,7 @@ async def inbound_email(request: Request):
             "source": "resend_inbound",
         })
 
-        # ── 5. Notification for the practitioner ─────────────────────
+        # ── 6. Notification for the practitioner ─────────────────────
         await _sb_post(client, "/chief_notifications", {
             "business_id": business_id,
             "type": "info",
@@ -837,7 +922,7 @@ async def inbound_email(request: Request):
             },
         })
 
-        # ── 6. Bump contact health — they engaged ───────────────────
+        # ── 7. Bump contact health — they engaged ───────────────────
         if contact_id:
             await _sb_patch(client, f"/contacts?id=eq.{contact_id}", {
                 "health_score": min(100, current_health + 5),
