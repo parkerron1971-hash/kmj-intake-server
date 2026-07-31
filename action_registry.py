@@ -151,6 +151,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                               "replies/bookings surfaced as activity, not attribution"),
     "list_expenses":       _r("lists business_expenses rows with an honest total; same "
                               "financial class as show_revenue, which is already exposed"),
+    "check_inventory":     _r("stock levels + low-stock list for store products, computed "
+                              "from offerings.inventory_qty and the settings thresholds. "
+                              "Fetches and formats; reaches nothing that writes. Same "
+                              "operational class as list_offerings/list_products"),
     # SENSITIVE. Reads, and they change nothing — but a congregation's giving
     # history is among the most confidential data a church holds. Many
     # churches deliberately keep it from their own staff, and Chief's own
@@ -423,6 +427,15 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                     "class is whatever it schedules, so it inherits the worst — "
                                     "otherwise it is a hole straight through this table. The "
                                     "scheduled verb must be checked at execution time too"),
+    "adjust_stock":         _w("C", "patches offerings.inventory_qty (delta or set, floor 0) and "
+                                    "drops a stock_adjusted movement row on the event spine. The "
+                                    "PATCH itself is one edit from right, but the number it "
+                                    "rewrites is the one checkout gates on: stock that silently "
+                                    "diverges from the shelf oversells real customer orders or "
+                                    "blocks real sales — the setup_store shape (reversible "
+                                    "switch, unattended downstream money effect). Chief inventing "
+                                    "a stock count unprompted is exactly the failure mode; the "
+                                    "practitioner saying 'add 10 tees' is the approval"),
     "setup_store":          _w("C", "sets storefront tax rate and flat shipping. The Stripe leg "
                                     "turned out to be a READ (select=stripe_account_id, to warn "
                                     "when checkout would refuse) — it creates no Stripe objects, "

@@ -127,6 +127,12 @@ from chief_expense_actions import (
     handle_log_expense,
     handle_update_expense,
 )
+# Physical inventory — offerings.inventory_qty plus stock_adjusted
+# movement rows on the event spine (no inventory tables).
+from chief_inventory_actions import (
+    handle_adjust_stock,
+    handle_check_inventory,
+)
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -10582,6 +10588,11 @@ ACTION_HANDLERS = {
     "list_expenses":                   handle_list_expenses,
     "update_expense":                  handle_update_expense,
     "delete_expense":                  handle_delete_expense,
+    # Physical inventory. check is a read; adjust patches
+    # offerings.inventory_qty and drops a stock_adjusted movement row on
+    # the event spine (class C — stock truth gates checkout).
+    "check_inventory":                 handle_check_inventory,
+    "adjust_stock":                    handle_adjust_stock,
     "undo_last":                       handle_undo_last,
     "what_undo":                       handle_what_undo,
     "set_availability_day":       handle_set_availability_day,
@@ -13514,11 +13525,14 @@ ACTIONS — STORE (the hosted e-commerce storefront — THIS EXISTS; never say y
   [ACTION:{{"type":"setup_store"}}]  — status check: returns the live store URL, how many products are live, and whether Stripe is connected. USE THIS FIRST whenever the practitioner asks about selling products, "build me a store", "set up a shop", or "how do people buy X".
   [ACTION:{{"type":"setup_store","tax_rate_pct":6,"flat_shipping_usd":5}}]  — set the store's flat sales-tax % and/or flat shipping fee (charged once per order containing physical items).
   [ACTION:{{"type":"create_offering","name":"Embrace the Shift","category":"product","current_price":25,"requires_shipping":true,"inventory_qty":50,"image_url":"https://…","fulfillment_note":"Ships within 3 business days"}}]  — a PHYSICAL product: requires_shipping makes checkout collect the address + apply the flat shipping fee; inventory_qty decrements on each paid order (omit it for untracked stock); fulfillment_note is included in the customer's receipt email (use it for download links on digital goods, pickup/shipping notes on physical ones).
-  [ACTION:{{"type":"update_offering","name":"Embrace the Shift","inventory_qty":40,"image_url":"https://…"}}]
+  [ACTION:{{"type":"update_offering","name":"Embrace the Shift","image_url":"https://…"}}]
+  [ACTION:{{"type":"check_inventory"}}]  — stock levels for every store product: tracked counts, what's low, what's out. USE THIS for "how many do I have left" / "what's low on stock".
+  [ACTION:{{"type":"adjust_stock","name":"Blueprint Tee","mode":"delta","amount":25,"reason":"restock arrived"}}]  — receive or correct stock. mode 'delta' adds/subtracts (amount can be negative); mode 'set' overwrites the count (also how tracking turns ON for an untracked product). Always pass a short reason — every adjustment lands in the movement history. Stock floors at 0.
     — Phrase tells:
          "build me a store" / "set up my shop" / "I want to sell products"  → setup_store (then offer to add their products as offerings)
          "sell my book on my site" / "add my e-book for $15"                → create_offering with category='product' (+ requires_shipping for physical, fulfillment_note with the download link for digital), THEN setup_store so you can hand back the live store link
-         "how many do I have left" / "set stock to 20"                      → update_offering inventory_qty
+         "how many do I have left" / "what's running low"                   → check_inventory
+         "20 more tees arrived" / "set stock to 20" / "sold 2 at the market" → adjust_stock (delta for received/sold-elsewhere, set for a recount)
          "charge sales tax" / "add $5 shipping"                             → setup_store with tax_rate_pct / flat_shipping_usd
     — The practitioner manages the same store visually at OPERATE → Catalog (Store panel: link, settings, order list with Fulfill). Composed sites feature store products automatically.
     — Checkout requires Stripe Connect on the business; if setup_store reports Stripe not connected, say so plainly and point to OPERATE → Payments. Never imply customers can pay before that's true.
