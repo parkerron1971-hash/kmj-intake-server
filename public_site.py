@@ -265,11 +265,37 @@ def _inject_canonical(html: str, slug: str, custom_domain: Optional[str] = None)
     return html
 
 
+def _inject_concierge_widget(html: str, business_id: Optional[str]) -> str:
+    """Site Concierge hook (2026-08-01): append the widget <script> tag to
+    served site pages ONLY when the concierge is enabled for the business
+    (site_concierge.widget_snippet returns "" otherwise — the enablement
+    truth lives there, cached briefly). Rides the _inject_brand_meta seam
+    so every composed-site serve path gets it in one place. Defensive:
+    any failure returns the original HTML unchanged."""
+    if not business_id:
+        return html
+    try:
+        import site_concierge
+        snippet = site_concierge.widget_snippet(business_id)
+    except Exception:
+        return html
+    if not snippet:
+        return html
+    for tag in ("</body>", "</BODY>"):
+        if tag in html:
+            return html.replace(tag, snippet + "\n" + tag, 1)
+    return html + snippet
+
+
 def _inject_brand_meta(html: str, business_id: Optional[str]) -> str:
     """Pass 3: wire `_brand_head_meta_tags` into legacy HTML before </head>.
     Activates the dormant Pass 2.5a helper for users who haven't opted into
     Smart Sites yet — favicons + OG tags + Twitter Cards finally render.
-    Defensive: any failure returns the original HTML unchanged."""
+    Defensive: any failure returns the original HTML unchanged.
+
+    Also the concierge widget's ride: every serve path that stamps brand
+    meta is a served site page, so the widget hook runs here first."""
+    html = _inject_concierge_widget(html, business_id)
     if not business_id:
         return html
     try:

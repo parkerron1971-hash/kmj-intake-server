@@ -67,6 +67,11 @@ UNIT_WEIGHTS: Dict[str, int] = {
     # same allowance-first, credits-next draw-down as Chief messages.
     "/ai/tts": 0,
     "/ai/tts-el": 1,
+    # Site Concierge (site_concierge.py): one customer-facing website
+    # reply = one weighted unit — same rate as a Chief chat message.
+    # Explicit (it IS the default) so the weight is a visible, tested
+    # decision rather than an accident of DEFAULT_WEIGHT.
+    "/concierge/reply": 1,
 }
 DEFAULT_WEIGHT = 1
 
