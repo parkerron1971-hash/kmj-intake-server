@@ -266,6 +266,9 @@ app.include_router(receipts_router)
 # Rails demand-driven — payroll interest capture (Gusto, demand-gated)
 from payroll_router import router as payroll_router
 app.include_router(payroll_router)
+# Session exit ramp (8/01) — strategy session end → setup plan
+from setup_plan import router as setup_plan_router
+app.include_router(setup_plan_router)
 # Phase I.3 — Period closing
 from accounting_periods_router import router as accounting_periods_router
 app.include_router(accounting_periods_router)
