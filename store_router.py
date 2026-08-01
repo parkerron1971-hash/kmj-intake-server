@@ -66,16 +66,23 @@ def _check_rate(slug: str) -> bool:
         return True
 
 
-def _site_by_slug(slug: str) -> Optional[Dict[str, Any]]:
+def _site_by_slug(slug: str, *, with_design: bool = False) -> Optional[Dict[str, Any]]:
+    """with_design=True adds status + site_config — the composed site's
+    stored design forensics (language, design_rationale_id, custom
+    domain) that store_design.resolve reads. Only the page renders pay
+    for the bigger row; data/checkout stay lean."""
+    sel = "id,business_id,slug"
+    if with_design:
+        sel += ",status,site_config"
     rows = sb_clients.sb_get_as_service(
-        f"/business_sites?slug=eq.{slug}&select=id,business_id,slug&limit=1") or []
+        f"/business_sites?slug=eq.{slug}&select={sel}&limit=1") or []
     return rows[0] if rows else None
 
 
 def _business(business_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}"
-        "&select=id,name,settings,stripe_account_id&limit=1") or []
+        "&select=id,name,type,settings,stripe_account_id&limit=1") or []
     return rows[0] if rows else None
 
 
@@ -432,7 +439,7 @@ def _maybe_low_stock_alert(business_id: str, offering_id: str, name: str,
             "type": "low_stock",
             "title": f"{name or 'A product'}: {left} — restock?",
             "body": (f"Stock just crossed your alert threshold of {threshold}. "
-                     f"Adjust stock from Services & Pricing → Stock, or tell "
+                     f"Adjust stock from Services & Products → Stock, or tell "
                      f"Chief to update it when the restock arrives."),
             "priority": "normal",
             "status": "unread",
@@ -713,7 +720,7 @@ def set_inventory_threshold(business_id: str, offering_id: str,
 def hosted_store_page(slug: str) -> HTMLResponse:
     if not _check_rate(slug):
         raise HTTPException(429, "Rate limit exceeded")
-    site = _site_by_slug(slug)
+    site = _site_by_slug(slug, with_design=True)
     if not site:
         raise HTTPException(404, "Store not found")
     biz = _business(site["business_id"])
@@ -722,7 +729,7 @@ def hosted_store_page(slug: str) -> HTMLResponse:
     from store_page import render_store_page
     items = _flag_low_stock(
         _flag_instant_downloads(_sellable_offerings(site["business_id"]), biz), biz)
-    html = render_store_page(slug, biz, items, _store_settings(biz))
+    html = render_store_page(slug, biz, items, _store_settings(biz), site=site)
     return HTMLResponse(html, headers={"X-Solutionist-Source": "store"})
 
 
@@ -770,11 +777,11 @@ def _thank_you_digital(site: Dict[str, Any], biz: Dict[str, Any],
 def hosted_store_thanks(slug: str, order: str = "") -> HTMLResponse:
     if not _check_rate(slug):
         raise HTTPException(429, "Rate limit exceeded")
-    site = _site_by_slug(slug)
+    site = _site_by_slug(slug, with_design=True)
     if not site:
         raise HTTPException(404, "Store not found")
     biz = _business(site["business_id"]) or {"id": site["business_id"]}
     digital = _thank_you_digital(site, biz, order)
     from store_page import render_thank_you
-    return HTMLResponse(render_thank_you(slug, biz, order, **digital),
+    return HTMLResponse(render_thank_you(slug, biz, order, site=site, **digital),
                         headers={"X-Solutionist-Source": "store"})
