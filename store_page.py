@@ -12,6 +12,14 @@ by slug) that sends ONLY {offering_id, quantity} to
 trust model as the motion-module injections: this JS is ours, never
 LLM-written.
 
+Cart UX (store-cart-ux arc): the cart's first-class home is an
+always-visible header button with a live count badge; the floating pill
+survives only on ≤560px screens where the identity header scrolls away.
+Each purchasable card carries a filled "Buy now" primary that skips the
+cart — same endpoint, one line item — next to the outlined "Add to
+cart". Drawer lines get thumbnails (image or category glyph), a
+per-line remove, and an "Instant download" hint on digital items.
+
 Template uses @TOKEN@ replacement (not f-strings) so CSS/JS braces stay
 literal — the heredoc/brace-escaping trap this file exists to avoid.
 """
@@ -78,10 +86,9 @@ _LANGUAGE_CSS: Dict[str, str] = {
 .st-lang-mural .st-sec-title{text-transform:uppercase;letter-spacing:.02em;
   box-shadow:inset 0 -0.16em 0 color-mix(in srgb,var(--sx-accent) 55%,transparent);
   padding-bottom:2px}
-.st-lang-mural .st-add{background:var(--sx-accent);color:var(--sx-on-accent);
-  border-color:var(--sx-accent)}
-.st-lang-mural .st-add:hover{background:var(--sx-accent-strong);
-  border-color:var(--sx-accent-strong);color:var(--sx-on-accent)}
+/* Buy now is the card's solid-accent presence everywhere now, so Mural's
+   old filled Add-to-cart would read as two primaries — the outline stays. */
+.st-lang-mural .st-buy{border-radius:6px}
 .st-lang-mural .st-head{background:
   linear-gradient(120deg,color-mix(in srgb,var(--sx-accent) 14%,var(--sx-bg)),var(--sx-bg) 70%)}
 """,
@@ -149,6 +156,21 @@ button{font-family:inherit}
 .st-site-link:hover{border-color:var(--sx-accent);background:var(--sx-accent-soft)}
 .st-site-link svg{width:15px;height:15px}
 
+/* ── Header cart button (always visible — the cart's first-class home) ── */
+.st-cart-btn{position:relative;display:inline-flex;align-items:center;
+  justify-content:center;flex:none;width:48px;height:48px;cursor:pointer;
+  border:1px solid var(--sx-border);border-radius:var(--sx-radius-button);
+  background:transparent;color:var(--sx-text);
+  transition:border-color .25s,background .25s,color .25s}
+.st-cart-btn:hover{border-color:var(--sx-accent);background:var(--sx-accent-soft);
+  color:var(--sx-accent)}
+.st-cart-btn svg{width:20px;height:20px}
+.st-cart-count{position:absolute;top:-7px;right:-7px;min-width:20px;height:20px;
+  padding:0 5px;border-radius:999px;background:var(--sx-accent);
+  color:var(--sx-on-accent);font-size:.7rem;font-weight:800;line-height:1;
+  display:flex;align-items:center;justify-content:center}
+.st-cart-count[hidden]{display:none}
+
 /* ── Sections + grid ── */
 .st-wrap{max-width:1100px;margin:0 auto;
   padding:clamp(24px,4.5vw,52px) clamp(18px,4vw,40px) 150px}
@@ -192,26 +214,39 @@ button{font-family:inherit}
 .st-desc{color:var(--sx-muted);font-size:.9rem;margin:0;display:-webkit-box;
   -webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .st-card-foot{margin-top:auto;padding-top:12px;display:flex;
-  justify-content:space-between;align-items:center;gap:10px}
+  flex-direction:column;gap:8px}
 .st-out{color:var(--sx-muted);font-size:.85rem;font-weight:700}
 .st-low{color:var(--sx-accent);font-size:.8rem;font-weight:700}
-.st-add{margin-left:auto;padding:10px 20px;min-height:44px;
+.st-actions{display:flex;gap:8px}
+.st-actions button{flex:1}
+.st-add{padding:10px 16px;min-height:44px;
   border-radius:var(--sx-radius-button);border:1.5px solid var(--sx-accent);
   background:transparent;color:var(--sx-accent);font-weight:700;font-size:.87rem;
   cursor:pointer;transition:background .25s,color .25s}
 .st-add:hover{background:var(--sx-accent);color:var(--sx-on-accent)}
+.st-buy{padding:10px 16px;min-height:44px;
+  border-radius:var(--sx-radius-button);border:1.5px solid var(--sx-accent);
+  background:var(--sx-accent);color:var(--sx-on-accent);font-weight:700;
+  font-size:.87rem;cursor:pointer;
+  transition:background .25s,border-color .25s,opacity .25s}
+.st-buy:hover{background:var(--sx-accent-strong);border-color:var(--sx-accent-strong)}
+.st-buy:disabled{opacity:.65;cursor:default}
+.st-card-err{margin:0;padding:8px 12px;border-radius:10px;background:#7f1d1d;
+  color:#fff;font-size:.78rem;font-weight:600}
 
 .st-foot{margin-top:36px;color:var(--sx-muted);font-size:.8rem;display:flex;
   justify-content:space-between;flex-wrap:wrap;gap:10px}
 .st-foot a{color:var(--sx-muted)}
 
-/* ── Cart: floating button + slide-in panel ── */
+/* ── Cart: floating pill (small screens only — the header cart button
+     is the cart's permanent home; the pill covers the scrolled-away
+     header on phones) + slide-in panel ── */
 .st-fab{position:fixed;right:18px;bottom:18px;z-index:60;display:none;
   align-items:center;gap:10px;padding:14px 20px;min-height:52px;border:none;
   border-radius:999px;background:var(--sx-accent);color:var(--sx-on-accent);
   font-weight:800;font-size:.95rem;cursor:pointer;
   box-shadow:0 12px 30px -10px color-mix(in srgb,var(--sx-accent) 60%,#000)}
-.st-fab.on{display:inline-flex}
+@media (max-width:560px){.st-fab.on{display:inline-flex}}
 .st-fab svg{width:19px;height:19px}
 .st-scrim{position:fixed;inset:0;background:rgba(8,8,10,.45);z-index:70;
   opacity:0;pointer-events:none;transition:opacity .3s}
@@ -237,13 +272,25 @@ button{font-family:inherit}
 .st-x:hover{color:var(--sx-text);background:var(--sx-surface-2)}
 .st-x svg{width:18px;height:18px}
 .st-lines{flex:1;overflow-y:auto;padding:8px 20px}
-.st-line{display:flex;align-items:center;gap:12px;padding:14px 0;
+.st-line{display:flex;align-items:center;gap:10px;padding:14px 0;
   border-bottom:1px solid var(--sx-border)}
 .st-line:last-child{border-bottom:none}
+.st-line-thumb{width:44px;height:44px;flex:none;border-radius:10px;
+  object-fit:cover;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,var(--sx-accent-soft),var(--sx-surface-2));
+  overflow:hidden}
+.st-line-thumb svg{width:20px;height:20px;color:var(--sx-accent);opacity:.85}
 .st-line-info{flex:1;min-width:0}
 .st-line-name{font-weight:600;font-size:.92rem;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
 .st-line-price{color:var(--sx-muted);font-size:.82rem;margin-top:2px}
+.st-line-dl{color:var(--sx-accent);font-size:.68rem;font-weight:700;
+  letter-spacing:.05em;text-transform:uppercase;margin-top:2px}
+.st-line-x{flex:none;width:44px;height:44px;display:inline-flex;
+  align-items:center;justify-content:center;background:none;border:none;
+  color:var(--sx-muted);font-size:1.25rem;line-height:1;cursor:pointer;
+  border-radius:50%}
+.st-line-x:hover{color:var(--sx-text);background:var(--sx-surface-2)}
 .st-qty{display:flex;align-items:center;gap:2px;flex:none}
 .st-qty button{width:44px;height:44px;border:1px solid var(--sx-border);
   background:transparent;color:var(--sx-text);font-size:1.05rem;cursor:pointer;
@@ -266,6 +313,7 @@ button{font-family:inherit}
 .st-clear{display:block;margin:10px auto 0;background:none;border:none;
   color:var(--sx-muted);font-size:.8rem;cursor:pointer;text-decoration:underline;
   min-height:44px;padding:0 12px}
+.st-clear[hidden]{display:none}
 .st-err{position:fixed;left:50%;transform:translateX(-50%);bottom:88px;
   background:#7f1d1d;color:#fff;padding:10px 18px;border-radius:10px;
   font-size:.85rem;display:none;z-index:90;max-width:min(92vw,480px);
@@ -287,6 +335,9 @@ button{font-family:inherit}
       @TAGLINE@
     </div>
     @SITELINK@
+    <button class="st-cart-btn" id="cartbtn" aria-haspopup="dialog"
+      aria-controls="panel" aria-label="Your cart">@CARTSVG@<span
+      class="st-cart-count" id="cart-count" hidden></span></button>
   </div>
 </header>
 <main class="st-wrap">
@@ -314,11 +365,14 @@ button{font-family:inherit}
 (function() {
   var SLUG = @SLUG@;
   var KEY = 'sx-cart-' + SLUG;
+  var GLYPHS = @GLYPHSJS@;
   var cart = {};
   try { cart = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) {}
   var meta = {};
   document.querySelectorAll('.st-add').forEach(function(b) {
-    meta[b.dataset.id] = { name: b.dataset.name, price: parseFloat(b.dataset.price) };
+    meta[b.dataset.id] = { name: b.dataset.name, price: parseFloat(b.dataset.price),
+      img: b.dataset.img || '', cat: b.dataset.cat || 'product',
+      dl: b.dataset.dl === '1' };
     b.addEventListener('click', function() {
       cart[b.dataset.id] = (cart[b.dataset.id] || 0) + 1;
       save(); render();
@@ -335,6 +389,7 @@ button{font-family:inherit}
   function openPanel() { panel.classList.add('on'); scrim.classList.add('on'); }
   function closePanel() { panel.classList.remove('on'); scrim.classList.remove('on'); }
   fab.addEventListener('click', openPanel);
+  document.getElementById('cartbtn').addEventListener('click', openPanel);
   scrim.addEventListener('click', closePanel);
   document.getElementById('close').addEventListener('click', closePanel);
   document.addEventListener('keydown', function(e) {
@@ -355,6 +410,16 @@ button{font-family:inherit}
       var q = cart[id], m = meta[id];
       n += q; t += q * m.price;
       var row = document.createElement('div'); row.className = 'st-line';
+      var thumb;
+      if (m.img) {
+        thumb = document.createElement('img');
+        thumb.className = 'st-line-thumb'; thumb.src = m.img;
+        thumb.alt = ''; thumb.loading = 'lazy';
+      } else {
+        thumb = document.createElement('span');
+        thumb.className = 'st-line-thumb';
+        thumb.innerHTML = GLYPHS[m.cat] || GLYPHS.product;
+      }
       var info = document.createElement('div'); info.className = 'st-line-info';
       var nm = document.createElement('div'); nm.className = 'st-line-name';
       nm.textContent = m.name;
@@ -362,6 +427,11 @@ button{font-family:inherit}
       pr.textContent = '$' + m.price.toFixed(2) + ' \\u00d7 ' + q +
         ' \\u2014 $' + (m.price * q).toFixed(2);
       info.appendChild(nm); info.appendChild(pr);
+      if (m.dl) {
+        var dl = document.createElement('div'); dl.className = 'st-line-dl';
+        dl.textContent = 'Instant download';
+        info.appendChild(dl);
+      }
       var qty = document.createElement('div'); qty.className = 'st-qty';
       qty.appendChild(qtyBtn('\\u2212', 'Remove one ' + m.name, function() {
         cart[id] -= 1;
@@ -373,20 +443,30 @@ button{font-family:inherit}
       qty.appendChild(qtyBtn('+', 'Add one ' + m.name, function() {
         cart[id] += 1; save(); render();
       }));
-      row.appendChild(info); row.appendChild(qty);
+      var rm = document.createElement('button'); rm.className = 'st-line-x';
+      rm.textContent = '\\u00d7';
+      rm.setAttribute('aria-label', 'Remove ' + m.name + ' from cart');
+      rm.addEventListener('click', function() {
+        delete cart[id]; save(); render();
+      });
+      row.appendChild(thumb); row.appendChild(info);
+      row.appendChild(qty); row.appendChild(rm);
       lines.appendChild(row);
     });
     if (n === 0) {
       var empty = document.createElement('p'); empty.className = 'st-empty';
-      empty.textContent = 'Your cart is empty.';
+      empty.textContent = 'Your cart is empty \\u2014 everything you add shows up here.';
       lines.appendChild(empty);
-      closePanel();
     }
     fab.classList.toggle('on', n > 0);
     document.getElementById('fab-label').textContent =
       n + (n === 1 ? ' item' : ' items') + ' \\u00b7 $' + t.toFixed(2);
+    var badge = document.getElementById('cart-count');
+    badge.textContent = String(n);
+    badge.hidden = n === 0;
     document.getElementById('total').textContent = '$' + t.toFixed(2);
     document.getElementById('go').disabled = n === 0;
+    document.getElementById('clear').hidden = n === 0;
   }
   document.getElementById('clear').addEventListener('click', function() {
     cart = {}; save(); render();
@@ -419,6 +499,42 @@ button{font-family:inherit}
         go.disabled = false; go.textContent = 'Checkout';
       });
   });
+
+  // Buy now — the cart-skipping path. Same endpoint, same body shape,
+  // a single line item; the cart itself is left alone.
+  document.querySelectorAll('.st-buy').forEach(function(b) {
+    var card = b.closest('.st-card');
+    var errEl = card ? card.querySelector('.st-card-err') : null;
+    b.addEventListener('click', function() {
+      if (b.disabled) return;
+      if (errEl) errEl.hidden = true;
+      b.disabled = true; b.textContent = 'One moment\\u2026';
+      fetch('/payments/store-checkout', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug: SLUG,
+          items: [{ offering_id: b.dataset.id, quantity: 1 }] })
+      }).then(function(r) { return r.json().then(function(j) { return { ok: r.ok, j: j }; }); })
+        .then(function(res) {
+          if (res.ok && res.j && res.j.checkout_url) {
+            window.location = res.j.checkout_url;
+          } else {
+            var d = res.j && res.j.detail;
+            if (errEl) {
+              errEl.textContent = typeof d === 'string' ? d :
+                'Checkout failed \\u2014 please try again.';
+              errEl.hidden = false;
+            }
+            b.disabled = false; b.textContent = 'Buy now';
+          }
+        }).catch(function() {
+          if (errEl) {
+            errEl.textContent = 'Network error \\u2014 please try again.';
+            errEl.hidden = false;
+          }
+          b.disabled = false; b.textContent = 'Buy now';
+        });
+    });
+  });
   render();
 })();
 </script>
@@ -431,8 +547,11 @@ _CATEGORY_ORDER = ("product", "course", "package")
 
 def _card(o: Dict[str, Any]) -> str:
     category = str(o.get("category") or "product")
-    if str(o.get("image_url") or "").startswith("http"):
-        media = f'<img class="st-img" src="{_esc(o.get("image_url"))}" alt="" loading="lazy">'
+    image_url = str(o.get("image_url") or "")
+    if not image_url.startswith("http"):
+        image_url = ""
+    if image_url:
+        media = f'<img class="st-img" src="{_esc(image_url)}" alt="" loading="lazy">'
     else:
         glyph = _CATEGORY_GLYPHS.get(category, _GLYPH_PRODUCT)
         media = f'<div class="st-ph">{glyph}</div>'
@@ -443,9 +562,23 @@ def _card(o: Dict[str, Any]) -> str:
         stock = f'<span class="st-low">Only {int(o["units_left"])} left</span>'
     else:
         stock = ""
-    btn = (f'<button class="st-add" data-id="{_esc(o["id"])}" '
-           f'data-name="{_esc(o["name"])}" data-price="{price:.2f}">Add to cart</button>'
-           if o.get("in_stock") else "")
+    actions = ""
+    if o.get("in_stock"):
+        # The add button's data attributes are the cart's item metadata
+        # (name/price for lines, image/category/download for the drawer
+        # thumbnails + hints) — every value HTML-escaped.
+        actions = (
+            f'<div class="st-actions">'
+            f'<button class="st-add" data-id="{_esc(o["id"])}" '
+            f'data-name="{_esc(o["name"])}" data-price="{price:.2f}" '
+            f'data-img="{_esc(image_url)}" data-cat="{_esc(category)}" '
+            f'data-dl="{"1" if o.get("instant_download") else ""}">'
+            f'Add to cart</button>'
+            f'<button class="st-buy" data-id="{_esc(o["id"])}" '
+            f'data-name="{_esc(o["name"])}" '
+            f'aria-label="Buy {_esc(o["name"])} now">Buy now</button>'
+            f'</div>'
+            f'<p class="st-card-err" role="alert" hidden></p>')
     desc = _esc(o.get("description") or "")
     desc_html = f'<p class="st-desc">{desc}</p>' if desc else ""
     badge = _DL_BADGE if o.get("instant_download") else ""
@@ -456,7 +589,7 @@ def _card(o: Dict[str, Any]) -> str:
             f'<div class="st-card-head"><h3>{_esc(o["name"])}</h3>'
             f'<span class="st-price">${price:,.2f}</span></div>'
             f'{badge}{desc_html}'
-            f'<div class="st-card-foot">{stock}{btn}</div></div></article>')
+            f'<div class="st-card-foot">{stock}{actions}</div></div></article>')
 
 
 def _sections(items: List[Dict[str, Any]], business_type: Optional[str]) -> str:
@@ -527,6 +660,8 @@ def render_store_page(slug: str, biz: Dict[str, Any],
             .replace("@NOTES@", notes_html)
             .replace("@CARTSVG@", _CART_SVG)
             .replace("@CLOSESVG@", _CLOSE_SVG)
+            .replace("@GLYPHSJS@",
+                     _json.dumps(_CATEGORY_GLYPHS).replace("<", "\\u003c"))
             .replace("@SLUG@", _js_str(slug)))
 
 

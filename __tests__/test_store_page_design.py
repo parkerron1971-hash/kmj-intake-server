@@ -12,6 +12,11 @@ The contract under test:
   • checkout mechanics unchanged: same localStorage key, same
     /payments/store-checkout POST of {slug, items:[{offering_id,
     quantity}]} — server-side pricing untouched;
+  • cart UX (store-cart-ux arc): always-visible header cart button with
+    a live count badge, a warm empty state, per-card Buy now that hits
+    the SAME checkout endpoint with a single line item, per-line remove
+    + thumbnails + instant-download hints in the drawer — and hostile
+    strings stay inert in every new element;
   • thank-you page keeps the download buttons and the webhook-race
     "finalizing" card + capped refresh, restyled on the same tokens;
   • vertical softening: a ministry's store says Resources, not Store.
@@ -193,6 +198,68 @@ def test_checkout_mechanics_unchanged():
     # tax + shipping notes still server-rendered
     assert "Sales tax (7.5%)" in html
     assert "Flat shipping $5.00" in html
+
+
+# ─── Cart UX: header button, Buy now, drawer upgrades ────────────────
+
+def test_header_cart_button_always_present_with_badge():
+    from store_page import render_store_page
+    html = render_store_page(SLUG, _biz(), ITEMS, SS)
+    # header cart button + count badge markup
+    assert 'id="cartbtn"' in html
+    assert 'aria-controls="panel"' in html
+    assert 'id="cart-count"' in html and 'class="st-cart-count"' in html
+    # warm empty state ships in the page JS (em dash as —)
+    assert "Your cart is empty" in html
+    assert "everything you add shows up here" in html
+    # floating pill is small-screen only now — the header owns the cart
+    assert "@media (max-width:560px){.st-fab.on{display:inline-flex}}" in html
+
+
+def test_buy_now_on_purchasable_cards_only():
+    from store_page import render_store_page
+    html = render_store_page(SLUG, _biz(), ITEMS, SS)
+    # 2 of the 3 items are purchasable; the sold-out card gets neither button
+    assert html.count('class="st-buy"') == 2
+    assert html.count('class="st-add"') == 2
+    assert html.count('class="st-card-err"') == 2
+    # Buy now skips the cart: single line item, SAME endpoint
+    assert "offering_id: b.dataset.id, quantity: 1" in html
+    # and the multi-item cart POST is still intact alongside it
+    assert "offering_id: id, quantity: cart[id]" in html
+
+
+def test_drawer_line_upgrades_present():
+    from store_page import render_store_page
+    html = render_store_page(SLUG, _biz(), ITEMS, SS)
+    # per-line remove + thumbnail + instant-download hint machinery
+    assert "st-line-x" in html
+    assert "st-line-thumb" in html
+    assert "st-line-dl" in html
+    # item metadata rides the add button for the drawer to read
+    assert 'data-img="https://img.example/c.jpg"' in html
+    assert 'data-dl="1"' in html
+    assert 'data-cat="course"' in html
+    # category glyphs are embedded for imageless thumbnails, script-safe
+    assert "var GLYPHS = " in html
+    assert "\\u003csvg" in html
+
+
+def test_hostile_strings_inert_in_new_elements():
+    from store_page import render_store_page
+    items = [{"id": "x", "name": 'Evil <script>alert(1)</script>',
+              "category": "product", "current_price": 10.0, "in_stock": True,
+              "units_left": None, "instant_download": True,
+              "image_url": 'https://img.example/x.jpg" onerror="alert(2)'}]
+    html = render_store_page(SLUG, _biz(), items, SS)
+    assert "<script>alert(1)</script>" not in html
+    # Buy now carries the name escaped (data attribute + aria label)
+    assert ('<button class="st-buy" data-id="x" '
+            'data-name="Evil &lt;script&gt;') in html
+    assert 'aria-label="Buy Evil &lt;script&gt;' in html
+    # hostile image_url can't break out of the data-img / src attributes
+    assert '.jpg" onerror=' not in html
+    assert '.jpg&quot; onerror=&quot;' in html
 
 
 # ─── Router wiring ───────────────────────────────────────────────────
