@@ -76,6 +76,12 @@ TIER_PRICE_CENTS = {"starter": 7900, "professional": 19900, "practice": 39900}
 
 THRESHOLDS = (50, 80, 100, 200)  # % of allotment; 200 ≈ the cap milestone
 
+# Credits-surfacing (2026-08-01): the soft "running low" signal fires when
+# the COMBINED remaining (monthly allowance left + pack balance) crosses
+# at/below this % of the cycle's capacity (allowance + packs available
+# this cycle). Distinct from THRESHOLDS, which track allowance-only usage.
+LOW_CREDIT_PCT = 20
+
 
 def _month_key(now: Optional[datetime] = None) -> str:
     n = now or datetime.now(timezone.utc)
@@ -85,6 +91,18 @@ def _month_key(now: Optional[datetime] = None) -> str:
 def _month_start_iso() -> str:
     n = datetime.now(timezone.utc)
     return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def _next_month_start_iso() -> str:
+    """First instant of NEXT month (UTC) — when the allowance resets."""
+    n = datetime.now(timezone.utc)
+    if n.month == 12:
+        nm = n.replace(year=n.year + 1, month=1, day=1,
+                       hour=0, minute=0, second=0, microsecond=0)
+    else:
+        nm = n.replace(month=n.month + 1, day=1,
+                       hour=0, minute=0, second=0, microsecond=0)
+    return nm.isoformat()
 
 
 def weight_for(endpoint: Optional[str]) -> int:
@@ -224,6 +242,147 @@ def usage_summary(business_id: str,
     }
 
 
+def credits_overview(business_id: str,
+                     biz_row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The CreditsCard read (GET /billing/credits/{business_id}) — the
+    practitioner-facing shape of the prepaid model in one payload.
+
+    CONSUMPTION ORDER (Pricing v2, the accounting this mirrors):
+    the monthly plan allowance (plus any usage_grants top-ups for the
+    month) is ALWAYS spent first; only usage beyond it draws down
+    purchased/granted credit packs (credit_ledger, via the lazy
+    sync_burn reconcile that usage_summary() performs on every read —
+    so reading this overview also keeps the burn row honest).
+
+    monthly.used is clamped to the allowance (the bar never overflows);
+    the beyond-allowance part shows up as packs consumption instead.
+    Grandfathered accounts read as unlimited: allowance/total None."""
+    import credit_ledger
+    s = usage_summary(business_id, biz_row)
+    led = credit_ledger.summary(business_id)
+
+    allowance = s["allotment"]          # None → grandfathered or no plan
+    used_raw = int(s["weighted_used"] or 0)
+    grandfathered = bool(s["grandfathered"])
+    monthly_used = used_raw if allowance is None else min(used_raw, allowance)
+    monthly_remaining = (None if allowance is None
+                         else max(0, allowance - used_raw))
+    packs_remaining = int(led["balance"] or 0)
+    packs_granted = int(led["purchased"] or 0) + int(led["granted"] or 0)
+    packs_used = int(led["burned"] or 0)
+
+    if grandfathered:
+        total_remaining = None          # unlimited during the founder period
+    else:
+        total_remaining = (monthly_remaining or 0) + packs_remaining
+
+    # Capacity this cycle = allowance + packs available at cycle start
+    # (balance + this month's burn adds the burn back). Burning moves
+    # units from balance→burned so capacity holds steady within a month;
+    # a pack purchase raises it.
+    capacity = (allowance or 0) + packs_remaining + int(s["credits_burned_month"] or 0)
+    low = bool(allowance is not None and not grandfathered and capacity > 0
+               and total_remaining is not None
+               and total_remaining * 100 <= capacity * LOW_CREDIT_PCT)
+
+    return {
+        "ok": True,
+        "month": s["month"],
+        "plan": s["plan"],
+        "grandfathered": grandfathered,
+        "enforce": s["enforce"],
+        "monthly": {
+            "allowance": allowance,
+            "used": monthly_used,
+            "used_raw": used_raw,
+            "remaining": monthly_remaining,
+            "resets_at": _next_month_start_iso(),
+        },
+        "packs": {
+            "granted": packs_granted,
+            "used": packs_used,
+            "remaining": packs_remaining,
+        },
+        "total_remaining": total_remaining,
+        "low": low,
+        "low_threshold_pct": LOW_CREDIT_PCT,
+        "catalog": credit_ledger.CREDIT_PACKS,
+        "weights": s["weights"],
+    }
+
+
+def check_low_credit(business_id: str,
+                     s: Optional[Dict[str, Any]] = None) -> bool:
+    """ONE chief_notification when a metered action takes the combined
+    remaining (allowance left + pack balance) across the LOW_CREDIT_PCT
+    edge — from above to at/below. Crossing-edge dedupe (the inventory
+    low-stock precedent in store_router._maybe_low_stock_alert): the
+    next action starts at/below the threshold, so the edge condition is
+    false until a top-up lifts capacity — at which point a fresh dip
+    legitimately re-alerts. The prior value is inferred from the weight
+    of the just-logged api_usage row (this runs from check_thresholds,
+    directly after an interaction logs). Belt-and-suspenders: one alert
+    per (month, capacity) pair — a re-check at the exact boundary can't
+    double-fire, and a pack purchase (new capacity) re-arms. Best-effort:
+    never raises."""
+    try:
+        s = s or usage_summary(business_id)
+        allowance = s["allotment"]
+        if s["grandfathered"] or not allowance:
+            return False
+        used = int(s["weighted_used"] or 0)
+        balance = int(s["credits_balance"] or 0)
+        burned_month = int(s["credits_burned_month"] or 0)
+        remaining = max(0, allowance - used) + balance
+        capacity = allowance + balance + burned_month
+        if capacity <= 0:
+            return False
+        threshold = (capacity * LOW_CREDIT_PCT) // 100
+        if remaining > threshold:
+            return False
+        # The edge: remaining BEFORE the action that just logged must
+        # have been above the threshold.
+        last = sb_clients.sb_get_as_service(
+            f"/api_usage?business_id=eq.{business_id}"
+            f"&created_at=gte.{_month_start_iso()}&select=endpoint"
+            f"&order=created_at.desc&limit=1") or []
+        w = weight_for(last[0].get("endpoint")) if last else 0
+        if w <= 0 or (remaining + w) <= threshold:
+            return False
+        # One alert per (month, capacity): a repeat check at the exact
+        # boundary, or a race between two actions, stays a single nudge.
+        existing = sb_clients.sb_get_as_service(
+            f"/chief_notifications?business_id=eq.{business_id}"
+            f"&type=eq.low_credits&created_at=gte.{_month_start_iso()}"
+            f"&select=id,data&limit=20") or []
+        for r in existing:
+            d = r.get("data") or {}
+            try:
+                if int(d.get("capacity") or 0) >= capacity:
+                    return False
+            except (TypeError, ValueError):
+                continue
+        sb_clients.sb_post_as_service("/chief_notifications", {
+            "business_id": business_id,
+            "type": "low_credits",
+            "title": f"Credits running low — {remaining} left this month. Top up?",
+            "body": (f"You've used {capacity - remaining} of the {capacity} AI "
+                     f"actions available this cycle. Nothing pauses yet — "
+                     f"bookings, invoices and bookkeeping never stop — but a "
+                     f"credit pack in Settings → Billing keeps Chief going "
+                     f"without interruption."),
+            "priority": "normal",
+            "status": "unread",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "data": {"remaining": remaining, "capacity": capacity,
+                     "threshold": threshold, "month": s["month"]},
+        }, prefer=None)
+        return True
+    except Exception as e:
+        logger.warning(f"[metering] low-credit check failed: {e}")
+        return False
+
+
 def can_interact(business_id: str) -> bool:
     """The single AI-gate every Chief surface asks. True unless enforcement
     is on AND (allowance + credits exhausted, OR the practitioner's own
@@ -247,6 +406,10 @@ def check_thresholds(business_id: str, owner_email: Optional[str] = None) -> Lis
     the row alone powers the UI banner. Returns thresholds newly crossed."""
     try:
         s = usage_summary(business_id)
+        # Credits-surfacing: the combined-balance "running low" nudge
+        # rides the same after-a-metered-action hook. Self-guarded
+        # (grandfather / no-allowance / crossing-edge) and best-effort.
+        check_low_credit(business_id, s)
         if s["grandfathered"] or s["allotment"] in (None, 0):
             return []
         pct = int(s["weighted_used"] * 100 / s["allotment"])

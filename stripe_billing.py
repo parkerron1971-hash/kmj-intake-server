@@ -536,6 +536,23 @@ async def create_credit_checkout(body: CreditCheckoutBody,
     return {"url": session.get("url"), "id": session.get("id")}
 
 
+@router.get("/credits/{business_id}")
+async def credits_overview_endpoint(business_id: str,
+                                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Credits-surfacing (2026-08-01) — the CreditsCard read. MEMBER+
+    (role-ranked seat access, unlike the owner-only /billing/usage):
+    every seat that can spend AI actions may see the balance.
+
+    Shape: { ok, monthly: {allowance, used, remaining, resets_at},
+    packs: {granted, used, remaining}, total_remaining, low, catalog }.
+    Consumption order (documented in usage_metering.credits_overview):
+    monthly allowance first — packs only burn beyond it."""
+    from business_users_router import require_role
+    require_role(business_id, str(user.id), "member")
+    import usage_metering
+    return usage_metering.credits_overview(business_id)
+
+
 @router.get("/usage")
 async def billing_usage(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """The Plan & Usage meter's one read: weighted usage vs allowance,
