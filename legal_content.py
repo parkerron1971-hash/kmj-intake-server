@@ -104,6 +104,63 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
   .nav-cta:hover{{background:#1D63E6;}}
   @media (max-width: 760px){{.nav-links{{gap:10px;font-size:12px;}}
     .nav-links a:not(.nav-cta):not(.nav-login){{display:none;}}}}
+  @media (max-width: 420px){{.nav-inner{{padding:12px 16px;}} .nav-links .nav-login{{display:none;}}}}
+
+  /* ─── mobile menu ───────────────────────────────────────────────
+     The links above are hidden below 760px, which left the legal pages
+     with no way back into the site on a phone. Panel is a SIBLING of
+     .nav: .nav has backdrop-filter, which would otherwise trap a fixed
+     child under the bar. ── */
+  .nav-burger{{display:none;align-items:center;justify-content:center;width:40px;height:40px;flex-shrink:0;
+    border:1px solid rgba(255,255,255,0.17);border-radius:10px;background:var(--surface);
+    color:var(--text-primary);cursor:pointer;padding:0;font-family:inherit;
+    transition:border-color .15s, background .15s;}}
+  .nav-burger:hover{{border-color:var(--accent);background:var(--surface-2);}}
+  .nav-burger svg{{width:19px;height:19px;}}
+  /* AFTER the base rule: a media query adds no specificity, so a later
+     display:none would win and the button would never appear. */
+  @media (max-width: 760px){{.nav-burger{{display:inline-flex;}}}}
+
+  .mobile-menu{{position:fixed;inset:0;z-index:60;display:none;}}
+  .mobile-menu.is-open{{display:block;}}
+  .mm-scrim{{position:absolute;inset:0;background:rgba(4,5,8,.74);opacity:0;transition:opacity .22s ease;}}
+  .mobile-menu.is-in .mm-scrim{{opacity:1;}}
+  .mm-panel{{position:absolute;top:0;left:0;right:0;max-height:100%;overflow-y:auto;
+    background:var(--bg-2);border-bottom:1px solid var(--border);
+    box-shadow:0 26px 60px rgba(0,0,0,.6);padding:0 20px 22px;
+    opacity:0;transform:translateY(-12px);
+    transition:opacity .2s ease, transform .26s cubic-bezier(.22,1,.36,1);}}
+  .mobile-menu.is-in .mm-panel{{opacity:1;transform:none;}}
+  .mm-top{{display:flex;align-items:center;justify-content:space-between;
+    padding:14px 0;border-bottom:1px solid var(--border);}}
+  .mm-close{{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;
+    border:1px solid rgba(255,255,255,0.17);border-radius:10px;background:var(--surface);
+    color:var(--text-primary);cursor:pointer;padding:0;font-family:inherit;
+    transition:border-color .15s, background .15s;}}
+  .mm-close:hover{{border-color:var(--accent);background:var(--surface-2);}}
+  .mm-close svg{{width:18px;height:18px;}}
+  .mm-links{{display:flex;flex-direction:column;}}
+  .mm-links a{{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:15px 2px;font-family:var(--font-heading);font-size:17px;font-weight:600;
+    letter-spacing:-.01em;color:var(--text-secondary);border-bottom:1px solid var(--border);
+    text-decoration:none;transition:color .15s;}}
+  .mm-links a:hover{{color:var(--text-primary);}}
+  .mm-links a svg{{width:16px;height:16px;color:var(--text-dim);flex-shrink:0;}}
+  .mm-actions{{display:flex;flex-direction:column;gap:10px;margin-top:20px;}}
+  .mm-actions a{{display:flex;align-items:center;justify-content:center;padding:14px 18px;
+    border-radius:10px;font-size:15px;font-weight:700;font-family:inherit;text-decoration:none;}}
+  .mm-actions .mm-primary{{background:var(--accent);color:#fff;
+    box-shadow:0 6px 22px color-mix(in srgb, var(--accent) 30%, transparent);}}
+  .mm-actions .mm-secondary{{background:var(--surface);color:var(--text-primary);
+    border:1px solid rgba(255,255,255,0.17);font-weight:600;}}
+  .mm-fine{{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 16px;margin-top:20px;
+    font-size:12.5px;}}
+  .mm-fine a{{color:var(--text-dim);text-decoration:none;}}
+  .mm-fine a:hover{{color:var(--text-secondary);}}
+  @media (prefers-reduced-motion: reduce){{
+    .mm-scrim,.mm-panel{{transition:none !important;}}
+    .mm-panel{{transform:none !important;}}
+  }}
   .page{{position:relative;padding:64px 24px 32px;}}
   .page::before{{content:'';position:absolute;inset:-40px 0 auto;height:280px;background:radial-gradient(60% 80% at 50% 0%, var(--glow), transparent 70%);pointer-events:none;opacity:0.6;}}
   .wrap{{max-width:820px;margin:0 auto;position:relative;}}
@@ -135,7 +192,8 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
   .footer-links a:hover{{color:var(--text-primary);}}
   @media (max-width: 640px) {{
     .page{{padding:40px 20px 24px;}}
-    .nav-inner{{flex-direction:column;gap:10px;align-items:flex-start;}}
+    /* the bar stays a ROW now — the burger holds the links, so stacking
+       the brand above the buttons just wasted a line */
     .footer-inner{{flex-direction:column;align-items:flex-start;}}
   }}
 </style>
@@ -155,9 +213,46 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
       <a href="mailto:{contact_email}">Contact</a>
       <a class="nav-login" href="{app_url}">Log in</a>
       <a class="nav-cta" href="/get-started">Get Started</a>
+      <button class="nav-burger" id="navBurger" type="button" aria-label="Open menu"
+              aria-expanded="false" aria-controls="mobileMenu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+      </button>
     </div>
   </div>
 </nav>
+
+<div class="mobile-menu" id="mobileMenu" hidden>
+  <div class="mm-scrim" data-mm-close></div>
+  <div class="mm-panel" role="dialog" aria-modal="true" aria-label="Site menu">
+    <div class="mm-top">
+      <a class="brand" href="/">
+        <img class="logo" src="/assets/logo-nav.png" alt="" height="32">
+        <span class="brand-text">The Solutionist System</span>
+      </a>
+      <button class="mm-close" id="mmClose" type="button" aria-label="Close menu" data-mm-close>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <nav class="mm-links" aria-label="Pages">
+      <a href="/features">Features<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
+      <a href="/compare">Compare<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
+      <a href="/faq">FAQ<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
+      <a href="/about">About<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
+      <a href="/help">Help<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
+      <a href="/download">Get the App<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
+    </nav>
+    <div class="mm-actions">
+      <a class="mm-primary" href="/get-started">Get Started &rarr;</a>
+      <a class="mm-secondary" href="{app_url}">Log in</a>
+    </div>
+    <div class="mm-fine">
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="/data-deletion">Data Deletion</a>
+      <a href="mailto:{contact_email}">Contact</a>
+    </div>
+  </div>
+</div>
 
 <div class="page">
   <div class="wrap">
@@ -177,6 +272,68 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
     </div>
   </div>
 </footer>
+
+<script>
+/* Mobile menu — the nav links are hidden below 760px, so this panel is the
+   only way back into the site from a legal page on a phone. */
+(function () {{
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var burger = document.getElementById('navBurger');
+  var menu   = document.getElementById('mobileMenu');
+  if (!burger || !menu) return;
+  var panel = menu.querySelector('.mm-panel');
+  var closeBtn = document.getElementById('mmClose');
+  var openState = false, closeTimer = null;
+
+  function focusables() {{
+    return [].slice.call(panel.querySelectorAll('a[href], button:not([disabled])'))
+             .filter(function (el) {{ return el.offsetParent !== null; }});
+  }}
+  function openMenu() {{
+    if (openState) return;
+    openState = true;
+    if (closeTimer) {{ clearTimeout(closeTimer); closeTimer = null; }}
+    menu.hidden = false;
+    menu.classList.add('is-open');
+    void menu.offsetWidth;
+    menu.classList.add('is-in');
+    burger.setAttribute('aria-expanded', 'true');
+    document.body.style.overflow = 'hidden';
+    if (closeBtn) closeBtn.focus();
+  }}
+  function closeMenu(refocus) {{
+    if (!openState) return;
+    openState = false;
+    menu.classList.remove('is-in');
+    burger.setAttribute('aria-expanded', 'false');
+    document.body.style.overflow = '';
+    if (refocus) burger.focus();
+    closeTimer = setTimeout(function () {{
+      menu.classList.remove('is-open');
+      menu.hidden = true;
+    }}, reduced ? 0 : 260);
+  }}
+
+  burger.addEventListener('click', function () {{ openState ? closeMenu(true) : openMenu(); }});
+  menu.addEventListener('click', function (e) {{
+    if (e.target.closest('[data-mm-close]')) closeMenu(true);
+    else if (e.target.closest('a[href]')) closeMenu(false);
+  }});
+  document.addEventListener('keydown', function (e) {{
+    if (!openState) return;
+    if (e.key === 'Escape') {{ e.preventDefault(); closeMenu(true); return; }}
+    if (e.key !== 'Tab') return;
+    var f = focusables();
+    if (!f.length) return;
+    var first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) {{ e.preventDefault(); last.focus(); }}
+    else if (!e.shiftKey && document.activeElement === last) {{ e.preventDefault(); first.focus(); }}
+  }});
+  window.addEventListener('resize', function () {{
+    if (openState && window.innerWidth > 760) closeMenu(false);
+  }});
+}})();
+</script>
 
 </body>
 </html>"""
