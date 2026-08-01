@@ -1053,6 +1053,9 @@ def list_conversations(business_id: str, limit: int = 50,
                               "body": str(last.get("body") or "")[:200],
                               "created_at": last.get("created_at")}
                              if last else None),
+            # The operator panel renders a flat preview line — keep the
+            # string alias alongside the structured last_message.
+            "preview": str(last.get("body") or "")[:200] if last else "",
         })
     return {"ok": True, "conversations": out}
 
