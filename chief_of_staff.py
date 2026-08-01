@@ -709,14 +709,45 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         business_id=business_id,
         duration_ms=int(time.time() * 1000) - started_ms,
     )
-    # Content includes text blocks + server-tool blocks (server_tool_use,
-    # web_search_tool_result). We only stitch together the text blocks —
-    # the model's narrative already weaves the search results into prose.
-    return "".join(
-        b.get("text", "")
-        for b in data.get("content", [])
+    return _text_from_content(data.get("content", []))
+
+
+def _text_from_content(content: Any) -> str:
+    """Assemble the practitioner-visible reply from an Anthropic content
+    array.
+
+    THE BUG THIS FIXES (8/01): the old code did "".join(text blocks),
+    on the assumption that "the model's narrative already weaves the
+    search results into prose". That holds for ONE text block. With
+    server tools (web_search), the response is
+        [text][server_tool_use][web_search_tool_result][text]...
+    and each text block is a SEPARATE thought written before/after a
+    search — including the model's own course-corrections. Joining them
+    shipped Chief's working notes to the practitioner, run together
+    without even a space:
+
+        "...so I'm not guessing.Ignore that last bit — let me get you
+         the real picture instead of generic web results."
+
+    The LAST text block is the model's answer after it has seen every
+    tool result; the earlier ones are scaffolding. Keep the last
+    non-empty block, unless the model only ever emitted one (no tool
+    use), in which case the join is trivially identical.
+    """
+    blocks = [
+        (b.get("text") or "").strip()
+        for b in (content or [])
         if isinstance(b, dict) and b.get("type") == "text"
-    ).strip()
+    ]
+    blocks = [b for b in blocks if b]
+    if not blocks:
+        return ""
+    if len(blocks) == 1:
+        return blocks[0]
+    logger.info(
+        f"[chief] {len(blocks)} text blocks (server tools ran) — "
+        f"keeping the final block, dropping {len(blocks) - 1} working note(s)")
+    return blocks[-1]
 
 
 async def _draft_short(
@@ -903,8 +934,20 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/sms_messages?business_id=eq.{biz_id}"
             f"&order=created_at.desc&limit=15"
             f"&select=id,direction,phone_number,message,status,created_at,read,contact_id"),
+        # Projects (8/01 fix) — Chief used to get a COUNT of projects but
+        # never their titles, so "what's due next?" left it with a hole
+        # it couldn't fill mid-turn: actions run after the reply is
+        # written, so it narrated "let me pull those" and (worse) reached
+        # for web_search on the practitioner's own data. Projects live as
+        # module_entries on the auto-created Projects module; the !inner
+        # join filters to that module in one round-trip, no lookup first.
+        _sb(client, "GET",
+            f"/module_entries?business_id=eq.{biz_id}"
+            f"&custom_modules.slug=eq.projects"
+            f"&select=id,data,created_at,custom_modules!inner(slug)"
+            f"&order=created_at.desc&limit=50"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, products, email_replies, sms_messages = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, products, email_replies, sms_messages, project_rows = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -1062,6 +1105,19 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "products": products or [],
         "email_replies": email_replies or [],
         "sms_messages": sms_messages or [],
+        # 8/01 — flattened to the same shape handle_list_projects returns,
+        # so the context block and the action agree on vocabulary.
+        "projects": [
+            {
+                "id": r.get("id"),
+                "title": (r.get("data") or {}).get("title") or "Untitled",
+                "client": (r.get("data") or {}).get("client") or "",
+                "status": (r.get("data") or {}).get("status") or "planning",
+                "value": (r.get("data") or {}).get("value") or 0,
+                "target_date": (r.get("data") or {}).get("target_date") or "",
+            }
+            for r in (project_rows or [])
+        ],
         "foundation_block": foundation_block or "",
         "business_profile_block": business_profile_block or "",
         "business_profile_raw": business_profile_raw or {},
@@ -1805,6 +1861,24 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
             f"  - {p.get('name')} [{ptype}{dur_part}] {price_label} [{pay_status}] [id={p.get('id')}]"
         )
 
+    # Projects (8/01) — titles/status/dates in the CONTEXT, not behind an
+    # action. Chief answers "what's due next?" from what it already has
+    # instead of narrating a data pull it cannot perform mid-turn.
+    project_lines = []
+    for p in (ctx.get("projects") or [])[:25]:
+        line = f"  - {p.get('title')} ({p.get('status')})"
+        if p.get("client"):
+            line += f" — {p['client']}"
+        if p.get("value"):
+            try:
+                line += f" · ${float(p['value']):,.0f}"
+            except (TypeError, ValueError):
+                pass
+        if p.get("target_date"):
+            line += f" · due {p['target_date']}"
+        line += f" [id={p.get('id')}]"
+        project_lines.append(line)
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
   Voice profile: {json.dumps(biz.get('voice_profile') or {})[:1200]}{et_summary}{autopilot_block}
@@ -1820,6 +1894,9 @@ QUEUE ({len(ctx['queue'])} drafts pending):
 
 UPCOMING SESSIONS (next 7 days):
 {chr(10).join(session_lines) if session_lines else '  (none scheduled)'}
+
+PROJECTS (this IS the full list — never search or "pull" for it):
+{chr(10).join(project_lines) if project_lines else '  (none yet)'}
 
 UNREAD INSIGHTS:
 {chr(10).join(insight_lines) if insight_lines else '  (none)'}
@@ -12763,7 +12840,11 @@ def _build_web_search_block() -> str:
         "- Holidays, awareness months, seasonal planning ('Pastor Appreciation Month?')\n"
         "- General knowledge you're not confident about\n\n"
         "DO NOT SEARCH FOR:\n"
-        "- Information already in the practitioner's business data — use the context blocks above.\n"
+        "- ANYTHING about this practitioner's own business — projects, contacts, "
+        "invoices, sessions, revenue, products, their website. Every one of those "
+        "is in the context blocks above. A web search cannot see their data and "
+        "will return useless generic results. If a detail seems missing, say what "
+        "you DO have and offer to open the relevant screen — never search for it.\n"
         "- Personal information about contacts (privacy).\n"
         "- Medical, legal, or financial advice that requires a licensed professional. "
         "If the practitioner asks for that, search for general orientation only and "
@@ -12773,7 +12854,18 @@ def _build_web_search_block() -> str:
         "Don't dump results — summarize the key finding in 2-3 sentences. If the "
         "search returns nothing useful, say so honestly.\n"
         "Most messages don't need a search — the budget is small (a few searches "
-        "per turn), so don't burn it on questions the context already answers."
+        "per turn), so don't burn it on questions the context already answers.\n\n"
+        "ONE REPLY, NO SEQUELS:\n"
+        "Everything you write goes out as a SINGLE message. You cannot send a "
+        "follow-up, and nothing arrives after you stop typing. So never write "
+        "'let me pull that', 'details incoming', 'while that loads', or 'I'll "
+        "walk you through it the moment it lands' — there is no moment after "
+        "this one. Answer from the context you already have, or take an action "
+        "and let its result speak. If you genuinely lack something, say plainly "
+        "that you don't have it and offer the screen where it lives.\n"
+        "Also: your reply is the FINAL draft. Never narrate a correction to "
+        "yourself ('ignore that last bit', 'let me try again') — just write the "
+        "corrected answer."
     )
 
 
