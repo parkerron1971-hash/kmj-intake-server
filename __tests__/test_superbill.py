@@ -294,7 +294,10 @@ def test_future_sessions_never_bill(monkeypatch):
     ]
     monkeypatch.setattr(sb_clients, "sb_get_as_service",
                         _sb(sessions=sessions, invoices=[]))
-    start = now.date().replace(day=1).isoformat()
+    # Window must COVER yesterday's session: replace(day=1) excluded it on
+    # the 1st of every month (yesterday = previous month) — a time-bomb
+    # that fired 2026-08-01. Anchor the window to the dates themselves.
+    start = (now.date() - timedelta(days=2)).isoformat()
     end = (now.date() + timedelta(days=27)).isoformat()
     out = superbill.build_superbill("b1", "c1", date_from=start, date_to=end)
     assert [r["date"] for r in out["rows"]] == \
