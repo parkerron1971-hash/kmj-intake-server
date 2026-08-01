@@ -142,6 +142,18 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "payload": ["file_name", "folder"],
         "legacy": True,
     },
+    # ── Site Concierge (customer-facing website chat) ────────────
+    "concierge_lead_captured": {
+        "source": "site_concierge /public/concierge/{slug}/lead "
+                  "(widget lead-capture form)",
+        "payload": ["name", "email", "message_preview", "conversation_id",
+                    "new_contact"],
+    },
+    "concierge_escalated": {
+        "source": "site_concierge guardrail deflection (crisis/clinical "
+                  "ask on a visitor conversation)",
+        "payload": ["conversation_id", "reason"],
+    },
 }
 
 

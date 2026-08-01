@@ -35,6 +35,10 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
     "accountant_package": "professional",  # year-end ZIP + IIF — every solo files taxes
     "vertical_ledgers": "professional",    # IOLTA trust / restricted-fund MECHANICS —
                                            # compliance is table stakes for a solo lawyer
+    "site_concierge": "professional",      # customer-facing website chat
+                                           # (site_concierge.py) — an AI
+                                           # surface, so it rides the hero
+                                           # tier with chief_unlimited
     # Practice — collaboration + compliance deliverables + scale
     "accountant_collaborator": "practice",
     "audit_trail": "practice",

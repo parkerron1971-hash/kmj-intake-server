@@ -293,6 +293,12 @@ app.include_router(store_router)
 # Digital delivery (2026-07-31) - hosted product files + validated downloads
 from store_files import router as store_files_router
 app.include_router(store_files_router)
+# Site Concierge (2026-08-01) - customer-facing website chat (NOT Chief):
+# public widget/message/lead endpoints + operator settings/conversations.
+# Registered BEFORE public_site_router so /public/concierge/* and
+# /concierge/* never fall into the subdomain catch-all.
+from site_concierge import router as site_concierge_router
+app.include_router(site_concierge_router)
 from rules_router import router as rules_router, proposals_router as chief_proposals_router
 app.include_router(rules_router)
 # Chief-in-your-pocket (2026-06-12) - Web Push (subscribe/test + senders)
