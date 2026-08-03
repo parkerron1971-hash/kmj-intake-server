@@ -3928,7 +3928,30 @@ async def _should_auto_approve(
     draft: Dict[str, Any],
     contact: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, str]:
-    """Return (should_auto_approve, reason_code)."""
+    """Return (should_auto_approve, reason_code).
+
+    LEDGER STAGE 3 (2026-08-03): this function is THE unattended sender —
+    auto-approving a draft here calls _do_approve_one, which emails the
+    client. It ran for four months without ever consulting
+    settings.autonomy.client_facing_autonomy, the flag launch_access
+    seeds as "disabled" for every law / therapy / counselling business at
+    creation. A therapist's account carried a setting saying Chief must
+    not contact clients on its own while this function did exactly that.
+    The policy engine is checked FIRST, before autopilot level, because
+    a regulated practice on "full" is precisely the dangerous case.
+    """
+    try:
+        import policy_engine
+        verdict = policy_engine.evaluate(
+            str(biz.get("id") or ""), verb="approve_draft",
+            surface="autopilot", prompted=False, biz_row=biz)
+        if not verdict.allowed:
+            return False, verdict.rule
+    except Exception as e:
+        # Fail OPEN to preserve today's behaviour on an engine hiccup —
+        # but say so, because a silent skip here is a silent send.
+        print(f"[Chief] policy check unavailable, autopilot proceeding: {e}", flush=True)
+
     level = _autopilot_level(biz, agent_name)
     if level == "manual":
         return False, "manual_mode"
@@ -11344,7 +11367,8 @@ async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
     }
 
 
-async def _execute_actions(client, biz, actions: List[Dict]) -> List[Dict]:
+async def _execute_actions(client, biz, actions: List[Dict],
+                           user_id: Optional[str] = None) -> List[Dict]:
     results: List[Dict[str, Any]] = []
     class_c_executed = 0
     for action in actions:
@@ -11406,8 +11430,31 @@ async def _execute_actions(client, biz, actions: List[Dict]) -> List[Dict]:
             continue
         if verdict == "execute":
             class_c_executed += 1
+
+        # STAGE 3 — the rule that permitted this, recorded. On the chat
+        # path the practitioner asking IS the authorisation (prompted),
+        # so this rarely refuses; its job here is to finally compute the
+        # caller's SEAT ROLE, which no Chief code path has ever done. Up
+        # to now a viewer seat reached the LLM and only died at insert
+        # time as a bare "insert failed", and the ledger could not say
+        # who was permitted to do what.
+        policy_rule = "chat"
+        try:
+            import policy_engine
+            pv = policy_engine.evaluate(
+                str(biz.get("id") or ""), verb=atype, surface="chat",
+                prompted=True, user_id=user_id, biz_row=biz)
+            policy_rule = pv.rule
+            if not pv.allowed:
+                results.append(_fail(atype, pv.reason))
+                continue
+        except Exception as e:
+            logger.warning(f"[policy] chat evaluation failed for {atype}: {e}")
+
         try:
             res = await handler(client, biz, resolved)
+            if isinstance(res, dict):
+                res["_authorized_by"] = policy_rule
             results.append(res)
             # Record it if it can be taken back. Both halves are needed: the
             # payload says what was asked for, the result carries the ids of
@@ -14861,7 +14908,8 @@ async def chief_chat(
                         if isinstance(a, dict) and a.get("type") == "propose_module_from_intake":
                             a["override"] = True
 
-            taken = await _execute_actions(client, biz, actions) if actions else []
+            taken = await _execute_actions(
+                client, biz, actions, user_id=str(user_session.user.id)) if actions else []
 
             # Phase C.1.2 — Option D two-pass reply. Only fires when actions
             # actually executed. Re-asks the LLM with structured success/

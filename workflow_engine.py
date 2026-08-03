@@ -352,18 +352,21 @@ async def execute_step(client, run, biz, step, ctx) -> Dict[str, Any]:
         from chief_of_staff import ACTION_HANDLERS
         chief_handler = ACTION_HANDLERS.get(action)
         if chief_handler:
+            # STAGE 3: the shared evaluator. A workflow step is unattended
+            # by definition, so this is also where a regulated practice's
+            # client-facing protection applies.
             authorized_by = "workflow"
             try:
-                import action_registry
-                if action_registry.is_bulk(action):
-                    return {"ok": False,
-                            "error": f"{action!r} is a bulk action — not runnable unattended"}
-                cls = action_registry.classification(action) or {}
-                authorized_by = (
-                    f"workflow:{cls.get('reversibility') or cls.get('effect')}"
-                    if cls else "workflow:unclassified")
-            except Exception:
-                pass
+                import policy_engine
+                verdict = policy_engine.evaluate(
+                    str(biz.get("id") or ""), verb=action, surface="workflow",
+                    prompted=False, biz_row=biz)
+                authorized_by = verdict.rule
+                if not verdict.allowed:
+                    return {"ok": False, "error": verdict.reason,
+                            "policy": verdict.as_error()}
+            except Exception as e:
+                logger.warning(f"policy check failed for {action!r}: {e}")
             ok, err, res = True, None, None
             try:
                 res = await chief_handler(
