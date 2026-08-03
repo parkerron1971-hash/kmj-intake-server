@@ -779,6 +779,18 @@ async def startup():
         scheduler_lock.try_acquire()
     except Exception as _e:
         print(f"   [warn] initial lease acquire failed (defaulting leader): {_e}")
+
+    # Action Ledger: publish the controlled vocabulary. Idempotent upsert
+    # from action_registry + the event catalog, so a verb added in code is
+    # registered by the next boot and its rows stop being stamped
+    # verb_registered=false. Never fatal — the ledger records an
+    # unfamiliar verb rather than losing the action.
+    try:
+        import audit_log as _al
+        print(f"   [ledger] vocabulary synced: {_al.sync_action_types()} verbs")
+    except Exception as _e:
+        print(f"   [warn] ledger vocabulary sync failed: {_e}")
+
     scheduler.add_job(scheduler_lock.renew_tick, "interval",
                       seconds=scheduler_lock.RENEW_SEC, id="scheduler_lease_renew")
     g = scheduler_lock.gate
