@@ -393,6 +393,58 @@ def test_pdf_renders_or_degrades_to_csv():
 
 
 def test_truncated_table_says_so():
-    """A truncated table must never be mistaken for a complete one."""
+    """A truncated table must never be mistaken for a complete one —
+    and the remedy it offers has to be real. The first version told
+    readers to "export CSV for the complete range" while the CSV was
+    capped at the same 500 rows: the document asserted the opposite of
+    the truth about itself."""
     rep = pathlib.Path(_here.parent / "ledger_report.py").read_text(encoding="utf-8")
-    assert "must never" in rep and "Export CSV for the complete range" in rep
+    assert "must never" in rep
+    assert "total_in_range" in rep, "the report must count what it did not show"
+    assert "narrow the date" in rep, "the remedy must actually work"
+    assert "Export CSV for the complete range" not in rep
+
+
+def test_failed_actions_keep_their_message_but_never_their_payload():
+    """The leak the security review found, and the line it sits on.
+
+    A half-failed handler returns a DICT — {"ok": False, "contact":
+    {...}} — and str()-ing that into `error` put contact PII into a
+    column that travels to an external auditor's CSV. But a STRING
+    result is the handler's own failure message, which the practitioner
+    needs. Keep the message; never stringify the structure."""
+    import audit_log as al
+    assert al._error_text({"result": "error: recipient suppressed"})         == "error: recipient suppressed"
+    leaky = {"label": "Send invoice",
+             "result": {"ok": False, "contact": {"email": "jane@private.com",
+                                                 "phone": "555-0100"}}}
+    out = al._error_text(leaky)
+    assert "jane@private.com" not in out and "555-0100" not in out
+    assert out == "failed: Send invoice"
+    assert al._error_text({}) == "action failed with no error message"
+
+
+def test_chain_tip_is_guarded_and_locked_down():
+    """Found by accident during the final audit: a test statement ran
+    `update ledger_chain_state set last_row_hash='forged'` and it
+    SUCCEEDED. The rows themselves held (their triggers refused), and
+    the tip was rebuilt from the rows — which is the reassuring half:
+    audit_log is authoritative, chain_state is only its cache.
+
+    But a BACKWARDS sequence would reuse a number that already exists,
+    and a duplicated sequence makes the ledger ambiguous about order —
+    which is most of what a ledger is for. A forged hash is
+    self-detecting on the next walk; a reused sequence is not."""
+    sql = pathlib.Path(
+        _here.parent / "supabase" / "APPLY-2026-08-03-ledger-tip-guard.sql"
+    ).read_text(encoding="utf-8")
+    assert "new.last_sequence < old.last_sequence" in sql
+    assert "before update on public.ledger_chain_state" in sql
+    # And the guard tables lock down consistently (whitespace-tolerant:
+    # the statements are column-aligned in the file).
+    flat = " ".join(sql.split())
+    for t in ("ledger_chain_state", "ledger_tombstones"):
+        assert f"revoke all on public.{t} from anon, authenticated" in flat
+    # last_row_hash stays writable on purpose — the legitimate repair
+    # path needs it, and a wrong hash reports itself.
+    assert "NOT locked" in sql

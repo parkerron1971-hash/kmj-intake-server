@@ -104,7 +104,12 @@ class Verdict:
 
 
 def _biz(business_id: str, biz_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    if isinstance(biz_row, dict) and biz_row.get("id"):
+    # A row without `type` and `settings` cannot answer the two
+    # questions this module asks of it. Trusting a stub made a regulated
+    # practice read as unregulated and quietly re-enabled unattended
+    # client contact — re-fetch instead.
+    if (isinstance(biz_row, dict) and biz_row.get("id")
+            and "type" in biz_row and "settings" in biz_row):
         return biz_row
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}&select=id,type,owner_id,settings&limit=1") or []
@@ -208,5 +213,11 @@ def evaluate(business_id: str, *, verb: str, surface: str,
                        f"{verb} is irreversible and ran without a prompt.",
                        role)
 
-    return Verdict(True, f"{surface}:{role or 'system'}:{rev or effect}",
-                   "Allowed.", role)
+    # The rule string names RULES THAT RAN — nothing else. It used to
+    # carry the seat role ("chat:viewer:B"), which reads in an auditor's
+    # report as "permitted under the viewer rule" — except no role check
+    # was ever evaluated; RLS remains the only gate. Putting an
+    # unenforced role there stated something false inside an
+    # append-only, uncorrectable record. The role is still resolved and
+    # returned on the Verdict for the day it becomes load-bearing.
+    return Verdict(True, f"{surface}:{rev or effect}", "Allowed.", role)

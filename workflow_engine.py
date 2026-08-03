@@ -366,7 +366,13 @@ async def execute_step(client, run, biz, step, ctx) -> Dict[str, Any]:
                     return {"ok": False, "error": verdict.reason,
                             "policy": verdict.as_error()}
             except Exception as e:
+                # FAIL CLOSED, matching chief_scheduler. Failing open
+                # here silently disabled the three things the engine
+                # blocks — including unattended client contact for a
+                # regulated practice — whenever the check itself broke.
                 logger.warning(f"policy check failed for {action!r}: {e}")
+                return {"ok": False,
+                        "error": "action safety check unavailable"}
             ok, err, res = True, None, None
             try:
                 res = await chief_handler(
@@ -407,7 +413,12 @@ async def advance_run(client, run: Dict[str, Any]) -> Dict[str, Any]:
     # Load biz once (Chief handlers + some steps want the row).
     bc, biz_rows = await _sb(client, "GET",
         f"/businesses?id=eq.{run['business_id']}&select=*&limit=1")
-    biz = biz_rows[0] if isinstance(biz_rows, list) and biz_rows else {"id": run["business_id"]}
+    # A stub row here disabled the regulated-vertical gate: policy_engine
+    # trusts any dict carrying an id, and a stub has no `type`, so a
+    # therapy practice read as unregulated. Fail the run instead.
+    biz = biz_rows[0] if isinstance(biz_rows, list) and biz_rows else None
+    if not biz:
+        return {"ok": False, "error": "business unavailable"}
 
     ctx = dict(run.get("context") or {})
     log = list(run.get("log") or [])

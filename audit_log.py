@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -88,11 +89,21 @@ def vocabulary() -> Dict[str, Dict[str, Any]]:
     for verb in ("rules:notify_practitioner", "rules:apply_tag",
                  "rules:create_task", "rules:send_template_email",
                  "job:rebuild_site", "job:compose_directions",
-                 "job:refine_section", "ledger:erasure", "ledger:selftest"):
+                 "job:refine_section", "ledger:erasure", "ledger:selftest",
+                 # The ledger's OWN verbs. Missing these meant the
+                 # feature's own rows landed with verb_registered=false
+                 # — the vocabulary out of sync on ship day, with itself.
+                 "ledger:searched", "ledger:link_minted",
+                 "ledger:link_revoked", "ledger:viewed_by_auditor"):
         out.setdefault(verb, {"verb": verb, "namespace": verb.split(":")[0],
                               "effect": "write"})
+    # MUST match the trigger list in APPLY-2026-08-03-ledger-coverage.sql.
+    # outbound_transfers was missing here, so every payout row landed
+    # verb_registered=false — the highest-consequence writes flagged as
+    # unrecognised vocabulary.
     for table in ("invoices", "bills", "business_expenses", "contacts",
-                  "sessions", "module_entries", "orders"):
+                  "sessions", "module_entries", "orders",
+                  "outbound_transfers"):
         for op in ("insert", "update", "delete"):
             key = f"db:{table}_{op}"
             out[key] = {"verb": key, "namespace": "db", "effect": "write",
@@ -185,6 +196,36 @@ def record(business_id: Optional[str], *, actor_type: str, verb: str,
         return False
 
 
+def _error_text(t: Dict[str, Any]) -> str:
+    """A failure MESSAGE, never a failure payload.
+
+    The result dict is deliberately not consulted: it is the thing that
+    holds record contents, and `error` is a column that leaves the
+    building. When a handler failed without saying why, say exactly
+    that rather than reaching for the nearest available text.
+    """
+    err = t.get("error")
+    if isinstance(err, str) and err.strip():
+        return err[:500]
+    # A STRING result is the handler's own human-readable failure
+    # message ("error: recipient suppressed") — the same class of thing
+    # as `error`, and what the practitioner needs to see in History.
+    #
+    # A DICT or LIST result is the payload, and that is where the leak
+    # was: a half-failed create_invoice returns {"ok": False,
+    # "contact": {...}}, and str()-ing it put contact PII into `error`,
+    # which travels all the way to an external auditor's CSV. Never
+    # stringify a structure; it stays in `result`, which no surface
+    # selects.
+    res = t.get("result")
+    if isinstance(res, str) and res.strip():
+        return res[:500]
+    label = t.get("label")
+    if isinstance(label, str) and label.strip():
+        return f"failed: {label}"[:500]
+    return "action failed with no error message"
+
+
 def record_chief_turn(*, user_id: Optional[str], business_id: Optional[str],
                       source: Optional[str], taken: List[Dict[str, Any]],
                       action_failed) -> int:
@@ -206,7 +247,13 @@ def record_chief_turn(*, user_id: Optional[str], business_id: Optional[str],
             actor_id=user_id,
             verb=verb,
             ok=not failed,
-            error=(str(t.get("error") or t.get("result"))[:500] if failed else None),
+            # NEVER fold `result` into `error`. `error` is in
+            # LEDGER_SELECT and therefore reaches viewers, accountants
+            # and — through an auditor link — people outside the
+            # business entirely. A handler's result dict routinely
+            # carries contact PII and invoice bodies. The result stays
+            # in `result`, which no surface selects.
+            error=(_error_text(t) if failed else None),
             summary=t.get("label") or verb,
             payload={k: t.get(k) for k in ("label", "nav") if t.get(k)},
             result=t.get("result"),
@@ -306,10 +353,11 @@ def ledger_entries(biz: str, *, limit: int = 100, failed_only: bool = False,
         q += f"&verb=eq.{safe}"
     # PostgREST timestamp class: the Z form ALWAYS. An isoformat +00:00
     # in a query string silently returns empty.
-    if since:
-        q += f"&created_at=gte.{_z(since)}"
-    if until:
-        q += f"&created_at=lte.{_z(until)}"
+    z_since, z_until = _z(since), _z(until)
+    if z_since:
+        q += f"&created_at=gte.{z_since}"
+    if z_until:
+        q += f"&created_at=lte.{z_until}"
     # Two tiers, one table. db_trigger rows are the PROVABLE tier and
     # they double up with the application row for the same action, so a
     # practitioner's History reads the intent tier by default. A proof
@@ -320,10 +368,60 @@ def ledger_entries(biz: str, *, limit: int = 100, failed_only: bool = False,
     return sb_clients.sb_get_as_service(q) or []
 
 
-def _z(ts: str) -> str:
-    """PostgREST-safe UTC timestamp (Z form, never +00:00)."""
-    s = str(ts).strip()
-    return s.replace("+00:00", "Z") if s else s
+def count_in_range(biz: str, *, include_db: bool = False,
+                   since: Optional[str] = None,
+                   until: Optional[str] = None) -> int:
+    """How many rows actually MATCH — not how many we returned.
+
+    ledger_entries hard-caps at 500. An exported report that shows 500
+    and says nothing implies a completeness it does not have, which for
+    an evidentiary document is the worst kind of quiet. Counts up to a
+    ceiling rather than scanning forever; at the ceiling the caller
+    still learns "more than this".
+    """
+    q = (f"/audit_log?business_id=eq.{biz}&select=id"
+         f"{'' if include_db else '&source=not.eq.db_trigger'}")
+    z_since, z_until = _z(since), _z(until)
+    if z_since:
+        q += f"&created_at=gte.{z_since}"
+    if z_until:
+        q += f"&created_at=lte.{z_until}"
+    try:
+        return len(sb_clients.sb_get_as_service(q + "&limit=5000") or [])
+    except Exception as e:
+        logger.warning(f"[ledger] range count failed for {biz}: {e}")
+        return 0
+
+
+_TS_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})"
+    r"(?:[T ](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?))?"
+    r"(?:Z|[+-]\d{2}:?\d{2})?$")
+
+
+def _z(ts: Optional[str]) -> Optional[str]:
+    """A validated, canonical UTC timestamp — or nothing.
+
+    This value is concatenated into a PostgREST query string, and it
+    arrives from three places: raw query params on /audit/export, the
+    signed window on an auditor link, and the NAVIGATOR, whose input is
+    an LLM reading a user's free text. The old version only rewrote
+    +00:00 to Z, so `2026-01-01&select=id,payload,result` sailed
+    through — one prompt away from widening the very select list this
+    design exists to keep narrow.
+
+    Anything that is not a plain ISO date/time is dropped rather than
+    passed on: a filter we cannot parse is not a filter we should
+    silently honour.
+    """
+    if not ts:
+        return None
+    m = _TS_RE.match(str(ts).strip())
+    if not m:
+        logger.warning("[ledger] rejected malformed timestamp filter")
+        return None
+    day, clock = m.group(1), m.group(2)
+    return f"{day}T{clock}Z" if clock else f"{day}T00:00:00Z"
 
 
 class _NavBody(BaseModel):
@@ -349,6 +447,19 @@ def navigate(body: _NavBody, user: AuthedUser = Depends(require_user)):
     belongs in the record — especially when the reader is an auditor.
     """
     _require_ledger_read(body.business_id, user)
+    # This endpoint spends money (an Anthropic call) and grows an
+    # append-only table on every request. chief_chat and ai_proxy are
+    # both metered; this was not, so any active seat could loop it.
+    try:
+        import rate_limit
+        if not rate_limit.allow("ledger_nav", str(user.id)):
+            raise HTTPException(
+                429, "That's a lot of searches at once — give it a moment.",
+                headers={"Retry-After": str(rate_limit.retry_after("ledger_nav"))})
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     import ledger_navigator
     nav = ledger_navigator.resolve(body.question)
     f = nav["filter"]
