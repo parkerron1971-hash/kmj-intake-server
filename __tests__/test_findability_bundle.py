@@ -125,6 +125,38 @@ def test_custom_domain_serves_every_door_the_subdomain_does():
         assert door in src, f"custom-domain path is missing {door}"
 
 
+def test_platform_pages_do_not_shadow_practitioner_sites():
+    """Root-level marketing/legal routes are registered BEFORE the
+    catch-all with no host check, so /about on a practitioner's own
+    domain served the SOLUTIONIST marketing About page — a brand
+    collision on the address they paid for. Every one of them must go
+    through the host guard."""
+    import inspect
+
+    for fn_name in ("public_about", "public_faq", "public_features",
+                    "public_compare", "public_get_started", "public_download",
+                    "public_sms_optin", "public_privacy", "public_terms",
+                    "public_help", "public_data_deletion", "public_login_redirect"):
+        fn = getattr(ps, fn_name)
+        src = inspect.getsource(fn)
+        assert "_platform_page_or_site" in src, (
+            f"{fn_name} answers on every host — it will shadow a "
+            f"practitioner's own page at that path")
+        assert "request" in inspect.signature(fn).parameters, (
+            f"{fn_name} cannot check the host without the request")
+
+
+def test_host_guard_prefers_the_site_on_a_site_host():
+    """The guard must reach the site renderer for a slug host, and only
+    fall through to the platform page when no site owns the host."""
+    import inspect
+    src = inspect.getsource(ps._platform_page_or_site)
+    assert "_serve_site_by_slug" in src
+    assert "_serve_site_by_custom_domain" in src
+    # The platform render is the LAST resort, after both site lookups.
+    assert src.index("_serve_site_by_slug") < src.index("return HTMLResponse")
+
+
 def test_both_serve_paths_pass_the_custom_domain_into_augment():
     """The canonical bug was _augment_html(html, slug) — dropping the
     argument the injector already accepted."""

@@ -6428,35 +6428,78 @@ async def static_widget_embed():
     )
 
 
+# ─── Platform pages vs. practitioner pages ───────────────────────────
+#
+# These root-level routes are registered BEFORE the catch-all, with no
+# host check — so until 2026-08-02 they answered on EVERY host. A
+# practitioner's own site served the SOLUTIONIST marketing About page at
+# /about: not a soft-404, a brand collision, on the domain they paid
+# for. (Found while verifying the findability bundle: the new sitemap
+# would have advertised /about as the practitioner's page.)
+#
+# The path belongs to whoever owns the host. On mysolutionist.app it is
+# the platform's page; on a practitioner subdomain or custom domain it
+# belongs to their site (their real page, or their branded 404).
+
+async def _platform_page_or_site(request: Request, render):
+    """Serve a platform marketing/legal page ONLY on a platform host.
+    On a site host, hand the same path to that site's renderer."""
+    host = public_host(request)
+    path = "/" + (request.url.path or "").lstrip("/")
+
+    slug = extract_slug_from_host(request)
+    if slug:
+        if not _check_rate(slug):
+            raise HTTPException(429, "Rate limit exceeded")
+        return await _serve_site_by_slug(slug, path)
+
+    if not _is_api_host(host):
+        is_known_base = any(host == base or host.endswith(f".{base}")
+                            for base in BASE_DOMAINS)
+        if not is_known_base and "." in host:
+            result = await _serve_site_by_custom_domain(host, path)
+            if result:
+                return result
+
+    return HTMLResponse(content=render(), media_type="text/html")
+
+
 # Marketing routes
 @router.get("/features", include_in_schema=False)
-async def public_features():
-    return HTMLResponse(content=render_features(), media_type="text/html")
+async def public_features(request: Request):
+    return await _platform_page_or_site(request, render_features)
 
 @router.get("/compare", include_in_schema=False)
-async def public_compare():
-    return HTMLResponse(content=render_compare(), media_type="text/html")
+async def public_compare(request: Request):
+    return await _platform_page_or_site(request, render_compare)
 
 @router.get("/faq", include_in_schema=False)
-async def public_faq():
-    return HTMLResponse(content=render_faq(), media_type="text/html")
+async def public_faq(request: Request):
+    return await _platform_page_or_site(request, render_faq)
 
 @router.get("/about", include_in_schema=False)
-async def public_about():
-    return HTMLResponse(content=render_about(), media_type="text/html")
+async def public_about(request: Request):
+    return await _platform_page_or_site(request, render_about)
 
 @router.get("/get-started", include_in_schema=False)
-async def public_get_started():
-    return HTMLResponse(content=render_get_started(), media_type="text/html")
+async def public_get_started(request: Request):
+    return await _platform_page_or_site(request, render_get_started)
 
 # Arc 18 — desktop download page + login convenience redirect.
 @router.get("/download", include_in_schema=False)
-async def public_download():
-    return HTMLResponse(content=render_download(), media_type="text/html")
+async def public_download(request: Request):
+    return await _platform_page_or_site(request, render_download)
 
 @router.get("/login", include_in_schema=False)
-async def public_login_redirect():
+async def public_login_redirect(request: Request):
     from fastapi.responses import RedirectResponse
+    # On a practitioner host /login is their page (or their 404) — the
+    # app-login convenience redirect is a platform-host affordance.
+    host = public_host(request)
+    if extract_slug_from_host(request) or (
+            not _is_api_host(host) and "." in host
+            and not any(host == b or host.endswith(f".{b}") for b in BASE_DOMAINS)):
+        return await _platform_page_or_site(request, lambda: "")
     return RedirectResponse(url=MARKETING_APP_URL, status_code=302)
 
 # Intake form submission — POSTed via fetch() from /get-started.
@@ -6467,26 +6510,26 @@ async def post_lead(req: LeadIntakeRequest):
 # A2P CTA page — the publicly verifiable SMS opt-in (2026-07-04).
 # Carriers' reviewers fetch this; it must stay public + crawlable.
 @router.get("/sms", include_in_schema=False)
-async def public_sms_optin():
+async def public_sms_optin(request: Request):
     from legal_content import render_sms_page_html
-    return HTMLResponse(content=render_sms_page_html(), media_type="text/html")
+    return await _platform_page_or_site(request, render_sms_page_html)
 
 # Legal + help routes
 @router.get("/privacy", include_in_schema=False)
-async def public_privacy():
-    return HTMLResponse(content=render_privacy_html(), media_type="text/html")
+async def public_privacy(request: Request):
+    return await _platform_page_or_site(request, render_privacy_html)
 
 @router.get("/data-deletion", include_in_schema=False)
-async def public_data_deletion():
-    return HTMLResponse(content=render_data_deletion_html(), media_type="text/html")
+async def public_data_deletion(request: Request):
+    return await _platform_page_or_site(request, render_data_deletion_html)
 
 @router.get("/terms", include_in_schema=False)
-async def public_terms():
-    return HTMLResponse(content=render_terms_html(), media_type="text/html")
+async def public_terms(request: Request):
+    return await _platform_page_or_site(request, render_terms_html)
 
 @router.get("/help", include_in_schema=False)
-async def public_help():
-    return HTMLResponse(content=render_help_html(), media_type="text/html")
+async def public_help(request: Request):
+    return await _platform_page_or_site(request, render_help_html)
 
 
 @router.get("/{path:path}", include_in_schema=False)
