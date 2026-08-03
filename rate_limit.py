@@ -35,6 +35,10 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # for a buyer grabbing a multi-item order, tight enough to stop a
     # scripted token search.
     "store_download": (int(os.environ.get("RL_STORE_DOWNLOAD_PER_MIN", "30")), 60),
+    # Auditor ledger links — anon, token-gated, checked with
+    # allow_strict(). A reviewer reads a page and maybe exports twice;
+    # anything faster is a scripted search for a valid token.
+    "auditor_link": (int(os.environ.get("RL_AUDITOR_LINK_PER_MIN", "20")), 60),
 }
 _DEFAULT = (60, 60)
 
