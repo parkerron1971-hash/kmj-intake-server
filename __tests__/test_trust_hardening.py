@@ -501,7 +501,19 @@ def test_children_delete_before_their_parents(child, parent):
     assert T.index(child) < T.index(parent), f"{child} must precede {parent}"
 
 
-def test_contacts_is_last():
-    """Everything cites contacts; it anchors the end of the walk."""
+def test_contacts_anchors_the_fk_walk_and_the_ledger_closes_it():
+    """Two different orderings, both load-bearing.
+
+    contacts still anchors the FOREIGN-KEY walk — everything that cites
+    it must be deleted first. audit_log then follows as the final entry
+    for a different reason entirely: it is append-only at the database,
+    so deleting the business row cascades into it and that cascade is
+    REFUSED while rows remain. The ledger is therefore erased last (via
+    the tombstone-writing RPC), leaving the smallest possible window in
+    which a late writer could re-block the cascade.
+    """
     from account_lifecycle import BUSINESS_CHILD_TABLES as T
-    assert T[-1] == "contacts"
+    assert T[-1] == "audit_log"
+    assert T[-2] == "contacts"
+    assert T.index("contacts") > T.index("invoices")
+    assert T.index("contacts") > T.index("sessions")

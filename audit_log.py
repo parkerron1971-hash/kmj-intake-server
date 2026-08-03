@@ -22,6 +22,20 @@ ACTOR NAMES: the table's actor_type CHECK allows only
 the trusted-autonomy sweep) therefore write actor_type='system' and
 carry their real identity in actor_id ('scheduler', 'trust-track') —
 the frontend renders actor_id as the display name when present.
+
+THE ACTION LEDGER (2026-08-03, Stage 1). This table IS the ledger —
+Kevin ruled we evolve it rather than start a fifth parallel history.
+What the database now guarantees, not the application:
+  * append-only for real — BEFORE UPDATE/DELETE triggers raise, so even
+    service_role (which bypasses RLS) cannot rewrite a row. Deletion is
+    possible only through ledger_erase_business(), which writes a
+    ledger_tombstones row FIRST and leaves the sequence gap visible.
+  * `sequence` is assigned per tenant under an advisory lock, and
+    `prev_hash`/`row_hash` are reserved for Stage 2's chain. Python
+    never sets any of the three.
+The vocabulary lives in action_types, seeded by sync_action_types()
+from action_registry — advisory rather than a foreign key, because
+losing the record of an action is worse than recording an odd verb.
 """
 from __future__ import annotations
 
@@ -39,6 +53,66 @@ logger = logging.getLogger("audit_log")
 router = APIRouter(prefix="/audit", tags=["audit"])
 
 _RESULT_CAP = 2000  # jsonb result snippet cap (chars of serialized form)
+
+
+def vocabulary() -> Dict[str, Dict[str, Any]]:
+    """The ledger's controlled vocabulary, assembled from the registries
+    that already exist rather than invented as a fourth naming scheme.
+
+    Chief verbs keep their own names (action_registry is already
+    drift-tested against ACTION_HANDLERS, so renaming 151 verbs into a
+    dotted convention would break that pin for cosmetics). Everything
+    else is namespaced so the origin is readable at a glance.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        import action_registry
+        for verb, cls in action_registry.REGISTRY.items():
+            out[verb] = {"verb": verb, "namespace": "chief",
+                         "effect": cls.get("effect"),
+                         "reversibility": cls.get("reversibility"),
+                         "bulk": bool(cls.get("bulk")),
+                         "description": (cls.get("why") or "")[:400]}
+    except Exception as e:
+        logger.warning(f"[ledger] action_registry unavailable: {e}")
+    try:
+        import event_spine
+        for et, meta in (event_spine.EVENT_CATALOG or {}).items():
+            key = f"webhook:{et}"
+            out[key] = {"verb": key, "namespace": "event", "effect": "write",
+                        "description": str(meta)[:400]}
+    except Exception as e:
+        logger.warning(f"[ledger] event catalog unavailable: {e}")
+    # Vocabularies with no registry of their own yet.
+    for verb in ("rules:notify_practitioner", "rules:apply_tag",
+                 "rules:create_task", "rules:send_template_email",
+                 "job:rebuild_site", "job:compose_directions",
+                 "job:refine_section", "ledger:erasure", "ledger:selftest"):
+        out.setdefault(verb, {"verb": verb, "namespace": verb.split(":")[0],
+                              "effect": "write"})
+    for table in ("invoices", "bills", "business_expenses", "contacts",
+                  "sessions", "module_entries", "orders"):
+        for op in ("insert", "update", "delete"):
+            key = f"db:{table}_{op}"
+            out[key] = {"verb": key, "namespace": "db", "effect": "write",
+                        "description": f"direct {op} on {table} (DB trigger)"}
+    return out
+
+
+def sync_action_types() -> int:
+    """Upsert the vocabulary into action_types. Idempotent; safe to call
+    at every boot. Returns the number of verbs published."""
+    vocab = list(vocabulary().values())
+    if not vocab:
+        return 0
+    try:
+        sb_clients.sb_post_as_service(
+            "/action_types?on_conflict=verb", vocab,
+            prefer="resolution=merge-duplicates")
+        return len(vocab)
+    except Exception as e:
+        logger.warning(f"[ledger] action_types sync failed: {e}")
+        return 0
 
 
 def _cap_json(value: Any) -> Dict[str, Any]:
@@ -62,10 +136,29 @@ def record(business_id: Optional[str], *, actor_type: str, verb: str,
            payload: Optional[Dict[str, Any]] = None,
            result: Any = None,
            target_type: Optional[str] = None, target_id: Optional[str] = None,
-           source: Optional[str] = None) -> bool:
-    """Append one audit row. Best-effort: never raises into the caller."""
+           source: Optional[str] = None,
+           authorized_by: Optional[str] = None,
+           subject_refs: Optional[List[Dict[str, Any]]] = None,
+           display_timezone: Optional[str] = None) -> bool:
+    """Append one ledger row. Best-effort: never raises into the caller.
+
+    ACTION LEDGER (2026-08-03): `sequence`, `prev_hash` and `row_hash` are
+    assigned by the database, not here — a BEFORE INSERT trigger takes a
+    per-tenant advisory lock so concurrent writers can't fork the chain.
+    Never set them from Python.
+
+    authorized_by is the spec's sixth field: the permission tier or policy
+    rule that allowed this action, not merely who ran it.
+    """
     if not business_id or not verb:
         return False
+    refs = subject_refs if isinstance(subject_refs, list) else []
+    # Field 5 stays queryable ("everything that happened to this client"),
+    # so keep the shape strict: [{type, id}] with both present.
+    refs = [{"type": str(r.get("type"))[:40], "id": str(r.get("id"))[:80]}
+            for r in refs if isinstance(r, dict) and r.get("type") and r.get("id")][:25]
+    if not refs and target_type and target_id:
+        refs = [{"type": str(target_type)[:40], "id": str(target_id)[:80]}]
     row = {
         "business_id": business_id,
         "actor_type": actor_type if actor_type in ("user", "chief", "agent", "system") else "system",
@@ -79,6 +172,9 @@ def record(business_id: Optional[str], *, actor_type: str, verb: str,
         "payload": _cap_json(payload),
         "result": _cap_json(result),
         "source": source,
+        "authorized_by": (str(authorized_by)[:120] if authorized_by else None),
+        "subject_refs": refs,
+        "display_timezone": display_timezone,
     }
     try:
         sb_clients.sb_post_as_service("/audit_log", row, prefer=None)

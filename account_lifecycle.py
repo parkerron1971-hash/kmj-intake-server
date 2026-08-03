@@ -102,10 +102,6 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "chief_scheduled_actions",
     "chief_insights",
     "chief_undo_log",
-    "audit_log",              # service-role delete on erasure is the ONE
-                              # sanctioned removal path (GDPR beats
-                              # append-only; RLS has no delete policy,
-                              # the service role bypasses RLS)
     "insights",
     "notifications",
     "sessions",
@@ -202,6 +198,15 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "business_collaborators",
     "invite_tokens",
     "contacts",          # after the tables that reference contacts
+    # THE LEDGER GOES LAST, on purpose. Deleting the business row
+    # cascades into audit_log, and audit_log's append-only trigger
+    # refuses that cascade — so the ledger must already be erased (via
+    # the tombstone-writing RPC in _delete_table_rows) by the time the
+    # business row is removed. Erasing it last also shrinks the window
+    # in which some other writer appends a row that would re-block the
+    # cascade; if that race ever fires, the business delete 502s loudly
+    # and a retry re-runs the erasure. Failing closed is correct here.
+    "audit_log",
 ]
 
 # User-scoped tables (keyed by user_id, not business_id) — cleaned up in
@@ -254,7 +259,37 @@ async def _fetch_table(client: httpx.AsyncClient, table: str, business_id: str) 
     return r.json() or []
 
 
+async def _erase_ledger(client: httpx.AsyncClient, business_id: str,
+                        requested_by: str = "account_erasure") -> int:
+    """The ONE sanctioned removal path for the action ledger.
+
+    audit_log is append-only at the DATABASE level now — a plain DELETE
+    raises, including the cascade from deleting the business row. GDPR
+    still beats append-only, but never silently: this RPC writes a
+    ledger_tombstones row (count + sequence range + the prior chain hash)
+    BEFORE removing anything, and deliberately does not reset
+    ledger_chain_state, so the erased range stays visible afterwards as a
+    gap the tombstone explains.
+    """
+    try:
+        r = await client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/ledger_erase_business",
+            headers=_service_headers(),
+            json={"p_business_id": business_id, "p_reason": "gdpr_erasure",
+                  "p_requested_by": requested_by})
+        if r.status_code >= 400:
+            logger.error(f"ledger erasure failed for {business_id}: {r.text[:300]}")
+            return 0
+        return int(r.json() or 0)
+    except Exception as e:
+        logger.error(f"ledger erasure raised for {business_id}: {e}")
+        return 0
+
+
 async def _delete_table_rows(client: httpx.AsyncClient, table: str, business_id: str) -> int:
+    # audit_log never takes the plain path — see _erase_ledger.
+    if table == "audit_log":
+        return await _erase_ledger(client, business_id)
     r = await client.delete(
         f"{SUPABASE_URL}/rest/v1/{table}",
         headers={**_service_headers(), "Prefer": "return=representation"},
