@@ -36,8 +36,11 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 import llm_call
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+import sb_clients
+from auth_supabase import AuthedUser, require_user
 
 # Reuse the Chief's action handlers for "Yes, do that" execution
 from chief_of_staff import ACTION_HANDLERS
@@ -75,10 +78,29 @@ def _anthropic_key(): return os.environ.get("ANTHROPIC_API_KEY", "")
 # ═══════════════════════════════════════════════════════════════════════
 
 async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
+    """Service-role Supabase call.
+
+    LEDGER STAGE 0 (2026-08-03): this used the ANON key, which meant every
+    read here returned [] under RLS — the notification engine could not
+    read its own rows, so /act 404'd and the practitioner's "Yes, do that"
+    button silently did nothing. It also masked the real defect: NONE of
+    this module's routes had an auth dependency, and /act executes any of
+    Chief's 151 handler verbs. Anon-key-by-accident was the only thing
+    standing between the internet and arbitrary action execution.
+
+    Both halves are fixed together, and the order matters: every route
+    below now authenticates and authorizes the caller against the target
+    business FIRST, and only then may this service-role helper run. Never
+    call _sb in a request path that hasn't been through _require_access.
+    """
+    key = sb_clients.sb_service_role()
+    if not key:
+        logger.error("SUPABASE_SERVICE_ROLE_KEY missing — notification engine disabled")
+        return None
     url = f"{_supabase_url()}/rest/v1{path}"
     headers = {
-        "apikey": _supabase_anon(),
-        "Authorization": f"Bearer {_supabase_anon()}",
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
@@ -90,6 +112,28 @@ async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
         return None
     text = resp.text
     return json.loads(text) if text else None
+
+
+def _require_access(business_id: str, user: AuthedUser,
+                    min_role: str = "member") -> Dict[str, Any]:
+    """LEDGER STAGE 0 — the gate this module never had.
+
+    Owner passes; an active seat passes by rank via THE one ladder
+    (business_users_router.require_role). Returns the business row so the
+    caller doesn't re-read it. Generating a notification and acting on one
+    are both operator work, so member is the floor — a viewer seat reads
+    notifications through RLS but does not fire them.
+    """
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=*&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "Business not found")
+    row = rows[0]
+    if str(row.get("owner_id")) == str(user.id):
+        return row
+    from business_users_router import require_role
+    require_role(str(business_id), str(user.id), min_role)
+    return row
 
 
 async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str,
@@ -560,32 +604,48 @@ class NotifRequest(BaseModel):
 
 
 @router.post("/agents/notifications/morning-brief")
-async def morning_brief(req: NotifRequest):
+async def morning_brief(req: NotifRequest,
+                        user: AuthedUser = Depends(require_user)):
+    _require_access(req.business_id, user)
     async with httpx.AsyncClient() as client:
         return await _generate_morning_brief(client, req.business_id)
 
 
 @router.post("/agents/notifications/midday-ping")
-async def midday_ping(req: NotifRequest):
+async def midday_ping(req: NotifRequest,
+                      user: AuthedUser = Depends(require_user)):
+    _require_access(req.business_id, user)
     async with httpx.AsyncClient() as client:
         return await _generate_midday_ping(client, req.business_id)
 
 
 @router.post("/agents/notifications/evening-summary")
-async def evening_summary(req: NotifRequest):
+async def evening_summary(req: NotifRequest,
+                          user: AuthedUser = Depends(require_user)):
+    _require_access(req.business_id, user)
     async with httpx.AsyncClient() as client:
         return await _generate_evening_summary(client, req.business_id)
 
 
 @router.post("/agents/notifications/check-urgent")
-async def check_urgent(req: NotifRequest):
+async def check_urgent(req: NotifRequest,
+                       user: AuthedUser = Depends(require_user)):
+    _require_access(req.business_id, user)
     async with httpx.AsyncClient() as client:
         return await _check_urgent(client, req.business_id)
 
 
 @router.post("/agents/notifications/{notification_id}/act")
-async def execute_notification_action(notification_id: str):
-    """Execute the notification's stored action_payload via Chief's handlers."""
+async def execute_notification_action(notification_id: str,
+                                      user: AuthedUser = Depends(require_user)):
+    """Execute the notification's stored action_payload via Chief's handlers.
+
+    This is a real dispatcher into ACTION_HANDLERS — one of six — and it
+    used to have no authentication, no authorization, no reversibility
+    gate, and no audit row. All four are here now. Order is deliberate:
+    read the notification to discover WHICH tenant it belongs to, then
+    authorize the caller against that tenant before anything executes.
+    """
     async with httpx.AsyncClient() as client:
         rows = await _sb(client, "GET",
             f"/chief_notifications?id=eq.{notification_id}&limit=1&select=*")
@@ -593,25 +653,63 @@ async def execute_notification_action(notification_id: str):
             raise HTTPException(404, "Notification not found")
         notif = rows[0]
 
+        # AUTHORIZE before anything else runs. The notification names its
+        # own business; the caller must hold a seat on it.
+        biz = _require_access(str(notif.get("business_id") or ""), user)
+
         action = notif.get("action_payload") or {}
-        if not action.get("type"):
+        atype = action.get("type")
+        if not atype:
             raise HTTPException(400, "No action to execute")
 
-        biz_rows = await _sb(client, "GET",
-            f"/businesses?id=eq.{notif['business_id']}&select=*&limit=1")
-        if not biz_rows:
-            raise HTTPException(404, "Business not found")
-        biz = biz_rows[0]
-
-        handler = ACTION_HANDLERS.get(action["type"])
+        handler = ACTION_HANDLERS.get(atype)
         if not handler:
-            raise HTTPException(400, f"Unknown action type: {action['type']}")
+            raise HTTPException(400, f"Unknown action type: {atype}")
 
+        # Reversibility gate. Clicking "Yes, do that" IS the approval, so
+        # class C executes here exactly as it does in chat — but a BULK
+        # verb fired from a notification is unattended blast radius with
+        # one click behind it, and the registry says those are never
+        # autonomy-eligible. Unknown verbs fail closed (registry drift).
+        authorized_by = "notification_action"
+        try:
+            import action_registry
+            if action_registry.is_bulk(atype):
+                raise HTTPException(400,
+                    "Bulk actions can't be fired from a notification — "
+                    "open the screen and confirm the list.")
+            cls = action_registry.classification(atype)
+            if not cls:
+                raise HTTPException(400, f"Unclassified action: {atype}")
+            authorized_by = f"notification_action:{cls.get('reversibility') or cls.get('effect')}"
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"[notif] registry check failed for {atype}: {e}")
+            raise HTTPException(503, "Action safety check unavailable")
+
+        ok, err, result = True, None, None
         try:
             result = await handler(client, biz, action)
         except Exception as e:
-            logger.exception(f"Action {action['type']} failed: {e}")
-            raise HTTPException(500, f"Action failed: {e}")
+            ok, err = False, str(e)
+            logger.exception(f"Action {atype} failed: {e}")
+        finally:
+            # This dispatcher had NO audit row before — a whole class of
+            # actions happened with nothing recorded anywhere.
+            try:
+                import audit_log
+                audit_log.record(
+                    str(biz.get("id")), actor_type="user", actor_id=str(user.id),
+                    verb=atype, ok=ok, error=err,
+                    summary=(notif.get("title") or "")[:240],
+                    payload={"notification_id": notification_id,
+                             "authorized_by": authorized_by},
+                    result=result, source="notification")
+            except Exception:
+                pass
+        if not ok:
+            raise HTTPException(500, f"Action failed: {err}")
 
         await _sb(client, "PATCH", f"/chief_notifications?id=eq.{notification_id}",
                   {"status": "acted_on"})

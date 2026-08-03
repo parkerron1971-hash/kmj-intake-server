@@ -111,8 +111,45 @@ async def _execute_row(row: Dict[str, Any]) -> None:
              "last_run_at": _now().isoformat()})
         return
 
+    recurrence_raw = str(row.get("recurrence") or "").strip().lower()
+
+    # LEDGER STAGE 0 (2026-08-03) — the scheduler consults the registry.
+    # It used to run ANY handler verb at its due time with only a 5-verb
+    # client-only denylist: a class-C verb scheduled once in chat then
+    # fired unprompted, forever, on a recurrence, with the chat path's
+    # _gate_class_c nowhere near it.
+    #
+    # What this gate does NOT do: block recurring class-C. Recurring
+    # invoices are a deliberate product feature (see action_registry's
+    # note on create_invoice + auto_send), so refusing them here would
+    # break intended behavior — that's Kevin's ruling to make, not a
+    # gate's. What it DOES enforce is the registry's own standing rule
+    # that BULK verbs are never autonomy-eligible at any class, which
+    # this path has been quietly violating. Unknown/unclassified fails
+    # closed, matching _gate_class_c.
+    authorized_by = "scheduled"
+    gate_refusal: Optional[str] = None
+    try:
+        import action_registry
+        if action_registry.is_bulk(atype):
+            gate_refusal = (f"'{atype}' is a bulk action — bulk is never "
+                            "autonomy-eligible, so it can't run unattended")
+        else:
+            cls = action_registry.classification(atype)
+            if not cls and atype not in CLIENT_ONLY_OR_NESTING:
+                gate_refusal = f"'{atype}' is not in the action registry"
+            elif cls:
+                rev = cls.get("reversibility") or cls.get("effect")
+                authorized_by = (f"scheduled:{rev}"
+                                 f"{':recurring' if recurrence_raw else ':once'}")
+    except Exception as e:
+        logger.warning(f"[scheduler] registry check failed for {atype}: {e}")
+        gate_refusal = "action safety check unavailable"
+
     ok, detail = False, ""
-    if atype in CLIENT_ONLY_OR_NESTING:
+    if gate_refusal:
+        detail = gate_refusal
+    elif atype in CLIENT_ONLY_OR_NESTING:
         detail = f"'{atype}' can't run server-side"
     else:
         # Lazy import (workflow_engine precedent) — Chief's whole verb
@@ -137,7 +174,7 @@ async def _execute_row(row: Dict[str, Any]) -> None:
             except Exception as e:
                 detail = f"handler raised: {e}"
 
-    recurrence = str(row.get("recurrence") or "").strip().lower()
+    recurrence = recurrence_raw
     nxt = _next_run(_parse_ts(row.get("run_at")), recurrence) if ok and recurrence else None
     patch: Dict[str, Any] = {"last_run_at": _now().isoformat()}
     if nxt:
@@ -164,7 +201,8 @@ async def _execute_row(row: Dict[str, Any]) -> None:
             ok=ok, error=(detail[:500] if not ok else None),
             summary=(str(row.get("label") or "") or detail)[:240],
             payload={"scheduled_action_id": str(rid),
-                     "recurrence": recurrence or None},
+                     "recurrence": recurrence or None,
+                     "authorized_by": authorized_by},
             source="scheduler")
         if not wrote:
             logger.warning(f"[scheduler] audit write failed for {atype} ({str(rid)[:8]})")

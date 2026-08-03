@@ -69,6 +69,15 @@ def _run_scheduler_row(monkeypatch, handler):
     monkeypatch.setattr(chief_scheduler, "_notify_outcome", _quiet_notify)
 
     monkeypatch.setitem(chief_of_staff.ACTION_HANDLERS, "_s11_stub", handler)
+    # Ledger Stage 0: the scheduler now consults action_registry and fails
+    # closed on an unclassified verb. In production that can't happen —
+    # the drift test pins REGISTRY's keys to ACTION_HANDLERS' — but this
+    # stub is synthetic, so register it too. These tests are about audit
+    # plumbing; the gate itself is covered in test_ledger_stage0_gates.
+    import action_registry
+    monkeypatch.setitem(action_registry.REGISTRY, "_s11_stub",
+                        {"effect": "write", "reversibility": "A",
+                         "why": "test stub"})
 
     row = {"id": "r1", "business_id": "b1", "label": "Nightly stub",
            "action": {"type": "_s11_stub"}, "recurrence": "",
