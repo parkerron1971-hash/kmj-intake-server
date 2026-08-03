@@ -259,3 +259,63 @@ def test_verify_never_claims_intact_with_nothing_hashed():
     assert "hashed         bigint," in sql
     py = pathlib.Path(_here.parent / "audit_log.py").read_text(encoding="utf-8")
     assert '"hashed": report.get("hashed", 0)' in py
+
+
+# ─── Ledger access: the two dead ends ────────────────────────────────
+
+def test_viewer_seat_can_read_history(monkeypatch):
+    """The sidebar showed every team seat a History leaf while the
+    endpoint demanded member+ — a clickable thing that dead-ended in a
+    403. History is a trust surface, not an owner secret."""
+    seen = {}
+    monkeypatch.setattr(audit_log.sb_clients, "sb_get_as_service",
+                        lambda q: [{"id": "b1", "owner_id": "someone-else"}]
+                        if q.startswith("/businesses") else seen.update(q=q) or [])
+    called = {}
+    monkeypatch.setattr("business_users_router.require_role",
+                        lambda b, u, r: called.update(min_role=r) or "viewer")
+    monkeypatch.setattr("business_collaborators_router.is_active_accountant",
+                        lambda b, u: False)
+    u = type("U", (), {"id": "v1", "email": "v@x.com"})()
+    out = audit_log.read_audit("b1", user=u)
+    assert out["ok"] is True
+    assert called["min_role"] == "viewer"
+
+
+def test_accountant_collaborator_can_read_history(monkeypatch):
+    """The single audience most likely to be handed an audit trail could
+    not open it: accountants live in business_collaborators, not
+    business_users, so require_role refused them outright."""
+    monkeypatch.setattr(audit_log.sb_clients, "sb_get_as_service",
+                        lambda q: [{"id": "b1", "owner_id": "someone-else"}]
+                        if q.startswith("/businesses") else [])
+
+    def _boom(b, u, r):
+        raise AssertionError("an accountant must not fall through to require_role")
+    monkeypatch.setattr("business_users_router.require_role", _boom)
+    monkeypatch.setattr("business_collaborators_router.is_active_accountant",
+                        lambda b, u: True)
+    u = type("U", (), {"id": "cpa1", "email": "cpa@x.com"})()
+    assert audit_log.read_audit("b1", user=u)["ok"] is True
+
+
+def test_ledger_read_never_returns_row_contents():
+    """Widening the audience is only safe because the query selects no
+    payload/result — the db-trigger tier's before/after record contents
+    stay out of it. Anything exposing contents must re-gate."""
+    src = pathlib.Path(_here.parent / "audit_log.py").read_text(encoding="utf-8")
+    body = src.split("def read_audit(")[1].split("@router.get(\"/verify\")")[0]
+    select = body.split("&select=")[1].split('"')[0]
+    assert "payload" not in select
+    assert "result" not in select
+
+
+def test_accountant_nav_includes_history():
+    fe = pathlib.Path(
+        r"C:\Users\kmccl\solutionist-studio\solutionist-studio\src\core"
+        r"\components\SolutionistSidebar.tsx")
+    if not fe.exists():
+        return
+    src = fe.read_text(encoding="utf-8")
+    keep = src.split("const keep = new Set([")[1].split("])")[0]
+    assert "'history'" in keep, "accountants must be able to reach the ledger"
