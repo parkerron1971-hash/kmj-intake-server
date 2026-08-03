@@ -28,6 +28,7 @@ import html as _html
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -124,7 +125,8 @@ def _brand_head_meta_tags(business_id: str) -> str:
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from auth_supabase import require_user, AuthedUser
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
+                               RedirectResponse, Response)
 
 from auth_supabase import AuthedUser, require_user
 
@@ -248,12 +250,30 @@ def extract_slug_from_host(request: Request) -> Optional[str]:
     return None
 
 
-def _inject_canonical(html: str, slug: str, custom_domain: Optional[str] = None) -> str:
+def _inject_canonical(html: str, slug: str, custom_domain: Optional[str] = None,
+                      page_path: str = "") -> str:
     """Inject canonical URL + OG tags into the HTML head section. When the
     site has a custom domain configured, that is the canonical public
-    address (not the platform subdomain)."""
-    cd = str(custom_domain or "").strip().lower().lstrip("/")
-    canonical = f"https://{cd}" if cd else f"https://{slug}.mysolutionist.app"
+    address (not the platform subdomain).
+
+    `page_path` ('/about') makes a secondary page canonical to ITSELF.
+    Without it every page of a multi-page site claimed to be the home
+    page, which tells Google the site has one page and three duplicates.
+    """
+    canonical = _public_origin(slug, custom_domain) + (page_path or "")
+
+    # The composed HTML already carries a canonical baked in at BUILD
+    # time (site_modules/_base.py hardcodes the platform subdomain — it
+    # cannot know about a domain connected later, or which page it will
+    # be served as). Appending a second canonical would leave two
+    # competing tags and Google would pick one at random. Serve time
+    # knows the truth, so serve time WINS: strip what the builder wrote,
+    # then inject.
+    html = re.sub(r'\s*<link[^>]+rel=["\']canonical["\'][^>]*>', "", html,
+                  flags=re.IGNORECASE)
+    html = re.sub(r'\s*<meta[^>]+property=["\']og:url["\'][^>]*>', "", html,
+                  flags=re.IGNORECASE)
+
     tags = (
         f'\n<link rel="canonical" href="{canonical}" />'
         f'\n<meta property="og:url" content="{canonical}" />'
@@ -263,6 +283,127 @@ def _inject_canonical(html: str, slug: str, custom_domain: Optional[str] = None)
     if "</HEAD>" in html:
         return html.replace("</HEAD>", tags + "\n</HEAD>", 1)
     return html
+
+
+def _public_origin(slug: str, custom_domain: Optional[str] = None) -> str:
+    """The address the public actually uses for this site. A connected
+    custom domain IS the site's home — the platform subdomain is the
+    fallback, never the canonical when a domain exists."""
+    cd = str(custom_domain or "").strip().lower().lstrip("/")
+    return f"https://{cd}" if cd else f"https://{slug}.mysolutionist.app"
+
+
+# Findability bundle (2026-08-02). Secondary pages of a composed
+# multi-page site are stored in site_config.generated_pages keyed by
+# page_id; these are the clean public paths that map onto them.
+_SITE_PAGE_PATHS = {"/about": "about", "/services": "services", "/contact": "contact"}
+# Sub-paths served by their own handlers — never 404, never in the
+# "unknown path" branch.
+_ALWAYS_WINS_PATHS = ("/book", "/give", "/events")
+
+
+def _site_robots_txt(slug: str, custom_domain: Optional[str] = None) -> str:
+    """A real robots.txt per site. Without one, crawlers had to guess,
+    and /robots.txt itself returned the home page with a 200 (soft-404)
+    which is worse than nothing."""
+    origin = _public_origin(slug, custom_domain)
+    return (
+        "User-agent: *\n"
+        "Allow: /\n"
+        # Nothing indexable lives behind these; they are transactional.
+        "Disallow: /thank-you\n"
+        f"\nSitemap: {origin}/sitemap.xml\n"
+    )
+
+
+def _site_sitemap_xml(slug: str, cfg: Dict[str, Any],
+                      custom_domain: Optional[str] = None) -> str:
+    """Sitemap listing every page this site actually serves — home, any
+    generated secondary pages, and the live transactional doors. Only
+    real URLs: a sitemap that lists a page which 404s is worse than no
+    sitemap at all."""
+    origin = _public_origin(slug, custom_domain)
+    urls: List[str] = [origin + "/"]
+
+    pages = cfg.get("generated_pages")
+    if isinstance(pages, dict):
+        for path, page_id in _SITE_PAGE_PATHS.items():
+            if (pages.get(page_id) or "").strip():
+                urls.append(origin + path)
+
+    # Transactional doors, listed only when actually live.
+    try:
+        import offering_profiles
+        state = offering_profiles.business_state(str(cfg.get("_business_id") or "")) if cfg.get("_business_id") else {}
+    except Exception:
+        state = {}
+    if state.get("booking_enabled"):
+        urls.append(origin + "/book")
+
+    body = "".join(
+        f"\n  <url><loc>{u}</loc><changefreq>weekly</changefreq></url>" for u in urls)
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            f'{body}\n</urlset>\n')
+
+
+def _not_found_page(slug: str, business_name: str = "",
+                    accent: str = "#D4AF37",
+                    custom_domain: Optional[str] = None) -> HTMLResponse:
+    """A real 404 — branded, honest, with a way home.
+
+    Before the findability bundle every unknown path returned the HOME
+    PAGE with a 200. Search engines read mass soft-404s as a quality
+    signal against the whole site, and it made /robots.txt and
+    /sitemap.xml unaddable (they were 'already taken' by the home page).
+    """
+    origin = _public_origin(slug, custom_domain)
+    name = (business_name or "").strip()
+    html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Page not found{(' — ' + name) if name else ''}</title>
+<style>
+ body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+      background:#faf9f7;color:#1a1a1a;font-family:system-ui,-apple-system,sans-serif;
+      text-align:center;padding:24px;line-height:1.6}}
+ .n{{font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:{accent};
+     font-weight:700;margin-bottom:14px}}
+ h1{{font-size:clamp(1.6rem,4vw,2.2rem);font-weight:400;margin:0 0 10px}}
+ p{{color:#5a5a5a;margin:0 0 26px;max-width:30rem}}
+ a{{display:inline-block;padding:12px 28px;border-radius:999px;background:{accent};
+    color:#fff;text-decoration:none;font-weight:600;font-size:14px}}
+</style></head>
+<body><div>
+ <div class="n">404</div>
+ <h1>That page isn&rsquo;t here</h1>
+ <p>The link may be out of date, or the page may have moved.</p>
+ <a href="{origin}/">Go to the homepage</a>
+</div></body></html>"""
+    return HTMLResponse(content=html, status_code=404,
+                        headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+
+
+async def _render_not_found(client: httpx.AsyncClient, slug: str,
+                            business_id: Optional[str],
+                            custom_domain: Optional[str] = None) -> HTMLResponse:
+    """Brand the 404 with the business's own name + accent. Best-effort:
+    a lookup failure still returns a correct 404, just a plain one."""
+    name, accent = "", "#D4AF37"
+    if business_id:
+        try:
+            rows = await _sb(client,
+                f"/businesses?id=eq.{business_id}&select=name,settings&limit=1")
+            if rows:
+                name = rows[0].get("name") or ""
+                bk = ((rows[0].get("settings") or {}).get("brand_kit") or {})
+                bc = str(bk.get("primary_color") or "").strip()
+                if bc.startswith("#") and len(bc) in (4, 7):
+                    accent = bc
+        except Exception:
+            pass
+    return _not_found_page(slug, name, accent, custom_domain)
 
 
 def _inject_concierge_widget(html: str, business_id: Optional[str]) -> str:
@@ -5001,8 +5142,17 @@ MARKETING_HTML = """<!DOCTYPE html>
 </html>"""
 
 
-async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: str, html: str) -> str:
-    """Inject canonical + live products + gallery into served HTML."""
+async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: str, html: str,
+                        custom_domain: Optional[str] = None,
+                        page_path: str = "") -> str:
+    """Inject canonical + live products + gallery into served HTML.
+
+    `custom_domain` (2026-08-02): this function used to call
+    _inject_canonical(html, slug) — dropping the argument the helper
+    already accepted. Every custom-domain page therefore declared the
+    platform subdomain as its canonical, handing the ranking value of
+    the domain the practitioner PAID FOR to a subdomain they don't own.
+    """
     products: List[Dict[str, Any]] = []
     gallery: List[Dict[str, Any]] = []
     brand_color = "#D4AF37"
@@ -5023,7 +5173,7 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
             bc = (bk.get("primary_color") or "").strip() if isinstance(bk, dict) else ""
             if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
                 brand_color = bc
-    html = _inject_canonical(html, slug)
+    html = _inject_canonical(html, slug, custom_domain, page_path)
     # Pass 3: activate the Pass 2.5a `_brand_head_meta_tags` helper for
     # legacy sites too — favicons + OG + Twitter Cards now render for
     # everyone, not just Smart Sites users.
@@ -5946,6 +6096,20 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         if path == "/" and not site.get("html_content"):
             return RedirectResponse(url="/book", status_code=307)
 
+        # ─── Findability bundle (2026-08-02) ───────────────────────
+        # robots.txt + sitemap.xml are real files now. They used to hit
+        # the catch-all and return the HOME PAGE with a 200, which is
+        # both a soft-404 and the reason neither could be added.
+        _cd = _cfg.get("custom_domain")
+        if normalized_path == "/robots.txt":
+            return PlainTextResponse(_site_robots_txt(slug, _cd),
+                                     headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+        if normalized_path == "/sitemap.xml":
+            return Response(
+                content=_site_sitemap_xml(slug, {**_cfg, "_business_id": biz_id}, _cd),
+                media_type="application/xml",
+                headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+
         if _use_smart_sites(site) and biz_id:
             # Fetch products to pass into the home page renderer.
             products = await _sb(client,
@@ -5966,7 +6130,33 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
 
         if not site.get("html_content"):
             raise HTTPException(404, "Site not found")
-        html = await _augment_html(client, biz_id, slug, site["html_content"])
+
+        # ─── Secondary pages at CLEAN paths ────────────────────────
+        # A composed multi-page site stores About/Services/Contact in
+        # site_config.generated_pages. They were only reachable at
+        # /public/site/{slug}/about — so slug.mysolutionist.app/about
+        # served the home page instead (soft-404), and the site's own
+        # nav pointed visitors at the /public/... preview URL.
+        _pages = _cfg.get("generated_pages")
+        _page_id = _SITE_PAGE_PATHS.get(normalized_path)
+        if _page_id and isinstance(_pages, dict):
+            _page_html = (_pages.get(_page_id) or "").strip()
+            if _page_html:
+                _page_html = await _augment_html(
+                    client, biz_id, slug, _page_html,
+                    custom_domain=_cd, page_path=normalized_path)
+                return HTMLResponse(
+                    content=_page_html, media_type="text/html",
+                    headers={"X-Solutionist-Source": "module-composer-multipage",
+                             **_PUBLIC_SITE_NO_STORE_HEADERS})
+
+        # ─── Real 404 for anything else ────────────────────────────
+        # Every unknown path used to return the home page with a 200.
+        if normalized_path != "/":
+            return await _render_not_found(client, slug, biz_id, _cd)
+
+        html = await _augment_html(client, biz_id, slug, site["html_content"],
+                                   custom_domain=_cd, page_path="")
         return HTMLResponse(
             content=html, media_type="text/html",
             headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
@@ -6025,6 +6215,22 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         # reasoning as /give.
         if _norm == "/events":
             return await _serve_events_page(client, biz_id, slug)
+        # Booking (2026-08-02): this was MISSING here while present on
+        # the subdomain path, so /book on a practitioner's own domain
+        # silently served the home page — a dead Book button on the
+        # address they paid for.
+        if _norm == "/book":
+            return await _serve_booking_page(client, biz_id, slug)
+
+        # ─── Findability bundle (2026-08-02), custom-domain parity ──
+        if _norm == "/robots.txt":
+            return PlainTextResponse(_site_robots_txt(slug, domain),
+                                     headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+        if _norm == "/sitemap.xml":
+            return Response(
+                content=_site_sitemap_xml(slug, {**_cfg, "_business_id": biz_id}, domain),
+                media_type="application/xml",
+                headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
 
         if _use_smart_sites(site) and biz_id:
             products = await _sb(client,
@@ -6044,7 +6250,28 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
 
         if not site.get("html_content"):
             return None  # type: ignore
-        html = await _augment_html(client, biz_id, slug, site["html_content"])
+
+        # Secondary pages at clean paths, on the practitioner's own domain.
+        _pages = _cfg.get("generated_pages")
+        _page_id = _SITE_PAGE_PATHS.get(_norm)
+        if _page_id and isinstance(_pages, dict):
+            _page_html = (_pages.get(_page_id) or "").strip()
+            if _page_html:
+                _page_html = await _augment_html(
+                    client, biz_id, slug, _page_html,
+                    custom_domain=domain, page_path=_norm)
+                return HTMLResponse(
+                    content=_page_html, media_type="text/html",
+                    headers={"X-Solutionist-Source": "module-composer-multipage",
+                             **_PUBLIC_SITE_NO_STORE_HEADERS})
+
+        if _norm != "/":
+            return await _render_not_found(client, slug, biz_id, domain)
+
+        # custom_domain=domain is THE fix for the canonical bug: without
+        # it every page here declared the platform subdomain canonical.
+        html = await _augment_html(client, biz_id, slug, site["html_content"],
+                                   custom_domain=domain, page_path="")
         return HTMLResponse(
             content=html, media_type="text/html",
             headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
@@ -6264,14 +6491,21 @@ async def public_help():
 
 @router.get("/{path:path}", include_in_schema=False)
 async def subdomain_catch_all(request: Request, path: str):
-    """Catch-all for subdomain requests. Serves the practitioner's site
-    regardless of path (SPA routing). API-host requests MUST 404 here so
-    they fall through to the real API routers — otherwise this handler
-    shadows /email/health, /agents/*, everything.
+    """Catch-all for subdomain + custom-domain requests. API-host
+    requests MUST 404 here so they fall through to the real API routers
+    — otherwise this handler shadows /email/health, /agents/*,
+    everything.
 
-    Pass 3.8g: when the host is a practitioner subdomain, the captured
-    `path` is forwarded into the renderer. Multi-page sites use it to
-    serve /about, /services, /contact off the same site_config."""
+    Pass 3.8g: the captured `path` is forwarded into the renderer.
+    Multi-page sites use it to serve /about, /services, /contact off the
+    same site_config.
+
+    Findability bundle (2026-08-02): this no longer serves the home page
+    "regardless of path". The renderer now answers /robots.txt and
+    /sitemap.xml, serves real secondary pages at clean paths, and
+    returns a genuine branded 404 for anything else — mass soft-404s
+    were both an SEO liability and the reason robots/sitemap could not
+    be added (the home page was already answering those URLs with 200)."""
     host = public_host(request)
 
     # API / local dev: bail immediately. Don't even look at the body.
