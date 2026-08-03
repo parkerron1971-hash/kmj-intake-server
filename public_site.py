@@ -1309,7 +1309,14 @@ async def invalidate_site_cache(business_id: str, user: AuthedUser = Depends(req
 @router.post("/sites/{business_id}/smart-config")
 async def save_smart_config_endpoint(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     """Save (merge into) site_config without flipping the use_smart_sites
-    flag. Body shape: any subset of SmartSiteConfig keys."""
+    flag. Body shape: any subset of SmartSiteConfig keys.
+
+    Owner-gated (audit 2026-08-01): require_user alone let ANY signed-in
+    user merge arbitrary keys into ANOTHER business's site_config —
+    including custom_domain, offline, and use_smart_sites (which shadows
+    a composed page with the retired Smart Sites renderer). Cross-tenant
+    write, closed."""
+    _require_business_owner(business_id, user)
     try:
         from smart_sites import save_smart_config
         result = save_smart_config(business_id, body or {})
@@ -1324,9 +1331,16 @@ async def save_smart_config_endpoint(business_id: str, body: Dict[str, Any], use
 
 
 @router.post("/sites/{business_id}/smart-preview")
-async def smart_preview_endpoint(business_id: str, body: Dict[str, Any]):
+async def smart_preview_endpoint(business_id: str, body: Dict[str, Any],
+                                 user: AuthedUser = Depends(require_user)):
     """Render Smart Sites preview from a draft config without persisting.
-    Used by MySite.tsx live preview iframe."""
+    Used by MySite.tsx live preview iframe.
+
+    Owner-gated (audit 2026-08-01): this had NO auth at all, and it
+    renders a business's real brand + content into HTML for anyone who
+    knows a business_id. It is a private draft preview, not a public
+    page — the public door is /public/site/{slug}."""
+    _require_business_owner(business_id, user)
     try:
         from smart_sites import render_smart_site_preview
         html = render_smart_site_preview(business_id, body or {})
@@ -1404,7 +1418,10 @@ async def smart_enable_endpoint(business_id: str,
 
 @router.post("/sites/{business_id}/smart-disable")
 async def smart_disable_endpoint(business_id: str, user: AuthedUser = Depends(require_user)):
-    """Flip use_smart_sites = false. Falls back to legacy rendering."""
+    """Flip use_smart_sites = false. Falls back to legacy rendering.
+    Owner-gated (audit 2026-08-01) — it rewrites another tenant's
+    site_config otherwise."""
+    _require_business_owner(business_id, user)
     try:
         from smart_sites import disable_smart_sites
         result = disable_smart_sites(business_id)
@@ -1506,7 +1523,10 @@ async def layout_override_endpoint(business_id: str, body: Dict[str, Any], user:
 
     Body: { vocabulary_override: <vocab-id> | null, layout_id: <layout-id> | null }
     Pass null (or omit either key) to reset to auto-detect.
+
+    Owner-gated (audit 2026-08-01) — writes site_config.
     """
+    _require_business_owner(business_id, user)
     try:
         from brand_engine import _sb_get as be_get, _sb_patch as be_patch
         from studio_data import LAYOUTS, VOCABULARIES
@@ -1840,7 +1860,11 @@ async def generate_decoration_endpoint(business_id: str, user: AuthedUser = Depe
       4. Call Claude (creative) + GPT (structural validator).
       5. Validate output against schema.
       6. Persist into business_sites.site_config.generated_decoration.
+
+    Owner-gated (audit 2026-08-01) — spends LLM budget and writes
+    another tenant's site_config otherwise.
     """
+    _require_business_owner(business_id, user)
     can_generate, seconds_remaining = _check_decoration_cooldown(business_id)
     if not can_generate:
         raise HTTPException(
@@ -2202,7 +2226,11 @@ async def generate_design_rec_endpoint(business_id: str, user: AuthedUser = Depe
 
     Cold-start path (deterministic, no LLM) fires when bundle voice
     signals are below the 2-of-9 threshold.
+
+    Owner-gated (audit 2026-08-01) — spends LLM budget and writes
+    another tenant's site_config otherwise.
     """
+    _require_business_owner(business_id, user)
     can_generate, seconds_remaining = _check_design_rec_cooldown(business_id)
     if not can_generate:
         raise HTTPException(

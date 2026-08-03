@@ -175,8 +175,8 @@ def reconcile_text_overrides(business_id: str, fresh_html: str) -> Dict[str, Any
       - legacy row without original_value             → active (unknown
         provenance; staling it would visibly revert a real edit)
 
-    Stale rows are never deleted — GET /composer/spec exposes them so a
-    future UI can offer re-apply. Status writes are best-effort: if the
+    Stale rows are never deleted — GET /composer/composition exposes them
+    so a future UI can offer re-apply. Status writes are best-effort: if the
     status column migration isn't applied yet, marking soft-fails (logged)
     and behavior degrades to the pre-Arc-4 apply-everything.
 
