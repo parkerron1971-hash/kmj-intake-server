@@ -132,7 +132,9 @@ def test_workflow_dispatcher_audits_and_refuses_bulk():
     src = pathlib.Path(_here.parent / "workflow_engine.py").read_text(encoding="utf-8")
     body = src.split("Fall back to Chief's existing action verbs")[1][:2600]
     assert "audit_log.record(" in body, "workflow dispatch must leave a ledger row"
-    assert "is_bulk(action)" in body, "bulk must not run unattended"
+    # Stage 3 moved the bulk rule into the shared evaluator so scheduler,
+    # workflow and notification paths cannot drift apart.
+    assert "policy_engine" in body, "bulk/vertical rules come from the engine"
     assert 'source="workflow"' in body
     assert "authorized_by=authorized_by" in body
 

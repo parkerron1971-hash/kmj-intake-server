@@ -127,24 +127,27 @@ async def _execute_row(row: Dict[str, Any]) -> None:
     # that BULK verbs are never autonomy-eligible at any class, which
     # this path has been quietly violating. Unknown/unclassified fails
     # closed, matching _gate_class_c.
+    # STAGE 3: one evaluator instead of a local registry read. It adds the
+    # regulated-vertical gate (a scheduled client-facing send for a
+    # therapist is unattended client contact) on top of the bulk and
+    # drift refusals this path already made.
     authorized_by = "scheduled"
     gate_refusal: Optional[str] = None
-    try:
-        import action_registry
-        if action_registry.is_bulk(atype):
-            gate_refusal = (f"'{atype}' is a bulk action — bulk is never "
-                            "autonomy-eligible, so it can't run unattended")
-        else:
-            cls = action_registry.classification(atype)
-            if not cls and atype not in CLIENT_ONLY_OR_NESTING:
-                gate_refusal = f"'{atype}' is not in the action registry"
-            elif cls:
-                rev = cls.get("reversibility") or cls.get("effect")
-                authorized_by = (f"scheduled:{rev}"
-                                 f"{':recurring' if recurrence_raw else ':once'}")
-    except Exception as e:
-        logger.warning(f"[scheduler] registry check failed for {atype}: {e}")
-        gate_refusal = "action safety check unavailable"
+    if atype not in CLIENT_ONLY_OR_NESTING:
+        try:
+            import policy_engine
+            verdict = policy_engine.evaluate(
+                str(biz.get("id") or ""), verb=atype, surface="scheduled",
+                prompted=False, biz_row=biz)
+            # Cadence is NOT appended to the rule: "scheduled" already
+            # implies unattended, and payload.recurrence carries the
+            # once-vs-recurring fact in a queryable field.
+            authorized_by = verdict.rule
+            if not verdict.allowed:
+                gate_refusal = verdict.reason
+        except Exception as e:
+            logger.warning(f"[scheduler] policy check failed for {atype}: {e}")
+            gate_refusal = "action safety check unavailable"
 
     ok, detail = False, ""
     if gate_refusal:

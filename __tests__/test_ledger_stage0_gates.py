@@ -141,7 +141,10 @@ def test_scheduler_refuses_bulk_and_stamps_the_class(fake, monkeypatch):
         "id": "r1", "business_id": "b1", "recurrence": "weekly",
         "action": {"type": "batch_email"}, "label": "blast"}))
     assert patched.get("status") == "failed"
-    assert "bulk" in (patched.get("last_error") or "").lower()
+    # Stage 3 routed this through policy_engine; the refusal now carries
+    # the engine's plainer sentence ("affects many records at once")
+    # rather than the word "bulk". Assert the OUTCOME, not the wording.
+    assert "unattended" in (patched.get("last_error") or "").lower()
     assert audited.get("ok") is False
 
 
@@ -163,5 +166,8 @@ def test_scheduler_records_reversibility_and_cadence(fake, monkeypatch):
     asyncio.run(cs._execute_row({
         "id": "r2", "business_id": "b1", "recurrence": "monthly",
         "action": {"type": "send_invoice"}, "label": "monthly invoice"}))
-    assert audited["payload"]["authorized_by"] == "scheduled:C:recurring"
+    # Stage 3: the shared evaluator produces the rule; cadence lives in
+    # payload.recurrence rather than being duplicated into the string.
+    assert audited["payload"]["authorized_by"] == "scheduled:C:unattended"
+    assert audited["payload"]["recurrence"] == "monthly"
     assert audited["ok"] is True

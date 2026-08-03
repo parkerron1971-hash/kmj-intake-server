@@ -210,6 +210,9 @@ def record_chief_turn(*, user_id: Optional[str], business_id: Optional[str],
             payload={k: t.get(k) for k in ("label", "nav") if t.get(k)},
             result=t.get("result"),
             source=source if source in ("mobile", "desktop", "voice", "system") else "desktop",
+            # Stage 3: the policy verdict _execute_actions stamped on the
+            # result. Field 6 stops being empty on the busiest path.
+            authorized_by=t.get("_authorized_by"),
         )
         n += 1 if wrote else 0
     return n
