@@ -42,6 +42,12 @@ def build(biz_row: Dict[str, Any], *, limit: int = 500,
     verification = audit_log.verification_report(biz)
     entries = audit_log.ledger_entries(
         biz, limit=limit, include_db=include_db, since=since, until=until)
+    # An evidentiary document must never imply completeness it does not
+    # have. ledger_entries hard-caps at 500, so count what is actually in
+    # range and say so when the two differ — the earlier text sent a
+    # reader to "the complete CSV", which was capped identically.
+    total = audit_log.count_in_range(biz, include_db=include_db,
+                                     since=since, until=until)
     return {
         "report": REPORT_KEY,
         "business_id": biz,
@@ -51,6 +57,8 @@ def build(biz_row: Dict[str, Any], *, limit: int = 500,
         "verification": verification,
         "entries": entries,
         "entry_count": len(entries),
+        "total_in_range": total,
+        "truncated": total > len(entries),
     }
 
 
@@ -77,6 +85,8 @@ def csv_rows(data: Dict[str, Any]) -> List[List[Any]]:
         [],
         ["Chain state"],
         ["Records in range", v.get("checked")],
+        ["Records in this report", data.get("entry_count")],
+        ["Total matching the range", data.get("total_in_range")],
         ["Carrying a fingerprint", v.get("hashed")],
         ["First sequence", v.get("first_sequence")],
         ["Last sequence", v.get("last_sequence")],
@@ -112,11 +122,28 @@ def csv_rows(data: Dict[str, Any]) -> List[List[Any]]:
     return rows
 
 
+_FORMULA_LEAD = ("=", "+", "-", "@", chr(9), chr(13))
+
+
+def _defuse(v: Any) -> Any:
+    """Neutralise spreadsheet formula injection.
+
+    Business names, verbs and error text are attacker-influenceable and
+    land in cells. A value starting with = + - @ is executed by Excel
+    and LibreOffice on open — and this file's whole purpose is to be
+    opened by an outside auditor. Prefixing with an apostrophe keeps it
+    readable as text.
+    """
+    if isinstance(v, str) and v[:1] in _FORMULA_LEAD:
+        return "'" + v
+    return v
+
+
 def to_csv(data: Dict[str, Any]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
-    for r in csv_rows(data):
-        w.writerow(r)
+    for row in csv_rows(data):
+        w.writerow([_defuse(c) for c in row])
     return buf.getvalue()
 
 
@@ -200,11 +227,13 @@ def _body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe]),
     ]))
     out.append(at)
-    if len(d.get("entries") or []) > 400:
+    shown_n = min(len(d.get("entries") or []), 400)
+    total = int(d.get("total_in_range") or shown_n)
+    if total > shown_n:
         out.append(Paragraph(
-            f"Showing the first 400 of {d.get('entry_count')} records. "
-            "Export CSV for the complete range — a truncated table must never "
-            "be mistaken for a complete one.", s["note"]))
+            f"Showing {shown_n} of {total} records in this range. A truncated "
+            "table must never be mistaken for a complete one — narrow the date "
+            "window and export again to see the rest.", s["note"]))
     return out
 
 

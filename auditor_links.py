@@ -119,7 +119,15 @@ def mint(business_id: str, *, label: str = "unnamed",
         "created_by": created_by,
         "expires_at": _iso(now + ttl),
     }
-    sb_clients.sb_post_as_service("/auditor_links", row, prefer="return=minimal")
+    saved = sb_clients.sb_post_as_service(
+        "/auditor_links", row, prefer="return=representation")
+    if not saved:
+        # Without a row, is_revoked() fails closed and the link is dead
+        # on arrival. Better to fail the mint than to hand someone a
+        # credential that can never work.
+        raise RuntimeError(
+            "the link could not be saved — nothing was created. "
+            "Check the date window and try again.")
     return token, row
 
 
@@ -193,10 +201,14 @@ def revoke(business_id: str, jti: str) -> bool:
     """Scoped by business_id as well as jti, so a guessed jti from
     another tenant cannot revoke anything."""
     try:
-        sb_clients.sb_patch_as_service(
+        # A zero-row PATCH is not an error to PostgREST — it returns [].
+        # Reporting that as success meant a mistyped jti, another
+        # tenant's jti, or an already-deleted row all read as "revoked",
+        # and the ledger recorded a revocation that never happened.
+        rows = sb_clients.sb_patch_as_service(
             f"/auditor_links?jti=eq.{jti}&business_id=eq.{business_id}",
             {"revoked_at": datetime.now(timezone.utc).isoformat()})
-        return True
+        return bool(rows)
     except Exception as e:
         logger.warning("[auditor_links] revoke failed: %s", e)
         return False

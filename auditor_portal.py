@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -38,7 +39,11 @@ logger = logging.getLogger("auditor_portal")
 
 router = APIRouter(tags=["auditor"])
 
-_APP_BASE = "https://app.solutionist.studio"
+# The auditor has no app session and never will, so the link must point
+# at the BACKEND page, not the app shell. Pointing it at app.solutionist
+# .studio sent the one person this feature exists for to a login screen.
+_PUBLIC_BASE = (os.environ.get("PUBLIC_API_BASE")
+                or "https://kmj-intake-server-production.up.railway.app")
 
 # The token rides in the URL, so: never cached, never framed, and no
 # Referer leak to any external asset. Copied from the OAuth consent
@@ -105,8 +110,7 @@ def mint_link(body: MintBody, user: AuthedUser = Depends(require_user)):
 
     return {
         "ok": True,
-        "url": f"{_APP_BASE}/audit/{token}",
-        "public_url": f"/public/audit/{token}",
+        "url": f"{_PUBLIC_BASE}/public/audit/{token}",
         "jti": row["jti"], "label": row["label"],
         "expires_at": row["expires_at"],
         "note": ("Copy this link now — it is stored only as a hash and "
@@ -145,12 +149,21 @@ def _resolve_or_404(token: str, request: Request) -> Dict[str, Any]:
     that is expired, revoked, forged or simply wrong must be
     indistinguishable from the outside."""
     import rate_limit
-    if not rate_limit.allow_strict("auditor_link", rate_limit.client_ip(request)):
+    # trusted_client_ip, not client_ip: the first X-Forwarded-For hop is
+    # client-supplied, so a scripted token search could mint a fresh
+    # bucket per request simply by varying the header.
+    if not rate_limit.allow_strict("auditor_link",
+                                   rate_limit.trusted_client_ip(request)):
         raise HTTPException(429, "Too many requests")
     import auditor_links
     ctx = auditor_links.resolve(token)
     if not ctx:
         raise HTTPException(404, "link not found")
+    # A second budget, per LINK. Every view appends an undeletable row
+    # under a per-tenant advisory lock, so one leaked credential could
+    # otherwise flood a tenant's ledger and serialise its writes.
+    if not rate_limit.allow_strict("auditor_link_jti", ctx["jti"]):
+        raise HTTPException(429, "Too many requests")
     return ctx
 
 

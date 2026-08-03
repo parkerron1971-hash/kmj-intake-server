@@ -39,11 +39,37 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # allow_strict(). A reviewer reads a page and maybe exports twice;
     # anything faster is a scripted search for a valid token.
     "auditor_link": (int(os.environ.get("RL_AUDITOR_LINK_PER_MIN", "20")), 60),
+    # Per-LINK budget, so one leaked credential cannot flood one
+    # tenant's append-only ledger with view rows.
+    "auditor_link_jti": (int(os.environ.get("RL_AUDITOR_LINK_PER_LINK", "60")), 3600),
+    # The ledger navigator: an LLM call plus a ledger row per request.
+    "ledger_nav": (int(os.environ.get("RL_LEDGER_NAV_PER_MIN", "12")), 60),
 }
 _DEFAULT = (60, 60)
 
 # (bucket, key) → {"start": epoch, "count": n}
 _buckets: Dict[Tuple[str, str], Dict[str, float]] = {}
+
+
+def trusted_client_ip(request) -> str:
+    """The LAST X-Forwarded-For hop, not the first.
+
+    client_ip() takes the first hop, which is whatever the caller typed
+    into the header — fine for a courtesy limit on a practitioner
+    screen, useless as a defence. Railway APPENDS the real peer, so the
+    last entry is the one the platform observed. Use this on any
+    unauthenticated surface where the limiter is a control rather than
+    a courtesy.
+    """
+    try:
+        xff = (request.headers.get("x-forwarded-for") or "").strip()
+        if xff:
+            hops = [h.strip() for h in xff.split(",") if h.strip()]
+            if hops:
+                return hops[-1]
+        return (getattr(getattr(request, "client", None), "host", "") or "unknown")
+    except Exception:
+        return "unknown"
 
 
 def client_ip(request) -> str:
