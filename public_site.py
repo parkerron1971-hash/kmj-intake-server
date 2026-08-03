@@ -182,6 +182,45 @@ _PUBLIC_SITE_NO_STORE_HEADERS = {
     "Expires": "0",
 }
 
+# ─── Edge caching for stable public pages (2026-08-02) ───────────────
+#
+# The no-store above is correct for anything that reflects live state,
+# but it was applied to EVERY public response — including the composed
+# home page, which changes only when the practitioner changes it. The
+# cost, measured: Cloudflare could not cache the page, so it stopped
+# being a CDN and became a 500ms tax. Time to first byte was 1153ms
+# through Cloudflare versus 650ms hitting Railway directly, and every
+# single visitor's page view ran the full render on the ONE uvicorn
+# worker that Chief and site builds share.
+#
+# The split that keeps both properties:
+#   max-age=0, must-revalidate  → the BROWSER always revalidates, so a
+#       practitioner refreshing their own site sees an edit instantly.
+#       This is the property the original no-store was protecting.
+#   s-maxage=60                 → the shared cache (Cloudflare) may
+#       serve for a minute. An edit is visible to the world within ~60s
+#       without any purge plumbing.
+#   stale-while-revalidate=600  → the edge serves the slightly-stale
+#       copy instantly and refreshes behind the scenes, so nobody ever
+#       waits on our origin for a page we already have.
+#
+# NOTE: Cloudflare does not cache HTML on ANY plan by default — this
+# header is necessary but not sufficient. The zone also needs a Cache
+# Rule marking these responses eligible for cache. Without it nothing
+# breaks; the page simply keeps behaving as it does today.
+#
+# Applied ONLY to pages whose content is a stored artifact: the
+# composed home page, generated secondary pages, robots.txt, and
+# sitemap.xml. Everything that reflects live state — booking (slot
+# availability), giving, events, academy, learner portals, the offline
+# page, and 404s — deliberately keeps no-store.
+_PUBLIC_SITE_EDGE_CACHE_HEADERS = {
+    "Cache-Control": (
+        "public, max-age=0, must-revalidate, "
+        "s-maxage=60, stale-while-revalidate=600"
+    ),
+}
+
 # Hosts where the Railway API is served directly. When the incoming
 # Host matches one of these, the root + catch-all handlers MUST 404 so
 # requests fall through to the real API routers (chief, email, etc.)
@@ -6210,12 +6249,12 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         _cd = _cfg.get("custom_domain")
         if normalized_path == "/robots.txt":
             return PlainTextResponse(_site_robots_txt(slug, _cd),
-                                     headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+                                     headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
         if normalized_path == "/sitemap.xml":
             return Response(
                 content=_site_sitemap_xml(slug, {**_cfg, "_business_id": biz_id}, _cd),
                 media_type="application/xml",
-                headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+                headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         if _use_smart_sites(site) and biz_id:
             # Fetch products to pass into the home page renderer.
@@ -6255,7 +6294,7 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
                 return HTMLResponse(
                     content=_page_html, media_type="text/html",
                     headers={"X-Solutionist-Source": "module-composer-multipage",
-                             **_PUBLIC_SITE_NO_STORE_HEADERS})
+                             **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         # ─── Real 404 for anything else ────────────────────────────
         # Every unknown path used to return the home page with a 200.
@@ -6266,7 +6305,7 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
                                    custom_domain=_cd, page_path="")
         return HTMLResponse(
             content=html, media_type="text/html",
-            headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
+            headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS},
         )
 
 
@@ -6332,12 +6371,12 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         # ─── Findability bundle (2026-08-02), custom-domain parity ──
         if _norm == "/robots.txt":
             return PlainTextResponse(_site_robots_txt(slug, domain),
-                                     headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+                                     headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
         if _norm == "/sitemap.xml":
             return Response(
                 content=_site_sitemap_xml(slug, {**_cfg, "_business_id": biz_id}, domain),
                 media_type="application/xml",
-                headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+                headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         if _use_smart_sites(site) and biz_id:
             products = await _sb(client,
@@ -6370,7 +6409,7 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
                 return HTMLResponse(
                     content=_page_html, media_type="text/html",
                     headers={"X-Solutionist-Source": "module-composer-multipage",
-                             **_PUBLIC_SITE_NO_STORE_HEADERS})
+                             **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         if _norm != "/":
             return await _render_not_found(client, slug, biz_id, domain)
@@ -6381,7 +6420,7 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
                                    custom_domain=domain, page_path="")
         return HTMLResponse(
             content=html, media_type="text/html",
-            headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
+            headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS},
         )
 
 
