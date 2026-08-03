@@ -218,6 +218,32 @@ def record_chief_turn(*, user_id: Optional[str], business_id: Optional[str],
     return n
 
 
+def _require_ledger_read(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    """The ledger's read gate: owner, any ACTIVE seat (viewer included),
+    or an active accountant collaborator.
+
+    History is a trust surface, not an owner secret — and an accountant
+    who cannot see what happened to the books they are reviewing is the
+    one person the surface exists for. Returns the business row.
+    """
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz}&select=id,name,owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    row = rows[0]
+    if str(row.get("owner_id")) == str(user.id):
+        return row
+    try:
+        from business_collaborators_router import is_active_accountant
+        if is_active_accountant(biz, str(user.id)):
+            return row
+    except Exception as e:
+        logger.warning(f"[audit] accountant check failed: {e}")
+    from business_users_router import require_role
+    require_role(biz, str(user.id), "viewer")
+    return row
+
+
 @router.get("")
 def read_audit(biz: str, limit: int = 100, failed_only: bool = False,
                verb: Optional[str] = None, include_db: bool = False,
@@ -226,14 +252,23 @@ def read_audit(biz: str, limit: int = 100, failed_only: bool = False,
 
     Seat visibility (S11): owner-only reads left invited seats staring
     at an empty History panel. Same require_role ladder as the other
-    routers — any working seat (member+) can read; roles are enforced
-    server-side here regardless of what the client renders."""
-    rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,owner_id&limit=1") or []
-    if not rows:
-        raise HTTPException(404, "business not found")
-    from business_users_router import require_role
-    require_role(biz, str(user.id), "member")
+    routers — roles are enforced server-side here regardless of what the
+    client renders.
+
+    LEDGER ACCESS (2026-08-03): the read floor drops to VIEWER and active
+    accountant collaborators are admitted. Two dead ends made that
+    necessary. The sidebar showed every team seat a History leaf while
+    this endpoint demanded member+, so a viewer clicking it met a 403 —
+    a clickable thing that dead-ends. And an accountant collaborator, the
+    single audience most likely to be handed an audit trail, could not
+    reach it at all.
+
+    Safe because of what this query SELECTS: verb, actor, ok/error,
+    summary, timing, sequence, authorized_by, subject_refs. It never
+    returns `payload` or `result`, so the db-trigger tier's before/after
+    record contents are not exposed by widening the audience. Anything
+    that would expose row CONTENTS must re-gate."""
+    _require_ledger_read(biz, user)
 
     limit = min(max(limit, 1), 500)
     q = (f"/audit_log?business_id=eq.{biz}"
@@ -274,12 +309,7 @@ def verify_chain(biz: str,
     reassure. A gap is reported as a gap, with the tombstone that
     explains it, and the practitioner draws their own conclusion.
     """
-    rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,owner_id&limit=1") or []
-    if not rows:
-        raise HTTPException(404, "business not found")
-    from business_users_router import require_role
-    require_role(biz, str(user.id), "member")
+    _require_ledger_read(biz, user)
 
     try:
         res = sb_clients.sb_post_as_service(

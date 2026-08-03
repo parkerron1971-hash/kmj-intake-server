@@ -282,11 +282,19 @@ def test_audit_admin_seat_reads(audit_biz):
     assert out["ok"] is True
 
 
-def test_audit_viewer_is_below_the_member_floor(audit_biz):
+def test_audit_viewer_can_read_history(audit_biz):
+    """The member floor was DELIBERATELY lowered to viewer (2026-08-03).
+
+    It created a dead end: the sidebar shows every team seat a History
+    leaf, so a viewer clicking it met a 403. History is a trust surface
+    — a seat that can see the business should be able to see what
+    happened to it. Safe because the query selects no payload/result,
+    so record CONTENTS are still not exposed by the wider audience.
+    Outsiders are still refused — see the test below, which is the
+    regression that actually matters.
+    """
     import audit_log
-    with pytest.raises(HTTPException) as e:
-        audit_log.read_audit(biz="b1", user=_user("v1"))
-    assert e.value.status_code == 403
+    assert audit_log.read_audit(biz="b1", user=_user("v1"))["ok"] is True
 
 
 def test_audit_outsider_is_refused(audit_biz):
