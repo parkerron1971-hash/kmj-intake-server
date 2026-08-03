@@ -300,6 +300,11 @@ def verify_chain(biz: str,
         "ok": True,
         "intact": bool(report.get("intact")),
         "checked": report.get("checked", 0),
+        # Found by running the verifier against production: every real
+        # chain said "intact" while carrying ZERO hashes, because
+        # pre-Stage-2 rows are skipped. "Verified" must never quietly
+        # mean "there was nothing to verify".
+        "hashed": report.get("hashed", 0),
         "first_sequence": report.get("first_sequence"),
         "last_sequence": report.get("last_sequence"),
         "broken_at": report.get("broken_at"),
