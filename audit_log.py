@@ -44,6 +44,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
@@ -323,6 +324,65 @@ def _z(ts: str) -> str:
     """PostgREST-safe UTC timestamp (Z form, never +00:00)."""
     s = str(ts).strip()
     return s.replace("+00:00", "Z") if s else s
+
+
+class _NavBody(BaseModel):
+    business_id: str
+    question: str
+
+
+@router.post("/navigate")
+def navigate(body: _NavBody, user: AuthedUser = Depends(require_user)):
+    """Turn a question into a FILTER over real rows, and return the rows.
+
+    The portal agent. It GUIDES — resolves "the invoices for that client
+    last July" into a filter and walks the reader to those records. It
+    does NOT narrate: no summary, no interpretation, no verdict on what
+    the records mean. The only sentence it produces is a description of
+    the FILTER it applied.
+
+    The model never sees row contents (see ledger_navigator), so the
+    restraint is structural rather than a prompt instruction someone
+    could talk their way past.
+
+    The search is itself recorded. Who went looking for what, and when,
+    belongs in the record — especially when the reader is an auditor.
+    """
+    _require_ledger_read(body.business_id, user)
+    import ledger_navigator
+    nav = ledger_navigator.resolve(body.question)
+    f = nav["filter"]
+
+    entries = ledger_entries(
+        body.business_id, limit=int(f.get("limit") or 200),
+        failed_only=bool(f.get("failed_only")), verb=f.get("verb"),
+        include_db=bool(f.get("include_db")),
+        since=f.get("since"), until=f.get("until"))
+
+    # Filters PostgREST can't express cleanly, applied to the rows we
+    # already hold rather than by widening the query.
+    if f.get("actor"):
+        a = f["actor"]
+        entries = [e for e in entries
+                   if e.get("actor_id") == a or e.get("actor_type") == a]
+    if f.get("subject_id"):
+        sid = f["subject_id"]
+        entries = [e for e in entries
+                   if any(sid in str(r.get("id") or "")
+                          for r in (e.get("subject_refs") or [])
+                          if isinstance(r, dict))
+                   or sid in str(e.get("target_id") or "")]
+
+    try:
+        record(body.business_id, actor_type="user", actor_id=str(user.id),
+               verb="ledger:searched", summary=str(body.question)[:240],
+               payload={"filter": f, "matches": len(entries)},
+               source="audit", authorized_by="ledger_read")
+    except Exception:
+        pass
+
+    return {"ok": True, "filter": f, "description": nav["description"],
+            "entries": entries, "count": len(entries)}
 
 
 @router.get("/export")
