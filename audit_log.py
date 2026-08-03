@@ -217,7 +217,7 @@ def record_chief_turn(*, user_id: Optional[str], business_id: Optional[str],
 
 @router.get("")
 def read_audit(biz: str, limit: int = 100, failed_only: bool = False,
-               verb: Optional[str] = None,
+               verb: Optional[str] = None, include_db: bool = False,
                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """The team's view of the business audit trail.
 
@@ -234,12 +234,23 @@ def read_audit(biz: str, limit: int = 100, failed_only: bool = False,
 
     limit = min(max(limit, 1), 500)
     q = (f"/audit_log?business_id=eq.{biz}"
-         f"&select=id,actor_type,actor_id,verb,ok,error,summary,source,created_at,target_type,target_id"
+         f"&select=id,actor_type,actor_id,verb,ok,error,summary,source,created_at,"
+         f"target_type,target_id,sequence,authorized_by,subject_refs,verb_registered"
          f"&order=created_at.desc&limit={limit}")
     if failed_only:
         q += "&ok=eq.false"
     if verb:
-        safe = "".join(ch for ch in verb if ch.isalnum() or ch == "_")[:80]
+        # ':' is now legal — namespaced verbs (db:, rules:, webhook:).
+        safe = "".join(ch for ch in verb if ch.isalnum() or ch in "_:")[:80]
         q += f"&verb=eq.{safe}"
+    # Two tiers, one table. db_trigger rows are the PROVABLE tier and
+    # they double up with the application row for the same action, so a
+    # practitioner's History reads the intent tier by default. The
+    # verification portal (Stage 4) passes include_db=true and sees
+    # everything — the provable tier is never hidden from a proof, only
+    # from a summary.
+    if not include_db:
+        q += "&source=not.eq.db_trigger"
     entries = sb_clients.sb_get_as_service(q) or []
-    return {"ok": True, "entries": entries, "count": len(entries)}
+    return {"ok": True, "entries": entries, "count": len(entries),
+            "tier": "all" if include_db else "application"}

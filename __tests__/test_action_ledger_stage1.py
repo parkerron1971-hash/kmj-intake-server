@@ -121,3 +121,56 @@ def test_erasure_routes_through_the_tombstone_rpc():
     assert 'table == "audit_log"' in body, "audit_log must not take the plain DELETE path"
     assert al.BUSINESS_CHILD_TABLES[-1] == "audit_log", \
         "the ledger is erased last so the business-row cascade has nothing to refuse"
+
+
+# ─── Stage 1b: coverage ──────────────────────────────────────────────
+
+def test_workflow_dispatcher_audits_and_refuses_bulk():
+    """The last ACTION_HANDLERS dispatcher that ran with no record at
+    all. A workflow step is unattended by definition, so bulk is refused
+    the same way it is on the scheduler."""
+    src = pathlib.Path(_here.parent / "workflow_engine.py").read_text(encoding="utf-8")
+    body = src.split("Fall back to Chief's existing action verbs")[1][:2600]
+    assert "audit_log.record(" in body, "workflow dispatch must leave a ledger row"
+    assert "is_bulk(action)" in body, "bulk must not run unattended"
+    assert 'source="workflow"' in body
+    assert "authorized_by=authorized_by" in body
+
+
+def test_audit_read_hides_the_db_tier_by_default(monkeypatch):
+    """Two tiers, one table: db_trigger rows double up with the
+    application row for the same action, so History reads the intent
+    tier — but a proof must be able to ask for everything."""
+    seen = {}
+
+    def _get(q):
+        seen["q"] = q
+        return []
+    monkeypatch.setattr(audit_log.sb_clients, "sb_get_as_service",
+                        lambda q: [{"id": "b1", "owner_id": "u1"}]
+                        if q.startswith("/businesses") else _get(q))
+    monkeypatch.setattr("business_users_router.require_role",
+                        lambda b, u, r: "owner")
+    u = type("U", (), {"id": "u1", "email": "u@x.com"})()
+
+    out = audit_log.read_audit("b1", user=u)
+    assert "source=not.eq.db_trigger" in seen["q"]
+    assert out["tier"] == "application"
+
+    out = audit_log.read_audit("b1", include_db=True, user=u)
+    assert "source=not.eq.db_trigger" not in seen["q"]
+    assert out["tier"] == "all"
+
+
+def test_namespaced_verbs_survive_the_filter(monkeypatch):
+    """db:/rules:/webhook: verbs contain a colon — the old sanitizer
+    stripped it and would have silently matched nothing."""
+    seen = {}
+    monkeypatch.setattr(audit_log.sb_clients, "sb_get_as_service",
+                        lambda q: [{"id": "b1", "owner_id": "u1"}]
+                        if q.startswith("/businesses") else seen.update(q=q) or [])
+    monkeypatch.setattr("business_users_router.require_role",
+                        lambda b, u, r: "owner")
+    u = type("U", (), {"id": "u1", "email": "u@x.com"})()
+    audit_log.read_audit("b1", verb="db:contacts_update", user=u)
+    assert "verb=eq.db:contacts_update" in seen["q"]
