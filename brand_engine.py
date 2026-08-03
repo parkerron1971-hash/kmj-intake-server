@@ -28,6 +28,7 @@ Public API:
 from __future__ import annotations
 
 import os
+import time
 import json
 import logging
 from datetime import datetime, timezone
@@ -745,11 +746,45 @@ def _read_practitioner_intelligence(
     return intel
 
 
-def get_bundle(business_id: str) -> Dict[str, Any]:
+# ─── Serve-path cache (2026-08-02, performance pass) ─────────────────
+# get_bundle runs FIVE sequential blocking round trips (businesses,
+# business_profiles, business_type_archetypes, practitioner_profiles,
+# business_sites). It sits on the public page-serve path via
+# _inject_brand_meta, and it is a SYNC function called from ASYNC
+# handlers — so on a single-worker uvicorn every anonymous page view
+# stalled the whole event loop for five queries. Chief streams, compose
+# jobs and every other visitor waited behind a stranger's page load.
+#
+# Brand data changes when a practitioner edits their kit — rarely, and
+# never mid-visit. A short TTL keeps edits feeling instant while
+# collapsing the common case to zero queries. Same shape as
+# site_concierge.widget_snippet, which already guards this path.
+_BUNDLE_TTL = float(os.environ.get("BRAND_BUNDLE_TTL", "60") or 60)
+_bundle_cache: Dict[str, tuple] = {}
+
+
+def invalidate_bundle_cache(business_id: str = "") -> None:
+    """Drop a cached bundle (or all of them). Called on every brand
+    write so a practitioner never waits on their own edit."""
+    if business_id:
+        _bundle_cache.pop(business_id, None)
+    else:
+        _bundle_cache.clear()
+
+
+def get_bundle(business_id: str, use_cache: bool = True) -> Dict[str, Any]:
     """Compose the canonical brand bundle. Single source of truth for every
-    downstream artifact (email, invoice, PDF, public site, Stripe page)."""
+    downstream artifact (email, invoice, PDF, public site, Stripe page).
+
+    Pass use_cache=False in read-modify-write paths that must see the
+    freshest row (brand save, asset upload)."""
     if not business_id:
         return _empty_bundle("")
+
+    if use_cache and _BUNDLE_TTL > 0:
+        _hit = _bundle_cache.get(business_id)
+        if _hit and (time.time() - _hit[0]) < _BUNDLE_TTL:
+            return _hit[1]
 
     business = _safe_get_one("businesses", "id", business_id)
     if not business or not business.get("id"):
@@ -843,6 +878,8 @@ def get_bundle(business_id: str) -> Dict[str, Any]:
         "missing_fields": missing,
         "has_brand_kit": bool(brand_kit),
     }
+    if _BUNDLE_TTL > 0:
+        _bundle_cache[business_id] = (time.time(), bundle)
     return bundle
 
 
@@ -881,6 +918,10 @@ def save_brand_kit(business_id: str, new_kit: Dict[str, Any]) -> Dict[str, Any]:
         },
     )
 
+    # The row just changed — drop the cached bundle so this return (and
+    # the practitioner's very next page view) reflects the save, not a
+    # copy taken up to a minute ago.
+    invalidate_bundle_cache(business_id)
     return get_bundle(business_id)
 
 
@@ -1249,6 +1290,7 @@ def upload_asset(
     if res is None:
         return {"ok": False, "error": "Database update failed"}
 
+    invalidate_bundle_cache(business_id)   # new logo/favicon must show now
     return {"ok": True, "url": public_url, "variant": variant}
 
 
@@ -1287,4 +1329,5 @@ def remove_asset(business_id: str, variant: str) -> Dict[str, Any]:
     if res is None:
         return {"ok": False, "error": "Database update failed"}
 
+    invalidate_bundle_cache(business_id)   # removal must show now too
     return {"ok": True, "variant": variant}

@@ -120,6 +120,14 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=False,  # bearer tokens only — never cookie auth
 )
+# Compression (2026-08-02, performance pass). Composed sites are single
+# documents with CSS + JS + JSON-LD inlined — routinely 100-250KB, and
+# every byte was shipping uncompressed to every visitor on every view
+# (the serve path is deliberately no-store, so nothing amortized it).
+# HTML/CSS/JS compress ~6-8x. minimum_size skips payloads where the
+# gzip header would cost more than it saves.
+from fastapi.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 # Guarantee CORS headers on ALL error responses (500/404/422/unhandled) — an
 # unhandled exception escapes CORSMiddleware otherwise, masking every error as
 # a browser CORS block. See cors_error_handlers.py.
