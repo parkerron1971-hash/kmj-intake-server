@@ -2374,7 +2374,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     # target path. Composer wrote NEW text there (≠ the override's
     # original_value) → the override is marked stale and NOT applied
     # (no silent masking). Orphaned paths → stale too, never deleted —
-    # the stale list rides GET /composer/spec so a future UI can offer
+    # the stale list rides GET /composer/composition so a future UI can offer
     # re-apply. Legacy rows without original_value keep applying
     # (provenance unknown; staling them would visibly revert edits).
     overrides_reconciled = _recon
@@ -2811,7 +2811,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         "html_source": "module-composer",
         "html_generated_at": datetime.now(timezone.utc).isoformat(),
         "use_smart_sites": False,
-        "quality_report": quality_report,   # Arc 4 — surfaced on /composer/spec
+        "quality_report": quality_report,   # Arc 4 — surfaced on /composer/composition
     })
     if dro_id:
         # powers the "why your site looks this way" view — served by
@@ -2867,10 +2867,26 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     # artifacts out of site_config — they are read only by the legacy
     # /director path and confuse every forensic read. Live-path keys
     # (vocabulary_override, previous_compose, build_inputs) stay.
+    #
+    # ⚠ NEVER add a key to this tuple that THIS function writes. The
+    # original list swept `page_spec` and `slot_concept`, which are
+    # written ~60 lines above (page_spec at the cfg.update, slot_concept
+    # just below it) — so every full recompose wrote them and then
+    # deleted them before the PATCH. That cost us three live behaviours
+    # for eleven days (audit 2026-08-01):
+    #   • /composer/shuffle always 409'd "no composed page yet"
+    #   • refresh_if_composed never fired → catalog/gallery edits stopped
+    #     reaching the site
+    #   • stored_concept_fp was always "" → reroll_defaults was always
+    #     True → default slot imagery re-rolled on EVERY build, burning
+    #     Unsplash/DALL-E budget the Arc 7 fingerprint exists to save,
+    #     and changing photos the practitioner never asked to change
+    # Both are also in _RESTORE_KEYS, so restore could never bring them
+    # back either. Purge only what nothing writes anymore.
     if full_recompose:
         for _dead in ("design_brief", "design_recommendation",
                       "enriched_brief", "generated_decoration",
-                      "slot_concept", "page_spec", "html_build_error",
+                      "html_build_error",
                       "html_build_failed_at", "html_validation_errors",
                       "dalle_spend_log", "composer_cache", "sections"):
             cfg.pop(_dead, None)
@@ -5406,9 +5422,25 @@ def set_site_visibility(body: SiteVisibilityBody,
     return {"ok": True, "offline": bool(body.offline)}
 
 
-@router.get("/spec/{business_id}")
+@router.get("/composition/{business_id}")
 def get_spec(business_id: str,
              session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    """The composition trust surface: what got built, whether the
+    rationale applied, the conformance report, and any stale overrides.
+
+    ROUTE RENAMED (audit 2026-08-01). This was a SECOND
+    `@router.get("/spec/{business_id}")` on the same router — FastAPI
+    matches in registration order, so `get_design_spec` (line ~4851,
+    which returns the Blueprint document as {"spec": …}) always won and
+    everything below was unreachable. SiteComposerPanel gated on
+    `j?.ok`, which the winning handler never returns, so the panel sat
+    in its pre-compose state forever and dro_status / quality_report /
+    stale_overrides could not be fetched by anything, ever.
+
+    Two handlers, two jobs, two paths now:
+      GET /composer/spec/{id}         → the Blueprint (design_spec)
+      GET /composer/composition/{id}  → what actually got composed
+    """
     _require_owner(business_id, session.user.id)
     ctx = gather_context(business_id)
     cfg = ((ctx.get("site") or {}).get("site_config") or {})
