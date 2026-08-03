@@ -64,6 +64,7 @@ def _settings_full():
                        "text": "#0a0a0a"},
             "font_heading": "Fraunces", "font_body": "Inter",
             "fonts_locked": True,
+            "visual_style": "quiet, editorial, unhurried",
         },
         "website_content": {"testimonials": [
             {"quote": "great", "show_on_website": True},
@@ -194,7 +195,11 @@ class TestB2Prefill:
             "accent_color": "#00ff59", "primary_color": "#111111",
             "secondary_color": "#222222", "background_color": "#fafafa",
             "text_color": "#0a0a0a", "font_heading": "Fraunces",
-            "font_body": "Inter", "fonts_locked": True}
+            "font_body": "Inter", "fonts_locked": True,
+            # Beat 6 offers this back for confirmation; the fixture's
+            # site_prefs carries no confirmed answer, so the Brand Room's
+            # stored sentence is what surfaces.
+            "visual_style": "quiet, editorial, unhurried"}
         assert out["signals"] == {
             "offer_clear": True, "audience_known": True, "has_about": True,
             "offer_count": 2, "testimonial_count": 1}
@@ -222,6 +227,80 @@ class TestB2Prefill:
             "offer_clear": False, "audience_known": False,
             "has_about": False, "offer_count": 0, "testimonial_count": 0}
         assert out["media"] == {"gallery_photos": 0}
+
+
+# ── Visual style, confirmed at intake (2026-08-03) ──────────────────
+#
+# The Brand Room stores a one-line visual style, but taste moves. Beat 6
+# offers it back; the value that reaches the build is the CONFIRMED one.
+# Rule: a change mirrors back to the brand kit, a plain confirm does not.
+
+class TestVisualStyleConfirmation:
+    def test_prefill_prefers_a_previously_confirmed_answer(self, fb):
+        """site_prefs beats the brand kit — re-asking a question they
+        already answered would read as the system forgetting."""
+        settings = _settings_full()
+        settings["site_prefs"]["visual_style"] = "louder, more color"
+        _seed_business(fb, settings=settings)
+        out = sc.interview_prefill("biz1", user=_user("owner-1"))
+        assert out["brand_design"]["visual_style"] == "louder, more color"
+
+    def test_prefill_empty_when_nothing_stored(self, fb):
+        _seed_business(fb, settings={})
+        out = sc.interview_prefill("biz1", user=_user("owner-1"))
+        assert out["brand_design"]["visual_style"] == ""
+
+    def test_sanitize_trims_and_caps(self):
+        out = sc.sanitize_design_prefs({"visual_style": "  spacious  "})
+        assert out["visual_style"] == "spacious"
+        long = sc.sanitize_design_prefs({"visual_style": "x" * 900})
+        assert len(long["visual_style"]) == sc._PREF_STR_CAP
+        # Blank / wrong type never creates the key.
+        assert sc.sanitize_design_prefs({"visual_style": "   "}) is None
+        assert sc.sanitize_design_prefs({"visual_style": 42}) is None
+
+    def _kit_style(self, fb):
+        return (fb.rows("businesses")[0]["settings"]
+                .get("brand_kit", {}).get("visual_style"))
+
+    def test_change_mirrors_back_to_the_brand_kit(self, fb):
+        _seed_business(fb, settings=_settings_full())
+        sc._persist_site_prefs("biz1", {"visual_style": "loud and modern"})
+        assert self._kit_style(fb) == "loud and modern"
+        # …and the confirmed answer is also on site_prefs for the build.
+        sp = fb.rows("businesses")[0]["settings"]["site_prefs"]
+        assert sp["visual_style"] == "loud and modern"
+
+    def test_plain_confirm_does_not_touch_the_brand_kit(self, fb):
+        """Tapping 'still right' sends back the identical string. The kit
+        object must come out unchanged — no rewrite, no history churn."""
+        settings = _settings_full()
+        _seed_business(fb, settings=settings)
+        before = dict(fb.rows("businesses")[0]["settings"]["brand_kit"])
+        sc._persist_site_prefs("biz1",
+                               {"visual_style": "quiet, editorial, unhurried"})
+        assert fb.rows("businesses")[0]["settings"]["brand_kit"] == before
+
+    def test_absent_visual_style_leaves_the_kit_alone(self, fb):
+        """Owners who never reach beat 6 (or clear the field) must not have
+        their stored sentence wiped."""
+        _seed_business(fb, settings=_settings_full())
+        sc._persist_site_prefs("biz1", {"feel_words": ["calm"]})
+        assert self._kit_style(fb) == "quiet, editorial, unhurried"
+
+    def test_confirmed_style_reaches_the_intake_text(self):
+        """The whole point: the sentence becomes evidence the design pass
+        can quote. Unconfirmed brand-kit text alone must NOT appear."""
+        ctx = {
+            "business": {"name": "KMJ", "type": "studio"},
+            "bundle": {}, "settings": {"brand_kit": {
+                "visual_style": "never confirmed"}},
+            "site_prefs": {"visual_style": "airy, generous, unhurried"},
+            "offerings": [],
+        }
+        text = sc._assemble_intake_text(ctx)
+        assert "airy, generous, unhurried" in text
+        assert "never confirmed" not in text
 
 
 # ── B3: POST /composer/interview/probe ──────────────────────────────

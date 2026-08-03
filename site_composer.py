@@ -203,6 +203,17 @@ def sanitize_design_prefs(raw: Any) -> Optional[Dict[str, Any]]:
     if isinstance(inotes, str) and inotes.strip():
         out["inspiration_notes"] = inotes.strip()[:_PREF_STR_CAP]
 
+    # VISUAL STYLE, CONFIRMED AT INTAKE (2026-08-03). The sentence lives in
+    # the Brand Room, but taste moves — the owner may have written it months
+    # ago, and the designer may since have found a better look. So it gets
+    # OFFERED BACK at beat 6, and the value that reaches the build is the one
+    # they just confirmed, never the stale stored one. Same leniency and cap
+    # as the other free-text prefs. _persist_site_prefs mirrors a CHANGED
+    # sentence back to the brand kit; an unchanged confirm writes nothing.
+    vstyle = raw.get("visual_style")
+    if isinstance(vstyle, str) and vstyle.strip():
+        out["visual_style"] = vstyle.strip()[:_PREF_STR_CAP]
+
     # v2 — colors {use_brand, direction, love[≤4], avoid[≤4]}
     c = raw.get("colors")
     if isinstance(c, dict):
@@ -340,7 +351,16 @@ def _persist_site_prefs(business_id: str, prefs: Dict[str, Any]) -> None:
     sibling settings keys survive. Called BEFORE gather_context so the
     compose that follows reads the fresh prefs back from settings.
     Arc 5: the stored reference_analysis rides along — compose_site
-    re-runs it only when the inspiration_urls actually changed."""
+    re-runs it only when the inspiration_urls actually changed.
+
+    Visual style write-back (2026-08-03): when the owner CHANGED the
+    sentence at beat 6, the Brand Room's copy is updated in the same PATCH
+    — settings is already in hand, so it costs no extra round-trip. Only a
+    real change writes: tapping "still right" produces an identical string
+    and touches nothing. Surgical (the one key, no brand-kit history
+    snapshot) for the same reason persist_creative_expression is surgical —
+    history is for practitioner-driven kit edits in the Brand Room, not for
+    every intake that re-affirms what was already there."""
     from datetime import datetime, timezone
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
@@ -352,6 +372,17 @@ def _persist_site_prefs(business_id: str, prefs: Dict[str, Any]) -> None:
     if isinstance(prior.get("reference_analysis"), dict):
         fresh["reference_analysis"] = prior["reference_analysis"]
     settings["site_prefs"] = fresh
+
+    confirmed_style = str(fresh.get("visual_style") or "").strip()
+    if confirmed_style:
+        kit = settings.get("brand_kit")
+        kit = dict(kit) if isinstance(kit, dict) else {}
+        if str(kit.get("visual_style") or "").strip() != confirmed_style:
+            kit["visual_style"] = confirmed_style
+            settings["brand_kit"] = kit
+            logger.info(f"[composer.prefs] {business_id}: visual_style "
+                        f"changed at intake → mirrored to brand kit")
+
     sb_clients.sb_patch_as_service(
         f"/businesses?id=eq.{business_id}", {"settings": settings})
 
@@ -1015,6 +1046,15 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
     if prefs.get("feel_words"):
         pref_lines.append("The site should feel: "
                           + ", ".join(str(w) for w in prefs["feel_words"]) + ".")
+    # The visual-style sentence the owner CONFIRMED at intake (beat 6) —
+    # first-person, freshly re-affirmed, so it sits at the top of the
+    # evidence block with feel_words rather than in the older bundle text
+    # below (which the fixed cap can truncate). Absent when they never ran
+    # the interview; the stored brand-kit sentence alone never lands here,
+    # by design — unconfirmed taste is not evidence.
+    if prefs.get("visual_style"):
+        pref_lines.append(f"How it should look, in their words: "
+                          f"\"{prefs['visual_style']}\"")
     if prefs.get("inspiration"):
         pref_lines.append(f"Inspiration: {prefs['inspiration']}")
     if prefs.get("type_personality"):
@@ -4601,6 +4641,13 @@ def interview_prefill(business_id: str,
         "font_heading": kit.get("font_heading") or font_pair.get("heading"),
         "font_body": kit.get("font_body") or font_pair.get("body"),
         "fonts_locked": bool(kit.get("fonts_locked")),
+        # The Brand Room's stored sentence, so beat 6 can offer it back for
+        # confirmation. Rides the settings read that already happened.
+        # site_prefs.visual_style (a previously CONFIRMED answer) wins when
+        # present — re-asking a question they already answered this way
+        # would read as the system forgetting.
+        "visual_style": ((site_prefs or {}).get("visual_style")
+                         or kit.get("visual_style") or ""),
     }
 
     # signals — the same facts prefill-signals computes (one bundle read,
