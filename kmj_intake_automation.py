@@ -436,6 +436,11 @@ async def health_ready():
 
 app.include_router(_health_router)
 
+# Auditor ledger links. MUST be above public_site_router: /public/audit/
+# would otherwise be swallowed by its `/{path:path}` catch-all.
+from auditor_portal import router as auditor_portal_router
+app.include_router(auditor_portal_router)
+
 # public_site_router MUST remain LAST — it defines `/` and `/{path:path}`
 # catch-alls that would otherwise shadow every specific API route.
 app.include_router(public_site_router)

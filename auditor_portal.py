@@ -1,0 +1,354 @@
+"""
+auditor_portal.py — the outside reviewer's window onto one ledger.
+
+Two surfaces:
+  * owner-gated management (/audit/links) — mint, list, revoke;
+  * the public read (/public/audit/{token}) — no Solutionist account,
+    no cookie, nothing but a signed link that expires and can be pulled.
+
+THE RULE, INHERITED: report, never reassure. This page shows the chain's
+state and the rows, and it never summarises them into a claim. An
+auditor is precisely the reader who must not be handed a conclusion.
+
+WHAT AN AUDITOR CAN SEE: the same columns every other ledger surface
+returns (audit_log.LEDGER_SELECT) — verb, actor, outcome, timing,
+sequence, authorized_by, subject_refs. It does NOT include payload or
+result, so record CONTENTS never leave through this door. If a future
+change widens that select list, it widens it HERE too, which is exactly
+why there is one constant and not four queries.
+
+EVERY VIEW IS LOGGED. Opening this page writes a row to the ledger it is
+reading. Who looked, and when, is part of the record — the Etherscan
+idea inverted: not public to everyone, but accountable to the practice.
+"""
+from __future__ import annotations
+
+import html
+import logging
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, Response
+from pydantic import BaseModel
+
+import sb_clients
+from auth_supabase import AuthedUser, require_user
+
+logger = logging.getLogger("auditor_portal")
+
+router = APIRouter(tags=["auditor"])
+
+_APP_BASE = "https://app.solutionist.studio"
+
+# The token rides in the URL, so: never cached, never framed, and no
+# Referer leak to any external asset. Copied from the OAuth consent
+# screen, which is the only other token-bearing page in the codebase.
+_SECURE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+# ─── Owner-gated management ─────────────────────────────────────────
+
+class MintBody(BaseModel):
+    business_id: str
+    label: str = "unnamed"
+    ttl_days: int = 30
+    window_start: Optional[str] = None
+    window_end: Optional[str] = None
+
+
+def _require_owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    """Minting a credential is an OWNER act, deliberately stricter than
+    reading the ledger. mcp_server sets the precedent: a credential that
+    can mint credentials is a privilege-escalation ladder, so the mint
+    door is narrower than the read door."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    if str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(403, "only the owner can share ledger access")
+    return rows[0]
+
+
+@router.post("/audit/links")
+def mint_link(body: MintBody, user: AuthedUser = Depends(require_user)):
+    """Mint a reviewer link. The plaintext is returned ONCE."""
+    biz_row = _require_owner(body.business_id, user)
+    import auditor_links
+    try:
+        token, row = auditor_links.mint(
+            body.business_id, label=body.label,
+            ttl_seconds=max(1, int(body.ttl_days or 30)) * 86400,
+            window_start=body.window_start, window_end=body.window_end,
+            created_by=(user.email or str(user.id)))
+    except RuntimeError as e:
+        # No secret configured — say so honestly rather than minting
+        # something unverifiable.
+        raise HTTPException(503, str(e))
+
+    try:
+        import audit_log
+        audit_log.record(
+            body.business_id, actor_type="user", actor_id=str(user.id),
+            verb="ledger:link_minted", summary=f"Auditor link: {row['label']}",
+            payload={"jti": row["jti"], "expires_at": row["expires_at"]},
+            source="audit", authorized_by="owner")
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "url": f"{_APP_BASE}/audit/{token}",
+        "public_url": f"/public/audit/{token}",
+        "jti": row["jti"], "label": row["label"],
+        "expires_at": row["expires_at"],
+        "note": ("Copy this link now — it is stored only as a hash and "
+                 "cannot be shown again. Revoking it is instant."),
+    }
+
+
+@router.get("/audit/links")
+def list_links(biz: str, user: AuthedUser = Depends(require_user)):
+    _require_owner(biz, user)
+    import auditor_links
+    return {"ok": True, "links": auditor_links.list_links(biz)}
+
+
+@router.delete("/audit/links/{jti}")
+def revoke_link(jti: str, biz: str, user: AuthedUser = Depends(require_user)):
+    _require_owner(biz, user)
+    import auditor_links
+    ok = auditor_links.revoke(biz, jti)
+    try:
+        import audit_log
+        audit_log.record(biz, actor_type="user", actor_id=str(user.id),
+                         verb="ledger:link_revoked", ok=ok,
+                         payload={"jti": jti}, source="audit",
+                         authorized_by="owner")
+    except Exception:
+        pass
+    return {"ok": ok}
+
+
+# ─── The public read ────────────────────────────────────────────────
+
+def _resolve_or_404(token: str, request: Request) -> Dict[str, Any]:
+    """Rate limit BEFORE verification (cheap pre-gate against brute
+    force), then resolve. Every failure returns the same 404 — a link
+    that is expired, revoked, forged or simply wrong must be
+    indistinguishable from the outside."""
+    import rate_limit
+    if not rate_limit.allow_strict("auditor_link", rate_limit.client_ip(request)):
+        raise HTTPException(429, "Too many requests")
+    import auditor_links
+    ctx = auditor_links.resolve(token)
+    if not ctx:
+        raise HTTPException(404, "link not found")
+    return ctx
+
+
+def _load(ctx: Dict[str, Any], limit: int = 500) -> Dict[str, Any]:
+    import audit_log
+    import ledger_report
+    biz = ctx["business_id"]
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz}&select=id,name,settings&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "link not found")
+    data = ledger_report.build(
+        rows[0], limit=limit,
+        since=ctx.get("window_start"), until=ctx.get("window_end"),
+        include_db=True)
+    # The view itself joins the record being viewed.
+    try:
+        audit_log.record(
+            biz, actor_type="agent", actor_id=f"auditor:{ctx['jti'][:8]}",
+            verb="ledger:viewed_by_auditor",
+            summary="An auditor link opened the ledger",
+            payload={"jti": ctx["jti"]}, source="auditor_link",
+            authorized_by="auditor_link")
+    except Exception:
+        pass
+    return data
+
+
+@router.get("/public/audit/{token}")
+def auditor_page(token: str, request: Request):
+    ctx = _resolve_or_404(token, request)
+    data = _load(ctx)
+    return HTMLResponse(content=_render(data, token), headers=_SECURE_HEADERS)
+
+
+@router.get("/public/audit/{token}/export")
+def auditor_export(token: str, request: Request, format: str = "csv"):
+    ctx = _resolve_or_404(token, request)
+    data = _load(ctx)
+    import ledger_report
+    base = f"ledger-verification-{data['generated_at'][:10]}"
+    if (format or "csv").lower() == "pdf":
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{ctx['business_id']}&select=settings&limit=1") or [{}]
+        try:
+            pdf = ledger_report.to_pdf(data, rows[0], generated_by="auditor link")
+        except ImportError:
+            raise HTTPException(503, "PDF unavailable. Use format=csv.")
+        return Response(content=pdf, media_type="application/pdf",
+                        headers={**_SECURE_HEADERS,
+                                 "Content-Disposition": f'attachment; filename="{base}.pdf"'})
+    return Response(content=ledger_report.to_csv(data), media_type="text/csv",
+                    headers={**_SECURE_HEADERS,
+                             "Content-Disposition": f'attachment; filename="{base}.csv"'})
+
+
+def _e(v: Any) -> str:
+    return html.escape(str(v if v is not None else ""), quote=True)
+
+
+def _render(d: Dict[str, Any], token: str) -> str:
+    v = d.get("verification") or {}
+    hashed = int(v.get("hashed") or 0)
+    intact = bool(v.get("intact")) and hashed > 0
+
+    if hashed == 0:
+        state_word, tone = "Not verifiable", "#9aa0a6"
+        state_line = ("No record here carries a cryptographic fingerprint yet, "
+                      "so nothing can be proven unaltered either way.")
+    elif intact:
+        state_word, tone = "Unaltered", "#2f9e6b"
+        state_line = (f"{hashed} records carry fingerprints and each one matches. "
+                      "Altering any of them would break every record after it.")
+    else:
+        state_word, tone = "Broken", "#c0392b"
+        state_line = (f"Record #{_e(v.get('broken_at'))} does not match its own "
+                      f"fingerprint. {_e(v.get('reason') or '')}")
+
+    facts = [
+        ("Records in range", v.get("checked", 0)),
+        ("Carrying a fingerprint", hashed),
+        ("Sequence range",
+         f"#{v.get('first_sequence')} – #{v.get('last_sequence')}"
+         if v.get("first_sequence") is not None else "—"),
+    ]
+    if v.get("unverifiable_rows"):
+        facts.append(("Cannot be proven",
+                      f"{v['unverifiable_rows']} (recorded before the chain began)"))
+    if v.get("gaps"):
+        facts.append(("Sequence gaps after",
+                      ", ".join(f"#{g}" for g in v["gaps"])))
+    fact_html = "".join(
+        f"<div class='f'><span>{_e(a)}</span><b>{_e(b)}</b></div>" for a, b in facts)
+
+    erasures = v.get("erasures") or []
+    er_html = ""
+    if erasures:
+        items = "".join(
+            f"<li>{_e(str(e.get('erased_at'))[:10])} — {_e(e.get('rows_erased'))} "
+            f"record(s) removed"
+            + (f" (#{_e(e.get('first_sequence'))}–#{_e(e.get('last_sequence'))})"
+               if e.get("first_sequence") is not None else "")
+            + (f" · {_e(e.get('reason'))}" if e.get("reason") else "")
+            + "</li>" for e in erasures)
+        er_html = (
+            "<h2>Erasures on record</h2><ul class='er'>" + items + "</ul>"
+            "<p class='note'>A deletion request removes records permanently. "
+            "The gap it leaves is deliberate and stays visible — it is not "
+            "evidence of tampering, and it is not hidden either.</p>")
+
+    rows = []
+    for e in (d.get("entries") or []):
+        refs = " ".join(
+            f"<code>{_e(r.get('type'))}:{_e(str(r.get('id'))[:8])}</code>"
+            for r in (e.get("subject_refs") or []) if isinstance(r, dict))
+        rows.append(
+            "<tr>"
+            f"<td class='sq'>{_e(e.get('sequence'))}</td>"
+            f"<td class='w'>{_e(str(e.get('created_at') or '')[:19])}</td>"
+            f"<td>{_e(e.get('actor_id') or e.get('actor_type'))}</td>"
+            f"<td><code>{_e(e.get('verb'))}</code></td>"
+            f"<td>{_e(e.get('authorized_by') or '')}</td>"
+            f"<td class='{'ok' if e.get('ok') else 'bad'}'>"
+            f"{'ok' if e.get('ok') else 'FAILED'}</td>"
+            f"<td>{refs}</td>"
+            "</tr>")
+
+    rng = d.get("range") or {}
+    window = ""
+    if rng.get("since") or rng.get("until"):
+        window = (f"<p class='note'>This link is limited to "
+                  f"{_e((rng.get('since') or 'the start')[:10])} → "
+                  f"{_e((rng.get('until') or 'now')[:10])}.</p>")
+
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Action Ledger — {_e(d.get('business_name'))}</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+background:#f6f7f9;color:#1c1f23;padding:28px 16px}}
+.wrap{{max-width:1000px;margin:0 auto}}
+h1{{font-size:21px;font-weight:600}}
+.sub{{color:#6b7280;font-size:13px;margin-top:3px}}
+.card{{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin-top:18px}}
+.state{{display:flex;align-items:center;gap:10px;flex-wrap:wrap}}
+.pill{{font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase;
+padding:4px 10px;border-radius:99px;color:#fff;background:{tone}}}
+.f{{display:flex;justify-content:space-between;gap:12px;padding:6px 0;
+border-bottom:1px solid #f0f1f3;font-size:13.5px}}
+.f span{{color:#6b7280}}
+h2{{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:#6b7280;
+margin:22px 0 8px}}
+table{{width:100%;border-collapse:collapse;font-size:12.5px}}
+th{{text-align:left;color:#6b7280;font-weight:600;padding:7px 8px;
+border-bottom:1px solid #e5e7eb;white-space:nowrap}}
+td{{padding:7px 8px;border-bottom:1px solid #f2f3f5;vertical-align:top}}
+tr:nth-child(even) td{{background:#fafbfc}}
+code{{font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:#f3f4f6;
+padding:1px 5px;border-radius:4px}}
+.ok{{color:#2f9e6b}} .bad{{color:#c0392b;font-weight:600}}
+.sq{{color:#9aa0a6}} .w{{white-space:nowrap;color:#6b7280}}
+.note{{font-size:12.5px;color:#6b7280;margin-top:9px;line-height:1.55}}
+.er{{margin:6px 0 0 18px;font-size:13px}}
+.scroll{{overflow-x:auto}}
+.btn{{display:inline-block;margin-right:8px;margin-top:12px;padding:7px 13px;
+border:1px solid #d1d5db;border-radius:8px;color:#1c1f23;text-decoration:none;
+font-size:13px;font-weight:600;background:#fff}}
+footer{{color:#9aa0a6;font-size:11.5px;margin:24px 0 8px;text-align:center}}
+</style></head><body><div class="wrap">
+<h1>{_e(d.get('business_name'))} — Action Ledger</h1>
+<div class="sub">Read-only review access · generated {_e(d.get('generated_at', '')[:19])} UTC</div>
+
+<div class="card">
+  <div class="state"><span class="pill">{_e(state_word)}</span>
+  <span style="font-size:13.5px">{state_line}</span></div>
+  <div style="margin-top:12px">{fact_html}</div>
+  {er_html}
+  {window}
+  <a class="btn" href="/public/audit/{_e(token)}/export?format=csv">Download CSV</a>
+  <a class="btn" href="/public/audit/{_e(token)}/export?format=pdf">Download PDF</a>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">Actions ({_e(d.get('entry_count', 0))})</h2>
+  <div class="scroll"><table>
+  <tr><th>Seq</th><th>When (UTC)</th><th>Actor</th><th>Action</th>
+      <th>Permitted by</th><th>Outcome</th><th>Touched</th></tr>
+  {''.join(rows) or '<tr><td colspan="7">No records in this range.</td></tr>'}
+  </table></div>
+  <p class="note">This record is append-only. The database refuses edits and
+  deletions to it, including from the platform operator. Each record carries a
+  fingerprint of the one before it, so altering any record breaks every record
+  after it — that is what the state above reports. Your visit has been recorded
+  in this same ledger.</p>
+</div>
+
+<footer>Solutionist System · this link expires and can be revoked by the practice at any time</footer>
+</div></body></html>"""
