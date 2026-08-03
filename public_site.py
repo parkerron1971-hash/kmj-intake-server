@@ -385,6 +385,110 @@ def _not_found_page(slug: str, business_name: str = "",
                         headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
 
 
+# ─── Image optimization (2026-08-02, performance pass) ───────────────
+#
+# Measured on a live composed page before this change: 13 images,
+# 12.8 MB, zero srcset. Heroes were 2.4 MB PNGs straight off DALL-E,
+# practitioner uploads up to 10 MB stored unmodified, and a phone on 4G
+# downloaded the full desktop asset every time (the serve path is
+# no-store, so nothing amortized it either).
+#
+# Supabase Storage can resize and re-encode on its own CDN — verified
+# live on this project. The same hero at width=1200 with resize=contain
+# comes back as WebP at 189 KB instead of 2.4 MB (93% smaller), and the
+# whole page drops to 0.71 MB (95%). WebP is CONTENT-NEGOTIATED off the
+# browser's Accept header, so one URL serves WebP to modern browsers
+# and the original format to old ones — no <picture>, no fallbacks.
+#
+# This rewrites at SERVE time, not build time, so every site already
+# published gets it immediately without a rebuild (and the stored HTML
+# stays untouched, which keeps the change reversible).
+
+_SB_OBJECT_RE = re.compile(
+    r"(https://[a-z0-9]+\.supabase\.co/storage/v1)/object/public/([^\"'\s)>]+)",
+    re.IGNORECASE)
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_SRC_RE = re.compile(r"""\bsrc\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+# Widths a real layout actually asks for. 1600 covers retina desktop;
+# beyond that the source images aren't bigger anyway (the transform
+# caps at the original dimensions).
+_SRCSET_WIDTHS = (400, 800, 1200, 1600)
+_DEFAULT_WIDTH = 1200
+# Formats the transform can't help with — vectors are already tiny and
+# animated GIFs lose their animation.
+_NO_TRANSFORM_EXT = (".svg", ".gif", ".ico")
+
+
+def _tx_url(base: str, path: str, width: int, quality: int = 78) -> str:
+    """A Supabase render-endpoint URL at a given width. resize=contain
+    preserves aspect ratio — without it the transform honours width and
+    keeps the ORIGINAL height, which squishes the image."""
+    return (f"{base}/render/image/public/{path}"
+            f"{'&' if '?' in path else '?'}width={width}"
+            f"&quality={quality}&resize=contain")
+
+
+def _optimize_images(html: str) -> str:
+    """Point <img> tags at resized WebP and give them a srcset.
+
+    Conservative by construction: only Supabase storage URLs, only tags
+    that don't already carry a srcset, never vectors/GIFs, and the
+    first image stays eager (it is almost always the hero / LCP).
+    Any failure returns the HTML untouched — a page that serves heavy
+    images beats a page that doesn't serve.
+    """
+    if not html or "supabase.co/storage" not in html:
+        return html
+
+    state = {"n": 0}
+
+    def rewrite(m: "re.Match") -> str:
+        tag = m.group(0)
+        state["n"] += 1
+        first = state["n"] == 1
+
+        if "srcset" in tag.lower():
+            return tag
+        src_m = _SRC_RE.search(tag)
+        if not src_m:
+            return tag
+        src = src_m.group(1)
+        if "/render/image/public/" in src:      # already transformed
+            return tag
+        sb = _SB_OBJECT_RE.match(src)
+        if not sb:
+            return tag                          # Unsplash, data:, external
+        base, path = sb.group(1), sb.group(2)
+        if path.lower().rsplit("?", 1)[0].endswith(_NO_TRANSFORM_EXT):
+            return tag
+
+        # `&` inside an HTML attribute must be escaped — an unescaped
+        # one is only safe while no parameter name happens to spell an
+        # entity (&copy, &reg, &times...). Ours don't today; escaping
+        # means they never can. Browsers decode it back before fetching.
+        def _attr(u: str) -> str:
+            return u.replace("&", "&amp;")
+
+        srcset = ", ".join(f"{_attr(_tx_url(base, path, w))} {w}w"
+                           for w in _SRCSET_WIDTHS)
+        out = tag.replace(src, _attr(_tx_url(base, path, _DEFAULT_WIDTH)), 1)
+        inject = (f' srcset="{srcset}"'
+                  f' sizes="(max-width: 768px) 100vw, {_DEFAULT_WIDTH}px"')
+        # The hero is the LCP element — never lazy-load it. Everything
+        # below the fold that hasn't already said otherwise gets lazy.
+        if "loading=" not in out.lower() and not first:
+            inject += ' loading="lazy"'
+        if "decoding=" not in out.lower():
+            inject += ' decoding="async"'
+        return out[:-1].rstrip() + inject + ">" if out.endswith(">") else out
+
+    try:
+        return _IMG_TAG_RE.sub(rewrite, html)
+    except Exception as e:      # pragma: no cover — never break a page
+        logger.warning(f"[perf] image optimization skipped: {e}")
+        return html
+
+
 async def _render_not_found(client: httpx.AsyncClient, slug: str,
                             business_id: Optional[str],
                             custom_domain: Optional[str] = None) -> HTMLResponse:
@@ -5183,6 +5287,9 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
         _render_products_section(products, slug, brand_color, biz_settings),
         _render_gallery_section(gallery),
     )
+    # LAST — after every section that could add an <img> (products and
+    # gallery are injected above), so nothing escapes the rewrite.
+    html = _optimize_images(html)
     return html
 
 
