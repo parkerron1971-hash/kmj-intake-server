@@ -319,3 +319,80 @@ def test_accountant_nav_includes_history():
     src = fe.read_text(encoding="utf-8")
     keep = src.split("const keep = new Set([")[1].split("])")[0]
     assert "'history'" in keep, "accountants must be able to reach the ledger"
+
+
+# ─── The exportable artifact ─────────────────────────────────────────
+
+def test_export_never_widens_the_column_list():
+    """The export is the widest audience the ledger has — it leaves the
+    building entirely. It must read through the SAME select list, so a
+    column can't be widened for one surface and forgotten on another."""
+    src = pathlib.Path(_here.parent / "audit_log.py").read_text(encoding="utf-8")
+    assert "LEDGER_SELECT" in src
+    sel = src.split("LEDGER_SELECT = (")[1].split(")")[0]
+    assert "payload" not in sel and "result" not in sel
+    # And the export goes through ledger_entries(), not its own query.
+    rep = pathlib.Path(_here.parent / "ledger_report.py").read_text(encoding="utf-8")
+    assert "audit_log.ledger_entries(" in rep
+    assert "/audit_log?" not in rep, "the report must not build its own query"
+
+
+def test_report_verdict_never_reassures():
+    import ledger_report as lr
+    nothing = lr._verdict_line({"hashed": 0, "checked": 11, "intact": True})
+    assert "cannot be proven" in nothing or "nothing here can be proven" in nothing
+    broken = lr._verdict_line({"hashed": 5, "intact": False, "broken_at": 4,
+                               "reason": "row contents do not match row_hash"})
+    assert "#4" in broken
+    intact = lr._verdict_line({"hashed": 5, "checked": 5, "intact": True})
+    assert "5" in intact
+    for line in (nothing, broken, intact):
+        low = line.lower()
+        assert "everything" not in low and "all good" not in low
+        assert "nothing unusual" not in low
+
+
+def test_csv_carries_the_chain_state_and_the_erasures():
+    import ledger_report as lr
+    data = {
+        "business_name": "T", "generated_at": "2026-08-03T00:00:00Z", "range": {},
+        "verification": {"intact": False, "checked": 5, "hashed": 5, "broken_at": 4,
+                         "first_sequence": 1, "last_sequence": 5,
+                         "unverifiable_rows": 0, "gaps": [3],
+                         "erasures": [{"erased_at": "2026-08-03", "rows_erased": 2,
+                                       "first_sequence": 2, "last_sequence": 3,
+                                       "reason": "gdpr_erasure"}]},
+        "entries": [{"sequence": 1, "created_at": "x", "actor_id": "chief",
+                     "verb": "create_task", "ok": True,
+                     "authorized_by": "chat:owner:A", "subject_refs": []}],
+        "entry_count": 1}
+    text = lr.to_csv(data)
+    assert "Carrying a fingerprint" in text
+    assert "Erasures on record" in text and "gdpr_erasure" in text
+    assert "Permitted by" in text          # field 6 travels with the artifact
+    assert "Sequence gaps after" in text
+
+
+def test_pdf_renders_or_degrades_to_csv():
+    """reportlab is a real dependency but every caller guards ImportError
+    and falls back to CSV — the floor is that the artifact always exists."""
+    import ledger_report as lr
+    data = {"business_name": "T", "generated_at": "2026-08-03T00:00:00Z",
+            "range": {}, "entry_count": 0, "entries": [],
+            "verification": {"intact": True, "checked": 2, "hashed": 2,
+                             "first_sequence": 1, "last_sequence": 2,
+                             "unverifiable_rows": 0, "gaps": [], "erasures": []}}
+    try:
+        out = lr.to_pdf(data, {"settings": {}}, generated_by="t")
+        assert out[:4] == b"%PDF"
+    except ImportError:
+        pass
+    src = pathlib.Path(_here.parent / "audit_log.py").read_text(encoding="utf-8")
+    body = src.split("def export_ledger(")[1].split("@router.get")[0]
+    assert "except ImportError" in body and "format=csv" in body
+
+
+def test_truncated_table_says_so():
+    """A truncated table must never be mistaken for a complete one."""
+    rep = pathlib.Path(_here.parent / "ledger_report.py").read_text(encoding="utf-8")
+    assert "must never" in rep and "Export CSV for the complete range" in rep

@@ -269,29 +269,101 @@ def read_audit(biz: str, limit: int = 100, failed_only: bool = False,
     record contents are not exposed by widening the audience. Anything
     that would expose row CONTENTS must re-gate."""
     _require_ledger_read(biz, user)
+    entries = ledger_entries(biz, limit=limit, failed_only=failed_only,
+                             verb=verb, include_db=include_db)
+    return {"ok": True, "entries": entries, "count": len(entries),
+            "tier": "all" if include_db else "application"}
 
-    limit = min(max(limit, 1), 500)
-    q = (f"/audit_log?business_id=eq.{biz}"
-         f"&select=id,actor_type,actor_id,verb,ok,error,summary,source,created_at,"
-         f"target_type,target_id,sequence,authorized_by,subject_refs,verb_registered"
+
+# The ONE definition of which ledger columns leave the building. The
+# export, the auditor link and this endpoint all read through it, so a
+# column can never be widened for one surface and forgotten on another.
+LEDGER_SELECT = ("id,actor_type,actor_id,verb,ok,error,summary,source,"
+                 "created_at,target_type,target_id,sequence,authorized_by,"
+                 "subject_refs,verb_registered")
+
+
+def ledger_entries(biz: str, *, limit: int = 100, failed_only: bool = False,
+                   verb: Optional[str] = None, include_db: bool = False,
+                   since: Optional[str] = None,
+                   until: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Ledger rows for a business. No auth gate — every caller gates first.
+
+    NOTE the select list: it never contains `payload` or `result`, so
+    record CONTENTS are not exposed by any surface built on this. That
+    invariant is what made widening the audience (viewers, accountants,
+    auditor links) safe, and it is pinned by a test.
+    """
+    limit = min(max(int(limit or 100), 1), 500)
+    q = (f"/audit_log?business_id=eq.{biz}&select={LEDGER_SELECT}"
          f"&order=created_at.desc&limit={limit}")
     if failed_only:
         q += "&ok=eq.false"
     if verb:
-        # ':' is now legal — namespaced verbs (db:, rules:, webhook:).
+        # ':' is legal — namespaced verbs (db:, rules:, webhook:).
         safe = "".join(ch for ch in verb if ch.isalnum() or ch in "_:")[:80]
         q += f"&verb=eq.{safe}"
+    # PostgREST timestamp class: the Z form ALWAYS. An isoformat +00:00
+    # in a query string silently returns empty.
+    if since:
+        q += f"&created_at=gte.{_z(since)}"
+    if until:
+        q += f"&created_at=lte.{_z(until)}"
     # Two tiers, one table. db_trigger rows are the PROVABLE tier and
     # they double up with the application row for the same action, so a
-    # practitioner's History reads the intent tier by default. The
-    # verification portal (Stage 4) passes include_db=true and sees
-    # everything — the provable tier is never hidden from a proof, only
-    # from a summary.
+    # practitioner's History reads the intent tier by default. A proof
+    # passes include_db=true — the provable tier is never hidden from a
+    # proof, only from a summary.
     if not include_db:
         q += "&source=not.eq.db_trigger"
-    entries = sb_clients.sb_get_as_service(q) or []
-    return {"ok": True, "entries": entries, "count": len(entries),
-            "tier": "all" if include_db else "application"}
+    return sb_clients.sb_get_as_service(q) or []
+
+
+def _z(ts: str) -> str:
+    """PostgREST-safe UTC timestamp (Z form, never +00:00)."""
+    s = str(ts).strip()
+    return s.replace("+00:00", "Z") if s else s
+
+
+@router.get("/export")
+def export_ledger(biz: str, format: str = "pdf", limit: int = 500,
+                  since: Optional[str] = None, until: Optional[str] = None,
+                  user: AuthedUser = Depends(require_user)):
+    """The artifact — a verification report that leaves the building.
+
+    A licensing board, an insurer or opposing counsel will never have a
+    Solutionist login, so a portal they cannot open is not a proof. This
+    is the document a practitioner hands them.
+
+    include_db is forced TRUE: an auditor wants the provable tier (the
+    database's own before/after record of every change), not the
+    readable summary the History screen shows.
+    """
+    biz_row = _require_ledger_read(biz, user)
+    import ledger_report
+    data = ledger_report.build(biz_row, limit=limit, since=since,
+                               until=until, include_db=True)
+    fmt = (format or "pdf").lower()
+    stamp = data["generated_at"][:10]
+    base = f"ledger-verification-{stamp}"
+
+    if fmt == "json":
+        return data
+    if fmt == "csv":
+        from fastapi.responses import Response
+        return Response(
+            content=ledger_report.to_csv(data), media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{base}.csv"'})
+    try:
+        pdf = ledger_report.to_pdf(
+            data, biz_row, generated_by=(user.email or str(user.id)))
+    except ImportError:
+        # House pattern: PDF is optional, CSV is the floor.
+        raise HTTPException(503, "PDF export unavailable. Use format=csv.")
+    from fastapi.responses import Response
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{base}.pdf"'})
 
 
 @router.get("/verify")
@@ -310,7 +382,17 @@ def verify_chain(biz: str,
     explains it, and the practitioner draws their own conclusion.
     """
     _require_ledger_read(biz, user)
+    return verification_report(biz)
 
+
+def verification_report(biz: str) -> Dict[str, Any]:
+    """The verification payload, without the auth gate.
+
+    Extracted so the endpoint, the exportable report, and the auditor
+    link all render the SAME numbers. A second implementation of "is
+    this chain intact" would eventually disagree with the first, and a
+    proof that disagrees with itself is worse than no proof.
+    """
     try:
         res = sb_clients.sb_post_as_service(
             "/rpc/ledger_verify", {"p_business_id": biz}) or []
