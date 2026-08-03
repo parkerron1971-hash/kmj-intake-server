@@ -174,3 +174,69 @@ def test_namespaced_verbs_survive_the_filter(monkeypatch):
     u = type("U", (), {"id": "u1", "email": "u@x.com"})()
     audit_log.read_audit("b1", verb="db:contacts_update", user=u)
     assert "verb=eq.db:contacts_update" in seen["q"]
+
+
+# ─── Stage 2: the hash chain ─────────────────────────────────────────
+
+def test_canonical_serialization_is_frozen_and_versioned():
+    """Stage 5's Merkle proofs recompute from stored rows, so the byte
+    recipe cannot change silently. It is versioned, and the version is
+    hashed INTO the material so a v2 can never collide with a v1."""
+    sql = pathlib.Path(
+        _here.parent / "supabase" / "APPLY-2026-08-03-ledger-hash-chain.sql"
+    ).read_text(encoding="utf-8")
+    assert "ledger_canonical_v1" in sql
+    assert "'v1'," in sql, "the version must be inside the hashed material"
+    assert "FROZEN" in sql
+    # Every field that a tamperer would want to change must be covered.
+    for field in ("business_id", "created_at", "sequence", "actor_type",
+                  "actor_id", "verb", "ok", "summary", "authorized_by",
+                  "subject_refs", "payload", "result"):
+        assert f"r.{field}" in sql, f"{field} is not covered by the hash"
+
+
+def test_chain_is_built_under_a_per_tenant_lock():
+    """The reason hashing lives in Postgres: read-the-tip-then-insert in
+    the application forks the chain when two writers race."""
+    sql = pathlib.Path(
+        _here.parent / "supabase" / "APPLY-2026-08-03-ledger-hash-chain.sql"
+    ).read_text(encoding="utf-8")
+    assert "pg_advisory_xact_lock" in sql
+    assert "for update" in sql.lower()
+    assert "sha256" in sql
+
+
+def test_verify_endpoint_reports_rather_than_reassures(monkeypatch):
+    """The portal rule applies to the API too: report the state, do not
+    summarise it into a claim. Pre-chain rows must never be counted as
+    intact."""
+    calls = {}
+
+    def _get(q):
+        if q.startswith("/businesses"):
+            return [{"id": "b1", "owner_id": "u1"}]
+        if q.startswith("/ledger_tombstones"):
+            return [{"erased_at": "2026-08-03", "rows_erased": 3,
+                     "first_sequence": 1, "last_sequence": 3,
+                     "reason": "gdpr_erasure"}]
+        if "row_hash=is.null" in q:
+            return [{"id": "old1"}, {"id": "old2"}]
+        return []
+    monkeypatch.setattr(audit_log.sb_clients, "sb_get_as_service", _get)
+    monkeypatch.setattr(audit_log.sb_clients, "sb_post_as_service",
+                        lambda p, b, prefer=None: calls.update(path=p) or
+                        [{"intact": False, "checked": 9, "broken_at": 4,
+                          "reason": "row contents do not match row_hash - this row was altered",
+                          "gaps": [3]}])
+    monkeypatch.setattr("business_users_router.require_role",
+                        lambda b, u, r: "owner")
+    u = type("U", (), {"id": "u1", "email": "u@x.com"})()
+
+    out = audit_log.verify_chain("b1", user=u)
+    assert calls["path"] == "/rpc/ledger_verify"   # the DB owns the recipe
+    assert out["intact"] is False
+    assert out["broken_at"] == 4
+    assert out["gaps"] == [3]
+    assert out["erasures"][0]["rows_erased"] == 3  # the gap is explained
+    assert out["unverifiable_rows"] == 2
+    assert out["note"], "pre-chain rows must be declared, not glossed over"

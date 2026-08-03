@@ -254,3 +254,59 @@ def read_audit(biz: str, limit: int = 100, failed_only: bool = False,
     entries = sb_clients.sb_get_as_service(q) or []
     return {"ok": True, "entries": entries, "count": len(entries),
             "tier": "all" if include_db else "application"}
+
+
+@router.get("/verify")
+def verify_chain(biz: str,
+                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Re-walk this business's hash chain and report whether it holds.
+
+    Stage 2. Each row's hash covers its own contents plus the previous
+    row's hash, so altering any historical row breaks every hash after
+    it. The check runs in the database (ledger_verify) because that is
+    where the canonical serialization lives — recomputing the bytes in
+    Python would be a second, drifting definition of the truth.
+
+    Deliberately plain output. This endpoint reports; it does not
+    reassure. A gap is reported as a gap, with the tombstone that
+    explains it, and the practitioner draws their own conclusion.
+    """
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz}&select=id,owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    from business_users_router import require_role
+    require_role(biz, str(user.id), "member")
+
+    try:
+        res = sb_clients.sb_post_as_service(
+            "/rpc/ledger_verify", {"p_business_id": biz}) or []
+        report = (res[0] if isinstance(res, list) and res else {}) or {}
+    except Exception as e:
+        logger.warning(f"[ledger] verify failed for {biz}: {e}")
+        raise HTTPException(503, "Verification is unavailable right now")
+
+    tombstones = sb_clients.sb_get_as_service(
+        f"/ledger_tombstones?business_id=eq.{biz}"
+        f"&select=erased_at,rows_erased,first_sequence,last_sequence,reason"
+        f"&order=erased_at.desc&limit=50") or []
+
+    # Rows written before Stage 2 carry no hash. Saying "intact" about
+    # them would be the one dishonest thing this endpoint could do.
+    unhashed = sb_clients.sb_get_as_service(
+        f"/audit_log?business_id=eq.{biz}&row_hash=is.null&select=id&limit=1000") or []
+
+    return {
+        "ok": True,
+        "intact": bool(report.get("intact")),
+        "checked": report.get("checked", 0),
+        "first_sequence": report.get("first_sequence"),
+        "last_sequence": report.get("last_sequence"),
+        "broken_at": report.get("broken_at"),
+        "reason": report.get("reason"),
+        "gaps": report.get("gaps") or [],
+        "erasures": tombstones,
+        "unverifiable_rows": len(unhashed),
+        "note": ("Rows recorded before the hash chain began carry no hash "
+                 "and cannot be proven either way.") if unhashed else None,
+    }
