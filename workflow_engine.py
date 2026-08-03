@@ -341,11 +341,48 @@ async def execute_step(client, run, biz, step, ctx) -> Dict[str, Any]:
         return await handler(client, run, biz, step, ctx)
 
     # Fall back to Chief's existing action verbs (lazy import to avoid cycle).
+    # ACTION LEDGER (2026-08-03): one of six dispatchers into
+    # ACTION_HANDLERS, and the last one running real business actions
+    # with NO audit row anywhere — a workflow step could send, charge or
+    # delete and leave no trace at all. Bulk is refused here for the same
+    # reason as on the scheduler: a workflow step is unattended by
+    # definition, and the registry holds that bulk is never
+    # autonomy-eligible at any class.
     try:
         from chief_of_staff import ACTION_HANDLERS
         chief_handler = ACTION_HANDLERS.get(action)
         if chief_handler:
-            res = await chief_handler(client, biz, {"type": action, **(step.get("params") or {})})
+            authorized_by = "workflow"
+            try:
+                import action_registry
+                if action_registry.is_bulk(action):
+                    return {"ok": False,
+                            "error": f"{action!r} is a bulk action — not runnable unattended"}
+                cls = action_registry.classification(action) or {}
+                authorized_by = (
+                    f"workflow:{cls.get('reversibility') or cls.get('effect')}"
+                    if cls else "workflow:unclassified")
+            except Exception:
+                pass
+            ok, err, res = True, None, None
+            try:
+                res = await chief_handler(
+                    client, biz, {"type": action, **(step.get("params") or {})})
+                ok = (res or {}).get("failed") is not True
+            except Exception as e:
+                ok, err = False, str(e)
+            try:
+                import audit_log
+                audit_log.record(
+                    str(biz.get("id") or ""), actor_type="system",
+                    actor_id="workflow", verb=action, ok=ok, error=err,
+                    summary=str(step.get("label") or action)[:240],
+                    payload={"workflow_run_id": str(run.get("id") or "")},
+                    result=res, source="workflow", authorized_by=authorized_by)
+            except Exception:
+                pass
+            if err:
+                return {"ok": False, "error": err}
             return {"ok": True, "chief_result": res}
     except Exception as e:
         logger.warning(f"chief handler fallback failed for {action!r}: {e}")
