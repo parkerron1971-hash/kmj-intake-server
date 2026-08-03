@@ -240,3 +240,20 @@ def test_verify_endpoint_reports_rather_than_reassures(monkeypatch):
     assert out["erasures"][0]["rows_erased"] == 3  # the gap is explained
     assert out["unverifiable_rows"] == 2
     assert out["note"], "pre-chain rows must be declared, not glossed over"
+
+
+def test_verify_never_claims_intact_with_nothing_hashed():
+    """The honesty guard, found by running the verifier against
+    production: every real chain reported intact while carrying zero
+    hashes, because rows predating Stage 2 are skipped. A tamper-
+    evidence check that says "verified" when it verified nothing is
+    worse than no check at all."""
+    sql = pathlib.Path(
+        _here.parent / "supabase" / "APPLY-2026-08-03-ledger-hash-chain.sql"
+    ).read_text(encoding="utf-8")
+    assert "if v_hashed = 0 then" in sql
+    assert "nothing to verify" in sql
+    # and the count travels to the caller so a UI can say so too
+    assert "hashed         bigint," in sql
+    py = pathlib.Path(_here.parent / "audit_log.py").read_text(encoding="utf-8")
+    assert '"hashed": report.get("hashed", 0)' in py

@@ -128,6 +128,7 @@ end $$;
 create or replace function public.ledger_verify(p_business_id uuid)
 returns table (
   checked        bigint,
+  hashed         bigint,
   first_sequence bigint,
   last_sequence  bigint,
   intact         boolean,
@@ -151,6 +152,7 @@ declare
   v_reason     text := null;
   v_gaps       bigint[] := '{}';
   v_prev_seq   bigint := null;
+  v_hashed     bigint := 0;
 begin
   for r in
     select * from public.audit_log
@@ -175,6 +177,7 @@ begin
       v_prev := null;
       continue;
     end if;
+    v_hashed := v_hashed + 1;
 
     if r.prev_hash is distinct from v_prev and v_broken is null then
       v_broken := r.sequence;
@@ -195,7 +198,20 @@ begin
     v_reason := 'sequence gap - see ledger_tombstones for erasures';
   end if;
 
-  return query select v_count, v_first, v_last,
+  -- HONESTY GUARD. Found by running this against production: every real
+  -- chain reported 'intact' while carrying ZERO hashes, because rows
+  -- written before Stage 2 are skipped. "Verified" must never mean
+  -- "there was nothing to verify" — that is the single most misleading
+  -- thing a tamper-evidence check could say.
+  if v_hashed = 0 then
+    return query select v_count, v_hashed, v_first, v_last,
+                        false, null::bigint,
+                        'nothing to verify - no row carries a hash yet '
+                        '(these predate the chain)', v_gaps;
+    return;
+  end if;
+
+  return query select v_count, v_hashed, v_first, v_last,
                       (v_broken is null), v_broken,
                       coalesce(v_reason, 'chain intact'), v_gaps;
 end $$;
