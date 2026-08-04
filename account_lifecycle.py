@@ -36,6 +36,7 @@ from typing import Any, Dict, List
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
+from audit_log import LEDGER_EXPORT_SELECT
 from auth_supabase import AuthedUser, require_user
 
 logger = logging.getLogger("account_lifecycle")
@@ -246,13 +247,24 @@ async def _owned_businesses(client: httpx.AsyncClient, user_id: str) -> List[Dic
     return r.json() or []
 
 
+# audit_log is the one table this export does not take wholesale. Its
+# payload/result columns hold copies of the records an action touched,
+# and the ledger's standing invariant is that no surface returns them —
+# an invariant only worth having if it has no quiet exceptions. Nothing
+# is lost: the tables those copies were made FROM travel in the same
+# export under their own names, and the hash columns come along so the
+# chain stays independently verifiable. See audit_log.LEDGER_EXPORT_SELECT.
+_TABLE_SELECT = {"audit_log": LEDGER_EXPORT_SELECT}
+
+
 async def _fetch_table(client: httpx.AsyncClient, table: str, business_id: str) -> List[Dict[str, Any]]:
     """All rows of `table` for this business; [] if the table doesn't
     exist or has no business_id column."""
     r = await client.get(
         f"{SUPABASE_URL}/rest/v1/{table}",
         headers=_service_headers(),
-        params={"business_id": f"eq.{business_id}", "select": "*", "limit": "10000"},
+        params={"business_id": f"eq.{business_id}",
+                "select": _TABLE_SELECT.get(table, "*"), "limit": "10000"},
     )
     if r.status_code >= 400:
         return []

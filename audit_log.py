@@ -324,11 +324,26 @@ def read_audit(biz: str, limit: int = 100, failed_only: bool = False,
 
 
 # The ONE definition of which ledger columns leave the building. The
-# export, the auditor link and this endpoint all read through it, so a
-# column can never be widened for one surface and forgotten on another.
+# report export, the auditor link and this endpoint all read through it,
+# so a column can never be widened for one surface and forgotten on
+# another.
 LEDGER_SELECT = ("id,actor_type,actor_id,verb,ok,error,summary,source,"
                  "created_at,target_type,target_id,sequence,authorized_by,"
                  "subject_refs,verb_registered")
+
+# The account-portability export (GET /account/export, owner-only) reads
+# through THIS one instead. It was the last surface still doing
+# `select=*`, which handed back payload and result — the record contents
+# the invariant above exists to keep out of every reader. Fixed rather
+# than excused: the owner loses nothing, because the same document
+# already contains the underlying contacts, invoices and sessions rows
+# that payload was a copy of.
+#
+# The three extra columns are the point of the export. Take your chain
+# with you and its integrity is checkable off our infrastructure by
+# anyone you hand it to — which is worth considerably more to a
+# departing practitioner than a duplicate of their own tables.
+LEDGER_EXPORT_SELECT = LEDGER_SELECT + ",prev_hash,row_hash,redacted_at"
 
 
 def ledger_entries(biz: str, *, limit: int = 100, failed_only: bool = False,
