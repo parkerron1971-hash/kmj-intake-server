@@ -572,6 +572,11 @@ def verification_report(biz: str) -> Dict[str, Any]:
         logger.warning(f"[ledger] verify failed for {biz}: {e}")
         raise HTTPException(503, "Verification is unavailable right now")
 
+    redactions = sb_clients.sb_get_as_service(
+        f"/ledger_redactions?business_id=eq.{biz}"
+        f"&select=redacted_at,subject_type,rows_redacted,reason"
+        f"&order=redacted_at.desc&limit=50") or []
+
     tombstones = sb_clients.sb_get_as_service(
         f"/ledger_tombstones?business_id=eq.{biz}"
         f"&select=erased_at,rows_erased,first_sequence,last_sequence,reason"
@@ -591,12 +596,17 @@ def verification_report(biz: str) -> Dict[str, Any]:
         # pre-Stage-2 rows are skipped. "Verified" must never quietly
         # mean "there was nothing to verify".
         "hashed": report.get("hashed", 0),
+        # Declared removals under an erasure request. Reported, never
+        # folded into "broken" — a gap you can see is not the same as a
+        # gap you cannot.
+        "redacted": report.get("redacted", 0),
         "first_sequence": report.get("first_sequence"),
         "last_sequence": report.get("last_sequence"),
         "broken_at": report.get("broken_at"),
         "reason": report.get("reason"),
         "gaps": report.get("gaps") or [],
         "erasures": tombstones,
+        "redactions": redactions,
         "unverifiable_rows": len(unhashed),
         "note": ("Rows recorded before the hash chain began carry no hash "
                  "and cannot be proven either way.") if unhashed else None,
