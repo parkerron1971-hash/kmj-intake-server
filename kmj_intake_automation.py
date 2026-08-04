@@ -301,6 +301,9 @@ app.include_router(receipts_router)
 # Document Intelligence — stored files finally get read (summarize / dates / ask / compare)
 from doc_intelligence_router import router as docintel_router
 app.include_router(docintel_router)
+# Conflict-of-interest check — deterministic sweep; the check itself is the record
+from conflicts_router import router as conflicts_router
+app.include_router(conflicts_router)
 # Rails demand-driven — payroll interest capture (Gusto, demand-gated)
 from payroll_router import router as payroll_router
 app.include_router(payroll_router)
