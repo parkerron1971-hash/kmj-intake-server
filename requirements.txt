@@ -42,3 +42,11 @@ playwright==1.61.0
 # with the standard `ots verify` tool rather than with anything we wrote.
 # Pure Python, no native build step on Railway.
 opentimestamps>=0.4.5
+
+# Stage 5 anchoring, second adapter — Hedera Consensus Service. The
+# NATIVE Python SDK: the older `hedera-sdk-py` wraps the Java SDK via
+# pyjnius and needs a JVM, which this image has no reason to carry.
+# Optional at runtime — the adapter is only reached when
+# LEDGER_ANCHOR_PROVIDER=hedera, and it refuses with a named-missing-var
+# error rather than anchoring nowhere.
+hiero-sdk-python>=0.1.0
