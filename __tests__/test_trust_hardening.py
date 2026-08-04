@@ -36,6 +36,18 @@ import pytest  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 
+# ─── Step-up: these tests exercise the READ GATE, not the lock ───────
+# The ledger now requires a fresh password confirmation. That is a
+# separate control with its own tests; here it is satisfied so each test
+# keeps asserting the thing it was written to assert.
+def _unlocked(user_id: str = "owner1"):
+    import os
+    os.environ.setdefault("AUDITOR_LINK_SECRET", "unit-test-secret")
+    import ledger_unlock
+    tok = ledger_unlock.mint(str(user_id))["token"]
+    return type("R", (), {"headers": {"X-Ledger-Unlock": tok}})()
+
+
 def _user(uid: str):
     return type("U", (), {"id": uid, "email": f"{uid}@x.com"})()
 
@@ -265,20 +277,20 @@ def audit_biz(monkeypatch):
 
 def test_audit_owner_still_reads(audit_biz):
     import audit_log
-    out = audit_log.read_audit(biz="b1", user=_user("owner1"))
+    out = audit_log.read_audit(_unlocked("owner1"), biz="b1", user=_user("owner1"))
     assert out["ok"] is True and out["count"] == 1
 
 
 def test_audit_member_seat_reads_now(audit_biz):
     """The empty-rooms fix: a working seat sees the same history."""
     import audit_log
-    out = audit_log.read_audit(biz="b1", user=_user("m1"))
+    out = audit_log.read_audit(_unlocked("m1"), biz="b1", user=_user("m1"))
     assert out["ok"] is True and out["count"] == 1
 
 
 def test_audit_admin_seat_reads(audit_biz):
     import audit_log
-    out = audit_log.read_audit(biz="b1", user=_user("a1"))
+    out = audit_log.read_audit(_unlocked("a1"), biz="b1", user=_user("a1"))
     assert out["ok"] is True
 
 
@@ -294,20 +306,20 @@ def test_audit_viewer_can_read_history(audit_biz):
     regression that actually matters.
     """
     import audit_log
-    assert audit_log.read_audit(biz="b1", user=_user("v1"))["ok"] is True
+    assert audit_log.read_audit(_unlocked("v1"), biz="b1", user=_user("v1"))["ok"] is True
 
 
 def test_audit_outsider_is_refused(audit_biz):
     import audit_log
     with pytest.raises(HTTPException) as e:
-        audit_log.read_audit(biz="b1", user=_user("stranger"))
+        audit_log.read_audit(_unlocked("stranger"), biz="b1", user=_user("stranger"))
     assert e.value.status_code == 403
 
 
 def test_audit_unknown_business_404s(audit_biz):
     import audit_log
     with pytest.raises(HTTPException) as e:
-        audit_log.read_audit(biz="nope", user=_user("owner1"))
+        audit_log.read_audit(_unlocked("owner1"), biz="nope", user=_user("owner1"))
     assert e.value.status_code == 404
 
 

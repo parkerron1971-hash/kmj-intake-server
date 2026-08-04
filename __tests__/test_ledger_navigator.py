@@ -158,8 +158,23 @@ def test_searching_the_ledger_is_written_to_the_ledger():
     """Who went looking for what belongs in the record — especially
     when the reader is an auditor."""
     src = pathlib.Path(_here.parent / "audit_log.py").read_text(encoding="utf-8")
-    body = src.split("def navigate(")[1].split("@router.get(\"/export\")")[0]
+    # The recording lives in run_navigation, which is the ONE place both
+    # doors go through — the practitioner's and the auditor's. That is
+    # deliberate: a second copy of this logic is how the guide-never-
+    # narrator property holds on one surface and quietly rots on the other.
+    body = src.split("def run_navigation(")[1].split("@router.post(\"/navigate\")")[0]
     assert 'verb="ledger:searched"' in body
-    assert "_require_ledger_read(" in body
+    assert "def navigate(" in src and "return run_navigation(" in src
+    portal = pathlib.Path(_here.parent / "auditor_portal.py").read_text(encoding="utf-8")
+    assert "audit_log.run_navigation(" in portal,         "the auditor's door must share the practitioner's navigation"
+    # Each door keeps its OWN gate — run_navigation is shared machinery
+    # and deliberately authorises nothing: the practitioner's endpoint
+    # checks the seat ladder plus step-up, the auditor's checks the
+    # signed session. A shared function that authorised would be one
+    # place for both to get it wrong.
+    endpoint = src.split('@router.post("/navigate")')[1]
+    assert "_require_ledger_read(" in endpoint
+    assert "ledger_unlock.require_unlock(" in endpoint
+    assert "_session(request)" in portal.split("def auditor_navigate(")[1]
     # And it returns rows, not prose.
     assert '"entries": entries' in body
