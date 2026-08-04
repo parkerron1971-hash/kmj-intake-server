@@ -350,6 +350,7 @@ def read_audit(request: Request, biz: str, limit: int = 100,
                failed_only: bool = False,
                verb: Optional[str] = None, include_db: bool = False,
                since: Optional[str] = None, until: Optional[str] = None,
+               actor: Optional[str] = None, subject_id: Optional[str] = None,
                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """The team's view of the business audit trail.
 
@@ -382,6 +383,9 @@ def read_audit(request: Request, biz: str, limit: int = 100,
     entries = ledger_entries(biz, limit=limit, failed_only=failed_only,
                              verb=verb, include_db=include_db,
                              since=since, until=until)
+    # actor/subject_id complete the set the navigator can produce, so a
+    # filter Chief resolved survives the hand-off to this endpoint.
+    entries = apply_post_filters(entries, actor, subject_id)
     return {"ok": True, "entries": entries, "count": len(entries),
             "tier": "all" if include_db else "application"}
 
@@ -507,6 +511,32 @@ class _NavBody(BaseModel):
     question: str
 
 
+def apply_post_filters(entries: List[Dict[str, Any]],
+                       actor: Optional[str] = None,
+                       subject_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Filters PostgREST can't express cleanly, applied to rows already
+    held rather than by widening the query.
+
+    SHARED ON PURPOSE. The navigator can emit `actor` and `subject_id`,
+    and GET /audit is where a reader LANDS after Chief resolves a
+    question. When only run_navigation knew how to honour them, Chief
+    counted rows with the actor applied and the panel then re-fetched
+    without it — so "3 records by chief" opened onto every actor's rows.
+    The count and the screen disagreed, and the constraint vanished with
+    nothing on screen admitting it. One implementation, both readers.
+    """
+    if actor:
+        entries = [e for e in entries
+                   if e.get("actor_id") == actor or e.get("actor_type") == actor]
+    if subject_id:
+        entries = [e for e in entries
+                   if any(subject_id in str(r.get("id") or "")
+                          for r in (e.get("subject_refs") or [])
+                          if isinstance(r, dict))
+                   or subject_id in str(e.get("target_id") or "")]
+    return entries
+
+
 def run_navigation(business_id: str, question: str, *,
                    actor_type: str, actor_id: str, authorized_by: str,
                    window_start: Optional[str] = None,
@@ -563,19 +593,7 @@ def run_navigation(business_id: str, question: str, *,
         include_db=bool(f.get("include_db")),
         since=f.get("since"), until=f.get("until"))
 
-    # Filters PostgREST can't express cleanly, applied to the rows we
-    # already hold rather than by widening the query.
-    if f.get("actor"):
-        a = f["actor"]
-        entries = [e for e in entries
-                   if e.get("actor_id") == a or e.get("actor_type") == a]
-    if f.get("subject_id"):
-        sid = f["subject_id"]
-        entries = [e for e in entries
-                   if any(sid in str(r.get("id") or "")
-                          for r in (e.get("subject_refs") or [])
-                          if isinstance(r, dict))
-                   or sid in str(e.get("target_id") or "")]
+    entries = apply_post_filters(entries, f.get("actor"), f.get("subject_id"))
 
     try:
         record(business_id, actor_type=actor_type, actor_id=actor_id,
