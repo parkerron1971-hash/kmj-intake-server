@@ -238,6 +238,48 @@ All three items previously listed here are fixed.
   email client, and Strict withholds the cookie on exactly that cross-site
   top-level navigation.
 
+- **The chain tip is bounded by the rows** (Kevin's ruling on the audit
+  finding). `ledger_tip_forward_only` made `last_sequence` monotonic so it
+  could not be rolled *back*, but nothing bounded how far *forward* it could
+  go — and a tip ahead of the rows makes `ledger_verify` report *"records
+  were removed"* about a ledger from which nothing was removed. A false
+  accusation of tampering, indistinguishable from the real thing.
+
+  The report described one hole; there were three. **UPDATE** could set any
+  forward value. **DELETE + INSERT bypassed the UPDATE guard entirely** —
+  deleting the tip row and re-inserting one with `last_sequence=999999`
+  succeeded, so guarding a single verb was theatre. And **`(business_id,
+  sequence)` had no unique index**, so a reset tip would mint duplicate
+  sequence numbers — the exact ordering ambiguity the tip guard was written
+  to prevent, still reachable by another road.
+
+  Now: the tip may never exceed `max(sequence) + 1` for its tenant, on
+  INSERT as well as UPDATE; the tip row cannot be deleted or truncated (and
+  needs no exception path, because `ledger_erase_business` reads the tip and
+  deliberately never resets it); and the sequence is unique per tenant.
+
+  **Why `+ 1` and not `= max`:** `ledger_assign_sequence` is a BEFORE INSERT
+  trigger, so it moves the tip while the row it describes does not exist
+  yet. One ahead is the correct steady state for the duration of that
+  trigger, and it is also the room the repair path needs. Tightening it to
+  `= max` would break every write — and with fail-closed in place, that
+  breaks the *business* write too.
+
+  The residual is one row wide and **cannot accumulate**: the tip can still
+  be nudged to exactly `max + 1`, which is a one-row false alarm, but a
+  second nudge is refused because it would then exceed the bound. Closing
+  that last row would mean teaching `ledger_verify` to tolerate `tip = max +
+  1`, which would cost the detection of a genuine single-row tail loss —
+  a worse trade.
+
+  The multi-row worry was **tested, not reasoned about**: a statement's own
+  rows can be invisible to queries under its snapshot, which would have made
+  this rule reject every multi-row insert. All three shapes were run against
+  the live database — separate INSERTs, a multi-row INSERT on a covered
+  table, and a multi-row INSERT straight into `audit_log` — and all pass,
+  because a query inside a plpgsql trigger runs under a fresh
+  command-counter snapshot.
+
 ## Still open
 
 `AUDITOR_LINK_SECRET` was set on Railway 2026-08-03, at the free moment —
@@ -245,21 +287,6 @@ All three items previously listed here are fixed.
 `MCP_TOKEN_SECRET` fallback. Note for later: changing that key now
 invalidates every outstanding link, because the secret is what the signature
 is checked against.
-
-- **The chain tip can be pushed FORWARD** (found in the post-arc audit,
-  2026-08-03). `ledger_tip_forward_only` makes `last_sequence` monotonic, so
-  it cannot be rolled back — but nothing bounds how far forward it may go.
-  Setting a tenant's tip to a large number makes `ledger_verify` report
-  *"the ledger ends at #2 but the chain tip is #999999 - records were
-  removed"* on a ledger from which nothing was removed.
-
-  Deliberate in origin — the tip stays writable so the legitimate repair
-  path (rebuilding it from the rows) works — and it is the *loud*
-  direction: it cannot conceal anything, only raise a false alarm, and it
-  needs `service_role`. But a false accusation of tampering is a real harm
-  in a system whose product is trust, and it is indistinguishable from the
-  genuine article. Bounding the tip to `max(sequence)` for the tenant would
-  close it at the cost of a subquery per insert. **Kevin's call.**
 
 - **One test row is permanently in a real ledger.** `ledger:selftest`
   ("stage1 proof") sits at sequence 5 of *KMJ Creative Solutions* — our own
