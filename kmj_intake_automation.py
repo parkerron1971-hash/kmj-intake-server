@@ -295,6 +295,9 @@ app.include_router(boldsign_router)
 # Rails demand-driven — receipt capture (Chief reads the photo)
 from receipts_router import router as receipts_router
 app.include_router(receipts_router)
+# Document Intelligence — stored files finally get read (summarize / dates / ask / compare)
+from doc_intelligence_router import router as docintel_router
+app.include_router(docintel_router)
 # Rails demand-driven — payroll interest capture (Gusto, demand-gated)
 from payroll_router import router as payroll_router
 app.include_router(payroll_router)
