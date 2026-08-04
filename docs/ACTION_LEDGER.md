@@ -138,12 +138,35 @@ layer.
   records what range vanished and why; `ledger_chain_state` is not reset, so
   the sequence continues past the gap. A gap is deliberate, not evidence of
   tampering — and not hidden either.
+- **One person can be erased without destroying a practice's record.**
+  `ledger_redact_subject()` clears `payload`/`result` on every row that
+  touched one subject and leaves the FACT of each action standing: when,
+  who, which verb, which sequence. `row_hash` is deliberately NOT
+  recomputed — so the chain still links (the next row's `prev_hash` is
+  untouched), the removal is reported as *declared* rather than as
+  tampering, and the erased content stays **committed to**: anyone holding
+  a copy can prove it hashed to the recorded value, while the system no
+  longer stores it. Redaction is the only permitted UPDATE, and the trigger
+  verifies every other column is byte-identical so it cannot become an edit
+  hatch.
 - **Verification reports; it does not reassure.** No summary of a result set
   into a claim. Show the rows; let the reader conclude. `ledger_verify`
   refuses to answer `intact` when nothing was hashed — "there was nothing to
   verify" must never be rendered as a green tick.
 
 ---
+
+## Still open
+
+- **`audit_row_change` swallows every exception**, so a held advisory lock
+  could produce unlogged writes with no gap and no alert. A ledger that can
+  silently skip is not a ledger.
+- **The auditor token appears in server access logs.** Needs a log filter or
+  a move off the URL.
+- **`/account/export` returns `audit_log.*`** including `payload`. Owner-only
+  and arguably intended for portability, but it contradicts the invariant
+  stated above and should be either scoped or explicitly documented as an
+  exception.
 
 ## Open rulings
 

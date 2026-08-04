@@ -141,6 +141,74 @@ def revoke_link(jti: str, biz: str, user: AuthedUser = Depends(require_user)):
     return {"ok": ok}
 
 
+class RedactBody(BaseModel):
+    business_id: str
+    subject_type: str
+    subject_id: str
+    reason: str = "data_subject_erasure"
+
+
+@router.post("/audit/redact")
+def redact_subject(body: RedactBody, user: AuthedUser = Depends(require_user)):
+    """Honour one person's erasure request without destroying the record.
+
+    A therapist's client, a lawyer's client, asks to be erased. Their
+    details sit inside the practice's ledger because the trigger tier
+    copies row contents. Until now the only removal path erased the
+    whole practice's history — so the request could not be honoured at
+    all without the practice destroying its own audit trail.
+
+    This clears the CONTENTS of every row that touched that subject and
+    leaves the FACT of each action standing: when, who, which verb,
+    which sequence. row_hash is deliberately not recomputed, so the
+    chain still links and the removed data stays provable to anyone who
+    holds a copy — erasure without losing provability.
+
+    Owner-only: it is the practice's legal obligation, and it is the one
+    operation that can empty rows in an append-only table.
+    """
+    _require_owner(body.business_id, user)
+    subject_type = str(body.subject_type or "").strip()[:40]
+    subject_id = str(body.subject_id or "").strip()[:80]
+    if not subject_type or not subject_id:
+        raise HTTPException(400, "subject_type and subject_id are required")
+    try:
+        res = sb_clients.sb_post_as_service("/rpc/ledger_redact_subject", {
+            "p_business_id": body.business_id,
+            "p_subject_type": subject_type,
+            "p_subject_id": subject_id,
+            "p_reason": str(body.reason or "data_subject_erasure")[:120],
+            "p_requested_by": (user.email or str(user.id)),
+        })
+    except Exception as e:
+        logger.error(f"[ledger] redaction failed for {body.business_id}: {e}")
+        raise HTTPException(503, "The erasure could not be completed. Nothing was changed.")
+    if res is None:
+        raise HTTPException(503, "The erasure could not be completed. Nothing was changed.")
+    count = int(res if isinstance(res, int) else (res or 0))
+
+    try:
+        import audit_log
+        audit_log.record(
+            body.business_id, actor_type="user", actor_id=str(user.id),
+            verb="ledger:redacted",
+            summary=f"Erasure honoured for {subject_type} {subject_id[:8]}",
+            payload={"subject_type": subject_type, "rows_redacted": count},
+            source="audit", authorized_by="owner")
+    except Exception:
+        pass
+
+    return {
+        "ok": True, "rows_redacted": count,
+        "note": ("The contents are gone. The record that those actions "
+                 "happened remains, and the ledger still verifies — the "
+                 "removal is declared, not hidden."
+                 if count else
+                 "Nothing in the ledger held data for that record. The "
+                 "request is on file either way."),
+    }
+
+
 # ─── The public read ────────────────────────────────────────────────
 
 def _resolve_or_404(token: str, request: Request) -> Dict[str, Any]:
