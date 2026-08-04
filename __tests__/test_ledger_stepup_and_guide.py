@@ -255,3 +255,58 @@ def test_the_ledger_verb_never_reaches_the_agent_surface():
     assert action_registry.is_sensitive("search_ledger") is True
     assert action_registry.may_expose_to_agent("search_ledger") is False
     assert action_registry.may_expose_to_agent("search_ledger", allow_writes=True) is False
+
+
+def test_the_sentence_describes_what_was_applied_not_what_was_asked():
+    """Found by driving the live portal, not by a unit test.
+
+    On a link scoped to January, "everything from the last two years"
+    returned zero rows under the sentence "Showing everything recorded
+    since 2022-07-01". The clamp was right; the sentence was a lie, and
+    an auditor would reasonably read "nothing happened in two years"
+    from a search that in fact covered one month. A narrowing the reader
+    cannot see is the exact failure this surface exists to prevent.
+    """
+    import audit_log
+    import ledger_navigator
+
+    real_entries = audit_log.ledger_entries
+    real_resolve = ledger_navigator.resolve
+    audit_log.ledger_entries = lambda biz, **kw: []
+    ledger_navigator.resolve = lambda q: {
+        "filter": {"since": "2022-07-01T00:00:00Z"},
+        "description": "Showing everything recorded since 2022-07-01, most recent first."}
+    try:
+        out = audit_log.run_navigation(
+            "b1", "everything from the last two years",
+            actor_type="agent", actor_id="auditor:x",
+            authorized_by="auditor_link",
+            window_start="2026-01-01T00:00:00Z",
+            window_end="2026-01-31T00:00:00Z")
+    finally:
+        audit_log.ledger_entries = real_entries
+        ledger_navigator.resolve = real_resolve
+
+    assert "2022" not in out["description"], \
+        "the sentence must not claim a range the search did not cover"
+    assert "2026-01-01" in out["description"] and "2026-01-31" in out["description"]
+    assert "narrowed" in out["description"], "the narrowing must be said out loud"
+
+
+def test_an_unclamped_search_keeps_its_original_sentence():
+    """No window, no narrowing, no extra caveat to explain away."""
+    import audit_log
+    import ledger_navigator
+    real_entries = audit_log.ledger_entries
+    real_resolve = ledger_navigator.resolve
+    audit_log.ledger_entries = lambda biz, **kw: []
+    ledger_navigator.resolve = lambda q: {
+        "filter": {"since": "2026-07-01T00:00:00Z"}, "description": "SENTINEL"}
+    try:
+        out = audit_log.run_navigation(
+            "b1", "july", actor_type="user", actor_id="u1",
+            authorized_by="ledger_read")
+    finally:
+        audit_log.ledger_entries = real_entries
+        ledger_navigator.resolve = real_resolve
+    assert out["description"] == "SENTINEL"

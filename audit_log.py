@@ -531,12 +531,31 @@ def run_navigation(business_id: str, question: str, *,
     f = dict(nav["filter"])
 
     ws, we = _z(window_start), _z(window_end)
+    clamped = False
     if ws:
         since = _z(f.get("since"))
         f["since"] = max(since, ws) if since else ws
+        clamped = clamped or f["since"] != since
     if we:
         until = _z(f.get("until"))
         f["until"] = min(until, we) if until else we
+        clamped = clamped or f["until"] != until
+
+    # THE SENTENCE MUST DESCRIBE WHAT WAS APPLIED, NOT WHAT WAS ASKED.
+    # Caught in a live audit: on a link scoped to January, "everything
+    # from the last two years" correctly returned zero rows — under the
+    # sentence "Showing everything recorded since 2022-07-01". Clamped
+    # properly and a plain lie to the reader, who would take "nothing in
+    # two years" from a search that actually covered one month. A silent
+    # narrowing is the precise failure this surface exists to prevent,
+    # so the sentence is regenerated from the FINAL filter and the
+    # narrowing is said out loud.
+    description = nav["description"]
+    if clamped:
+        import ledger_navigator as _ln
+        description = (_ln.describe(f)
+                       + " This link only covers that range, so the "
+                         "search was narrowed to it.")
 
     entries = ledger_entries(
         business_id, limit=int(f.get("limit") or 200),
@@ -566,7 +585,7 @@ def run_navigation(business_id: str, question: str, *,
     except Exception:
         pass
 
-    return {"ok": True, "filter": f, "description": nav["description"],
+    return {"ok": True, "filter": f, "description": description,
             "entries": entries, "count": len(entries)}
 
 
