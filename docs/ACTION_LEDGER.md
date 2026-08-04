@@ -209,13 +209,42 @@ All three items previously listed here are fixed.
   the point of an export — the practitioner can hand the file to someone who
   verifies the chain without us.
 
+- **The auditor credential is out of the URL.** `/public/audit/{token}` is
+  now an *entry* route: it resolves the link, sets a short-lived scoped
+  cookie and 303s to `/public/audit/view`, which is the page the auditor
+  actually reads. The token-bearing URL renders no body, loads no asset and
+  never reaches the address bar, so what survives in browser history, in a
+  bookmark, in a screenshot or on a shared screen is a URL that grants
+  nothing. The link itself still arrives by email with the token in the path
+  — that is unavoidable — but it is now spent on one request per session
+  instead of every page view and every download.
+
+  Four things the exchange deliberately does not weaken. **Revocation still
+  bites**: every request re-checks the link's `revoked_at`, because a cookie
+  that outlived a revoked link would turn "revoke" into "revoke in twelve
+  hours". **A session never outlives its link** — the TTL is capped at the
+  link's own expiry, so a 12-hour session cannot be minted from a link with
+  five minutes left. **The window rides inside the session signature**, as it
+  does on the link, so an edited cookie cannot widen what it may see. And
+  **sessions are signed in a separate HMAC domain** (`auditor-session-v1|`),
+  because both credentials use the same key — without it a cookie would
+  verify as a link and a link as a cookie. That last one is pinned by a test
+  that forges a payload satisfying *both* field shapes at once, since the
+  obvious version of the test passes on field shape alone and would keep
+  passing with the domain separation removed.
+
+  Cookie: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/public/audit`. Lax
+  rather than Strict because the auditor arrives by clicking a link in an
+  email client, and Strict withholds the cookie on exactly that cross-site
+  top-level navigation.
+
 ## Still open
 
-- **`AUDITOR_LINK_SECRET` is not set on Railway.** It falls back to
-  `MCP_TOKEN_SECRET`, so rotating agent credentials would silently
-  invalidate every live audit link. Kevin's to set.
-- **The auditor token still lives in the URL.** Log redaction is mitigation;
-  moving the credential off the path is the real fix.
+Nothing on the ledger arc. `AUDITOR_LINK_SECRET` was set on Railway
+2026-08-03, at the free moment — `auditor_links` held zero rows, so nothing
+had been signed with the `MCP_TOKEN_SECRET` fallback. Note for later:
+changing that key now invalidates every outstanding link, because the secret
+is what the signature is checked against.
 
 ## Open rulings
 

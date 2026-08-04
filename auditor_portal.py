@@ -3,8 +3,18 @@ auditor_portal.py — the outside reviewer's window onto one ledger.
 
 Two surfaces:
   * owner-gated management (/audit/links) — mint, list, revoke;
-  * the public read (/public/audit/{token}) — no Solutionist account,
-    no cookie, nothing but a signed link that expires and can be pulled.
+  * the public read — no Solutionist account, nothing but a signed link
+    that expires and can be pulled.
+
+THE CREDENTIAL DOES NOT STAY IN THE URL. /public/audit/{token} is an
+ENTRY route: it resolves the link, sets a short-lived scoped cookie and
+303s to /public/audit/view, which is what the auditor actually reads.
+The token-bearing URL therefore never renders a page, never loads an
+asset, and never sits in the address bar — so what ends up in browser
+history, in a bookmark, in a screenshot or over someone's shoulder is a
+URL that grants nothing. Every request still re-checks revocation
+against the table, because a cookie that outlived a revoked link would
+turn "revoke" into "revoke in twelve hours".
 
 THE RULE, INHERITED: report, never reassure. This page shows the chain's
 state and the rows, and it never summarises them into a claim. An
@@ -29,7 +39,7 @@ import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 import sb_clients
@@ -45,9 +55,12 @@ router = APIRouter(tags=["auditor"])
 _PUBLIC_BASE = (os.environ.get("PUBLIC_API_BASE")
                 or "https://kmj-intake-server-production.up.railway.app")
 
-# The token rides in the URL, so: never cached, never framed, and no
-# Referer leak to any external asset. Copied from the OAuth consent
-# screen, which is the only other token-bearing page in the codebase.
+# Never cached, never framed, no Referer leak. Still every bit as
+# necessary now that the credential is a cookie rather than a path
+# segment: no-store keeps the ledger out of a shared machine's disk
+# cache, and the framing rules keep this page out of someone else's
+# chrome. Applied to the ENTRY redirect too, so the one response that
+# does see the token is not cacheable either.
 _SECURE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     "Pragma": "no-cache",
@@ -260,16 +273,93 @@ def _load(ctx: Dict[str, Any], limit: int = 500) -> Dict[str, Any]:
     return data
 
 
+# ─── Entry: trade the token for a session, then get it out of the URL ─
+#
+# THE ONLY route that ever sees the credential. It renders nothing —
+# it resolves, sets a cookie and redirects — so the token-bearing URL
+# never has a page body, never loads an asset, and never lingers in the
+# address bar. What the auditor reads, bookmarks, and leaves in their
+# history is `/public/audit/view`.
+#
+# 303, not 302: the redirect must be a GET regardless of how the entry
+# was reached, and 303 is the one that says so rather than relying on
+# universal-but-unspecified browser behaviour.
+_SESSION_GONE = (
+    "This review session has ended. Open the original link the practice "
+    "sent you to start a new one — the link itself is still valid until "
+    "it expires or the practice revokes it.")
+
+
+def _session(request: Request) -> Optional[Dict[str, Any]]:
+    """The session path. Same rate-limit budgets as the link path: every
+    view appends an undeletable ledger row under a per-tenant advisory
+    lock, and moving the credential to a cookie must not quietly remove
+    the flood protection that guarded that."""
+    import rate_limit
+    import auditor_links
+    if not rate_limit.allow_strict("auditor_link",
+                                   rate_limit.trusted_client_ip(request)):
+        raise HTTPException(429, "Too many requests")
+    ctx = auditor_links.resolve_session(
+        request.cookies.get(auditor_links.SESSION_COOKIE) or "")
+    if not ctx:
+        return None
+    if not rate_limit.allow_strict("auditor_link_jti", ctx["jti"]):
+        raise HTTPException(429, "Too many requests")
+    return ctx
+
+
+@router.get("/public/audit/view")
+def auditor_view(request: Request):
+    ctx = _session(request)
+    if not ctx:
+        # A browser gets a page, not a JSON blob. This is the one reader
+        # the whole feature exists for, and "the session ended, your
+        # link still works" is a very different message from "gone" —
+        # without it an expired cookie reads as a revoked link and the
+        # auditor calls the practice.
+        return HTMLResponse(content=_render_gone(), status_code=410,
+                            headers=_SECURE_HEADERS)
+    return HTMLResponse(content=_render(_load(ctx)), headers=_SECURE_HEADERS)
+
+
+@router.get("/public/audit/view/export")
+def auditor_view_export(request: Request, format: str = "csv"):
+    ctx = _session(request)
+    if not ctx:
+        raise HTTPException(410, _SESSION_GONE)
+    return _export(ctx, format)
+
+
 @router.get("/public/audit/{token}")
-def auditor_page(token: str, request: Request):
+def auditor_entry(token: str, request: Request):
     ctx = _resolve_or_404(token, request)
-    data = _load(ctx)
-    return HTMLResponse(content=_render(data, token), headers=_SECURE_HEADERS)
+    import auditor_links
+    value, max_age = auditor_links.mint_session(ctx)
+    if not value:
+        raise HTTPException(404, "link not found")
+    r = RedirectResponse("/public/audit/view", status_code=303,
+                         headers=_SECURE_HEADERS)
+    r.set_cookie(
+        auditor_links.SESSION_COOKIE, value,
+        max_age=max_age,
+        # Scoped to this surface alone: the cookie is never attached to
+        # any other endpoint on the domain, so it cannot ride along with
+        # a request it was not minted for.
+        path="/public/audit",
+        httponly=True,      # script on any page cannot read it
+        secure=True,        # never travels in the clear
+        # Lax, not Strict: the auditor arrives by clicking a link in an
+        # email client, and Strict would withhold the cookie on exactly
+        # that cross-site top-level navigation. Lax still blocks it on
+        # cross-site POSTs and subresource loads, which is the CSRF
+        # surface that matters for a cookie-authenticated page.
+        samesite="lax",
+    )
+    return r
 
 
-@router.get("/public/audit/{token}/export")
-def auditor_export(token: str, request: Request, format: str = "csv"):
-    ctx = _resolve_or_404(token, request)
+def _export(ctx: Dict[str, Any], format: str = "csv") -> Response:
     data = _load(ctx)
     import ledger_report
     base = f"ledger-verification-{data['generated_at'][:10]}"
@@ -292,7 +382,23 @@ def _e(v: Any) -> str:
     return html.escape(str(v if v is not None else ""), quote=True)
 
 
-def _render(d: Dict[str, Any], token: str) -> str:
+def _render_gone() -> str:
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Review session ended</title><style>
+body{{margin:0;background:#0f1115;color:#e8eaed;
+ font:15px/1.65 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}}
+.wrap{{max-width:520px;margin:0 auto;padding:64px 20px}}
+.card{{background:#171a21;border:1px solid #262b36;border-radius:12px;padding:24px}}
+h1{{font-size:19px;margin:0 0 10px}}
+p{{color:#9aa0a6;font-size:13.5px;margin:0}}
+</style></head><body><div class="wrap"><div class="card">
+<h1>This review session has ended</h1>
+<p>{_e(_SESSION_GONE)}</p>
+</div></div></body></html>"""
+
+
+def _render(d: Dict[str, Any]) -> str:
     v = d.get("verification") or {}
     hashed = int(v.get("hashed") or 0)
     intact = bool(v.get("intact")) and hashed > 0
@@ -413,8 +519,8 @@ footer{{color:#9aa0a6;font-size:11.5px;margin:24px 0 8px;text-align:center}}
   <div style="margin-top:12px">{fact_html}</div>
   {er_html}
   {window}
-  <a class="btn" href="/public/audit/{_e(token)}/export?format=csv">Download CSV</a>
-  <a class="btn" href="/public/audit/{_e(token)}/export?format=pdf">Download PDF</a>
+  <a class="btn" href="/public/audit/view/export?format=csv">Download CSV</a>
+  <a class="btn" href="/public/audit/view/export?format=pdf">Download PDF</a>
 </div>
 
 <div class="card">
