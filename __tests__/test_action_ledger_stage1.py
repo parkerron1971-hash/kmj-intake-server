@@ -21,6 +21,18 @@ import pytest  # noqa: E402
 import audit_log  # noqa: E402
 
 
+# ─── Step-up: these tests exercise the READ GATE, not the lock ───────
+# The ledger now requires a fresh password confirmation. That is a
+# separate control with its own tests; here it is satisfied so each test
+# keeps asserting the thing it was written to assert.
+def _unlocked(user_id: str = "owner1"):
+    import os
+    os.environ.setdefault("AUDITOR_LINK_SECRET", "unit-test-secret")
+    import ledger_unlock
+    tok = ledger_unlock.mint(str(user_id))["token"]
+    return type("R", (), {"headers": {"X-Ledger-Unlock": tok}})()
+
+
 # ─── The sixth field + field five ────────────────────────────────────
 
 def test_record_carries_authorized_by_and_subject_refs(monkeypatch):
@@ -155,11 +167,11 @@ def test_audit_read_hides_the_db_tier_by_default(monkeypatch):
                         lambda b, u, r: "owner")
     u = type("U", (), {"id": "u1", "email": "u@x.com"})()
 
-    out = audit_log.read_audit("b1", user=u)
+    out = audit_log.read_audit(_unlocked(u.id), "b1", user=u)
     assert "source=not.eq.db_trigger" in seen["q"]
     assert out["tier"] == "application"
 
-    out = audit_log.read_audit("b1", include_db=True, user=u)
+    out = audit_log.read_audit(_unlocked(u.id), "b1", include_db=True, user=u)
     assert "source=not.eq.db_trigger" not in seen["q"]
     assert out["tier"] == "all"
 
@@ -174,7 +186,7 @@ def test_namespaced_verbs_survive_the_filter(monkeypatch):
     monkeypatch.setattr("business_users_router.require_role",
                         lambda b, u, r: "owner")
     u = type("U", (), {"id": "u1", "email": "u@x.com"})()
-    audit_log.read_audit("b1", verb="db:contacts_update", user=u)
+    audit_log.read_audit(_unlocked(u.id), "b1", verb="db:contacts_update", user=u)
     assert "verb=eq.db:contacts_update" in seen["q"]
 
 
@@ -234,7 +246,7 @@ def test_verify_endpoint_reports_rather_than_reassures(monkeypatch):
                         lambda b, u, r: "owner")
     u = type("U", (), {"id": "u1", "email": "u@x.com"})()
 
-    out = audit_log.verify_chain("b1", user=u)
+    out = audit_log.verify_chain(_unlocked(u.id), "b1", user=u)
     assert calls["path"] == "/rpc/ledger_verify"   # the DB owns the recipe
     assert out["intact"] is False
     assert out["broken_at"] == 4
@@ -277,7 +289,7 @@ def test_viewer_seat_can_read_history(monkeypatch):
     monkeypatch.setattr("business_collaborators_router.is_active_accountant",
                         lambda b, u: False)
     u = type("U", (), {"id": "v1", "email": "v@x.com"})()
-    out = audit_log.read_audit("b1", user=u)
+    out = audit_log.read_audit(_unlocked(u.id), "b1", user=u)
     assert out["ok"] is True
     assert called["min_role"] == "viewer"
 
@@ -296,7 +308,7 @@ def test_accountant_collaborator_can_read_history(monkeypatch):
     monkeypatch.setattr("business_collaborators_router.is_active_accountant",
                         lambda b, u: True)
     u = type("U", (), {"id": "cpa1", "email": "cpa@x.com"})()
-    assert audit_log.read_audit("b1", user=u)["ok"] is True
+    assert audit_log.read_audit(_unlocked(u.id), "b1", user=u)["ok"] is True
 
 
 def test_ledger_read_never_returns_row_contents():

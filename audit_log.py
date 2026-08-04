@@ -44,9 +44,10 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+import ledger_unlock
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -292,9 +293,63 @@ def _require_ledger_read(biz: str, user: AuthedUser) -> Dict[str, Any]:
     return row
 
 
+class _UnlockBody(BaseModel):
+    business_id: str
+    password: str
+
+
+@router.post("/unlock")
+async def unlock_ledger(body: _UnlockBody,
+                        user: AuthedUser = Depends(require_user)):
+    """Re-prove the account password to open the ledger for 15 minutes.
+
+    See ledger_unlock for why this is step-up rather than a separate
+    ledger password. In short: a second secret needs a reset path, and
+    whoever can reset it from inside a signed-in session is the very
+    attacker it was meant to stop.
+
+    Rate limited on the USER, not the IP. The thing being guessed is
+    one specific account's password; an attacker sitting at an unlocked
+    laptop already has the session, so varying their IP is free while
+    varying whose account this is is not.
+
+    The read gate runs FIRST. Someone who may not read this ledger at
+    all should not get a password oracle for it.
+    """
+    import rate_limit
+    _require_ledger_read(body.business_id, user)
+    if not rate_limit.allow_strict("ledger_unlock", str(user.id)):
+        raise HTTPException(429, "Too many attempts. Wait a moment.")
+    if not (body.password or "").strip():
+        raise HTTPException(400, "Enter your password.")
+    if not await ledger_unlock.check_password(user.email, body.password):
+        # Recorded too: repeated failed unlocks against a practice's
+        # ledger is precisely the pattern someone should be able to
+        # find afterwards.
+        try:
+            record(body.business_id, actor_type="user", actor_id=str(user.id),
+                   verb="ledger:unlock_failed", ok=False,
+                   summary="Failed password confirmation for the ledger",
+                   authorized_by="step_up")
+        except Exception:
+            pass
+        raise HTTPException(403, "That password did not match.")
+    out = ledger_unlock.mint(str(user.id))
+    try:
+        record(body.business_id, actor_type="user", actor_id=str(user.id),
+               verb="ledger:unlocked",
+               summary="Confirmed password to open the ledger",
+               authorized_by="step_up")
+    except Exception:
+        pass
+    return {"ok": True, **out}
+
+
 @router.get("")
-def read_audit(biz: str, limit: int = 100, failed_only: bool = False,
+def read_audit(request: Request, biz: str, limit: int = 100,
+               failed_only: bool = False,
                verb: Optional[str] = None, include_db: bool = False,
+               since: Optional[str] = None, until: Optional[str] = None,
                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """The team's view of the business audit trail.
 
@@ -317,8 +372,16 @@ def read_audit(biz: str, limit: int = 100, failed_only: bool = False,
     record contents are not exposed by widening the audience. Anything
     that would expose row CONTENTS must re-gate."""
     _require_ledger_read(biz, user)
+    ledger_unlock.require_unlock(request, user.id)
+    # since/until arrive when Chief resolves a question into a filter and
+    # sends the reader here. They were absent, so a date range would have
+    # been silently dropped and the panel would have shown the most
+    # recent rows while claiming to show a window — a quiet wrong answer,
+    # which is the one kind a ledger surface must never give. Both are
+    # validated by _z inside ledger_entries.
     entries = ledger_entries(biz, limit=limit, failed_only=failed_only,
-                             verb=verb, include_db=include_db)
+                             verb=verb, include_db=include_db,
+                             since=since, until=until)
     return {"ok": True, "entries": entries, "count": len(entries),
             "tier": "all" if include_db else "application"}
 
@@ -444,43 +507,39 @@ class _NavBody(BaseModel):
     question: str
 
 
-@router.post("/navigate")
-def navigate(body: _NavBody, user: AuthedUser = Depends(require_user)):
-    """Turn a question into a FILTER over real rows, and return the rows.
+def run_navigation(business_id: str, question: str, *,
+                   actor_type: str, actor_id: str, authorized_by: str,
+                   window_start: Optional[str] = None,
+                   window_end: Optional[str] = None) -> Dict[str, Any]:
+    """One navigation, shared by the practitioner and the auditor.
 
-    The portal agent. It GUIDES — resolves "the invoices for that client
-    last July" into a filter and walks the reader to those records. It
-    does NOT narrate: no summary, no interpretation, no verdict on what
-    the records mean. The only sentence it produces is a description of
-    the FILTER it applied.
+    Both doors run THIS, so the guide-never-narrator property cannot
+    hold on one surface and quietly rot on the other. The model is
+    given the question and the verb vocabulary, and returns a FILTER;
+    it never receives a row, so it cannot summarise, characterise or
+    invent what happened.
 
-    The model never sees row contents (see ledger_navigator), so the
-    restraint is structural rather than a prompt instruction someone
-    could talk their way past.
-
-    The search is itself recorded. Who went looking for what, and when,
-    belongs in the record — especially when the reader is an auditor.
+    THE WINDOW CLAMPS THE MODEL. An auditor link carries a signed date
+    range, and the filter here is derived from free text an outsider
+    typed. Without this clamp, "show me everything from last year" on a
+    link scoped to one quarter would widen the link — the model would
+    have become the access-control decision. The signed window always
+    wins; it can narrow the filter and never widen it.
     """
-    _require_ledger_read(body.business_id, user)
-    # This endpoint spends money (an Anthropic call) and grows an
-    # append-only table on every request. chief_chat and ai_proxy are
-    # both metered; this was not, so any active seat could loop it.
-    try:
-        import rate_limit
-        if not rate_limit.allow("ledger_nav", str(user.id)):
-            raise HTTPException(
-                429, "That's a lot of searches at once — give it a moment.",
-                headers={"Retry-After": str(rate_limit.retry_after("ledger_nav"))})
-    except HTTPException:
-        raise
-    except Exception:
-        pass
     import ledger_navigator
-    nav = ledger_navigator.resolve(body.question)
-    f = nav["filter"]
+    nav = ledger_navigator.resolve(question)
+    f = dict(nav["filter"])
+
+    ws, we = _z(window_start), _z(window_end)
+    if ws:
+        since = _z(f.get("since"))
+        f["since"] = max(since, ws) if since else ws
+    if we:
+        until = _z(f.get("until"))
+        f["until"] = min(until, we) if until else we
 
     entries = ledger_entries(
-        body.business_id, limit=int(f.get("limit") or 200),
+        business_id, limit=int(f.get("limit") or 200),
         failed_only=bool(f.get("failed_only")), verb=f.get("verb"),
         include_db=bool(f.get("include_db")),
         since=f.get("since"), until=f.get("until"))
@@ -500,10 +559,10 @@ def navigate(body: _NavBody, user: AuthedUser = Depends(require_user)):
                    or sid in str(e.get("target_id") or "")]
 
     try:
-        record(body.business_id, actor_type="user", actor_id=str(user.id),
-               verb="ledger:searched", summary=str(body.question)[:240],
+        record(business_id, actor_type=actor_type, actor_id=actor_id,
+               verb="ledger:searched", summary=str(question)[:240],
                payload={"filter": f, "matches": len(entries)},
-               source="audit", authorized_by="ledger_read")
+               source="audit", authorized_by=authorized_by)
     except Exception:
         pass
 
@@ -511,8 +570,48 @@ def navigate(body: _NavBody, user: AuthedUser = Depends(require_user)):
             "entries": entries, "count": len(entries)}
 
 
+@router.post("/navigate")
+def navigate(request: Request, body: _NavBody,
+             user: AuthedUser = Depends(require_user)):
+    """Turn a question into a FILTER over real rows, and return the rows.
+
+    The portal agent. It GUIDES — resolves "the invoices for that client
+    last July" into a filter and walks the reader to those records. It
+    does NOT narrate: no summary, no interpretation, no verdict on what
+    the records mean. The only sentence it produces is a description of
+    the FILTER it applied.
+
+    The model never sees row contents (see ledger_navigator), so the
+    restraint is structural rather than a prompt instruction someone
+    could talk their way past.
+
+    The search is itself recorded. Who went looking for what, and when,
+    belongs in the record — especially when the reader is an auditor.
+    """
+    _require_ledger_read(body.business_id, user)
+    ledger_unlock.require_unlock(request, user.id)
+    # This endpoint spends money (an Anthropic call) and grows an
+    # append-only table on every request. chief_chat and ai_proxy are
+    # both metered; this was not, so any active seat could loop it.
+    try:
+        import rate_limit
+        if not rate_limit.allow("ledger_nav", str(user.id)):
+            raise HTTPException(
+                429, "That's a lot of searches at once — give it a moment.",
+                headers={"Retry-After": str(rate_limit.retry_after("ledger_nav"))})
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    return run_navigation(
+        body.business_id, body.question,
+        actor_type="user", actor_id=str(user.id),
+        authorized_by="ledger_read")
+
+
 @router.get("/export")
-def export_ledger(biz: str, format: str = "pdf", limit: int = 500,
+def export_ledger(request: Request, biz: str, format: str = "pdf",
+                  limit: int = 500,
                   since: Optional[str] = None, until: Optional[str] = None,
                   user: AuthedUser = Depends(require_user)):
     """The artifact — a verification report that leaves the building.
@@ -526,6 +625,7 @@ def export_ledger(biz: str, format: str = "pdf", limit: int = 500,
     readable summary the History screen shows.
     """
     biz_row = _require_ledger_read(biz, user)
+    ledger_unlock.require_unlock(request, user.id)
     import ledger_report
     data = ledger_report.build(biz_row, limit=limit, since=since,
                                until=until, include_db=True)
@@ -553,7 +653,7 @@ def export_ledger(biz: str, format: str = "pdf", limit: int = 500,
 
 
 @router.get("/verify")
-def verify_chain(biz: str,
+def verify_chain(request: Request, biz: str,
                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """Re-walk this business's hash chain and report whether it holds.
 
@@ -568,6 +668,7 @@ def verify_chain(biz: str,
     explains it, and the practitioner draws their own conclusion.
     """
     _require_ledger_read(biz, user)
+    ledger_unlock.require_unlock(request, user.id)
     return verification_report(biz)
 
 

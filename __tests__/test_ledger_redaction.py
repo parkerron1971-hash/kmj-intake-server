@@ -24,6 +24,18 @@ from fastapi import HTTPException  # noqa: E402
 
 from test_i2_gl_sync import FakeSB  # noqa: E402
 
+
+# ─── Step-up: these tests exercise the READ GATE, not the lock ───────
+# The ledger now requires a fresh password confirmation. That is a
+# separate control with its own tests; here it is satisfied so each test
+# keeps asserting the thing it was written to assert.
+def _unlocked(user_id: str = "owner1"):
+    import os
+    os.environ.setdefault("AUDITOR_LINK_SECRET", "unit-test-secret")
+    import ledger_unlock
+    tok = ledger_unlock.mint(str(user_id))["token"]
+    return type("R", (), {"headers": {"X-Ledger-Unlock": tok}})()
+
 _SQL = (_here.parent / "supabase" / "APPLY-2026-08-03-ledger-redaction.sql"
         ).read_text(encoding="utf-8")
 
@@ -126,7 +138,7 @@ def test_redaction_is_owner_only(fake):
     body = ap.RedactBody(business_id="b1", subject_type="contacts",
                          subject_id="c1")
     with pytest.raises(HTTPException) as e:
-        ap.redact_subject(body, type("U", (), {"id": "member1", "email": "m@x.com"})())
+        ap.redact_subject(_unlocked('member1'), body, type("U", (), {"id": "member1", "email": "m@x.com"})())
     assert e.value.status_code == 403
 
 
@@ -135,7 +147,7 @@ def test_missing_subject_is_refused(fake):
     owner = type("U", (), {"id": "owner1", "email": "o@x.com"})()
     with pytest.raises(HTTPException) as e:
         ap.redact_subject(
-            ap.RedactBody(business_id="b1", subject_type="", subject_id="c1"), owner)
+            _unlocked('owner1'), ap.RedactBody(business_id="b1", subject_type="", subject_id="c1"), owner)
     assert e.value.status_code == 400
 
 
@@ -149,7 +161,7 @@ def test_a_failed_redaction_says_nothing_changed(fake, monkeypatch):
     owner = type("U", (), {"id": "owner1", "email": "o@x.com"})()
     with pytest.raises(HTTPException) as e:
         ap.redact_subject(
-            ap.RedactBody(business_id="b1", subject_type="contacts",
+            _unlocked('owner1'), ap.RedactBody(business_id="b1", subject_type="contacts",
                           subject_id="c1"), owner)
     assert e.value.status_code == 503
     assert "Nothing was changed" in str(e.value.detail)

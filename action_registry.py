@@ -139,6 +139,18 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "list_scheduled":      _r("reads queued chief_scheduled_actions"),
     "offering_readiness":  _r("offering_profiles.business_readiness — pure report"),
     "recall_conversation": _r("searches prior conversation"),
+    # GUIDES, never narrates: returns a filter + a count and sends the
+    # reader to the rows. Chief is deliberately given no row contents,
+    # so it cannot summarise the ledger any more than the navigator can.
+    # SENSITIVE, so it never reaches the MCP agent surface. Read-ness
+    # asks "can this break anything"; sensitivity asks "may a third party
+    # see it" — and this is the record of who did what to which client.
+    # It is also the one surface now behind step-up authentication for
+    # signed-in humans, and a long-lived agent token must not be the way
+    # around that.
+    "search_ledger":       _r("turns a question into a FILTER over the action "
+                              "ledger and points at the rows. Returns counts, "
+                              "never row contents", sensitive=True),
     "show_revenue":        _r("reads revenue figures"),
     "site_health":         _r("reads site + booking config and reports"),
     "what_undo":           _r("reports what undo_last WOULD reverse. Pure read — undo is "

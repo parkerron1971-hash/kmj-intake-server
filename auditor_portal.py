@@ -39,9 +39,11 @@ import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import (HTMLResponse, JSONResponse,
+                               RedirectResponse, Response)
 from pydantic import BaseModel
 
+import ledger_unlock
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -96,8 +98,10 @@ def _require_owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
 
 
 @router.post("/audit/links")
-def mint_link(body: MintBody, user: AuthedUser = Depends(require_user)):
+def mint_link(request: Request, body: MintBody,
+              user: AuthedUser = Depends(require_user)):
     """Mint a reviewer link. The plaintext is returned ONCE."""
+    ledger_unlock.require_unlock(request, user.id)
     biz_row = _require_owner(body.business_id, user)
     import auditor_links
     try:
@@ -132,14 +136,21 @@ def mint_link(body: MintBody, user: AuthedUser = Depends(require_user)):
 
 
 @router.get("/audit/links")
-def list_links(biz: str, user: AuthedUser = Depends(require_user)):
+def list_links(request: Request, biz: str,
+               user: AuthedUser = Depends(require_user)):
     _require_owner(biz, user)
+    ledger_unlock.require_unlock(request, user.id)
     import auditor_links
     return {"ok": True, "links": auditor_links.list_links(biz)}
 
 
 @router.delete("/audit/links/{jti}")
 def revoke_link(jti: str, biz: str, user: AuthedUser = Depends(require_user)):
+    # DELIBERATELY no step-up. Every other surface here is gated, but
+    # revocation only ever REDUCES access, and it is the thing you reach
+    # for when a link has leaked. A password prompt between a practice
+    # and cutting off a live auditor session is a control that hurts the
+    # person it is supposed to protect. Ownership is still enforced.
     _require_owner(biz, user)
     import auditor_links
     ok = auditor_links.revoke(biz, jti)
@@ -162,7 +173,8 @@ class RedactBody(BaseModel):
 
 
 @router.post("/audit/redact")
-def redact_subject(body: RedactBody, user: AuthedUser = Depends(require_user)):
+def redact_subject(request: Request, body: RedactBody,
+                   user: AuthedUser = Depends(require_user)):
     """Honour one person's erasure request without destroying the record.
 
     A therapist's client, a lawyer's client, asks to be erased. Their
@@ -181,6 +193,7 @@ def redact_subject(body: RedactBody, user: AuthedUser = Depends(require_user)):
     operation that can empty rows in an append-only table.
     """
     _require_owner(body.business_id, user)
+    ledger_unlock.require_unlock(request, user.id)
     subject_type = str(body.subject_type or "").strip()[:40]
     subject_id = str(body.subject_id or "").strip()[:80]
     if not subject_type or not subject_id:
@@ -329,6 +342,58 @@ def auditor_view_export(request: Request, format: str = "csv"):
     if not ctx:
         raise HTTPException(410, _SESSION_GONE)
     return _export(ctx, format)
+
+
+class NavigateBody(BaseModel):
+    question: str
+
+
+@router.post("/public/audit/view/navigate")
+def auditor_navigate(body: NavigateBody, request: Request):
+    """The guide, for the reader it was actually built for.
+
+    This existed only behind require_user, so the one audience it was
+    designed for — an outside auditor holding a link and no Solutionist
+    account — could not reach it. The mechanics were built and then
+    fenced off from their user.
+
+    IT GUIDES, IT DOES NOT NARRATE, and that is structural rather than
+    promised: the model receives the question and the verb vocabulary,
+    returns a FILTER, and never sees a row. It cannot tell an auditor
+    "nothing unusual happened here", because it was never given
+    anything to form that opinion from — and that sentence is precisely
+    the one an auditor has to reach alone.
+
+    THE LINK'S WINDOW CLAMPS THE ANSWER. run_navigation intersects the
+    filter with the signed window, so "everything from last year" on a
+    link scoped to one quarter still returns one quarter. Without it,
+    free text typed by an outsider would have become the access-control
+    decision.
+    """
+    ctx = _session(request)
+    if not ctx:
+        raise HTTPException(410, _SESSION_GONE)
+    # A third budget, tighter than the two in _session, because this one
+    # spends money on every call. Keyed by LINK: an external holder is
+    # the whole point, and an IP bucket is theirs to vary for free.
+    import rate_limit
+    if not rate_limit.allow("ledger_nav", ctx["jti"]):
+        raise HTTPException(
+            429, "That's a lot of searches at once — give it a moment.",
+            headers={"Retry-After": str(rate_limit.retry_after("ledger_nav"))})
+    q = (body.question or "").strip()
+    if not q:
+        raise HTTPException(400, "Ask a question first.")
+    import audit_log
+    out = audit_log.run_navigation(
+        ctx["business_id"], q[:500],
+        actor_type="agent", actor_id=f"auditor:{ctx['jti'][:8]}",
+        authorized_by="auditor_link",
+        window_start=ctx.get("window_start"), window_end=ctx.get("window_end"))
+    return JSONResponse(
+        content={"ok": True, "description": out["description"],
+                 "entries": out["entries"], "count": out["count"]},
+        headers=_SECURE_HEADERS)
 
 
 @router.get("/public/audit/{token}")
@@ -524,11 +589,31 @@ footer{{color:#9aa0a6;font-size:11.5px;margin:24px 0 8px;text-align:center}}
 </div>
 
 <div class="card">
-  <h2 style="margin-top:0">Actions ({_e(d.get('entry_count', 0))})</h2>
+  <h2 style="margin-top:0">Find a moment</h2>
+  <p class="note" style="margin-top:0">Describe what you are looking for and
+  this will take you to those records &mdash; &ldquo;invoices for that client
+  last July&rdquo;, &ldquo;anything that failed in March&rdquo;. It finds and
+  filters. It does not summarise, interpret, or tell you whether anything is
+  wrong: reading the records is your job, not the software&rsquo;s.</p>
+  <form id="navf" onsubmit="return solNav(event)" style="display:flex;gap:8px;flex-wrap:wrap">
+    <input id="navq" type="text" autocomplete="off"
+           placeholder="What are you looking for?"
+           style="flex:1 1 260px;min-width:0;padding:9px 12px;border-radius:8px;
+                  border:1px solid #262b36;background:#0f1115;color:#e8eaed;
+                  font:inherit;font-size:13.5px">
+    <button class="btn" type="submit" style="cursor:pointer">Take me there</button>
+  </form>
+  <div id="navmsg" class="note" style="margin-bottom:0"></div>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">Actions (<span id="navcount">{_e(d.get('entry_count', 0))}</span>)</h2>
   <div class="scroll"><table>
   <tr><th>Seq</th><th>When (UTC)</th><th>Actor</th><th>Action</th>
       <th>Permitted by</th><th>Outcome</th><th>Touched</th></tr>
+  <tbody id="navrows">
   {''.join(rows) or '<tr><td colspan="7">No records in this range.</td></tr>'}
+  </tbody>
   </table></div>
   <p class="note">This record is append-only. The database refuses edits and
   deletions to it, including from the platform operator. Each record carries a
@@ -538,4 +623,73 @@ footer{{color:#9aa0a6;font-size:11.5px;margin:24px 0 8px;text-align:center}}
 </div>
 
 <footer>Solutionist System · this link expires and can be revoked by the practice at any time</footer>
-</div></body></html>"""
+</div>
+<script>
+// Rows are built with DOM APIs, never innerHTML. Everything here is
+// practitioner-controlled text that already lives in the ledger — verbs,
+// actor names, subject ids — and the server escapes it on first render.
+// Re-introducing it through innerHTML would hand an auditor's browser to
+// whoever could get a string into a ledger row.
+function solCell(text, cls) {{
+  var td = document.createElement('td');
+  if (cls) td.className = cls;
+  td.textContent = text == null ? '' : String(text);
+  return td;
+}}
+function solNav(ev) {{
+  ev.preventDefault();
+  var q = document.getElementById('navq').value.trim();
+  var msg = document.getElementById('navmsg');
+  if (!q) return false;
+  msg.textContent = 'Looking…';
+  fetch('/public/audit/view/navigate', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{question: q}})
+  }}).then(function (r) {{
+    if (r.status === 410) {{ location.reload(); return null; }}
+    if (r.status === 429) throw new Error('That is a lot of searches at once — give it a moment.');
+    if (!r.ok) throw new Error('That search could not be run.');
+    return r.json();
+  }}).then(function (j) {{
+    if (!j) return;
+    var body = document.getElementById('navrows');
+    while (body.firstChild) body.removeChild(body.firstChild);
+    var list = j.entries || [];
+    if (!list.length) {{
+      var tr = document.createElement('tr');
+      var td = solCell('No records match that.');
+      td.colSpan = 7; tr.appendChild(td); body.appendChild(tr);
+    }}
+    list.forEach(function (e) {{
+      var tr = document.createElement('tr');
+      tr.appendChild(solCell(e.sequence, 'sq'));
+      tr.appendChild(solCell(String(e.created_at || '').slice(0, 19), 'w'));
+      tr.appendChild(solCell(e.actor_id || e.actor_type));
+      var vt = document.createElement('td');
+      var code = document.createElement('code');
+      code.textContent = e.verb == null ? '' : String(e.verb);
+      vt.appendChild(code); tr.appendChild(vt);
+      tr.appendChild(solCell(e.authorized_by || ''));
+      tr.appendChild(solCell(e.ok ? 'ok' : 'FAILED', e.ok ? 'ok' : 'bad'));
+      var rt = document.createElement('td');
+      (e.subject_refs || []).forEach(function (r) {{
+        if (!r || typeof r !== 'object') return;
+        var c = document.createElement('code');
+        c.textContent = String(r.type) + ':' + String(r.id || '').slice(0, 8);
+        rt.appendChild(c); rt.appendChild(document.createTextNode(' '));
+      }});
+      tr.appendChild(rt);
+      body.appendChild(tr);
+    }});
+    document.getElementById('navcount').textContent = String(j.count == null ? list.length : j.count);
+    // The ONLY sentence shown is a description of the FILTER that was
+    // applied — never a characterisation of what the records mean.
+    msg.textContent = j.description || '';
+  }}).catch(function (err) {{
+    msg.textContent = err.message || 'That search could not be run.';
+  }});
+  return false;
+}}
+</script>
+</body></html>"""

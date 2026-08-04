@@ -3325,6 +3325,50 @@ async def handle_navigate(client, biz, action) -> Dict:
     }
 
 
+async def handle_search_ledger(client, biz, action) -> Dict:
+    """"Show me every time you touched that client's invoices in July."
+
+    THE GUIDE, BOUND TO CHIEF. The filter mechanics existed and worked;
+    what was missing was being able to ask for them in the language
+    people actually use.
+
+    CHIEF IS GIVEN NO ROW CONTENTS, and that is the entire design. It
+    receives a count and a description of the FILTER, then the reader is
+    sent to History to read the rows themselves. Handing Chief the rows
+    would make it the thing that says "nothing unusual happened there" —
+    a conclusion the reader has to reach alone, and the one sentence a
+    ledger exists to stop software from producing on your behalf.
+
+    So the restraint is structural at both layers: the navigator's model
+    never sees a row, and Chief never sees one either.
+    """
+    question = (action.get("question") or action.get("query") or "").strip()
+    if not question:
+        return _fail("search_ledger", "Ask what you're looking for")
+    try:
+        import audit_log
+        out = audit_log.run_navigation(
+            biz["id"], question[:500],
+            actor_type="chief", actor_id="chief",
+            authorized_by="ledger_read")
+    except Exception as e:
+        return _fail("search_ledger", f"Could not search the ledger: {e}")
+
+    count = int(out.get("count") or 0)
+    desc = out.get("description") or "that search"
+    f = out.get("filter") or {}
+    return {
+        "type": "search_ledger",
+        # A count and a filter. Never the rows.
+        "result": {"count": count, "description": desc, "filter": f},
+        "label": (f"{count} record{'' if count == 1 else 's'} — {desc}"
+                  if count else f"No records — {desc}"),
+        # Land them on the rows, pre-filtered, so the reading happens in
+        # the surface built for it rather than in a chat bubble.
+        "nav": {"tab": "operate", "sub": "history", "ledgerFilter": f},
+    }
+
+
 async def handle_set_chat_window(client, biz, action) -> Dict:
     """Pass-through — the frontend opens/closes the chat WINDOW. With
     keep_talking=true the voice conversation continues while the window
@@ -10576,6 +10620,7 @@ ACTION_HANDLERS = {
     "generate_briefing":     handle_generate_briefing,
     "generate_insights":     handle_generate_insights,
     "navigate":              handle_navigate,
+    "search_ledger":         handle_search_ledger,
     "set_chat_window":       handle_set_chat_window,
     "create_course":         handle_create_course,
     "enroll_student":        handle_enroll_student,
@@ -13783,11 +13828,18 @@ ACTIONS — GROWTH OBJECTIVES (the Growth Timeline):
     — spawns.modules / spawns.workflows: ONLY pass slugs you know exist from CONTEXT (the growth block or module list). Unknown slugs are silently skipped server-side — never promise a module/workflow spawn you aren't sure of. Milestones are always safe.
     — After it lands, the result label reports what was spawned — narrate that and point them to GROW → Timeline to watch it.
 
+ACTIONS — THE RECORD:
+  [ACTION:{{"type":"search_ledger","question":"<what they asked, in their words>"}}]
+  — "When did you last touch that client's invoices?", "what failed in March?", "show me everything that happened to Maria in July". Turns the question into a filter over the action ledger and opens OPERATE → History on those rows.
+  — YOU ARE NOT GIVEN THE RECORDS. The result is a COUNT and a description of the filter — nothing else — and that is deliberate. Say how many were found and that they are on screen. NEVER characterise what the records show, never say whether anything looks normal, wrong, suspicious or fine. The practitioner (or their auditor) reads them and draws the conclusion. That is the entire point of an audit trail: if the software tells you what it means, it is not evidence any more.
+  — If the count is 0, say plainly that nothing matched that search. Do not speculate about why, and do not reassure them that means nothing happened.
+  — History asks for a password before it opens, even though they are signed in. That is expected — it is the one surface that shows everything at once. Say so calmly if they ask.
+
 ACTIONS — NAVIGATION + MEMORY:
   [ACTION:{{"type":"navigate","tab":"home|operate|grow|build","sub":"<sub-tab-optional>","contact_id":"<uuid-optional>","page":"<build-page-optional>"}}]
   — You can take the practitioner ANYWHERE in the system. The full destination map:
     • tab:"home" — the Home dashboard / command center (no sub). "Take me home", "back to my dashboard".
-    • tab:"operate" subs: dashboard | queue | contacts | email | sms | projects | calendar | invoices | payments | bookkeeping | tasks | documents | agents | offerings-manager
+    • tab:"operate" subs: dashboard | queue | contacts | email | sms | projects | calendar | invoices | payments | bookkeeping | tasks | documents | agents | history | offerings-manager
     • tab:"grow" subs: dashboard | briefing | insights | goals | revenue | retention | reviews | content | funnel | timeline
     • tab:"build" pages (use "page", not "sub"): strategy-track | course-studio | business-profile | about-me | foundation-track | brand | media-library | print-materials | my-site | link-page | booking | intake-forms | custom-modules | module-builder | social-media | email-templates | resources | products | analytics | integrations | settings | module:<uuid>
   — Pick the closest destination even for indirect asks ("where do I change my colors?" → build/brand; "I want to text a client" → operate/sms; "show me my website" → build/my-site).
