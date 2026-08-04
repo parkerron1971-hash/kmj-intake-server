@@ -506,6 +506,10 @@ def _z(ts: Optional[str]) -> Optional[str]:
     return f"{day}T{clock}Z" if clock else f"{day}T00:00:00Z"
 
 
+class _AnchorBody(BaseModel):
+    business_id: str
+
+
 class _NavBody(BaseModel):
     business_id: str
     question: str
@@ -687,6 +691,77 @@ def export_ledger(request: Request, biz: str, format: str = "pdf",
     return Response(
         content=pdf, media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{base}.pdf"'})
+
+
+@router.get("/anchors")
+def list_anchors(request: Request, biz: str,
+                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """The receipts, and an honest word about what they are worth.
+
+    `independent` is the whole story of this endpoint. A local anchor
+    sits inside exactly the trust boundary a skeptic is questioning, so
+    it proves nothing they must accept. Returning that as a flag rather
+    than leaving the UI to compare provider strings is what stops a
+    staging anchor being rendered as evidence.
+    """
+    _require_ledger_read(biz, user)
+    ledger_unlock.require_unlock(request, user.id)
+    import ledger_anchor
+    rows = sb_clients.sb_get_as_service(
+        f"/ledger_anchors?business_id=eq.{biz}"
+        f"&select=first_sequence,last_sequence,row_count,merkle_root,"
+        f"algorithm,provider,provider_ref,anchored_at"
+        f"&order=last_sequence.desc&limit=50") or []
+    for r in rows:
+        r["independent"] = ledger_anchor.is_independent(r.get("provider") or "")
+    return {"ok": True, "anchors": rows, "count": len(rows),
+            "any_independent": any(r["independent"] for r in rows)}
+
+
+@router.get("/proof")
+def ledger_proof(request: Request, biz: str, sequence: int,
+                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Prove one record sits under a published root.
+
+    Returns the leaf, the sibling path, the root and the public
+    reference — everything needed to rebuild the root independently and
+    nothing that has to be taken on trust. `root_matches` is reported
+    rather than repaired: a proof endpoint that quietly re-roots when
+    the rows have moved is not a proof endpoint.
+    """
+    _require_ledger_read(biz, user)
+    ledger_unlock.require_unlock(request, user.id)
+    import ledger_anchor
+    return ledger_anchor.proof_for(biz, int(sequence))
+
+
+@router.post("/anchor")
+def create_anchor(request: Request, body: _AnchorBody,
+                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Anchor everything hashed since the last one. Owner-only.
+
+    Publishing a commitment on a practice's behalf is not a seat-level
+    action — it is the owner asserting "this is our record as of now",
+    and it cannot be undone once a real provider has it.
+    """
+    row = _require_ledger_read(body.business_id, user)
+    ledger_unlock.require_unlock(request, user.id)
+    if str(row.get("owner_id")) != str(user.id):
+        raise HTTPException(403, "Only the owner can anchor the ledger.")
+    import ledger_anchor
+    out = ledger_anchor.anchor_business(body.business_id)
+    if out.get("anchored"):
+        try:
+            record(body.business_id, actor_type="user", actor_id=str(user.id),
+                   verb="ledger:anchored",
+                   summary=(f"Anchored records #{out['first_sequence']}"
+                            f"-#{out['last_sequence']}"),
+                   payload={"merkle_root": out["merkle_root"],
+                            "provider": out["provider"]},
+                   authorized_by="owner")
+        except Exception:
+            pass
+    return out
 
 
 @router.get("/verify")
