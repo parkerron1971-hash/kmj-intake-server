@@ -191,7 +191,7 @@ This is what keeps Stage 5 reachable (below).
 
 ---
 
-## Stage 5 — anchoring (designed, not built)
+## Stage 5 — anchoring (BUILT 2026-08-04, except the public provider)
 
 The honest gap in a private hash chain: a determined skeptic can argue we
 control the whole database and could have rebuilt the chain wholesale.
@@ -211,20 +211,53 @@ the proof path never had to be stored. The spec correctly identified the
 proof path as the one thing painful to retrofit; freezing the canonical form
 in Stage 2 is what closed it.
 
-**What remains to build, when it is worth it:**
+**What is built** (`ledger_anchor.py`, `APPLY-2026-08-04-ledger-anchors.sql`):
 
-- **Batching.** A deterministic window — `(business_id, date)` or a sequence
-  range — rolled into one Merkle root. Deterministic so the same window
-  always yields the same root.
-- **Anchor record.** `ledger_anchors (business_id, window_start, window_end,
-  first_sequence, last_sequence, merkle_root, provider, provider_ref,
-  anchored_at)`. The receipt lives with us; the root lives publicly.
-- **Proof endpoint.** Given a row: recompute the leaf, walk siblings to the
-  root, return the path plus the public reference. The client can verify
-  without trusting us.
-- **Provider-agnostic interface.** Same discipline as `payments_core`: an
-  `anchor(root) -> receipt` seam with Hedera as the first adapter, not a
-  hard-wired dependency.
+- **Batching.** The window is "every hashed row after the previous anchor's
+  `last_sequence`". Deterministic by construction, because rows are
+  immutable — the same window always yields the same root, and re-running
+  with nothing new is a no-op rather than a duplicate receipt. Rows with no
+  `row_hash` are excluded by query, not skipped, so first/last sequence stay
+  honest about what the root covers.
+- **Anchor record.** `ledger_anchors`, append-only like the rest (UPDATE,
+  DELETE and TRUNCATE all raise) and with **no FK to businesses**, for the
+  same reason `ledger_chain_state` has none: the receipt must outlive an
+  erased tenant or erasure would destroy the evidence that the erasure was
+  declared.
+- **Proof endpoint.** `GET /audit/proof?biz=&sequence=` returns the leaf's
+  `row_hash`, the sibling path, the root and the public reference —
+  everything needed to rebuild the root independently, nothing that must be
+  taken on trust. `root_matches` is *reported, never repaired*: an endpoint
+  that quietly re-roots when the rows have moved is not a proof endpoint.
+- **Provider seam.** `anchor(root) -> (ref, error)`. A failed publish writes
+  **no receipt** — a row here asserts a proof exists, and writing one when
+  publication failed would make the table lie in the one direction it must
+  not.
+
+**Two decisions that make this a proof rather than a shape:**
+
+*Domain separation.* Leaves hash with a `0x00` prefix, internal nodes with
+`0x01`. Without it a Merkle tree admits a second-preimage attack — an
+internal node can be presented as a leaf, producing a valid path for data
+that was never in the tree. One byte, and omitting it is the classic way to
+build a proof system that proves the wrong thing.
+
+*Odd levels promote, they do not duplicate.* Duplicating the last node
+(Bitcoin's shape) makes a tree of N and a tree of N+1 whose last row is a
+copy produce the **same root**. Two different histories sharing a root is a
+real ambiguity in a system whose claim is "this is exactly what happened".
+
+Verified by proving every row in every window size from 1 to 64, and against
+real production rows.
+
+**What is NOT built: a public provider.** The default is `local`, which
+records the root here and publishes nothing. That sits inside exactly the
+trust boundary a skeptic is questioning, so **it proves nothing they must
+accept** — it is a staging step, and `is_independent` is a property of the
+provider precisely so no surface has to compare provider strings to work
+that out. The verify banner says so in those words. Turning on real
+anchoring means writing one adapter and setting `LEDGER_ANCHOR_PROVIDER`;
+it is a config change, not a design change.
 
 **Never publish business data — only a fingerprint.** The public network
 holds proof of non-alteration and nothing else.
