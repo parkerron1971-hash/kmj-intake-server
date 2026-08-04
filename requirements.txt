@@ -35,3 +35,10 @@ pytest>=8.0.0
 # inbound webhook signature validation (RequestValidator).
 twilio>=9.0.0
 playwright==1.61.0
+
+# Stage 5 anchoring — publishing a ledger fingerprint to Bitcoin via
+# OpenTimestamps. Chosen over a paid network because it needs NO account,
+# NO credentials and NO fees, and because an auditor verifies the result
+# with the standard `ots verify` tool rather than with anything we wrote.
+# Pure Python, no native build step on Railway.
+opentimestamps>=0.4.5

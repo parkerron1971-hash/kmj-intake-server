@@ -191,7 +191,7 @@ This is what keeps Stage 5 reachable (below).
 
 ---
 
-## Stage 5 — anchoring (BUILT 2026-08-04, except the public provider)
+## Stage 5 — anchoring (BUILT 2026-08-04, publishing to Bitcoin)
 
 The honest gap in a private hash chain: a determined skeptic can argue we
 control the whole database and could have rebuilt the chain wholesale.
@@ -250,14 +250,48 @@ real ambiguity in a system whose claim is "this is exactly what happened".
 Verified by proving every row in every window size from 1 to 64, and against
 real production rows.
 
-**What is NOT built: a public provider.** The default is `local`, which
-records the root here and publishes nothing. That sits inside exactly the
-trust boundary a skeptic is questioning, so **it proves nothing they must
-accept** — it is a staging step, and `is_independent` is a property of the
-provider precisely so no surface has to compare provider strings to work
-that out. The verify banner says so in those words. Turning on real
-anchoring means writing one adapter and setting `LEDGER_ANCHOR_PROVIDER`;
-it is a config change, not a design change.
+### The public provider: OpenTimestamps → Bitcoin
+
+Chosen over a paid ledger for one reason that outranks cost: **the auditor
+verifies with a tool we did not write.** The output is a standard `.ots`
+file, checked with the public `ots verify` client against the Bitcoin
+blockchain. A proof only our own code can validate is worth very little.
+
+It also needs no account, no credentials and no fees, so switching it on was
+never a commercial decision.
+
+**Three states, and they are not the same thing.** The surfaces must never
+round them together:
+
+| State | What it means |
+|---|---|
+| `local` | Recorded here, published nowhere. Inside the very trust boundary a skeptic is questioning, so it proves nothing they must accept. A staging step. |
+| `submitted` | At independent calendar servers, which have committed to including it. It has left our control — real, and weaker than the next row. |
+| `confirmed` | The commitment is in a Bitcoin block. The root is now provably older than that block, and no party — us included — can backdate it. |
+
+Bitcoin aggregation takes hours, so `submitted` is the normal state for a
+while. The banner says "waiting to be written into Bitcoin" rather than
+letting it borrow the credibility of `confirmed`.
+
+**Redundancy.** The root goes to three calendars. One unreachable server must
+not cost a practice its anchor, and the proof is valid if any single calendar
+honours it. If *every* calendar fails, `anchor()` returns an error and **no
+receipt is written** — a row here asserts a proof exists.
+
+**Upgrades are never written back.** `ledger_anchors` is append-only, so the
+stored receipt can never be rewritten — and does not need to be. A pending
+proof already carries everything needed to fetch its Bitcoin attestation, so
+`proof_status()` recomputes the current state on each read. The receipt stays
+immutable and the answer stays current, which would otherwise be in tension.
+
+**`GET /audit/anchor.ots?biz=&sequence=`** hands over the proof file. That
+route is the point of the whole stage: an auditor runs `ots verify` against
+Bitcoin, and nothing in that check involves our code, our servers, or our
+good faith.
+
+Enabled with `LEDGER_ANCHOR_PROVIDER=opentimestamps`. Unset, it falls back to
+`local` — so a missing env var degrades to "we published nothing", never to a
+false claim of independence.
 
 **Never publish business data — only a fingerprint.** The public network
 holds proof of non-alteration and nothing else.
