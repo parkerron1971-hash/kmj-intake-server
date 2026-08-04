@@ -42,6 +42,7 @@ from business_profile_router import router as business_profile_router
 from practitioner_profile_router import router as practitioner_profile_router
 from brand_engine_router import router as brand_engine_router
 from voice_depth_router import router as voice_depth_router
+from strategy_router import router as strategy_router
 # Access-Enforcement 25a (Fork 25) — locked restricted-module entries (e.g. Giving)
 from restricted_modules import router as restricted_router
 from workflow_router import router as workflow_router
@@ -211,6 +212,8 @@ from sms_routing import router as sms_routing_router
 app.include_router(sms_routing_router)
 app.include_router(brand_engine_router)
 app.include_router(voice_depth_router)
+# THE OBSERVATORY — research a card (docs/STRATEGY_ROOM.md phase 3c)
+app.include_router(strategy_router)
 app.include_router(restricted_router)
 app.include_router(workflow_router)
 app.include_router(growth_objective_router)
