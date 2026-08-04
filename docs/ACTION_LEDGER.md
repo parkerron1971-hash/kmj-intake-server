@@ -240,11 +240,33 @@ All three items previously listed here are fixed.
 
 ## Still open
 
-Nothing on the ledger arc. `AUDITOR_LINK_SECRET` was set on Railway
-2026-08-03, at the free moment — `auditor_links` held zero rows, so nothing
-had been signed with the `MCP_TOKEN_SECRET` fallback. Note for later:
-changing that key now invalidates every outstanding link, because the secret
-is what the signature is checked against.
+`AUDITOR_LINK_SECRET` was set on Railway 2026-08-03, at the free moment —
+`auditor_links` held zero rows, so nothing had been signed with the
+`MCP_TOKEN_SECRET` fallback. Note for later: changing that key now
+invalidates every outstanding link, because the secret is what the signature
+is checked against.
+
+- **The chain tip can be pushed FORWARD** (found in the post-arc audit,
+  2026-08-03). `ledger_tip_forward_only` makes `last_sequence` monotonic, so
+  it cannot be rolled back — but nothing bounds how far forward it may go.
+  Setting a tenant's tip to a large number makes `ledger_verify` report
+  *"the ledger ends at #2 but the chain tip is #999999 - records were
+  removed"* on a ledger from which nothing was removed.
+
+  Deliberate in origin — the tip stays writable so the legitimate repair
+  path (rebuilding it from the rows) works — and it is the *loud*
+  direction: it cannot conceal anything, only raise a false alarm, and it
+  needs `service_role`. But a false accusation of tampering is a real harm
+  in a system whose product is trust, and it is indistinguishable from the
+  genuine article. Bounding the tip to `max(sequence)` for the tenant would
+  close it at the cost of a subquery per insert. **Kevin's call.**
+
+- **One test row is permanently in a real ledger.** `ledger:selftest`
+  ("stage1 proof") sits at sequence 5 of *KMJ Creative Solutions* — our own
+  business, not a customer's. Append-only means it cannot be removed, and it
+  is the only row in production with `verb_registered=false`. Harmless, but
+  it will appear in that practice's History panel forever. The lesson is the
+  one already recorded: rehearse on a throwaway tenant, never on a real one.
 
 ## Open rulings
 
