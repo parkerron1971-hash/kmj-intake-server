@@ -714,8 +714,50 @@ def list_anchors(request: Request, biz: str,
         f"&order=last_sequence.desc&limit=50") or []
     for r in rows:
         r["independent"] = ledger_anchor.is_independent(r.get("provider") or "")
+        # Recomputed per request, never stored: the receipt is
+        # append-only and a pending proof already carries everything
+        # needed to find its Bitcoin attestation later.
+        st = ledger_anchor.proof_status(r.get("provider_ref"))
+        r["state"] = st["state"]
+        r["confirmed"] = st["confirmed"]
+        r["bitcoin_block"] = st.get("bitcoin_block")
+        # The blob is large and useless in a list; it has its own route.
+        r.pop("provider_ref", None)
     return {"ok": True, "anchors": rows, "count": len(rows),
-            "any_independent": any(r["independent"] for r in rows)}
+            "any_independent": any(r["independent"] for r in rows),
+            "any_confirmed": any(r["confirmed"] for r in rows)}
+
+
+@router.get("/anchor.ots")
+def download_ots(request: Request, biz: str, sequence: int,
+                 user: AuthedUser = Depends(require_user)):
+    """The proof file, for verifying WITHOUT us.
+
+    This is the point of the whole stage. An auditor runs
+
+        ots verify ledger-anchor.ots
+
+    against Bitcoin using the public OpenTimestamps client, and nothing
+    in that check involves our code, our servers or our good faith. A
+    proof only we can validate would be worth very little.
+    """
+    import base64
+    _require_ledger_read(biz, user)
+    ledger_unlock.require_unlock(request, user.id)
+    rows = sb_clients.sb_get_as_service(
+        f"/ledger_anchors?business_id=eq.{biz}"
+        f"&first_sequence=lte.{int(sequence)}&last_sequence=gte.{int(sequence)}"
+        f"&select=provider,provider_ref,first_sequence,last_sequence&limit=1") or []
+    if not rows or not rows[0].get("provider_ref"):
+        raise HTTPException(404, "No published proof covers that record yet.")
+    try:
+        blob = base64.b64decode(rows[0]["provider_ref"])
+    except Exception:
+        raise HTTPException(500, "The stored proof could not be decoded.")
+    name = f"ledger-anchor-{rows[0]['first_sequence']}-{rows[0]['last_sequence']}.ots"
+    from fastapi.responses import Response as _R
+    return _R(content=blob, media_type="application/octet-stream",
+              headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @router.get("/proof")

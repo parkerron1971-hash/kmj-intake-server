@@ -232,3 +232,145 @@ def test_the_table_is_locked_to_anon_and_authenticated():
 def test_the_doc_says_local_proves_nothing():
     flat = " ".join(_SQL.replace("--", " ").split())
     assert "NOT published anywhere independent" in flat
+
+
+# ─── The public provider ─────────────────────────────────────────────
+
+def test_opentimestamps_is_independent_and_local_is_not():
+    """The whole point of the provider seam. `local` records the root
+    inside the system being questioned; OTS puts it at calendar servers
+    we do not run, on its way into Bitcoin."""
+    assert la.is_independent("opentimestamps") is True
+    assert la.is_independent("local") is False
+
+
+def test_it_submits_to_more_than_one_calendar():
+    """One unreachable server must not cost a practice its anchor. The
+    proof is valid if any single calendar honours it."""
+    assert len(la.OpenTimestampsProvider.CALENDARS) >= 3
+
+
+def test_a_non_hex_root_is_refused_before_any_network_call():
+    ref, err = la.OpenTimestampsProvider().anchor("not-a-digest")
+    assert ref is None and "hex" in err
+
+
+def test_every_calendar_failing_yields_no_receipt():
+    """The existing discipline, now with a real provider behind it: an
+    anchor row asserts a proof exists, so a failed publish must return
+    an error rather than a reference."""
+    class AllDown(la.OpenTimestampsProvider):
+        CALENDARS = ("https://127.0.0.1:1",)
+    ref, err = AllDown().anchor("aa" * 32)
+    assert ref is None and err
+
+
+def test_one_reachable_calendar_is_enough(monkeypatch):
+    """Redundancy has to actually degrade gracefully, not all-or-nothing."""
+    import opentimestamps.core.timestamp as ots_ts
+    from opentimestamps.core.notary import PendingAttestation
+    from opentimestamps.core.serialize import BytesSerializationContext
+
+    digest = bytes.fromhex("bb" * 32)
+    good = ots_ts.Timestamp(digest)
+    # A timestamp with no attestation cannot be serialized at all — the
+    # calendar always returns one, so the fixture must too.
+    good.attestations.add(PendingAttestation("https://up.example"))
+    ctx = BytesSerializationContext()
+    good.serialize(ctx)
+    payload = ctx.getbytes()
+
+    calls = {"n": 0}
+
+    def flaky(calendar, d, timeout=15.0):
+        calls["n"] += 1
+        if "down" in calendar:
+            raise OSError("unreachable")
+        return payload
+
+    class Mixed(la.OpenTimestampsProvider):
+        CALENDARS = ("https://down.example", "https://up.example")
+    monkeypatch.setattr(Mixed, "_submit", staticmethod(flaky))
+    ref, err = Mixed().anchor("bb" * 32)
+    assert calls["n"] == 2, "it must try every calendar, not stop at the first failure"
+    assert err is None and ref, "one healthy calendar should still produce a proof"
+
+
+# ─── Proof state, read from the stored receipt ───────────────────────
+
+def test_status_of_no_proof_is_none_not_an_error():
+    assert la.proof_status(None)["state"] == "none"
+    assert la.proof_status("")["state"] == "none"
+
+
+def test_unreadable_proof_says_so_rather_than_claiming_confirmation():
+    """Failing toward 'unreadable' matters: the alternative is a corrupt
+    blob quietly reporting confirmed=False in a way indistinguishable
+    from an honest pending proof."""
+    st = la.proof_status("!!!not-base64!!!")
+    assert st["state"] == "unreadable"
+    assert st["confirmed"] is False
+
+
+def test_a_fresh_proof_is_submitted_not_confirmed():
+    """THE honesty test. Bitcoin aggregation takes hours, so a brand new
+    anchor is at the calendars and NOT yet in a block. Reporting those
+    two states as one would let 'submitted' borrow the credibility of
+    'confirmed'."""
+    import opentimestamps.core.timestamp as ots_ts
+    from opentimestamps.core.op import OpSHA256
+    from opentimestamps.core.notary import PendingAttestation
+    from opentimestamps.core.serialize import BytesSerializationContext
+    import base64
+
+    digest = bytes.fromhex("cc" * 32)
+    ts = ots_ts.Timestamp(digest)
+    ts.attestations.add(PendingAttestation("https://example.calendar"))
+    ctx = BytesSerializationContext()
+    ots_ts.DetachedTimestampFile(OpSHA256(), ts).serialize(ctx)
+    st = la.proof_status(base64.b64encode(ctx.getbytes()).decode())
+
+    assert st["state"] == "submitted"
+    assert st["confirmed"] is False
+    assert st["bitcoin_block"] is None
+    assert st["digest"] == "cc" * 32
+
+
+def test_a_bitcoin_attestation_reads_as_confirmed():
+    import opentimestamps.core.timestamp as ots_ts
+    from opentimestamps.core.op import OpSHA256
+    from opentimestamps.core.notary import BitcoinBlockHeaderAttestation
+    from opentimestamps.core.serialize import BytesSerializationContext
+    import base64
+
+    digest = bytes.fromhex("dd" * 32)
+    ts = ots_ts.Timestamp(digest)
+    ts.attestations.add(BitcoinBlockHeaderAttestation(800000))
+    ctx = BytesSerializationContext()
+    ots_ts.DetachedTimestampFile(OpSHA256(), ts).serialize(ctx)
+    st = la.proof_status(base64.b64encode(ctx.getbytes()).decode())
+
+    assert st["state"] == "confirmed"
+    assert st["confirmed"] is True
+    assert st["bitcoin_block"] == 800000
+
+
+def test_upgrades_are_never_written_back():
+    """The receipt is append-only and must stay that way. proof_status
+    recomputes the current state instead, which is why the table never
+    needs a mutable proof column."""
+    src = (_here.parent / "ledger_anchor.py").read_text(encoding="utf-8")
+    body = src.split("def proof_status(")[1].split("\n_PROVIDERS")[0]
+    assert "sb_post_as_service" not in body
+    assert "sb_patch_as_service" not in body
+
+
+def test_the_proof_file_has_its_own_route():
+    """An auditor verifies with the public `ots` client, against Bitcoin,
+    using nothing we wrote. A proof only our code can check is worth
+    very little."""
+    src = (_here.parent / "audit_log.py").read_text(encoding="utf-8")
+    assert '@router.get("/anchor.ots")' in src
+    body = src.split("def download_ots(")[1].split("\n@router")[0]
+    assert "ledger_unlock.require_unlock(" in body
+    assert "application/octet-stream" in body

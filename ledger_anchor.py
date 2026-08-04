@@ -195,7 +195,140 @@ class LocalProvider(AnchorProvider):
         return None, None
 
 
-_PROVIDERS: Dict[str, AnchorProvider] = {"local": LocalProvider()}
+class OpenTimestampsProvider(AnchorProvider):
+    """Publishes the root to Bitcoin, via the OpenTimestamps calendars.
+
+    WHY THIS AND NOT A PAID LEDGER. It needs no account, no credentials
+    and no fees, so nothing about turning it on is a commercial
+    decision. More importantly the output is a standard `.ots` file: an
+    auditor verifies it with the public `ots verify` tool against the
+    Bitcoin blockchain, not with anything we wrote. A proof that only
+    our own code can check is not much of a proof.
+
+    TWO HONEST STATES, AND THEY ARE NOT THE SAME THING.
+
+      submitted  the root is at independent calendar servers, which
+                 have committed to including it. It has left our
+                 control — real, and weaker than the next line.
+      confirmed  the calendars' commitment is in a Bitcoin block. Now
+                 the root is provably older than that block, and no
+                 party including us can backdate it.
+
+    Bitcoin aggregation takes hours, so `submitted` is the normal state
+    for a while and the surfaces have to say which one they mean rather
+    than rounding both to "anchored".
+
+    REDUNDANCY ON PURPOSE. The root goes to several calendars. One
+    unreachable server must not cost a practice its anchor, and the
+    proof is valid if any single calendar honours it.
+    """
+    name = "opentimestamps"
+    is_independent = True
+
+    CALENDARS = (
+        "https://a.pool.opentimestamps.org",
+        "https://b.pool.opentimestamps.org",
+        "https://finney.calendar.eternitywall.com",
+    )
+
+    def anchor(self, root: str) -> Tuple[Optional[str], Optional[str]]:
+        import base64
+        try:
+            from opentimestamps.core.timestamp import Timestamp, DetachedTimestampFile
+            from opentimestamps.core.op import OpSHA256
+            from opentimestamps.core.serialize import (
+                BytesSerializationContext, BytesDeserializationContext)
+        except ImportError:
+            return None, "the opentimestamps package is not installed"
+
+        try:
+            digest = bytes.fromhex(root)
+        except ValueError:
+            return None, "the root is not a hex digest"
+
+        ts = Timestamp(digest)
+        merged = 0
+        errors = []
+        for cal in self.CALENDARS:
+            try:
+                body = self._submit(cal, digest)
+                ts.merge(Timestamp.deserialize(
+                    BytesDeserializationContext(body), digest))
+                merged += 1
+            except Exception as e:                      # one server down is survivable
+                errors.append(f"{cal}: {type(e).__name__}")
+        if not merged:
+            # No calendar took it, so nothing was published. Returning an
+            # error means no receipt is written — a row here would assert
+            # a proof that does not exist.
+            return None, "no calendar accepted the fingerprint (" + "; ".join(errors) + ")"
+
+        out = BytesSerializationContext()
+        DetachedTimestampFile(OpSHA256(), ts).serialize(out)
+        return base64.b64encode(out.getbytes()).decode("ascii"), None
+
+    @staticmethod
+    def _submit(calendar: str, digest: bytes, timeout: float = 15.0) -> bytes:
+        import urllib.request
+        req = urllib.request.Request(
+            calendar.rstrip("/") + "/digest", data=digest,
+            headers={"Accept": "application/vnd.opentimestamps.v1",
+                     "Content-Type": "application/x-www-form-urlencoded",
+                     "User-Agent": "solutionist-ledger/1.0"})
+        return urllib.request.urlopen(req, timeout=timeout).read()
+
+
+def proof_status(provider_ref: Optional[str]) -> Dict[str, Any]:
+    """Read a stored .ots and say what it currently proves.
+
+    UPGRADES ARE NOT PERSISTED, DELIBERATELY. ledger_anchors is
+    append-only, so the stored receipt can never be rewritten — and it
+    does not need to be. A pending proof carries everything required to
+    fetch the Bitcoin attestation later, so the upgrade is recomputed
+    when someone asks rather than stored. The receipt stays immutable
+    and the answer stays current, which is the combination that would
+    otherwise be in tension.
+    """
+    out: Dict[str, Any] = {"state": "none", "confirmed": False,
+                           "pending_at": [], "bitcoin_block": None}
+    if not provider_ref:
+        return out
+    import base64
+    try:
+        from opentimestamps.core.timestamp import DetachedTimestampFile
+        from opentimestamps.core.serialize import BytesDeserializationContext
+        from opentimestamps.core.notary import (
+            BitcoinBlockHeaderAttestation, PendingAttestation)
+    except ImportError:
+        return {**out, "state": "unreadable",
+                "reason": "the opentimestamps package is not installed"}
+    try:
+        raw = base64.b64decode(provider_ref)
+        det = DetachedTimestampFile.deserialize(BytesDeserializationContext(raw))
+    except Exception:
+        return {**out, "state": "unreadable",
+                "reason": "the stored proof could not be parsed"}
+
+    for _msg, att in det.timestamp.all_attestations():
+        if isinstance(att, BitcoinBlockHeaderAttestation):
+            out["confirmed"] = True
+            out["bitcoin_block"] = int(att.height)
+        elif isinstance(att, PendingAttestation):
+            try:
+                out["pending_at"].append(att.uri.decode() if isinstance(att.uri, bytes)
+                                         else str(att.uri))
+            except Exception:
+                pass
+    out["state"] = ("confirmed" if out["confirmed"]
+                    else "submitted" if out["pending_at"] else "unknown")
+    out["digest"] = det.file_digest.hex()
+    return out
+
+
+_PROVIDERS: Dict[str, AnchorProvider] = {
+    "local": LocalProvider(),
+    "opentimestamps": OpenTimestampsProvider(),
+}
 
 
 def register_provider(p: AnchorProvider) -> None:
