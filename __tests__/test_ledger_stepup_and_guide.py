@@ -310,3 +310,48 @@ def test_an_unclamped_search_keeps_its_original_sentence():
         audit_log.ledger_entries = real_entries
         ledger_navigator.resolve = real_resolve
     assert out["description"] == "SENTINEL"
+
+
+def test_audit_honours_every_filter_the_navigator_can_produce():
+    """Found auditing the seam: the navigator emits `actor` and
+    `subject_id`, but GET /audit — where a reader LANDS after Chief
+    resolves a question — silently dropped both. Chief counted rows with
+    the actor applied, the panel re-fetched without it, and "3 records by
+    chief" opened onto every actor's rows with nothing on screen
+    admitting the constraint had gone.
+    """
+    import inspect
+    import audit_log
+    sig = set(inspect.signature(audit_log.read_audit).parameters)
+    emitted = {"since", "until", "verb", "failed_only",
+               "include_db", "limit", "actor", "subject_id"}
+    assert emitted <= sig, f"/audit cannot express: {sorted(emitted - sig)}"
+
+
+def test_both_readers_share_one_post_filter_implementation():
+    src = (_here.parent / "audit_log.py").read_text(encoding="utf-8")
+    assert src.count("def apply_post_filters(") == 1
+    for caller in ("def read_audit(", "def run_navigation("):
+        body = src.split(caller)[1].split("\n@router")[0]
+        assert "apply_post_filters(" in body, f"{caller} must use the shared filter"
+
+
+def test_the_actor_filter_actually_narrows():
+    import audit_log
+    rows = [
+        {"id": "1", "actor_type": "chief", "actor_id": "chief"},
+        {"id": "2", "actor_type": "user", "actor_id": "u1"},
+    ]
+    assert [r["id"] for r in audit_log.apply_post_filters(rows, "chief", None)] == ["1"]
+    assert len(audit_log.apply_post_filters(rows, None, None)) == 2
+
+
+def test_the_subject_filter_matches_refs_and_legacy_targets():
+    import audit_log
+    rows = [
+        {"id": "1", "subject_refs": [{"type": "contacts", "id": "c-abc"}], "target_id": None},
+        {"id": "2", "subject_refs": [], "target_id": "c-abc"},
+        {"id": "3", "subject_refs": [], "target_id": "other"},
+    ]
+    got = [r["id"] for r in audit_log.apply_post_filters(rows, None, "c-abc")]
+    assert got == ["1", "2"]
