@@ -156,17 +156,66 @@ layer.
 
 ---
 
+## Closed since (2026-08-03)
+
+All three items previously listed here are fixed.
+
+- **The provable tier no longer skips in silence.** `audit_row_change` used
+  to wrap its body in `exception when others then null`, so a held advisory
+  lock plus a timeout produced unlogged writes with no gap, no tombstone and
+  no alert — a ledger that can silently skip is not a ledger. It now **fails
+  closed**: if the ledger row cannot be written, the business write is rolled
+  back with it, which makes "a row exists for every write" true by
+  construction rather than by hope. The underlying error goes to the Postgres
+  log (it survives the rollback); the caller gets a message saying nothing
+  was written, and that message deliberately carries no internal detail
+  because it crosses a tenant boundary. The unreachable "no `business_id` →
+  skip" branch became a raise for the same reason: all eight audited tables
+  declare the column NOT NULL, so the only way to reach it was to attach a
+  ninth table with a nullable tenant — and that mistake should announce
+  itself rather than produce an invisible gap.
+
+  **The cost, stated plainly:** `audit_log` is now on the critical path for
+  writes to those eight tables. That is deliberate. A ledger with holes still
+  gets shown to auditors, so it is worth less than no ledger at all; loud
+  failure is recoverable, silent omission is not. Nothing here is expected to
+  throw in normal operation — lock contention *waits*, it does not error.
+  Verified live against a sentinel tenant: with the ledger write blocked the
+  business write was refused, and four successful writes produced exactly
+  four ledger rows.
+
+- **URL credentials are redacted from the logs.** `access_log_redaction.py`
+  rewrites `uvicorn.access` records before they are formatted, so
+  `/public/audit/<token>` and `/public/store/download/<order>/<token>/<id>`
+  keep their useful prefix and lose the secret. The path is an *arg* at
+  filter time, not the message, so every string arg is scanned rather than
+  the index uvicorn happens to use today. The same scrubber is wired into
+  Sentry's `before_send`: `send_default_pii=False` withholds headers and
+  cookies but *not* the request URL, and for these routes the URL is the
+  whole credential. Installed twice on purpose (import time and app startup)
+  because uvicorn's logging `dictConfig` replaces a logger's filter list, and
+  a control whose failure mode is silence should not depend on start order.
+  **This does not make a token-in-a-URL safe** — it is still in the auditor's
+  browser history and in any intermediary that logs paths for us. It closes
+  the copy we are responsible for.
+
+- **`/account/export` no longer returns record contents.** It was the last
+  surface doing `select=*` on `audit_log`, which handed back `payload` and
+  `result`. It now reads through `LEDGER_EXPORT_SELECT` (= `LEDGER_SELECT`
+  plus `prev_hash`, `row_hash`, `redacted_at`). Scoped rather than excused:
+  the invariant is only worth having if it has no quiet exceptions, and the
+  owner loses nothing, because the tables those copies were made *from*
+  travel in the same document under their own names. The hash columns are
+  the point of an export — the practitioner can hand the file to someone who
+  verifies the chain without us.
+
 ## Still open
 
-- **`audit_row_change` swallows every exception**, so a held advisory lock
-  could produce unlogged writes with no gap and no alert. A ledger that can
-  silently skip is not a ledger.
-- **The auditor token appears in server access logs.** Needs a log filter or
-  a move off the URL.
-- **`/account/export` returns `audit_log.*`** including `payload`. Owner-only
-  and arguably intended for portability, but it contradicts the invariant
-  stated above and should be either scoped or explicitly documented as an
-  exception.
+- **`AUDITOR_LINK_SECRET` is not set on Railway.** It falls back to
+  `MCP_TOKEN_SECRET`, so rotating agent credentials would silently
+  invalidate every live audit link. Kevin's to set.
+- **The auditor token still lives in the URL.** Log redaction is mitigation;
+  moving the credential off the path is the real fix.
 
 ## Open rulings
 

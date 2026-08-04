@@ -86,6 +86,14 @@ from agents.chief_executive.router import router as chief_executive_router
 # Pass 4.0g — Multi-module composition (Cathedral + Studio Brut + Module Router)
 from agents.composer.router import router as composer_router
 
+# Two route families carry a bearer credential as a URL path segment
+# (auditor read links, store downloads), so the access log was recording
+# working credentials. Installed at IMPORT time rather than under
+# __main__: Railway starts uvicorn from the CLI, where __main__ never
+# runs but this module is always imported.
+from access_log_redaction import install as _install_log_redaction, scrub_sentry_event
+_install_log_redaction()
+
 # Arc 29 — error tracking. Env-gated: no-op until SENTRY_DSN is set on
 # Railway, then every unhandled exception + slow request is captured.
 # Optional dependency (sentry-sdk in requirements); import guarded so a
@@ -98,6 +106,11 @@ if os.environ.get("SENTRY_DSN"):
             traces_sample_rate=float(os.environ.get("SENTRY_TRACES_RATE", "0.0")),
             environment=os.environ.get("RAILWAY_ENVIRONMENT", "production"),
             send_default_pii=False,  # never ship customer PII to Sentry
+            # send_default_pii=False withholds headers and cookies but NOT
+            # the request URL, and for those two routes the URL is the
+            # credential. Without this, switching error tracking on would
+            # ship live audit links to a third party.
+            before_send=scrub_sentry_event,
         )
         print("   Sentry error tracking: ON")
     except Exception as _e:
@@ -774,6 +787,16 @@ scheduler = AsyncIOScheduler()
 
 @app.on_event("startup")
 async def startup():
+    # Re-arm the URL-credential redaction. The import-time install above
+    # is the one that matters under the uvicorn CLI (logging is
+    # configured before the app module is imported), but uvicorn applies
+    # its logging dictConfig to the `uvicorn.access` logger, and
+    # dictConfig REPLACES a logger's filter list. If the two ever run in
+    # the other order the filter would be silently dropped — and a
+    # security control whose failure mode is silence gets a second,
+    # order-independent install. It is idempotent.
+    _install_log_redaction()
+
     # Arc 29 — leader election. renew_tick runs on EVERY replica and
     # refreshes the lease; all other jobs are wrapped with .gate() so
     # they execute on the single leader only. Single-replica deploys are
