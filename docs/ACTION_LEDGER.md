@@ -34,11 +34,116 @@ writes a tombstone **before** removing anything.
 | The evaluator | `policy_engine.py` — produces `authorized_by` |
 | Write helper | `audit_log.record()` — never sets `sequence`/`prev_hash`/`row_hash`; the database does |
 | Verification | `ledger_verify()` + `GET /audit/verify` + `LedgerVerifyBanner.tsx` |
+| Step-up | `ledger_unlock.py` + `POST /audit/unlock`; client half in `ledgerUnlock.ts` + `LedgerLock.tsx` |
+| Auditor links | `auditor_links.py` (mint / verify / revoke / session) + `auditor_portal.py` (the pages) |
+| The guide | `ledger_navigator.py` (question → filter) + `audit_log.run_navigation()` (the one shared path) |
+| Chief's binding | `handle_search_ledger` — returns a count and a filter, never rows |
+| Log hygiene | `access_log_redaction.py` — keeps URL credentials out of access logs and Sentry |
 
 ### The six fields
 `created_at` (UTC, ms) · `business_id` (never null) · `actor_id` + `actor_type`
 · `verb` (controlled vocabulary) · `subject_refs` (`[{type,id}]`, GIN-indexed)
 · `authorized_by` (the rule, not the actor).
+
+---
+
+## The access point
+
+There are **three doors** into a ledger and they never share a credential.
+That is the design: an outsider must never need an account, and an
+account must never be the thing an outsider borrows.
+
+| Door | Who | Credential | Where it ends |
+|---|---|---|---|
+| **The app** | Owner, any active seat (viewer and up), active accountant collaborators | Supabase JWT **plus a fresh password confirmation** | OPERATE → History |
+| **The link** | An outside auditor, accountant or regulator with no account and no reason to get one | A signed, scoped, expiring token that becomes a cookie | `/public/audit/view` |
+| **The file** | Anyone the practitioner hands it to — a board, an insurer, opposing counsel | None. It is a document. | CSV / PDF / JSON |
+
+### Door 1 — the app, behind step-up
+
+Signing in is not enough. History re-asks for the account password and
+holds that for **15 minutes**.
+
+The threat is not a stolen password, it is an **open session**: a laptop
+left unlocked, a front-desk machine, a browser someone walked away from.
+Every other surface leaks a page at a time; History is who did what, to
+which client, across the whole business, at once.
+
+`POST /audit/unlock` re-proves the password against Supabase (never
+trusting the browser's word for it) and returns a 15-minute HMAC token.
+Every ledger call carries it in `X-Ledger-Unlock`. The refusal is
+`403 {code: "ledger_locked"}` — machine-readable on purpose, so the UI
+can tell *"confirm your password"* apart from *"you may never read
+this"*. Showing a password box to someone who will never be let in is
+its own small cruelty; showing "access denied" to someone who just needs
+to type their password is worse.
+
+The token lives **in memory, never `localStorage`** — persisting it
+would hand the walk-up attacker the very proof they were being asked
+for, and would outlive the tab that earned it. A reload re-prompts, and
+that is correct rather than a rough edge.
+
+Gated: read, verify, export, navigate, mint, redact. **Not gated:
+revocation** — it only ever *reduces* access and it is what you reach
+for when a link has leaked. A password prompt between a practice and
+cutting off a live auditor is a control that hurts the person it exists
+to protect.
+
+Both the unlock **and the failed unlock** are ledger rows. Opening the
+record joins the record.
+
+Two things it is not, stated so nobody sells it as more:
+* **Not a second factor.** Whoever holds the password can complete it.
+  It narrows the window on an unattended session; that is the whole claim.
+* **It does not narrow the audience.** Viewers and accountants still
+  qualify to read. Step-up puts a prompt in front of that audience.
+  Whether the audience should be smaller is a separate, open decision.
+
+### Door 2 — the link, which stops being a URL
+
+The owner mints a link scoped to a **date window** and a lifetime (30
+days default, 180 max). The window and the scope ride **inside the
+signature**, so a tampered URL cannot widen what it may see.
+
+`/public/audit/{token}` is an **entry** route, not a page. It resolves
+the link, sets a cookie and `303`s to `/public/audit/view`. The
+token-bearing URL renders no body, loads no asset, and never reaches the
+address bar — so what survives in browser history, in a bookmark, in a
+screenshot or over a shoulder is a URL that grants nothing.
+
+Cookie: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/public/audit`, and
+never longer-lived than the link itself. Lax rather than Strict because
+the auditor arrives by clicking a link in an email client, and Strict
+withholds the cookie on exactly that navigation.
+
+**Revocation reaches the cookie.** Every request re-checks the link's
+`revoked_at`, because a session that outlived a revoked link would turn
+"revoke" into "revoke in twelve hours".
+
+Every view is a ledger row. The auditor's reading is part of the record
+they are reading — the Etherscan idea inverted: not public to everyone,
+but accountable to the practice.
+
+### Signing, and why the domains matter
+
+Three credential types share one key (`AUDITOR_LINK_SECRET`), separated
+by **HMAC domain**:
+
+| Credential | Domain prefix | Lives |
+|---|---|---|
+| Auditor link | *(none — the original)* | 30–180 days, in the URL once |
+| Portal session | `auditor-session-v1\|` | ≤12h, cookie |
+| Ledger unlock | `ledger-unlock-v1\|` | 15 min, request header |
+
+Without distinct domains a cookie would verify as a link, or an unlock
+as either — one credential type silently becoming another with a
+different reach. Pinned by a test that forges a payload satisfying
+*both* field shapes at once, because the obvious version of that test
+passes on field shape alone and would keep passing with the separation
+deleted.
+
+**Changing that key invalidates every outstanding link**, since the
+secret is what the signature is checked against.
 
 ---
 
@@ -126,6 +231,65 @@ holds proof of non-alteration and nothing else.
 
 Positioning: opt-in premium for practices whose stakes justify it. Not base
 layer.
+
+---
+
+## The guide — AI that finds, never AI that concludes
+
+The rule: **the software finds and filters; the human concludes.** An
+auditor is precisely the reader who must not be handed a verdict, and a
+ledger whose software tells you what it means has stopped being
+evidence.
+
+That restraint is **structural, not a prompt instruction**. The model
+receives the question and the 204-verb vocabulary. It returns a
+**filter** — date range, verb, actor, subject. It never receives a row.
+It cannot summarise records it was never given, and no clever question
+talks it past that, because there is nothing to talk past.
+
+Three surfaces run through **one** function, `audit_log.run_navigation`:
+
+| Asked from | Gate | Records |
+|---|---|---|
+| History's search box | seat ladder + step-up | `ledger:searched` |
+| The auditor portal | signed session, metered per link | `ledger:searched`, actor `auditor:{jti}` |
+| Chief, in conversation | seat ladder + step-up | `ledger:searched` |
+
+One function on purpose: a second copy is how this property holds on one
+surface and quietly rots on the other.
+
+**The signed window clamps the model.** On an auditor link the filter
+comes from free text an outsider typed, so `run_navigation` intersects
+it with the link's window — a later start wins, an earlier end wins.
+Without that, *"everything from last year"* on a link scoped to one
+quarter would widen the link, and the model would have become the
+access-control decision.
+
+**And the sentence must describe the search that actually ran.** Found
+by driving the live portal: a January-scoped link asked for "everything
+from the last two years" correctly returned zero rows, under the
+sentence *"Showing everything recorded since 2022-07-01."* The clamp was
+right and the sentence was a lie — an auditor would take away "nothing
+happened in two years" from a search that covered one month. The
+description is now regenerated from the **final** filter and the
+narrowing is stated out loud. **Rule: when a filter is modified after
+the model described it, the description is regenerated. Never report the
+requested filter as the applied one.**
+
+**Chief is given a count and a filter, never rows.** Ask *"when did you
+last touch that client's invoices?"* and History opens on them. Hand
+Chief the rows and it becomes the thing that says "nothing unusual
+happened there" — the one conclusion the reader has to reach alone. The
+handler is pinned by a test asserting `entries` never appears in it, and
+the prompt says so in those terms.
+
+**The ledger verb is `sensitive`, so it never reaches the MCP agent
+surface.** Exposure there is *derived* from `read` classification, so
+adding this verb silently put the audit trail on the agent surface — and
+a long-lived agent token would have been the way around the step-up
+shipped in the same commit. Caught by the exposure-count tripwire.
+Read-ness asks "can this break anything"; sensitivity asks "may a third
+party see it".
 
 ---
 
@@ -280,6 +444,27 @@ All three items previously listed here are fixed.
   because a query inside a plpgsql trigger runs under a fresh
   command-counter snapshot.
 
+- **Step-up, the auditor's guide, and Chief's binding** (2026-08-04, BE#402
+  / FE#306 / BE#403). Described in *The access point* and *The guide* above.
+  Three notes worth keeping with the change record rather than the design:
+
+  A **separate ledger password was rejected**, not overlooked. Same as the
+  account password it is friction without protection; a new secret needs a
+  reset path, and whoever can reset it from inside a signed-in session is
+  the very attacker it was meant to stop. It would also be a thing a
+  practitioner can lose, locking them out of their own audit trail.
+
+  `GET /audit` **ignored `since`/`until`** until this arc — Chief's filter
+  would have had its date range dropped while the panel claimed to show a
+  window. A quiet wrong answer is the one kind a ledger surface must never
+  give.
+
+  Verified end to end **against production with a real signed-in user**, not
+  only in tests: locked without an unlock, wrong password refused, correct
+  password opens all five surfaces, forged token refused, **another user's
+  valid unlock refused**, and the same payload signed in the auditor-link
+  domain refused. Unit tests cannot prove the browser contract; that can.
+
 ## Still open
 
 `AUDITOR_LINK_SECRET` was set on Railway 2026-08-03, at the free moment —
@@ -288,6 +473,11 @@ All three items previously listed here are fixed.
 invalidates every outstanding link, because the secret is what the signature
 is checked against.
 
+- **The ledger's audience is still wide.** The read gate admits the owner,
+  any active seat from viewer up, and active accountant collaborators.
+  Step-up puts a password prompt in front of that audience; it does not
+  shrink it. Whether a viewer seat should reach the audit trail at all is
+  an open product decision, deliberately not bundled into the step-up work.
 - **One test row is permanently in a real ledger.** `ledger:selftest`
   ("stage1 proof") sits at sequence 5 of *KMJ Creative Solutions* — our own
   business, not a customer's. Append-only means it cannot be removed, and it
