@@ -264,6 +264,17 @@ app.include_router(approvals_router)
 # Balance surface (2026-07-31) — the drawdown ledger's HTTP layer
 from customer_balances_router import router as customer_balances_router
 app.include_router(customer_balances_router)
+# The Business Track (2026-08-04) — the established-business intake.
+# Serves the day-one plug-in list from the same catalog the Business
+# Coach recommends out of, so the conversation and the BUILD checklist
+# can never disagree about what to switch on next.
+from business_track_router import router as business_track_router
+app.include_router(business_track_router)
+# Bring an existing client list in. /contacts had CSV export and no
+# import; for a business that arrives with people, that was the first
+# wall they hit.
+from contacts_import_router import router as contacts_import_router
+app.include_router(contacts_import_router)
 # Phase H.1 — Accounts Payable (bills + recurring bills)
 from bills_router import router as bills_router
 app.include_router(bills_router)

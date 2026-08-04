@@ -159,6 +159,7 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "growth_milestones",
     "growth_objectives",
     "strategy_tracks",
+    "business_tracks",
     "support_tickets",
     "workflows",
     "workflow_definitions",

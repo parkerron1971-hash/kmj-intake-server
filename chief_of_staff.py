@@ -146,6 +146,9 @@ ANTHROPIC_VERSION = "2023-06-01"
 # conversational tier) is preserved as the draft-lane default.
 import chief_models
 import fallback_brain
+# The Business Track. Safe to import at module scope: everything it needs
+# from here is imported inside its functions, so there is no import cycle.
+import business_track_actions
 CHIEF_MODEL = chief_models.model_for("chat")
 DRAFT_MODEL = chief_models.model_for("draft")
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
@@ -170,6 +173,15 @@ _STREAM_SINK: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
 OPENING_SENTINEL_PREFIX = "[SYSTEM:opening_greeting"  # may have :morning/:afternoon/:evening suffix
 COACH_OPEN_SENTINEL = "[SYSTEM:strategy_coach_open]"
 COACH_PAUSE_SENTINEL = "[SYSTEM:strategy_coach_pause]"
+# The Business Track's coach — the established-business counterpart to the
+# Strategy Coach. Same sentinel contract, its own persona and phases.
+BUSINESS_COACH_OPEN_SENTINEL = "[SYSTEM:business_coach_open]"
+BUSINESS_COACH_PAUSE_SENTINEL = "[SYSTEM:business_coach_pause]"
+# Both coaches get the same treatment everywhere the difference is
+# "is this a coaching persona?" rather than "which coach?" — notably the
+# per-turn operational injectors, which must never reach either of them
+# (the leak class of #153/#164).
+COACH_MODES = ("strategy_coach", "business_coach")
 MAX_ACTIONS_PER_TURN = 10  # safety cap; delegation chains can issue up to this many in one turn
 # Tighter, second cap for SENSITIVE verbs only (action_registry class C —
 # sends, money, hard deletes). MAX_ACTIONS_PER_TURN bounds the whole turn;
@@ -914,6 +926,12 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         _sb(client, "GET",
             f"/strategy_tracks?business_id=eq.{biz_id}"
             f"&order=created_at.desc&limit=1&select=*"),
+        # The Business Track — the established-business counterpart. Loaded
+        # for every request, not just coach mode: the operational Chief uses
+        # it to avoid re-asking what the coach already learned.
+        _sb(client, "GET",
+            f"/business_tracks?business_id=eq.{biz_id}"
+            f"&order=created_at.desc&limit=1&select=*"),
         # Products catalog — Chief uses this to answer pricing questions
         # and pre-fill invoice line items without the practitioner
         # having to repeat themselves.
@@ -947,7 +965,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&select=id,data,created_at,custom_modules!inner(slug)"
             f"&order=created_at.desc&limit=50"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, products, email_replies, sms_messages, project_rows = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, sms_messages, project_rows = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -1102,6 +1120,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "auto_recent": auto_recent,
         "site": (site_rows or [{}])[0] if site_rows else None,
         "strategy_track": (strategy_rows or [None])[0] if strategy_rows else None,
+        "business_track": (business_track_rows or [None])[0] if business_track_rows else None,
         "products": products or [],
         "email_replies": email_replies or [],
         "sms_messages": sms_messages or [],
@@ -10657,6 +10676,11 @@ ACTION_HANDLERS = {
     "save_launch_plan":           handle_save_launch_plan,
     "session_summary":            handle_session_summary,
     "complete_strategy_track":    handle_complete_strategy_track,
+    # Business Track — the established-business coach's own bookkeeping
+    # verbs. Everything it CAPTURES goes through existing write verbs
+    # (create_offering / update_*_profile_field / remember / create_goal);
+    # these four only move the track row itself.
+    **business_track_actions.HANDLERS,
     # Phase-2 operations
     "create_task":                handle_create_task,
     "complete_task":              handle_complete_task,
@@ -13295,9 +13319,14 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          habit_block: str = "",
                          bookkeeping_block: str = "",
                          learned_block: str = "") -> str:
-    # Strategy Coach mode is a different persona entirely.
+    # Coach modes are different personas entirely — neither shares the
+    # operational Chief's prompt.
     if mode == "strategy_coach":
         return _build_coach_prompt(ctx, is_greeting, resume_note=resume_note)
+    if mode == "business_coach":
+        import business_track_actions as bta
+        return bta.build_business_coach_prompt(
+            ctx, is_greeting, resume_note=resume_note)
 
     biz = ctx.get("business") or {}
     biz_name = biz.get("name", "the business")
@@ -13307,6 +13336,14 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     context_block = _format_context_for_prompt(ctx)
     view_block = _format_view_block(view, view_detail or {})
     strategy_block = _format_strategy_block(biz, ctx.get("strategy_track"), mode=mode)
+    # What the Business Coach already learned. Empty string when there is no
+    # track row, so nothing changes for businesses that never ran one.
+    try:
+        business_track_block = business_track_actions.format_business_track_block(
+            biz, ctx.get("business_track"))
+    except Exception as e:  # never let an awareness block break a reply
+        logger.warning(f"business track block failed (non-fatal): {e}")
+        business_track_block = ""
     # VABI v1 — inject the vertical context block so every Chief reply
     # carries the practitioner's vertical voice + vocabulary + hallmarks.
     try:
@@ -14086,6 +14123,7 @@ manual):
 {context_block}
 {view_block}
 {strategy_block}
+{business_track_block}
 
 {learned_block}
 
@@ -14372,11 +14410,17 @@ class ChatRequest(BaseModel):
 
 def _is_greeting(msg: str) -> bool:
     s = msg.strip()
-    return s.startswith(OPENING_SENTINEL_PREFIX) or s.startswith(COACH_OPEN_SENTINEL) or s.startswith(COACH_PAUSE_SENTINEL)
+    return (s.startswith(OPENING_SENTINEL_PREFIX)
+            or s.startswith(COACH_OPEN_SENTINEL)
+            or s.startswith(COACH_PAUSE_SENTINEL)
+            or s.startswith(BUSINESS_COACH_OPEN_SENTINEL)
+            or s.startswith(BUSINESS_COACH_PAUSE_SENTINEL))
 
 
 def _is_coach_pause(msg: str) -> bool:
-    return msg.strip().startswith(COACH_PAUSE_SENTINEL)
+    s = msg.strip()
+    return (s.startswith(COACH_PAUSE_SENTINEL)
+            or s.startswith(BUSINESS_COACH_PAUSE_SENTINEL))
 
 
 # Phrases that suggest a prior assistant turn described an action. When we
@@ -14647,7 +14691,7 @@ async def chief_chat(
             # operational instructions stowing away on the user's words and
             # called them out as an injection attempt, mid-conversation.
             # Everything operational is skipped in coach mode.
-            is_coach_mode = (req.mode or "") == "strategy_coach"
+            is_coach_mode = (req.mode or "") in COACH_MODES
 
             # Intelligence enrichment — voice samples, session context,
             # daily priorities, mentor cooldown, suggestion preference,
@@ -14757,7 +14801,18 @@ async def chief_chat(
             except Exception as _jit_err:
                 logger.warning(f"[jit] directive build failed (non-fatal): {_jit_err}")
             effective_message = req.message
-            if req.mode == "strategy_coach" and is_coach_pause:
+            if req.mode == "business_coach" and is_coach_pause:
+                effective_message = (
+                    "The practitioner is pausing the session now. Write 1-2 warm parting sentences "
+                    "that name something real they told you today and make clear you'll pick up "
+                    "exactly here. Then emit [ACTION:business_session_summary] with a concise summary "
+                    "and the phases_progressed list. Do not ask a new question."
+                )
+            elif req.mode == "business_coach" and is_greeting:
+                effective_message = (
+                    "This is the start of a session. Respond using the OPENING guidance in the system prompt."
+                )
+            elif req.mode == "strategy_coach" and is_coach_pause:
                 effective_message = (
                     "The practitioner is pausing the session now. Write 1-2 warm parting sentences "
                     "that reflect what you covered together and hint at what's next when they return. "

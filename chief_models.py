@@ -91,7 +91,10 @@ def model_for(lane: str, plan: str | None = None) -> str:
 
 def lane_for_chat(mode: str = "", client_surface: str = "") -> str:
     """Pick the lane for a /agents/chief/chat turn."""
-    if (mode or "") == "strategy_coach":
+    # Both coaches ride the deep lane. The Business Coach in particular
+    # needs the long turn budget: one reply can capture several offerings
+    # plus profile writes alongside the conversation itself.
+    if (mode or "") in ("strategy_coach", "business_coach"):
         return "deep"
     if (client_surface or "") == "voice":
         return "voice"

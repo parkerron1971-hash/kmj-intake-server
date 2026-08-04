@@ -246,6 +246,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "update_voice_sample":    _w("A", "edits a voice sample"),
     "update_voice_profile":   _w("A", "merges free-text fields into businesses.voice_profile"),
     "advance_phase":          _w("A", "moves a strategy track's phase pointer; re-settable"),
+    "advance_business_phase": _w("A", "moves a business track's phase pointer; re-settable"),
     "archive_offering":       _w("A", "SOFT delete — is_active=false + archived_at, and existing "
                                       "references keep working off denormalized fields"),
     "dismiss_draft":          _w("A", "flips a queued draft's status to dismissed; the row survives"),
@@ -290,6 +291,16 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "save_launch_plan":       _w("A", "saves a strategy-track deliverable"),
     "save_packages":          _w("A", "saves a strategy-track deliverable"),
     "save_phase":             _w("A", "saves a strategy-track phase deliverable"),
+    "save_business_phase":    _w("A", "saves a business-track phase deliverable onto the track "
+                                      "row; re-saving overwrites that phase only"),
+    "business_session_summary": _w("A", "appends a Business Track session summary to "
+                                        "phases.session_log"),
+    "complete_business_track": _w("A", "flips the business track to completed and stamps "
+                                       "settings.business_track_done. Deliberately NOT the "
+                                       "composite that complete_strategy_track is — it generates "
+                                       "no site, seeds no module, sends nothing. The work it "
+                                       "points at is the plug-in list, which the practitioner "
+                                       "drives by hand"),
     "save_pricing":           _w("A", "saves a strategy-track deliverable"),
     "save_projections":       _w("A", "saves a strategy-track deliverable"),
     "save_swot":              _w("A", "saves a strategy-track deliverable"),
