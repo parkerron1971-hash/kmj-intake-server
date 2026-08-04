@@ -188,6 +188,104 @@ def touch(jti: str) -> None:
         logger.info("[auditor_links] touch skipped: %s", e)
 
 
+# ─── The session: how the credential gets OFF the URL ───────────────
+#
+# The minted link has to carry its credential in the path — it arrives by
+# email and a link has nowhere else to put one. What it does NOT have to
+# do is stay there. The entry route trades the token for a short-lived
+# cookie and redirects to a bare URL, so the address bar, the browser
+# history entry, a shoulder-surfed screen and any bookmark the auditor
+# makes all hold `/public/audit/view` and nothing else.
+#
+# DOMAIN SEPARATION IS THE LOAD-BEARING PART. A session is signed with
+# the same key as a link, so without a distinct HMAC domain a session
+# cookie would verify as a link and vice versa — one credential type
+# would silently become the other, and the session's much longer reach
+# (no rate-limit budget of its own, no window check on mint) would be
+# handed to anyone holding either. The prefix below makes that
+# structurally impossible rather than merely unlikely.
+_SESSION_DOMAIN = b"auditor-session-v1|"
+SESSION_TTL_SECONDS = 12 * 60 * 60      # a working session, not a link
+SESSION_COOKIE = "sol_audit_sess"
+
+
+def _session_sig(payload_b64: str) -> str:
+    return _b64url_encode(hmac.new(
+        _secret(), _SESSION_DOMAIN + payload_b64.encode("utf-8"),
+        hashlib.sha256).digest())
+
+
+def mint_session(ctx: Dict[str, Any]) -> Tuple[str, int]:
+    """Trade a resolved link context for a session value + its lifetime.
+
+    The window travels INSIDE the signature exactly as it does on the
+    link, so a session cannot see a wider range than the link that
+    created it even if the row were read stale. The session never
+    outlives its link.
+    """
+    now = int(time.time())
+    link_exp = int(ctx.get("exp") or 0)
+    exp = now + SESSION_TTL_SECONDS
+    if link_exp:
+        exp = min(exp, link_exp)
+    if exp <= now:
+        return "", 0
+    payload = {
+        "typ": "sess",
+        "biz": str(ctx.get("business_id") or ""),
+        "jti": str(ctx.get("jti") or ""),
+        "iat": now,
+        "exp": exp,
+    }
+    if ctx.get("window_start"):
+        payload["ws"] = str(ctx["window_start"])
+    if ctx.get("window_end"):
+        payload["we"] = str(ctx["window_end"])
+    payload_b64 = _b64url_encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    return f"{payload_b64}.{_session_sig(payload_b64)}", exp - now
+
+
+def resolve_session(value: str) -> Optional[Dict[str, Any]]:
+    """Signature → expiry → revocation, every request.
+
+    The revocation check is why this is not simply a signed cookie left
+    to run out on its own: pulling a link in the app has to kill the
+    sessions it spawned, or "revoke" would mean "revoked in 12 hours".
+    """
+    try:
+        if not isinstance(value, str) or value.count(".") != 1:
+            return None
+        payload_b64, sig_b64 = value.split(".", 1)
+        if not hmac.compare_digest(_session_sig(payload_b64), sig_b64):
+            return None
+        claims = json.loads(_b64url_decode(payload_b64))
+        if not isinstance(claims, dict) or claims.get("typ") != "sess":
+            return None
+        exp = claims.get("exp")
+        if not isinstance(exp, int) or exp <= time.time():
+            return None
+        jti = str(claims.get("jti") or "")
+        biz = str(claims.get("biz") or "")
+        if not jti or not biz:
+            return None
+    except Exception:
+        return None
+    # Outside the try: a lookup failure must fail CLOSED, not fall
+    # through to "malformed cookie" and then to a 404 that looks the
+    # same. is_revoked already refuses on error; keep it un-swallowed.
+    if is_revoked(jti):
+        return None
+    return {
+        "business_id": biz,
+        "jti": jti,
+        "scopes": [SCOPE_LEDGER_READ],
+        "window_start": claims.get("ws"),
+        "window_end": claims.get("we"),
+        "exp": claims.get("exp"),
+    }
+
+
 def list_links(business_id: str) -> List[Dict[str, Any]]:
     """What the owner sees. NEVER selects token_hash."""
     return sb_clients.sb_get_as_service(
@@ -233,4 +331,7 @@ def resolve(token: str) -> Optional[Dict[str, Any]]:
         "jti": jti,
         "window_start": claims.get("ws"),
         "window_end": claims.get("we"),
+        # Carried so a session minted from this context can be capped at
+        # the link's own expiry. A session must never outlive its link.
+        "exp": claims.get("exp"),
     }

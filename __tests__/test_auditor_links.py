@@ -221,7 +221,7 @@ def test_rendered_page_escapes_business_content(secret):
                          "first_sequence": 1, "last_sequence": 1,
                          "unverifiable_rows": 0, "gaps": [], "erasures": []},
     }
-    html_out = ap._render(data, "tok")
+    html_out = ap._render(data)
     assert "<script>alert(1)</script>" not in html_out
     assert "&lt;script&gt;" in html_out
     assert "onerror=1" not in html_out or "&lt;img" in html_out
@@ -233,13 +233,13 @@ def test_page_reports_rather_than_reassures(secret):
             "range": {}, "entry_count": 0, "entries": []}
     nothing = ap._render({**base, "verification": {
         "intact": True, "checked": 9, "hashed": 0, "first_sequence": 1,
-        "last_sequence": 9, "unverifiable_rows": 9, "gaps": [], "erasures": []}}, "t")
+        "last_sequence": 9, "unverifiable_rows": 9, "gaps": [], "erasures": []}})
     assert "Not verifiable" in nothing
     assert "nothing can be proven" in nothing
     broken = ap._render({**base, "verification": {
         "intact": False, "checked": 9, "hashed": 9, "broken_at": 4,
         "reason": "row contents do not match row_hash", "first_sequence": 1,
-        "last_sequence": 9, "unverifiable_rows": 0, "gaps": [], "erasures": []}}, "t")
+        "last_sequence": 9, "unverifiable_rows": 0, "gaps": [], "erasures": []}})
     assert "Broken" in broken and "#4" in broken
     for page in (nothing, broken):
         assert "nothing unusual" not in page.lower()

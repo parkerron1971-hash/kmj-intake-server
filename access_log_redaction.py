@@ -24,11 +24,13 @@ request time, so it catches the access log, anything that propagates to
 the root handlers, and — via `scrub_sentry_event` — the error reports
 too. Nothing upstream has to remember to be careful.
 
-WHAT THIS IS NOT. It does not make a token-in-a-URL safe; the token is
-still in the auditor's browser history and in any intermediary that
-logs paths for us. It closes the copy we are responsible for. Moving
-the credential off the URL entirely is the real fix and is recorded as
-such in docs/ACTION_LEDGER.md.
+STILL NEEDED AFTER THE SESSION EXCHANGE. `/public/audit/{token}` is now
+an entry route that trades the token for a cookie and redirects, so the
+credential reaches us on exactly ONE request per session instead of
+every page view and every download. One request is still one log line
+holding a working credential, so this filter is what makes that hop
+safe rather than merely rare. The store-download route has no such
+exchange and relies on this outright.
 """
 from __future__ import annotations
 
