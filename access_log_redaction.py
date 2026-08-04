@@ -42,8 +42,18 @@ from typing import Any, Dict, Optional
 # "how many auditors read the ledger today" — and destroys the secret.
 # Written as a list so adding a route is one line, not a new mechanism.
 _REDACTIONS = (
-    # /public/audit/<token> and /public/audit/<token>/export
-    re.compile(r"(/public/audit/)[^/?\s\"]+"),
+    # /public/audit/<token> — the entry route, once per session.
+    #
+    # The negative lookahead spares the literal `view`, which is the
+    # session page and carries no secret at all (its credential is a
+    # cookie, and cookies are not in the access log). Without it every
+    # line collapsed to `/public/audit/<redacted>` and the entry hit
+    # became indistinguishable from a page view — which defeats the
+    # reason this masks the segment instead of dropping the line: you
+    # are supposed to be able to count auditor activity. It also has to
+    # keep redacting a token that merely STARTS with "view", hence
+    # requiring a delimiter or end-of-path after it.
+    re.compile(r"(/public/audit/)(?!view(?:[/?#]|$))[^/?\s\"]+"),
     # /public/store/download/<order>/<token>/<offering>
     re.compile(r"(/public/store/download/[^/?\s\"]+/)[^/?\s\"]+"),
 )

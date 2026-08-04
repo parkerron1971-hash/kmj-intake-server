@@ -120,6 +120,27 @@ def test_ordinary_paths_are_untouched():
         assert alr.redact(path) == path
 
 
+def test_the_session_page_is_not_redacted():
+    """`view` is a public literal — its credential is a cookie, and
+    cookies are not in the access log. Masking it made the entry hit
+    (one per session, carries the token) indistinguishable from a page
+    view (many per session, carries nothing), which defeats the point
+    of masking the segment rather than dropping the line. Caught in
+    production logs, not by a test."""
+    import access_log_redaction as alr
+    assert alr.redact("/public/audit/view") == "/public/audit/view"
+    assert alr.redact("/public/audit/view/export?format=csv") == \
+        "/public/audit/view/export?format=csv"
+
+
+def test_a_token_that_merely_starts_with_view_is_still_redacted():
+    """The exemption is for the literal segment, not a prefix — else
+    minting a token beginning 'view' would opt it out of redaction."""
+    import access_log_redaction as alr
+    assert alr.redact("/public/audit/viewSECRET.sig") == "/public/audit/<redacted>"
+    assert alr.redact("/public/audit/viewer.token") == "/public/audit/<redacted>"
+
+
 def test_redaction_is_idempotent():
     """install() attaches the filter in two places on purpose; a record
     can pass through twice."""
