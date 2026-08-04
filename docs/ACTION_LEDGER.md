@@ -293,6 +293,42 @@ Enabled with `LEDGER_ANCHOR_PROVIDER=opentimestamps`. Unset, it falls back to
 `local` — so a missing env var degrades to "we published nothing", never to a
 false claim of independence.
 
+### Second adapter: Hedera (built, not configured)
+
+Kevin's original choice, and the one the spec named. Both exist because they
+fail and succeed differently:
+
+| | OpenTimestamps | Hedera |
+|---|---|---|
+| Finality | Hours (Bitcoin aggregation) | Seconds |
+| Cost / setup | Free, no account | Small fee, needs an account + funded balance |
+| Verified by | Public `ots` client vs Bitcoin | Public mirror-node REST vs the topic |
+| Normal state after anchoring | `submitted` for most of a day | `confirmed` immediately |
+
+Speed is the real difference. If a practice needs to say *proven* the same
+afternoon, Hedera is the one that can; OTS spends its first day merely
+submitted.
+
+**Testnet is not evidence, and this is the load-bearing decision.** Hedera's
+testnet is periodically **wiped**. A proof there looks identical to a real one
+and then vanishes without warning, so `is_independent` is False on any network
+but mainnet, and the banner calls it a rehearsal. Getting this backwards would
+produce the worst outcome this feature can have — a practice believing it holds
+evidence that has quietly ceased to exist.
+
+`independent` is read from the **receipt's own** network, not the currently
+configured one, so flipping the env var to mainnet cannot silently promote old
+testnet proofs.
+
+**Configuration** (all three required, or it refuses by name and writes no
+receipt): `HEDERA_ACCOUNT_ID`, `HEDERA_PRIVATE_KEY`, `HEDERA_TOPIC_ID`, plus
+`HEDERA_NETWORK=mainnet`. Uses `hiero-sdk-python` — the *native* SDK; the older
+`hedera-sdk-py` wraps the Java SDK through pyjnius and would drag a JVM into
+the image.
+
+Nothing is configured yet, so selecting `hedera` today fails cleanly rather
+than anchoring nowhere.
+
 **Never publish business data — only a fingerprint.** The public network
 holds proof of non-alteration and nothing else.
 

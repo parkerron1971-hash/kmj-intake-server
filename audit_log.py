@@ -717,10 +717,14 @@ def list_anchors(request: Request, biz: str,
         # Recomputed per request, never stored: the receipt is
         # append-only and a pending proof already carries everything
         # needed to find its Bitcoin attestation later.
-        st = ledger_anchor.proof_status(r.get("provider_ref"))
+        st = ledger_anchor.proof_status(r.get("provider_ref"), r.get("provider"))
         r["state"] = st["state"]
         r["confirmed"] = st["confirmed"]
         r["bitcoin_block"] = st.get("bitcoin_block")
+        # Hedera receipts carry a public mirror-node URL instead; an
+        # auditor curls it and compares the message to the root.
+        r["verify_url"] = st.get("verify_url")
+        r["network"] = st.get("network")
         # The blob is large and useless in a list; it has its own route.
         r.pop("provider_ref", None)
     return {"ok": True, "anchors": rows, "count": len(rows),

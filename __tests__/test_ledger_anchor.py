@@ -175,6 +175,10 @@ def test_a_failed_publish_writes_no_receipt(monkeypatch):
         def anchor(self, root):
             return None, "network unreachable"
 
+    # Registering into the module-level registry is global state. Without
+    # the restore below it leaks into every later test — which is exactly
+    # how test_all_three_providers_are_registered started failing.
+    _saved = dict(la._PROVIDERS)
     la.register_provider(Broken())
     posted = []
     monkeypatch.setattr(la.sb_clients, "sb_get_as_service",
@@ -182,7 +186,11 @@ def test_a_failed_publish_writes_no_receipt(monkeypatch):
                         else [{"sequence": 1, "row_hash": _h(1)}])
     monkeypatch.setattr(la.sb_clients, "sb_post_as_service",
                         lambda p, b, prefer=None: posted.append(b))
-    out = la.anchor_business("b1", provider_name="broken")
+    try:
+        out = la.anchor_business("b1", provider_name="broken")
+    finally:
+        la._PROVIDERS.clear()
+        la._PROVIDERS.update(_saved)
     assert out["ok"] is False and out["anchored"] is False
     assert posted == [], "no receipt may be written when publishing failed"
 
@@ -298,9 +306,18 @@ def test_one_reachable_calendar_is_enough(monkeypatch):
 
 # ─── Proof state, read from the stored receipt ───────────────────────
 
-def test_status_of_no_proof_is_none_not_an_error():
-    assert la.proof_status(None)["state"] == "none"
-    assert la.proof_status("")["state"] == "none"
+def test_status_of_no_proof_is_never_an_error():
+    """A local anchor legitimately has no reference — that is what
+    `local` MEANS — while an OpenTimestamps anchor missing its proof is
+    a different situation entirely. Since the dispatch went per-provider
+    the two stopped being the same answer, and keeping them apart is
+    more useful than the old shared "none".
+    """
+    assert la.proof_status(None, "local")["state"] == "local"
+    assert la.proof_status("", "local")["state"] == "local"
+    assert la.proof_status(None, "opentimestamps")["state"] == "none"
+    assert all(la.proof_status(r, p)["confirmed"] is False
+               for r in (None, "") for p in ("local", "opentimestamps", "hedera"))
 
 
 def test_unreadable_proof_says_so_rather_than_claiming_confirmation():
@@ -374,3 +391,114 @@ def test_the_proof_file_has_its_own_route():
     body = src.split("def download_ots(")[1].split("\n@router")[0]
     assert "ledger_unlock.require_unlock(" in body
     assert "application/octet-stream" in body
+
+
+# ─── Hedera, the second adapter ──────────────────────────────────────
+
+def test_testnet_is_never_treated_as_evidence(monkeypatch):
+    """THE decision that matters most in this adapter. Hedera's testnet
+    is periodically WIPED. A proof there looks identical to a real one
+    and then vanishes, so calling it independent would produce the worst
+    outcome this feature can have: a practice believing it holds
+    evidence that has quietly ceased to exist.
+    """
+    h = la.HederaProvider()
+    monkeypatch.setenv("HEDERA_NETWORK", "testnet")
+    assert h.is_independent is False
+    assert la.is_independent("hedera") is False
+    monkeypatch.setenv("HEDERA_NETWORK", "mainnet")
+    assert h.is_independent is True
+    assert la.is_independent("hedera") is True
+
+
+def test_an_unset_network_does_not_default_to_evidence(monkeypatch):
+    """Absent config must land on the harmless side."""
+    monkeypatch.delenv("HEDERA_NETWORK", raising=False)
+    assert la.HederaProvider().is_independent is False
+
+
+def test_a_testnet_receipt_stays_testnet_after_switching_to_mainnet(monkeypatch):
+    """`independent` is read from the receipt's OWN network, not the one
+    configured now. Otherwise flipping an env var would silently promote
+    every old testnet proof into 'evidence'."""
+    import json as _j
+    monkeypatch.setenv("HEDERA_NETWORK", "mainnet")
+    ref = _j.dumps({"network": "testnet", "topic": "0.0.5", "sequence": "1"})
+    st = la.proof_status(ref, "hedera")
+    assert st["state"] == "testnet"
+    assert st["confirmed"] is False
+
+
+def test_missing_credentials_refuse_by_name(monkeypatch):
+    """A half-configured provider must say exactly what is absent and
+    write no receipt, rather than anchoring nowhere in silence."""
+    for v in ("HEDERA_ACCOUNT_ID", "HEDERA_PRIVATE_KEY", "HEDERA_TOPIC_ID"):
+        monkeypatch.delenv(v, raising=False)
+    ref, err = la.HederaProvider().anchor("aa" * 32)
+    assert ref is None
+    for v in ("HEDERA_ACCOUNT_ID", "HEDERA_PRIVATE_KEY", "HEDERA_TOPIC_ID"):
+        assert v in err, "the error must name what is missing"
+
+
+def test_a_partially_configured_provider_still_refuses(monkeypatch):
+    monkeypatch.setenv("HEDERA_ACCOUNT_ID", "0.0.1234")
+    monkeypatch.delenv("HEDERA_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("HEDERA_TOPIC_ID", raising=False)
+    ref, err = la.HederaProvider().anchor("aa" * 32)
+    assert ref is None and "HEDERA_PRIVATE_KEY" in err
+
+
+def test_a_mainnet_receipt_hands_the_auditor_a_public_url(monkeypatch):
+    """The verification story: an auditor curls a public mirror node and
+    compares the message to the root. No account, no SDK, nothing of
+    ours involved."""
+    import json as _j
+    ref = _j.dumps({"network": "mainnet", "topic": "0.0.777", "sequence": "42"})
+    st = la.proof_status(ref, "hedera")
+    assert st["confirmed"] is True
+    assert st["verify_url"] == (
+        "https://mainnet-public.mirrornode.hedera.com/api/v1/topics/0.0.777/messages")
+    assert "solutionist" not in (st["verify_url"] or "")
+
+
+def test_hedera_has_no_pending_state():
+    """Consensus is reached before the call returns — that is the whole
+    speed advantage over Bitcoin, and why there is nothing to poll."""
+    import json as _j
+    st = la.proof_status(_j.dumps({"network": "mainnet", "topic": "0.0.1"}), "hedera")
+    assert st["pending_at"] == []
+    assert st["state"] == "confirmed"
+
+
+def test_a_corrupt_hedera_receipt_is_unreadable_not_confirmed():
+    for junk in ("not-json", "{}", '{"network":"mainnet"}'):
+        st = la.proof_status(junk, "hedera")
+        assert st["confirmed"] is False, f"{junk} must not read as confirmed"
+
+
+# ─── The seam holds all three ────────────────────────────────────────
+
+def test_each_provider_reads_its_own_receipt_format():
+    """A .ots blob and a Hedera transaction reference share nothing
+    structurally. Dispatching by provider rather than sniffing the blob
+    is what stops a parser guessing — and guessing here means claiming a
+    proof that is not there."""
+    for name in ("local", "opentimestamps", "hedera"):
+        assert hasattr(la._PROVIDERS[name], "status")
+    import json as _j
+    hedera_ref = _j.dumps({"network": "mainnet", "topic": "0.0.1"})
+    # Each blob is nonsense to the other provider, and neither claims a proof.
+    assert la.proof_status(hedera_ref, "opentimestamps")["confirmed"] is False
+    assert la.proof_status("AE9wZW5UaW1lc3RhbXBz", "hedera")["confirmed"] is False
+
+
+def test_all_three_providers_are_registered():
+    assert set(la._PROVIDERS) == {"local", "opentimestamps", "hedera"}
+
+
+def test_only_the_local_provider_claims_nothing():
+    """Independence is a property of the provider, so no surface has to
+    compare strings to work out what a receipt is worth."""
+    assert la.is_independent("local") is False
+    assert la.is_independent("opentimestamps") is True
+    assert la.is_independent("nonsense-provider") is False

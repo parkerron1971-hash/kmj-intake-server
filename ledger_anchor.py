@@ -31,6 +31,7 @@ begins the moment a provider publishes the root somewhere independent.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
@@ -172,6 +173,17 @@ class AnchorProvider:
     def anchor(self, root: str) -> Tuple[Optional[str], Optional[str]]:
         raise NotImplementedError
 
+    def status(self, provider_ref: Optional[str]) -> Dict[str, Any]:
+        """What does this receipt currently prove?
+
+        Each provider reads its OWN receipt format. OpenTimestamps
+        stores a binary .ots; Hedera stores a transaction reference.
+        A single parser that tried to understand both would end up
+        guessing, and guessing wrong here means reporting a proof that
+        is not there.
+        """
+        return {"state": "none", "confirmed": False}
+
 
 class LocalProvider(AnchorProvider):
     """Records the root with us and publishes nothing.
@@ -193,6 +205,9 @@ class LocalProvider(AnchorProvider):
 
     def anchor(self, root: str) -> Tuple[Optional[str], Optional[str]]:
         return None, None
+
+    def status(self, provider_ref: Optional[str]) -> Dict[str, Any]:
+        return {"state": "local", "confirmed": False}
 
 
 class OpenTimestampsProvider(AnchorProvider):
@@ -267,6 +282,53 @@ class OpenTimestampsProvider(AnchorProvider):
         DetachedTimestampFile(OpSHA256(), ts).serialize(out)
         return base64.b64encode(out.getbytes()).decode("ascii"), None
 
+
+    def status(self, provider_ref: Optional[str]) -> Dict[str, Any]:
+        """Read a stored .ots and say what it currently proves.
+
+        UPGRADES ARE NOT PERSISTED, DELIBERATELY. ledger_anchors is
+        append-only, so the stored receipt can never be rewritten — and
+        it does not need to be. A pending proof carries everything
+        required to fetch the Bitcoin attestation later, so the upgrade
+        is recomputed when someone asks rather than stored. The receipt
+        stays immutable and the answer stays current, which is the
+        combination that would otherwise be in tension.
+        """
+        out: Dict[str, Any] = {"state": "none", "confirmed": False,
+                               "pending_at": [], "bitcoin_block": None}
+        if not provider_ref:
+            return out
+        import base64
+        try:
+            from opentimestamps.core.timestamp import DetachedTimestampFile
+            from opentimestamps.core.serialize import BytesDeserializationContext
+            from opentimestamps.core.notary import (
+                BitcoinBlockHeaderAttestation, PendingAttestation)
+        except ImportError:
+            return {**out, "state": "unreadable",
+                    "reason": "the opentimestamps package is not installed"}
+        try:
+            raw = base64.b64decode(provider_ref)
+            det = DetachedTimestampFile.deserialize(BytesDeserializationContext(raw))
+        except Exception:
+            return {**out, "state": "unreadable",
+                    "reason": "the stored proof could not be parsed"}
+
+        for _msg, att in det.timestamp.all_attestations():
+            if isinstance(att, BitcoinBlockHeaderAttestation):
+                out["confirmed"] = True
+                out["bitcoin_block"] = int(att.height)
+            elif isinstance(att, PendingAttestation):
+                try:
+                    out["pending_at"].append(
+                        att.uri.decode() if isinstance(att.uri, bytes) else str(att.uri))
+                except Exception:
+                    pass
+        out["state"] = ("confirmed" if out["confirmed"]
+                        else "submitted" if out["pending_at"] else "unknown")
+        out["digest"] = det.file_digest.hex()
+        return out
+
     @staticmethod
     def _submit(calendar: str, digest: bytes, timeout: float = 15.0) -> bytes:
         import urllib.request
@@ -278,56 +340,166 @@ class OpenTimestampsProvider(AnchorProvider):
         return urllib.request.urlopen(req, timeout=timeout).read()
 
 
-def proof_status(provider_ref: Optional[str]) -> Dict[str, Any]:
-    """Read a stored .ots and say what it currently proves.
+def proof_status(provider_ref: Optional[str],
+                 provider: Optional[str] = None) -> Dict[str, Any]:
+    """Ask the PROVIDER what its own receipt proves.
 
-    UPGRADES ARE NOT PERSISTED, DELIBERATELY. ledger_anchors is
-    append-only, so the stored receipt can never be rewritten — and it
-    does not need to be. A pending proof carries everything required to
-    fetch the Bitcoin attestation later, so the upgrade is recomputed
-    when someone asks rather than stored. The receipt stays immutable
-    and the answer stays current, which is the combination that would
-    otherwise be in tension.
+    Dispatching by provider rather than sniffing the blob is what lets
+    two very different receipt formats coexist — a binary .ots and a
+    Hedera transaction reference share nothing structurally, and a
+    parser that guessed between them would eventually guess wrong in
+    the direction of claiming a proof that is not there.
     """
-    out: Dict[str, Any] = {"state": "none", "confirmed": False,
-                           "pending_at": [], "bitcoin_block": None}
-    if not provider_ref:
-        return out
-    import base64
+    out = {"state": "none", "confirmed": False, "pending_at": [],
+           "bitcoin_block": None}
+    if not provider_ref and (provider or "local") == "local":
+        return {**out, "state": "local"}
+    p = _PROVIDERS.get((provider or "opentimestamps").strip())
+    if not p:
+        return {**out, "state": "unknown"}
     try:
-        from opentimestamps.core.timestamp import DetachedTimestampFile
-        from opentimestamps.core.serialize import BytesDeserializationContext
-        from opentimestamps.core.notary import (
-            BitcoinBlockHeaderAttestation, PendingAttestation)
-    except ImportError:
-        return {**out, "state": "unreadable",
-                "reason": "the opentimestamps package is not installed"}
-    try:
-        raw = base64.b64decode(provider_ref)
-        det = DetachedTimestampFile.deserialize(BytesDeserializationContext(raw))
+        return {**out, **p.status(provider_ref)}
     except Exception:
-        return {**out, "state": "unreadable",
-                "reason": "the stored proof could not be parsed"}
+        return {**out, "state": "unreadable"}
 
-    for _msg, att in det.timestamp.all_attestations():
-        if isinstance(att, BitcoinBlockHeaderAttestation):
-            out["confirmed"] = True
-            out["bitcoin_block"] = int(att.height)
-        elif isinstance(att, PendingAttestation):
-            try:
-                out["pending_at"].append(att.uri.decode() if isinstance(att.uri, bytes)
-                                         else str(att.uri))
-            except Exception:
-                pass
-    out["state"] = ("confirmed" if out["confirmed"]
-                    else "submitted" if out["pending_at"] else "unknown")
-    out["digest"] = det.file_digest.hex()
-    return out
+
+class HederaProvider(AnchorProvider):
+    """Publishes the root as a Hedera Consensus Service message.
+
+    WHY BOTH THIS AND OPENTIMESTAMPS. They fail and succeed
+    differently, and an anchor is worth having in more than one place:
+
+      speed     Hedera finalises in seconds. Bitcoin aggregation takes
+                hours, so an OTS anchor spends most of its first day
+                merely `submitted`. If a practice needs to say "proven"
+                the same afternoon, this is the one that can.
+      audience  "Recorded on a network governed by Google, IBM and
+                Boeing" reads differently to a nervous practitioner
+                than "Bitcoin" does. Same mathematics, different room.
+      purpose   HCS exists to timestamp and order messages. OTS is a
+                clever use of Bitcoin; this is the intended use of
+                Hedera.
+
+    TESTNET IS NOT EVIDENCE, and this is the decision that matters
+    most here. Hedera's testnet is periodically WIPED. A proof there
+    looks identical to a real one and disappears without warning, so
+    `is_independent` is False on any network but mainnet. Getting that
+    backwards would produce the single worst outcome this whole feature
+    can have: a practice believing it holds evidence that has quietly
+    ceased to exist.
+
+    WHAT AN AUDITOR DOES WITH IT. The receipt names a network, a topic
+    and a sequence number. They fetch the message from a PUBLIC mirror
+    node over plain HTTP and compare its contents to the root. No
+    account, no SDK, no cooperation from us.
+    """
+    name = "hedera"
+
+    MIRRORS = {
+        "mainnet": "https://mainnet-public.mirrornode.hedera.com",
+        "testnet": "https://testnet.mirrornode.hedera.com",
+    }
+
+    @staticmethod
+    def _network() -> str:
+        return (os.environ.get("HEDERA_NETWORK") or "testnet").strip().lower()
+
+    @property
+    def is_independent(self) -> bool:
+        # Only mainnet is durable. Testnet resets take the proof with them.
+        return self._network() == "mainnet"
+
+    @staticmethod
+    def _config() -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+        acct = (os.environ.get("HEDERA_ACCOUNT_ID") or "").strip()
+        key = (os.environ.get("HEDERA_PRIVATE_KEY") or "").strip()
+        topic = (os.environ.get("HEDERA_TOPIC_ID") or "").strip()
+        missing = [n for n, v in (("HEDERA_ACCOUNT_ID", acct),
+                                  ("HEDERA_PRIVATE_KEY", key),
+                                  ("HEDERA_TOPIC_ID", topic)) if not v]
+        if missing:
+            # Fail rather than fall back. anchor_business() writes no
+            # receipt on an error, so a half-configured provider stays
+            # silent instead of quietly anchoring nowhere.
+            return None, "hedera is not configured: missing " + ", ".join(missing)
+        return {"account": acct, "key": key, "topic": topic}, None
+
+    def anchor(self, root: str) -> Tuple[Optional[str], Optional[str]]:
+        cfg, err = self._config()
+        if err:
+            return None, err
+        try:
+            from hiero_sdk_python import (
+                Client, Network, AccountId, PrivateKey, TopicId,
+                TopicMessageSubmitTransaction)
+        except ImportError:
+            return None, "the hiero-sdk-python package is not installed"
+
+        net = self._network()
+        try:
+            client = Client(Network(network=net))
+            client.set_operator(AccountId.from_string(cfg["account"]),
+                                PrivateKey.from_string(cfg["key"]))
+            receipt = (TopicMessageSubmitTransaction()
+                       .set_topic_id(TopicId.from_string(cfg["topic"]))
+                       .set_message(root)
+                       .execute(client))
+        except Exception as e:
+            return None, f"hedera submit failed: {type(e).__name__}: {str(e)[:120]}"
+
+        ref = {"network": net, "topic": cfg["topic"], "root": root}
+        for attr, label in (("topic_sequence_number", "sequence"),
+                            ("topicSequenceNumber", "sequence"),
+                            ("transaction_id", "transaction_id"),
+                            ("transactionId", "transaction_id")):
+            v = getattr(receipt, attr, None)
+            if v is not None and label not in ref:
+                ref[label] = str(v)
+        return json.dumps(ref, separators=(",", ":"), sort_keys=True), None
+
+    def status(self, provider_ref: Optional[str]) -> Dict[str, Any]:
+        """Hedera reaches consensus before the call returns, so a stored
+        receipt is already final — there is no pending state to poll,
+        which is the whole speed advantage over Bitcoin.
+
+        `independent` still depends on the network the receipt names,
+        NOT on the one configured now. A testnet proof stays a testnet
+        proof after someone switches the env var to mainnet.
+        """
+        out: Dict[str, Any] = {"state": "none", "confirmed": False,
+                               "pending_at": [], "bitcoin_block": None}
+        if not provider_ref:
+            return out
+        try:
+            ref = json.loads(provider_ref)
+            net = str(ref.get("network") or "")
+            topic = str(ref.get("topic") or "")
+        except Exception:
+            return {**out, "state": "unreadable"}
+        if not topic:
+            return {**out, "state": "unreadable"}
+
+        durable = net == "mainnet"
+        mirror = self.MIRRORS.get(net)
+        return {
+            **out,
+            "state": "confirmed" if durable else "testnet",
+            "confirmed": durable,
+            "network": net,
+            "topic": topic,
+            "sequence": ref.get("sequence"),
+            "transaction_id": ref.get("transaction_id"),
+            # The address an auditor curls. Nothing here is ours.
+            "verify_url": (f"{mirror}/api/v1/topics/{topic}/messages"
+                           if mirror else None),
+            "durable": durable,
+        }
 
 
 _PROVIDERS: Dict[str, AnchorProvider] = {
     "local": LocalProvider(),
     "opentimestamps": OpenTimestampsProvider(),
+    "hedera": HederaProvider(),
 }
 
 
