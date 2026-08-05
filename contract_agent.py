@@ -599,20 +599,16 @@ def _build_pdf(
     styles = getSampleStyleSheet()
     h_business = ParagraphStyle(
         "BusinessName", parent=styles["Title"],
-        fontSize=22, leading=26, textColor=dark, spaceAfter=4, alignment=TA_LEFT,
+        fontSize=17, leading=21, textColor=dark, spaceAfter=3, alignment=TA_LEFT,
         fontName=f_bold,
     )
     h_practitioner = ParagraphStyle(
         "Practitioner", parent=styles["Normal"],
-        fontSize=11, leading=14, textColor=muted, spaceAfter=2, fontName=f_regular,
-    )
-    h_date = ParagraphStyle(
-        "DateStyle", parent=styles["Normal"],
-        fontSize=10, leading=12, textColor=muted, spaceAfter=20, fontName=f_regular,
+        fontSize=9.5, leading=13, textColor=muted, spaceAfter=0, fontName=f_regular,
     )
     h_recipient = ParagraphStyle(
         "Recipient", parent=styles["Normal"],
-        fontSize=11, leading=14, textColor=dark, spaceAfter=18, fontName=f_regular,
+        fontSize=10.5, leading=14, textColor=muted, spaceAfter=16, fontName=f_regular,
     )
     h_subject = ParagraphStyle(
         "Subject", parent=styles["Heading2"],
@@ -635,50 +631,61 @@ def _build_pdf(
         fontName=f_regular,
     )
 
+    def _xml(s: str) -> str:
+        # Names travel through Paragraph's inline-markup parser too — an
+        # "&" in "A & B Law" must never crash the letterhead.
+        return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     story: List[Any] = []
-    # Header — the letterhead. With a Brand Studio logo it sits beside
-    # the name block; without one, the name block IS the letterhead.
+    # Header — a tight letterhead lockup. The logo column is sized to
+    # the LOGO (the old fixed 2.1in column left a dead gap that made
+    # the header read as two things fighting); the name block sits
+    # immediately beside it, vertically centered, with practitioner and
+    # date on one quiet line instead of a three-line stack.
+    meta_line = _xml(practitioner_name)
+    meta_line += f"  ·  {datetime.now().strftime('%B %d, %Y')}"
     name_block = [
-        Paragraph(business_name, h_business),
-        Paragraph(practitioner_name, h_practitioner),
-        Paragraph(datetime.now().strftime("%B %d, %Y"), h_date),
+        Paragraph(_xml(business_name), h_business),
+        Paragraph(meta_line, h_practitioner),
     ]
     logo_flowable = None
+    logo_w = 0.0
     if logo_bytes:
         try:
             reader = ImageReader(io.BytesIO(logo_bytes))
             iw, ih = reader.getSize()
             if iw > 0 and ih > 0:
-                target_h = 0.62 * inch
-                target_w = min(target_h * (iw / ih), 1.9 * inch)
+                target_h = 0.6 * inch
+                logo_w = min(target_h * (iw / ih), 1.7 * inch)
                 logo_flowable = Image(io.BytesIO(logo_bytes),
-                                      width=target_w, height=target_h)
+                                      width=logo_w, height=target_h)
         except Exception:
             logo_flowable = None  # a bad image never breaks the paper
     if logo_flowable is not None:
         head = Table([[logo_flowable, name_block]],
-                     colWidths=[2.1 * inch, None])
+                     colWidths=[logo_w + 14, None])
         head.setStyle(TableStyle([
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("LEFTPADDING", (0, 0), (-1, -1), 0),
-            ("RIGHTPADDING", (0, 0), (0, 0), 12),
+            ("RIGHTPADDING", (0, 0), (0, 0), 14),
+            ("RIGHTPADDING", (1, 0), (1, 0), 0),
             ("TOPPADDING", (0, 0), (-1, -1), 0),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
         ]))
         story.append(head)
     else:
         story.extend(name_block)
-    story.append(HRFlowable(width="100%", thickness=2, color=accent, spaceBefore=0, spaceAfter=14))
+    story.append(Spacer(1, 10))
+    story.append(HRFlowable(width="100%", thickness=2, color=accent, spaceBefore=0, spaceAfter=16))
 
-    # Recipient
-    recipient_line = f"<b>Prepared for:</b> {contact_name}"
+    # Title first, then who it's for — the document leads with what it
+    # IS; the recipient line reads as a quiet label under it.
+    story.append(Paragraph(_xml(subject), h_subject))
+    recipient_line = f'Prepared for <font color="#1A1A22"><b>{_xml(contact_name)}</b></font>'
     if contact_org:
-        recipient_line += f", {contact_org}"
+        recipient_line += f", {_xml(contact_org)}"
     story.append(Paragraph(recipient_line, h_recipient))
-
-    # Subject
-    story.append(Paragraph(subject, h_subject))
-    story.append(Spacer(1, 6))
+    story.append(Spacer(1, 2))
 
     # Body — parse markdown-ish formatting (## headers, **bold**, - bullets)
     bullet_buffer: List[str] = []
@@ -731,7 +738,7 @@ def _build_pdf(
     # Footer
     story.append(Spacer(1, 24))
     story.append(HRFlowable(width="100%", thickness=0.5, color=muted, spaceBefore=0, spaceAfter=8))
-    story.append(Paragraph(f"{business_name}  ·  {practitioner_name}", h_footer))
+    story.append(Paragraph(f"{_xml(business_name)}  ·  {_xml(practitioner_name)}", h_footer))
 
     doc.build(story)
     return buf.getvalue()
