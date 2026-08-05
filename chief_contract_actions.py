@@ -338,9 +338,12 @@ async def handle_generate_document(client, biz, action) -> Dict[str, Any]:
     business_id = biz["id"]
 
     # Template — id, title, or a word of it ("nda", "demand letter").
+    # The business's own learned templates join the pool and win exact
+    # title matches — "the consulting agreement" means THEIRS once one
+    # was saved from an upload.
     query = (action.get("template") or action.get("template_id")
              or action.get("document") or "").strip()
-    resolved = dtr.resolve_template(query)
+    resolved = dtr.resolve_template(query, business_id=business_id)
     if resolved is None:
         titles = ", ".join(t["title"] for t in doc_templates.TEMPLATES)
         return _fail("generate_document",

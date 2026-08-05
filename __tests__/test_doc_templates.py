@@ -413,3 +413,93 @@ def test_list_ships_subtitles_sections_and_page_estimates(fake):
     assert any(s.get("requires") == "deposit" for s in eng["sections"])
     # drafted sections shipped as their fallback (no briefs leak)
     assert "one-paragraph professional opener" not in joined
+
+
+# ─── Learn from upload — their paper becomes a template ──────────────
+
+def test_normalize_custom_auto_declares_and_sanitizes():
+    raw = {
+        "title": "Wedding Photography Contract",
+        "subtitle": "Coverage, Payment & Deliverables",
+        "fields": [
+            {"key": "package_price", "label": "Package price", "required": True,
+             "sticky": True, "placeholder": "$2,400"},
+            {"key": "client_name", "label": "should be dropped"},   # standard var
+        ],
+        "sections": [
+            {"heading": "1. COVERAGE", "text": "{business_name} will photograph the event on {event_date} for {package_price}."},
+            {"heading": None, "text": "Delivery within {delivery_weeks} weeks to {client_name}."},
+            {"heading": "", "text": "   "},                          # empty → dropped
+        ],
+    }
+    t = dtr.normalize_custom(raw)
+    keys = {f["key"] for f in t["fields"]}
+    # declared field kept; standard var dropped; undeclared placeholders auto-declared
+    assert keys == {"package_price", "event_date", "delivery_weeks"}
+    assert t["category"] == "custom" and len(t["sections"]) == 2
+    by_key = {f["key"]: f for f in t["fields"]}
+    assert by_key["package_price"]["sticky"] is True
+    assert by_key["event_date"]["required"] is False   # auto-declared → optional
+    # every placeholder now resolves (the ship-with-a-hole guarantee)
+    allowed = dtr._STANDARD_VARS | keys
+    for s in t["sections"]:
+        for var in dtr._PLACEHOLDER_RE.findall(s["text"]):
+            assert var in allowed
+
+
+def test_normalize_custom_rejects_sectionless():
+    with pytest.raises(dtr.GenerationError):
+        dtr.normalize_custom({"title": "X", "sections": []})
+
+
+def test_custom_templates_list_generate_and_resolve(patchable, wired):
+    fake = patchable
+    fake.rows("business_doc_templates").append({
+        "id": "row1", "business_id": BIZ,
+        "template": {
+            "id": "", "title": "Wedding Photography Contract",
+            "subtitle": "Coverage, Payment & Deliverables",
+            "description": "Learned from an upload.", "category": "custom",
+            "suggested_for": [],
+            "fields": [{"key": "package_price", "label": "Package price",
+                        "type": "text", "required": True, "placeholder": "",
+                        "default": "", "sticky": True}],
+            "sections": [{"kind": "fixed", "heading": "1. COVERAGE",
+                          "text": "{business_name} will photograph for {client_name} at {package_price}."}],
+        },
+        "created_at": "2026-08-04T00:00:00Z"})
+
+    # list: custom leads, flagged, still ships sections/pages
+    listed = asyncio.run(dtr.doctemplates_list(BIZ, _User()))
+    first = listed["templates"][0]
+    assert first["custom"] and first["id"] == "custom:row1"
+    assert first["suggested"] and first["sections"]
+
+    # generate through the same core via custom id
+    out = asyncio.run(dtr.doctemplates_generate(dtr.GenerateBody(
+        business_id=BIZ, contact_id="c9", template_id="custom:row1",
+        params={"package_price": "$2,400"}), _User()))
+    assert out["ok"] and "photograph for Dana Whitfield at $2,400" in out["body"]
+    # sticky learned from the custom template too
+    assert fake.rows("businesses")[0]["settings"]["doc_defaults"]["package_price"] == "$2,400"
+
+    # Chief's resolver: exact custom title WINS; keyword reaches it too
+    hit = dtr.resolve_template("Wedding Photography Contract", business_id=BIZ)
+    assert hit["id"] == "custom:row1"
+    hit = dtr.resolve_template("wedding", business_id=BIZ)
+    assert hit["id"] == "custom:row1"
+    # without business context, library behavior unchanged
+    assert dtr.resolve_template("wedding") is None
+
+
+def test_custom_delete_scoped_to_owner(patchable, monkeypatch):
+    fake = patchable
+    import sb_clients
+    deleted = []
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service",
+                        lambda p: deleted.append(p) or True)
+    out = asyncio.run(dtr.doctemplates_delete_custom("row1", BIZ, _User()))
+    assert out["ok"] and "business_id=eq.b1" in deleted[0]
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(dtr.doctemplates_delete_custom("row1", BIZ, _Stranger()))
+    assert e.value.status_code == 403
