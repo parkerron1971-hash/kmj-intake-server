@@ -85,6 +85,7 @@ from chief_bookkeeping_actions import (
 from chief_contract_actions import (
     handle_contract_pdf,
     handle_draft_contract,
+    handle_generate_document,
 )
 # Customer drawdown ledger — what a client prepaid and has not used yet.
 from chief_balance_actions import (
@@ -10726,10 +10727,13 @@ ACTION_HANDLERS = {
     "approve_bookkeeping_proposal":    handle_approve_bookkeeping_proposal,
     "reject_bookkeeping_proposal":     handle_reject_bookkeeping_proposal,
     # P0.3 — contract drafting per-contact + the branded PDF. Sending stays
-    # with approve_draft; there is no send_for_signature because there is no
-    # e-signature provider (see chief_contract_actions module docstring).
+    # with approve_draft; e-sign happens from the Approval Queue after a
+    # human approves (BoldSign) — Chief still holds no send_for_signature.
     "draft_contract":                  handle_draft_contract,
     "contract_pdf":                    handle_contract_pdf,
+    # Template library — formal documents (NDA, retainer, demand letter…)
+    # into the same draft → approve chain.
+    "generate_document":               handle_generate_document,
     # Drawdown ledger. Bookkeeping ABOUT money, not movement OF it — these
     # reach no Stripe object and post no GL entry, which is why they are
     # class A while create_invoice is C.
@@ -13531,11 +13535,15 @@ ACTIONS — BOOKKEEPING (the books, from the conversation):
 ACTIONS — CONTRACTS & PROPOSALS (the engagement letter, in their voice):
   [ACTION:{{"type":"draft_contract","contact_name":"Marcus Webb"}}]  — draft the proposal / engagement letter for ONE person, written in the practitioner's voice from what you know about that relationship.
   [ACTION:{{"type":"contract_pdf","contact_name":"Marcus Webb"}}]  — render the draft as the branded PDF and return a shareable link. Optional "queue_id" to pick a specific draft.
+  [ACTION:{{"type":"generate_document","template":"mutual_nda","contact_name":"Marcus Webb","params":{{"purpose":"evaluating a joint venture"}}}}]  — generate a FORMAL document from the template library, filled from the conversation. Prefer this over draft_contract whenever they name a document type (an NDA, a retainer, a demand letter…); draft_contract stays for the free-form proposal.
+    — The library and each template's params (* = required): engagement_letter (scope*, fee*, deposit, state) · retainer_agreement (services*, monthly_fee*, overage, state) · service_agreement (services*, price*, timeline, state) · consulting_agreement (engagement*, fees*, term, state) · coaching_agreement (program*, investment*, cancel_window) · mutual_nda (purpose*, term_years, state) · independent_contractor (services*, pay*, state) · demand_letter (amount*, owed_for*, deadline_days) · disengagement_letter (matter*, final_note).
+    — Fill params from what they SAID and what the records show. If a required param is missing, the action asks — and so should you. NEVER invent a fee, an amount, a scope, or a deadline: a made-up number in a contract is not a recoverable mistake.
+    — The load-bearing clauses are fixed template text; only the opener is written in their voice. If the result says the opener used standard wording, say that.
     — It lands as a DRAFT. Nothing reaches the client until the practitioner approves it — say so, and offer the read before the send.
-    — To actually send it, chain approve_draft with the queue_id draft_contract returned (or "latest"). Draft → read → approve is the sequence; don't skip the middle step on their behalf.
+    — To actually send it, chain approve_draft with the queue_id the draft verb returned (or "latest"). Draft → read → approve is the sequence; don't skip the middle step on their behalf.
     — A contract needs a named counterparty. If the name is ambiguous or unknown the action asks — never draft for whoever happened to match first.
     — If the result says the wording is generic placeholder, SAY THAT. It means the model returned nothing and a stub was substituted; calling it "your engagement letter" would be a lie about work that didn't happen.
-    — You CANNOT send anything for e-signature — there is no signing integration. You draft it, render it, and email it. Never say "sent for signature", "out for signing", or imply the client can sign it here; if they ask for that, name it as the gap and offer queue_build_request.
+    — YOU cannot send anything for e-signature — no verb does that. But the practitioner CAN: after approving, the Approval Queue has a "Send for signature" rail (BoldSign) and signed status shows in Documents → E-Signatures. Point them there instead of calling it a gap.
     — Drafting the words is not giving legal advice. You do not vet terms, judge enforceability, or advise on what a clause means — that stays with their attorney, and for a law practice the engagement letter is the practitioner's own instrument to approve.
 
 ACTIONS — BOOKINGS (putting real appointments on the calendar):

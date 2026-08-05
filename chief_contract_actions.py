@@ -307,3 +307,108 @@ async def handle_contract_pdf(client, biz, action) -> Dict[str, Any]:
         "contact_id": contact.get("id"),
         "nav": _nav_queue(),
     }
+
+
+# ─── generate_document — the template library, by voice ───────────────
+
+async def handle_generate_document(client, biz, action) -> Dict[str, Any]:
+    """Generate a formal document from the template library — the verb
+    behind "send Dana an NDA" / "draft the retainer for Marcus at
+    $1,200 a month".
+
+    TRUST-LAYER DISCIPLINE (same shape as draft_contract):
+      • What changes? ONE agent_queue row, status='draft',
+        action_type='document', plus a document_generated event.
+        Nothing is sent; nothing reaches the contact.
+      • Can the practitioner see it first? Yes — the draft waits in the
+        Approval Queue with the full body, and the result names the
+        template and the counterparty.
+      • Is it reversible? The draft can be edited or deleted; it is
+        inert until approved.
+      • Audit trail: agent_queue (agent='contract', ai_reasoning names
+        the template) + the document_generated event.
+      • Ambiguity is refused, not guessed: an unmatched template lists
+        the library; an ambiguous contact asks. And a missing REQUIRED
+        field asks rather than inventing — Chief must never make up a
+        fee, a scope, or a deadline and put it in a contract.
+    """
+    import doc_templates
+    import doc_templates_router as dtr
+
+    business_id = biz["id"]
+
+    # Template — id, title, or a word of it ("nda", "demand letter").
+    query = (action.get("template") or action.get("template_id")
+             or action.get("document") or "").strip()
+    resolved = dtr.resolve_template(query)
+    if resolved is None:
+        titles = ", ".join(t["title"] for t in doc_templates.TEMPLATES)
+        return _fail("generate_document",
+                     (f"I don't have a template matching '{query}'. " if query
+                      else "Which document? ")
+                     + f"The library: {titles}.")
+    if isinstance(resolved, list):
+        return _fail("generate_document",
+                     f"'{query}' matches more than one template: "
+                     + ", ".join(t["title"] for t in resolved) + ". Which one?")
+    template = resolved
+
+    found = _resolve_contact(business_id, action)
+    if found.get("error"):
+        return _fail("generate_document", found["error"])
+    contact = found["contact"]
+
+    # Params: a "params" dict wins; loose top-level keys that match the
+    # template's declared fields are gathered too (the model sometimes
+    # emits them flat). Undeclared keys are ignored by build_vars.
+    field_keys = {f["key"] for f in template["fields"]}
+    params: Dict[str, Any] = {}
+    for k in field_keys:
+        if action.get(k):
+            params[k] = str(action[k])
+    raw = action.get("params")
+    if isinstance(raw, dict):
+        params.update({k: str(v) for k, v in raw.items() if v is not None})
+
+    missing = [f["label"] for f in template["fields"]
+               if f["required"] and not (params.get(f["key"]) or "").strip()]
+    if missing:
+        # Ask, never invent — a made-up fee in a retainer is not a
+        # recoverable mistake.
+        return _fail("generate_document",
+                     f"To generate the {template['title']} for "
+                     f"{contact.get('name')}, I still need: "
+                     + "; ".join(missing) + ".")
+
+    try:
+        out = await dtr.generate_document_core(
+            biz, contact, template, params,
+            user_id=str(biz.get("owner_id") or ""))
+    except dtr.GenerationError as e:
+        return _fail("generate_document", e.message)
+    except Exception as e:
+        logger.exception(f"generate_document failed: {e}")
+        return _fail("generate_document",
+                     f"I couldn't generate that document: {str(e)[:160]}")
+
+    who = contact.get("name") or "your client"
+    result = (f"{template['title']} generated for {who} — waiting in the "
+              f"Approval Queue for your review")
+    if not out.get("drafted_sections_used"):
+        # The fixed clauses carry the document either way; only the
+        # personal opener degraded. Say so instead of letting the reply
+        # present neutral wording as voice work.
+        result += ". The opening paragraph used standard wording rather than your voice"
+
+    return {
+        "type": "generate_document",
+        "result": result,
+        "label": f"{template['title']} — {who}",
+        "queue_id": out.get("queue_id"),
+        "template_id": template["id"],
+        "contact_id": contact.get("id"),
+        "contact_name": who,
+        "subject": out.get("subject"),
+        "drafted_sections_used": out.get("drafted_sections_used"),
+        "nav": _nav_queue(),
+    }

@@ -117,7 +117,18 @@ def test_defaults_apply_and_validation_catches_missing():
 def fake(monkeypatch):
     fb = FakeSB()
     import sb_clients
-    monkeypatch.setattr(sb_clients, "sb_get_as_service", fb.get)
+
+    def get_with_ilike(path):
+        # FakeSB treats unknown operators as match-all; _resolve_contact
+        # uses name=ilike.*X* — emulate it so a miss is really a miss.
+        m = re.search(r"name=ilike\.\*(.+?)\*", path)
+        rows = fb.get(re.sub(r"&?name=ilike\.[^&]*", "", path))
+        if m:
+            needle = m.group(1).lower()
+            rows = [r for r in rows if needle in (r.get("name") or "").lower()]
+        return rows
+
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get_with_ilike)
     monkeypatch.setattr(sb_clients, "sb_post_as_service",
                         lambda p, b, prefer="rep": fb.post(p, b, prefer))
     fb.rows("businesses").append({
@@ -217,3 +228,85 @@ def test_generate_guards(fake, wired):
             template_id="engagement_letter", params=ok), _User()))
     assert e.value.status_code == 404          # contact not found
     assert fake.rows("agent_queue") == []      # nothing queued on any failure
+
+
+# ─── Chief's generate_document verb ──────────────────────────────────
+
+def test_resolve_template_fuzzy():
+    assert dtr.resolve_template("mutual_nda")["id"] == "mutual_nda"
+    assert dtr.resolve_template("NDA")["id"] == "mutual_nda"
+    assert dtr.resolve_template("demand letter")["id"] == "demand_letter"
+    assert dtr.resolve_template("retainer")["id"] == "retainer_agreement"
+    assert dtr.resolve_template("closing letter")["id"] == "disengagement_letter"
+    assert dtr.resolve_template("sonnet") is None
+    # "agreement" is ambiguous → a list comes back, never a guess
+    hit = dtr.resolve_template("agreement")
+    assert isinstance(hit, list) and len(hit) > 1
+
+
+def test_verb_registered_and_dispatched():
+    import action_registry
+    assert "generate_document" in action_registry.REGISTRY
+    entry = action_registry.REGISTRY["generate_document"]
+    assert entry["reversibility"] == "A" and not entry.get("bulk")
+    from chief_contract_actions import handle_generate_document
+    assert callable(handle_generate_document)
+
+
+def test_verb_happy_path_lands_draft(fake, wired):
+    from chief_contract_actions import handle_generate_document
+    biz = fake.rows("businesses")[0]
+    out = asyncio.run(handle_generate_document(None, biz, {
+        "type": "generate_document", "template": "nda",
+        "contact_name": "Dana",
+        "params": {"purpose": "evaluating a joint venture"},
+    }))
+    assert not out.get("failed")
+    assert out["type"] == "generate_document"
+    assert out["template_id"] == "mutual_nda"
+    assert out["queue_id"] and out["nav"] == {"tab": "operate", "sub": "queue"}
+    # model off in this fixture → the honest degradation note
+    assert "standard wording" in out["result"]
+    rows = fake.rows("agent_queue")
+    assert len(rows) == 1 and rows[0]["action_type"] == "document"
+
+
+def test_verb_refuses_instead_of_inventing(fake, wired):
+    from chief_contract_actions import handle_generate_document
+    biz = fake.rows("businesses")[0]
+
+    # missing required param → asks for it BY LABEL, queues nothing
+    out = asyncio.run(handle_generate_document(None, biz, {
+        "type": "generate_document", "template": "demand letter",
+        "contact_name": "Dana", "params": {"amount": "$1,850"},
+    }))
+    assert out.get("failed") and "What it's owed for" in out["result"]
+
+    # unknown template → lists the library
+    out = asyncio.run(handle_generate_document(None, biz, {
+        "type": "generate_document", "template": "warranty deed",
+        "contact_name": "Dana", "params": {},
+    }))
+    assert out.get("failed") and "Mutual Nondisclosure" in out["result"]
+
+    # unknown contact → refused
+    out = asyncio.run(handle_generate_document(None, biz, {
+        "type": "generate_document", "template": "nda",
+        "contact_name": "Zebulon", "params": {"purpose": "x"},
+    }))
+    assert out.get("failed")
+    assert fake.rows("agent_queue") == []
+
+
+def test_verb_gathers_flat_params(fake, wired):
+    # Chief sometimes emits fields flat on the action instead of in params.
+    from chief_contract_actions import handle_generate_document
+    biz = fake.rows("businesses")[0]
+    out = asyncio.run(handle_generate_document(None, biz, {
+        "type": "generate_document", "template": "demand_letter",
+        "contact_name": "Dana",
+        "amount": "$2,000", "owed_for": "Invoice #2041",
+    }))
+    assert not out.get("failed")
+    body = fake.rows("agent_queue")[0]["body"]
+    assert "$2,000" in body and "Invoice #2041" in body

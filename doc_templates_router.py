@@ -179,36 +179,40 @@ class GenerateBody(BaseModel):
     params: Dict[str, str] = {}
 
 
-@router.post("/generate")
-async def doctemplates_generate(body: GenerateBody,
-                                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    business = _owner(body.business_id, user)
-    template = doc_templates.TEMPLATE_INDEX.get(body.template_id)
-    if not template:
-        raise HTTPException(404, "unknown template")
-    err = doc_templates.validate_params(template, body.params or {})
+class GenerationError(Exception):
+    """A generation failure with a practitioner-readable message.
+    The endpoint maps it to an HTTP status; Chief's handler maps it to
+    a failed-action result."""
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.message = message
+        self.status = status
+
+
+async def generate_document_core(business: Dict[str, Any],
+                                 contact: Dict[str, Any],
+                                 template: Dict[str, Any],
+                                 params: Dict[str, str], *,
+                                 user_id: str) -> Dict[str, Any]:
+    """The one generation path — the /doctemplates endpoint and Chief's
+    generate_document verb both land here, so the document a practitioner
+    gets is identical whichever door they came through. Caller has
+    already authorized (owner gate / Chief's turn) and validated the
+    template + contact belong to the business."""
+    err = doc_templates.validate_params(template, params or {})
     if err:
-        raise HTTPException(400, err)
-
-    contacts = sb_clients.sb_get_as_service(
-        f"/contacts?id=eq.{body.contact_id}"
-        f"&business_id=eq.{body.business_id}&select=id,name,email&limit=1") or []
-    if not contacts:
-        raise HTTPException(404, "contact not found")
-    contact = contacts[0]
-
-    billing_limits.require_units(body.business_id)  # drafting is an AI action
+        raise GenerationError(err, 400)
 
     business_name = business.get("name") or "this business"
     practitioner = ((business.get("settings") or {}).get("practitioner_name")
                     or business_name)
     variables = doc_templates.build_vars(
-        template, body.params or {},
+        template, params or {},
         business_name=business_name, practitioner_name=practitioner,
         client_name=contact.get("name") or "Client", date_str=_today())
 
     drafted = await _draft_sections(business, template, variables,
-                                    user_id=user.id)
+                                    user_id=user_id)
 
     # The attorney-review note rides on everyone's paper except the
     # lawyer's own — they ARE the counsel.
@@ -219,8 +223,8 @@ async def doctemplates_generate(body: GenerateBody,
     subject = f"{template['title']} — {business_name}"
     queue_id: Optional[str] = None
     queued = sb_clients.sb_post_as_service("/agent_queue", {
-        "business_id": body.business_id,
-        "contact_id": body.contact_id,
+        "business_id": business["id"],
+        "contact_id": contact["id"],
         "agent": "contract",
         "action_type": "document",
         "subject": subject,
@@ -237,11 +241,12 @@ async def doctemplates_generate(body: GenerateBody,
     if not queue_id:
         # The document exists but has nowhere to be approved from —
         # surface that honestly instead of a dead 'ok'.
-        raise HTTPException(502, "couldn't queue the document for review — try again")
+        raise GenerationError(
+            "couldn't queue the document for review — try again", 502)
 
     try:
         sb_clients.sb_post_as_service("/events", {
-            "business_id": body.business_id, "contact_id": body.contact_id,
+            "business_id": business["id"], "contact_id": contact["id"],
             "event_type": "document_generated",
             "data": {"template_id": template["id"], "title": template["title"],
                      "queue_id": queue_id},
@@ -252,3 +257,50 @@ async def doctemplates_generate(body: GenerateBody,
     return {"ok": True, "queue_id": queue_id, "subject": subject,
             "title": template["title"], "body": doc_body,
             "drafted_sections_used": bool(drafted)}
+
+
+def resolve_template(query: str) -> Any:
+    """Loose template lookup for conversational callers: exact id, then
+    title/keyword containment. Returns the template, a list (ambiguous),
+    or None (no match)."""
+    q = (query or "").strip().lower().replace("-", "_")
+    if not q:
+        return None
+    exact = doc_templates.TEMPLATE_INDEX.get(q)
+    if exact:
+        return exact
+    q_words = q.replace("_", " ")
+    hits = [t for t in doc_templates.TEMPLATES
+            if q_words in t["title"].lower() or q in t["id"]]
+    if not hits:
+        # token overlap: "nda" → Mutual Nondisclosure, "demand" → Demand Letter
+        hits = [t for t in doc_templates.TEMPLATES
+                if any(w and (w in t["id"] or w in t["title"].lower())
+                       for w in q_words.split())]
+    if len(hits) == 1:
+        return hits[0]
+    return hits or None
+
+
+@router.post("/generate")
+async def doctemplates_generate(body: GenerateBody,
+                                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    business = _owner(body.business_id, user)
+    template = doc_templates.TEMPLATE_INDEX.get(body.template_id)
+    if not template:
+        raise HTTPException(404, "unknown template")
+
+    contacts = sb_clients.sb_get_as_service(
+        f"/contacts?id=eq.{body.contact_id}"
+        f"&business_id=eq.{body.business_id}&select=id,name,email&limit=1") or []
+    if not contacts:
+        raise HTTPException(404, "contact not found")
+    contact = contacts[0]
+
+    billing_limits.require_units(body.business_id)  # drafting is an AI action
+
+    try:
+        return await generate_document_core(
+            business, contact, template, body.params or {}, user_id=user.id)
+    except GenerationError as e:
+        raise HTTPException(e.status, e.message)
