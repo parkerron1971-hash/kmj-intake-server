@@ -43,12 +43,13 @@ _SIGNATURE_BLOCK = """ACCEPTED AND AGREED
 {business_name}
 
 By: ____________________________     Date: ______________
-     {practitioner_name}
+Name: {practitioner_name}
 
 
 {client_name}
 
 By: ____________________________     Date: ______________
+Name: {client_name}
 """
 
 # Appended for every business type EXCEPT lawyer (they are the counsel).

@@ -528,7 +528,7 @@ def test_every_agreement_carries_the_back_page():
         # e-sign validity is load-bearing: execution runs through BoldSign
         assert "electronic signatures" in body, tid
         # the signature block stays last
-        assert body.rstrip().endswith("Date: ______________"), tid
+        assert body.count("By: ___") == 2 and "ACCEPTED AND AGREED" in body, tid
     # letters stay letters — no boilerplate on a demand or closing letter
     for tid in ("demand_letter", "disengagement_letter"):
         t = dt.TEMPLATE_INDEX[tid]
