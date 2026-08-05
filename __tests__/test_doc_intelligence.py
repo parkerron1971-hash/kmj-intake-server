@@ -43,7 +43,7 @@ def fake(monkeypatch):
                         lambda p, b, prefer="rep": fb.post(p, b, prefer))
     fb.rows("businesses").append({
         "id": BIZ, "owner_id": "owner1", "name": "Reyes Law",
-        "business_type": "lawyer"})
+        "type": "lawyer"})
     fb.rows("contacts").append({
         "id": "c9", "business_id": BIZ, "name": "Dana Whitfield"})
     return fb

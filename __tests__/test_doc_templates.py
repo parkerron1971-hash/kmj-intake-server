@@ -1,0 +1,219 @@
+# __tests__/test_doc_templates.py
+#
+# The document template library + /doctemplates surface. The integrity
+# tests are the point: every placeholder in every template must resolve
+# from declared fields or the standard variables — a typo'd placeholder
+# in a retainer is a defect the library can never ship with.
+
+import asyncio
+import pathlib
+import re
+import sys
+
+_here = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(_here.parent))
+sys.path.insert(0, str(_here))
+
+import pytest  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
+
+import doc_templates as dt  # noqa: E402
+import doc_templates_router as dtr  # noqa: E402
+from test_i2_gl_sync import FakeSB  # noqa: E402
+
+
+class _User:
+    id = "owner1"
+    email = "owner1@x.com"
+
+
+class _Stranger:
+    id = "intruder"
+    email = "evil@x.com"
+
+
+BIZ = "b1"
+
+_STANDARD_VARS = {"business_name", "practitioner_name", "client_name", "date"}
+_PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
+
+
+# ─── Library integrity ───────────────────────────────────────────────
+
+def test_every_placeholder_resolves():
+    for t in dt.TEMPLATES:
+        allowed = _STANDARD_VARS | {f["key"] for f in t["fields"]}
+        for s in t["sections"]:
+            for text in (s.get("text"), s.get("brief"), s.get("fallback")):
+                if not text:
+                    continue
+                for var in _PLACEHOLDER.findall(text):
+                    assert var in allowed, \
+                        f"{t['id']}: placeholder {{{var}}} has no source"
+
+
+def test_library_shape_and_uniqueness():
+    ids = [t["id"] for t in dt.TEMPLATES]
+    assert len(ids) == len(set(ids)) == 9
+    for t in dt.TEMPLATES:
+        assert t["title"] and t["description"] and t["category"]
+        assert t["suggested_for"], f"{t['id']} suggests nothing"
+        assert any(f["required"] for f in t["fields"]), \
+            f"{t['id']} has no required field"
+        # conditional sections must key on a real field
+        keys = {f["key"] for f in t["fields"]}
+        for s in t["sections"]:
+            if s.get("requires"):
+                assert s["requires"] in keys
+        # every drafted section can survive the model being down
+        for s in t["sections"]:
+            if s["kind"] == "drafted":
+                assert (s.get("fallback") or "").strip()
+
+
+def test_assemble_conditionals_fallbacks_and_review_note():
+    t = dt.TEMPLATE_INDEX["engagement_letter"]
+    v = dt.build_vars(t, {"scope": "The Northside lease", "fee": "$300/hour"},
+                      business_name="Reyes Law", practitioner_name="A. Reyes",
+                      client_name="Dana Whitfield", date_str="August 4, 2026")
+    body = dt.assemble(t, v, {}, include_review_note=True)
+    # fallback carried the drafted opener
+    assert "Thank you for engaging Reyes Law" in body
+    # no deposit given → no deposit clause; no state → no governing law
+    assert "DEPOSIT" not in body and "GOVERNING LAW" not in body
+    # load-bearing clauses present, variables resolved
+    assert "The Northside lease" in body and "$300/hour" in body
+    assert "SCOPE OF ENGAGEMENT" in body and "ENDING THE ENGAGEMENT" in body
+    assert "Dana Whitfield" in body and "{" not in body.replace("{client_name}", "")
+    assert "not legal advice" in body
+
+    # lawyer's own paper carries no review note; deposit clause appears when given
+    v2 = dt.build_vars(t, {"scope": "s", "fee": "$1", "deposit": "$1,500",
+                           "state": "Georgia"},
+                       business_name="Reyes Law", practitioner_name="A. Reyes",
+                       client_name="Dana", date_str="August 4, 2026")
+    body2 = dt.assemble(t, v2, {0: "Custom drafted opener."},
+                        include_review_note=False)
+    assert "not legal advice" not in body2
+    assert "DEPOSIT" in body2 and "$1,500" in body2
+    assert "GOVERNING LAW" in body2 and "Georgia" in body2
+    assert "Custom drafted opener." in body2
+
+
+def test_defaults_apply_and_validation_catches_missing():
+    t = dt.TEMPLATE_INDEX["mutual_nda"]
+    assert dt.validate_params(t, {}) is not None          # purpose required
+    assert dt.validate_params(t, {"purpose": "eval"}) is None
+    v = dt.build_vars(t, {"purpose": "eval"}, business_name="B",
+                      practitioner_name="P", client_name="C", date_str="D")
+    assert v["term_years"] == "2"                          # default applied
+    body = dt.assemble(t, v, {}, include_review_note=True)
+    assert "2 years" in body
+
+
+# ─── Router ──────────────────────────────────────────────────────────
+
+@pytest.fixture
+def fake(monkeypatch):
+    fb = FakeSB()
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", fb.get)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service",
+                        lambda p, b, prefer="rep": fb.post(p, b, prefer))
+    fb.rows("businesses").append({
+        "id": BIZ, "owner_id": "owner1", "name": "Reyes Law",
+        "type": "lawyer", "settings": {"practitioner_name": "Alicia Reyes"},
+        "voice_profile": {}})
+    fb.rows("contacts").append({
+        "id": "c9", "business_id": BIZ, "name": "Dana Whitfield",
+        "email": "dana@x.com"})
+    return fb
+
+
+@pytest.fixture
+def wired(fake, monkeypatch):
+    rec = {"units": []}
+    monkeypatch.setattr(dtr.billing_limits, "require_units",
+                        lambda biz: rec["units"].append(biz))
+    monkeypatch.setattr(dtr.llm_call, "api_key", lambda: "")  # fallbacks path
+    return rec
+
+
+def test_routes_exist_and_are_authed():
+    from auth_supabase import require_user
+    by_path = {}
+    for r in dtr.router.routes:
+        by_path.setdefault(r.path, set()).update(getattr(r, "methods", set()))
+        assert require_user in [d.call for d in r.dependant.dependencies], \
+            f"{r.path} is missing require_user"
+    assert "GET" in by_path.get("/doctemplates/list", set())
+    assert "POST" in by_path.get("/doctemplates/generate", set())
+
+
+def test_list_ranks_suggested_first(fake):
+    out = asyncio.run(dtr.doctemplates_list(BIZ, _User()))
+    ts = out["templates"]
+    assert len(ts) == 9
+    # lawyer templates lead; once a non-suggested appears, no suggested follows
+    seen_unsuggested = False
+    for t in ts:
+        if not t["suggested"]:
+            seen_unsuggested = True
+        assert not (seen_unsuggested and t["suggested"])
+    assert ts[0]["suggested"] and ts[0]["id"] in (
+        "engagement_letter", "retainer_agreement", "mutual_nda",
+        "demand_letter", "disengagement_letter")
+
+
+def test_generate_lands_the_queue_draft(fake, wired):
+    body = dtr.GenerateBody(
+        business_id=BIZ, contact_id="c9", template_id="engagement_letter",
+        params={"scope": "The Northside lease negotiation",
+                "fee": "$300/hour", "deposit": "$1,500"})
+    out = asyncio.run(dtr.doctemplates_generate(body, _User()))
+    assert out["ok"] and out["queue_id"]
+    assert out["drafted_sections_used"] is False          # model off → fallbacks
+    assert "Dana Whitfield" in out["body"]
+    assert "$1,500" in out["body"]
+    assert "not legal advice" not in out["body"]          # lawyer's own paper
+
+    rows = fake.rows("agent_queue")
+    assert len(rows) == 1
+    q = rows[0]
+    assert q["agent"] == "contract" and q["action_type"] == "document"
+    assert q["status"] == "draft" and q["channel"] == "email"
+    assert q["contact_id"] == "c9"
+    assert q["subject"] == "Engagement Letter — Reyes Law"
+    # the generation charged a unit and hit the event spine
+    assert wired["units"] == [BIZ]
+    events = fake.rows("events")
+    assert len(events) == 1 and events[0]["event_type"] == "document_generated"
+    assert events[0]["data"]["queue_id"] == q["id"]
+
+
+def test_generate_guards(fake, wired):
+    ok = {"scope": "s", "fee": "$1"}
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(dtr.doctemplates_generate(dtr.GenerateBody(
+            business_id=BIZ, contact_id="c9",
+            template_id="engagement_letter", params=ok), _Stranger()))
+    assert e.value.status_code == 403
+
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(dtr.doctemplates_generate(dtr.GenerateBody(
+            business_id=BIZ, contact_id="c9",
+            template_id="nope", params=ok), _User()))
+    assert e.value.status_code == 404
+
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(dtr.doctemplates_generate(dtr.GenerateBody(
+            business_id=BIZ, contact_id="c9",
+            template_id="engagement_letter", params={"fee": "$1"}), _User()))
+    assert e.value.status_code == 400          # scope missing
+
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(dtr.doctemplates_generate(dtr.GenerateBody(
+            business_id=BIZ, contact_id="ghost",
+            template_id="engagement_letter", params=ok), _User()))
+    assert e.value.status_code == 404          # contact not found
+    assert fake.rows("agent_queue") == []      # nothing queued on any failure
