@@ -431,6 +431,7 @@ async def handle_generate_document(client, biz, action) -> Dict[str, Any]:
     return {
         "type": "generate_document",
         "result": result,
+        "review_note": out.get("review_note"),
         "label": f"{template['title']} — {who}",
         "queue_id": out.get("queue_id"),
         "template_id": template["id"],

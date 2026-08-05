@@ -162,6 +162,7 @@ async def doctemplates_list(biz: str,
             "heading": s.get("heading"),
             "text": s["text"] if s["kind"] == "fixed" else s.get("fallback", ""),
             "requires": s.get("requires"),
+            "requires_value": s.get("requires_value"),
         } for s in t["sections"]]
         chars = sum(len(s["text"]) for s in sections)
         pages = max(1, round(chars / 2600))
@@ -299,16 +300,21 @@ async def generate_document_core(business: Dict[str, Any],
     variables = doc_templates.build_vars(
         template, params or {},
         business_name=business_name, practitioner_name=practitioner,
-        client_name=contact.get("name") or "Client", date_str=_today())
+        client_name=contact.get("name") or "Client", date_str=_today(),
+        # The document speaks the business's trade — expense examples,
+        # outcome factors, and file-vs-work-product language all derive
+        # from the vertical (doc_templates.VERTICAL_LANGUAGE).
+        business_type=business.get("type"))
 
     drafted = await _draft_sections(business, template, variables,
                                     user_id=user_id)
 
-    # The attorney-review note rides on everyone's paper except the
-    # lawyer's own — they ARE the counsel.
+    # The attorney-review note is an INTERNAL acknowledgment — it shows
+    # in the app (dialog, queue, Chief's reply) and never prints on the
+    # client's document. Lawyers see none (they are the counsel).
     is_lawyer = (business.get("type") or "").lower() == "lawyer"
     doc_body = doc_templates.assemble(
-        template, variables, drafted, include_review_note=not is_lawyer)
+        template, variables, drafted, include_review_note=False)
 
     subject = f"{template['title']} — {business_name}"
     queue_id: Optional[str] = None
@@ -352,7 +358,8 @@ async def generate_document_core(business: Dict[str, Any],
             "title": template["title"], "body": doc_body,
             "drafted_sections_used": bool(drafted),
             "used_defaults": used_defaults,
-            "saved_defaults": saved_defaults}
+            "saved_defaults": saved_defaults,
+            "review_note": None if is_lawyer else doc_templates._REVIEW_NOTE}
 
 
 def resolve_template(query: str, business_id: Optional[str] = None) -> Any:

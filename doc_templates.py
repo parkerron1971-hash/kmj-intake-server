@@ -44,6 +44,7 @@ _SIGNATURE_BLOCK = """ACCEPTED AND AGREED
 
 By: ____________________________     Date: ______________
 Name: {practitioner_name}
+Title: {practitioner_title}
 
 
 {client_name}
@@ -64,10 +65,18 @@ def sig(text: str) -> Dict[str, Any]:
 
 
 def fixed(heading: Optional[str], text: str,
-          requires: Optional[str] = None) -> Dict[str, Any]:
+          requires: Optional[str] = None,
+          requires_value: Optional[tuple] = None) -> Dict[str, Any]:
+    """requires: render only when that field is non-empty.
+    requires_value: ("field", "value") — render only when the field
+    equals the value (the fee-model branch mechanism). Both may be set;
+    they AND together."""
     d: Dict[str, Any] = {"kind": "fixed", "heading": heading, "text": text}
     if requires:
         d["requires"] = requires
+    if requires_value:
+        d["requires_value"] = {"field": requires_value[0],
+                               "value": requires_value[1]}
     return d
 
 
@@ -90,6 +99,27 @@ def field(key: str, label: str, *, type_: str = "text", required: bool = False,
             "placeholder": placeholder, "default": default, "sticky": sticky}
 
 
+def select_field(key: str, label: str, options: List[str], *,
+                 required: bool = False, default: str = "",
+                 sticky: bool = False) -> Dict[str, Any]:
+    """A typed choice — the dialog renders a dropdown, Chief gets an
+    enumerated set, and requires_value sections branch on it."""
+    f = field(key, label, required=required, default=default, sticky=sticky)
+    f["type"] = "select"
+    f["options"] = options
+    return f
+
+
+def list_field(key: str, label: str, *, required: bool = False,
+               placeholder: str = "", sticky: bool = False) -> Dict[str, Any]:
+    """One item per line in the form; renders as a structured list in
+    the document (deliverables, milestones)."""
+    f = field(key, label, type_="textarea", required=required,
+              placeholder=placeholder, sticky=sticky)
+    f["type"] = "list"
+    return f
+
+
 # ─── The nine ────────────────────────────────────────────────────────
 
 TEMPLATES: List[Dict[str, Any]] = [
@@ -108,10 +138,20 @@ TEMPLATES: List[Dict[str, Any]] = [
             field("scope", "Scope of the engagement", type_="textarea", required=True,
                   placeholder="e.g. Representation in the negotiation and closing of the Northside lease"),
             field("fee", "Fee", required=True, sticky=True,
-                  placeholder="e.g. $300/hour, billed monthly — or a flat $2,500"),
-            field("deposit", "Initial deposit / retainer (optional)", sticky=True,
-                  placeholder="e.g. $1,500"),
+                  placeholder="e.g. $300/hour — or a flat $2,500 (just the amount; structure goes below)"),
+            select_field("fee_model", "How the fee works",
+                         ["flat_fee", "hourly", "retainer", "milestone"],
+                         sticky=True),
+            field("payment_terms", "Payment structure (optional)", type_="textarea",
+                  sticky=True, default="",
+                  placeholder="e.g. 50% due on signing; the remaining 50% due at completion."),
+            field("deposit", "Retainer deposit amount (retainer model only)",
+                  sticky=True, placeholder="e.g. $1,500"),
+            field("expense_cap", "Written approval needed for costs over (optional)",
+                  sticky=True, placeholder="e.g. $50"),
             field("state", "Governing state (optional)", sticky=True, placeholder="e.g. Georgia"),
+            field("venue_county", "Venue county (optional)", sticky=True,
+                  placeholder="e.g. Oakland"),
         ],
         "sections": [
             drafted(None,
@@ -128,16 +168,37 @@ TEMPLATES: List[Dict[str, Any]] = [
             fixed("FEES AND BILLING",
                   "Our fee for this engagement is: {fee}. Invoices are payable upon "
                   "receipt unless stated otherwise on the invoice. Reasonable "
-                  "out-of-pocket costs incurred on your behalf (filing fees, "
-                  "postage, third-party charges) are billed at cost."),
-            fixed("DEPOSIT",
+                  "out-of-pocket costs incurred on your behalf (such as "
+                  "{expense_examples}) are billed at cost{expense_cap_clause}."),
+            # ── Payment structure branches on the fee model. The
+            # trust-drawdown language survives ONLY where it is true —
+            # a retainer. A flat fee has no "unused balance" to argue
+            # about, and the clause now says what a flat fee means.
+            fixed("PAYMENT STRUCTURE",
+                  "{payment_terms}\n\n"
+                  "This is a flat-fee engagement. Any deposit or initial payment "
+                  "is a milestone payment toward the flat fee and is not "
+                  "refundable once work has begun. The remaining balance is due "
+                  "at completion of the scope described above, and final work "
+                  "product is released on receipt of payment in full.",
+                  requires_value=("fee_model", "flat_fee")),
+            fixed("PAYMENT STRUCTURE",
+                  "Time is billed at {fee} and invoiced as the work proceeds. "
+                  "{payment_terms}",
+                  requires_value=("fee_model", "hourly")),
+            fixed("PAYMENT STRUCTURE",
+                  "Payment is tied to the milestones below. Each payment is due "
+                  "on delivery of its milestone, and work on the next milestone "
+                  "may pause until the prior payment is received.\n\n{payment_terms}",
+                  requires_value=("fee_model", "milestone")),
+            fixed("RETAINER",
                   "An initial deposit of {deposit} is due on signing and will be "
                   "held and applied against fees and costs as they are incurred, "
                   "in accordance with the rules applicable to client funds. If the "
                   "deposit is exhausted before the engagement concludes, we may "
                   "request that it be replenished. Any unused balance is returned "
                   "promptly at the end of the engagement.",
-                  requires="deposit"),
+                  requires="deposit", requires_value=("fee_model", "retainer")),
             fixed("YOUR RESPONSIBILITIES",
                   "You agree to provide complete and accurate information, respond "
                   "to requests in a timely way, and tell us promptly about anything "
@@ -148,13 +209,19 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "respond to inquiries within a reasonable time. You will be "
                   "consulted before decisions that materially affect the outcome "
                   "or the cost."),
+            fixed("CONFIDENTIALITY",
+                  "We treat the information you share with us in this engagement "
+                  "as confidential, using it only to perform the services and "
+                  "disclosing it only with your permission, to those who need it "
+                  "to do the work, or as required by law."),
             fixed("ENDING THE ENGAGEMENT",
                   "Either of us may end this engagement with written notice. You "
                   "remain responsible for fees and costs incurred through the "
-                  "effective date of termination, and we will return your file and "
-                  "any unused deposit promptly."),
+                  "effective date of termination, and we will return your "
+                  "{work_materials_term} and any unused deposit promptly."),
             fixed("GOVERNING LAW",
-                  "This agreement is governed by the laws of {state}.",
+                  "This agreement is governed by the laws of "
+                  "{state_full}.{venue_clause}",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
         ],
@@ -209,7 +276,7 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "has begun, except any unused advance deposit, which is "
                   "returned."),
             fixed("GOVERNING LAW",
-                  "This agreement is governed by the laws of {state}.",
+                  "This agreement is governed by the laws of {state_full}.{venue_clause}",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
         ],
@@ -279,7 +346,7 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "through the termination date; any unearned prepayment is "
                   "returned."),
             fixed("GOVERNING LAW",
-                  "This agreement is governed by the laws of {state}.",
+                  "This agreement is governed by the laws of {state_full}.{venue_clause}",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
         ],
@@ -344,7 +411,7 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "termination date.",
                   requires="term"),
             fixed("GOVERNING LAW",
-                  "This agreement is governed by the laws of {state}.",
+                  "This agreement is governed by the laws of {state_full}.{venue_clause}",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
         ],
@@ -468,7 +535,7 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "repair, so the injured party may seek injunctive relief in "
                   "addition to any other remedy available at law."),
             fixed("GOVERNING LAW",
-                  "This agreement is governed by the laws of {state}.",
+                  "This agreement is governed by the laws of {state_full}.{venue_clause}",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
         ],
@@ -524,7 +591,7 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "Company pays for services satisfactorily performed through the "
                   "termination date."),
             fixed("GOVERNING LAW",
-                  "This agreement is governed by the laws of {state}.",
+                  "This agreement is governed by the laws of {state_full}.{venue_clause}",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
         ],
@@ -625,6 +692,93 @@ TEMPLATES: List[Dict[str, Any]] = [
 TEMPLATE_INDEX: Dict[str, Dict[str, Any]] = {t["id"]: t for t in TEMPLATES}
 
 
+# ─── Vertical language — the document speaks the business's trade ────
+# The system KNOWS the business type at generation time; these derived
+# variables make the clauses use it. A rubric, not per-vertical forks:
+# templates reference {expense_examples} / {outcome_factors} /
+# {work_materials_term} and every vertical resolves them — unknown
+# types get the neutral defaults.
+
+VERTICAL_LANGUAGE: Dict[str, Dict[str, str]] = {
+    "_default": {
+        "expense_examples": "materials, licenses, and third-party charges",
+        "outcome_factors": "circumstances outside our control",
+        "work_materials_term": "materials and completed work product",
+    },
+    "lawyer": {
+        "expense_examples": "filing fees, postage, and third-party charges",
+        "outcome_factors": "decision-makers outside our control",
+        "work_materials_term": "file",
+    },
+    "accountant": {
+        "expense_examples": "filing fees, software, and third-party charges",
+        "work_materials_term": "records and work papers",
+    },
+    "consultant": {
+        "expense_examples": "travel and pre-approved third-party charges",
+    },
+    "creative": {
+        "expense_examples": "domain registration, hosting, stock imagery, "
+                            "fonts, and software licenses",
+        "work_materials_term": "completed deliverables and source files",
+    },
+    "contractor": {
+        "expense_examples": "materials, equipment rental, and permits",
+        "outcome_factors": "site conditions and suppliers outside our control",
+        "work_materials_term": "completed work and materials on site",
+    },
+    "coach": {
+        "expense_examples": "pre-approved materials and venue charges",
+        "outcome_factors": "your own decisions and effort, which coaching "
+                           "cannot replace",
+    },
+    "personal_services": {
+        "expense_examples": "products and supplies used in your services",
+    },
+}
+
+
+def vertical_language(business_type: Optional[str]) -> Dict[str, str]:
+    merged = dict(VERTICAL_LANGUAGE["_default"])
+    merged.update(VERTICAL_LANGUAGE.get((business_type or "").lower(), {}))
+    return merged
+
+
+# Governing-law rendering: "the laws of MI" read like a form. Full
+# names always; pass-through for anything already written out.
+US_STATE_NAMES: Dict[str, str] = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+    "CA": "California", "CO": "Colorado", "CT": "Connecticut",
+    "DE": "Delaware", "FL": "Florida", "GA": "Georgia", "HI": "Hawaii",
+    "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa",
+    "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine",
+    "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan",
+    "MN": "Minnesota", "MS": "Mississippi", "MO": "Missouri",
+    "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico",
+    "NY": "New York", "NC": "North Carolina", "ND": "North Dakota",
+    "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania",
+    "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota",
+    "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont",
+    "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+    "WI": "Wisconsin", "WY": "Wyoming", "DC": "the District of Columbia",
+}
+
+
+def us_state_full(s: str) -> str:
+    v = (s or "").strip()
+    return US_STATE_NAMES.get(v.upper(), v)
+
+
+# Derived variables build_vars computes on top of the field values.
+# The placeholder-integrity test admits these alongside declared fields.
+DERIVED_VARS = {
+    "state_full", "venue_clause", "effective_date_resolved",
+    "expense_examples", "outcome_factors", "work_materials_term",
+    "expense_cap_clause", "extra_rate_clause", "practitioner_title",
+}
+
+
 # ─── Assembly ────────────────────────────────────────────────────────
 
 class _SafeMap(dict):
@@ -646,7 +800,8 @@ def validate_params(template: Dict[str, Any],
 
 def build_vars(template: Dict[str, Any], params: Dict[str, str],
                *, business_name: str, practitioner_name: str,
-               client_name: str, date_str: str) -> Dict[str, str]:
+               client_name: str, date_str: str,
+               business_type: Optional[str] = None) -> Dict[str, str]:
     v = {
         "business_name": business_name,
         "practitioner_name": practitioner_name,
@@ -655,7 +810,30 @@ def build_vars(template: Dict[str, Any], params: Dict[str, str],
     }
     for f in template["fields"]:
         val = (params.get(f["key"]) or "").strip() or f.get("default", "")
+        if f.get("type") == "list" and val:
+            # one item per line in the form → a structured list on paper
+            items = [ln.strip().lstrip("-•").strip()
+                     for ln in val.split("\n") if ln.strip()]
+            val = "\n".join(f"- {it}" for it in items)
         v[f["key"]] = val
+
+    # Derived variables — where the vertical speaks (DERIVED_VARS).
+    v.update(vertical_language(business_type))
+    v["state_full"] = us_state_full(v.get("state", ""))
+    venue = (v.get("venue_county") or "").strip()
+    v["venue_clause"] = (f" Venue for any court proceeding lies in "
+                         f"{venue} County." if venue else "")
+    v["effective_date_resolved"] = ((v.get("effective_date") or "").strip()
+                                    or "the date of the last signature below")
+    cap = (v.get("expense_cap") or "").strip()
+    v["expense_cap_clause"] = (f"; any single cost over {cap} will be "
+                               f"approved by you in writing before it is "
+                               f"incurred" if cap else "")
+    rate = (v.get("extra_rate") or "").strip()
+    v["extra_rate_clause"] = (f"are billed at {rate} and" if rate
+                              else "are quoted first and")
+    v["practitioner_title"] = ((v.get("title") or "").strip()
+                               or "____________________")
     return v
 
 
@@ -675,6 +853,9 @@ def assemble(template: Dict[str, Any], variables: Dict[str, str],
     for i, s in enumerate(template["sections"]):
         req = s.get("requires")
         if req and not (variables.get(req) or "").strip():
+            continue
+        rv = s.get("requires_value")
+        if rv and (variables.get(rv["field"]) or "").strip().lower() != rv["value"]:
             continue
         if s["kind"] == "drafted":
             text = (drafted_texts.get(i) or "").strip() or s["fallback"]
@@ -727,22 +908,23 @@ _GENERAL_TERMS = fixed("GENERAL TERMS",
     "prompt notice and resumes as soon as reasonably possible.\n"
     "(g) Signatures. This agreement may be signed in counterparts, and "
     "electronic signatures — including through an e-signature service — "
-    "are as valid as ink.")
+    "are as valid as ink.\n"
+    "(h) Effective date. This agreement takes effect on "
+    "{effective_date_resolved}.")
 
 _DISPUTE = fixed("DISPUTE RESOLUTION",
     "If a dispute arises under this agreement, the parties will first try "
     "in good faith to resolve it directly within 30 days of one party "
     "raising it in writing. If that fails, they will consider mediation "
     "before either begins a court proceeding — except that either party "
-    "may go straight to court to protect confidential information or "
-    "intellectual property. Where the law allows, the prevailing party in "
+    "may go straight to court to protect confidential information. Where the law allows, the prevailing party in "
     "any proceeding may recover its reasonable costs.")
 
 _NO_GUARANTEE_PRO = fixed("NO GUARANTEE OF OUTCOME",
     "We will bring professional skill, care, and judgment to this "
     "engagement. Outcomes depend on facts, third parties, and "
-    "decision-makers outside our control, and no particular result is "
-    "promised or implied.")
+    "{outcome_factors}, and no particular result is promised or "
+    "implied.")
 
 _OVERDUE = fixed("OVERDUE ACCOUNTS",
     "Amounts more than 15 days past due may accrue a late charge of 1.5% "
@@ -784,3 +966,172 @@ for _t in TEMPLATES:
     if _extra:
         _sig_block = _t["sections"].pop()   # signature block is last
         _t["sections"].extend(list(_extra) + [_sig_block])
+
+
+# ─── The tenth: Creative Services Agreement ──────────────────────────
+# Kevin's live-fire finding (8/05): creative work had no agreement of
+# its own, so the engagement letter — correct for a lawyer — was the
+# nearest suggestion, and its trust-drawdown and law-office language
+# leaked onto a design job. This is the variant built for the work:
+# IP that transfers ON PAYMENT IN FULL, revision rounds and change
+# orders, deemed acceptance, an explicit DEFINITION of completion
+# (payment hangs on it), client-delay protection, client-materials
+# warranty, a liability cap, and third-party services responsibility.
+# Shared spine (dispute w/ IP carve-out + general terms) splices in
+# below like every other agreement.
+
+_DISPUTE_IP = fixed("DISPUTE RESOLUTION",
+    "If a dispute arises under this agreement, the parties will first try "
+    "in good faith to resolve it directly within 30 days of one party "
+    "raising it in writing. If that fails, they will consider mediation "
+    "before either begins a court proceeding — except that either party "
+    "may go straight to court to protect confidential information or "
+    "intellectual property. Where the law allows, the prevailing party in "
+    "any proceeding may recover its reasonable costs.")
+
+_CONFIDENTIALITY_MUTUAL = fixed("CONFIDENTIALITY",
+    "Each party will protect the other's non-public business information "
+    "with at least the care it uses for its own, use it only for this "
+    "project, and disclose it only to those who need it for the work or "
+    "as required by law. This obligation survives the end of the project "
+    "for two years, and indefinitely for trade secrets.")
+
+_CREATIVE_TEMPLATE: Dict[str, Any] = {
+    "id": "creative_services_agreement",
+    "numbered": True,
+    "title": "Creative Services Agreement",
+    "subtitle": "Deliverables, Revisions, Ownership & Getting Paid",
+    "description": "Built for design, web, brand, and content work: "
+                   "revisions, acceptance, IP on payment, and a defined "
+                   "finish line.",
+    "category": "client",
+    "suggested_for": ["creative", "personal_services"],
+    "fields": [
+        field("scope", "The project", type_="textarea", required=True,
+              placeholder="e.g. Design and build a five-page marketing site for Walton Wellness"),
+        list_field("deliverables", "Deliverables (one per line)", required=True,
+                   placeholder="Homepage design\nFour interior pages\nMobile layouts\nLaunch on client hosting"),
+        field("fee", "Project fee", required=True, sticky=True,
+              placeholder="e.g. $2,400 (just the amount; structure below)"),
+        select_field("fee_model", "How the fee works",
+                     ["flat_fee", "hourly", "milestone"],
+                     default="flat_fee", sticky=True),
+        field("payment_terms", "Payment structure (optional)", type_="textarea",
+              sticky=True, default="",
+              placeholder="e.g. 50% due on signing; the remaining 50% due at completion."),
+        field("revision_rounds", "Revision rounds included", default="2",
+              sticky=True, placeholder="2"),
+        field("extra_rate", "Rate for extra rounds / out-of-scope work (optional)",
+              sticky=True, placeholder="e.g. $85/hour"),
+        field("acceptance_days", "Days until silent delivery counts as accepted",
+              default="7", sticky=True, placeholder="7"),
+        field("abandon_days", "Days of client silence before the project closes out",
+              default="30", sticky=True, placeholder="30"),
+        field("expense_cap", "Written approval needed for costs over (optional)",
+              sticky=True, placeholder="e.g. $50"),
+        select_field("portfolio_ok", "May the work appear in your portfolio?",
+                     ["yes", "no"], default="yes", sticky=True),
+        field("state", "Governing state (optional)", sticky=True,
+              placeholder="e.g. Michigan"),
+    ],
+    "sections": [
+        drafted(None,
+                "A one-paragraph professional opener from {business_name} to "
+                "{client_name}: excited to take on the project, this agreement "
+                "sets the working terms so both sides can focus on the work.",
+                "Dear {client_name},\n\nThank you for choosing {business_name}. "
+                "This agreement sets out how we will work together on your "
+                "project — read it carefully and sign below to begin."),
+        fixed("THE PROJECT",
+              "{scope}"),
+        fixed("DELIVERABLES",
+              "The deliverables for this project:\n\n{deliverables}\n\n"
+              "Anything not listed is out of scope until it is added by a "
+              "written change order."),
+        fixed("FEES AND EXPENSES",
+              "The project fee is: {fee}. Reasonable pre-approved costs "
+              "incurred on your behalf (such as {expense_examples}) are "
+              "billed at cost{expense_cap_clause}."),
+        fixed("PAYMENT STRUCTURE",
+              "{payment_terms}\n\n"
+              "This is a flat-fee project. Any deposit or initial payment is "
+              "a milestone payment toward the project fee and is not "
+              "refundable once work has begun. The remaining balance is due "
+              "at completion as defined below, and final deliverables and "
+              "source files are released on receipt of payment in full.",
+              requires_value=("fee_model", "flat_fee")),
+        fixed("PAYMENT STRUCTURE",
+              "Time is billed at {fee} and invoiced as the work proceeds. "
+              "{payment_terms}",
+              requires_value=("fee_model", "hourly")),
+        fixed("PAYMENT STRUCTURE",
+              "Payment is tied to the deliverables above: each payment is due "
+              "on delivery of its milestone, and work on the next milestone "
+              "may pause until the prior payment is received.\n\n{payment_terms}",
+              requires_value=("fee_model", "milestone")),
+        fixed("REVISIONS AND CHANGE ORDERS",
+              "The fee includes {revision_rounds} rounds of revisions per "
+              "deliverable. Additional rounds and out-of-scope requests "
+              "{extra_rate_clause} proceed only by a written change order "
+              "(a clear written exchange counts) describing the work, the "
+              "price, and any timeline effect."),
+        fixed("ACCEPTANCE AND COMPLETION",
+              "Each deliverable is accepted when you approve it in writing, "
+              "or automatically if {acceptance_days} days pass after delivery "
+              "with no written feedback. The project is COMPLETE when every "
+              "deliverable listed in this agreement has been delivered and "
+              "accepted. The final balance is due at completion."),
+        fixed("CLIENT DELAY",
+              "The project needs your input to move. If we cannot get a "
+              "response from you for {abandon_days} days, the project is "
+              "deemed complete as delivered and the remaining balance becomes "
+              "due. Restarting after that may carry a reactivation fee of up "
+              "to 10% of the project fee."),
+        fixed("OWNERSHIP",
+              "On receipt of payment in full, ownership of the final "
+              "deliverables transfers to {client_name}. {business_name} "
+              "retains ownership of its pre-existing and reusable tools, "
+              "components, templates, and frameworks, including as improved "
+              "during this project, with a license to you to use them as part "
+              "of the deliverables."),
+        fixed("PORTFOLIO",
+              "{business_name} may display the finished work in its portfolio "
+              "and marketing once the project is public or complete.",
+              requires_value=("portfolio_ok", "yes")),
+        fixed("PORTFOLIO",
+              "{business_name} will not display this work in its portfolio or "
+              "marketing without your prior written permission.",
+              requires_value=("portfolio_ok", "no")),
+        fixed("CLIENT MATERIALS",
+              "You confirm you have the rights to the materials you provide "
+              "for the project — logos, copy, images, fonts, and similar — "
+              "and you will be responsible for any third-party claim that "
+              "those materials infringe someone else's rights."),
+        fixed("THIRD-PARTY SERVICES",
+              "Hosting, domains, plugins, fonts, and platform subscriptions "
+              "used in the deliverables are your ongoing responsibility and "
+              "cost after handoff. {business_name} is not responsible for "
+              "third-party outages, changes, or price increases."),
+    ],
+}
+
+_CREATIVE_TEMPLATE["sections"].extend([
+    _CONFIDENTIALITY_MUTUAL,
+    _LIABILITY_CAP,
+    fixed("GOVERNING LAW",
+          "This agreement is governed by the laws of "
+          "{state_full}.{venue_clause}",
+          requires="state"),
+    _DISPUTE_IP,
+    _GENERAL_TERMS,
+    sig(_SIGNATURE_BLOCK),
+])
+
+TEMPLATES.append(_CREATIVE_TEMPLATE)
+TEMPLATE_INDEX[_CREATIVE_TEMPLATE["id"]] = _CREATIVE_TEMPLATE
+
+# Creative stops being pointed at the generic service agreement — its
+# own paper outranks it (ranking only; nothing is ever gated).
+for _t in TEMPLATES:
+    if _t["id"] == "service_agreement" and "creative" in _t["suggested_for"]:
+        _t["suggested_for"].remove("creative")
