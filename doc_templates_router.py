@@ -152,10 +152,24 @@ async def doctemplates_list(biz: str,
             if f.get("sticky") and (saved.get(f["key"]) or "").strip():
                 f2["default"] = saved[f["key"]]
             fields.append(f2)
+        # The paper itself rides along — the picker renders a real
+        # mini-document and the fill step previews it live. Drafted
+        # sections ship their fallback text; {placeholders} stay intact
+        # for the frontend to substitute as the form fills.
+        sections = [{
+            "heading": s.get("heading"),
+            "text": s["text"] if s["kind"] == "fixed" else s["fallback"],
+            "requires": s.get("requires"),
+        } for s in t["sections"]]
+        chars = sum(len(s["text"]) for s in sections)
+        pages = max(1, round(chars / 2600))
         out.append({
             "id": t["id"], "title": t["title"],
+            "subtitle": t.get("subtitle") or "",
             "description": t["description"], "category": t["category"],
             "fields": fields,
+            "sections": sections,
+            "page_estimate": f"≈{pages} page{'s' if pages != 1 else ''}",
             "suggested": btype in t["suggested_for"],
         })
     # Suggested templates first, library order otherwise (it's curated).

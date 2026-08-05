@@ -97,6 +97,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     {
         "id": "engagement_letter",
         "title": "Engagement Letter",
+        "subtitle": "Scope, Fees & How It Ends",
         "description": "Open a new client relationship properly: scope, fees, "
                        "responsibilities, and how it ends.",
         "category": "client",
@@ -161,6 +162,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     {
         "id": "retainer_agreement",
         "title": "Retainer Agreement",
+        "subtitle": "Monthly Fee, Overage & Renewal",
         "description": "An ongoing relationship on a monthly retainer: what's "
                        "included, replenishment, and renewal.",
         "category": "client",
@@ -214,6 +216,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     {
         "id": "service_agreement",
         "title": "Service Agreement",
+        "subtitle": "Deliverables, Payment & Ownership",
         "description": "One project, cleanly scoped: deliverables, payment, "
                        "changes, and who owns the work.",
         "category": "client",
@@ -282,6 +285,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     {
         "id": "consulting_agreement",
         "title": "Consulting Agreement",
+        "subtitle": "Scope, Independence & Confidentiality",
         "description": "Advisory engagement with independent-contractor status, "
                        "confidentiality, and clean IP lines.",
         "category": "client",
@@ -345,6 +349,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     {
         "id": "coaching_agreement",
         "title": "Coaching Agreement",
+        "subtitle": "Sessions, Cancellations & Boundaries",
         "description": "Program, sessions, cancellations — and the boundaries "
                        "that protect a coaching practice.",
         "category": "client",
@@ -402,6 +407,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     {
         "id": "mutual_nda",
         "title": "Mutual Nondisclosure Agreement",
+        "subtitle": "Definitions, Exclusions & Term",
         "description": "Both sides can talk freely: definitions, exclusions, "
                        "term, and remedies.",
         "category": "protect",
@@ -465,6 +471,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     {
         "id": "independent_contractor",
         "title": "Independent Contractor Agreement",
+        "subtitle": "Relationship, Pay & Work Product",
         "description": "Bring on 1099 help with the relationship, taxes, and "
                        "IP stated plainly.",
         "category": "protect",
@@ -519,6 +526,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     {
         "id": "demand_letter",
         "title": "Demand Letter (Unpaid Balance)",
+        "subtitle": "The Balance, the Deadline & What's Next",
         "description": "A firm, professional demand for payment — the letter "
                        "before further action.",
         "category": "money",
@@ -565,6 +573,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     {
         "id": "disengagement_letter",
         "title": "Closing Letter",
+        "subtitle": "What Concluded, the File & What's Ahead",
         "description": "End an engagement cleanly: what concluded, the file, "
                        "and what you're no longer responsible for.",
         "category": "close",
