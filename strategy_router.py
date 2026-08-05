@@ -154,6 +154,141 @@ _LINK_SYSTEM = (
 )
 
 
+_SHAPE_QUESTIONS = {
+    "who": "Who is this for?",
+    "true": "What would have to be true for this to work?",
+    "test": "What is the smallest way to test it?",
+    "cost": "What does it cost — time and money, honestly?",
+    "instead": "What would you stop doing to make room?",
+}
+_SHAPE_ORDER = ["who", "true", "test", "cost", "instead"]
+
+_SHAPE_SYSTEM = (
+    "You are Chief, sitting with a small-business owner while they think "
+    "an idea through out loud. This is a CONVERSATION, and much of it is "
+    "spoken aloud — so you are brief, you sound like a person, and you "
+    "never read a list back at them.\n\n"
+    "They have just answered one question about their idea. Do three "
+    "things, in this order:\n"
+    "1. React to what they ACTUALLY said. Name the specific thing. Never "
+    "open with 'Great!' or 'That's a good point.'\n"
+    "2. Decide whether the answer is USABLE — concrete enough that "
+    "someone else could act on it. 'Everyone', 'more clients', 'not "
+    "much' and 'we'll see' are not usable.\n"
+    "3. If it is not usable, ask ONE sharper follow-up on the SAME "
+    "question — a narrower question, not the same one repeated. If it is "
+    "usable, say what it tells you and stop.\n\n"
+    "Rules:\n"
+    "- Two or three sentences. This is speech, not a document.\n"
+    "- Push back when something does not add up. An owner who says a "
+    "thing costs nothing and displaces nothing is describing a wish.\n"
+    "- Never invent facts about their business.\n"
+    "- Only ever push back ONCE per question. If they have already had a "
+    "follow-up, accept what they gave you and move on — a coach who will "
+    "not let go is a coach they stop talking to.\n\n"
+    "Return ONLY a JSON object:\n"
+    '{"reply": "what you say to them",\n'
+    ' "answer": "their answer, tidied into one clear line — keep THEIR '
+    'words and meaning, never upgrade the substance",\n'
+    ' "usable": true|false}'
+)
+
+
+class ShapeTurnBody(BaseModel):
+    business_id: str
+    title: str
+    note: Optional[str] = ""
+    key: str
+    answer: str
+    shape: Optional[Dict[str, Any]] = None
+    """True when this question has already had one follow-up."""
+    second_pass: Optional[bool] = False
+
+
+@router.post("/shape-turn")
+async def shape_turn(
+    body: ShapeTurnBody,
+    user: AuthedUser = Depends(require_user),
+) -> JSONResponse:
+    """One turn of shaping an idea with Chief.
+
+    The board's five questions already exist as a form. This is the same
+    rubric held as a CONVERSATION: the practitioner answers (typing or out
+    loud), Chief reacts to what they actually said, and pushes back once
+    when the answer would not survive contact with a calendar.
+
+    Fail-soft: on any failure the caller keeps the raw answer and moves
+    on, so a dead endpoint costs the coaching, never the idea."""
+    _require_owner(body.business_id, user.id)
+
+    key = (body.key or "").strip()
+    if key not in _SHAPE_QUESTIONS:
+        raise HTTPException(status_code=400, detail="unknown question")
+    answer = (body.answer or "").strip()[:_NOTE_CAP]
+    if not answer:
+        raise HTTPException(status_code=400, detail="nothing to react to")
+
+    shape = body.shape if isinstance(body.shape, dict) else {}
+    prior = []
+    for k in _SHAPE_ORDER:
+        if k == key:
+            continue
+        v = str(shape.get(k) or "").strip()
+        if v:
+            prior.append("- {} {}".format(_SHAPE_QUESTIONS[k], v[:_SHAPE_CAP]))
+
+    lines = [
+        "Business: {}.".format(_business_name(body.business_id)),
+        'Their idea: "{}"'.format(str(body.title or "")[:_TITLE_CAP]),
+    ]
+    note = (body.note or "").strip()[:_NOTE_CAP]
+    if note:
+        lines.append("Their own notes on it: {}".format(note))
+    if prior:
+        lines.append("What they have already told me about it:\n" + "\n".join(prior))
+    lines.append('The question on the table: "{}"'.format(_SHAPE_QUESTIONS[key]))
+    lines.append('They answered: "{}"'.format(answer))
+    if body.second_pass:
+        lines.append(
+            "This is their SECOND answer to this question — you have already "
+            "pushed back once. Accept what they have given you and move on."
+        )
+    lines.append("Respond with the JSON object.")
+
+    try:
+        import chief_of_staff as cos
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            text = await cos._call_claude(
+                client,
+                system=_SHAPE_SYSTEM,
+                messages=[{"role": "user", "content": "\n\n".join(lines)}],
+                max_tokens=500,
+                enable_web_search=False,
+                business_id=body.business_id,
+            )
+    except Exception as e:
+        logger.warning(f"[strategy.shape] call failed: {type(e).__name__}: {e}")
+        return JSONResponse({"ok": False, "error": "coach_unavailable"})
+
+    data = _extract_json(text or "")
+    if not data:
+        return JSONResponse({"ok": False, "error": "unreadable_result"})
+
+    # A second pass is always accepted, whatever the model thinks — the
+    # prompt says so, and the server enforces it so one stubborn model
+    # cannot trap someone on a question.
+    usable = bool(data.get("usable")) or bool(body.second_pass)
+    tidied = str(data.get("answer") or "").strip()[:_SHAPE_CAP]
+
+    return JSONResponse({
+        "ok": True,
+        "reply": str(data.get("reply") or "").strip()[:900],
+        # Never lose what they said if the model returns nothing usable.
+        "answer": tidied or answer[:_SHAPE_CAP],
+        "usable": usable,
+    })
+
+
 class SuggestBody(BaseModel):
     business_id: str
     cards: List[Dict[str, Any]]
