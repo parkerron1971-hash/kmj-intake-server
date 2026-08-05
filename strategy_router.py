@@ -126,6 +126,124 @@ def _clean_list(raw: Any, cap: int, limit: int) -> List[str]:
     return out
 
 
+_LINK_SYSTEM = (
+    "You are Chief, looking at a practitioner's idea board. Every card is "
+    "something they are considering; the strings between cards are "
+    "relationships they have already drawn.\n\n"
+    "Your job: find relationships they have NOT drawn yet and should. You "
+    "are looking for the connection that changes what they would do — not "
+    "for surface similarity. Two cards both mentioning clients is not a "
+    "relationship; one card being the thing that makes another possible "
+    "is.\n\n"
+    "The three relations, and what each means:\n"
+    "- feeds: doing the first makes the second easier, cheaper or possible "
+    "at all.\n"
+    "- contradicts: they compete for the same time, money or positioning; "
+    "doing both properly is not realistic.\n"
+    "- same: they are one move wearing two names, and keeping them apart is "
+    "costing clarity.\n\n"
+    "Rules:\n"
+    "- NEVER suggest a pair that is already tied. They are listed.\n"
+    "- Suggest at most 4. Two good ones beat six plausible ones, and an "
+    "empty list is a correct answer for a board of unrelated cards.\n"
+    "- 'because' must say something they could disagree with. 'They are "
+    "related' is not a reason.\n\n"
+    "Return ONLY a JSON object:\n"
+    '{"suggestions": [{"from": "<card id>", "to": "<card id>", '
+    '"kind": "feeds|contradicts|same", "because": "one sentence"}]}'
+)
+
+
+class SuggestBody(BaseModel):
+    business_id: str
+    cards: List[Dict[str, Any]]
+    existing: Optional[List[Dict[str, str]]] = None
+
+
+@router.post("/suggest-links")
+async def suggest_links(
+    body: SuggestBody,
+    user: AuthedUser = Depends(require_user),
+) -> JSONResponse:
+    """Chief reads the board and proposes strings the practitioner has not
+    drawn. Reasoning over their OWN cards, so web search stays OFF — it is
+    cheaper, faster, and there is nothing out there to look up.
+
+    Fail-soft: ok=False rather than a 500."""
+    _require_owner(body.business_id, user.id)
+
+    cards = [c for c in (body.cards or []) if isinstance(c, dict) and c.get("id")][:40]
+    if len(cards) < 2:
+        return JSONResponse({"ok": True, "suggestions": []})
+
+    valid_ids = {str(c["id"]) for c in cards}
+    lines: List[str] = [f"Business: {_business_name(body.business_id)}.", "", "The cards:"]
+    for c in cards:
+        bits = ['- id {}: "{}"'.format(c["id"], str(c.get("title") or "")[:_TITLE_CAP])]
+        if c.get("note"):
+            bits.append("    note: {}".format(str(c["note"])[:300]))
+        shape = c.get("shape") if isinstance(c.get("shape"), dict) else {}
+        for k, v in list(shape.items())[:5]:
+            if str(v or "").strip():
+                bits.append("    {}: {}".format(k, str(v).strip()[:200]))
+        lines.append("\n".join(bits))
+
+    existing = [e for e in (body.existing or []) if isinstance(e, dict)]
+    lines.append("")
+    if existing:
+        lines.append("Already tied (do not repeat these):")
+        for e in existing[:80]:
+            lines.append("- {} {} {}".format(e.get("from"), e.get("kind"), e.get("to")))
+    else:
+        lines.append("Nothing is tied yet.")
+    lines.append("")
+    lines.append("Return the JSON object.")
+
+    try:
+        import chief_of_staff as cos
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            text = await cos._call_claude(
+                client,
+                system=_LINK_SYSTEM,
+                messages=[{"role": "user", "content": "\n".join(lines)}],
+                max_tokens=900,
+                enable_web_search=False,
+                business_id=body.business_id,
+            )
+    except Exception as e:
+        logger.warning(f"[strategy.suggest] call failed: {type(e).__name__}: {e}")
+        return JSONResponse({"ok": False, "error": "suggest_unavailable"})
+
+    data = _extract_json(text or "")
+    if not data:
+        return JSONResponse({"ok": False, "error": "unreadable_result"})
+
+    # Validate hard: a suggestion pointing at a card that is not on the
+    # board, or repeating a tie that already exists, is worse than none.
+    tied = {(str(e.get("from")), str(e.get("to"))) for e in existing}
+    tied |= {(b, a) for (a, b) in tied}
+    kinds = {"feeds", "contradicts", "same"}
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for raw in (data.get("suggestions") or []):
+        if not isinstance(raw, dict) or len(out) >= 4:
+            continue
+        a, b = str(raw.get("from") or ""), str(raw.get("to") or "")
+        kind = str(raw.get("kind") or "").strip().lower()
+        if a not in valid_ids or b not in valid_ids or a == b:
+            continue
+        if kind not in kinds or (a, b) in tied or (a, b) in seen:
+            continue
+        seen.add((a, b))
+        seen.add((b, a))
+        out.append({
+            "from": a, "to": b, "kind": kind,
+            "because": str(raw.get("because") or "").strip()[:300],
+        })
+
+    return JSONResponse({"ok": True, "suggestions": out})
+
+
 class ResearchBody(BaseModel):
     business_id: str
     title: str
