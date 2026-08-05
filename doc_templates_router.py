@@ -661,3 +661,182 @@ async def doctemplates_delete_custom(row_id: str, biz: str,
     sb_clients.sb_delete_as_service(
         f"/business_doc_templates?id=eq.{row_id}&business_id=eq.{biz}")
     return {"ok": True}
+
+
+# ─── Compose — a contract that doesn't exist yet ─────────────────────
+# The practitioner describes the agreement they need ("equipment rental
+# with a damage deposit and pickup windows") and the model writes ONLY
+# the deal-specific clauses, in our exact template structure. The
+# armor is ours, deterministically: normalize_custom() sanitizes the
+# shape and auto-declares placeholders, then the shared spine (dispute
+# resolution, general terms, signature block) is spliced in server-side
+# — a composed contract can never ship without severability or with a
+# model-invented signature block. Saved to business_doc_templates, so
+# it lists, previews, generates, and resolves through Chief like any
+# learned template, reusable from then on.
+
+_COMPOSE_INSTRUCTION = (
+    "Draft the DEAL-SPECIFIC clauses of this agreement as a reusable "
+    "template. Respond with ONLY JSON:\n"
+    '{"title": "short document name", '
+    '"subtitle": "the 2-4 key things it covers, like: Rental, Deposit & Return", '
+    '"description": "one sentence on when to use it", '
+    '"fields": [{"key": "snake_case", "label": "Human label", '
+    '"type": "text" or "textarea", "required": true/false, '
+    '"sticky": true/false, "placeholder": "a realistic example value"}], '
+    '"sections": [{"heading": "SECTION HEADING", "text": "the clause text"}]}\n\n'
+    "Rules:\n"
+    "- Write plain, professional, complete clauses — no headings inside "
+    "text, no markdown. Use {client_name}, {business_name}, "
+    "{practitioner_name}, and {date} where the parties or date belong.\n"
+    "- Every OTHER variable value (amounts, dates, quantities, windows, "
+    "addresses) becomes a {snake_case} placeholder with a matching entry "
+    "in fields. required=true when the agreement is meaningless without "
+    "it. sticky=true ONLY for business-standard terms (their rate, their "
+    "deposit policy, their notice window) — never facts about one client.\n"
+    "- Cover the deal completely: what is provided, money and when it is "
+    "due, each party's responsibilities, what happens when things go "
+    "wrong (damage, cancellation, no-shows), and how it ends.\n"
+    "- Do NOT write general boilerplate (entire agreement, severability, "
+    "assignment, notices, force majeure, signatures, dispute resolution, "
+    "governing law) — the system appends those itself.\n"
+    "- Do not include legal-advice framing or disclaimers; write the "
+    "practitioner's own document in a neutral professional voice.")
+
+
+def _compose_spine() -> List[Dict[str, Any]]:
+    """The non-negotiable tail of every composed contract."""
+    import doc_templates as dt
+    return [
+        dt.fixed("GOVERNING LAW",
+                 "This agreement is governed by the laws of "
+                 "{state_full}.{venue_clause}",
+                 requires="state"),
+        dict(dt._DISPUTE),
+        dict(dt._GENERAL_TERMS),
+        dt.sig(dt._SIGNATURE_BLOCK),
+    ]
+
+
+async def compose_document_template(business: Dict[str, Any],
+                                    description: str, *,
+                                    user_id: str) -> Dict[str, Any]:
+    """One composition path for the endpoint and Chief's verb. Returns
+    the saved template (id stamped custom:{row_id}). Raises
+    GenerationError with a practitioner-readable message."""
+    import doc_intelligence_router as di
+    import doc_templates as dt
+
+    desc = (description or "").strip()
+    if len(desc) < 12:
+        raise GenerationError(
+            "Describe the agreement you need in a sentence or two — what's "
+            "being provided, and the terms that matter.", 400)
+    if not llm_call.api_key():
+        raise GenerationError("Contract composing isn't configured (no API key).", 503)
+
+    btype = (business.get("type") or "").strip()
+    lang = dt.vertical_language(btype)
+    payload = {
+        "model": _learn_model(), "max_tokens": 4000,
+        "system": ("You draft clean, professional business agreements as "
+                   "reusable templates, in the exact JSON structure "
+                   "requested. "
+                   + (f"The business is a {btype}; " if btype else "")
+                   + f"typical pass-through expenses for it are "
+                     f"{lang['expense_examples']}."),
+        "messages": [{"role": "user", "content":
+                      f"The business ({business.get('name') or 'this business'}) "
+                      f"needs this agreement:\n\n{desc}\n\n{_COMPOSE_INSTRUCTION}"}],
+    }
+    started = time.monotonic()
+    async with httpx.AsyncClient(timeout=di.HTTP_TIMEOUT) as client:
+        resp = await llm_call.apost(client, payload, task="doctemplates_compose")
+    if resp.status_code >= 400:
+        logger.error(f"compose {resp.status_code}: {resp.text[:300]}")
+        raise GenerationError("I couldn't draft that agreement right now — try again.", 502)
+    data = resp.json()
+    text = "".join(b.get("text", "") for b in data.get("content", [])
+                   if b.get("type") == "text")
+    usage = data.get("usage") or {}
+    try:
+        await log_api_usage(
+            endpoint="/doctemplates/compose",
+            model=data.get("model") or _learn_model(),
+            input_tokens=int(usage.get("input_tokens") or 0),
+            output_tokens=int(usage.get("output_tokens") or 0),
+            business_id=business["id"], user_id=user_id,
+            task_type="doctemplate_compose",
+            duration_ms=int((time.monotonic() - started) * 1000))
+    except Exception:
+        pass
+
+    try:
+        raw = di._parse_json(text)
+    except HTTPException:
+        raise GenerationError("The draft came back malformed — try again.", 502)
+    template = normalize_custom(raw)
+
+    # The armor is ours: state/venue fields + the shared spine, spliced
+    # deterministically. Composed agreements auto-number like the
+    # library's.
+    keys = {f["key"] for f in template["fields"]}
+    if "state" not in keys:
+        template["fields"].append({
+            "key": "state", "label": "Governing state (optional)",
+            "type": "text", "required": False, "placeholder": "e.g. Michigan",
+            "default": "", "sticky": True})
+    if "venue_county" not in keys:
+        template["fields"].append({
+            "key": "venue_county", "label": "Venue county (optional)",
+            "type": "text", "required": False, "placeholder": "e.g. Oakland",
+            "default": "", "sticky": True})
+    template["sections"].extend(_compose_spine())
+    template["numbered"] = True
+
+    rows = sb_clients.sb_post_as_service("/business_doc_templates", {
+        "business_id": business["id"],
+        "template": template,
+        "source_path": None,
+    })
+    if not (isinstance(rows, list) and rows):
+        raise GenerationError("The agreement was drafted but couldn't be saved — try again.", 502)
+    template["id"] = f"custom:{rows[0].get('id')}"
+
+    try:
+        sb_clients.sb_post_as_service("/events", {
+            "business_id": business["id"],
+            "event_type": "document_template_composed",
+            "data": {"title": template["title"],
+                     "template_row": rows[0].get("id"),
+                     "description": desc[:300]},
+            "source": "doc_templates"})
+    except Exception:
+        pass
+    return template
+
+
+class ComposeBody(BaseModel):
+    business_id: str
+    description: str
+
+
+@router.post("/compose")
+async def doctemplates_compose(body: ComposeBody,
+                               user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    business = _owner(body.business_id, user)
+    billing_limits.require_units(body.business_id)  # drafting is an AI action
+    try:
+        template = await compose_document_template(
+            business, body.description, user_id=user.id)
+    except GenerationError as e:
+        raise HTTPException(e.status, e.message)
+    return {"ok": True, "template_id": template["id"],
+            "title": template["title"], "subtitle": template["subtitle"],
+            "fields": template["fields"], "sections": [{
+                "heading": s.get("heading"),
+                "text": s.get("text") or s.get("fallback", ""),
+                "requires": s.get("requires"),
+                "requires_value": s.get("requires_value"),
+            } for s in template["sections"]],
+            "numbered": True}

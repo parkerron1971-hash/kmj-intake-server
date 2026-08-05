@@ -441,3 +441,59 @@ async def handle_generate_document(client, biz, action) -> Dict[str, Any]:
         "drafted_sections_used": out.get("drafted_sections_used"),
         "nav": _nav_queue(),
     }
+
+
+# ─── compose_template — a contract that doesn't exist yet ─────────────
+
+async def handle_compose_template(client, biz, action) -> Dict[str, Any]:
+    """Draft a brand-new reusable agreement from a description — the
+    verb behind "make me an equipment rental contract with a damage
+    deposit".
+
+    TRUST-LAYER DISCIPLINE:
+      • What changes? ONE business_doc_templates row (a TEMPLATE — no
+        document, no draft, nothing client-facing) plus a
+        document_template_composed event.
+      • Seen first? The template lists in New Document under "Yours",
+        previews like every other, and generating FROM it still lands
+        an Approval Queue draft nothing sends without a human.
+      • Reversible? The template row is deletable in the picker.
+      • The model writes only deal-specific clauses; the spine
+        (dispute, general terms, signatures) is spliced by the server,
+        so a composed contract can never omit severability or invent
+        its own signature block.
+    """
+    import doc_templates_router as dtr
+
+    description = (action.get("description") or action.get("about")
+                   or action.get("details") or "").strip()
+    if not description:
+        return _fail("compose_template",
+                     "Describe the agreement you need — what's being "
+                     "provided and the terms that matter — and I'll draft it.")
+    try:
+        template = await dtr.compose_document_template(
+            biz, description, user_id=str(biz.get("owner_id") or ""))
+    except dtr.GenerationError as e:
+        return _fail("compose_template", e.message)
+    except Exception as e:
+        logger.exception(f"compose_template failed: {e}")
+        return _fail("compose_template",
+                     f"I couldn't draft that agreement: {str(e)[:160]}")
+
+    required = [f["label"] for f in template["fields"] if f.get("required")]
+    result = (f"Drafted a reusable template: {template['title']} — it's in "
+              f"New Document under Yours.")
+    if required:
+        result += (" To generate one for a client I'll need: "
+                   + "; ".join(required) + ".")
+
+    return {
+        "type": "compose_template",
+        "result": result,
+        "label": f"New template — {template['title']}",
+        "template_id": template["id"],
+        "template_title": template["title"],
+        "required_fields": required,
+        "nav": None,
+    }

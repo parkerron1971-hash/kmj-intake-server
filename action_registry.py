@@ -354,6 +354,13 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "handler refuses to invent required fields (fee, scope, "
                                       "amount) — it asks instead, so a wrong number can't enter a "
                                       "contract without a human typing it"),
+    "compose_template":       _w("A", "drafts a brand-new reusable agreement TEMPLATE into ONE "
+                                      "business_doc_templates row — no document, no draft, nothing "
+                                      "client-facing; generating FROM it still goes through the "
+                                      "approve-first queue. The row is deletable in the picker. The "
+                                      "model writes only deal-specific clauses; the server splices "
+                                      "the spine (dispute, general terms, signatures), so a composed "
+                                      "contract cannot omit severability or invent a signature block"),
     "plan_campaign":          _w("A", "inserts a campaigns row with status='draft' — the same "
                                       "shape as draft_email: a reviewable artifact, and nothing "
                                       "sends until launch_campaign (which is class C). The drafting "
