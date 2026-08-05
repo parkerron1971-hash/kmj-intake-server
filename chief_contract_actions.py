@@ -427,11 +427,14 @@ async def handle_generate_document(client, biz, action) -> Dict[str, Any]:
         # personal opener degraded. Say so instead of letting the reply
         # present neutral wording as voice work.
         result += ". The opening paragraph used standard wording rather than your voice"
+    if out.get("state_notes"):
+        result += ". State notes for you are attached — worth a skim before you approve"
 
     return {
         "type": "generate_document",
         "result": result,
         "review_note": out.get("review_note"),
+        "state_notes": out.get("state_notes"),
         "label": f"{template['title']} — {who}",
         "queue_id": out.get("queue_id"),
         "template_id": template["id"],

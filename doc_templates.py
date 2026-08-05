@@ -213,7 +213,7 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "We treat the information you share with us in this engagement "
                   "as confidential, using it only to perform the services and "
                   "disclosing it only with your permission, to those who need it "
-                  "to do the work, or as required by law."),
+                  "to do the work, or as required by law. Nothing in this agreement prevents either party from reporting suspected unlawful conduct to a government agency or from making disclosures protected by law."),
             fixed("ENDING THE ENGAGEMENT",
                   "Either of us may end this engagement with written notice. You "
                   "remain responsible for fees and costs incurred through the "
@@ -519,7 +519,7 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "developed without use of the discloser's information, or "
                   "(e) must be disclosed by law — with prompt notice to the "
                   "discloser where lawful, and disclosure limited to what is "
-                  "required."),
+                  "required. Nothing in this agreement prevents either party from reporting suspected unlawful conduct to a government agency or from making disclosures protected by law."),
             fixed("TERM",
                   "This agreement covers disclosures made within one year of "
                   "signing. Confidentiality obligations last {term_years} years "
@@ -770,6 +770,20 @@ def us_state_full(s: str) -> str:
     return US_STATE_NAMES.get(v.upper(), v)
 
 
+def venue_unit(state: str) -> str:
+    """The deterministic slice of state awareness: Louisiana has
+    parishes, Alaska has boroughs — a venue clause that says 'County'
+    there is simply wrong. Everything mechanical like this adjusts
+    automatically; legal-judgment differences go to state_notes for
+    the practitioner instead of being silently rewritten."""
+    full = us_state_full(state).lower()
+    if full == "louisiana":
+        return "Parish"
+    if full == "alaska":
+        return "Borough"
+    return "County"
+
+
 # Derived variables build_vars computes on top of the field values.
 # The placeholder-integrity test admits these alongside declared fields.
 DERIVED_VARS = {
@@ -822,7 +836,8 @@ def build_vars(template: Dict[str, Any], params: Dict[str, str],
     v["state_full"] = us_state_full(v.get("state", ""))
     venue = (v.get("venue_county") or "").strip()
     v["venue_clause"] = (f" Venue for any court proceeding lies in "
-                         f"{venue} County." if venue else "")
+                         f"{venue} {venue_unit(v.get('state', ''))}."
+                         if venue else "")
     v["effective_date_resolved"] = ((v.get("effective_date") or "").strip()
                                     or "the date of the last signature below")
     cap = (v.get("expense_cap") or "").strip()
@@ -994,7 +1009,7 @@ _CONFIDENTIALITY_MUTUAL = fixed("CONFIDENTIALITY",
     "with at least the care it uses for its own, use it only for this "
     "project, and disclose it only to those who need it for the work or "
     "as required by law. This obligation survives the end of the project "
-    "for two years, and indefinitely for trade secrets.")
+    "for two years, and indefinitely for trade secrets. Nothing in this agreement prevents either party from reporting suspected unlawful conduct to a government agency or from making disclosures protected by law.")
 
 _CREATIVE_TEMPLATE: Dict[str, Any] = {
     "id": "creative_services_agreement",

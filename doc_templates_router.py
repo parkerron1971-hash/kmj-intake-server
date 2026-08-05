@@ -260,6 +260,67 @@ async def _draft_sections(business: Dict[str, Any], template: Dict[str, Any],
 
 # ─── Generate ────────────────────────────────────────────────────────
 
+async def _state_notes(business: Dict[str, Any], template: Dict[str, Any],
+                       variables: Dict[str, str], *, user_id: str) -> Optional[str]:
+    """State awareness, the legal-judgment half. Mechanical differences
+    (parish vs county) adjust the paper deterministically in
+    doc_templates; differences that ARE state law — late-fee caps,
+    required notices, cancellation rights — come back as short advisory
+    notes for the PRACTITIONER. Deliberately not auto-applied and never
+    printed on the document: a model-invented 'state rule' silently
+    entering a contract is the failure mode this design refuses.
+    Fail-soft: any error → None, generation proceeds."""
+    state = (variables.get("state_full") or "").strip()
+    if not state or not llm_call.api_key():
+        return None
+    headings = [s.get("heading") for s in template["sections"] if s.get("heading")]
+    payload = {
+        "model": _learn_model(), "max_tokens": 500,
+        "system": ("You are a cautious contracts-practice assistant writing "
+                   "advisory notes for a business OWNER about their own "
+                   "document. Not legal advice; never addressed to their "
+                   "client. Only well-established, widely-known rules — "
+                   "when unsure, stay silent rather than guess."),
+        "messages": [{"role": "user", "content":
+                      f"Business: {business.get('name')}, a "
+                      f"{business.get('type') or 'small business'}. Document: "
+                      f"{template['title']}, governed by {state} law. Its "
+                      f"clauses cover: {', '.join(headings[:16])}.\n\n"
+                      f"In 2-4 short plain-language bullets, note where "
+                      f"{state} law commonly differs or needs attention for "
+                      f"a document like this (late-fee caps, required "
+                      f"notices, cancellation rights, enforceability limits, "
+                      f"licensing). If nothing is notable, say the document "
+                      f"is broadly standard for {state}. End with: 'Confirm "
+                      f"anything load-bearing with a {state} attorney.'"}],
+    }
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            resp = await llm_call.apost(client, payload, task="doctemplates_state")
+        if resp.status_code >= 400:
+            return None
+        data = resp.json()
+        text = "".join(b.get("text", "") for b in data.get("content", [])
+                       if b.get("type") == "text").strip()
+        usage = data.get("usage") or {}
+        try:
+            await log_api_usage(
+                endpoint="/doctemplates/state_notes",
+                model=data.get("model") or _learn_model(),
+                input_tokens=int(usage.get("input_tokens") or 0),
+                output_tokens=int(usage.get("output_tokens") or 0),
+                business_id=business["id"], user_id=user_id,
+                task_type="doctemplate_state_notes",
+                duration_ms=int((time.monotonic() - started) * 1000))
+        except Exception:
+            pass
+        return text or None
+    except Exception as e:
+        logger.warning(f"state notes failed soft: {e}")
+        return None
+
+
 class GenerateBody(BaseModel):
     business_id: str
     contact_id: str
@@ -354,11 +415,16 @@ async def generate_document_core(business: Dict[str, Any],
     # sticky terms become the business's standard, pre-filling next time.
     saved_defaults = save_sticky_terms(business, template, explicit)
 
+    # State counsel notes — advisory, practitioner-facing, off-paper.
+    state_notes = await _state_notes(business, template, variables,
+                                     user_id=user_id)
+
     return {"ok": True, "queue_id": queue_id, "subject": subject,
             "title": template["title"], "body": doc_body,
             "drafted_sections_used": bool(drafted),
             "used_defaults": used_defaults,
             "saved_defaults": saved_defaults,
+            "state_notes": state_notes,
             "review_note": None if is_lawyer else doc_templates._REVIEW_NOTE}
 
 
@@ -737,6 +803,10 @@ async def compose_document_template(business: Dict[str, Any],
 
     btype = (business.get("type") or "").strip()
     lang = dt.vertical_language(btype)
+    # Brief the drafting with the governing state when the business has
+    # one on file — the model leans toward patterns valid there, and
+    # the deterministic spine + state_notes still backstop it.
+    gov_state = dt.us_state_full(get_doc_defaults(business).get("state", ""))
     payload = {
         "model": _learn_model(), "max_tokens": 4000,
         "system": ("You draft clean, professional business agreements as "
@@ -744,7 +814,10 @@ async def compose_document_template(business: Dict[str, Any],
                    "requested. "
                    + (f"The business is a {btype}; " if btype else "")
                    + f"typical pass-through expenses for it are "
-                     f"{lang['expense_examples']}."),
+                     f"{lang['expense_examples']}."
+                   + (f" Its agreements are typically governed by "
+                      f"{gov_state} law; draft with that in mind."
+                      if gov_state else "")),
         "messages": [{"role": "user", "content":
                       f"The business ({business.get('name') or 'this business'}) "
                       f"needs this agreement:\n\n{desc}\n\n{_COMPOSE_INSTRUCTION}"}],
