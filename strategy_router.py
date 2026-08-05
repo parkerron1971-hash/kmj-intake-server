@@ -33,9 +33,15 @@ from auth_supabase import require_user, AuthedUser
 router = APIRouter(prefix="/strategy", tags=["strategy"])
 logger = logging.getLogger("strategy_router")
 
-# Enough to research one idea properly; short enough that a runaway
-# prompt can't turn a card into an essay.
+# Enough to answer properly; short enough that a runaway prompt can't
+# turn a card into an essay.
 _MAX_TOKENS = 1400
+# Research gets its own, larger cap. 1400 was the whole assistant turn
+# INCLUDING the narration blocks the model writes between web searches —
+# so an answer carrying a summary, five findings, watch-outs AND its
+# sources could run out of room mid-object and come back unparseable.
+# This is the largest payload of the three endpoints; give it room.
+_RESEARCH_MAX_TOKENS = 3000
 _TITLE_CAP = 300
 _NOTE_CAP = 1200
 _SHAPE_CAP = 400
@@ -93,23 +99,71 @@ _SYSTEM = (
 )
 
 
-def _extract_json(text: str) -> Optional[Dict[str, Any]]:
-    """The model was asked for bare JSON; accept a fenced block too."""
+def _extract_json(text: str, require: tuple = ()) -> Optional[Dict[str, Any]]:
+    """The model was asked for bare JSON; accept a fenced block too.
+
+    THE BUG THIS FIXES (8/04, found by clicking "Look into this" on a real
+    board): research searched for thirty seconds and then came back
+    "unreadable". find('{') + rfind('}') only works when the object is the
+    LAST thing in the text. It is defeated by both of the shapes a model
+    with server-side web search actually produces:
+
+      1. The answer is TRUNCATED at max_tokens mid-object, so the last '}'
+         in the string closes an inner object — a source, a nested value —
+         and json.loads gets a fragment.
+      2. The model writes a line after the JSON ("Sources checked: ..."),
+         and if that line contains a brace, rfind walks past the object.
+
+    So: scan for a BALANCED object, string-aware, trying each candidate
+    start until one parses.
+
+    `require` is what stops that scan being WORSE than the bug it fixes. A
+    test written for this caught it immediately: when the outer object is
+    truncated, the scan walks on to the first NESTED object — a source —
+    which balances perfectly and parses. The endpoint would then pin
+    {"title", "url"} as the research, read no summary and no findings off
+    it, and show the practitioner an empty result claiming Chief had
+    looked. So callers name the keys a real payload carries, and a
+    candidate that has none of them is not the payload.
+    """
     if not text:
         return None
     body = text.strip()
     fence = re.search(r"```(?:json)?\s*(.+?)```", body, re.S)
     if fence:
         body = fence.group(1).strip()
-    start = body.find("{")
-    end = body.rfind("}")
-    if start == -1 or end <= start:
-        return None
-    try:
-        out = json.loads(body[start:end + 1])
-        return out if isinstance(out, dict) else None
-    except Exception:
-        return None
+
+    for start in (i for i, ch in enumerate(body) if ch == "{"):
+        depth = 0
+        in_str = False
+        esc = False
+        for i in range(start, len(body)):
+            ch = body[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        out = json.loads(body[start:i + 1])
+                    except Exception:
+                        break          # this candidate is not it — try the next '{'
+                    if isinstance(out, dict) and (
+                            not require or any(k in out for k in require)):
+                        return out
+                    break              # balanced but not the payload — keep looking
+        # ran off the end without balancing: truncated, or not an object
+    return None
 
 
 def _clean_list(raw: Any, cap: int, limit: int) -> List[str]:
@@ -270,7 +324,7 @@ async def shape_turn(
         logger.warning(f"[strategy.shape] call failed: {type(e).__name__}: {e}")
         return JSONResponse({"ok": False, "error": "coach_unavailable"})
 
-    data = _extract_json(text or "")
+    data = _extract_json(text or "", require=("reply", "answer", "usable"))
     if not data:
         return JSONResponse({"ok": False, "error": "unreadable_result"})
 
@@ -349,7 +403,7 @@ async def suggest_links(
         logger.warning(f"[strategy.suggest] call failed: {type(e).__name__}: {e}")
         return JSONResponse({"ok": False, "error": "suggest_unavailable"})
 
-    data = _extract_json(text or "")
+    data = _extract_json(text or "", require=("suggestions",))
     if not data:
         return JSONResponse({"ok": False, "error": "unreadable_result"})
 
@@ -446,7 +500,7 @@ async def research_idea(
                 client,
                 system=_SYSTEM,
                 messages=[{"role": "user", "content": "\n\n".join(parts)}],
-                max_tokens=_MAX_TOKENS,
+                max_tokens=_RESEARCH_MAX_TOKENS,
                 enable_web_search=True,
                 business_id=body.business_id,
             )
@@ -454,9 +508,15 @@ async def research_idea(
         logger.warning(f"[strategy.research] call failed: {type(e).__name__}: {e}")
         return JSONResponse({"ok": False, "error": "research_unavailable"})
 
-    data = _extract_json(text or "")
+    data = _extract_json(text or "", require=("summary", "findings", "verdict"))
     if not data:
-        logger.info("[strategy.research] no JSON in response; returning raw")
+        # The old log line carried NO evidence, which is why a live failure
+        # could not be diagnosed at all. Keep the tail: truncation shows up
+        # as an answer that simply stops, and that is the whole diagnosis.
+        raw = (text or "").strip()
+        logger.warning(
+            "[strategy.research] unparseable answer: %d chars, tail=%r",
+            len(raw), raw[-220:])
         return JSONResponse({"ok": False, "error": "unreadable_result"})
 
     # Sources, validated rather than trusted: anything that is not an
