@@ -503,3 +503,58 @@ def test_custom_delete_scoped_to_owner(patchable, monkeypatch):
     with pytest.raises(HTTPException) as e:
         asyncio.run(dtr.doctemplates_delete_custom("row1", BIZ, _Stranger()))
     assert e.value.status_code == 403
+
+
+# ─── The back page — every agreement carries its armor ───────────────
+
+_AGREEMENTS = ("engagement_letter", "retainer_agreement", "service_agreement",
+               "consulting_agreement", "coaching_agreement", "mutual_nda",
+               "independent_contractor")
+
+
+def _min_body(tid):
+    t = dt.TEMPLATE_INDEX[tid]
+    params = {f["key"]: f'X {f["key"]} X' for f in t["fields"] if f["required"]}
+    v = dt.build_vars(t, params, business_name="B", practitioner_name="P",
+                      client_name="C", date_str="D")
+    return dt.assemble(t, v, {}, include_review_note=False)
+
+
+def test_every_agreement_carries_the_back_page():
+    for tid in _AGREEMENTS:
+        body = _min_body(tid)
+        assert "GENERAL TERMS" in body, tid
+        assert "Entire agreement" in body and "Severability" in body, tid
+        # e-sign validity is load-bearing: execution runs through BoldSign
+        assert "electronic signatures" in body, tid
+        # the signature block stays last
+        assert body.rstrip().endswith("Date: ______________"), tid
+    # letters stay letters — no boilerplate on a demand or closing letter
+    for tid in ("demand_letter", "disengagement_letter"):
+        t = dt.TEMPLATE_INDEX[tid]
+        joined = "".join(s.get("text") or "" for s in t["sections"])
+        assert "GENERAL TERMS" not in joined, tid
+
+
+def test_agreement_numbering_never_gaps():
+    import re as _re
+    for tid in _AGREEMENTS:
+        body = _min_body(tid)   # optional fields blank → conditionals hidden
+        nums = [int(m.group(1)) for m in _re.finditer(r"^(\d+)\. ", body, _re.M)]
+        assert nums and nums == list(range(1, len(nums) + 1)), (tid, nums)
+    # letters carry no clause numbers
+    t = dt.TEMPLATE_INDEX["demand_letter"]
+    v = dt.build_vars(t, {"amount": "$1", "owed_for": "x"}, business_name="B",
+                      practitioner_name="P", client_name="C", date_str="D")
+    body = dt.assemble(t, v, {}, include_review_note=False)
+    assert not _re.search(r"^\d+\. ", body, _re.M)
+
+
+def test_ethical_line_no_liability_cap_on_lawyer_paper():
+    # Prospectively capping professional liability is prohibited for
+    # lawyers in most states — its ABSENCE on these two is deliberate.
+    for tid in ("engagement_letter", "retainer_agreement"):
+        assert "LIMITATION OF LIABILITY" not in _min_body(tid), tid
+    # while the commercial agreements do cap or allocate responsibility
+    assert "LIMITATION OF LIABILITY" in _min_body("consulting_agreement")
+    assert "RESPONSIBILITY FOR CLAIMS" in _min_body("service_agreement")

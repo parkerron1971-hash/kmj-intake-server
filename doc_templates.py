@@ -96,6 +96,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     # ── 1. Engagement Letter ─────────────────────────────────────────
     {
         "id": "engagement_letter",
+        "numbered": True,
         "title": "Engagement Letter",
         "subtitle": "Scope, Fees & How It Ends",
         "description": "Open a new client relationship properly: scope, fees, "
@@ -119,16 +120,16 @@ TEMPLATES: List[Dict[str, Any]] = [
                     "Dear {client_name},\n\nThank you for engaging {business_name}. "
                     "This letter confirms the terms of our engagement. Please read "
                     "it carefully and sign below to begin."),
-            fixed("1. SCOPE OF ENGAGEMENT",
+            fixed("SCOPE OF ENGAGEMENT",
                   "{business_name} will provide the following services:\n\n{scope}\n\n"
                   "Services outside this scope are not covered by this letter and "
                   "will be agreed in writing before any additional work begins."),
-            fixed("2. FEES AND BILLING",
+            fixed("FEES AND BILLING",
                   "Our fee for this engagement is: {fee}. Invoices are payable upon "
                   "receipt unless stated otherwise on the invoice. Reasonable "
                   "out-of-pocket costs incurred on your behalf (filing fees, "
                   "postage, third-party charges) are billed at cost."),
-            fixed("3. DEPOSIT",
+            fixed("DEPOSIT",
                   "An initial deposit of {deposit} is due on signing and will be "
                   "held and applied against fees and costs as they are incurred, "
                   "in accordance with the rules applicable to client funds. If the "
@@ -136,22 +137,22 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "request that it be replenished. Any unused balance is returned "
                   "promptly at the end of the engagement.",
                   requires="deposit"),
-            fixed("4. YOUR RESPONSIBILITIES",
+            fixed("YOUR RESPONSIBILITIES",
                   "You agree to provide complete and accurate information, respond "
                   "to requests in a timely way, and tell us promptly about anything "
                   "that could affect the engagement. Our work depends on what you "
                   "give us."),
-            fixed("5. COMMUNICATION",
+            fixed("COMMUNICATION",
                   "We will keep you informed of significant developments and "
                   "respond to inquiries within a reasonable time. You will be "
                   "consulted before decisions that materially affect the outcome "
                   "or the cost."),
-            fixed("6. ENDING THE ENGAGEMENT",
+            fixed("ENDING THE ENGAGEMENT",
                   "Either of us may end this engagement with written notice. You "
                   "remain responsible for fees and costs incurred through the "
                   "effective date of termination, and we will return your file and "
                   "any unused deposit promptly."),
-            fixed("7. GOVERNING LAW",
+            fixed("GOVERNING LAW",
                   "This agreement is governed by the laws of {state}.",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
@@ -161,6 +162,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     # ── 2. Retainer Agreement ────────────────────────────────────────
     {
         "id": "retainer_agreement",
+        "numbered": True,
         "title": "Retainer Agreement",
         "subtitle": "Monthly Fee, Overage & Renewal",
         "description": "An ongoing relationship on a monthly retainer: what's "
@@ -184,28 +186,28 @@ TEMPLATES: List[Dict[str, Any]] = [
                     "This Retainer Agreement is between {business_name} and "
                     "{client_name}, effective on the date of the last signature "
                     "below."),
-            fixed("1. RETAINED SERVICES",
+            fixed("RETAINED SERVICES",
                   "During each monthly term, {business_name} will provide:\n\n"
                   "{services}\n\nWork outside this description is not covered by "
                   "the retainer and will be quoted before it begins."),
-            fixed("2. RETAINER FEE",
+            fixed("RETAINER FEE",
                   "The retainer fee is {monthly_fee}, due in advance on the first "
                   "day of each monthly term. The fee covers availability and the "
                   "services described above; it is earned as the month proceeds "
                   "and unused capacity does not roll over unless agreed in "
                   "writing."),
-            fixed("3. WORK BEYOND THE RETAINER",
+            fixed("WORK BEYOND THE RETAINER",
                   "Work beyond the retained scope is billed at {overage}, invoiced "
                   "monthly and payable upon receipt. We will tell you before "
                   "beginning any work that will be billed outside the retainer.",
                   requires="overage"),
-            fixed("4. TERM AND RENEWAL",
+            fixed("TERM AND RENEWAL",
                   "This agreement runs month to month and renews automatically. "
                   "Either party may end it with 30 days' written notice. Fees for "
                   "the current term are earned and non-refundable once the term "
                   "has begun, except any unused advance deposit, which is "
                   "returned."),
-            fixed("5. GOVERNING LAW",
+            fixed("GOVERNING LAW",
                   "This agreement is governed by the laws of {state}.",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
@@ -215,6 +217,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     # ── 3. Service Agreement ─────────────────────────────────────────
     {
         "id": "service_agreement",
+        "numbered": True,
         "title": "Service Agreement",
         "subtitle": "Deliverables, Payment & Ownership",
         "description": "One project, cleanly scoped: deliverables, payment, "
@@ -237,44 +240,44 @@ TEMPLATES: List[Dict[str, Any]] = [
                     "This Service Agreement is between {business_name} and "
                     "{client_name}. {business_name} agrees to perform the services "
                     "described below on the terms set out here."),
-            fixed("1. SERVICES",
+            fixed("SERVICES",
                   "{services}\n\nAnything not listed above is out of scope. "
                   "Additional work is agreed in writing (a message counts) with "
                   "its price before it begins."),
-            fixed("2. PAYMENT",
+            fixed("PAYMENT",
                   "{price}. Invoices are payable upon receipt unless the invoice "
                   "states otherwise. Amounts more than 15 days past due may accrue "
                   "a late charge of 1.5% per month or the maximum allowed by law, "
                   "whichever is less, and work may pause until the account is "
                   "current."),
-            fixed("3. TIMELINE",
+            fixed("TIMELINE",
                   "{timeline}. Dates shift day-for-day where delays are caused by "
                   "the client (approvals, access, materials selection) or by "
                   "events outside either party's reasonable control.",
                   requires="timeline"),
-            fixed("4. CHANGES",
+            fixed("CHANGES",
                   "Either party may propose changes to the scope. A change takes "
                   "effect only when both parties have agreed to it and to any "
                   "price or timeline adjustment, in writing."),
-            fixed("5. OWNERSHIP OF WORK",
+            fixed("OWNERSHIP OF WORK",
                   "Upon receipt of full payment, ownership of the final "
                   "deliverables transfers to {client_name}. {business_name} "
                   "retains its pre-existing tools, methods and know-how, and may "
                   "display the finished work in its portfolio unless you ask us "
                   "not to in writing."),
-            fixed("6. WARRANTY AND LIABILITY",
+            fixed("WARRANTY AND LIABILITY",
                   "Services are performed in a professional and workmanlike "
                   "manner. If something is not right, tell us within 30 days and "
                   "we will correct it at no charge where reasonably possible. "
                   "Each party's total liability under this agreement is limited "
                   "to the amounts paid for the services, except for liabilities "
                   "that cannot be limited by law."),
-            fixed("7. TERMINATION",
+            fixed("TERMINATION",
                   "Either party may terminate with written notice. The client "
                   "pays for work completed and non-refundable commitments made "
                   "through the termination date; any unearned prepayment is "
                   "returned."),
-            fixed("8. GOVERNING LAW",
+            fixed("GOVERNING LAW",
                   "This agreement is governed by the laws of {state}.",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
@@ -284,6 +287,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     # ── 4. Consulting Agreement ──────────────────────────────────────
     {
         "id": "consulting_agreement",
+        "numbered": True,
         "title": "Consulting Agreement",
         "subtitle": "Scope, Independence & Confidentiality",
         "description": "Advisory engagement with independent-contractor status, "
@@ -304,41 +308,41 @@ TEMPLATES: List[Dict[str, Any]] = [
                     "an independent consultant; this agreement sets the terms.",
                     "{client_name} engages {business_name} as an independent "
                     "consultant on the terms below."),
-            fixed("1. THE ENGAGEMENT",
+            fixed("THE ENGAGEMENT",
                   "{engagement}\n\nThe consultant controls the manner and means of "
                   "the work; the client is buying outcomes and advice, not hours "
                   "of supervision."),
-            fixed("2. INDEPENDENT CONTRACTOR",
+            fixed("INDEPENDENT CONTRACTOR",
                   "The consultant is an independent contractor, not an employee, "
                   "partner or agent of the client. The consultant is responsible "
                   "for its own taxes, insurance and business expenses, and may "
                   "serve other clients, provided confidentiality below is "
                   "honored."),
-            fixed("3. FEES",
+            fixed("FEES",
                   "{fees}. Invoices are payable upon receipt unless the invoice "
                   "states otherwise. Pre-approved, reasonable out-of-pocket "
                   "expenses are billed at cost."),
-            fixed("4. CONFIDENTIALITY",
+            fixed("CONFIDENTIALITY",
                   "Each party will protect the other's non-public business "
                   "information with at least the care it uses for its own, and "
                   "will use it only for this engagement. This obligation survives "
                   "the end of the engagement for two years, and indefinitely for "
                   "trade secrets."),
-            fixed("5. WORK PRODUCT",
+            fixed("WORK PRODUCT",
                   "Deliverables prepared specifically for the client under this "
                   "agreement belong to the client upon full payment. The "
                   "consultant retains its general skills, methods, templates and "
                   "know-how, including as improved during the engagement."),
-            fixed("6. NO GUARANTEE",
+            fixed("NO GUARANTEE",
                   "The consultant will bring professional skill and judgment to "
                   "the engagement. Business outcomes depend on factors outside "
                   "either party's control, and no particular result is promised."),
-            fixed("7. TERM AND TERMINATION",
+            fixed("TERM AND TERMINATION",
                   "Term: {term}. Either party may terminate earlier with 14 days' "
                   "written notice; the client pays for work performed through the "
                   "termination date.",
                   requires="term"),
-            fixed("8. GOVERNING LAW",
+            fixed("GOVERNING LAW",
                   "This agreement is governed by the laws of {state}.",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
@@ -348,6 +352,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     # ── 5. Coaching Agreement ────────────────────────────────────────
     {
         "id": "coaching_agreement",
+        "numbered": True,
         "title": "Coaching Agreement",
         "subtitle": "Sessions, Cancellations & Boundaries",
         "description": "Program, sessions, cancellations — and the boundaries "
@@ -369,33 +374,33 @@ TEMPLATES: List[Dict[str, Any]] = [
                     "relationship — encouraging, no hype.",
                     "Welcome — this agreement sets out how we will work together, "
                     "so both of us can focus on the work itself."),
-            fixed("1. THE PROGRAM",
+            fixed("THE PROGRAM",
                   "{program}"),
-            fixed("2. INVESTMENT",
+            fixed("INVESTMENT",
                   "{investment}. Payment is due as scheduled regardless of "
                   "session usage; missed payments pause the program until the "
                   "account is current."),
-            fixed("3. SCHEDULING AND CANCELLATIONS",
+            fixed("SCHEDULING AND CANCELLATIONS",
                   "Sessions are scheduled in advance. A session may be "
                   "rescheduled without charge with at least {cancel_window} "
                   "notice; later cancellations and no-shows count as delivered, "
                   "because the time was reserved for you."),
-            fixed("4. YOUR COMMITMENT",
+            fixed("YOUR COMMITMENT",
                   "Coaching works when you do: you agree to show up prepared, "
                   "complete what you commit to between sessions, and communicate "
                   "honestly about what is and isn't working."),
-            fixed("5. CONFIDENTIALITY",
+            fixed("CONFIDENTIALITY",
                   "What you share in coaching stays private, with narrow "
                   "exceptions required by law (risk of harm to yourself or "
                   "others, or a court order)."),
-            fixed("6. COACHING, NOT THERAPY OR PROFESSIONAL ADVICE",
+            fixed("COACHING, NOT THERAPY OR PROFESSIONAL ADVICE",
                   "Coaching is a development relationship. It is not therapy, "
                   "counseling, medical, legal or financial advice, and it does "
                   "not diagnose or treat any condition. If issues arise that need "
                   "a licensed professional, you agree to seek one. Results depend "
                   "on your own decisions and actions; no specific outcome is "
                   "guaranteed."),
-            fixed("7. ENDING THE PROGRAM",
+            fixed("ENDING THE PROGRAM",
                   "You may end the program with 14 days' written notice. Sessions "
                   "already delivered and the current billing period are earned; "
                   "remaining prepaid, undelivered sessions are refunded."),
@@ -406,6 +411,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     # ── 6. Mutual NDA ────────────────────────────────────────────────
     {
         "id": "mutual_nda",
+        "numbered": True,
         "title": "Mutual Nondisclosure Agreement",
         "subtitle": "Definitions, Exclusions & Term",
         "description": "Both sides can talk freely: definitions, exclusions, "
@@ -424,20 +430,20 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "This Mutual Nondisclosure Agreement is between "
                   "{business_name} and {client_name} (each a \"party\"), for the "
                   "purpose of: {purpose}."),
-            fixed("1. CONFIDENTIAL INFORMATION",
+            fixed("CONFIDENTIAL INFORMATION",
                   "\"Confidential Information\" means non-public information a "
                   "party discloses in connection with the purpose above — "
                   "business, technical, financial or customer information — "
                   "whether marked confidential or not, where a reasonable person "
                   "would understand it to be confidential."),
-            fixed("2. OBLIGATIONS",
+            fixed("OBLIGATIONS",
                   "Each party will (a) use the other's Confidential Information "
                   "only for the purpose above, (b) protect it with at least the "
                   "care it uses for its own confidential information and no less "
                   "than reasonable care, and (c) share it only with people who "
                   "need it for the purpose and are bound by obligations at least "
                   "as protective as these."),
-            fixed("3. EXCLUSIONS",
+            fixed("EXCLUSIONS",
                   "These obligations do not apply to information that (a) is or "
                   "becomes public through no fault of the receiver, (b) the "
                   "receiver already lawfully had, (c) is received lawfully from a "
@@ -446,21 +452,21 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "(e) must be disclosed by law — with prompt notice to the "
                   "discloser where lawful, and disclosure limited to what is "
                   "required."),
-            fixed("4. TERM",
+            fixed("TERM",
                   "This agreement covers disclosures made within one year of "
                   "signing. Confidentiality obligations last {term_years} years "
                   "from each disclosure; obligations for trade secrets last as "
                   "long as the information remains a trade secret."),
-            fixed("5. RETURN AND NO LICENSE",
+            fixed("RETURN AND NO LICENSE",
                   "On request, each party will return or destroy the other's "
                   "Confidential Information. Nothing here transfers ownership or "
                   "grants any license; no party is obligated to proceed with any "
                   "transaction."),
-            fixed("6. REMEDIES",
+            fixed("REMEDIES",
                   "A breach of this agreement may cause harm money cannot fully "
                   "repair, so the injured party may seek injunctive relief in "
                   "addition to any other remedy available at law."),
-            fixed("7. GOVERNING LAW",
+            fixed("GOVERNING LAW",
                   "This agreement is governed by the laws of {state}.",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
@@ -470,6 +476,7 @@ TEMPLATES: List[Dict[str, Any]] = [
     # ── 7. Independent Contractor Agreement ──────────────────────────
     {
         "id": "independent_contractor",
+        "numbered": True,
         "title": "Independent Contractor Agreement",
         "subtitle": "Relationship, Pay & Work Product",
         "description": "Bring on 1099 help with the relationship, taxes, and "
@@ -488,34 +495,34 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "This Independent Contractor Agreement is between "
                   "{business_name} (\"Company\") and {client_name} "
                   "(\"Contractor\")."),
-            fixed("1. SERVICES",
+            fixed("SERVICES",
                   "{services}\n\nThe Contractor controls the manner and means of "
                   "performing the services, providing their own tools and "
                   "equipment unless agreed otherwise in writing."),
-            fixed("2. RELATIONSHIP",
+            fixed("RELATIONSHIP",
                   "The Contractor is an independent contractor, not an employee. "
                   "The Contractor is responsible for their own income and "
                   "self-employment taxes, insurance, and licenses, and is not "
                   "entitled to employee benefits. The Company will issue tax "
                   "reporting forms (e.g. Form 1099-NEC) as required by law."),
-            fixed("3. PAYMENT",
+            fixed("PAYMENT",
                   "{pay}. The Contractor invoices the Company; approved invoices "
                   "are paid on the schedule above. Pre-approved materials and "
                   "expenses are reimbursed at cost with receipts."),
-            fixed("4. WORK PRODUCT",
+            fixed("WORK PRODUCT",
                   "Work product created for the Company under this agreement is "
                   "the Company's property upon payment, including intellectual "
                   "property rights in it, to the extent permitted by law. The "
                   "Contractor keeps their general skills, methods and know-how."),
-            fixed("5. SAFETY AND CONDUCT",
+            fixed("SAFETY AND CONDUCT",
                   "The Contractor will perform the services safely, comply with "
                   "applicable law and site rules, and carry any insurance "
                   "required for the work."),
-            fixed("6. TERM AND TERMINATION",
+            fixed("TERM AND TERMINATION",
                   "Either party may end this agreement with written notice. The "
                   "Company pays for services satisfactorily performed through the "
                   "termination date."),
-            fixed("7. GOVERNING LAW",
+            fixed("GOVERNING LAW",
                   "This agreement is governed by the laws of {state}.",
                   requires="state"),
             sig(_SIGNATURE_BLOCK),
@@ -659,6 +666,11 @@ def assemble(template: Dict[str, Any], variables: Dict[str, str],
     uses its fallback, so the document always completes."""
     safe = _SafeMap(variables)
     parts: List[str] = []
+    # Agreements number their headed sections AT ASSEMBLY — a hidden
+    # conditional clause (no deposit → no deposit section) can then
+    # never leave a gap in the numbering. Letters stay unnumbered.
+    numbered = bool(template.get("numbered"))
+    clause_no = 0
     for i, s in enumerate(template["sections"]):
         req = s.get("requires")
         if req and not (variables.get(req) or "").strip():
@@ -669,8 +681,105 @@ def assemble(template: Dict[str, Any], variables: Dict[str, str],
             text = s["text"]
         rendered = text.format_map(safe)
         if s.get("heading"):
-            rendered = f"{s['heading']}\n\n{rendered}"
+            heading = s["heading"]
+            if numbered:
+                clause_no += 1
+                heading = f"{clause_no}. {heading}"
+            rendered = f"{heading}\n\n{rendered}"
         parts.append(rendered)
     if include_review_note:
         parts.append(_REVIEW_NOTE)
     return "\n\n".join(parts)
+
+
+# ─── The back page — the armor every signed agreement carries ────────
+# The clauses that look like filler and do the real work when things
+# go wrong: entire-agreement kills "but you said on the phone",
+# severability keeps one dead clause from killing the contract, and
+# the signatures clause is load-bearing HERE because execution runs
+# through an e-signature service. Spliced before the signature block
+# of the seven agreements; the two letters stay letters.
+# Deliberate absence: NO liability cap on engagement_letter or
+# retainer_agreement — prospectively limiting professional (e.g.
+# malpractice) liability is ethically prohibited for lawyers in most
+# states, so those two omit it on purpose.
+
+_GENERAL_TERMS = fixed("GENERAL TERMS",
+    "(a) Entire agreement. This document is the entire agreement between "
+    "the parties about its subject and replaces every earlier discussion, "
+    "promise, or writing about it.\n"
+    "(b) Changes. A change to this agreement counts only when it is in "
+    "writing and accepted by both parties; a clear written exchange "
+    "(including email) is enough.\n"
+    "(c) Severability. If any part of this agreement is found "
+    "unenforceable, that part is limited or removed to the minimum extent "
+    "necessary, and the rest stays in force.\n"
+    "(d) Assignment. Neither party may transfer this agreement to someone "
+    "else without the other's written consent, except as part of a sale "
+    "of substantially all of a party's business.\n"
+    "(e) Notices. Formal notices go in writing to the addresses or email "
+    "addresses the parties regularly use with each other, and count when "
+    "received.\n"
+    "(f) Events beyond control. Neither party is responsible for delay or "
+    "failure caused by events beyond its reasonable control (illness, "
+    "disaster, outage, or similar), provided the affected party gives "
+    "prompt notice and resumes as soon as reasonably possible.\n"
+    "(g) Signatures. This agreement may be signed in counterparts, and "
+    "electronic signatures — including through an e-signature service — "
+    "are as valid as ink.")
+
+_DISPUTE = fixed("DISPUTE RESOLUTION",
+    "If a dispute arises under this agreement, the parties will first try "
+    "in good faith to resolve it directly within 30 days of one party "
+    "raising it in writing. If that fails, they will consider mediation "
+    "before either begins a court proceeding — except that either party "
+    "may go straight to court to protect confidential information or "
+    "intellectual property. Where the law allows, the prevailing party in "
+    "any proceeding may recover its reasonable costs.")
+
+_NO_GUARANTEE_PRO = fixed("NO GUARANTEE OF OUTCOME",
+    "We will bring professional skill, care, and judgment to this "
+    "engagement. Outcomes depend on facts, third parties, and "
+    "decision-makers outside our control, and no particular result is "
+    "promised or implied.")
+
+_OVERDUE = fixed("OVERDUE ACCOUNTS",
+    "Amounts more than 15 days past due may accrue a late charge of 1.5% "
+    "per month or the maximum the law allows, whichever is less, and work "
+    "may pause until the account is current. You are responsible for the "
+    "reasonable costs of collecting seriously overdue amounts where the "
+    "law allows.")
+
+_RELATIONSHIP = fixed("RELATIONSHIP OF THE PARTIES",
+    "{business_name} is an independent contractor, not an employee, "
+    "partner, or agent of {client_name}. Neither party may bind the "
+    "other, and nothing in this agreement creates a joint venture.")
+
+_INDEMNITY = fixed("RESPONSIBILITY FOR CLAIMS",
+    "Each party will be responsible for, and will hold the other harmless "
+    "from, third-party claims to the extent they arise out of that "
+    "party's own negligence, willful misconduct, or breach of this "
+    "agreement. Neither party takes on the other's independent "
+    "obligations to third parties.")
+
+_LIABILITY_CAP = fixed("LIMITATION OF LIABILITY",
+    "Except for breaches of confidentiality, amounts owed under this "
+    "agreement, or liabilities that cannot be limited by law, each "
+    "party's total liability under this agreement is limited to the fees "
+    "paid or payable for the engagement.")
+
+_BACK_PAGE: Dict[str, List[Dict[str, Any]]] = {
+    "engagement_letter":      [_NO_GUARANTEE_PRO, _OVERDUE, _DISPUTE, _GENERAL_TERMS],
+    "retainer_agreement":     [_NO_GUARANTEE_PRO, _OVERDUE, _DISPUTE, _GENERAL_TERMS],
+    "service_agreement":      [_RELATIONSHIP, _INDEMNITY, _DISPUTE, _GENERAL_TERMS],
+    "consulting_agreement":   [_LIABILITY_CAP, _DISPUTE, _GENERAL_TERMS],
+    "coaching_agreement":     [_DISPUTE, _GENERAL_TERMS],
+    "mutual_nda":             [_GENERAL_TERMS],
+    "independent_contractor": [_INDEMNITY, _DISPUTE, _GENERAL_TERMS],
+}
+
+for _t in TEMPLATES:
+    _extra = _BACK_PAGE.get(_t["id"])
+    if _extra:
+        _sig_block = _t["sections"].pop()   # signature block is last
+        _t["sections"].extend(list(_extra) + [_sig_block])

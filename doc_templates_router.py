@@ -175,6 +175,9 @@ async def doctemplates_list(biz: str,
             "page_estimate": f"≈{pages} page{'s' if pages != 1 else ''}",
             "suggested": is_custom or btype in t.get("suggested_for", []),
             "custom": is_custom,
+            # the live preview numbers headed sections exactly like
+            # assemble() does, so what you watch is what you sign
+            "numbered": bool(t.get("numbered")),
         })
     # A business's own templates first, then suggested, then the rest
     # in curated library order.
