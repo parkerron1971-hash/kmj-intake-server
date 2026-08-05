@@ -395,3 +395,21 @@ def test_first_time_hint_and_list_overlay(patchable, wired):
     assert "Scope of the engagement" in out2["result"]   # still asks for scope
     assert "Fee" not in out2["result"].replace("Fee, state", "")  # fee satisfied by default
     assert "first one" not in out2["result"]
+
+
+# ─── Visual pass — the paper rides along with the list ───────────────
+
+def test_list_ships_subtitles_sections_and_page_estimates(fake):
+    out = asyncio.run(dtr.doctemplates_list(BIZ, _User()))
+    for t in out["templates"]:
+        assert t["subtitle"], f"{t['id']} missing subtitle"
+        assert t["sections"] and all("text" in s for s in t["sections"])
+        assert t["page_estimate"].startswith("≈")
+    eng = next(t for t in out["templates"] if t["id"] == "engagement_letter")
+    # placeholders intact for live frontend substitution
+    joined = "\n".join(s["text"] for s in eng["sections"])
+    assert "{scope}" in joined and "{client_name}" in joined
+    # conditional sections carry their gate
+    assert any(s.get("requires") == "deposit" for s in eng["sections"])
+    # drafted sections shipped as their fallback (no briefs leak)
+    assert "one-paragraph professional opener" not in joined
