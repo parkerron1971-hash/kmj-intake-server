@@ -98,8 +98,11 @@ def _supabase_url() -> str:
 
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    # NB: the businesses column is `type` — selecting a column that
+    # doesn't exist turns into PostgREST 400 → None → a phantom 404
+    # for every caller (how v1 shipped broken).
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id,business_type&limit=1") or []
+        f"/businesses?id=eq.{biz}&select=id,name,owner_id,type&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
     if str(rows[0].get("owner_id")) != str(user.id):
@@ -188,11 +191,11 @@ def _voice(business_type: Optional[str]) -> str:
 def _system(biz: Dict[str, Any], contact_name: Optional[str]) -> str:
     parts = [
         f"You are the document analyst for {biz.get('name') or 'this business'}"
-        + (f", a {biz.get('business_type')}" if biz.get("business_type") else "")
+        + (f", a {biz.get('type')}" if biz.get("type") else "")
         + ". You are advising the business OWNER about a document in their "
           "own files — not giving advice to their client.",
     ]
-    v = _voice(biz.get("business_type"))
+    v = _voice(biz.get("type"))
     if v:
         parts.append(v)
     if contact_name:

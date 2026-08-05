@@ -304,6 +304,9 @@ app.include_router(docintel_router)
 # Conflict-of-interest check — deterministic sweep; the check itself is the record
 from conflicts_router import router as conflicts_router
 app.include_router(conflicts_router)
+# Document templates — nine data-aware documents into the approve → PDF → e-sign chain
+from doc_templates_router import router as doctemplates_router
+app.include_router(doctemplates_router)
 # Rails demand-driven — payroll interest capture (Gusto, demand-gated)
 from payroll_router import router as payroll_router
 app.include_router(payroll_router)
