@@ -310,3 +310,88 @@ def test_verb_gathers_flat_params(fake, wired):
     assert not out.get("failed")
     body = fake.rows("agent_queue")[0]["body"]
     assert "$2,000" in body and "Invoice #2041" in body
+
+
+# ─── Learned defaults — the first contract teaches the system ────────
+
+@pytest.fixture
+def patchable(fake, monkeypatch):
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", fake.patch)
+    return fake
+
+
+def test_first_contract_teaches_then_second_fills_itself(patchable, wired):
+    from chief_contract_actions import handle_generate_document
+    fake = patchable
+    biz = fake.rows("businesses")[0]
+
+    # FIRST document: fee + state given explicitly → generated AND saved.
+    out = asyncio.run(handle_generate_document(None, biz, {
+        "type": "generate_document", "template": "engagement_letter",
+        "contact_name": "Dana",
+        "params": {"scope": "The Northside lease", "fee": "$300/hour",
+                   "state": "Georgia"},
+    }))
+    assert not out.get("failed")
+    assert "I've saved" in out["result"] and "fee" in out["result"]
+    saved = fake.rows("businesses")[0]["settings"]["doc_defaults"]
+    assert saved == {"fee": "$300/hour", "state": "Georgia"}
+    # engagement facts are never saved
+    assert "scope" not in saved
+
+    # SECOND document: no fee/state given — the defaults fill them,
+    # the result names what was pulled, and nothing re-asks.
+    out2 = asyncio.run(handle_generate_document(None, biz, {
+        "type": "generate_document", "template": "engagement_letter",
+        "contact_name": "Dana",
+        "params": {"scope": "Trademark filing"},
+    }))
+    assert not out2.get("failed")
+    assert "Filled from your standard terms" in out2["result"]
+    assert "fee = $300/hour" in out2["result"]
+    body = fake.rows("agent_queue")[1]["body"]
+    assert "$300/hour" in body and "Georgia" in body
+    # nothing new was saved the second time (values came from defaults)
+    assert "I've saved" not in out2["result"]
+
+    # EXPLICIT beats saved: a different fee this time wins and re-saves.
+    out3 = asyncio.run(handle_generate_document(None, biz, {
+        "type": "generate_document", "template": "engagement_letter",
+        "contact_name": "Dana",
+        "params": {"scope": "Appeal", "fee": "$5,000 flat"},
+    }))
+    assert not out3.get("failed")
+    assert "$5,000 flat" in fake.rows("agent_queue")[2]["body"]
+    assert fake.rows("businesses")[0]["settings"]["doc_defaults"]["fee"] == "$5,000 flat"
+
+
+def test_first_time_hint_and_list_overlay(patchable, wired):
+    from chief_contract_actions import handle_generate_document
+    fake = patchable
+    biz = fake.rows("businesses")[0]
+
+    # No defaults yet + missing required → the walk-through hint rides along.
+    out = asyncio.run(handle_generate_document(None, biz, {
+        "type": "generate_document", "template": "engagement_letter",
+        "contact_name": "Dana", "params": {},
+    }))
+    assert out.get("failed") and "first one" in out["result"]
+
+    # After terms exist, /list pre-fills sticky fields for the dialog.
+    biz["settings"]["doc_defaults"] = {"fee": "$300/hour", "state": "Georgia"}
+    listed = asyncio.run(dtr.doctemplates_list(BIZ, _User()))
+    eng = next(t for t in listed["templates"] if t["id"] == "engagement_letter")
+    by_key = {f["key"]: f for f in eng["fields"]}
+    assert by_key["fee"]["default"] == "$300/hour"
+    assert by_key["state"]["default"] == "Georgia"
+    assert by_key["scope"]["default"] == ""          # engagement facts never pre-fill
+    # and the second miss no longer claims first-time
+    out2 = asyncio.run(handle_generate_document(None, biz, {
+        "type": "generate_document", "template": "engagement_letter",
+        "contact_name": "Dana", "params": {},
+    }))
+    assert out2.get("failed")
+    assert "Scope of the engagement" in out2["result"]   # still asks for scope
+    assert "Fee" not in out2["result"].replace("Fee, state", "")  # fee satisfied by default
+    assert "first one" not in out2["result"]

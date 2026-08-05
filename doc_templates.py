@@ -76,9 +76,17 @@ def drafted(heading: Optional[str], brief: str, fallback: str) -> Dict[str, Any]
 
 
 def field(key: str, label: str, *, type_: str = "text", required: bool = False,
-          placeholder: str = "", default: str = "") -> Dict[str, Any]:
+          placeholder: str = "", default: str = "",
+          sticky: bool = False) -> Dict[str, Any]:
+    """sticky=True marks a BUSINESS-STANDARD term (your hourly fee, your
+    state, your cancellation window): once the practitioner fills it the
+    first time, it is saved to the business's doc_defaults and pre-fills
+    every later document — the first contract teaches the system. Facts
+    about one engagement (a scope, an amount owed, an NDA's purpose) are
+    NEVER sticky: reusing them would write one client's terms into
+    another client's contract."""
     return {"key": key, "label": label, "type": type_, "required": required,
-            "placeholder": placeholder, "default": default}
+            "placeholder": placeholder, "default": default, "sticky": sticky}
 
 
 # ─── The nine ────────────────────────────────────────────────────────
@@ -96,11 +104,11 @@ TEMPLATES: List[Dict[str, Any]] = [
         "fields": [
             field("scope", "Scope of the engagement", type_="textarea", required=True,
                   placeholder="e.g. Representation in the negotiation and closing of the Northside lease"),
-            field("fee", "Fee", required=True,
+            field("fee", "Fee", required=True, sticky=True,
                   placeholder="e.g. $300/hour, billed monthly — or a flat $2,500"),
-            field("deposit", "Initial deposit / retainer (optional)",
+            field("deposit", "Initial deposit / retainer (optional)", sticky=True,
                   placeholder="e.g. $1,500"),
-            field("state", "Governing state (optional)", placeholder="e.g. Georgia"),
+            field("state", "Governing state (optional)", sticky=True, placeholder="e.g. Georgia"),
         ],
         "sections": [
             drafted(None,
@@ -160,11 +168,11 @@ TEMPLATES: List[Dict[str, Any]] = [
         "fields": [
             field("services", "Services covered by the retainer", type_="textarea", required=True,
                   placeholder="e.g. Ongoing contract review, employment questions, and up to two negotiations per month"),
-            field("monthly_fee", "Monthly retainer fee", required=True,
+            field("monthly_fee", "Monthly retainer fee", required=True, sticky=True,
                   placeholder="e.g. $1,200/month"),
-            field("overage", "Rate for work beyond the retainer (optional)",
+            field("overage", "Rate for work beyond the retainer (optional)", sticky=True,
                   placeholder="e.g. $250/hour"),
-            field("state", "Governing state (optional)", placeholder="e.g. Georgia"),
+            field("state", "Governing state (optional)", sticky=True, placeholder="e.g. Georgia"),
         ],
         "sections": [
             drafted(None,
@@ -217,7 +225,7 @@ TEMPLATES: List[Dict[str, Any]] = [
                   placeholder="e.g. $4,800 — half on signing, half on completion"),
             field("timeline", "Timeline (optional)",
                   placeholder="e.g. Work begins March 3 and completes by March 21"),
-            field("state", "Governing state (optional)", placeholder="e.g. Georgia"),
+            field("state", "Governing state (optional)", sticky=True, placeholder="e.g. Georgia"),
         ],
         "sections": [
             drafted(None,
@@ -281,10 +289,10 @@ TEMPLATES: List[Dict[str, Any]] = [
         "fields": [
             field("engagement", "The engagement", type_="textarea", required=True,
                   placeholder="e.g. Advise on the Q4 pricing rollout: weekly working sessions plus a written recommendation"),
-            field("fees", "Fees and invoicing", required=True,
+            field("fees", "Fees and invoicing", required=True, sticky=True,
                   placeholder="e.g. $5,000 flat, invoiced half up front — or $250/hour, invoiced monthly"),
             field("term", "Term (optional)", placeholder="e.g. Through December 31, 2026"),
-            field("state", "Governing state (optional)", placeholder="e.g. Georgia"),
+            field("state", "Governing state (optional)", sticky=True, placeholder="e.g. Georgia"),
         ],
         "sections": [
             drafted(None,
@@ -346,7 +354,7 @@ TEMPLATES: List[Dict[str, Any]] = [
                   placeholder="e.g. 12-week leadership coaching: weekly 60-minute sessions plus email support between sessions"),
             field("investment", "Investment and payment", required=True,
                   placeholder="e.g. $2,400 — payable in full, or 3 monthly payments of $850"),
-            field("cancel_window", "Cancellation notice for a session",
+            field("cancel_window", "Cancellation notice for a session", sticky=True,
                   default="24 hours", placeholder="24 hours"),
         ],
         "sections": [
@@ -401,9 +409,9 @@ TEMPLATES: List[Dict[str, Any]] = [
         "fields": [
             field("purpose", "Purpose of the exchange", required=True,
                   placeholder="e.g. Evaluating a joint venture for event production services"),
-            field("term_years", "Confidentiality term (years)", default="2",
+            field("term_years", "Confidentiality term (years)", sticky=True, default="2",
                   placeholder="2"),
-            field("state", "Governing state (optional)", placeholder="e.g. Georgia"),
+            field("state", "Governing state (optional)", sticky=True, placeholder="e.g. Georgia"),
         ],
         "sections": [
             fixed(None,
@@ -466,7 +474,7 @@ TEMPLATES: List[Dict[str, Any]] = [
                   placeholder="e.g. Framing labor for the Deluth remodel, per plans provided"),
             field("pay", "Pay and schedule", required=True,
                   placeholder="e.g. $45/hour, invoiced weekly, paid within 7 days"),
-            field("state", "Governing state (optional)", placeholder="e.g. Georgia"),
+            field("state", "Governing state (optional)", sticky=True, placeholder="e.g. Georgia"),
         ],
         "sections": [
             fixed(None,
@@ -519,7 +527,7 @@ TEMPLATES: List[Dict[str, Any]] = [
             field("amount", "Amount owed", required=True, placeholder="e.g. $1,850.00"),
             field("owed_for", "What it's owed for", type_="textarea", required=True,
                   placeholder="e.g. Invoice #2041 for the March brand design work, delivered March 18"),
-            field("deadline_days", "Days to pay", default="14", placeholder="14"),
+            field("deadline_days", "Days to pay", sticky=True, default="14", placeholder="14"),
         ],
         "sections": [
             drafted(None,
