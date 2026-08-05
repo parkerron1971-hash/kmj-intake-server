@@ -566,3 +566,111 @@ def test_ethical_line_no_liability_cap_on_lawyer_paper():
     # while the commercial agreements do cap or allocate responsibility
     assert "LIMITATION OF LIABILITY" in _min_body("consulting_agreement")
     assert "RESPONSIBILITY FOR CLAIMS" in _min_body("service_agreement")
+
+
+# ─── Compose — a contract that doesn't exist yet ─────────────────────
+
+@pytest.fixture
+def compose_wired(patchable, monkeypatch):
+    """Fake model returns a deal-specific template; recorder captures."""
+    import json as _json
+    rec = {"units": [], "payloads": []}
+    monkeypatch.setattr(dtr.billing_limits, "require_units",
+                        lambda biz: rec["units"].append(biz))
+    monkeypatch.setattr(dtr.llm_call, "api_key", lambda: "k")
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {"model": "claude-sonnet-4-5",
+                    "usage": {"input_tokens": 5, "output_tokens": 9},
+                    "content": [{"type": "text", "text": _json.dumps({
+                        "title": "Equipment Rental Agreement",
+                        "subtitle": "Rental, Deposit & Return",
+                        "description": "Renting gear to a client.",
+                        "fields": [
+                            {"key": "equipment", "label": "Equipment",
+                             "type": "textarea", "required": True,
+                             "placeholder": "Two speakers"},
+                            {"key": "damage_deposit", "label": "Damage deposit",
+                             "required": True, "sticky": True,
+                             "placeholder": "$200"},
+                        ],
+                        "sections": [
+                            {"heading": "THE RENTAL",
+                             "text": "{business_name} rents to {client_name}: {equipment}."},
+                            {"heading": "DEPOSIT AND RETURN",
+                             "text": "A damage deposit of {damage_deposit} is due at pickup; late return past {return_window} incurs a fee."},
+                        ]})}]}
+
+    async def fake_apost(client, payload=None, **kw):
+        rec["payloads"].append(payload)
+        return _Resp()
+    monkeypatch.setattr(dtr.llm_call, "apost", fake_apost)
+
+    async def fake_log(**kw):
+        pass
+    monkeypatch.setattr(dtr, "log_api_usage", fake_log)
+    return rec
+
+
+def test_compose_core_splices_the_spine(compose_wired, patchable):
+    fake = patchable
+    biz = fake.rows("businesses")[0]
+    t = asyncio.run(dtr.compose_document_template(
+        biz, "equipment rental with a damage deposit", user_id="owner1"))
+    assert t["id"].startswith("custom:") and t["numbered"] is True
+    # deal clauses from the model
+    joined = "\n".join(s["text"] for s in t["sections"])
+    assert "{equipment}" in joined and "{damage_deposit}" in joined
+    # undeclared placeholder auto-declared (the armor)
+    keys = {f["key"] for f in t["fields"]}
+    assert "return_window" in keys
+    # the spine is OURS, spliced deterministically
+    assert "Severability" in joined and "DISPUTE RESOLUTION" in "\n".join(
+        s.get("heading") or "" for s in t["sections"])
+    assert joined.rstrip().endswith("Name: {client_name}")
+    # governing-law machinery added
+    assert "state" in keys and "venue_county" in keys
+    # saved + event, unit charged, vertical rode into the system prompt
+    assert len(fake.rows("business_doc_templates")) == 1
+    assert any(e["event_type"] == "document_template_composed"
+               for e in fake.rows("events"))
+    sysmsg = compose_wired["payloads"][0]["system"]
+    assert "lawyer" in sysmsg
+    # and it can GENERATE immediately through the normal core
+    out = asyncio.run(dtr.doctemplates_generate(dtr.GenerateBody(
+        business_id=BIZ, contact_id="c9", template_id=t["id"],
+        params={"equipment": "Two speakers", "damage_deposit": "$200"}),
+        _User()))
+    assert out["ok"] and "Two speakers" in out["body"]
+    assert "Severability" in out["body"]
+
+
+def test_compose_guards(compose_wired):
+    biz = {"id": BIZ, "owner_id": "owner1", "name": "B", "type": None}
+    with pytest.raises(dtr.GenerationError) as e:
+        asyncio.run(dtr.compose_document_template(biz, "too short", user_id="u"))
+    assert e.value.status == 400
+
+
+def test_compose_verb_registered_and_flows(compose_wired, patchable):
+    import action_registry
+    from chief_contract_actions import handle_compose_template
+    assert "compose_template" in action_registry.REGISTRY
+    assert action_registry.REGISTRY["compose_template"]["reversibility"] == "A"
+    fake = patchable
+    biz = fake.rows("businesses")[0]
+    out = asyncio.run(handle_compose_template(None, biz, {
+        "type": "compose_template",
+        "description": "equipment rental with a damage deposit and return windows",
+    }))
+    assert not out.get("failed")
+    assert out["template_id"].startswith("custom:")
+    assert "Equipment" in "; ".join(out["required_fields"])
+    # empty description refused, nothing written
+    before = len(fake.rows("business_doc_templates"))
+    out2 = asyncio.run(handle_compose_template(None, biz, {
+        "type": "compose_template", "description": ""}))
+    assert out2.get("failed")
+    assert len(fake.rows("business_doc_templates")) == before
