@@ -478,6 +478,81 @@ async def contract_health():
 PDF_BUCKET = "proposals"
 PDF_ACCENT = "#C8973E"  # Default gold
 
+# Brand Studio → the paper (8/05). The kit at settings.brand_kit already
+# carries colors.primary, font_pair, and logo_url — the PDF just never
+# read it. brand_from_business() extracts what reportlab can honor
+# (accent color, serif/sans lean, the logo), and both callers pass it.
+
+_SERIF_HINTS = ("playfair", "georgia", "merriweather", "lora", "times",
+                "garamond", "baskerville", "libre caslon", "cormorant",
+                "crimson", "spectral", "serif")
+
+
+def brand_from_business(business: Dict[str, Any]) -> Dict[str, Any]:
+    """{accent, serif, logo_url} from settings.brand_kit — with the
+    shipped defaults when a business hasn't built a kit yet."""
+    kit = ((business or {}).get("settings") or {}).get("brand_kit") or {}
+    colors = kit.get("colors") or {}
+    raw = (colors.get("primary") or kit.get("primary_color") or "").strip()
+    accent = PDF_ACCENT
+    if re.fullmatch(r"#?[0-9a-fA-F]{6}", raw):
+        accent = raw if raw.startswith("#") else f"#{raw}"
+    font_pair = kit.get("font_pair") or {}
+    heading_font = str(font_pair.get("heading")
+                       or kit.get("font_heading") or "").lower()
+    serif = any(h in heading_font for h in _SERIF_HINTS)
+    logo_url = kit.get("logo_url") or (kit.get("assets") or {}).get("primary")
+    return {"accent": accent, "serif": serif, "logo_url": logo_url or None}
+
+
+async def fetch_logo_bytes(client: httpx.AsyncClient,
+                           logo_url: Optional[str]) -> Optional[bytes]:
+    """Best-effort logo download for the letterhead. SVG is skipped
+    (reportlab can't raster it); any failure means no logo, never a
+    failed PDF."""
+    if not logo_url or logo_url.lower().split("?")[0].endswith(".svg"):
+        return None
+    try:
+        r = await client.get(logo_url, timeout=HTTP_TIMEOUT)
+        if r.status_code >= 400 or not r.content or len(r.content) > 3_000_000:
+            return None
+        return r.content
+    except Exception:
+        return None
+
+
+# ── Line classification for the body renderer ────────────────────────
+# Generated documents carry clause headings like "1. SCOPE OF
+# ENGAGEMENT" and letters carry bare ones like "THE BALANCE". The old
+# renderer's numbered-list regex swallowed the former as BULLETS. A
+# line is a clause heading when its text reads as a title (all-caps,
+# short); numbered lines with sentence text stay list items.
+
+def _classify_line(line: str) -> tuple:
+    s = line.rstrip()
+    if not s.strip():
+        return ("blank", "")
+    if s.startswith("## "):
+        return ("heading", s[3:])
+    if s.startswith("# "):
+        return ("heading", s[2:])
+    m = re.match(r"^(\d+)\.\s+(.+)$", s.strip())
+    if m:
+        rest = m.group(2).strip()
+        if rest == rest.upper() and any(c.isalpha() for c in rest) and len(rest) <= 70:
+            return ("heading", s.strip())          # "1. SCOPE OF ENGAGEMENT"
+        return ("numbered", rest)                   # a real numbered list item
+    bare = s.strip()
+    if (bare == bare.upper() and any(c.isalpha() for c in bare)
+            and len(bare) <= 70 and not bare.endswith((".", ":", ","))):
+        return ("heading", bare)                    # "GENERAL TERMS", "ACCEPTED AND AGREED"
+    if re.match(r"^\([a-z]\)\s+", bare):
+        return ("subclause", bare)                  # "(a) Entire agreement. …"
+    bm = re.match(r"^\s*[-*]\s+(.*)", s)
+    if bm:
+        return ("bullet", bm.group(1))
+    return ("para", s.strip())
+
 
 def _build_pdf(
     business_name: str,
@@ -487,6 +562,8 @@ def _build_pdf(
     subject: str,
     body: str,
     accent_hex: str = PDF_ACCENT,
+    serif: bool = False,
+    logo_bytes: Optional[bytes] = None,
 ) -> bytes:
     """Generate a professional PDF proposal. Returns bytes."""
     # Lazy import so the module loads even if reportlab isn't installed yet
@@ -494,14 +571,22 @@ def _build_pdf(
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.colors import HexColor, black, white
     from reportlab.lib.units import inch
+    from reportlab.lib.utils import ImageReader
     from reportlab.platypus import (
         SimpleDocTemplate, Paragraph, Spacer, HRFlowable, ListFlowable, ListItem,
+        Image, Table, TableStyle,
     )
     from reportlab.lib.enums import TA_LEFT
 
     accent = HexColor(accent_hex)
     dark = HexColor("#1A1A22")
     muted = HexColor("#6B7280")
+
+    # Brand Studio font lean: a serif kit reads as Times, a sans kit as
+    # Helvetica — the closest reportlab's built-ins get to the site's
+    # typography without shipping font files.
+    f_regular = "Times-Roman" if serif else "Helvetica"
+    f_bold = "Times-Bold" if serif else "Helvetica-Bold"
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -515,46 +600,74 @@ def _build_pdf(
     h_business = ParagraphStyle(
         "BusinessName", parent=styles["Title"],
         fontSize=22, leading=26, textColor=dark, spaceAfter=4, alignment=TA_LEFT,
-        fontName="Helvetica-Bold",
+        fontName=f_bold,
     )
     h_practitioner = ParagraphStyle(
         "Practitioner", parent=styles["Normal"],
-        fontSize=11, leading=14, textColor=muted, spaceAfter=2, fontName="Helvetica",
+        fontSize=11, leading=14, textColor=muted, spaceAfter=2, fontName=f_regular,
     )
     h_date = ParagraphStyle(
         "DateStyle", parent=styles["Normal"],
-        fontSize=10, leading=12, textColor=muted, spaceAfter=20, fontName="Helvetica",
+        fontSize=10, leading=12, textColor=muted, spaceAfter=20, fontName=f_regular,
     )
     h_recipient = ParagraphStyle(
         "Recipient", parent=styles["Normal"],
-        fontSize=11, leading=14, textColor=dark, spaceAfter=18, fontName="Helvetica",
+        fontSize=11, leading=14, textColor=dark, spaceAfter=18, fontName=f_regular,
     )
     h_subject = ParagraphStyle(
         "Subject", parent=styles["Heading2"],
         fontSize=15, leading=18, textColor=accent, spaceAfter=12,
-        fontName="Helvetica-Bold",
+        fontName=f_bold,
     )
     h_section = ParagraphStyle(
         "Section", parent=styles["Heading3"],
         fontSize=12, leading=15, textColor=accent, spaceAfter=6, spaceBefore=12,
-        fontName="Helvetica-Bold",
+        fontName=f_bold,
     )
     h_body = ParagraphStyle(
         "Body", parent=styles["BodyText"],
         fontSize=10.5, leading=15, textColor=dark, spaceAfter=8,
-        fontName="Helvetica", alignment=TA_LEFT,
+        fontName=f_regular, alignment=TA_LEFT,
     )
     h_footer = ParagraphStyle(
         "Footer", parent=styles["Normal"],
         fontSize=9, leading=11, textColor=muted, alignment=TA_LEFT,
-        fontName="Helvetica",
+        fontName=f_regular,
     )
 
     story: List[Any] = []
-    # Header
-    story.append(Paragraph(business_name, h_business))
-    story.append(Paragraph(practitioner_name, h_practitioner))
-    story.append(Paragraph(datetime.now().strftime("%B %d, %Y"), h_date))
+    # Header — the letterhead. With a Brand Studio logo it sits beside
+    # the name block; without one, the name block IS the letterhead.
+    name_block = [
+        Paragraph(business_name, h_business),
+        Paragraph(practitioner_name, h_practitioner),
+        Paragraph(datetime.now().strftime("%B %d, %Y"), h_date),
+    ]
+    logo_flowable = None
+    if logo_bytes:
+        try:
+            reader = ImageReader(io.BytesIO(logo_bytes))
+            iw, ih = reader.getSize()
+            if iw > 0 and ih > 0:
+                target_h = 0.62 * inch
+                target_w = min(target_h * (iw / ih), 1.9 * inch)
+                logo_flowable = Image(io.BytesIO(logo_bytes),
+                                      width=target_w, height=target_h)
+        except Exception:
+            logo_flowable = None  # a bad image never breaks the paper
+    if logo_flowable is not None:
+        head = Table([[logo_flowable, name_block]],
+                     colWidths=[2.1 * inch, None])
+        head.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (0, 0), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        story.append(head)
+    else:
+        story.extend(name_block)
     story.append(HRFlowable(width="100%", thickness=2, color=accent, spaceBefore=0, spaceAfter=14))
 
     # Recipient
@@ -578,41 +691,40 @@ def _build_pdf(
         story.append(Spacer(1, 6))
         bullet_buffer.clear()
 
+    h_subclause = ParagraphStyle(
+        "Subclause", parent=h_body, leftIndent=14, spaceAfter=5,
+    )
+
     def _inline_md(text: str) -> str:
+        # Escape XML first — a stray & or < in a clause must never crash
+        # reportlab's Paragraph parser (it reads inline HTML-ish markup).
+        text = (text.replace("&", "&amp;")
+                    .replace("<", "&lt;").replace(">", "&gt;"))
         # Convert **bold** → <b>bold</b>
         text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
         # Convert *italic* → <i>italic</i>  (only single asterisks)
         text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", text)
-        # Escape stray angle brackets
         return text
 
+    # The classifier knows a clause heading ("1. SCOPE OF ENGAGEMENT",
+    # "GENERAL TERMS") from a list item — the old numbered-list regex
+    # rendered every contract clause as a bullet point.
     for raw_line in body.split("\n"):
-        line = raw_line.rstrip()
-        if not line.strip():
+        kind, text = _classify_line(raw_line)
+        if kind == "blank":
             _flush_bullets()
             story.append(Spacer(1, 4))
-            continue
-        # Heading
-        if line.startswith("## "):
+        elif kind == "heading":
             _flush_bullets()
-            story.append(Paragraph(_inline_md(line[3:]), h_section))
-            continue
-        if line.startswith("# "):
+            story.append(Paragraph(_inline_md(text), h_section))
+        elif kind in ("bullet", "numbered"):
+            bullet_buffer.append(_inline_md(text))
+        elif kind == "subclause":
             _flush_bullets()
-            story.append(Paragraph(_inline_md(line[2:]), h_section))
-            continue
-        # Bullet
-        bm = re.match(r"^\s*[-*]\s+(.*)", line)
-        nm = re.match(r"^\s*\d+\.\s+(.*)", line)
-        if bm:
-            bullet_buffer.append(_inline_md(bm.group(1)))
-            continue
-        if nm:
-            bullet_buffer.append(_inline_md(nm.group(1)))
-            continue
-        # Regular paragraph
-        _flush_bullets()
-        story.append(Paragraph(_inline_md(line), h_body))
+            story.append(Paragraph(_inline_md(text), h_subclause))
+        else:
+            _flush_bullets()
+            story.append(Paragraph(_inline_md(text), h_body))
 
     _flush_bullets()
 
@@ -681,7 +793,10 @@ async def contract_pdf(req: PdfRequest, user: AuthedUser = Depends(require_user)
             or (contact.get("metadata") or {}).get("organization") \
             or contact.get("role")
 
-        # Build PDF
+        # Build PDF — dressed by the Brand Studio kit (accent, font
+        # lean, logo) when one exists.
+        brand = brand_from_business(biz)
+        logo = await fetch_logo_bytes(client, brand["logo_url"])
         try:
             pdf_bytes = _build_pdf(
                 business_name=biz_name,
@@ -690,6 +805,9 @@ async def contract_pdf(req: PdfRequest, user: AuthedUser = Depends(require_user)
                 contact_org=contact_org,
                 subject=req.subject,
                 body=req.proposal_body,
+                accent_hex=brand["accent"],
+                serif=brand["serif"],
+                logo_bytes=logo,
             )
         except ImportError:
             raise HTTPException(500, "reportlab is not installed. Add reportlab>=4.0.0 to requirements.txt and redeploy.")
