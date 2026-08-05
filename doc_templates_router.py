@@ -78,6 +78,62 @@ def _today() -> str:
     return f"{now.strftime('%B')} {now.day}, {now.year}"
 
 
+# ─── Learned defaults — the first contract teaches the system ────────
+# settings.doc_defaults holds the business's standard terms, keyed by
+# STICKY field keys only (fee, state, cancel_window…). Populated
+# automatically the first time a document is generated with them filled;
+# merged under explicit params on every generation after — both doors
+# (the dialog pre-fills via /list; Chief's verb merges before asking).
+
+def get_doc_defaults(business: Dict[str, Any]) -> Dict[str, str]:
+    d = (business.get("settings") or {}).get("doc_defaults")
+    return {k: str(v) for k, v in d.items()} if isinstance(d, dict) else {}
+
+
+def merge_defaults(business: Dict[str, Any], template: Dict[str, Any],
+                   params: Dict[str, str]) -> tuple:
+    """(merged_params, used_defaults). Explicit params always win; a
+    saved default only fills a STICKY field the caller left blank."""
+    saved = get_doc_defaults(business)
+    merged = dict(params or {})
+    used: Dict[str, str] = {}
+    for f in template["fields"]:
+        if not f.get("sticky"):
+            continue
+        if (merged.get(f["key"]) or "").strip():
+            continue
+        if (saved.get(f["key"]) or "").strip():
+            merged[f["key"]] = saved[f["key"]]
+            used[f["key"]] = saved[f["key"]]
+    return merged, used
+
+
+def save_sticky_terms(business: Dict[str, Any], template: Dict[str, Any],
+                      explicit_params: Dict[str, str]) -> List[str]:
+    """Persist sticky terms the practitioner EXPLICITLY gave this time
+    (never values that came from the defaults themselves). Returns the
+    saved keys. Best-effort — a failed save must not fail the document."""
+    saved = get_doc_defaults(business)
+    sticky_keys = {f["key"] for f in template["fields"] if f.get("sticky")}
+    changed: Dict[str, str] = {}
+    for k in sticky_keys:
+        v = (explicit_params.get(k) or "").strip()
+        if v and saved.get(k) != v:
+            changed[k] = v
+    if not changed:
+        return []
+    try:
+        settings = dict(business.get("settings") or {})
+        settings["doc_defaults"] = {**saved, **changed}
+        sb_clients.sb_patch_as_service(
+            f"/businesses?id=eq.{business['id']}", {"settings": settings})
+        business["settings"] = settings  # keep the in-hand row honest
+    except Exception as e:
+        logger.warning(f"doc_defaults save failed (non-fatal): {e}")
+        return []
+    return sorted(changed.keys())
+
+
 # ─── List ────────────────────────────────────────────────────────────
 
 @router.get("/list")
@@ -85,12 +141,21 @@ async def doctemplates_list(biz: str,
                             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     b = _owner(biz, user)
     btype = (b.get("type") or "").lower()
+    saved = get_doc_defaults(b)
     out = []
     for t in doc_templates.TEMPLATES:
+        # Overlay the business's learned terms onto sticky fields so the
+        # New Document form arrives pre-filled with THEIR standards.
+        fields = []
+        for f in t["fields"]:
+            f2 = dict(f)
+            if f.get("sticky") and (saved.get(f["key"]) or "").strip():
+                f2["default"] = saved[f["key"]]
+            fields.append(f2)
         out.append({
             "id": t["id"], "title": t["title"],
             "description": t["description"], "category": t["category"],
-            "fields": t["fields"],
+            "fields": fields,
             "suggested": btype in t["suggested_for"],
         })
     # Suggested templates first, library order otherwise (it's curated).
@@ -199,9 +264,12 @@ async def generate_document_core(business: Dict[str, Any],
     gets is identical whichever door they came through. Caller has
     already authorized (owner gate / Chief's turn) and validated the
     template + contact belong to the business."""
-    err = doc_templates.validate_params(template, params or {})
+    explicit = dict(params or {})
+    merged, used_defaults = merge_defaults(business, template, explicit)
+    err = doc_templates.validate_params(template, merged)
     if err:
         raise GenerationError(err, 400)
+    params = merged
 
     business_name = business.get("name") or "this business"
     practitioner = ((business.get("settings") or {}).get("practitioner_name")
@@ -254,9 +322,15 @@ async def generate_document_core(business: Dict[str, Any],
     except Exception:
         pass
 
+    # The first filled contract teaches the system: explicitly-given
+    # sticky terms become the business's standard, pre-filling next time.
+    saved_defaults = save_sticky_terms(business, template, explicit)
+
     return {"ok": True, "queue_id": queue_id, "subject": subject,
             "title": template["title"], "body": doc_body,
-            "drafted_sections_used": bool(drafted)}
+            "drafted_sections_used": bool(drafted),
+            "used_defaults": used_defaults,
+            "saved_defaults": saved_defaults}
 
 
 def resolve_template(query: str) -> Any:

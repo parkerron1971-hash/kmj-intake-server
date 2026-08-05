@@ -370,15 +370,24 @@ async def handle_generate_document(client, biz, action) -> Dict[str, Any]:
     if isinstance(raw, dict):
         params.update({k: str(v) for k, v in raw.items() if v is not None})
 
+    # The business's learned standard terms (settings.doc_defaults) fill
+    # sticky fields BEFORE the missing-check — a practice that has set
+    # its fee and state once is never asked for them again.
+    merged, would_use_defaults = dtr.merge_defaults(biz, template, params)
     missing = [f["label"] for f in template["fields"]
-               if f["required"] and not (params.get(f["key"]) or "").strip()]
+               if f["required"] and not (merged.get(f["key"]) or "").strip()]
     if missing:
         # Ask, never invent — a made-up fee in a retainer is not a
         # recoverable mistake.
-        return _fail("generate_document",
-                     f"To generate the {template['title']} for "
-                     f"{contact.get('name')}, I still need: "
-                     + "; ".join(missing) + ".")
+        msg = (f"To generate the {template['title']} for "
+               f"{contact.get('name')}, I still need: "
+               + "; ".join(missing) + ".")
+        if not dtr.get_doc_defaults(biz):
+            # First document ever — set the walk-through expectation.
+            msg += (" This is the first one, so once these are filled I'll "
+                    "remember the standard terms (fee, state, notice windows) "
+                    "and future documents will fill themselves.")
+        return _fail("generate_document", msg)
 
     try:
         out = await dtr.generate_document_core(
@@ -394,6 +403,17 @@ async def handle_generate_document(client, biz, action) -> Dict[str, Any]:
     who = contact.get("name") or "your client"
     result = (f"{template['title']} generated for {who} — waiting in the "
               f"Approval Queue for your review")
+    used = out.get("used_defaults") or {}
+    if used:
+        # Name what was pulled from their standards so a stale term gets
+        # caught in conversation, not after the client reads it.
+        result += (". Filled from your standard terms: "
+                   + ", ".join(f"{k} = {v}" for k, v in used.items())
+                   + " — say the word if this engagement differs")
+    saved = out.get("saved_defaults") or []
+    if saved:
+        result += (". I've saved " + ", ".join(saved)
+                   + " as your standard going forward")
     if not out.get("drafted_sections_used"):
         # The fixed clauses carry the document either way; only the
         # personal opener degraded. Say so instead of letting the reply
