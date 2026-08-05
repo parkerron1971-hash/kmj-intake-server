@@ -42,7 +42,8 @@ _PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
 
 def test_every_placeholder_resolves():
     for t in dt.TEMPLATES:
-        allowed = _STANDARD_VARS | {f["key"] for f in t["fields"]}
+        allowed = (_STANDARD_VARS | dt.DERIVED_VARS
+                   | {f["key"] for f in t["fields"]})
         for s in t["sections"]:
             for text in (s.get("text"), s.get("brief"), s.get("fallback")):
                 if not text:
@@ -54,7 +55,7 @@ def test_every_placeholder_resolves():
 
 def test_library_shape_and_uniqueness():
     ids = [t["id"] for t in dt.TEMPLATES]
-    assert len(ids) == len(set(ids)) == 9
+    assert len(ids) == len(set(ids)) == 10
     for t in dt.TEMPLATES:
         assert t["title"] and t["description"] and t["category"]
         assert t["suggested_for"], f"{t['id']} suggests nothing"
@@ -87,17 +88,23 @@ def test_assemble_conditionals_fallbacks_and_review_note():
     assert "Dana Whitfield" in body and "{" not in body.replace("{client_name}", "")
     assert "not legal advice" in body
 
-    # lawyer's own paper carries no review note; deposit clause appears when given
+    # lawyer's own paper carries no review note; the retainer drawdown
+    # clause appears ONLY on the retainer fee model
     v2 = dt.build_vars(t, {"scope": "s", "fee": "$1", "deposit": "$1,500",
-                           "state": "Georgia"},
+                           "fee_model": "retainer", "state": "Georgia"},
                        business_name="Reyes Law", practitioner_name="A. Reyes",
-                       client_name="Dana", date_str="August 4, 2026")
+                       client_name="Dana", date_str="August 4, 2026",
+                       business_type="lawyer")
     body2 = dt.assemble(t, v2, {0: "Custom drafted opener."},
                         include_review_note=False)
     assert "not legal advice" not in body2
-    assert "DEPOSIT" in body2 and "$1,500" in body2
+    assert "RETAINER" in body2 and "$1,500" in body2 and "replenished" in body2
     assert "GOVERNING LAW" in body2 and "Georgia" in body2
     assert "Custom drafted opener." in body2
+    # same deposit on a flat-fee model: the drawdown clause must NOT render
+    v2b = dict(v2); v2b["fee_model"] = "flat_fee"
+    body2b = dt.assemble(t, v2b, {}, include_review_note=False)
+    assert "replenished" not in body2b and "exhausted" not in body2b
 
 
 def test_defaults_apply_and_validation_catches_missing():
@@ -164,7 +171,7 @@ def test_routes_exist_and_are_authed():
 def test_list_ranks_suggested_first(fake):
     out = asyncio.run(dtr.doctemplates_list(BIZ, _User()))
     ts = out["templates"]
-    assert len(ts) == 9
+    assert len(ts) == 10
     # lawyer templates lead; once a non-suggested appears, no suggested follows
     seen_unsuggested = False
     for t in ts:
@@ -180,7 +187,8 @@ def test_generate_lands_the_queue_draft(fake, wired):
     body = dtr.GenerateBody(
         business_id=BIZ, contact_id="c9", template_id="engagement_letter",
         params={"scope": "The Northside lease negotiation",
-                "fee": "$300/hour", "deposit": "$1,500"})
+                "fee": "$300/hour", "fee_model": "retainer",
+                "deposit": "$1,500"})
     out = asyncio.run(dtr.doctemplates_generate(body, _User()))
     assert out["ok"] and out["queue_id"]
     assert out["drafted_sections_used"] is False          # model off → fallbacks
