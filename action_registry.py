@@ -348,6 +348,12 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "and the status is editable back"),
     "draft_contract":         _w("A", "drafts an engagement letter for one contact — a draft, and "
                                       "there is no send_for_signature verb to pair it with yet"),
+    "generate_document":      _w("A", "generates a formal document from the template library into "
+                                      "ONE agent_queue draft row — same reasoning as draft_contract: "
+                                      "reviewable, editable, deletable, inert until approved. The "
+                                      "handler refuses to invent required fields (fee, scope, "
+                                      "amount) — it asks instead, so a wrong number can't enter a "
+                                      "contract without a human typing it"),
     "plan_campaign":          _w("A", "inserts a campaigns row with status='draft' — the same "
                                       "shape as draft_email: a reviewable artifact, and nothing "
                                       "sends until launch_campaign (which is class C). The drafting "
