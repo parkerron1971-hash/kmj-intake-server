@@ -196,6 +196,15 @@ def provision_modules(
             "is_active": True,
             "sort_order": row.get("sort_order") or 0,
         }
+        # The blueprint now names the module ARCHETYPE. Without it every
+        # provisioned module landed on fallback_generic — so a lawyer's
+        # auto-created Matters was a plain list, and the vertical desk,
+        # which reads custom_modules where archetype='work_pipeline',
+        # never saw it. The lawyer got "No open matters" forever while a
+        # Matters module sat right there.
+        arch = row.get("archetype")
+        if arch:
+            payload["archetype"] = arch
         pub = row.get("public_display")
         if pub:
             payload["public_display"] = pub
