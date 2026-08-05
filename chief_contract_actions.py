@@ -268,6 +268,8 @@ async def handle_contract_pdf(client, biz, action) -> Dict[str, Any]:
                    or metadata.get("organization")
                    or contact.get("role"))
 
+    brand = ca.brand_from_business(biz)
+    logo = await ca.fetch_logo_bytes(client, brand["logo_url"])
     try:
         pdf_bytes = ca._build_pdf(
             business_name=biz.get("name", ""),
@@ -276,6 +278,9 @@ async def handle_contract_pdf(client, biz, action) -> Dict[str, Any]:
             contact_org=contact_org,
             subject=row.get("subject") or "Proposal",
             body=body,
+            accent_hex=brand["accent"],
+            serif=brand["serif"],
+            logo_bytes=logo,
         )
     except ImportError:
         # reportlab ships in requirements.txt; if it is genuinely missing the
