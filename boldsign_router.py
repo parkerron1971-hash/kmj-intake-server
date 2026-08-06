@@ -92,6 +92,11 @@ class SendBody(BaseModel):
     signer_email: str
     message: str = ""
     source_ref: str = ""         # e.g. the agent_queue proposal id
+    # The matter / project / job this document belongs to. Optional
+    # because a general engagement letter belongs to the client, not to
+    # one matter — and because a business with no work pipeline (a
+    # salon) has nothing to attach it to.
+    module_entry_id: Optional[str] = None
 
 
 @router.post("/send")
@@ -147,6 +152,7 @@ async def esign_send(body: SendBody,
         "signer_email": email,
         "status": "sent",
         "source_ref": (body.source_ref or None),
+        **({"module_entry_id": body.module_entry_id} if body.module_entry_id else {}),
     })
     row_id = (inserted[0].get("id") if isinstance(inserted, list) and inserted
               else (inserted or {}).get("id"))
