@@ -40,6 +40,17 @@ class _User:
         self.id = uid
 
 
+def _seat(role):
+    """Stands in for sb_get_as_service across the three reads the gate
+    makes: the existence check, then role_of's businesses + business_users
+    lookups. `role=None` means "not a member of this business"."""
+    def _side_effect(path, *a, **kw):
+        if path.startswith("/business_users"):
+            return [{"role": role}] if role else []
+        return [{"id": BIZ_ID, "owner_id": OWNER_ID}]
+    return _side_effect
+
+
 def _client(user_id=None) -> TestClient:
     app = FastAPI()
     app.include_router(session_agent.router)
@@ -58,26 +69,46 @@ class EndpointAuthTests(unittest.TestCase):
             self.assertNotEqual(r.status_code, 200, path)
             self.assertIn(r.status_code, (401, 403, 422), f"{path} -> {r.status_code}")
 
-    def test_non_owner_is_rejected(self):
-        rows = [{"id": BIZ_ID, "owner_id": OWNER_ID}]
+    def test_a_seat_below_admin_is_rejected(self):
+        # A member can open the sessions screen. They cannot make the
+        # business write to every client from it.
         with patch.object(session_agent.sb_clients, "sb_get_as_service",
-                          return_value=rows):
+                          side_effect=_seat("member")):
             r = _client(OTHER_ID).post("/agents/session/prep",
                                        json={"business_id": BIZ_ID})
         self.assertEqual(r.status_code, 403)
 
-    def test_unknown_business_is_404(self):
+    def test_a_stranger_is_rejected(self):
+        with patch.object(session_agent.sb_clients, "sb_get_as_service",
+                          side_effect=_seat(None)):
+            r = _client(OTHER_ID).post("/agents/session/prep",
+                                       json={"business_id": BIZ_ID})
+        self.assertEqual(r.status_code, 403)
+
+    def test_unknown_business_is_404_not_403(self):
+        # "No such business" is not a permissions answer.
         with patch.object(session_agent.sb_clients, "sb_get_as_service",
                           return_value=[]):
             r = _client(OWNER_ID).post("/agents/session/prep",
                                        json={"business_id": BIZ_ID})
         self.assertEqual(r.status_code, 404)
 
+    def test_admin_seat_reaches_the_work(self):
+        # Owner-only was the first cut and too tight: the screen is
+        # reachable by any seat and the frontend only console.errors a
+        # failure, so an admin would have met a button that did nothing.
+        with patch.object(session_agent.sb_clients, "sb_get_as_service",
+                          side_effect=_seat("admin")), \
+             patch.object(session_agent, "run_noshow",
+                          new=AsyncMock(return_value={"drafts_created": 1})):
+            r = _client(OTHER_ID).post("/agents/session/no-show",
+                                       json={"business_id": BIZ_ID})
+        self.assertEqual(r.status_code, 200)
+
     def test_owner_reaches_the_work(self):
         # The gate must not lock out the person it exists to protect.
-        rows = [{"id": BIZ_ID, "owner_id": OWNER_ID}]
         with patch.object(session_agent.sb_clients, "sb_get_as_service",
-                          return_value=rows), \
+                          side_effect=_seat(None)), \
              patch.object(session_agent, "run_prep",
                           new=AsyncMock(return_value={"briefs_created": 2})) as run:
             r = _client(OWNER_ID).post("/agents/session/prep",

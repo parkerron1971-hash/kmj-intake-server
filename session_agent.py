@@ -29,6 +29,7 @@ import httpx
 import llm_call
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+from business_users_router import require_role
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -467,18 +468,28 @@ class SessionRequest(BaseModel):
     business_id: str
 
 
-def _require_owner(business_id: str, user: AuthedUser) -> None:
+def _require_admin(business_id: str, user: AuthedUser) -> None:
     """These three endpoints took a bare business_id and no credential.
     Anyone who knew an id could make that business draft messages to its
-    clients, spend its model budget and decay its contact health
-    scores. Mirrors the owner check in terminology_overrides_router."""
+    clients, spend its model budget and decay its contact health scores.
+
+    ADMIN, not owner. Owner-only was the first cut and it was too tight:
+    the sessions screen is reachable by any seat, the frontend only
+    console.errors a failed call, so a legitimate admin would have found
+    the button doing nothing at all. Admin also matches how the desks
+    already rank these — money verbs sit at minRole 'admin', and
+    spending model budget to write to every client belongs in the same
+    tier. role_of() ranks the owner above admin, so the owner still
+    passes.
+    """
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id,owner_id&limit=1"
+        f"/businesses?id=eq.{business_id}&select=id&limit=1"
     ) or []
     if not rows:
+        # 404 before 403 — "no such business" is not a permissions
+        # answer, and require_role cannot tell the two apart.
         raise HTTPException(404, "business not found")
-    if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(403, "not authorized")
+    require_role(business_id, str(user.id), "admin")
 
 
 # ── The work, separated from the door ─────────────────────────────────
@@ -582,21 +593,21 @@ async def run_noshow(business_id: str) -> Dict[str, Any]:
 @router.post("/agents/session/prep")
 async def session_prep(req: SessionRequest,
                        user: AuthedUser = Depends(require_user)):
-    _require_owner(req.business_id, user)
+    _require_admin(req.business_id, user)
     return await run_prep(req.business_id)
 
 
 @router.post("/agents/session/follow-up")
 async def session_followup(req: SessionRequest,
                            user: AuthedUser = Depends(require_user)):
-    _require_owner(req.business_id, user)
+    _require_admin(req.business_id, user)
     return await run_followup(req.business_id)
 
 
 @router.post("/agents/session/no-show")
 async def session_noshow(req: SessionRequest,
                          user: AuthedUser = Depends(require_user)):
-    _require_owner(req.business_id, user)
+    _require_admin(req.business_id, user)
     return await run_noshow(req.business_id)
 
 
