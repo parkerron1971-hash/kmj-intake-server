@@ -709,15 +709,22 @@ def list_anchors(request: Request, biz: str,
     import ledger_anchor
     rows = sb_clients.sb_get_as_service(
         f"/ledger_anchors?business_id=eq.{biz}"
-        f"&select=first_sequence,last_sequence,row_count,merkle_root,"
+        f"&select=id,first_sequence,last_sequence,row_count,merkle_root,"
         f"algorithm,provider,provider_ref,anchored_at"
         f"&order=last_sequence.desc&limit=50") or []
+    # THE UPGRADE CACHE. A stored .ots is written at submission time and
+    # never learns about its own Bitcoin confirmation — that lives at the
+    # calendar. Reading only the stored bytes reported `submitted`
+    # forever, however long ago Bitcoin confirmed it, which wasted the
+    # one distinction the two states exist to draw.
+    ups = ledger_anchor.upgrades_for([r.get("id") for r in rows])
     for r in rows:
         r["independent"] = ledger_anchor.is_independent(r.get("provider") or "")
-        # Recomputed per request, never stored: the receipt is
-        # append-only and a pending proof already carries everything
-        # needed to find its Bitcoin attestation later.
-        st = ledger_anchor.proof_status(r.get("provider_ref"), r.get("provider"))
+        up = ups.get(str(r.get("id"))) or {}
+        # The upgraded proof is a strict superset of the stored one, so
+        # it needs no special handling here — just better bytes.
+        st = ledger_anchor.proof_status(
+            up.get("upgraded_ref") or r.get("provider_ref"), r.get("provider"))
         r["state"] = st["state"]
         r["confirmed"] = st["confirmed"]
         r["bitcoin_block"] = st.get("bitcoin_block")
@@ -725,8 +732,13 @@ def list_anchors(request: Request, biz: str,
         # auditor curls it and compares the message to the root.
         r["verify_url"] = st.get("verify_url")
         r["network"] = st.get("network")
+        # When the last upgrade attempt found nothing yet, say so as a
+        # fact about aggregation rather than leaving the UI to guess
+        # why a days-old proof is still merely submitted.
+        r["upgrade_checked"] = bool(up)
         # The blob is large and useless in a list; it has its own route.
         r.pop("provider_ref", None)
+        r.pop("id", None)
     return {"ok": True, "anchors": rows, "count": len(rows),
             "any_independent": any(r["independent"] for r in rows),
             "any_confirmed": any(r["confirmed"] for r in rows)}
@@ -758,13 +770,19 @@ def download_ots(request: Request, biz: str, sequence: int,
         # named `.ots`. A proof file that is not a proof file is worse
         # than a 404.
         f"&provider=eq.opentimestamps"
-        f"&select=provider,provider_ref,first_sequence,last_sequence&limit=1") or []
+        f"&select=id,provider,provider_ref,first_sequence,last_sequence&limit=1") or []
     if not rows or not rows[0].get("provider_ref"):
         raise HTTPException(
             404, "No OpenTimestamps proof covers that record yet. "
                  "Other providers may still cover it — see /ledger/proof.")
+    # Hand over the UPGRADED proof when we have it. A submission-time
+    # .ots makes the auditor's client go and fetch the Bitcoin
+    # attestation itself; the upgraded one is self-contained and
+    # verifiable against a block header with nobody's servers involved.
+    import ledger_anchor as _la
+    up = (_la.upgrades_for([rows[0].get("id")]) or {}).get(str(rows[0].get("id"))) or {}
     try:
-        blob = base64.b64decode(rows[0]["provider_ref"])
+        blob = base64.b64decode(up.get("upgraded_ref") or rows[0]["provider_ref"])
     except Exception:
         raise HTTPException(500, "The stored proof could not be decoded.")
     name = f"ledger-anchor-{rows[0]['first_sequence']}-{rows[0]['last_sequence']}.ots"
