@@ -46,6 +46,7 @@ import httpx
 import llm_call
 from fastapi import APIRouter, HTTPException, Depends
 from auth_supabase import require_user, AuthedUser
+from business_users_router import require_business_admin
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -391,10 +392,9 @@ class ContractPreviewRequest(BaseModel):
     contact_id: str
 
 
-@router.post("/agents/contract/generate")
-async def contract_generate(req: ContractRequest, user: AuthedUser = Depends(require_user)):
+async def run_contract_generate(business_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
         if not businesses:
             raise HTTPException(404, "Business not found")
         biz = businesses[0]
@@ -402,7 +402,7 @@ async def contract_generate(req: ContractRequest, user: AuthedUser = Depends(req
         # Find conversion-ready contacts:
         # High lead score OR has been engaged (agent_message_sent event exists)
         contacts = await _sb(client, "GET",
-            f"/contacts?business_id=eq.{req.business_id}"
+            f"/contacts?business_id=eq.{business_id}"
             f"&lead_score=gte.{MIN_LEAD_SCORE}"
             f"&status=in.(lead,active,vip)"
             f"&order=lead_score.desc&limit=15"
@@ -431,7 +431,7 @@ async def contract_generate(req: ContractRequest, user: AuthedUser = Depends(req
                 results.append(r)
 
         return {
-            "business_id": req.business_id,
+            "business_id": business_id,
             "contacts_evaluated": len(contacts),
             "proposals_drafted": len(results),
             "results": results,
@@ -827,3 +827,15 @@ async def contract_pdf(req: PdfRequest, user: AuthedUser = Depends(require_user)
 
         logger.info(f"PDF generated for {contact_name}: {pdf_url}")
         return {"pdf_url": pdf_url, "size_bytes": len(pdf_bytes)}
+
+
+# ── The doors ─────────────────────────────────────────────────────────
+
+
+@router.post("/agents/contract/generate")
+async def contract_generate(req: ContractRequest, user: AuthedUser = Depends(require_user)):
+    """Owner/admin only. This makes the business ACT — drafts client
+    messages and spends model budget — so a caller proves who they are
+    rather than merely knowing a uuid. Chief calls run_contract_generate() in-process."""
+    require_business_admin(req.business_id, user)
+    return await run_contract_generate(req.business_id)

@@ -59,6 +59,26 @@ def _client(user_id=None) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
+class EveryGatedAgentTests(unittest.TestCase):
+    """Covers all nine paths in one sweep, driven off the dispatch table
+    rather than a hand-written list — so an agent added to the table
+    without a lock on its endpoint fails here instead of in the wild."""
+
+    def test_every_dispatched_path_rejects_an_anonymous_post(self):
+        import importlib
+        from fastapi import FastAPI as _F
+        for path, (mod_name, _fn) in chief_of_staff._AGENTS_IN_PROCESS.items():
+            mod = importlib.import_module(mod_name)
+            app = _F()
+            app.include_router(mod.router)
+            c = TestClient(app, raise_server_exceptions=False)
+            r = c.post(path, json={"business_id": BIZ_ID})
+            # 200 would mean an anonymous caller just made a business act.
+            self.assertNotEqual(r.status_code, 200, f"{path} IS OPEN")
+            self.assertIn(r.status_code, (401, 403, 422),
+                          f"{path} -> {r.status_code}")
+
+
 class EndpointAuthTests(unittest.TestCase):
     def test_no_credential_is_rejected(self):
         # The whole point. Before this fix these returned 200.
@@ -132,15 +152,28 @@ class ChiefDispatchTests(unittest.IsolatedAsyncioTestCase):
         loopback.assert_not_awaited()
         self.assertEqual(out, {"drafts_created": 1})
 
-    async def test_other_agents_still_use_the_loopback(self):
-        # The change must be narrow — nurture, contract, payment and the
-        # rest are unchanged and must keep working.
+    async def test_ungated_paths_still_use_the_loopback(self):
+        # This used /agents/nurture/run until that was gated too. A path
+        # NOT in the table must still take the HTTP route, or the
+        # dispatcher has quietly swallowed every agent in the app.
+        self.assertNotIn("/agents/nurture/preview",
+                         chief_of_staff._AGENTS_IN_PROCESS)
         loopback = AsyncMock(return_value={"drafts_created": 3})
         with patch.object(chief_of_staff, "_loopback_post", new=loopback):
             out = await chief_of_staff._dispatch_agent(
-                "/agents/nurture/run", {"business_id": BIZ_ID})
+                "/agents/nurture/preview", {"business_id": BIZ_ID})
         loopback.assert_awaited_once()
         self.assertEqual(out, {"drafts_created": 3})
+
+    async def test_every_gated_path_resolves_to_a_real_function(self):
+        # The table is strings on both sides. A typo in a module or
+        # function name would only surface as "agent unreachable" in
+        # chat, which reads like a network blip rather than a bug.
+        import importlib
+        for path, (mod_name, fn_name) in chief_of_staff._AGENTS_IN_PROCESS.items():
+            mod = importlib.import_module(mod_name)
+            self.assertTrue(hasattr(mod, fn_name),
+                            f"{path} -> {mod_name}.{fn_name} does not exist")
 
     async def test_failure_returns_none_rather_than_raising(self):
         # Chief's callers check `if not data` and report the agent as

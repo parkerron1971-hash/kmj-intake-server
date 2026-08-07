@@ -34,7 +34,9 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 import llm_call
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from auth_supabase import AuthedUser, require_user
+from business_users_router import require_business_admin
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -438,10 +440,9 @@ class PaymentRequest(BaseModel):
     business_id: str
 
 
-@router.post("/agents/payment/check")
-async def payment_check(req: PaymentRequest):
+async def run_payment_check(business_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
         if not businesses:
             raise HTTPException(404, "Business not found")
         biz = businesses[0]
@@ -453,7 +454,7 @@ async def payment_check(req: PaymentRequest):
         logger.info(f"Payment scan for {biz.get('name')}: {len(overdue)} overdue, {len(thank_yous)} thank-yous, alert={trend_alert is not None}")
 
         return {
-            "business_id": req.business_id,
+            "business_id": business_id,
             "overdue_reminders": overdue,
             "thank_yous": thank_yous,
             "trend_alert": trend_alert,
@@ -472,3 +473,15 @@ async def payment_health():
         "trends_decline_threshold": TRENDS_DECLINE_THRESHOLD,
         "payment_event_types": PAYMENT_EVENT_TYPES,
     }
+
+
+# ── The doors ─────────────────────────────────────────────────────────
+
+
+@router.post("/agents/payment/check")
+async def payment_check(req: PaymentRequest, user: AuthedUser = Depends(require_user)):
+    """Owner/admin only. This makes the business ACT — drafts client
+    messages and spends model budget — so a caller proves who they are
+    rather than merely knowing a uuid. Chief calls run_payment_check() in-process."""
+    require_business_admin(req.business_id, user)
+    return await run_payment_check(req.business_id)
