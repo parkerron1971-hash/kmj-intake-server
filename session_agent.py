@@ -38,6 +38,38 @@ PLAN_MODEL = "claude-sonnet-4-5-20250929"
 DRAFT_MODEL = "claude-sonnet-4-5-20250929"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
+# ── PHI gate ──────────────────────────────────────────────────────────
+# Verticals whose session content is PROTECTED HEALTH INFORMATION.
+#
+# Every draft on this agent builds its prompt from the CLIENT'S NAME,
+# the session type and the session title. For a therapist that sentence
+# is "this named person is in mental-health treatment, on this date" —
+# which is exactly the thing that must not be handed to a model
+# provider.
+#
+# Kevin ruled this 2026-08-07 and the frontend hid the buttons
+# (FE#398). That was not enough and could not be: these endpoints take
+# a bare business_id, and AGENT_ENDPOINT_MAP in chief_of_staff.py wires
+# all three to Chief actions. Anything that reaches the endpoint —
+# Chief, an automation, a plain POST — bypassed the UI entirely. A gate
+# only counts where the data leaves, so it lives here.
+#
+# What this does NOT do is disable the feature. Each draft already has
+# a deterministic local template behind its model call, so clinical
+# verticals keep the whole workflow — the draft is queued, the health
+# score decays, the event is written — with nothing sent anywhere.
+#
+# Keep in step with isClinicalVertical() in the frontend's
+# verticalPriorities.ts. Two lists, one rule; if they drift, this one
+# is the one that matters, because it is the one at the wire.
+CLINICAL_VERTICALS = {"therapist"}
+
+
+def _is_clinical(business: Dict) -> bool:
+    """True when this business's session content must not reach a model."""
+    return (business.get("type") or "").strip().lower() in CLINICAL_VERTICALS
+
+
 logger = logging.getLogger("session_agent")
 if not logger.handlers:
     h = logging.StreamHandler()
@@ -237,7 +269,10 @@ Recent events:
 Prior outreach:
 {outreach_summary}"""
 
-    brief_text = await _call_claude(client, system_prompt, user_msg, model=PLAN_MODEL, max_tokens=400)
+    brief_text = (
+        None if _is_clinical(business)
+        else await _call_claude(client, system_prompt, user_msg, model=PLAN_MODEL, max_tokens=400)
+    )
     if not brief_text:
         brief_text = f"Upcoming {session.get('session_type', 'session')} with {contact_name}. Review their recent activity before the meeting."
 
@@ -263,7 +298,10 @@ Prior outreach:
         "status": "draft",
         "priority": "medium",
         "ai_reasoning": f"Upcoming session in {hours_away} hours. Prepared context brief for {practitioner}.",
-        "ai_model": PLAN_MODEL,
+        # Honest attribution. A clinical vertical never reached a model,
+        # and a queue row claiming one did is a false entry in exactly
+        # the audit trail somebody would check to prove PHI stayed put.
+        "ai_model": None if _is_clinical(business) else PLAN_MODEL,
     })
 
     # Log event
@@ -318,7 +356,10 @@ Notes: {notes}
 
 Draft the follow-up message."""
 
-    draft_body = await _call_claude(client, system_prompt, user_msg)
+    draft_body = (
+        None if _is_clinical(business)
+        else await _call_claude(client, system_prompt, user_msg)
+    )
     if not draft_body:
         draft_body = f"Hi {contact_name}, thanks for our session. Looking forward to our next meeting. -- {practitioner}"
 
@@ -335,7 +376,7 @@ Draft the follow-up message."""
         "status": "draft",
         "priority": "medium",
         "ai_reasoning": f"Session '{session.get('title')}' completed on {session_dt}. Follow-up drafted based on session notes.",
-        "ai_model": DRAFT_MODEL,
+        "ai_model": None if _is_clinical(business) else DRAFT_MODEL,
     })
 
     await _sb(client, "POST", "/events", {
@@ -375,7 +416,10 @@ Be understanding -- life happens. Don't guilt them. Offer to reschedule. Keep it
 
     user_msg = f"Contact: {contact_name}\nMissed session: {session.get('title')}\nScheduled for: {session_dt}\n\nDraft a warm reschedule message."
 
-    draft_body = await _call_claude(client, system_prompt, user_msg, max_tokens=300)
+    draft_body = (
+        None if _is_clinical(business)
+        else await _call_claude(client, system_prompt, user_msg, max_tokens=300)
+    )
     if not draft_body:
         draft_body = f"Hi {contact_name}, I noticed we missed our session. No worries at all -- let's find another time that works. -- {practitioner}"
 
@@ -390,7 +434,7 @@ Be understanding -- life happens. Don't guilt them. Offer to reschedule. Keep it
         "status": "draft",
         "priority": "high",
         "ai_reasoning": f"No-show for '{session.get('title')}' on {session_dt}. Gentle reschedule message drafted. Health score decayed by 10.",
-        "ai_model": DRAFT_MODEL,
+        "ai_model": None if _is_clinical(business) else DRAFT_MODEL,
     })
 
     # Decay health score
