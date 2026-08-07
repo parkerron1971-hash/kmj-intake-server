@@ -69,29 +69,31 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 def _supabase_url(): return os.environ.get("SUPABASE_URL", "")
-def _supabase_anon(): return os.environ.get("SUPABASE_ANON", "")
+# _supabase_anon removed with the raw-anon _sb it served — leaving it
+# would imply this agent still reaches Supabase as anon.
 def _anthropic_key(): return os.environ.get("ANTHROPIC_API_KEY", "")
 
 # ═══════════════════════════════════════════════════════════════════════
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════
 
-async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
-    url = f"{_supabase_url()}/rest/v1{path}"
-    headers = {
-        "apikey": _supabase_anon(),
-        "Authorization": f"Bearer {_supabase_anon()}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
-    resp = await client.request(method, url, headers=headers,
-                                content=json.dumps(body) if body else None,
-                                timeout=HTTP_TIMEOUT)
-    if resp.status_code >= 400:
-        logger.error(f"Supabase {method} {path}: {resp.status_code} {resp.text}")
-        return None
-    text = resp.text
-    return json.loads(text) if text else None
+async def _sb(client, method: str, path: str, body=None):
+    """RLS-readiness migration (late): delegates to
+    sb_clients.sb_as_current_context, forwarding the caller's JWT when a
+    request context has one and falling back to service-role for
+    server-initiated paths.
+
+    This file was missed when nurture/contract/growth were migrated, and
+    it kept hand-rolling the ANON key. Under RLS the anon key cannot read
+    `businesses`, so every run of this agent fell straight through its own
+    "Business not found" 404 — the agent has effectively never worked.
+    Confirmed against production: the migrated agents answered 200 to the
+    same call this one 404'd.
+    """
+    import sb_clients
+    return await sb_clients.sb_as_current_context(
+        client, method, path, body, allow_service_fallback=True,
+    )
 
 
 async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str, max_tokens=400) -> str:
