@@ -2961,8 +2961,48 @@ AGENT_ENDPOINT_MAP = {
 }
 
 
+# Session agents are invoked IN-PROCESS rather than over the loopback.
+#
+# Their endpoints now require an owner credential (BE#437 follow-up),
+# because they draft client messages, spend model budget and write
+# health scores for whatever business_id they are handed — and they used
+# to accept any. A loopback POST carries no credential, so leaving Chief
+# on HTTP would 401 the backend against itself. That is not theoretical:
+# BE#210 did exactly this to /sms/send and /stripe/product-link, and
+# every Chief-initiated call failed until it was unpicked.
+#
+# Calling the core function directly is also simply better — no socket,
+# no serialisation, and the authorization decision stays at the edge
+# where a real caller is present, instead of being faked internally.
+_SESSION_IN_PROCESS = {
+    "/agents/session/prep": "run_prep",
+    "/agents/session/follow-up": "run_followup",
+    "/agents/session/no-show": "run_noshow",
+}
+
+
+async def _dispatch_agent(path: str, body: Dict) -> Optional[Dict]:
+    """Session agents run in-process; every other agent still loopbacks."""
+    fn_name = _SESSION_IN_PROCESS.get(path)
+    if not fn_name:
+        return await _loopback_post(path, body)
+    try:
+        import session_agent  # local import keeps app startup order free
+        return await getattr(session_agent, fn_name)(body.get("business_id"))
+    except Exception as e:
+        # Same contract as _loopback_post: None means "the caller should
+        # report this agent as unreachable", not a raised 500 at Chief.
+        logger.warning(f"In-process {path} failed: {e}")
+        return None
+
+
 async def _loopback_post(path: str, body: Dict) -> Optional[Dict]:
-    """Try localhost first (fast), fall back to public URL."""
+    """Try localhost first (fast), fall back to public URL.
+
+    NOTE: carries no credential. Any endpoint this reaches must either be
+    unauthenticated by design or be dispatched in-process instead — see
+    _dispatch_agent above.
+    """
     for base in (SELF_BASE, FALLBACK_BASE):
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
@@ -3034,7 +3074,7 @@ async def handle_run_agent(client, biz, action) -> Dict:
         # Session agents work on all matching sessions — pass business_id
         session_sub = sub or "prep"
         session_path = AGENT_ENDPOINT_MAP.get(f"session_{session_sub}") or "/agents/session/prep"
-        data = await _loopback_post(session_path, {"business_id": biz["id"]})
+        data = await _dispatch_agent(session_path, {"business_id": biz["id"]})
         if not data:
             return _fail("run_agent", f"session {session_sub} unreachable")
         count = data.get("briefs_created") or data.get("followups_created") or data.get("drafts_created") or 0
@@ -3050,7 +3090,7 @@ async def handle_run_agent(client, biz, action) -> Dict:
         return _fail("run_agent", f"Unknown agent '{agent}'. Valid: {', '.join(AGENT_ENDPOINT_MAP)}")
 
     body_payload: Dict = {"business_id": biz["id"]}
-    data = await _loopback_post(path, body_payload)
+    data = await _dispatch_agent(path, body_payload)
     if not data:
         return _fail("run_agent", f"{agent} endpoint unreachable")
 

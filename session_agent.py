@@ -27,7 +27,9 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 import llm_call
-from fastapi import APIRouter, HTTPException
+import sb_clients
+from auth_supabase import AuthedUser, require_user
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -465,17 +467,41 @@ class SessionRequest(BaseModel):
     business_id: str
 
 
-@router.post("/agents/session/prep")
-async def session_prep(req: SessionRequest):
+def _require_owner(business_id: str, user: AuthedUser) -> None:
+    """These three endpoints took a bare business_id and no credential.
+    Anyone who knew an id could make that business draft messages to its
+    clients, spend its model budget and decay its contact health
+    scores. Mirrors the owner check in terminology_overrides_router."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=id,owner_id&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    if str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(403, "not authorized")
+
+
+# ── The work, separated from the door ─────────────────────────────────
+#
+# chief_of_staff reached these three over HTTP through _loopback_post,
+# and that is the reason they had no auth: locking the endpoint would
+# have 401'd the backend's own calls. That exact regression already
+# happened once (BE#210 — /sms/send and /stripe/product-link died on
+# every Chief-initiated call). So the loopback goes away instead. Chief
+# awaits these functions in-process now, and the endpoints below get to
+# be shut properly rather than left open for our own convenience.
+
+
+async def run_prep(business_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
         if not businesses:
             raise HTTPException(404, "Business not found")
         biz = businesses[0]
 
         cutoff = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
         sessions = await _sb(client, "GET",
-            f"/sessions?business_id=eq.{req.business_id}&status=eq.scheduled"
+            f"/sessions?business_id=eq.{business_id}&status=eq.scheduled"
             f"&scheduled_for=lte.{cutoff}&prep_brief=is.null"
             f"&order=scheduled_for.asc&limit=10"
         ) or []
@@ -489,17 +515,16 @@ async def session_prep(req: SessionRequest):
         return {"sessions_checked": len(sessions), "briefs_created": len(results), "results": results}
 
 
-@router.post("/agents/session/follow-up")
-async def session_followup(req: SessionRequest):
+async def run_followup(business_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
         if not businesses:
             raise HTTPException(404, "Business not found")
         biz = businesses[0]
 
         # Completed sessions -- check if follow-up already exists
         completed = await _sb(client, "GET",
-            f"/sessions?business_id=eq.{req.business_id}&status=eq.completed"
+            f"/sessions?business_id=eq.{business_id}&status=eq.completed"
             f"&order=scheduled_for.desc&limit=10"
         ) or []
 
@@ -507,7 +532,7 @@ async def session_followup(req: SessionRequest):
         for s in completed:
             # Check if follow-up draft already exists for this session
             existing = await _sb(client, "GET",
-                f"/agent_queue?business_id=eq.{req.business_id}&agent=eq.session"
+                f"/agent_queue?business_id=eq.{business_id}&agent=eq.session"
                 f"&action_type=eq.follow_up&contact_id=eq.{s['contact_id']}"
                 f"&select=id&limit=1"
             )
@@ -520,23 +545,22 @@ async def session_followup(req: SessionRequest):
         return {"sessions_checked": len(completed), "followups_created": len(results), "results": results}
 
 
-@router.post("/agents/session/no-show")
-async def session_noshow(req: SessionRequest):
+async def run_noshow(business_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
         if not businesses:
             raise HTTPException(404, "Business not found")
         biz = businesses[0]
 
         noshows = await _sb(client, "GET",
-            f"/sessions?business_id=eq.{req.business_id}&status=eq.no_show"
+            f"/sessions?business_id=eq.{business_id}&status=eq.no_show"
             f"&order=scheduled_for.desc&limit=10"
         ) or []
 
         results = []
         for s in noshows:
             existing = await _sb(client, "GET",
-                f"/agent_queue?business_id=eq.{req.business_id}&agent=eq.session"
+                f"/agent_queue?business_id=eq.{business_id}&agent=eq.session"
                 f"&contact_id=eq.{s['contact_id']}&action_type=eq.follow_up"
                 f"&select=id&limit=1"
             )
@@ -547,6 +571,33 @@ async def session_noshow(req: SessionRequest):
                 results.append(r)
 
         return {"noshows_checked": len(noshows), "drafts_created": len(results), "results": results}
+
+
+# ── The doors ─────────────────────────────────────────────────────────
+# Owner-only. Every one of these makes the business act — drafts client
+# messages, spends model budget, writes health scores — so a caller has
+# to prove they are the owner, not merely know a uuid.
+
+
+@router.post("/agents/session/prep")
+async def session_prep(req: SessionRequest,
+                       user: AuthedUser = Depends(require_user)):
+    _require_owner(req.business_id, user)
+    return await run_prep(req.business_id)
+
+
+@router.post("/agents/session/follow-up")
+async def session_followup(req: SessionRequest,
+                           user: AuthedUser = Depends(require_user)):
+    _require_owner(req.business_id, user)
+    return await run_followup(req.business_id)
+
+
+@router.post("/agents/session/no-show")
+async def session_noshow(req: SessionRequest,
+                         user: AuthedUser = Depends(require_user)):
+    _require_owner(req.business_id, user)
+    return await run_noshow(req.business_id)
 
 
 @router.get("/agents/session/health")
