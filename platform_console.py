@@ -406,6 +406,33 @@ async def platform_errors(limit: int = 100, _owner=Depends(require_owner)):
     return {"errors": wd.recent_errors(limit)}
 
 
+@router.get("/ledger/anchor-health")
+async def ledger_anchor_health(days: int = 7,
+                               _owner=Depends(require_owner)) -> Dict[str, Any]:
+    """Is the Action Ledger actually being anchored, on each network?
+
+    WHY THIS IS PLATFORM AND NOT PER-BUSINESS. A practitioner's question
+    is "is MY record provable", and the ledger surfaces in their room
+    already answer it. This one is the operator's question — "is the
+    anchoring infrastructure working at all, for anyone" — which is
+    exactly the Mission Control boundary.
+
+    WHY IT EXISTS. Running two providers only buys anything if a
+    provider going quiet is noticed. Until this endpoint the only
+    evidence of a failed publish was a log line on Railway, which in
+    practice meant a network could stop working indefinitely with
+    nothing anywhere to say so.
+
+    PLATFORM-WIDE, SO SERVICE ROLE. This deliberately reads across every
+    tenant, which no practitioner-facing route may do — the owner gate
+    above is the whole reason that is acceptable here.
+    """
+    import ledger_anchor
+    # Bounded so a stray ?days=100000 cannot turn a health check into a
+    # full-table scan against every tenant's anchors at once.
+    return ledger_anchor.anchor_health(days=max(1, min(int(days), 90)))
+
+
 # ─── Subscriptions ──────────────────────────────────────────────────────
 
 @router.get("/subscriptions/summary")
