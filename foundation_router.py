@@ -49,6 +49,14 @@ class RecommendEntityBody(BaseModel):
     situation: Dict[str, Any]
 
 
+class AcceptEntityBody(BaseModel):
+    business_id: str
+    entity_type: str
+    # Disambiguates a bare "LLC" into single- vs multi-member. Without it an
+    # ambiguous value is rejected rather than guessed.
+    member_count: Optional[int] = None
+
+
 class OperatingAgreementBody(BaseModel):
     business_id: str
     business_name: str
@@ -108,6 +116,20 @@ async def complete_phase(business_id: str, phase: int, user: AuthedUser = Depend
 async def recommend_entity(body: RecommendEntityBody, user: AuthedUser = Depends(require_user)) -> JSONResponse:
     _require_owner(body.business_id, user)
     result = await fa.recommend_entity(body.business_id, body.situation)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+
+@router.post("/entity-type")
+async def accept_entity_type(body: AcceptEntityBody,
+                             user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    """Record the entity form the owner chose (not merely the one suggested).
+
+    Writes business_profiles.entity_type, which the Revenue set-aside estimate
+    reads before deciding whether its self-employment-tax assumption holds.
+    """
+    _require_owner(body.business_id, user)
+    result = await fa.accept_entity_type(
+        body.business_id, body.entity_type, member_count=body.member_count)
     return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
 

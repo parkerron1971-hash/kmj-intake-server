@@ -26,6 +26,7 @@ Tables:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import llm_call
 import json
@@ -219,8 +220,62 @@ async def update_phase(
             f"/foundation_progress?business_id=eq.{business_id}&phase=eq.{phase}",
             payload,
         )
+    if data:
+        await _promote_identity(business_id, phase, data)
     await _recompute_in_the_clear(business_id)
     return {"ok": True, "phase": phase, "status": status}
+
+
+# Phase answers that are really facts about the business, not facts about the
+# track. Foundation used to bury these in foundation_progress.data where the
+# 1099 panel, the superbill and the tax lookup could not see them.
+_IDENTITY_BY_PHASE: Dict[int, Dict[str, str]] = {
+    1: {"state": "formation_state", "legal_name": "legal_name"},
+    2: {"ein": "ein"},
+}
+
+# Fields Foundation may SEED but must never overwrite. governing_state is the
+# law a contract is written under; the state you file an LLC in is usually but
+# not always the same, so Foundation fills the gap and then keeps its hands off
+# whatever the practitioner set in About My Business.
+_IDENTITY_FILL_ONLY = {"governing_state"}
+
+
+async def _promote_identity(business_id: str, phase: int, data: Dict[str, Any]) -> None:
+    """Copy identity answers out of a phase payload into business_profiles.
+
+    Best-effort by design: Foundation progress is already saved by the time
+    this runs, so a failure here must never surface as a failed phase save.
+    """
+    mapping = _IDENTITY_BY_PHASE.get(phase)
+    if not mapping:
+        return
+    fields = {
+        target: data.get(source)
+        for source, target in mapping.items()
+        if data.get(source)
+    }
+    # The state a business forms in seeds its governing state when that has
+    # never been answered anywhere else.
+    if fields.get("formation_state"):
+        fields["governing_state"] = fields["formation_state"]
+
+    if not fields:
+        return
+
+    try:
+        import business_identity
+        existing = await asyncio.to_thread(
+            lambda: business_identity.get_identity(business_id))
+        for field in _IDENTITY_FILL_ONLY:
+            if field in fields and existing.get(field):
+                fields.pop(field)
+        if not fields:
+            return
+        await asyncio.to_thread(
+            lambda: business_identity.set_identity(business_id, **fields))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"identity promotion failed (phase {phase}): {e}")
 
 
 async def phase_completed(business_id: str, phase: int) -> Dict[str, Any]:
@@ -323,8 +378,46 @@ async def recommend_entity(business_id: str, situation: Dict[str, Any]) -> Dict[
             "content": json.dumps(parsed, indent=2),
             "metadata": {"situation": situation, "foreign_entity": foreign},
         })
-    await update_phase(business_id, 1, status="in_progress", data={"recommendation": parsed})
+    # The situation is what the owner TOLD us (a fact); the recommendation is
+    # what the model suggested (advice). Only the fact is promoted to the
+    # business record here — entity_type is written when the owner accepts a
+    # form, via accept_entity_type(), not when they merely read the advice.
+    await update_phase(
+        business_id, 1, status="in_progress",
+        data={
+            "recommendation": parsed,
+            "situation": situation,
+            "state": situation.get("state"),
+        },
+    )
     return {"ok": True, "recommendation": parsed}
+
+
+async def accept_entity_type(business_id: str, entity_type: str,
+                             member_count: Optional[int] = None) -> Dict[str, Any]:
+    """Record the entity form the owner actually chose.
+
+    This is the fact the Revenue tab's set-aside estimate needs: its rate
+    table assumes a pass-through payer of self-employment tax, which is wrong
+    for an S-corp or C-corp. Until this is set the app says it does not know,
+    rather than assuming sole proprietor.
+    """
+    import business_identity
+    normalized = business_identity.normalize_entity_type(
+        entity_type, member_count=member_count)
+    if not normalized:
+        return {"ok": False,
+                "error": f"Unrecognized entity type {entity_type!r}. "
+                         f"Expected one of: {', '.join(business_identity.ENTITY_TYPES)}"}
+    row = await asyncio.to_thread(
+        lambda: business_identity.set_identity(business_id, entity_type=normalized))
+    if row is None:
+        return {"ok": False, "error": "Could not save the entity type."}
+    # Deliberately NOT mirrored into foundation_progress.data — business_profiles
+    # is the record now, and a second copy is the problem this PR removes.
+    # update_phase() also replaces `data` wholesale, so writing here would drop
+    # the stored recommendation.
+    return {"ok": True, "entity_type": normalized}
 
 
 # ──────────────────────────────────────────────────────────────

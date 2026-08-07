@@ -325,23 +325,12 @@ def summary_1099(biz: str, year: Optional[int] = None,
 # ─── Rails Arc 2 — 1099-NEC drafts (prep tool, never the filer) ──────
 
 def _payer_block(biz_row: Dict[str, Any]) -> Dict[str, Any]:
-    """Payer identity from the business row + settings.financial.payer
-    (the 1099 panel collects EIN/address there)."""
-    fin = ((biz_row.get("settings") or {}).get("financial") or {})
-    payer = (fin.get("payer") or {})
-    city_state_zip = ", ".join(
-        p for p in [payer.get("city"), payer.get("state")] if p)
-    if payer.get("zip"):
-        city_state_zip = f"{city_state_zip} {payer['zip']}".strip(", ")
-    return {
-        "name": payer.get("name") or biz_row.get("name") or "",
-        "ein": payer.get("ein") or "",
-        "line1": payer.get("line1") or "",
-        "line2": payer.get("line2") or "",
-        "city_state_zip": city_state_zip,
-        "phone": payer.get("phone") or "",
-        "complete": bool(payer.get("ein") and payer.get("line1")),
-    }
+    """Payer identity from business_profiles (the canonical identity store),
+    falling back to the legacy settings.financial.payer blob for rows the
+    identity backfill has not reached. An EIN entered anywhere — Foundation
+    Phase 2, the 1099 panel, the superbill config — lands here."""
+    import business_identity
+    return business_identity.payer_block(biz_row.get("id"), biz_row)
 
 
 @router.get("/1099-drafts")
@@ -781,11 +770,29 @@ class SuperbillConfigBody(BaseModel):
     service_codes: Optional[Dict[str, str]] = None
 
 
+def _fill_practitioner_ein(payload: Dict[str, Any], biz: str) -> Dict[str, Any]:
+    """Fall back to the shared identity EIN when the superbill config has none.
+
+    superbill.py deliberately reads only the tables in its ALLOWED_TABLES wall,
+    so the cross-read lives here instead. A locally-saved EIN always wins: a
+    practice may bill under a different TIN than the parent entity.
+    """
+    block = payload.get("practitioner")
+    if not isinstance(block, dict) or block.get("ein"):
+        return payload
+    try:
+        import business_identity
+        block["ein"] = business_identity.get_identity(biz).get("ein") or ""
+    except Exception as e:  # noqa: BLE001 — never fail a statement over this
+        logger.warning(f"superbill EIN fallback failed for {biz}: {e}")
+    return payload
+
+
 @router.get("/superbill/config")
 def superbill_config(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     import superbill
     _owner(biz, user)
-    return superbill.get_config(biz)
+    return _fill_practitioner_ein(superbill.get_config(biz), biz)
 
 
 @router.put("/superbill/config")
@@ -793,7 +800,8 @@ def superbill_config_save(biz: str, body: SuperbillConfigBody,
                           user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     import superbill
     _owner(biz, user)
-    return superbill.save_config(biz, body.model_dump(exclude_unset=True))
+    saved = superbill.save_config(biz, body.model_dump(exclude_unset=True))
+    return _fill_practitioner_ein(saved, biz)
 
 
 @router.get("/superbill/clients")
@@ -811,7 +819,8 @@ def superbill_report(biz: str, contact_id: str, month: Optional[str] = None,
     import superbill
     _owner(biz, user)
     billing_limits.require_feature(biz, "vertical_reports")
-    return superbill.build_superbill(biz, contact_id, month, from_, to)
+    return _fill_practitioner_ein(
+        superbill.build_superbill(biz, contact_id, month, from_, to), biz)
 
 
 @router.get("/superbill/pdf")
@@ -822,7 +831,8 @@ def superbill_pdf(biz: str, contact_id: str, month: Optional[str] = None,
     import superbill
     biz_row = _owner(biz, user)
     billing_limits.require_feature(biz, "vertical_reports")
-    data = superbill.build_superbill(biz, contact_id, month, from_, to)
+    data = _fill_practitioner_ein(
+        superbill.build_superbill(biz, contact_id, month, from_, to), biz)
     if not (data.get("practitioner") or {}).get("complete"):
         raise HTTPException(409, "Practitioner details are incomplete — add your "
                                  "name, license number and NPI in Superbill setup first.")
