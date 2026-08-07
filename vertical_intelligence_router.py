@@ -132,6 +132,24 @@ def get_vertical(
         "empty_state_nudges": empty_state_nudges,
         "module_suggestions": module_suggestions,
         "effective_terms": effective_terms,
+        # The practitioner's OWN term customisations, unmerged.
+        #
+        # effective_terms is BASE -> vertical -> overrides already
+        # flattened, so a caller needing the override slice back has to
+        # subtract a baseline — and that subtraction is only correct if
+        # they baseline against the SAME vertical merged here. When they
+        # don't, every term of this vertical looks customised, and since
+        # overrides apply last they win: one disagreement replaces the
+        # entire dictionary. That shipped (frontend FE#400) and told a
+        # church it had "Clients" instead of "Members", for a business
+        # with no overrides at all.
+        #
+        # This is the same dict merged above, so no caller has to guess
+        # again. `has_business_overrides` stays for compatibility but is
+        # deliberately coarser — true when EITHER terms or
+        # vertical-intelligence overrides exist, so it cannot answer
+        # "are any TERMS customised" on its own.
+        "terminology_overrides": overrides_terms or {},
         "has_business_overrides": bool(overrides_terms or overrides_vi),
     }
 
