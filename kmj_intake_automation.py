@@ -1021,6 +1021,15 @@ async def startup():
                           # there is nothing new to anchor, so a redeploy
                           # loop costs two queries a time.
                           next_run_time=_dt.now(_tz.utc) + _td(minutes=3))
+        # The Bitcoin upgrade tick — a SEPARATE clock on purpose. The
+        # sweep is driven by new ledger activity; this is driven by
+        # Bitcoin block times and has work to do even when nothing at
+        # all is happening on the platform. Folding it into the sweep
+        # would leave a quiet practice's proofs `submitted` forever,
+        # which is the exact bug it exists to fix.
+        scheduler.add_job(g("ledger_anchor_upgrade", _anchor_sched.upgrade_tick),
+                          "interval", hours=1, id="ledger_anchor_upgrade",
+                          next_run_time=_dt.now(_tz.utc) + _td(minutes=5))
     except Exception as e:
         print(f"   [warn] ledger anchor sweep not scheduled: {e}")
     scheduler.start()

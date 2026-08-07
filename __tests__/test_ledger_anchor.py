@@ -829,3 +829,245 @@ def test_health_queries_use_the_Z_timestamp_form(monkeypatch):
     stamped = [p for p in seen if "gte." in p]
     assert stamped, "the window filters should be present"
     assert all("Z" in p and "+00:00" not in p for p in stamped)
+
+
+# ─── Seeing the Bitcoin confirmation ─────────────────────────────────
+#
+# A stored .ots is written at SUBMISSION time, when its only attestation
+# is "pending at a calendar". The Bitcoin attestation arrives hours later
+# and lives at the calendar — it never appears in bytes we already hold.
+# Reading only the stored blob reported `submitted` forever, and the
+# 2026-08-04 anchor proved it: confirmed in Bitcoin block 961016 while
+# the app still called it submitted.
+#
+# That mattered because submitted-vs-confirmed is the whole reason there
+# are two states.
+
+_SQL3 = (_here.parent / "supabase"
+         / "APPLY-2026-08-07-anchor-upgrades.sql").read_text(encoding="utf-8")
+
+
+def _ots_blob(attestation):
+    """A serialized .ots carrying one attestation."""
+    import base64
+    import opentimestamps.core.timestamp as ots_ts
+    from opentimestamps.core.op import OpSHA256
+    from opentimestamps.core.serialize import BytesSerializationContext
+    digest = bytes.fromhex("ab" * 32)
+    ts = ots_ts.Timestamp(digest)
+    ts.attestations.add(attestation)
+    ctx = BytesSerializationContext()
+    ots_ts.DetachedTimestampFile(OpSHA256(), ts).serialize(ctx)
+    return base64.b64encode(ctx.getbytes()).decode()
+
+
+def test_an_already_confirmed_proof_needs_no_calendar(monkeypatch):
+    """If the stored bytes already carry a Bitcoin attestation, the
+    upgrade must return it without touching the network."""
+    from opentimestamps.core.notary import BitcoinBlockHeaderAttestation
+    blob = _ots_blob(BitcoinBlockHeaderAttestation(961016))
+    ref, block, err = la.OpenTimestampsProvider().upgrade(blob)
+    assert err is None
+    assert block == 961016
+    assert ref, "an upgraded proof must still be returned"
+
+
+def test_a_pending_proof_with_dead_calendars_is_not_an_error_state(monkeypatch):
+    """Aggregation takes hours, so 'not yet' is the EXPECTED answer for a
+    fresh anchor. Treating it as a failure would fill the failure
+    surfaces with noise and train the operator to ignore them."""
+    from opentimestamps.core.notary import PendingAttestation
+    blob = _ots_blob(PendingAttestation("https://127.0.0.1:1"))
+    ref, block, err = la.OpenTimestampsProvider().upgrade(blob)
+    assert ref is None and block is None
+    assert "not yet" in err
+
+
+def test_a_corrupt_proof_does_not_claim_a_block():
+    ref, block, err = la.OpenTimestampsProvider().upgrade("!!!not-base64!!!")
+    assert ref is None and block is None and err
+
+
+def test_no_proof_is_refused_rather_than_crashing():
+    ref, block, err = la.OpenTimestampsProvider().upgrade(None)
+    assert ref is None and err
+
+
+def test_the_earliest_block_wins():
+    """The proof establishes existence BEFORE its block. Reporting a
+    later attestation would overstate how old the record is provably
+    is — the one direction this system must never round."""
+    import base64
+    import opentimestamps.core.timestamp as ots_ts
+    from opentimestamps.core.op import OpSHA256
+    from opentimestamps.core.notary import BitcoinBlockHeaderAttestation
+    from opentimestamps.core.serialize import BytesSerializationContext
+    ts = ots_ts.Timestamp(bytes.fromhex("cd" * 32))
+    ts.attestations.add(BitcoinBlockHeaderAttestation(900000))
+    ts.attestations.add(BitcoinBlockHeaderAttestation(961016))
+    ctx = BytesSerializationContext()
+    ots_ts.DetachedTimestampFile(OpSHA256(), ts).serialize(ctx)
+    _ref, block, err = la.OpenTimestampsProvider().upgrade(
+        base64.b64encode(ctx.getbytes()).decode())
+    assert err is None and block == 900000
+
+
+def test_an_upgraded_proof_reads_as_confirmed():
+    """The point of the whole cache: proof_status on the upgraded bytes
+    must finally say confirmed, where the stored bytes never could."""
+    from opentimestamps.core.notary import (BitcoinBlockHeaderAttestation,
+                                            PendingAttestation)
+    pending = _ots_blob(PendingAttestation("https://a.example"))
+    assert la.proof_status(pending, "opentimestamps")["state"] == "submitted"
+    upgraded = _ots_blob(BitcoinBlockHeaderAttestation(961016))
+    st = la.proof_status(upgraded, "opentimestamps")
+    assert st["state"] == "confirmed"
+    assert st["confirmed"] is True
+    assert st["bitcoin_block"] == 961016
+
+
+# ─── The cache ───────────────────────────────────────────────────────
+
+class _UpDB:
+    def __init__(self, anchors, upgrades=None):
+        self.anchors = anchors
+        self.upgrades = upgrades or []
+        self.posts = []
+
+    def get(self, path):
+        if "/ledger_anchor_upgrades" in path:
+            rows = self.upgrades
+            if "confirmed=is.true" in path:
+                rows = [r for r in rows if r.get("confirmed")]
+            return list(rows)
+        if "/ledger_anchors" in path:
+            return list(self.anchors)
+        return []
+
+    def post(self, path, body, prefer=None):
+        self.posts.append((path, body, prefer))
+        return [body]
+
+
+def test_a_confirmed_anchor_is_never_re_fetched(monkeypatch):
+    """Bitcoin confirmations do not un-happen. Re-asking the calendars
+    for a proof already in a block is pure waste, and at scale it is the
+    difference between a polite client and a rude one."""
+    db = _UpDB(
+        anchors=[{"id": "a1", "business_id": "b1", "provider_ref": "x"}],
+        upgrades=[{"anchor_id": "a1", "confirmed": True, "bitcoin_block": 961016}])
+    monkeypatch.setattr(la.sb_clients, "sb_get_as_service", db.get)
+    monkeypatch.setattr(la.sb_clients, "sb_post_as_service", db.post)
+    called = []
+    monkeypatch.setattr(la._PROVIDERS["opentimestamps"], "upgrade",
+                        lambda ref: called.append(ref) or (None, None, "not yet"))
+    out = la.upgrade_pending()
+    assert called == [], "an already-confirmed proof must not be re-fetched"
+    assert out["checked"] == 0
+
+
+def test_a_confirmation_is_cached_with_its_block(monkeypatch):
+    db = _UpDB(anchors=[{"id": "a1", "business_id": "b1", "provider_ref": "x"}])
+    monkeypatch.setattr(la.sb_clients, "sb_get_as_service", db.get)
+    monkeypatch.setattr(la.sb_clients, "sb_post_as_service", db.post)
+    monkeypatch.setattr(la._PROVIDERS["opentimestamps"], "upgrade",
+                        lambda ref: ("upgraded-bytes", 961016, None))
+    out = la.upgrade_pending()
+    assert out["confirmed"] == 1
+    body = db.posts[0][1]
+    assert body["confirmed"] is True
+    assert body["bitcoin_block"] == 961016
+    assert body["upgraded_ref"] == "upgraded-bytes"
+    # Upsert, not insert: one row per receipt, refreshed in place.
+    assert "merge-duplicates" in (db.posts[0][2] or "")
+
+
+def test_still_aggregating_is_recorded_as_pending_not_as_an_error(monkeypatch):
+    db = _UpDB(anchors=[{"id": "a1", "business_id": "b1", "provider_ref": "x"}])
+    monkeypatch.setattr(la.sb_clients, "sb_get_as_service", db.get)
+    monkeypatch.setattr(la.sb_clients, "sb_post_as_service", db.post)
+    monkeypatch.setattr(la._PROVIDERS["opentimestamps"], "upgrade",
+                        lambda ref: (None, None, "not yet aggregated into a bitcoin block"))
+    out = la.upgrade_pending()
+    assert out["pending"] == 1 and out["errored"] == 0
+    assert db.posts[0][1]["confirmed"] is False
+
+
+def test_one_broken_proof_does_not_stop_the_batch(monkeypatch):
+    db = _UpDB(anchors=[{"id": "a1", "business_id": "b1", "provider_ref": "x"},
+                        {"id": "a2", "business_id": "b1", "provider_ref": "y"}])
+    monkeypatch.setattr(la.sb_clients, "sb_get_as_service", db.get)
+    monkeypatch.setattr(la.sb_clients, "sb_post_as_service", db.post)
+
+    def boom(ref):
+        if ref == "x":
+            raise RuntimeError("calendar exploded")
+        return ("bytes", 961016, None)
+
+    monkeypatch.setattr(la._PROVIDERS["opentimestamps"], "upgrade", boom)
+    out = la.upgrade_pending()
+    assert out["checked"] == 2 and out["confirmed"] == 1
+
+
+def test_upgrades_for_returns_nothing_when_asked_for_nothing(monkeypatch):
+    """An empty id list must not become `in.()`, which is a syntax error
+    PostgREST answers with a 400 — and _safe_get would swallow it into a
+    silent empty, hiding every upgrade on the page."""
+    seen = []
+    monkeypatch.setattr(la.sb_clients, "sb_get_as_service",
+                        lambda p: seen.append(p) or [])
+    assert la.upgrades_for([]) == {}
+    assert la.upgrades_for([None]) == {}
+    assert seen == [], "no query should be issued at all"
+
+
+# ─── The surfaces ────────────────────────────────────────────────────
+
+def test_the_anchor_list_consults_the_upgrade_cache():
+    """This is where the bug was VISIBLE: the list read the stored bytes
+    and reported submitted forever."""
+    src = (_here.parent / "audit_log.py").read_text(encoding="utf-8")
+    body = src.split("def list_anchors(")[1].split("\n@router")[0]
+    assert "upgrades_for" in body
+    assert "upgraded_ref" in body
+
+
+def test_the_ots_download_serves_the_upgraded_proof():
+    """A submission-time .ots makes the auditor's client go and fetch the
+    attestation itself; the upgraded one verifies against a block header
+    with nobody's servers involved."""
+    src = (_here.parent / "audit_log.py").read_text(encoding="utf-8")
+    body = src.split("def download_ots(")[1].split("\n@router")[0]
+    assert "upgraded_ref" in body
+
+
+def test_the_upgrade_job_is_registered_on_its_own_clock():
+    """Folding it into the anchoring sweep would tie confirmation to
+    ledger activity, so a quiet practice's proofs would stay submitted
+    indefinitely — the exact bug, reintroduced by the back door."""
+    src = (_here.parent / "kmj_intake_automation.py").read_text(encoding="utf-8")
+    assert 'id="ledger_anchor_upgrade"' in src
+    assert 'g("ledger_anchor_upgrade"' in src
+    body = src.split('id="ledger_anchor_upgrade"')[1].split("except Exception")[0]
+    assert "next_run_time" in body, "an interval job needs an explicit first run"
+
+
+# ─── The cache table ─────────────────────────────────────────────────
+
+def test_the_upgrade_cache_is_deliberately_mutable():
+    """ledger_anchors is append-only because it is evidence. This is a
+    cache of derived, refetchable data, so it carries no append-only
+    trigger — and the file has to say why, or someone will 'fix' it."""
+    assert "create table if not exists public.ledger_anchor_upgrades" in _SQL3
+    assert "before update or delete on public.ledger_anchor_upgrades" not in _SQL3
+    flat = " ".join(_SQL3.replace("--", " ").split())
+    assert "DERIVED" in flat or "derived" in flat
+
+
+def test_the_upgrade_cache_never_touches_the_receipt_table():
+    assert "alter table public.ledger_anchors" not in _SQL3.lower()
+
+
+def test_the_upgrade_cache_is_locked_to_anon_and_authenticated():
+    assert ("revoke all on public.ledger_anchor_upgrades from anon, authenticated"
+            in _SQL3)
