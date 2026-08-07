@@ -330,6 +330,81 @@ class OpenTimestampsProvider(AnchorProvider):
         out["digest"] = det.file_digest.hex()
         return out
 
+    def upgrade(self, provider_ref: Optional[str]
+                ) -> Tuple[Optional[str], Optional[int], Optional[str]]:
+        """Ask the calendars for the Bitcoin attestation. -> (ref, block, error)
+
+        THE MISSING HALF. A stored .ots is written at submission time,
+        when its only attestation is "pending at a calendar". The
+        Bitcoin attestation arrives hours later and lives AT THE
+        CALENDAR — it never appears in bytes we already hold. Without
+        this call a proof stays `submitted` forever no matter how long
+        ago Bitcoin confirmed it, and the distinction between the two
+        states, which is the whole reason there are two, is wasted.
+
+        The result is a strict superset of the original: same digest,
+        same path, plus the block header attestation. So every existing
+        reader can be handed the upgraded blob in place of the stored
+        one with no special handling.
+        """
+        import base64
+        try:
+            from opentimestamps.calendar import RemoteCalendar
+            from opentimestamps.core.notary import (
+                BitcoinBlockHeaderAttestation, PendingAttestation)
+            from opentimestamps.core.serialize import (
+                BytesDeserializationContext, BytesSerializationContext)
+            from opentimestamps.core.timestamp import DetachedTimestampFile
+        except ImportError:
+            return None, None, "the opentimestamps package is not installed"
+        if not provider_ref:
+            return None, None, "no proof to upgrade"
+        try:
+            det = DetachedTimestampFile.deserialize(
+                BytesDeserializationContext(base64.b64decode(provider_ref)))
+        except Exception:
+            return None, None, "the stored proof could not be parsed"
+
+        errors: List[str] = []
+
+        def walk(ts) -> None:
+            # Snapshots, because merging mutates both collections while
+            # we are walking them.
+            for sub in list(ts.ops.values()):
+                walk(sub)
+            for att in list(ts.attestations):
+                if not isinstance(att, PendingAttestation):
+                    continue
+                uri = (att.uri.decode() if isinstance(att.uri, bytes)
+                       else str(att.uri))
+                try:
+                    ts.merge(RemoteCalendar(uri).get_timestamp(ts.msg))
+                except Exception as e:
+                    # One calendar being unreachable is survivable —
+                    # any single one of them can complete the proof.
+                    errors.append(f"{uri}: {type(e).__name__}")
+
+        try:
+            walk(det.timestamp)
+        except Exception as e:
+            return None, None, f"upgrade walk failed: {type(e).__name__}: {str(e)[:100]}"
+
+        blocks = [int(a.height) for _m, a in det.timestamp.all_attestations()
+                  if isinstance(a, BitcoinBlockHeaderAttestation)]
+        if not blocks:
+            # NOT an error state in the usual sense — aggregation takes
+            # hours, so "not yet" is the expected answer for a fresh
+            # anchor and the caller must not treat it as a failure.
+            detail = ("; ".join(errors)) if errors else ""
+            return None, None, ("not yet aggregated into a bitcoin block"
+                                + (f" ({detail})" if detail else ""))
+
+        out = BytesSerializationContext()
+        det.serialize(out)
+        # The EARLIEST block: the proof establishes existence before that
+        # block, and a later attestation would overstate its own age.
+        return base64.b64encode(out.getbytes()).decode("ascii"), min(blocks), None
+
     @staticmethod
     def _submit(calendar: str, digest: bytes, timeout: float = 15.0) -> bytes:
         import urllib.request
@@ -836,11 +911,21 @@ def proof_for(business_id: str, sequence: int) -> Dict[str, Any]:
     anchors = sb_clients.sb_get_as_service(
         f"/ledger_anchors?business_id=eq.{business_id}"
         f"&first_sequence=lte.{int(sequence)}&last_sequence=gte.{int(sequence)}"
-        f"&select=first_sequence,last_sequence,merkle_root,provider,"
+        f"&select=id,first_sequence,last_sequence,merkle_root,provider,"
         f"provider_ref,anchored_at,algorithm&order=anchored_at.asc&limit=10") or []
     if not anchors:
         return {"ok": False,
                 "reason": "this record is not covered by an anchor yet"}
+
+    # Swap in the Bitcoin-upgraded proof where we have one. It is a
+    # strict superset of the stored bytes, so everything downstream
+    # behaves identically except that `confirmed` can finally be true.
+    ups = upgrades_for([a.get("id") for a in anchors])
+    for a in anchors:
+        up = ups.get(str(a.get("id"))) or {}
+        if up.get("upgraded_ref"):
+            a["provider_ref"] = up["upgraded_ref"]
+            a["bitcoin_block"] = up.get("bitcoin_block")
 
     proofs = [_proof_under(business_id, sequence, a) for a in anchors]
     usable = [p for p in proofs if p.get("ok")]
@@ -1040,10 +1125,42 @@ def anchor_health(*, days: int = 7, recent: int = 25) -> Dict[str, Any]:
         "scheduled": schedule_enabled(),
         "interval_hours": schedule_interval_hours(),
         "last_sweep": _last_sweep(),
+        # How much of the OpenTimestamps half has actually reached
+        # Bitcoin. Reported separately from the provider verdict because
+        # they are different questions: a provider can be perfectly
+        # healthy — every submission accepted — while none of its proofs
+        # has been aggregated into a block yet.
+        "bitcoin": _bitcoin_summary(),
         "total_successes": len(wins),
         "total_failures": len(fails),
         "generated_at": _utc_z(now),
     }
+
+
+def _bitcoin_summary() -> Dict[str, Any]:
+    """Confirmed vs still aggregating, across every OpenTimestamps proof."""
+    ots = _safe_get("/ledger_anchors?provider=eq.opentimestamps"
+                    "&select=id&limit=1000")
+    ups = _safe_get("/ledger_anchor_upgrades?confirmed=is.true"
+                    "&select=bitcoin_block&limit=1000")
+    blocks = [int(u["bitcoin_block"]) for u in ups
+              if u.get("bitcoin_block") is not None]
+    return {
+        "confirmed": len(ups),
+        # "Awaiting" is the honest word: aggregation takes hours, so a
+        # nonzero count here is normal and not a fault.
+        "awaiting": max(0, len(ots) - len(ups)),
+        "latest_block": max(blocks) if blocks else None,
+        "last_upgrade": _last_upgrade(),
+    }
+
+
+def _last_upgrade() -> Optional[Dict[str, Any]]:
+    try:
+        import anchor_scheduler
+        return anchor_scheduler.LAST_UPGRADE
+    except Exception:
+        return None
 
 
 def _last_sweep() -> Optional[Dict[str, Any]]:
@@ -1057,3 +1174,99 @@ def _last_sweep() -> Optional[Dict[str, Any]]:
         return anchor_scheduler.LAST_SWEEP
     except Exception:
         return None
+
+
+# ─── Bitcoin upgrades ────────────────────────────────────────────────
+#
+# A stored .ots is written at submission time and never learns about its
+# own Bitcoin confirmation — the upgrade lives at the calendar. Left
+# alone, every OpenTimestamps proof reports `submitted` forever, which
+# throws away the distinction that is the entire reason there are two
+# states. These read and refresh a cache of the upgraded proofs.
+#
+# Nothing here is evidence. Every row is derived and refetchable from
+# public calendars by anyone, which is why the cache may be written over
+# while ledger_anchors may not.
+
+UPGRADE_SCAN_LIMIT = 500
+
+
+def upgrades_for(anchor_ids: Any) -> Dict[str, Dict[str, Any]]:
+    """Cached upgrades keyed by anchor id, for surfaces that list anchors."""
+    ids = sorted({str(i) for i in (anchor_ids or []) if i})
+    if not ids:
+        return {}
+    rows = _safe_get("/ledger_anchor_upgrades?anchor_id=in.(" + ",".join(ids)
+                     + ")&select=anchor_id,upgraded_ref,bitcoin_block,confirmed"
+                     + f"&limit={len(ids)}")
+    return {str(r.get("anchor_id")): r for r in rows}
+
+
+def upgrade_pending(limit: int = 25) -> Dict[str, Any]:
+    """Fetch Bitcoin attestations for anchors that do not have one yet.
+
+    Only OpenTimestamps has a pending state at all — Hedera reaches
+    consensus before its submit call returns, so there is nothing to
+    poll and nothing here touches it.
+
+    "Not yet aggregated" is the EXPECTED answer for a fresh anchor, not
+    a failure. It is recorded as a checked attempt so the row moves to
+    the back of the queue, and retried on the next pass.
+    """
+    provider = _PROVIDERS.get("opentimestamps")
+    if provider is None or not hasattr(provider, "upgrade"):
+        return {"ok": False, "error": "no upgradable provider registered"}
+
+    anchors = _safe_get(
+        "/ledger_anchors?provider=eq.opentimestamps"
+        "&select=id,business_id,provider,provider_ref,anchored_at"
+        f"&order=anchored_at.asc&limit={UPGRADE_SCAN_LIMIT}")
+    if not anchors:
+        return {"ok": True, "checked": 0, "confirmed": 0, "pending": 0}
+
+    settled = {str(r.get("anchor_id")) for r in _safe_get(
+        "/ledger_anchor_upgrades?confirmed=is.true&select=anchor_id"
+        f"&limit={UPGRADE_SCAN_LIMIT}")}
+    todo = [a for a in anchors if str(a.get("id")) not in settled][:int(limit)]
+
+    confirmed = pending = errored = 0
+    for a in todo:
+        try:
+            ref, block, err = provider.upgrade(a.get("provider_ref"))
+        except Exception as e:
+            ref, block, err = None, None, f"{type(e).__name__}: {str(e)[:120]}"
+        row: Dict[str, Any] = {
+            "anchor_id": str(a.get("id")),
+            "business_id": str(a.get("business_id")),
+            "provider": "opentimestamps",
+            "checked_at": _utc_z(datetime.now(timezone.utc)),
+            "last_error": (str(err)[:300] if err else None),
+        }
+        if ref and block:
+            confirmed += 1
+            row.update({"upgraded_ref": ref, "bitcoin_block": int(block),
+                        "confirmed": True,
+                        "upgraded_at": _utc_z(datetime.now(timezone.utc))})
+        elif err and "not yet" in err:
+            pending += 1
+            row["confirmed"] = False
+        else:
+            errored += 1
+            row["confirmed"] = False
+        try:
+            # Upsert: one row per receipt, refreshed in place. Safe here
+            # precisely because this table is a cache and not a claim.
+            sb_clients.sb_post_as_service(
+                "/ledger_anchor_upgrades", row,
+                prefer="resolution=merge-duplicates,return=minimal")
+        except Exception as e:
+            logger.warning("[anchor-upgrade] could not cache %s: %s",
+                           row["anchor_id"], e)
+
+    out = {"ok": True, "checked": len(todo), "confirmed": confirmed,
+           "pending": pending, "errored": errored,
+           "outstanding": len([a for a in anchors
+                               if str(a.get("id")) not in settled])}
+    if todo:
+        logger.info("[anchor-upgrade] %s", out)
+    return out

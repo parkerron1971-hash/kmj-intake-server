@@ -182,3 +182,60 @@ async def sweep_tick() -> Dict[str, Any]:
 def _now_z() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ─── The Bitcoin upgrade tick ────────────────────────────────────────
+#
+# A stored .ots is written at submission time and never learns about its
+# own Bitcoin confirmation — the upgrade lives at the calendar server.
+# Without something asking, every OpenTimestamps proof reports
+# `submitted` forever, which throws away the distinction that is the
+# entire reason there are two states.
+
+LAST_UPGRADE: Optional[Dict[str, Any]] = None
+
+DEFAULT_UPGRADE_BATCH = 25
+
+
+def upgrade_batch() -> int:
+    try:
+        v = int(os.environ.get("LEDGER_ANCHOR_UPGRADE_BATCH")
+                or DEFAULT_UPGRADE_BATCH)
+    except (TypeError, ValueError):
+        return DEFAULT_UPGRADE_BATCH
+    return v if v > 0 else DEFAULT_UPGRADE_BATCH
+
+
+async def upgrade_tick() -> Dict[str, Any]:
+    """Ask the calendars for Bitcoin attestations we do not have yet.
+
+    A SEPARATE JOB ON A DIFFERENT CLOCK, because the two answer to
+    different things. The anchoring sweep is driven by new ledger
+    activity; this one is driven by Bitcoin block times, and it has work
+    to do even on a platform where nothing whatsoever is happening.
+    Folding it into the sweep would tie confirmation to activity, so a
+    quiet practice's proofs would stay `submitted` indefinitely — which
+    is the exact bug this fixes, reintroduced by the back door.
+
+    Off the event loop for the same reason the sweep is: this talks to
+    three calendar servers per proof over synchronous http.
+    """
+    global LAST_UPGRADE
+    started = time.time()
+
+    if not ledger_anchor.schedule_enabled():
+        LAST_UPGRADE = {"skipped": "LEDGER_ANCHOR_SCHEDULE=off", "at": _now_z()}
+        return LAST_UPGRADE
+
+    try:
+        out = await asyncio.to_thread(ledger_anchor.upgrade_pending,
+                                      upgrade_batch())
+    except Exception as e:
+        logger.warning("[anchor-upgrade] tick failed: %s", e)
+        LAST_UPGRADE = {"error": f"{type(e).__name__}: {str(e)[:160]}",
+                        "at": _now_z()}
+        return LAST_UPGRADE
+
+    LAST_UPGRADE = {**out, "at": _now_z(),
+                    "took_s": round(time.time() - started, 1)}
+    return LAST_UPGRADE
