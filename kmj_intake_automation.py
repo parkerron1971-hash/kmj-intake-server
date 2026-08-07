@@ -995,6 +995,22 @@ async def startup():
                           "cron", hour=9, minute=15, id="balance_sweep")
     except Exception as e:
         print(f"   [warn] balance sweep not scheduled: {e}")
+    # Action Ledger Stage 5 (2026-08-07) — anchor every tenant that has
+    # unanchored rows, to every configured provider. Two networks protect
+    # against one failing; they do nothing about the likeliest failure,
+    # which was nobody anchoring at all. A gap cannot be repaired later —
+    # you cannot anchor last month at last month's timestamp — so this
+    # bounds how long a record can sit unprovable.
+    # Kill switch: LEDGER_ANCHOR_SCHEDULE=off. Cadence:
+    # LEDGER_ANCHOR_INTERVAL_HOURS (default 6).
+    try:
+        import anchor_scheduler as _anchor_sched
+        import ledger_anchor as _la
+        scheduler.add_job(g("ledger_anchor_sweep", _anchor_sched.sweep_tick),
+                          "interval", hours=_la.schedule_interval_hours(),
+                          id="ledger_anchor_sweep")
+    except Exception as e:
+        print(f"   [warn] ledger anchor sweep not scheduled: {e}")
     scheduler.start()
     print(f"🚀 KMJ Intake Automation running")
     print(f"   Owner: {OWNER_NAME} | {BUSINESS_NAME}")
