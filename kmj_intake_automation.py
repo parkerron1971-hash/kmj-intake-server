@@ -1006,9 +1006,21 @@ async def startup():
     try:
         import anchor_scheduler as _anchor_sched
         import ledger_anchor as _la
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
         scheduler.add_job(g("ledger_anchor_sweep", _anchor_sched.sweep_tick),
                           "interval", hours=_la.schedule_interval_hours(),
-                          id="ledger_anchor_sweep")
+                          id="ledger_anchor_sweep",
+                          # AN INTERVAL JOB'S FIRST RUN IS now + interval,
+                          # and the timer restarts with the process. On a
+                          # repo that deploys several times a day, a 6h
+                          # interval would be reset before it ever fired —
+                          # the sweep would exist and never run once. An
+                          # explicit first run a few minutes after boot is
+                          # what makes the schedule real. Late enough to
+                          # stay out of the boot storm; a no-op anyway when
+                          # there is nothing new to anchor, so a redeploy
+                          # loop costs two queries a time.
+                          next_run_time=_dt.now(_tz.utc) + _td(minutes=3))
     except Exception as e:
         print(f"   [warn] ledger anchor sweep not scheduled: {e}")
     scheduler.start()

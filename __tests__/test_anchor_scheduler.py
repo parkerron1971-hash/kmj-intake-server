@@ -276,3 +276,16 @@ def test_the_job_is_registered_and_leader_gated():
     src = (_here.parent / "kmj_intake_automation.py").read_text(encoding="utf-8")
     assert 'id="ledger_anchor_sweep"' in src
     assert 'g("ledger_anchor_sweep"' in src, "must go through scheduler_lock.gate"
+
+
+def test_the_sweep_has_an_explicit_first_run():
+    """An interval job's first run is now + interval, and the timer
+    restarts with the process. On a repo that deploys several times a
+    day a 6h interval is reset before it ever fires — the job would
+    exist, report healthy, and never run once. An explicit first run
+    shortly after boot is the difference between a schedule and a
+    schedule-shaped object.
+    """
+    src = (_here.parent / "kmj_intake_automation.py").read_text(encoding="utf-8")
+    body = src.split('id="ledger_anchor_sweep"')[1].split("except Exception")[0]
+    assert "next_run_time" in body
