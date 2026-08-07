@@ -438,19 +438,18 @@ async def run_contract_generate(business_id: str) -> Dict[str, Any]:
         }
 
 
-@router.post("/agents/contract/preview")
-async def contract_preview(req: ContractPreviewRequest, user: AuthedUser = Depends(require_user)):
+async def run_contract_preview(business_id: str, contact_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
         if not businesses:
             raise HTTPException(404, "Business not found")
-        contacts = await _sb(client, "GET", f"/contacts?id=eq.{req.contact_id}&select=*&limit=1")
+        contacts = await _sb(client, "GET", f"/contacts?id=eq.{contact_id}&select=*&limit=1")
         if not contacts:
             raise HTTPException(404, "Contact not found")
         events = await _sb(client, "GET",
-            f"/events?contact_id=eq.{req.contact_id}&order=created_at.desc&limit=8") or []
+            f"/events?contact_id=eq.{contact_id}&order=created_at.desc&limit=8") or []
         queue_history = await _sb(client, "GET",
-            f"/agent_queue?contact_id=eq.{req.contact_id}&order=created_at.desc&limit=5"
+            f"/agent_queue?contact_id=eq.{contact_id}&order=created_at.desc&limit=5"
             f"&select=agent,action_type,subject,status,created_at") or []
         result = await _draft_proposal(client, businesses[0], contacts[0], events, queue_history, dry_run=True)
         if not result:
@@ -839,3 +838,10 @@ async def contract_generate(req: ContractRequest, user: AuthedUser = Depends(req
     rather than merely knowing a uuid. Chief calls run_contract_generate() in-process."""
     require_business_admin(req.business_id, user)
     return await run_contract_generate(req.business_id)
+
+@router.post("/agents/contract/preview")
+async def contract_preview(req: ContractPreviewRequest, user: AuthedUser = Depends(require_user)):
+    """Admin only. Drafts against a named contact; Chief calls
+    run_contract_preview() in-process."""
+    require_business_admin(req.business_id, user)
+    return await run_contract_preview(req.business_id, req.contact_id)
