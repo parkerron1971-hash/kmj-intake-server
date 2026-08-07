@@ -31,7 +31,9 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 import llm_call
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from auth_supabase import AuthedUser, require_user
+from business_users_router import require_business_admin
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -539,16 +541,15 @@ class ModuleCheckRequest(BaseModel):
     business_id: str
 
 
-@router.post("/agents/module/check")
-async def module_check(req: ModuleCheckRequest):
+async def run_module_check(business_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
         if not businesses:
             raise HTTPException(404, "Business not found")
         biz = businesses[0]
 
         modules = await _sb(client, "GET",
-            f"/custom_modules?business_id=eq.{req.business_id}&is_active=eq.true"
+            f"/custom_modules?business_id=eq.{business_id}&is_active=eq.true"
             f"&order=sort_order.asc&limit=50&select=*"
         ) or []
 
@@ -614,7 +615,7 @@ async def module_check(req: ModuleCheckRequest):
             f"{entries_created_total} auto-entries across {len(modules)} modules"
         )
         return {
-            "business_id": req.business_id,
+            "business_id": business_id,
             "modules_checked": len(modules),
             "drafts_created": drafts_count,
             "entries_created": entries_created_total,
@@ -633,3 +634,15 @@ async def module_health():
         "overdue_dedup_days": OVERDUE_DEDUP_DAYS,
         "per_run_cap": PER_RUN_DRAFT_CAP,
     }
+
+
+# ── The doors ─────────────────────────────────────────────────────────
+
+
+@router.post("/agents/module/check")
+async def module_check(req: ModuleCheckRequest, user: AuthedUser = Depends(require_user)):
+    """Owner/admin only. This makes the business ACT — drafts client
+    messages and spends model budget — so a caller proves who they are
+    rather than merely knowing a uuid. Chief calls run_module_check() in-process."""
+    require_business_admin(req.business_id, user)
+    return await run_module_check(req.business_id)

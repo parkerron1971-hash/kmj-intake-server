@@ -2974,21 +2974,37 @@ AGENT_ENDPOINT_MAP = {
 # Calling the core function directly is also simply better — no socket,
 # no serialisation, and the authorization decision stays at the edge
 # where a real caller is present, instead of being faked internally.
-_SESSION_IN_PROCESS = {
-    "/agents/session/prep": "run_prep",
-    "/agents/session/follow-up": "run_followup",
-    "/agents/session/no-show": "run_noshow",
+_AGENTS_IN_PROCESS = {
+    "/agents/session/prep":       ("session_agent",  "run_prep"),
+    "/agents/session/follow-up":  ("session_agent",  "run_followup"),
+    "/agents/session/no-show":    ("session_agent",  "run_noshow"),
+    "/agents/nurture/run":        ("nurture_agent",  "run_nurture_sweep"),
+    "/agents/contract/generate":  ("contract_agent", "run_contract_generate"),
+    "/agents/payment/check":      ("payment_agent",  "run_payment_check"),
+    "/agents/module/check":       ("module_agent",   "run_module_check"),
+    "/agents/growth/briefing":    ("growth_engine",  "run_growth_briefing"),
+    "/agents/growth/insights":    ("growth_engine",  "run_growth_insights"),
 }
 
 
 async def _dispatch_agent(path: str, body: Dict) -> Optional[Dict]:
-    """Session agents run in-process; every other agent still loopbacks."""
-    fn_name = _SESSION_IN_PROCESS.get(path)
-    if not fn_name:
+    """Gated agents run in-process; anything else still loopbacks.
+
+    Every path in the table above is now owner/admin-only over HTTP, so
+    a loopback POST to one would 401 — the BE#210 shape. Contract had
+    ALREADY been in that state: it carried Depends(require_user) while
+    Chief called it with a bare client, so Chief's contract agent had
+    been failing in production. Moving it here is a fix, not a
+    precaution.
+    """
+    entry = _AGENTS_IN_PROCESS.get(path)
+    if not entry:
         return await _loopback_post(path, body)
+    module_name, fn_name = entry
     try:
-        import session_agent  # local import keeps app startup order free
-        return await getattr(session_agent, fn_name)(body.get("business_id"))
+        import importlib  # local import keeps app startup order free
+        mod = importlib.import_module(module_name)
+        return await getattr(mod, fn_name)(body.get("business_id"))
     except Exception as e:
         # Same contract as _loopback_post: None means "the caller should
         # report this agent as unreachable", not a raised 500 at Chief.

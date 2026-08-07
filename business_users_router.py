@@ -60,6 +60,26 @@ def require_role(biz: str, user_id: str, min_role: str) -> str:
     return r
 
 
+def require_business_admin(business_id: str, user: AuthedUser) -> str:
+    """The gate the agent runners share: 404 if no such business, 403
+    unless the caller is admin or above. Returns the role.
+
+    Lives here because this module already owns role resolution. The
+    alternative was these eight lines copied into six agent files, where
+    copies drift and one of them quietly keeps letting people in.
+    `role_of` ranks the owner above admin, so owners still pass.
+
+    The 404 comes BEFORE the role check on purpose: "no such business"
+    is not a permissions answer, and require_role cannot tell them apart.
+    """
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=id&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    return require_role(business_id, str(user.id), "admin")
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

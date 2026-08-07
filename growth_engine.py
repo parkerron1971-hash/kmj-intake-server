@@ -35,7 +35,9 @@ import httpx
 
 import briefing_verticals
 import llm_call
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from auth_supabase import AuthedUser, require_user
+from business_users_router import require_business_admin
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -629,10 +631,9 @@ def _format_actions_section(actions: List[Dict], pending_proposals_count: int) -
     return "\n".join(lines)
 
 
-@router.post("/agents/growth/briefing")
-async def growth_briefing(req: GrowthRequest):
+async def run_growth_briefing(business_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
         if not businesses:
             raise HTTPException(404, "Business not found")
         biz = businesses[0]
@@ -717,7 +718,7 @@ Rules:
 
         title = f"Weekly Briefing — {date_range}"
         insight = await _sb(client, "POST", "/insights", {
-            "business_id": req.business_id,
+            "business_id": business_id,
             "category": "growth",
             "insight_type": "observation",
             "title": title,
@@ -1163,17 +1164,16 @@ STALE LEADS (status=lead, 30+ days old, 14+ days no contact):
 """
 
 
-@router.post("/agents/growth/insights")
-async def growth_insights(req: GrowthRequest):
+async def run_growth_insights(business_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
         if not businesses:
             raise HTTPException(404, "Business not found")
         biz = businesses[0]
         biz_name = biz.get("name", "your business")
 
-        stats = await _gather_insights_data(client, req.business_id)
-        cross_domain = await _gather_cross_domain_data(client, req.business_id)
+        stats = await _gather_insights_data(client, business_id)
+        cross_domain = await _gather_cross_domain_data(client, business_id)
 
         system_prompt = f"""You are the Growth Intelligence Engine for {biz_name}. Analyze 30 days of business data and return 3-5 actionable insights.
 
@@ -1221,7 +1221,7 @@ Be specific and actionable. Do NOT invent numbers. Only reference data present i
             if not isinstance(item, dict) or not item.get("title"):
                 continue
             row = {
-                "business_id": req.business_id,
+                "business_id": business_id,
                 "category": _normalize_category(item.get("category", "")),
                 "insight_type": _normalize_type(item.get("insight_type", "")),
                 "title": str(item["title"])[:200],
@@ -1259,3 +1259,24 @@ async def growth_health():
         "briefing_window_days": BRIEFING_WINDOW_DAYS,
         "insights_window_days": INSIGHTS_WINDOW_DAYS,
     }
+
+
+# ── The doors ─────────────────────────────────────────────────────────
+
+
+@router.post("/agents/growth/briefing")
+async def growth_briefing(req: GrowthRequest, user: AuthedUser = Depends(require_user)):
+    """Owner/admin only. This makes the business ACT — drafts client
+    messages and spends model budget — so a caller proves who they are
+    rather than merely knowing a uuid. Chief calls run_growth_briefing() in-process."""
+    require_business_admin(req.business_id, user)
+    return await run_growth_briefing(req.business_id)
+
+
+@router.post("/agents/growth/insights")
+async def growth_insights(req: GrowthRequest, user: AuthedUser = Depends(require_user)):
+    """Owner/admin only. This makes the business ACT — drafts client
+    messages and spends model budget — so a caller proves who they are
+    rather than merely knowing a uuid. Chief calls run_growth_insights() in-process."""
+    require_business_admin(req.business_id, user)
+    return await run_growth_insights(req.business_id)

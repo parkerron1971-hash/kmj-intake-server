@@ -39,7 +39,9 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 import llm_call
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from auth_supabase import AuthedUser, require_user
+from business_users_router import require_business_admin
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -417,10 +419,9 @@ class NurturePreviewRequest(BaseModel):
     contact_id: str
 
 
-@router.post("/agents/nurture/run")
-async def nurture_run(req: NurtureRunRequest):
+async def run_nurture_sweep(business_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
         if not businesses:
             raise HTTPException(404, "Business not found")
         result = await _run_nurture(client, businesses[0])
@@ -461,3 +462,15 @@ async def nurture_health():
         "anthropic_configured": bool(_anthropic_key()),
         "default_thresholds": DEFAULT_THRESHOLDS,
     }
+
+
+# ── The doors ─────────────────────────────────────────────────────────
+
+
+@router.post("/agents/nurture/run")
+async def nurture_run(req: NurtureRunRequest, user: AuthedUser = Depends(require_user)):
+    """Owner/admin only. This makes the business ACT — drafts client
+    messages and spends model budget — so a caller proves who they are
+    rather than merely knowing a uuid. Chief calls run_nurture_sweep() in-process."""
+    require_business_admin(req.business_id, user)
+    return await run_nurture_sweep(req.business_id)
