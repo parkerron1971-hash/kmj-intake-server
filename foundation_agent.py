@@ -424,6 +424,31 @@ async def accept_entity_type(business_id: str, entity_type: str,
 # State filing data (Phase 1)
 # ──────────────────────────────────────────────────────────────
 
+async def list_state_coverage() -> Dict[str, Any]:
+    """Which states we actually hold verified filing data for.
+
+    Only Michigan is verified today; the other 49 rows carry a name and
+    nothing else. The picker uses this so it can say so BEFORE the user
+    chooses, instead of offering all fifty and returning an empty result
+    with a warning for 49 of them.
+
+    We deliberately do not ship unverified fees or URLs. A stale filing fee
+    is worse than no filing fee — someone would budget against it.
+    """
+    async with httpx.AsyncClient() as client:
+        rows = await _sb_get(
+            client,
+            "/state_filing_data?select=state_code,state_name,verified"
+            "&order=state_name.asc",
+        ) or []
+    return {
+        "ok": True,
+        "states": rows,
+        "verified_codes": sorted(
+            r["state_code"] for r in rows if r.get("verified")),
+    }
+
+
 async def get_state_filing_info(state_code: str) -> Dict[str, Any]:
     state_code = (state_code or "").strip().upper()
     if not state_code:
