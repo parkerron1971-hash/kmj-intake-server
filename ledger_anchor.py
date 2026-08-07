@@ -34,6 +34,7 @@ import hashlib
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import sb_clients
@@ -512,6 +513,43 @@ def get_provider(name: Optional[str] = None) -> AnchorProvider:
     return _PROVIDERS.get(key, _PROVIDERS["local"])
 
 
+# How long a provider may go without a successful anchor before the
+# health surface calls it stale. Anchoring is owner-triggered today, so
+# age alone is NOT a fault — the surface says so in those words. This
+# exists so that once something does schedule anchoring, silence starts
+# being visible rather than being mistaken for calm.
+STALE_AFTER_HOURS = 48
+
+
+def configured_providers(explicit: Optional[str] = None) -> List[str]:
+    """Every network this deployment publishes to, in order.
+
+    WHY A LIST AND NOT A CHOICE. Running one provider means a month of
+    silent breakage is a month with no proof, and a gap cannot be
+    repaired later — you cannot anchor last month at last month's
+    timestamp. Two independent providers turn "no evidence" into "one
+    of the two still has it", which is the only failure mode that
+    actually matters here.
+
+    `LEDGER_ANCHOR_PROVIDERS` is the plural form. The old singular
+    `LEDGER_ANCHOR_PROVIDER` still works and still means exactly what it
+    meant, so a deployment that has not been updated keeps its current
+    behaviour instead of quietly gaining a second network.
+    """
+    raw = (explicit
+           or os.environ.get("LEDGER_ANCHOR_PROVIDERS")
+           or os.environ.get("LEDGER_ANCHOR_PROVIDER")
+           or "local")
+    out: List[str] = []
+    for part in str(raw).split(","):
+        name = part.strip()
+        # Dedupe: a doubled name would anchor twice and collide on the
+        # per-provider unique index, turning a config typo into an error.
+        if name and name not in out:
+            out.append(name)
+    return out or ["local"]
+
+
 def is_independent(provider_name: str) -> bool:
     """Did this anchor actually leave our control?
 
@@ -541,82 +579,246 @@ def _rows_after(business_id: str, after_sequence: int,
         f"&select=sequence,row_hash&order=sequence.asc&limit={int(limit)}") or []
 
 
-def last_anchor(business_id: str) -> Optional[Dict[str, Any]]:
+def last_anchor(business_id: str,
+                provider: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """This tenant's most recent receipt, optionally for ONE provider.
+
+    THE PROVIDER FILTER IS WHAT MAKES REDUNDANCY REAL. Without it the
+    window would be "everything since the newest anchor by anybody", so
+    a provider that failed on rows 1-100 while the other succeeded would
+    start its next run at 101 and never come back for the gap. Its
+    outage would be permanent and invisible.
+
+    Scoped per provider, each network anchors everything since ITS OWN
+    last success — so a provider that was down for a day covers the
+    missed rows on the next run, by itself, with no repair step.
+    """
+    q = (f"/ledger_anchors?business_id=eq.{business_id}"
+         f"&select=id,first_sequence,last_sequence,merkle_root,provider,"
+         f"provider_ref,anchored_at,row_count,algorithm")
+    if provider:
+        q += f"&provider=eq.{provider}"
     rows = sb_clients.sb_get_as_service(
-        f"/ledger_anchors?business_id=eq.{business_id}"
-        f"&select=id,first_sequence,last_sequence,merkle_root,provider,"
-        f"provider_ref,anchored_at,row_count,algorithm"
-        f"&order=last_sequence.desc&limit=1") or []
+        q + "&order=last_sequence.desc&limit=1") or []
     return rows[0] if rows else None
+
+
+def record_failure(business_id: str, provider: str, error: str, *,
+                   merkle_root: Optional[str] = None,
+                   first_sequence: Optional[int] = None,
+                   last_sequence: Optional[int] = None,
+                   row_count: Optional[int] = None) -> None:
+    """Write down that a provider did not publish.
+
+    WHY THIS IS NOT A ROW IN ledger_anchors. A row there asserts a proof
+    exists. Recording failures in the same table — even behind a status
+    column — would make the receipt table lie in the one direction it
+    must never lie. Diagnostics live somewhere else on purpose.
+
+    WHY IT EXISTS. Redundancy is worthless if nobody notices a provider
+    has gone quiet. Before this, a failed publish was a log line, which
+    in practice meant invisible: a network could stop working for a
+    month with nothing anywhere to say so.
+
+    Never raises. Telemetry that can break the operation it observes is
+    worse than no telemetry — a failure to record a failure must not
+    also cost the OTHER provider its anchor.
+    """
+    try:
+        sb_clients.sb_post_as_service("/ledger_anchor_failures", {
+            "business_id": str(business_id),
+            "provider": str(provider),
+            "merkle_root": merkle_root,
+            "first_sequence": first_sequence,
+            "last_sequence": last_sequence,
+            "row_count": row_count,
+            # Bounded here rather than in the column: this is read by a
+            # human deciding whether to go fix something, and a provider
+            # that returns a wall of text should not fill the table.
+            "error": str(error)[:500],
+        })
+    except Exception:
+        logger.warning("[anchor] could not record the failure for %s", provider)
+
+
+def _anchor_one(business_id: str, name: str) -> Dict[str, Any]:
+    """Anchor this tenant's outstanding rows to ONE provider.
+
+    Deterministic by construction: the window is "every hashed row after
+    THIS provider's previous anchor", and rows are immutable, so the
+    same window always yields the same root. Re-running when nothing new
+    has landed is a no-op rather than a duplicate receipt.
+    """
+    out: Dict[str, Any] = {"provider": name, "ok": False, "anchored": False}
+    provider = _PROVIDERS.get((name or "").strip())
+    if provider is None:
+        # A misspelt provider must NOT quietly fall back to `local`.
+        # get_provider() does exactly that, which is tolerable when it is
+        # a deliberate single choice and dangerous when it is one entry
+        # in a list: the deployment would believe it was publishing to
+        # two networks while one of them recorded nothing anywhere.
+        err = f"'{name}' is not a registered anchor provider"
+        logger.warning("[anchor] %s", err)
+        record_failure(business_id, name, err)
+        return {**out, "error": err}
+
+    prev = last_anchor(business_id, provider.name)
+    after = int(prev["last_sequence"]) if prev else 0
+    rows = _rows_after(business_id, after)
+    if not rows:
+        return {**out, "ok": True,
+                "reason": "nothing new to anchor since the last one"}
+
+    hashes = [str(r["row_hash"]) for r in rows]
+    first, last = int(rows[0]["sequence"]), int(rows[-1]["sequence"])
+    window = {"first_sequence": first, "last_sequence": last,
+              "row_count": len(rows)}
+    root = merkle_root(hashes)
+
+    try:
+        ref, err = provider.anchor(root)
+    except Exception as e:
+        # An adapter that raises instead of returning an error is a bug
+        # in the adapter, not a reason to lose the other provider's
+        # anchor. Caught here so the contract "returns (ref, error)"
+        # holds even when an adapter breaks it.
+        ref, err = None, f"{type(e).__name__}: {str(e)[:120]}"
+
+    if err:
+        # No receipt on a failed publish. A row in ledger_anchors asserts
+        # a proof exists; writing one when publication failed would make
+        # the table lie in the one direction it must not. The failure is
+        # recorded somewhere else so it is visible rather than silent.
+        logger.warning("[anchor] %s failed to publish: %s", provider.name, err)
+        record_failure(business_id, provider.name, err, merkle_root=root, **window)
+        return {**out, "error": err, "merkle_root": root, **window}
+
+    try:
+        saved = sb_clients.sb_post_as_service("/ledger_anchors", {
+            "business_id": str(business_id),
+            "merkle_root": root,
+            "algorithm": ALGORITHM,
+            "provider": provider.name,
+            "provider_ref": ref,
+            **window,
+        }, prefer="return=representation")
+    except Exception as e:
+        saved, err = None, f"{type(e).__name__}: {str(e)[:120]}"
+
+    if not saved:
+        # PUBLISHED BUT UNRECORDED — the uncomfortable case, and the
+        # reason it gets recorded loudly. The root is already on the
+        # network; only our receipt is missing. The next run recomputes
+        # the same window and publishes again, which costs a fraction of
+        # a cent and is far better than the alternative of writing a
+        # receipt we are not sure of.
+        err = err or "the anchor could not be saved"
+        record_failure(business_id, provider.name,
+                       f"published but the receipt could not be saved: {err}",
+                       merkle_root=root, **window)
+        return {**out, "error": err, "merkle_root": root, **window}
+
+    return {**out, "ok": True, "anchored": True, "merkle_root": root,
+            "provider_ref": ref, "independent": is_independent(provider.name),
+            **window}
 
 
 def anchor_business(business_id: str, *, provider_name: Optional[str] = None
                     ) -> Dict[str, Any]:
-    """Anchor everything hashed since this tenant's last anchor.
+    """Anchor to every configured provider, independently.
 
-    Deterministic by construction: the window is "every hashed row after
-    the previous anchor's last_sequence", and rows are immutable, so the
-    same window always yields the same root. Re-running when nothing new
-    has landed is a no-op rather than a duplicate receipt.
+    INDEPENDENTLY IS THE WHOLE CONTRACT. If one network is unreachable
+    the other must still publish, because the point of running two is
+    that a single outage never leaves a window with no proof at all. So
+    every provider gets its own window, its own attempt and its own
+    error, and nothing one of them does can abort the loop.
     """
-    prev = last_anchor(business_id)
-    after = int(prev["last_sequence"]) if prev else 0
-    rows = _rows_after(business_id, after)
-    if not rows:
-        return {"ok": True, "anchored": False,
-                "reason": "nothing new to anchor since the last one"}
+    names = configured_providers(provider_name)
+    results: List[Dict[str, Any]] = []
+    for name in names:
+        try:
+            results.append(_anchor_one(business_id, name))
+        except Exception as e:
+            # The backstop. _anchor_one already handles the errors it can
+            # foresee; this one exists so that an error it could not —
+            # Supabase unreachable while reading the window, say — still
+            # costs only this provider and not the other.
+            err = f"{type(e).__name__}: {str(e)[:120]}"
+            logger.warning("[anchor] %s raised: %s", name, err)
+            record_failure(business_id, name, err)
+            results.append({"provider": name, "ok": False,
+                            "anchored": False, "error": err})
 
-    hashes = [str(r["row_hash"]) for r in rows]
-    root = merkle_root(hashes)
-    provider = get_provider(provider_name)
-
-    ref, err = provider.anchor(root)
-    if err:
-        # No receipt on a failed publish. A row here asserts a proof
-        # exists; writing one when publication failed would make the
-        # table lie in the one direction it must not.
-        logger.warning("[anchor] %s failed to publish: %s", provider.name, err)
-        return {"ok": False, "anchored": False, "error": err}
-
-    saved = sb_clients.sb_post_as_service("/ledger_anchors", {
-        "business_id": str(business_id),
-        "first_sequence": int(rows[0]["sequence"]),
-        "last_sequence": int(rows[-1]["sequence"]),
-        "row_count": len(rows),
-        "merkle_root": root,
-        "algorithm": ALGORITHM,
-        "provider": provider.name,
-        "provider_ref": ref,
-    }, prefer="return=representation")
-    if not saved:
-        return {"ok": False, "anchored": False,
-                "error": "the anchor could not be saved"}
-
-    return {"ok": True, "anchored": True, "merkle_root": root,
-            "first_sequence": int(rows[0]["sequence"]),
-            "last_sequence": int(rows[-1]["sequence"]),
-            "row_count": len(rows), "provider": provider.name,
-            "provider_ref": ref,
-            "independent": is_independent(provider.name)}
+    anchored = [r for r in results if r.get("anchored")]
+    failed = [r for r in results if r.get("error")]
+    out: Dict[str, Any] = {
+        "ok": not failed,
+        "anchored": bool(anchored),
+        "providers": results,
+        "published_to": [r["provider"] for r in anchored],
+        "failed_providers": [r["provider"] for r in failed],
+        "independent": any(r.get("independent") for r in anchored),
+    }
+    # The flattened keys are what every existing caller reads. They point
+    # at an INDEPENDENT receipt when there is one, so a `local` staging
+    # anchor can never be the face of a run that also reached a real
+    # network. `providers` carries the full per-network truth.
+    best = next((r for r in anchored if r.get("independent")),
+                anchored[0] if anchored else None)
+    if best:
+        for k in ("merkle_root", "first_sequence", "last_sequence",
+                  "row_count", "provider", "provider_ref"):
+            out[k] = best.get(k)
+    elif failed:
+        out["error"] = "; ".join(f"{r['provider']}: {r['error']}" for r in failed)
+    else:
+        out["reason"] = (results[0].get("reason") if results
+                         else "nothing new to anchor since the last one")
+    return out
 
 
 def proof_for(business_id: str, sequence: int) -> Dict[str, Any]:
     """The proof that one row sits under a published root.
 
-    Returns everything a verifier needs and nothing they must trust us
-    for: the leaf's own row_hash, the sibling path, the root, and the
-    public reference to check it against.
+    ONE PROOF PER NETWORK. With two providers a record is normally
+    covered twice, under two different windows and therefore two
+    different roots — and each of those is a separate, independently
+    checkable proof. Returning only the first would throw away exactly
+    the redundancy the second network was added for, so every covering
+    anchor is proved and they all come back in `proofs`.
+
+    The flattened keys stay the shape every existing caller reads, and
+    point at an INDEPENDENT proof whenever one exists: a `local` anchor
+    must never be the face of a record that also has real evidence.
     """
     anchors = sb_clients.sb_get_as_service(
         f"/ledger_anchors?business_id=eq.{business_id}"
         f"&first_sequence=lte.{int(sequence)}&last_sequence=gte.{int(sequence)}"
         f"&select=first_sequence,last_sequence,merkle_root,provider,"
-        f"provider_ref,anchored_at,algorithm&limit=1") or []
+        f"provider_ref,anchored_at,algorithm&order=anchored_at.asc&limit=10") or []
     if not anchors:
         return {"ok": False,
                 "reason": "this record is not covered by an anchor yet"}
-    a = anchors[0]
 
+    proofs = [_proof_under(business_id, sequence, a) for a in anchors]
+    usable = [p for p in proofs if p.get("ok")]
+    best = next((p for p in usable if p.get("independent")),
+                usable[0] if usable else proofs[0])
+    return {**best,
+            "proofs": proofs,
+            "anchor_count": len(proofs),
+            "independent_count": sum(1 for p in proofs if p.get("independent")),
+            "providers": [p.get("provider") for p in proofs]}
+
+
+def _proof_under(business_id: str, sequence: int,
+                 a: Dict[str, Any]) -> Dict[str, Any]:
+    """Prove one row under ONE anchor's window.
+
+    Returns everything a verifier needs and nothing they must trust us
+    for: the leaf's own row_hash, the sibling path, the root, and the
+    public reference to check it against.
+    """
     rows = sb_clients.sb_get_as_service(
         f"/audit_log?business_id=eq.{business_id}"
         f"&sequence=gte.{int(a['first_sequence'])}"
@@ -629,7 +831,8 @@ def proof_for(business_id: str, sequence: int) -> Dict[str, Any]:
         idx = next(i for i, r in enumerate(rows)
                    if int(r["sequence"]) == int(sequence))
     except StopIteration:
-        return {"ok": False, "reason": "that record is not in the anchored window"}
+        return {"ok": False, "provider": a.get("provider"),
+                "reason": "that record is not in the anchored window"}
 
     recomputed = merkle_root(hashes)
     path = merkle_proof(hashes, idx)
@@ -650,4 +853,145 @@ def proof_for(business_id: str, sequence: int) -> Dict[str, Any]:
         "independent": is_independent(a.get("provider") or ""),
         "window": {"first_sequence": a["first_sequence"],
                    "last_sequence": a["last_sequence"]},
+    }
+
+
+# ─── Health, for whoever has to keep this working ────────────────────
+#
+# Redundancy across two networks is worth nothing if nobody notices one
+# of them has gone quiet. Everything below exists to answer one
+# question an operator should never have to read logs for: is anchoring
+# actually working, on each network, and if not, why not.
+
+def _utc_z(dt: datetime) -> str:
+    """PostgREST filters want the Z form, never `+00:00`.
+
+    isoformat() yields '+00:00', and the '+' decodes to a space once the
+    query string is parsed — so the filter matches nothing and the
+    caller gets an empty list rather than an error. A silent empty is
+    the worst possible failure for a health check, which would then
+    report "no failures" precisely when it had lost the ability to see
+    any.
+    """
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_ts(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _safe_get(path: str) -> List[Dict[str, Any]]:
+    """A health check must not 500 because the thing it inspects is broken.
+
+    Most relevant before this arc's migration runs: ledger_anchor_failures
+    does not exist yet, and the honest answer is "I cannot see failures",
+    not a stack trace.
+    """
+    try:
+        return sb_clients.sb_get_as_service(path) or []
+    except Exception as e:
+        logger.warning("[anchor-health] %s: %s", type(e).__name__, str(e)[:120])
+        return []
+
+
+def anchor_health(*, days: int = 7, recent: int = 25) -> Dict[str, Any]:
+    """Per-provider anchoring health across every tenant.
+
+    AGE IS A FACT, NOT AUTOMATICALLY A FAULT. Anchoring is owner-
+    triggered today — nothing schedules it — so a provider can be
+    perfectly healthy and still show a last success from weeks ago.
+    `stale` therefore reports elapsed time and does not claim breakage;
+    `failing` is the verdict that means something is actually wrong,
+    and it is driven by a real error, not by silence.
+    """
+    now = datetime.now(timezone.utc)
+    since = _utc_z(now - timedelta(days=int(days)))
+
+    wins = _safe_get(
+        f"/ledger_anchors?anchored_at=gte.{since}"
+        f"&select=business_id,provider,merkle_root,first_sequence,"
+        f"last_sequence,row_count,anchored_at"
+        f"&order=anchored_at.desc&limit=200")
+    fails = _safe_get(
+        f"/ledger_anchor_failures?failed_at=gte.{since}"
+        f"&select=business_id,provider,error,merkle_root,first_sequence,"
+        f"last_sequence,failed_at"
+        f"&order=failed_at.desc&limit=200")
+
+    # Names, so the panel reads as businesses rather than as uuids.
+    ids = {str(r.get("business_id")) for r in (wins + fails) if r.get("business_id")}
+    names: Dict[str, str] = {}
+    if ids:
+        for b in _safe_get("/businesses?id=in.(" + ",".join(sorted(ids)) +
+                           ")&select=id,name&limit=200"):
+            names[str(b.get("id"))] = b.get("name") or ""
+    for r in wins + fails:
+        r["business_name"] = names.get(str(r.get("business_id")), "")
+
+    providers: List[Dict[str, Any]] = []
+    for name in configured_providers():
+        registered = name in _PROVIDERS
+        last_ok = _safe_get(
+            f"/ledger_anchors?provider=eq.{name}"
+            f"&select=anchored_at,business_id,merkle_root,first_sequence,"
+            f"last_sequence&order=anchored_at.desc&limit=1")
+        last_bad = _safe_get(
+            f"/ledger_anchor_failures?provider=eq.{name}"
+            f"&select=failed_at,error,business_id&order=failed_at.desc&limit=1")
+        ok_at = _parse_ts(last_ok[0]["anchored_at"]) if last_ok else None
+        bad_at = _parse_ts(last_bad[0]["failed_at"]) if last_bad else None
+
+        if not registered:
+            # Configured but not a real adapter. Left as its own verdict
+            # because it is a config error, not an outage, and the fix is
+            # completely different.
+            verdict = "unregistered"
+        elif bad_at and (not ok_at or bad_at > ok_at):
+            verdict = "failing"
+        elif not ok_at:
+            verdict = "never"
+        elif now - ok_at > timedelta(hours=STALE_AFTER_HOURS):
+            verdict = "stale"
+        else:
+            verdict = "healthy"
+
+        providers.append({
+            "provider": name,
+            "registered": registered,
+            # Whether an anchor here is evidence at all. For hedera this
+            # is false on testnet however healthy the plumbing looks.
+            "independent": is_independent(name),
+            "verdict": verdict,
+            "last_success_at": last_ok[0]["anchored_at"] if last_ok else None,
+            "hours_since_success": (round((now - ok_at).total_seconds() / 3600, 1)
+                                    if ok_at else None),
+            "last_failure_at": last_bad[0]["failed_at"] if last_bad else None,
+            "last_error": (last_bad[0].get("error") if last_bad else None),
+            "successes": sum(1 for r in wins if r.get("provider") == name),
+            "failures": sum(1 for r in fails if r.get("provider") == name),
+            "recent_successes": [r for r in wins
+                                 if r.get("provider") == name][:recent],
+            "recent_failures": [r for r in fails
+                                if r.get("provider") == name][:recent],
+        })
+
+    return {
+        "ok": not any(p["verdict"] in ("failing", "unregistered")
+                      for p in providers),
+        "providers": providers,
+        "configured": configured_providers(),
+        # False means this deployment publishes to nowhere a skeptic must
+        # accept, whatever the verdicts above say.
+        "any_independent": any(p["independent"] for p in providers),
+        "window_days": int(days),
+        "stale_after_hours": STALE_AFTER_HOURS,
+        "total_successes": len(wins),
+        "total_failures": len(fails),
+        "generated_at": _utc_z(now),
     }

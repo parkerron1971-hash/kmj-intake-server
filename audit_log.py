@@ -751,9 +751,18 @@ def download_ots(request: Request, biz: str, sequence: int,
     rows = sb_clients.sb_get_as_service(
         f"/ledger_anchors?business_id=eq.{biz}"
         f"&first_sequence=lte.{int(sequence)}&last_sequence=gte.{int(sequence)}"
+        # PROVIDER-FILTERED, and it must stay that way. Once a second
+        # provider anchors the same windows, the unfiltered query can
+        # return a Hedera receipt — a JSON reference, not a .ots file —
+        # and this route would hand the auditor base64-decoded garbage
+        # named `.ots`. A proof file that is not a proof file is worse
+        # than a 404.
+        f"&provider=eq.opentimestamps"
         f"&select=provider,provider_ref,first_sequence,last_sequence&limit=1") or []
     if not rows or not rows[0].get("provider_ref"):
-        raise HTTPException(404, "No published proof covers that record yet.")
+        raise HTTPException(
+            404, "No OpenTimestamps proof covers that record yet. "
+                 "Other providers may still cover it — see /ledger/proof.")
     try:
         blob = base64.b64decode(rows[0]["provider_ref"])
     except Exception:
@@ -797,13 +806,32 @@ def create_anchor(request: Request, body: _AnchorBody,
     import ledger_anchor
     out = ledger_anchor.anchor_business(body.business_id)
     if out.get("anchored"):
+        published = out.get("published_to") or [out.get("provider")]
+        failed = out.get("failed_providers") or []
         try:
             record(body.business_id, actor_type="user", actor_id=str(user.id),
                    verb="ledger:anchored",
                    summary=(f"Anchored records #{out['first_sequence']}"
-                            f"-#{out['last_sequence']}"),
+                            f"-#{out['last_sequence']} to "
+                            + ", ".join(str(p) for p in published)
+                            # A partial run is stated, not smoothed over.
+                            # "Anchored" reading the same whether one or
+                            # both networks took it is exactly the kind of
+                            # rounding this ledger exists to not do.
+                            + (f" ({', '.join(failed)} failed)" if failed else "")),
                    payload={"merkle_root": out["merkle_root"],
-                            "provider": out["provider"]},
+                            "provider": out["provider"],
+                            "published_to": published,
+                            "failed_providers": failed,
+                            # Per-network windows and roots, minus the
+                            # receipts themselves: an .ots blob is
+                            # kilobytes and has no business in a payload.
+                            "windows": [
+                                {k: p.get(k) for k in
+                                 ("provider", "merkle_root", "first_sequence",
+                                  "last_sequence", "row_count", "independent")}
+                                for p in (out.get("providers") or [])
+                                if p.get("anchored")]},
                    authorized_by="owner")
         except Exception:
             pass

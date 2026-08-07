@@ -166,8 +166,14 @@ def test_an_unknown_provider_is_not_independent():
 
 
 def test_a_failed_publish_writes_no_receipt(monkeypatch):
-    """A row here asserts a proof exists. Writing one when publication
-    failed would make the table lie in the one direction it must not."""
+    """A row in ledger_anchors asserts a proof exists. Writing one when
+    publication failed would make the table lie in the one direction it
+    must not.
+
+    The failure IS now written — to its own table — so this asserts
+    against the path rather than against "nothing was posted at all".
+    Both halves matter: no receipt, and no silence either.
+    """
     class Broken(la.AnchorProvider):
         name = "broken"
         is_independent = True
@@ -185,14 +191,17 @@ def test_a_failed_publish_writes_no_receipt(monkeypatch):
                         lambda p: [] if "ledger_anchors" in p
                         else [{"sequence": 1, "row_hash": _h(1)}])
     monkeypatch.setattr(la.sb_clients, "sb_post_as_service",
-                        lambda p, b, prefer=None: posted.append(b))
+                        lambda p, b, prefer=None: posted.append((p, b)))
     try:
         out = la.anchor_business("b1", provider_name="broken")
     finally:
         la._PROVIDERS.clear()
         la._PROVIDERS.update(_saved)
     assert out["ok"] is False and out["anchored"] is False
-    assert posted == [], "no receipt may be written when publishing failed"
+    assert not [p for p, _ in posted if "/ledger_anchors" in p], \
+        "no receipt may be written when publishing failed"
+    assert [p for p, _ in posted if "/ledger_anchor_failures" in p], \
+        "a failed publish must be recorded somewhere, or it is invisible"
 
 
 def test_nothing_new_is_a_no_op_not_a_duplicate(monkeypatch):
@@ -502,3 +511,321 @@ def test_only_the_local_provider_claims_nothing():
     assert la.is_independent("local") is False
     assert la.is_independent("opentimestamps") is True
     assert la.is_independent("nonsense-provider") is False
+
+
+# ─── Two networks, independently ─────────────────────────────────────
+#
+# The reason for running two providers is not that either is likely to
+# be discredited. It is that a gap cannot be repaired: you cannot anchor
+# last month at last month's timestamp. So the tests that matter are the
+# ones about a provider failing WITHOUT taking the other down, and about
+# a provider that was down covering its own gap afterwards.
+
+_SQL2 = (_here.parent / "supabase"
+         / "APPLY-2026-08-07-anchor-multi-provider.sql").read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def registry():
+    """_PROVIDERS is module-level global state; leaking a fake into it
+    breaks unrelated tests later in the file."""
+    saved = dict(la._PROVIDERS)
+    yield
+    la._PROVIDERS.clear()
+    la._PROVIDERS.update(saved)
+
+
+class _FakeDB:
+    """Just enough PostgREST to exercise per-provider windows."""
+
+    def __init__(self, sequences):
+        self.audit = [{"sequence": i, "row_hash": _h(i)} for i in sequences]
+        self.anchors = []
+        self.failures = []
+        self.posts = []
+
+    def add_rows(self, sequences):
+        self.audit += [{"sequence": i, "row_hash": _h(i)} for i in sequences]
+
+    def get(self, path):
+        import re
+        if "/ledger_anchors" in path:
+            rows = self.anchors
+            m = re.search(r"provider=eq\.([^&]+)", path)
+            if m:
+                rows = [r for r in rows if r["provider"] == m.group(1)]
+            rows = sorted(rows, key=lambda r: r["last_sequence"], reverse=True)
+            lim = re.search(r"limit=(\d+)", path)
+            return rows[:int(lim.group(1))] if lim else rows
+        if "/ledger_anchor_failures" in path:
+            return list(self.failures)
+        if "/audit_log" in path:
+            m = re.search(r"sequence=gt\.(\d+)", path)
+            after = int(m.group(1)) if m else 0
+            return [r for r in self.audit if r["sequence"] > after]
+        return []
+
+    def post(self, path, body, prefer=None):
+        self.posts.append((path, body))
+        if "/ledger_anchors" in path:
+            self.anchors.append(dict(body))
+        elif "/ledger_anchor_failures" in path:
+            self.failures.append(dict(body))
+        return [body]
+
+    def receipts(self):
+        return [b for p, b in self.posts if "/ledger_anchors" in p]
+
+
+class _Down(la.AnchorProvider):
+    name = "down"
+    is_independent = True
+
+    def anchor(self, root):
+        return None, "network unreachable"
+
+
+class _Up(la.AnchorProvider):
+    name = "up"
+    is_independent = True
+
+    def __init__(self):
+        self.roots = []
+
+    def anchor(self, root):
+        self.roots.append(root)
+        return "ref-" + root[:8], None
+
+
+def _wire(monkeypatch, db):
+    monkeypatch.setattr(la.sb_clients, "sb_get_as_service", db.get)
+    monkeypatch.setattr(la.sb_clients, "sb_post_as_service", db.post)
+
+
+def test_the_plural_env_var_configures_both(monkeypatch):
+    monkeypatch.setenv("LEDGER_ANCHOR_PROVIDERS", "hedera,opentimestamps")
+    assert la.configured_providers() == ["hedera", "opentimestamps"]
+
+
+def test_the_old_singular_var_still_means_what_it_meant(monkeypatch):
+    """A deployment nobody has updated must keep its current behaviour
+    rather than quietly gaining a second network."""
+    monkeypatch.delenv("LEDGER_ANCHOR_PROVIDERS", raising=False)
+    monkeypatch.setenv("LEDGER_ANCHOR_PROVIDER", "opentimestamps")
+    assert la.configured_providers() == ["opentimestamps"]
+
+
+def test_nothing_configured_lands_on_local(monkeypatch):
+    for v in ("LEDGER_ANCHOR_PROVIDERS", "LEDGER_ANCHOR_PROVIDER"):
+        monkeypatch.delenv(v, raising=False)
+    assert la.configured_providers() == ["local"]
+
+
+def test_whitespace_and_repeats_do_not_double_anchor(monkeypatch):
+    """A doubled name would publish twice and collide on the per-provider
+    unique index — a config typo becoming an error."""
+    monkeypatch.setenv("LEDGER_ANCHOR_PROVIDERS", " hedera , hedera ,, ")
+    assert la.configured_providers() == ["hedera"]
+
+
+def test_one_provider_failing_does_not_stop_the_other(monkeypatch, registry):
+    """THE test for the whole arc. If this passes, an outage on one
+    network costs that network's anchor and nothing else."""
+    db = _FakeDB([1, 2, 3])
+    _wire(monkeypatch, db)
+    la.register_provider(_Down())
+    up = _Up()
+    la.register_provider(up)
+
+    out = la.anchor_business("b1", provider_name="down,up")
+
+    assert out["anchored"] is True, "the healthy network must still publish"
+    assert out["published_to"] == ["up"]
+    assert out["failed_providers"] == ["down"]
+    assert len(up.roots) == 1, "the healthy provider was actually called"
+    assert len(db.receipts()) == 1, "exactly one receipt - for the one that worked"
+    assert db.receipts()[0]["provider"] == "up"
+
+
+def test_the_order_of_failure_does_not_matter(monkeypatch, registry):
+    """Failing FIRST must not abort the loop before the healthy provider
+    is reached - the obvious way to get this wrong."""
+    db = _FakeDB([1, 2])
+    _wire(monkeypatch, db)
+    la.register_provider(_Down())
+    la.register_provider(_Up())
+    for order in ("down,up", "up,down"):
+        db.anchors.clear()
+        db.posts.clear()
+        out = la.anchor_business("b1", provider_name=order)
+        assert out["published_to"] == ["up"], f"order {order} lost the anchor"
+
+
+def test_a_provider_that_raises_does_not_take_the_other_with_it(
+        monkeypatch, registry):
+    """An adapter that breaks its own contract is a bug in the adapter,
+    not a reason to lose the other network's proof."""
+    class Explodes(la.AnchorProvider):
+        name = "explodes"
+        is_independent = True
+
+        def anchor(self, root):
+            raise RuntimeError("boom")
+
+    db = _FakeDB([1, 2])
+    _wire(monkeypatch, db)
+    la.register_provider(Explodes())
+    la.register_provider(_Up())
+    out = la.anchor_business("b1", provider_name="explodes,up")
+    assert out["published_to"] == ["up"]
+    assert out["failed_providers"] == ["explodes"]
+    assert any("boom" in str(f.get("error")) for f in db.failures)
+
+
+def test_a_failed_provider_catches_up_its_own_gap(monkeypatch, registry):
+    """WITHOUT per-provider windows this is where redundancy quietly
+    dies. The window would be "everything since the newest anchor by
+    ANYBODY", so the provider that failed on rows 1-3 would start its
+    next run at 4 and never come back for the gap - a permanent hole
+    that nothing would ever report.
+    """
+    db = _FakeDB([1, 2, 3])
+    _wire(monkeypatch, db)
+    down, up = _Down(), _Up()
+    la.register_provider(down)
+    la.register_provider(up)
+
+    la.anchor_business("b1", provider_name="down,up")     # up: [1,3]; down fails
+    assert up.roots, "first run should have published on the healthy network"
+
+    # The failing network recovers, and new rows have landed meanwhile.
+    db.add_rows([4, 5])
+    la._PROVIDERS["down"] = type("Recovered", (_Up,), {"name": "down"})()
+    out = la.anchor_business("b1", provider_name="down,up")
+
+    per = {p["provider"]: p for p in out["providers"]}
+    assert per["up"]["first_sequence"] == 4, "healthy provider resumes after its own anchor"
+    assert per["down"]["first_sequence"] == 1, "recovered provider must cover its gap"
+    assert per["down"]["last_sequence"] == 5
+
+
+def test_a_failure_never_lands_in_the_receipt_table(monkeypatch, registry):
+    """The invariant the whole design rests on: a row in ledger_anchors
+    asserts a proof exists."""
+    db = _FakeDB([1, 2])
+    _wire(monkeypatch, db)
+    la.register_provider(_Down())
+    la.anchor_business("b1", provider_name="down")
+    assert db.receipts() == []
+    assert len(db.failures) == 1
+    assert db.failures[0]["provider"] == "down"
+    assert "unreachable" in db.failures[0]["error"]
+    # The window it was trying to cover, so the gap is legible later.
+    assert db.failures[0]["first_sequence"] == 1
+    assert db.failures[0]["last_sequence"] == 2
+
+
+def test_an_unknown_provider_does_not_silently_anchor_locally(
+        monkeypatch, registry):
+    """get_provider() falls back to `local`, which is fine as a single
+    deliberate choice and dangerous as one entry in a list: the
+    deployment would believe it published to two networks while one of
+    them recorded nothing anywhere."""
+    db = _FakeDB([1])
+    _wire(monkeypatch, db)
+    out = la.anchor_business("b1", provider_name="hedra")   # typo on purpose
+    assert out["anchored"] is False
+    assert db.receipts() == [], "a typo must not become a local anchor"
+    assert "not a registered anchor provider" in db.failures[0]["error"]
+
+
+def test_a_local_anchor_never_fronts_a_run_that_reached_a_real_network(
+        monkeypatch, registry):
+    """The flattened keys are what existing callers read. They must point
+    at evidence when evidence exists."""
+    db = _FakeDB([1, 2])
+    _wire(monkeypatch, db)
+    la.register_provider(_Up())
+    out = la.anchor_business("b1", provider_name="local,up")
+    assert set(out["published_to"]) == {"local", "up"}
+    assert out["provider"] == "up", "the independent receipt is the face of the run"
+    assert out["independent"] is True
+
+
+def test_nothing_new_is_still_a_no_op_for_every_provider(monkeypatch, registry):
+    db = _FakeDB([1])
+    _wire(monkeypatch, db)
+    la.register_provider(_Up())
+    la.anchor_business("b1", provider_name="up")
+    before = len(db.receipts())
+    out = la.anchor_business("b1", provider_name="up")
+    assert len(db.receipts()) == before, "re-running must not duplicate a receipt"
+    assert out["anchored"] is False and "nothing new" in out["reason"]
+
+
+# ─── The schema those windows depend on ──────────────────────────────
+
+def test_the_unique_key_now_includes_the_provider():
+    """Two providers anchoring one window is redundancy, not duplication.
+    Without provider in the key the second one hits a constraint
+    violation and the redundancy silently never happens."""
+    flat = " ".join(_SQL2.split())
+    assert ("on public.ledger_anchors (business_id, provider, "
+            "first_sequence, last_sequence)") in flat
+
+
+def test_failures_have_their_own_table():
+    assert "create table if not exists public.ledger_anchor_failures" in _SQL2
+    assert ("revoke all on public.ledger_anchor_failures from anon, authenticated"
+            in _SQL2)
+
+
+def test_the_failures_table_does_not_touch_the_receipt_table():
+    """No status column, no soft-delete flag, nothing that would let a
+    failure be represented as a receipt."""
+    assert "alter table public.ledger_anchors add" not in _SQL2.lower()
+
+
+def test_the_ots_route_cannot_hand_back_a_hedera_receipt():
+    """A Hedera receipt is JSON, not a .ots file. Unfiltered, this route
+    would base64-decode one and serve the garbage as a proof file -
+    which is worse than a 404."""
+    src = (_here.parent / "audit_log.py").read_text(encoding="utf-8")
+    body = src.split("def download_ots(")[1].split("\n@router")[0]
+    assert "provider=eq.opentimestamps" in body
+
+
+def test_health_reports_each_provider_separately(monkeypatch):
+    """One aggregate verdict would hide the case that matters most: one
+    network fine, the other dead."""
+    monkeypatch.setenv("LEDGER_ANCHOR_PROVIDERS", "hedera,opentimestamps")
+    monkeypatch.setattr(la.sb_clients, "sb_get_as_service", lambda p: [])
+    out = la.anchor_health()
+    assert [p["provider"] for p in out["providers"]] == ["hedera", "opentimestamps"]
+    assert all(p["verdict"] == "never" for p in out["providers"])
+
+
+def test_health_survives_the_failures_table_not_existing(monkeypatch):
+    """Before the migration runs the table is absent, and the honest
+    answer is 'I cannot see failures', not a 500 on the operator's
+    dashboard."""
+    def boom(path):
+        if "ledger_anchor_failures" in path:
+            raise RuntimeError("relation ledger_anchor_failures does not exist")
+        return []
+    monkeypatch.setattr(la.sb_clients, "sb_get_as_service", boom)
+    out = la.anchor_health()
+    assert out["total_failures"] == 0
+
+
+def test_health_queries_use_the_Z_timestamp_form(monkeypatch):
+    """isoformat() gives '+00:00', whose '+' becomes a space in a query
+    string - the filter then matches nothing and a health check reports
+    'no failures' precisely when it has gone blind."""
+    seen = []
+    monkeypatch.setattr(la.sb_clients, "sb_get_as_service",
+                        lambda p: seen.append(p) or [])
+    la.anchor_health()
+    stamped = [p for p in seen if "gte." in p]
+    assert stamped, "the window filters should be present"
+    assert all("Z" in p and "+00:00" not in p for p in stamped)
