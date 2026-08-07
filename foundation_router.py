@@ -133,6 +133,14 @@ async def accept_entity_type(body: AcceptEntityBody,
     return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
 
+@router.get("/state-coverage")
+async def state_coverage(user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    """Which states have verified filing data. Not business-scoped — it is
+    reference data, so no owner check, but still authenticated."""
+    result = await fa.list_state_coverage()
+    return JSONResponse(result, status_code=200 if result.get("ok") else 500)
+
+
 @router.get("/state-filing/{state_code}")
 async def state_filing(state_code: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
     result = await fa.get_state_filing_info(state_code)
