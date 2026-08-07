@@ -142,6 +142,14 @@ _REQUIRED_FIELDS = ("practitioner_name", "license_number", "npi")
 
 
 def practitioner_info(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Practitioner block for a superbill.
+
+    Reads only settings.superbill. The EIN is the same federal number the
+    1099 panel and Foundation Phase 2 collect, but the fallback to the shared
+    identity store happens in reports_router — this module's ALLOWED_TABLES
+    wall stays exactly as narrow as it is, and a locally-saved EIN still wins
+    (a practice can legitimately bill under a different TIN than the entity).
+    """
     sp = ((settings or {}).get("superbill") or {})
     out = {k: str(sp.get(k) or "").strip() for k in _PRACTITIONER_FIELDS}
     out["complete"] = all(out[k] for k in _REQUIRED_FIELDS)
