@@ -513,12 +513,54 @@ def get_provider(name: Optional[str] = None) -> AnchorProvider:
     return _PROVIDERS.get(key, _PROVIDERS["local"])
 
 
-# How long a provider may go without a successful anchor before the
-# health surface calls it stale. Anchoring is owner-triggered today, so
-# age alone is NOT a fault — the surface says so in those words. This
-# exists so that once something does schedule anchoring, silence starts
-# being visible rather than being mistaken for calm.
-STALE_AFTER_HOURS = 48
+# ─── Cadence ─────────────────────────────────────────────────────────
+#
+# WHAT SILENCE MEANS DEPENDS ON WHETHER ANYTHING IS DRIVING THIS.
+# When anchoring was owner-triggered only, a provider going quiet meant
+# "nobody asked" and calling that a fault would have been crying wolf.
+# With the sweep running, the same silence means something IS wrong,
+# because the schedule should have published. So staleness is derived
+# from the interval rather than being a fixed constant — the health
+# surface stays honest across both worlds instead of hard-coding the
+# assumption that was true on the day it was written.
+
+DEFAULT_INTERVAL_HOURS = 6
+UNSCHEDULED_STALE_HOURS = 48
+
+
+def schedule_enabled() -> bool:
+    """Kill switch: LEDGER_ANCHOR_SCHEDULE=off."""
+    return (os.environ.get("LEDGER_ANCHOR_SCHEDULE") or "on").strip().lower() != "off"
+
+
+def schedule_interval_hours() -> float:
+    """How often the sweep runs. Six hours by default.
+
+    The tradeoff is exposure, not money: a record is not provable until
+    it is anchored, so the interval is the longest a new row can sit
+    unprovable. Hedera costs ~$0.0001 an anchor, so cost does not argue
+    for a longer gap — but the OpenTimestamps calendars are free public
+    infrastructure, and hammering them per-tenant per-hour would be rude
+    for a gain nobody would notice.
+    """
+    try:
+        v = float(os.environ.get("LEDGER_ANCHOR_INTERVAL_HOURS")
+                  or DEFAULT_INTERVAL_HOURS)
+    except (TypeError, ValueError):
+        return DEFAULT_INTERVAL_HOURS
+    return v if v > 0 else DEFAULT_INTERVAL_HOURS
+
+
+def stale_after_hours() -> float:
+    """When silence becomes a finding rather than a fact."""
+    if not schedule_enabled():
+        return UNSCHEDULED_STALE_HOURS
+    # Two missed runs. One missed run is a blip — a redeploy, a
+    # leadership handover — and flagging it would train the operator to
+    # ignore the page, which is the failure mode this whole surface is
+    # trying to avoid. The floor keeps a very tight interval from making
+    # every ordinary gap look like an outage.
+    return max(2 * schedule_interval_hours(), 6)
 
 
 def configured_providers(explicit: Optional[str] = None) -> List[str]:
@@ -912,6 +954,7 @@ def anchor_health(*, days: int = 7, recent: int = 25) -> Dict[str, Any]:
     """
     now = datetime.now(timezone.utc)
     since = _utc_z(now - timedelta(days=int(days)))
+    stale_hrs = stale_after_hours()
 
     wins = _safe_get(
         f"/ledger_anchors?anchored_at=gte.{since}"
@@ -956,7 +999,7 @@ def anchor_health(*, days: int = 7, recent: int = 25) -> Dict[str, Any]:
             verdict = "failing"
         elif not ok_at:
             verdict = "never"
-        elif now - ok_at > timedelta(hours=STALE_AFTER_HOURS):
+        elif now - ok_at > timedelta(hours=stale_hrs):
             verdict = "stale"
         else:
             verdict = "healthy"
@@ -990,8 +1033,27 @@ def anchor_health(*, days: int = 7, recent: int = 25) -> Dict[str, Any]:
         # accept, whatever the verdicts above say.
         "any_independent": any(p["independent"] for p in providers),
         "window_days": int(days),
-        "stale_after_hours": STALE_AFTER_HOURS,
+        "stale_after_hours": stale_hrs,
+        # Whether anything is DRIVING anchoring. The surface needs this to
+        # know what silence means: without it, "quiet" is just nobody
+        # asking; with it, "quiet" is the schedule having failed to run.
+        "scheduled": schedule_enabled(),
+        "interval_hours": schedule_interval_hours(),
+        "last_sweep": _last_sweep(),
         "total_successes": len(wins),
         "total_failures": len(fails),
         "generated_at": _utc_z(now),
     }
+
+
+def _last_sweep() -> Optional[Dict[str, Any]]:
+    """What the most recent scheduled sweep did, if one has run.
+
+    Imported late so the scheduler can depend on this module without
+    this module depending on the scheduler.
+    """
+    try:
+        import anchor_scheduler
+        return anchor_scheduler.LAST_SWEEP
+    except Exception:
+        return None
