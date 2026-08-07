@@ -59,24 +59,47 @@ def _client(user_id=None) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-class EveryGatedAgentTests(unittest.TestCase):
-    """Covers all nine paths in one sweep, driven off the dispatch table
-    rather than a hand-written list — so an agent added to the table
-    without a lock on its endpoint fails here instead of in the wild."""
+AGENT_MODULES = ("session_agent", "nurture_agent", "contract_agent",
+                 "payment_agent", "module_agent", "growth_engine",
+                 "notification_engine")
 
-    def test_every_dispatched_path_rejects_an_anonymous_post(self):
+
+class EveryAgentEndpointTests(unittest.TestCase):
+    """The invariant, not a list: EVERY POST route in EVERY agent module
+    must refuse an anonymous caller.
+
+    Written this way deliberately. A hand-written list of paths goes
+    stale the moment somebody adds an endpoint, and the new one is
+    exactly the one nobody remembers to lock — which is how
+    /agents/nurture/run came to sweep a real contact book for anyone who
+    knew a uuid. Discover the routes from the routers instead, so a new
+    door has to be shut before this passes.
+
+    GET is excluded: the /health endpoints are public by design and
+    return booleans about configuration, never business data.
+    """
+
+    def test_no_post_route_accepts_an_anonymous_caller(self):
         import importlib
         from fastapi import FastAPI as _F
-        for path, (mod_name, _fn) in chief_of_staff._AGENTS_IN_PROCESS.items():
+        checked = []
+        for mod_name in AGENT_MODULES:
             mod = importlib.import_module(mod_name)
             app = _F()
             app.include_router(mod.router)
-            c = TestClient(app, raise_server_exceptions=False)
-            r = c.post(path, json={"business_id": BIZ_ID})
-            # 200 would mean an anonymous caller just made a business act.
-            self.assertNotEqual(r.status_code, 200, f"{path} IS OPEN")
-            self.assertIn(r.status_code, (401, 403, 422),
-                          f"{path} -> {r.status_code}")
+            client = TestClient(app, raise_server_exceptions=False)
+            for route in mod.router.routes:
+                if "POST" not in getattr(route, "methods", set()) or "{" in route.path:
+                    continue  # path-param routes need a real id to reach
+                r = client.post(route.path, json={"business_id": BIZ_ID,
+                                                  "contact_id": "c-1"})
+                self.assertNotEqual(r.status_code, 200, f"{route.path} IS OPEN")
+                self.assertIn(r.status_code, (401, 403, 422),
+                              f"{route.path} -> {r.status_code}")
+                checked.append(route.path)
+        # Guard against the sweep quietly checking nothing at all.
+        self.assertGreaterEqual(len(checked), 12,
+                                f"only swept {len(checked)}: {checked}")
 
 
 class EndpointAuthTests(unittest.TestCase):
@@ -152,18 +175,31 @@ class ChiefDispatchTests(unittest.IsolatedAsyncioTestCase):
         loopback.assert_not_awaited()
         self.assertEqual(out, {"drafts_created": 1})
 
-    async def test_ungated_paths_still_use_the_loopback(self):
-        # This used /agents/nurture/run until that was gated too. A path
-        # NOT in the table must still take the HTTP route, or the
-        # dispatcher has quietly swallowed every agent in the app.
-        self.assertNotIn("/agents/nurture/preview",
-                         chief_of_staff._AGENTS_IN_PROCESS)
+    async def test_unknown_paths_still_use_the_loopback(self):
+        # Started as /agents/nurture/run, then /agents/nurture/preview —
+        # both got gated in turn, which is the point. The fallback itself
+        # must survive, or the dispatcher has swallowed the whole app.
         loopback = AsyncMock(return_value={"drafts_created": 3})
         with patch.object(chief_of_staff, "_loopback_post", new=loopback):
             out = await chief_of_staff._dispatch_agent(
-                "/agents/nurture/preview", {"business_id": BIZ_ID})
+                "/agents/something/not-in-the-table", {"business_id": BIZ_ID})
         loopback.assert_awaited_once()
         self.assertEqual(out, {"drafts_created": 3})
+
+    async def test_previews_run_in_process_with_their_contact(self):
+        # contract/preview was ALREADY gated while Chief loopbacked it,
+        # so this call had been failing in production exactly like
+        # contract/generate. Both args must arrive.
+        import contract_agent
+        loopback = AsyncMock(return_value={"should": "not be used"})
+        with patch.object(contract_agent, "run_contract_preview",
+                          new=AsyncMock(return_value={"subject": "S"})) as run, \
+             patch.object(chief_of_staff, "_loopback_post", new=loopback):
+            out = await chief_of_staff._dispatch_preview(
+                "/agents/contract/preview", BIZ_ID, "contact-9")
+        run.assert_awaited_once_with(BIZ_ID, "contact-9")
+        loopback.assert_not_awaited()
+        self.assertEqual(out, {"subject": "S"})
 
     async def test_every_gated_path_resolves_to_a_real_function(self):
         # The table is strings on both sides. A typo in a module or

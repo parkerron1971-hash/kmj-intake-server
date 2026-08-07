@@ -428,17 +428,16 @@ async def run_nurture_sweep(business_id: str) -> Dict[str, Any]:
         return result
 
 
-@router.post("/agents/nurture/preview")
-async def nurture_preview(req: NurturePreviewRequest):
+async def run_nurture_preview(business_id: str, contact_id: str) -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+        businesses = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
         if not businesses:
             raise HTTPException(404, "Business not found")
-        contacts = await _sb(client, "GET", f"/contacts?id=eq.{req.contact_id}&select=*&limit=1")
+        contacts = await _sb(client, "GET", f"/contacts?id=eq.{contact_id}&select=*&limit=1")
         if not contacts:
             raise HTTPException(404, "Contact not found")
         events = await _sb(client, "GET",
-            f"/events?contact_id=eq.{req.contact_id}&order=created_at.desc&limit=5") or []
+            f"/events?contact_id=eq.{contact_id}&order=created_at.desc&limit=5") or []
         result = await _nurture_one_contact(client, businesses[0], contacts[0], events, dry_run=True)
         if not result:
             raise HTTPException(500, "Failed to generate preview")
@@ -446,7 +445,10 @@ async def nurture_preview(req: NurturePreviewRequest):
 
 
 @router.post("/agents/health-decay/run")
-async def health_decay_run(req: NurtureRunRequest):
+async def health_decay_run(req: NurtureRunRequest,
+                            user: AuthedUser = Depends(require_user)):
+    """Admin only. Rewrites every contact's health score."""
+    require_business_admin(req.business_id, user)
     async with httpx.AsyncClient() as client:
         businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
         if not businesses:
@@ -474,3 +476,10 @@ async def nurture_run(req: NurtureRunRequest, user: AuthedUser = Depends(require
     rather than merely knowing a uuid. Chief calls run_nurture_sweep() in-process."""
     require_business_admin(req.business_id, user)
     return await run_nurture_sweep(req.business_id)
+
+@router.post("/agents/nurture/preview")
+async def nurture_preview(req: NurturePreviewRequest, user: AuthedUser = Depends(require_user)):
+    """Admin only. Drafts against a named contact; Chief calls
+    run_nurture_preview() in-process."""
+    require_business_admin(req.business_id, user)
+    return await run_nurture_preview(req.business_id, req.contact_id)

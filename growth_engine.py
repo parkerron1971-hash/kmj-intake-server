@@ -775,7 +775,10 @@ def _bucket_of(score: int) -> str:
 
 
 @router.post("/agents/growth/health-report")
-async def growth_health_report(req: GrowthRequest):
+async def growth_health_report(req: GrowthRequest,
+                               user: AuthedUser = Depends(require_user)):
+    """Admin only. Reads the whole contact book's health."""
+    require_business_admin(req.business_id, user)
     async with httpx.AsyncClient() as client:
         contacts = await _sb(client, "GET",
             f"/contacts?business_id=eq.{req.business_id}"

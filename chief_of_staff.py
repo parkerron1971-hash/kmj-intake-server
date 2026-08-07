@@ -2987,6 +2987,35 @@ _AGENTS_IN_PROCESS = {
 }
 
 
+# Previews take a CONTACT as well as a business, so they cannot share
+# the single-argument table above.
+_PREVIEWS_IN_PROCESS = {
+    "/agents/nurture/preview":  ("nurture_agent",  "run_nurture_preview"),
+    "/agents/contract/preview": ("contract_agent", "run_contract_preview"),
+}
+
+
+async def _dispatch_preview(path: str, business_id: str,
+                            contact_id: str) -> Optional[Dict]:
+    """Targeted single-contact drafts, in-process for the same reason as
+    the sweeps: both previews are admin-gated now, and a loopback POST
+    carries no credential. contract/preview was ALREADY gated while
+    Chief loopbacked it, so this call has been failing exactly like
+    contract/generate was."""
+    entry = _PREVIEWS_IN_PROCESS.get(path)
+    if not entry:
+        return await _loopback_post(path, {"business_id": business_id,
+                                           "contact_id": contact_id})
+    module_name, fn_name = entry
+    try:
+        import importlib
+        mod = importlib.import_module(module_name)
+        return await getattr(mod, fn_name)(business_id, contact_id)
+    except Exception as e:
+        logger.warning(f"In-process {path} failed: {e}")
+        return None
+
+
 async def _dispatch_agent(path: str, body: Dict) -> Optional[Dict]:
     """Gated agents run in-process; anything else still loopbacks.
 
@@ -3048,10 +3077,7 @@ async def handle_run_agent(client, biz, action) -> Dict:
         else:
             preview_path = "/agents/contract/preview"
 
-        data = await _loopback_post(preview_path, {
-            "business_id": biz["id"],
-            "contact_id": target_contact,
-        })
+        data = await _dispatch_preview(preview_path, biz["id"], target_contact)
         if not data:
             return _fail("run_agent", f"{agent} preview unreachable")
 
