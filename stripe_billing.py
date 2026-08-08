@@ -490,9 +490,13 @@ async def create_credit_checkout(body: CreditCheckoutBody,
                                  user: AuthedUser = Depends(require_user)):
     """Mint a one-time-payment Checkout Session for a credit pack."""
     import credit_ledger
-    p = credit_ledger.CREDIT_PACKS.get((body.pack or "").strip().lower())
+    # credit_packs() not the import-time CREDIT_PACKS snapshot: one
+    # source of truth, so a repriced pack can never be sold at the old
+    # unit count while the meter grants the new one.
+    _packs = credit_ledger.credit_packs()
+    p = _packs.get((body.pack or "").strip().lower())
     if not p:
-        raise HTTPException(400, f"pack must be one of {sorted(credit_ledger.CREDIT_PACKS)}")
+        raise HTTPException(400, f"pack must be one of {sorted(_packs)}")
     if not os.environ.get("STRIPE_SECRET_KEY", "").strip():
         raise HTTPException(409, "Payments aren't configured yet — credits can't be "
                                  "purchased until Stripe is connected.")
@@ -563,7 +567,7 @@ async def billing_usage(biz: str, user: AuthedUser = Depends(require_user)) -> D
     _require_owner_of(user, biz_row)
     s = usage_metering.usage_summary(biz, biz_row)
     s["credits"] = credit_ledger.summary(biz)
-    s["packs"] = credit_ledger.CREDIT_PACKS
+    s["packs"] = credit_ledger.credit_packs()
     return s
 
 
