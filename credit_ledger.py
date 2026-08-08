@@ -22,15 +22,33 @@ import logging
 from typing import Any, Dict, Optional
 
 import sb_clients
+import pricing_config
 
 logger = logging.getLogger("credit_ledger")
 
-# Packs — LOCKED by Kevin 2026-07-12 (spec §7.1): cents charged → units.
-CREDIT_PACKS: Dict[str, Dict[str, int]] = {
-    "small":  {"cents": 1000, "units": 100},
-    "medium": {"cents": 2500, "units": 275},
-    "large":  {"cents": 5000, "units": 600},
-}
+
+def credit_packs() -> Dict[str, Dict[str, int]]:
+    """Top-up packs — cents charged → units granted, live from config.
+
+    ⚠ THE UNITS ARE STILL THE 2026-07-12 RULED NUMBERS AND NO LONGER
+    COHERE (flagged to Kevin 2026-08-08; deliberately NOT changed — a
+    ruling of his is his to move). They were sized against the OLD
+    300/1000/3000 tank. Against the new 3,000/10,000/25,000 tank and the
+    2026-08-08 action prices:
+
+        $10 /  100u — cannot buy one section rewrite (120)
+        $25 /  275u — cannot buy one build (600)
+        $50 /  600u — buys exactly one build, with nothing left over
+
+    A top-up that cannot complete a single action is a bad checkout.
+    Roughly 10x (1000 / 2750 / 6000) would restore the original intent.
+    The env names are live, so the fix is a value change, not a deploy."""
+    return pricing_config.credit_packs()
+
+
+# Back-compat snapshot for import-time readers. Prefer credit_packs() —
+# this cannot see an env change made after import.
+CREDIT_PACKS: Dict[str, Dict[str, int]] = pricing_config.credit_packs()
 
 
 def _month_key() -> str:

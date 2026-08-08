@@ -60,12 +60,18 @@ def test_business_cap_dormant_then_enforced(fake, monkeypatch):
 
 
 def test_chief_metering_month_window_and_cap(fake, monkeypatch):
-    """Pricing v2 LOCKED semantics: starter allotment 300, then PREPAID
-    credits — not postpaid overage. Past the allowance you draw down credits;
-    with none left you stop ("out_of_units"), and a practitioner hard cap
-    stops you at the allowance even when credits remain. Nothing bills as
-    overage anymore, so the legacy postpaid fields must stay zeroed."""
+    """Prepaid semantics: allowance first, then credits — never postpaid
+    overage. Past the allowance you draw down credits; with none left you
+    stop ("out_of_units"), and a practitioner hard cap stops you at the
+    allowance even when credits remain. Nothing bills as overage anymore,
+    so the legacy postpaid fields must stay zeroed.
+
+    The allowance is pinned to 300 via the dial rather than by generating
+    3,000 rows: the shipped default moved to 3,000 on 2026-08-08, and
+    what this test is about is the DRAW-DOWN ORDER, not the tank size.
+    Setting it here also proves the override reaches usage_summary."""
     import usage_metering as um
+    monkeypatch.setenv("CREDITS_STARTER_CREDITS", "300")
     fb = fake
     _biz(fb, "b1", plan="price_starter")
     now = datetime.now(timezone.utc)
@@ -102,8 +108,9 @@ def test_chief_metering_month_window_and_cap(fake, monkeypatch):
     assert s2["credits_balance"] == 495                          # 500 - 5
     assert not s2["blocked"] and bl.chief_can_send("b1") is True
 
-    # Weighted: a full site build = 25 units. Re-reading GROWS the same
-    # month's burn row rather than stacking a second one.
+    # Weighted: a full site build costs build_base(). Re-reading GROWS
+    # the same month's burn row rather than stacking a second one.
+    monkeypatch.setenv("PRICE_BUILD_BASE", "25")   # keep the arithmetic legible
     for i in range(8):
         fb.rows("api_usage").append({"id": f"b{i}", "business_id": "b1",
                                      "created_at": this_month,
@@ -124,8 +131,12 @@ def test_chief_metering_month_window_and_cap(fake, monkeypatch):
 
 def test_chief_llm_respects_cap_gracefully(fake, monkeypatch):
     """Practitioner hard cap: at/over allotment with usage_hard_cap set,
-    AI interactions soft-block (Arc 19 rule, Pricing v2 allotment)."""
+    AI interactions soft-block (Arc 19 rule).
+
+    Allowance pinned to 300 via the dial — the behaviour under test is
+    the soft-block, not the shipped tank size."""
     fb = fake
+    monkeypatch.setenv("CREDITS_STARTER_CREDITS", "300")
     fb.rows("businesses").append({
         "id": "b1", "owner_id": "owner1", "is_active": True, "name": "b1",
         "subscription_status": "active", "subscription_plan": "price_starter",
@@ -198,11 +209,17 @@ def test_invite_requires_owner_and_valid_role(fake):
 
 
 def test_build_marker_weights(fake, monkeypatch):
-    """Weight-hole fix (2026-07-30): a shipped full build bills as ONE
-    25-unit marker row (/composer/compose); the authoring calls inside it
-    (canvas, canvas-review, builder-v2 + eyes, spec) are weight 0 so a
-    build never bills per-LLM-call. Hero refresh stays 5, chat stays 1."""
+    """Weight-hole fix (2026-07-30) at the 2026-08-08 config prices: a
+    shipped full build bills as ONE marker row (/composer/compose); the
+    authoring calls inside it (canvas, canvas-review, builder-v2 + eyes,
+    spec) are priced 0 so a build never bills per-LLM-call.
+
+    Prices come from pricing_config rather than pinned literals — they
+    are dials now, and a test hardcoding 25 would only have to be
+    rewritten on the first tuning pass. What IS pinned is the shape:
+    internals free, marker billable, chat is the unit."""
     import usage_metering as um
+    import pricing_config as pc
     fb = fake
     _biz(fb, "b1", plan="price_starter")
     now_iso = datetime.now(timezone.utc).replace(day=2).isoformat()
@@ -214,8 +231,50 @@ def test_build_marker_weights(fake, monkeypatch):
     for i, ep in enumerate(build_rows + extra_rows):
         fb.rows("api_usage").append({"id": f"w{i}", "business_id": "b1",
                                      "created_at": now_iso, "endpoint": ep})
-    # 25 (marker) + 0×6 (build internals) + 5 (hero) + 1 + 1 (chat) = 32
-    assert um.weighted_usage_this_month("b1") == 32
-    assert um.weight_for("/composer/compose") == 25
-    assert um.weight_for("/composer/atelier") == 1   # select-to-talk edit
-    assert um.weight_for("/director/build") == 25    # legacy rows still count
+    expected = (pc.build_base()      # marker row, no explicit units
+                + 0 * 6              # build internals
+                + pc.hero_regen()    # hero refresh
+                + 1                  # /ai/proxy -> DEFAULT_WEIGHT
+                + pc.chat_price())   # chat turn
+    assert um.weighted_usage_this_month("b1") == expected
+    assert um.weight_for("/composer/compose") == pc.build_base()
+    assert um.weight_for("/composer/atelier") == pc.section_rewrite()
+    assert um.weight_for("/director/build") == pc.build_base()  # legacy rows
+    # Build internals must stay FREE — the marker carries the whole bill.
+    for internal in ("/composer/canvas", "/composer/builder-v2",
+                     "/composer/spec", "/composer/drl/dro", "/vision/grade"):
+        assert um.weight_for(internal) == 0, internal
+
+
+def test_row_units_override_the_endpoint_price(fake):
+    """A row carrying explicit `units` is priced by that value, not by
+    its endpoint — the mechanism that makes base+per-section, revamp,
+    and in-build-vs-standalone atelier expressible at all.
+
+    0 must be honoured (build internals are deliberately free), so the
+    read path tests `is not None`, never truthiness."""
+    import usage_metering as um
+    import pricing_config as pc
+    fb = fake
+    _biz(fb, "b1", plan="price_starter")
+    now_iso = datetime.now(timezone.utc).replace(day=2).isoformat()
+    # A 5-section build, an in-build atelier fragment (free), and a
+    # standalone Studio rewrite (charged) — all three would be mispriced
+    # by an endpoint-only lookup.
+    fb.rows("api_usage").extend([
+        {"id": "u1", "business_id": "b1", "created_at": now_iso,
+         "endpoint": "/composer/compose", "units": 1100},
+        {"id": "u2", "business_id": "b1", "created_at": now_iso,
+         "endpoint": "/composer/atelier", "units": 0},
+        {"id": "u3", "business_id": "b1", "created_at": now_iso,
+         "endpoint": "/composer/atelier", "units": pc.section_rewrite()},
+    ])
+    assert um.weighted_usage_this_month("b1") == 1100 + pc.section_rewrite()
+    assert um.weight_for_row({"endpoint": "/composer/compose", "units": 0}) == 0
+    # A NULL units column falls back to the endpoint table — every row
+    # written before 2026-08-08.
+    assert (um.weight_for_row({"endpoint": "/composer/hero", "units": None})
+            == pc.hero_regen())
+    # A malformed value must not crash the meter — fall back, don't raise.
+    assert (um.weight_for_row({"endpoint": "/composer/hero", "units": "junk"})
+            == pc.hero_regen())

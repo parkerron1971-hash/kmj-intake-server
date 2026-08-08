@@ -73,6 +73,27 @@ def require_units(business_id: str) -> None:
     })
 
 
+def require_chat_fair_use(business_id: str) -> None:
+    """The per-day runaway brake on Chief chat (see
+    usage_metering.chat_fair_use_ok for the full reasoning).
+
+    A 429, NOT a 402: this is rate limiting, not billing. The
+    practitioner has not run out of anything and must never be shown an
+    upgrade prompt for tripping it — a human at the opening ceiling of
+    250 turns/day is not a customer to upsell, it is a loop to stop.
+    The Retry-After header is the honest answer: the window is the UTC
+    day, so the brake lifts at midnight."""
+    import usage_metering
+    if usage_metering.chat_fair_use_ok(business_id):
+        return
+    raise HTTPException(status_code=429, detail={
+        "error": "chat_daily_limit",
+        "message": ("Chief has hit today's message limit for this "
+                    "business. It resets at midnight UTC — if this "
+                    "wasn't you, something may be sending on a loop."),
+    }, headers={"Retry-After": "3600"})
+
+
 def require_live_access(business_id: str) -> None:
     """The 402 gate for a LOCKED subscription (canceled / trial expired).
     Until now access_state was advisory — the frontend showed the paywall
@@ -100,8 +121,15 @@ def require_live_access(business_id: str) -> None:
 
 
 def _month_start_iso() -> str:
+    """First instant of THIS month (UTC), Z form.
+
+    Second copy of the meter-reads-zero bug (see the long note on
+    usage_metering._month_start_iso): the bare .isoformat() emitted
+    `+00:00`, which decodes as a space in a query string and made
+    chief_messages_this_month() below return 0 for every business."""
     now = datetime.now(timezone.utc)
-    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    return (now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+               .isoformat().replace("+00:00", "Z"))
 
 
 def owner_best_plan_row(owner_id: str) -> Optional[Dict[str, Any]]:

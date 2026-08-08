@@ -500,8 +500,8 @@ def billing_readiness(_owner=Depends(require_owner)) -> Dict[str, Any]:
             unsubscribed.append(b["id"])
     month_usage = sb_clients.sb_get_as_service(
         f"/api_usage?created_at=gte.{usage_metering._month_start_iso()}"
-        f"&select=endpoint&limit=10000") or []
-    weighted = sum(usage_metering.weight_for(r.get("endpoint")) for r in month_usage)
+        f"&select=endpoint,units&limit=10000") or []
+    weighted = sum(usage_metering.weight_for_row(r) for r in month_usage)
 
     tiers_env = {p: bool((os.environ.get(f"STRIPE_PRICE_ID_{p.upper()}") or "").strip())
                  for p in feature_gates.PLANS}
