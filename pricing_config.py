@@ -98,14 +98,37 @@ def tier_credits() -> Dict[str, int]:
 # ─── Action prices ───────────────────────────────────────────────────
 
 def build_base() -> int:
-    """A build's fixed price, before per-section. ~3-section build = 600
-    at the opening defaults = 20% of the Starter tank."""
+    """A build's price INCLUDING the first build_included_sections()
+    sections. At the opening defaults a typical ~3-section build is 600
+    — 20% of the Starter tank, so the first build leaves plenty behind
+    (3,000 -> 2,400)."""
     return _dial("BUILD_BASE", "PRICE_", 600)
 
 
+def build_included_sections() -> int:
+    """How many sections build_base() already covers.
+
+    ADDED 2026-08-08 (second pass) TO MAKE KEVIN'S OWN ARITHMETIC TRUE.
+    The first implementation charged base + sections x per_section for
+    EVERY section, which made a 3-section build cost 900 — 30% of the
+    Starter tank, not the 20% / "3,000 -> 2,400" the ruling states, and
+    it left the $10 pack unable to afford a single section rewrite after
+    one build. Set to 0 for a pure base-plus-every-section model."""
+    return _dial("BUILD_INCLUDED_SECTIONS", "PRICE_", 3)
+
+
 def build_per_section() -> int:
-    """Charged per composed section ON TOP of build_base."""
+    """Charged per composed section BEYOND build_included_sections()."""
     return _dial("BUILD_PER_SECTION", "PRICE_", 100)
+
+
+def price_for_build(sections: int) -> int:
+    """What a full site build costs, given its composed section count.
+
+    The single place this arithmetic lives — call sites must not
+    re-derive it, or the two copies drift the moment a dial moves."""
+    extra = max(0, int(sections or 0) - build_included_sections())
+    return build_base() + extra * build_per_section()
 
 
 def revamp_price() -> int:
@@ -254,31 +277,115 @@ def unit_weights() -> Dict[str, int]:
 DEFAULT_WEIGHT = 1
 
 
+# ─── Tier list prices ────────────────────────────────────────────────
+# Needed here (not just in Stripe) to compute the per-credit rate that
+# the pack guard below compares against.
+
+def tier_price_cents() -> Dict[str, int]:
+    """Monthly list price per tier, in cents. `founder` is the launch
+    cohort's Professional price locked for the subscription's life — it
+    buys the Professional grant, so it is the CHEAPEST subscription
+    credit on the platform and therefore the binding constraint on how
+    cheap a top-up pack may be."""
+    return {
+        "starter":      _dial("TIER_STARTER_CENTS", "PRICE_", 7900),
+        "professional": _dial("TIER_PROFESSIONAL_CENTS", "PRICE_", 19900),
+        "practice":     _dial("TIER_PRACTICE_CENTS", "PRICE_", 39900),
+        "founder":      _dial("TIER_FOUNDER_CENTS", "PRICE_", 14900),
+    }
+
+
+def tier_cents_per_credit() -> Dict[str, float]:
+    """What one credit costs inside each subscription."""
+    prices, credits = tier_price_cents(), tier_credits()
+    grant = dict(credits)
+    grant["founder"] = credits["professional"]   # founder = the pro grant
+    return {t: (prices[t] / grant[t]) for t in prices if grant.get(t)}
+
+
 # ─── Credit packs ────────────────────────────────────────────────────
 #
-# ⚠ FLAGGED TO KEVIN, NOT CHANGED (2026-08-08). These units were RULED
-# in the Pricing v2 spec (§7) against the OLD 300/1000/3000 tank, and I
-# do not silently overwrite a ruling. At the new 3,000/10,000/25,000
-# scale they no longer cohere:
+# RESCALED 2026-08-08 (Kevin's ruling, second pass) to 1000 / 2750 /
+# 6000 units. The previous numbers were sized against the OLD
+# 300/1000/3000 tank and could not complete a single action at the new
+# scale — the $10 pack could not buy one section rewrite and the $50
+# pack bought exactly one build with nothing left. A top-up that cannot
+# finish one action is a bad checkout.
 #
-#   $10 / 100u   — cannot buy one section rewrite (120)
-#   $25 / 275u   — cannot buy one build (600)
-#   $50 / 600u   — buys exactly one build, nothing left over
-#
-# A top-up that cannot complete a single action is a bad checkout. The
-# defaults below are the ruled numbers, unchanged; the env names are
-# live, so a decision is a value change. Roughly 10x (1000/2750/6000)
-# would restore the original intent — Kevin's call.
+# Cents are unchanged: the packs stay $10 / $25 / $50.
 
 def credit_packs() -> Dict[str, Dict[str, int]]:
     return {
         "small":  {"cents": _dial("PACK_SMALL_CENTS", "PRICE_", 1000),
-                   "units": _dial("PACK_SMALL_UNITS", "PRICE_", 100)},
+                   "units": _dial("PACK_SMALL_UNITS", "PRICE_", 1000)},
         "medium": {"cents": _dial("PACK_MEDIUM_CENTS", "PRICE_", 2500),
-                   "units": _dial("PACK_MEDIUM_UNITS", "PRICE_", 275)},
+                   "units": _dial("PACK_MEDIUM_UNITS", "PRICE_", 2750)},
         "large":  {"cents": _dial("PACK_LARGE_CENTS", "PRICE_", 5000),
-                   "units": _dial("PACK_LARGE_UNITS", "PRICE_", 600)},
+                   "units": _dial("PACK_LARGE_UNITS", "PRICE_", 6000)},
     }
+
+
+def pack_economics() -> Dict[str, object]:
+    """The two invariants Kevin asked for, computed rather than asserted.
+
+    (1) NO PACK CREDIT MAY BE CHEAPER THAN A SUBSCRIPTION CREDIT.
+        Otherwise a heavy user rationally buys packs forever instead of
+        upgrading, and the tier ladder stops meaning anything. The
+        comparison is against the CHEAPEST tier rate — today the Founder
+        seat at $149 for the Professional grant (1.490c/credit).
+
+    (2) EVERY PACK MUST COMPLETE AT LEAST ONE FULL ACTION AND HAVE
+        SOMETHING LEFT. A pack that funds 90% of a build is a refund
+        request.
+
+    Returned as data, not raised: pricing is Kevin's to set, and a guard
+    that hard-fails startup on a deliberate promotional price would be
+    worse than the problem. The test suite asserts on this, and
+    warn_on_pack_economics() logs it at boot."""
+    packs = credit_packs()
+    tier_rates = tier_cents_per_credit()
+    floor_tier = min(tier_rates, key=lambda t: tier_rates[t])
+    floor = tier_rates[floor_tier]
+    typical_build = price_for_build(build_included_sections())
+
+    rows = {}
+    for name, p in packs.items():
+        units = p["units"] or 1
+        rate = p["cents"] / units
+        rows[name] = {
+            "cents": p["cents"], "units": units,
+            "cents_per_credit": round(rate, 4),
+            "pct_of_cheapest_tier_rate": round(rate / floor * 100, 1),
+            "undercuts_subscription": rate < floor,
+            "builds_afforded": units // typical_build if typical_build else None,
+            "credits_left_after_one_build": units - typical_build,
+            "completes_an_action_with_change": units > typical_build,
+        }
+    return {
+        "cheapest_tier": floor_tier,
+        "cheapest_tier_cents_per_credit": round(floor, 4),
+        "typical_build_credits": typical_build,
+        "packs": rows,
+        "warnings": (
+            [f"{n}: {r['cents_per_credit']}c/credit is "
+             f"{r['pct_of_cheapest_tier_rate']}% of the {floor_tier} rate "
+             f"({round(floor, 3)}c) — a top-up credit is cheaper than a "
+             f"subscription credit"
+             for n, r in rows.items() if r["undercuts_subscription"]]
+            + [f"{n}: {r['units']} credits cannot complete one "
+               f"{typical_build}-credit build with change to spare"
+               for n, r in rows.items()
+               if not r["completes_an_action_with_change"]]),
+    }
+
+
+def warn_on_pack_economics() -> None:
+    """Log any pack-pricing warning once, at import. Silent when clean."""
+    try:
+        for w in pack_economics()["warnings"]:
+            logger.warning(f"[pricing] pack economics: {w}")
+    except Exception as e:      # never let a diagnostic break boot
+        logger.warning(f"[pricing] pack economics check skipped: {e}")
 
 
 # ─── Introspection ───────────────────────────────────────────────────
@@ -290,6 +397,7 @@ def snapshot() -> Dict[str, object]:
         "tier_credits": tier_credits(),
         "prices": {
             "build_base": build_base(),
+            "build_included_sections": build_included_sections(),
             "build_per_section": build_per_section(),
             "revamp": revamp_price(),
             "section_rewrite": section_rewrite(),
@@ -305,4 +413,9 @@ def snapshot() -> Dict[str, object]:
         "low_credit_pct": low_credit_pct(),
         "usage_thresholds": list(usage_thresholds()),
         "credit_packs": credit_packs(),
+        "tier_price_cents": tier_price_cents(),
+        "pack_economics": pack_economics(),
     }
+
+
+warn_on_pack_economics()

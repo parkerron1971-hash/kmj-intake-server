@@ -30,19 +30,17 @@ logger = logging.getLogger("credit_ledger")
 def credit_packs() -> Dict[str, Dict[str, int]]:
     """Top-up packs — cents charged → units granted, live from config.
 
-    ⚠ THE UNITS ARE STILL THE 2026-07-12 RULED NUMBERS AND NO LONGER
-    COHERE (flagged to Kevin 2026-08-08; deliberately NOT changed — a
-    ruling of his is his to move). They were sized against the OLD
-    300/1000/3000 tank. Against the new 3,000/10,000/25,000 tank and the
-    2026-08-08 action prices:
+    RESCALED 2026-08-08 (Kevin's ruling) to $10/1,000 · $25/2,750 ·
+    $50/6,000. The previous units were sized against the OLD
+    300/1000/3000 tank and could not complete a single action at the new
+    scale: the $10 pack could not buy one section rewrite, and the $50
+    pack bought exactly one build with nothing left. A top-up that
+    cannot finish one action is a bad checkout.
 
-        $10 /  100u — cannot buy one section rewrite (120)
-        $25 /  275u — cannot buy one build (600)
-        $50 /  600u — buys exactly one build, with nothing left over
-
-    A top-up that cannot complete a single action is a bad checkout.
-    Roughly 10x (1000 / 2750 / 6000) would restore the original intent.
-    The env names are live, so the fix is a value change, not a deploy."""
+    Two standing invariants are computed in
+    pricing_config.pack_economics() and asserted in the test suite: no
+    pack credit may be cheaper than the cheapest SUBSCRIPTION credit,
+    and every pack must complete at least one full action with change."""
     return pricing_config.credit_packs()
 
 

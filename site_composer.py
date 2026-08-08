@@ -4146,10 +4146,11 @@ def compose_site(business_id: str, brief_notes: str = "",
                 _kind = "site_revamp"
             else:
                 # len(spec) is the composed section count — the thing the
-                # practitioner actually receives.
-                _sections = len(spec or [])
-                _units = (pricing_config.build_base()
-                          + _sections * pricing_config.build_per_section())
+                # practitioner actually receives. The arithmetic lives in
+                # pricing_config.price_for_build and NOWHERE else, so the
+                # included-sections allowance can't drift between the
+                # price the meter charges and the price the UI quotes.
+                _units = pricing_config.price_for_build(len(spec or []))
                 _kind = "site_build_marker"
             log_api_usage_sync(
                 endpoint="/composer/compose", model="site-build-marker",

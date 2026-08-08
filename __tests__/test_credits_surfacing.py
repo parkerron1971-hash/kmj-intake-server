@@ -255,9 +255,12 @@ def test_webhook_grants_pack_idempotently(webhook_env):
     event = _pack_event("evt_1", "cs_1", "pi_1")
     body = json.dumps(event).encode()
 
+    # Pack units are a dial (rescaled 2026-08-08) — assert the grant
+    # matches the configured pack, not a literal that repricing breaks.
+    small = cl.credit_packs()["small"]["units"]
     out = asyncio.run(sb.stripe_webhook(_make_request(body), "t=1,v1=x"))
     assert out == {"received": True}
-    assert cl.balance("b1") == 100
+    assert cl.balance("b1") == small
     grants = [r for r in fb.rows("credit_ledger") if r.get("kind") == "purchase"]
     assert len(grants) == 1 and grants[0]["stripe_payment_id"] == "pi_1"
 
@@ -265,7 +268,7 @@ def test_webhook_grants_pack_idempotently(webhook_env):
     # grant a recognized no-op, and the webhook still answers clean.
     out2 = asyncio.run(sb.stripe_webhook(_make_request(body), "t=1,v1=x"))
     assert out2 == {"received": True}
-    assert cl.balance("b1") == 100
+    assert cl.balance("b1") == small
     assert all(r["error"] is None for r in recorded)
 
 
@@ -281,7 +284,7 @@ def test_webhook_async_payment_and_unpaid_guard(webhook_env):
         "evt_b", "cs_2", "pi_2",
         etype="checkout.session.async_payment_succeeded")).encode()
     asyncio.run(sb.stripe_webhook(_make_request(done), "t=1,v1=x"))
-    assert cl.balance("b1") == 100
+    assert cl.balance("b1") == cl.credit_packs()["small"]["units"]
 
 
 # ═══ Low-balance signal — crossing edge, once per cycle ══════════════

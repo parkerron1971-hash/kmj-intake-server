@@ -264,3 +264,110 @@ def test_price_list_is_live_not_hardcoded(monkeypatch):
     importlib.reload(um)
     assert um.price_list()["hero_regeneration"] == 77
     assert um.price_list()["site_build_base"] == pricing_config.build_base()
+
+
+# ─── 5. Pack economics (Kevin's two invariants, 2026-08-08) ──────────
+
+def test_a_typical_build_costs_what_the_ruling_says(monkeypatch):
+    """THE ARITHMETIC THE RULING IS BUILT ON: a ~3-section build is 600
+    credits = 20% of the Starter tank, so one build leaves 2,400 behind.
+
+    The first implementation charged base + per_section for EVERY
+    section, making a 3-section build 900 (30% of the tank) and breaking
+    both that statement and the small pack's "build + edits" promise.
+    build_included_sections() is what reconciles them."""
+    pc = _reload_config()
+    assert pc.price_for_build(3) == 600
+    assert pc.tier_credits()["starter"] - pc.price_for_build(3) == 2400
+    assert pc.price_for_build(3) * 5 == pc.tier_credits()["starter"]  # 20%
+    # Sections beyond the included allowance bill per section.
+    assert pc.price_for_build(5) == 800
+    assert pc.price_for_build(8) == 1100
+    # A tiny build never costs less than base, and never goes negative.
+    assert pc.price_for_build(0) == 600
+    assert pc.price_for_build(-4) == 600
+
+
+def test_every_pack_completes_one_action_with_change():
+    """INVARIANT 2. A pack that funds 90% of a build is a refund
+    request. This is what the old $10/100u and $50/600u packs failed:
+    100 credits could not buy one 120-credit section rewrite, and 600
+    bought exactly one build with nothing left over."""
+    import pricing_config as pc
+    e = pc.pack_economics()
+    build = e["typical_build_credits"]
+    for name, row in e["packs"].items():
+        assert row["completes_an_action_with_change"], (
+            f"{name}: {row['units']} credits cannot finish one "
+            f"{build}-credit build with change")
+    # Kevin's stated shape for each pack.
+    p = e["packs"]
+    assert p["small"]["credits_left_after_one_build"] >= pc.section_rewrite(), \
+        "small pack must cover a build PLUS at least one edit"
+    assert p["medium"]["units"] >= build + pc.revamp_price(), \
+        "medium pack must cover a build plus a revamp"
+    assert p["large"]["builds_afforded"] >= 3, \
+        "large pack must cover several builds"
+
+
+def test_pack_rate_ordering_is_a_volume_discount():
+    """Bigger pack, better rate — deliberate. What must NOT happen is a
+    pack costing more per credit than a smaller one."""
+    import pricing_config as pc
+    packs = pc.credit_packs()
+    rates = [packs[n]["cents"] / packs[n]["units"]
+             for n in ("small", "medium", "large")]
+    assert rates == sorted(rates, reverse=True), rates
+
+
+def test_the_undercut_guard_actually_detects_both_directions(monkeypatch):
+    """INVARIANT 1's guard, tested on synthetic values so it is proven to
+    work rather than merely present.
+
+    A top-up credit cheaper than a subscription credit means a heavy user
+    rationally buys packs forever instead of upgrading."""
+    # Priced ABOVE the cheapest tier rate -> clean.
+    monkeypatch.setenv("PRICE_PACK_SMALL_CENTS", "1000")
+    monkeypatch.setenv("PRICE_PACK_SMALL_UNITS", "200")     # 5.0c/credit
+    monkeypatch.setenv("PRICE_PACK_MEDIUM_UNITS", "500")    # 5.0c/credit
+    monkeypatch.setenv("PRICE_PACK_LARGE_UNITS", "1200")    # 4.17c/credit
+    pc = _reload_config()
+    e = pc.pack_economics()
+    assert not any(r["undercuts_subscription"] for r in e["packs"].values())
+    assert not [w for w in e["warnings"] if "cheaper than" in w]
+
+    # Priced BELOW -> flagged, by name.
+    monkeypatch.setenv("PRICE_PACK_SMALL_UNITS", "100000")
+    pc = _reload_config()
+    e = pc.pack_economics()
+    assert e["packs"]["small"]["undercuts_subscription"]
+    assert any("small" in w and "cheaper than" in w for w in e["warnings"])
+
+
+def test_shipped_packs_undercut_every_tier_and_that_is_flagged(monkeypatch):
+    """THE OPEN PRICING QUESTION, PINNED (2026-08-08).
+
+    At the shipped numbers all three packs price a credit BELOW every
+    subscription tier — the cheapest being the Founder seat at $149 for
+    the Professional grant (1.490c/credit):
+
+        small  $10 / 1,000 = 1.000c/credit — 67% of the founder rate
+        medium $25 / 2,750 = 0.909c/credit — 61%
+        large  $50 / 6,000 = 0.833c/credit — 56%
+
+    This is INHERITED, not introduced: the 2026-07-12 packs sat at the
+    identical 0.380 / 0.457 pack-to-tier ratio against the old tank, so
+    the 10x rescale carried the relationship through untouched.
+
+    Kevin has the numbers and the ruling is his. This test does not
+    demand a fix — it RATCHETS: it fails if the gap ever widens, and it
+    fails once the packs are repriced above the line, at which point
+    delete it and assert the invariant directly."""
+    pc = _reload_config()
+    e = pc.pack_economics()
+    assert e["cheapest_tier"] == "founder"
+    pct = {n: r["pct_of_cheapest_tier_rate"] for n, r in e["packs"].items()}
+    assert pct == {"small": 67.1, "medium": 61.0, "large": 55.9}, (
+        "pack-to-tier pricing moved — if this was deliberate, update the "
+        f"pin; if not, the gap just changed silently: {pct}")
+    assert len([w for w in e["warnings"] if "cheaper than" in w]) == 3
