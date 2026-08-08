@@ -217,14 +217,26 @@ def _client():
             if key else None)
 
 
-def _call_llm(system: str, user: str, business_id: str) -> Optional[str]:
+def _call_llm(system: str, user: str, business_id: str,
+              units: int = 0) -> Optional[str]:
     """One bespoke-section call under the model ladder (Site Arc 12):
     family-scaled timeout, loud+breadcrumbed sonnet fallback on a
     model-identity error, same-model reduced-tokens retry on a timeout.
     Returns the raw text or None on total failure — the caller treats
     None as 'fall back to the module section', but that failure is now
     IMPOSSIBLE to be silent: logger.error + a site_config.model_fallbacks
-    breadcrumb fire before None is returned."""
+    breadcrumb fire before None is returned.
+
+    `units` = what this call COSTS the practitioner in credits.
+
+    DEFAULTS TO 0 ON PURPOSE (2026-08-08). Both atelier entry points log
+    the same "/composer/atelier" endpoint, but they are different
+    products: the 2-3 bespoke fragments authored inside a build are
+    already paid for by the build marker, while a standalone Studio
+    "rework this section" is its own billable action. Free is the safe
+    default — a path I miss under-bills by one section instead of
+    double-billing every build. generate_refined_section, the standalone
+    path, passes the real price explicitly."""
     import model_ladder
 
     client = _client()
@@ -282,7 +294,7 @@ def _call_llm(system: str, user: str, business_id: str) -> Optional[str]:
             endpoint="/composer/atelier", model=used_model,
             input_tokens=getattr(u, "input_tokens", 0) or 0,
             output_tokens=getattr(u, "output_tokens", 0) or 0,
-            business_id=business_id, task_type="atelier")
+            business_id=business_id, task_type="atelier", units=units)
     except Exception:
         pass
     return "".join(b.text for b in msg.content
@@ -998,9 +1010,23 @@ def generate_refined_section(kind: str, current_html: str, current_css: str,
                                  current_css, instruction, allowed_slots,
                                  allowed_hrefs, form_token=bool(form_html))
 
+    # THE standalone billable atelier path — a Studio "rework this
+    # section". Build-internal fragments stay free (units defaults to 0);
+    # see the _call_llm docstring for why one endpoint label carries two
+    # different prices.
+    #
+    # CHARGED ONCE PER USER ACTION, not per LLM call: _attempt runs a
+    # second time when our own validator rejects the first fragment, and
+    # that repair round is OUR problem, not something the practitioner
+    # asked for. They pressed "rework this section" once; they pay once.
+    _billed = {"v": False}
+
     def _attempt(extra: str = "") -> Tuple[Optional[Tuple[str, str]], List[str]]:
+        import pricing_config
+        _units = 0 if _billed["v"] else pricing_config.section_rewrite()
+        _billed["v"] = True
         raw = _call_llm(_REFINE_SYSTEM_PROMPT, prompt + extra,
-                        business_id or "unknown")
+                        business_id or "unknown", units=_units)
         if raw is None:
             return None, ["LLM call failed"]
         frag = _split_fragment(raw, uid)

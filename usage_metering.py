@@ -32,60 +32,47 @@ from typing import Any, Dict, List, Optional
 import sb_clients
 import feature_gates
 import credit_ledger
+import pricing_config
 
 logger = logging.getLogger("usage_metering")
 
-# Endpoint → unit weight (default 1). Disclosed at point of use in the UI.
-UNIT_WEIGHTS: Dict[str, int] = {
-    "/composer/hero": 5,
-    # FULL SITE BUILD = ONE 25-unit action (2026-07-30 weight-hole fix).
-    # compose_site logs a single zero-cost marker row ("/composer/compose")
-    # when a full LLM compose ships; the constituent authoring endpoints
-    # below keep their rows for cost analytics at weight 0 so one build
-    # never bills per-LLM-call. The old key — "/director/build" — matched
-    # an endpoint NOTHING ever logged (build-with-loop was retired into
-    # compose_site), so the 25 weight silently never applied and a $1-2
-    # build metered as a handful of weight-1 rows.
-    "/composer/compose": 25,
-    "/director/build": 25,           # legacy engine marker, kept for old rows
-    "/composer/canvas": 0,           # one-mind page author (build-internal)
-    "/composer/canvas-review": 0,    # vision-loop repair (build-internal)
-    "/composer/builder-v2": 0,       # v2 builder (build-internal)
-    "/composer/builder-v2-eyes": 0,  # v2 vision walk (build-internal)
-    # Spec authoring/revision is deliberately "pennies" (Arc 3: only
-    # decided designs pay for builds) — and compose_spec_llm logs the
-    # same label inside every build. The build marker carries the bill.
-    "/composer/spec": 0,
-    # /composer/atelier stays default-1: a Studio select-to-talk edit is
-    # one action, and the 2-3 bespoke fragments inside a build add only
-    # their honest handful on top of the marker.
-    # Voice (2026-07-15): standard OpenAI TTS is included with every plan —
-    # weight 0 keeps the rows attributable for analytics without billing
-    # them (the default weight of 1 would otherwise start charging units
-    # for every spoken sentence the moment rows carry business_id).
-    # ElevenLabs premium voice bills 1 unit per spoken chunk and rides the
-    # same allowance-first, credits-next draw-down as Chief messages.
-    "/ai/tts": 0,
-    "/ai/tts-el": 1,
-    # Site Concierge (site_concierge.py): one customer-facing website
-    # reply = one weighted unit — same rate as a Chief chat message.
-    # Explicit (it IS the default) so the weight is a visible, tested
-    # decision rather than an accident of DEFAULT_WEIGHT.
-    "/concierge/reply": 1,
-}
-DEFAULT_WEIGHT = 1
+# ─── Prices live in pricing_config, not here ─────────────────────────
+#
+# CONFIG-DRIVEN LAUNCH (Kevin's ruling 2026-08-08): we launch on
+# conservative opening defaults and refine against real data once the
+# meter works — so no price may be hardcoded at a call site. Everything
+# below reads pricing_config, whose every value is env-overridable, so
+# tuning is a Railway value change plus a restart, never a code deploy.
+#
+# The endpoint table had to become a FUNCTION rather than a constant:
+# the build price is now itself a dial, so the table is derived.
 
-# Overage rate (cents/unit) per tier — LOCKED 2026-06-10.
+
+def unit_weights() -> Dict[str, int]:
+    """Endpoint → price, live from config.
+
+    See pricing_config.unit_weights() for the per-endpoint reasoning and
+    for the rule that every key must be a label something ACTUALLY logs
+    (the /director/build weight hole is what that rule is made of)."""
+    return pricing_config.unit_weights()
+
+
+DEFAULT_WEIGHT = pricing_config.DEFAULT_WEIGHT
+
+# Overage rate (cents/unit) per tier — LOCKED 2026-06-10. Legacy shape
+# only: the prepaid model never bills overage.
 OVERAGE_CENTS = {"starter": 40, "professional": 30, "practice": 25}
 TIER_PRICE_CENTS = {"starter": 7900, "professional": 19900, "practice": 39900}
 
-THRESHOLDS = (50, 80, 100, 200)  # % of allotment; 200 ≈ the cap milestone
+# % of allotment that notifies, once each per month; 200 ≈ the cap
+# milestone. Read at import — Railway env is fixed for a process life.
+THRESHOLDS = pricing_config.usage_thresholds()
 
 # Credits-surfacing (2026-08-01): the soft "running low" signal fires when
 # the COMBINED remaining (monthly allowance left + pack balance) crosses
 # at/below this % of the cycle's capacity (allowance + packs available
 # this cycle). Distinct from THRESHOLDS, which track allowance-only usage.
-LOW_CREDIT_PCT = 20
+LOW_CREDIT_PCT = pricing_config.low_credit_pct()
 
 
 def _month_key(now: Optional[datetime] = None) -> str:
@@ -94,12 +81,41 @@ def _month_key(now: Optional[datetime] = None) -> str:
 
 
 def _month_start_iso() -> str:
+    """First instant of THIS month (UTC), Z form.
+
+    THE METER-READS-ZERO BUG (found 2026-08-08, fixed here): this
+    returned a bare .isoformat(), which emits `+00:00`. Interpolated
+    into a PostgREST query string the `+` decodes as a SPACE, so
+    Postgres received "2026-08-01T00:00:00 00:00" and answered
+    `22007: invalid input syntax for type timestamp with time zone`.
+    PostgREST 400s, sb_get_as_service returns None, the `or []` at the
+    call site swallows it — and weighted_usage_this_month() returned 0
+    for EVERY business, forever. The Settings meter read zero, credit
+    draw-down never drew down, and every require_units() gate passed
+    unconditionally.
+
+    PR #196 (2026-07-21) swept this class repo-wide; this module dates
+    to 2026-06-10 and was missed by that sweep. The Z form is the rule
+    for ANY timestamp interpolated into a PostgREST URL."""
     n = datetime.now(timezone.utc)
-    return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    return (n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+             .isoformat().replace("+00:00", "Z"))
+
+
+def _day_start_iso() -> str:
+    """First instant of TODAY (UTC), Z form — the chat fair-use window."""
+    n = datetime.now(timezone.utc)
+    return (n.replace(hour=0, minute=0, second=0, microsecond=0)
+             .isoformat().replace("+00:00", "Z"))
 
 
 def _next_month_start_iso() -> str:
-    """First instant of NEXT month (UTC) — when the allowance resets."""
+    """First instant of NEXT month (UTC) — when the allowance resets.
+
+    Z form for consistency. This one is only ever returned to the UI
+    (never interpolated into a query string), but a module that emits
+    two shapes of timestamp is a trap for the next reader who copies
+    the wrong one into a filter."""
     n = datetime.now(timezone.utc)
     if n.month == 12:
         nm = n.replace(year=n.year + 1, month=1, day=1,
@@ -107,11 +123,45 @@ def _next_month_start_iso() -> str:
     else:
         nm = n.replace(month=n.month + 1, day=1,
                        hour=0, minute=0, second=0, microsecond=0)
-    return nm.isoformat()
+    return nm.isoformat().replace("+00:00", "Z")
 
 
 def weight_for(endpoint: Optional[str]) -> int:
-    return UNIT_WEIGHTS.get((endpoint or "").strip(), DEFAULT_WEIGHT)
+    """Price of an action from its endpoint alone — the FALLBACK path.
+
+    Prefer weight_for_row() wherever the whole row is in hand: a row
+    carrying explicit `units` overrides this table."""
+    return unit_weights().get((endpoint or "").strip(), DEFAULT_WEIGHT)
+
+
+def weight_for_row(row: Optional[Dict[str, Any]]) -> int:
+    """Price of one api_usage row.
+
+    WHY A ROW AND NOT JUST AN ENDPOINT (2026-08-08): the endpoint->weight
+    table cannot express the price list Kevin ruled. Three of the seven
+    prices are context-dependent on an endpoint that logs ONE label:
+
+      · /composer/compose is a build (base + sections x per_section) OR a
+        revamp (flat) — same function, same label.
+      · /composer/atelier is a standalone Studio section rewrite (120) OR
+        one of the 2-3 bespoke fragments inside a build (0, because the
+        build marker already carries them) — same function, same label.
+
+    So the price is written onto the ROW at log time and read back here.
+    The endpoint table remains the fallback for rows that predate the
+    column and for every action whose price really is flat.
+
+    `units` of 0 is meaningful (build internals are deliberately free),
+    so this tests for None rather than truthiness."""
+    if not row:
+        return DEFAULT_WEIGHT
+    u = row.get("units")
+    if u is not None:
+        try:
+            return max(0, int(u))
+        except (TypeError, ValueError):
+            pass                      # malformed -> fall through to endpoint
+    return weight_for(row.get("endpoint"))
 
 
 def weighted_usage_this_month(business_id: str) -> int:
@@ -122,13 +172,66 @@ def weighted_usage_this_month(business_id: str) -> int:
     while offset <= 200_000:
         rows = sb_clients.sb_get_as_service(
             f"/api_usage?business_id=eq.{business_id}"
-            f"&created_at=gte.{_month_start_iso()}&select=endpoint"
+            f"&created_at=gte.{_month_start_iso()}&select=endpoint,units"
             f"&limit={page}&offset={offset}") or []
-        total += sum(weight_for(r.get("endpoint")) for r in rows)
+        total += sum(weight_for_row(r) for r in rows)
         if len(rows) < page:
             break
         offset += page
     return total
+
+
+def chat_turns_today(business_id: str) -> int:
+    """Chief turns this business has logged since 00:00 UTC — the input
+    to the fair-use brake. Counts ROWS, not weighted units: the ceiling
+    is about request volume (a runaway script), not spend."""
+    rows = sb_clients.sb_get_as_service(
+        f"/api_usage?business_id=eq.{business_id}"
+        f"&endpoint=eq./chief/backend"
+        f"&created_at=gte.{_day_start_iso()}&select=id&limit=2000") or []
+    return len(rows)
+
+
+def chat_fair_use_ok(business_id: str) -> bool:
+    """The per-day abuse brake on Chief chat. True = let the turn run.
+
+    WHY THIS EXISTS (2026-08-08): chat is priced at 1 credit but its real
+    cost is neither flat nor stable — p95 is 19.84c/turn against a 7.16c
+    mean, and the mean rose ~70% in the fortnight to 2026-08-03 as
+    context injectors grew. A single runaway loop is the one failure mode
+    that can outrun the credit tank faster than anyone reads a dashboard.
+
+    ABUSE-ONLY BY DESIGN. At the opening 250 turns/day a real
+    practitioner never meets it: the busiest observed human day on the
+    platform is 34. Sustained traffic above it is a script or a loop.
+
+    THREE DELIBERATE CHOICES, all flagged to Kevin:
+
+      1. NOT gated behind BILLING_ENFORCE. This is abuse protection, not
+         billing. Gating it behind the billing flag would ship it as a
+         no-op on day one — dead weight by the repo's own rule — and
+         leave the platform with no per-account runaway brake during
+         exactly the beta month it was built for. CHAT_CEILING_ENFORCE=off
+         turns blocking off while still logging every trip.
+      2. NO grandfather bypass. Grandfathered accounts skip BILLING
+         limits; a runaway loop on a grandfathered account still burns
+         real money, and the largest grandfathered account is Kevin's own.
+      3. FAILS OPEN. A metering read failure must never mute Chief."""
+    try:
+        ceiling = pricing_config.chat_daily_soft_ceiling()
+        if ceiling <= 0:
+            return True
+        turns = chat_turns_today(business_id)
+        if turns < ceiling:
+            return True
+        logger.warning(
+            f"[metering] chat fair-use ceiling tripped for "
+            f"{business_id[:8]}: {turns} turns today (ceiling {ceiling}, "
+            f"enforced={pricing_config.chat_ceiling_enforced()})")
+        return not pricing_config.chat_ceiling_enforced()
+    except Exception as e:
+        logger.warning(f"[metering] chat_fair_use_ok failed open: {e}")
+        return True
 
 
 def _biz_row(business_id: str) -> Optional[Dict[str, Any]]:
@@ -193,7 +296,7 @@ def usage_summary(business_id: str,
 
     allotment = None
     if plan:
-        allotment = (feature_gates.PLAN_LIMITS.get(plan) or {}).get("chief_messages_monthly")
+        allotment = (feature_gates.plan_limits().get(plan) or {}).get("chief_messages_monthly")
 
     # Launch-ops monthly bonus grants (usage_grants) top up the plan
     # allotment. (Distinct from credit_ledger grants, which never expire.)
@@ -243,7 +346,28 @@ def usage_summary(business_id: str,
         "plan": plan,
         "grandfathered": grandfathered,
         "enforce": enforce,
-        "weights": {"chat": 1, "hero_regeneration": 5, "full_site_build": 25},
+        # Live from config — this used to be a hardcoded {1, 5, 25} that
+        # the UI displayed as fact while the real table said otherwise.
+        # The price list the practitioner reads is now the price list
+        # they are charged.
+        "weights": price_list(),
+    }
+
+
+def price_list() -> Dict[str, Any]:
+    """The practitioner-facing price list, live from config. What the
+    Settings meter and the credits card disclose at point of use."""
+    return {
+        "chat": pricing_config.chat_price(),
+        "hero_regeneration": pricing_config.hero_regen(),
+        "site_build_base": pricing_config.build_base(),
+        "site_build_per_section": pricing_config.build_per_section(),
+        "site_revamp": pricing_config.revamp_price(),
+        "section_rewrite": pricing_config.section_rewrite(),
+        "small_edit": pricing_config.small_edit(),
+        "document": pricing_config.doc_gen(),
+        "concierge_reply": pricing_config.concierge_price(),
+        "premium_voice": pricing_config.premium_voice_price(),
     }
 
 

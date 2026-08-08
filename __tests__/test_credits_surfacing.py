@@ -52,6 +52,13 @@ def fake(monkeypatch):
     for k in ("BILLING_ENFORCE",):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("STRIPE_PRICE_ID_STARTER", "price_starter")
+    # The Starter grant became a DIAL on 2026-08-08 and its shipped
+    # default moved 300 -> 3,000. Every case in this file is about the
+    # allowance-then-packs draw-down ORDER and the low-credit crossing
+    # EDGE, not about the tank size — so pin the old number here and
+    # keep the arithmetic in each test readable, rather than generating
+    # ten times the rows to say the same thing.
+    monkeypatch.setenv("CREDITS_STARTER_CREDITS", "300")
     return fb
 
 

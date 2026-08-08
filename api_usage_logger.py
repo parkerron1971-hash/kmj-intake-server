@@ -155,9 +155,16 @@ def log_api_usage_sync(
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
     cost_cents_override: Optional[float] = None,
+    units: Optional[int] = None,
 ) -> None:
     """Synchronous variant for sync call sites (composer/director). Same
-    row shape; never raises. Arc 19 — site builds must meter (weight 5/25)."""
+    row shape; never raises.
+
+    `units` = the PRICE of this action in credits, written onto the row.
+    Pass it whenever the price is not a flat function of the endpoint —
+    a build (base + per-section), a revamp, or an atelier call that is
+    build-internal (0) rather than a standalone Studio rewrite. Leave it
+    None to let usage_metering price the row from its endpoint."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         return
     cost = (round(cost_cents_override, 4) if cost_cents_override is not None
@@ -169,9 +176,15 @@ def log_api_usage_sync(
         "output_tokens": int(output_tokens or 0),
         "cost_cents": cost,
         "ok": ok,
+        # Cache traffic is already PRICED into cost_cents above; these
+        # two columns persist the COUNTS so the cache-hit rate is
+        # measurable rather than merely paid for.
+        "cache_read_tokens": int(cache_read_tokens or 0),
+        "cache_creation_tokens": int(cache_creation_tokens or 0),
     }
     if business_id: body["business_id"] = business_id
     if task_type:   body["task_type"] = task_type
+    if units is not None: body["units"] = int(units)
     try:
         httpx.post(
             f"{SUPABASE_URL}/rest/v1/api_usage",
@@ -202,8 +215,11 @@ async def log_api_usage(
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
     cost_cents_override: Optional[float] = None,
+    units: Optional[int] = None,
 ) -> None:
-    """Append one row to api_usage. Never raises."""
+    """Append one row to api_usage. Never raises.
+
+    `units` = the PRICE of this action in credits (see log_api_usage_sync)."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         logger.warning("api_usage: Supabase not configured; skipping log")
         return
@@ -218,12 +234,17 @@ async def log_api_usage(
         "output_tokens": int(output_tokens or 0),
         "cost_cents":    cost_cents,
         "ok":            ok,
+        # Persist the cache COUNTS, not just their price (see the sync
+        # variant): this is what makes the cache-hit rate measurable.
+        "cache_read_tokens":     int(cache_read_tokens or 0),
+        "cache_creation_tokens": int(cache_creation_tokens or 0),
     }
     if business_id: body["business_id"] = business_id
     if user_id:     body["user_id"] = user_id
     if task_type:   body["task_type"] = task_type
     if duration_ms is not None: body["duration_ms"] = int(duration_ms)
     if error:       body["error"] = str(error)[:500]
+    if units is not None: body["units"] = int(units)
 
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:

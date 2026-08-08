@@ -14735,6 +14735,12 @@ async def chief_chat(
         # payload is the frontend top-up prompt's contract.
         try:
             import billing_limits
+            # Fair-use FIRST: a runaway loop should be stopped before it
+            # is priced, and it trips whether or not billing enforcement
+            # is on. 429 (rate limit), never a 402 upsell — a human does
+            # not reach 250 turns in a day, so this is a loop to stop,
+            # not a customer to upsell. See require_chat_fair_use.
+            billing_limits.require_chat_fair_use(req.business_id)
             billing_limits.require_units(req.business_id)
         except HTTPException:
             raise

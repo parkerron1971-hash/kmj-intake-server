@@ -129,6 +129,10 @@ def test_create_business_cap_enforced_and_grandfather_bypass(fake, monkeypatch):
 def test_threshold_notifications_fire_once(fake, monkeypatch):
     fb = fake
     monkeypatch.setenv("STRIPE_PRICE_ID_STARTER", "price_starter")
+    # Starter grant is a dial since 2026-08-08 (default moved to 3,000);
+    # pinned so 240 rows still reads as 80% of the allowance. What's
+    # under test is fire-once-per-threshold, not the tank size.
+    monkeypatch.setenv("CREDITS_STARTER_CREDITS", "300")
     fb.rows("businesses").append({
         "id": "b1", "owner_id": "o", "is_active": True, "name": "b1",
         "subscription_status": "active", "subscription_plan": "price_starter"})

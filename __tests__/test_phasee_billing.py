@@ -103,8 +103,16 @@ def test_plan_limits_unenforced_then_enforced(monkeypatch):
     assert fg.limit_for(biz, "chief_messages_monthly") is None   # unenforced = unlimited
     monkeypatch.setenv("BILLING_ENFORCE", "on")
     monkeypatch.setenv("STRIPE_PRICE_ID_STARTER", "price_starter")
-    assert fg.limit_for(biz, "chief_messages_monthly") == 300  # Pricing v2 locked
+    # The grant is a DIAL (2026-08-08 config-driven launch) — assert it
+    # tracks config, not a literal that a tuning pass would invalidate.
+    import pricing_config as pc
+    assert (fg.limit_for(biz, "chief_messages_monthly")
+            == pc.tier_credits()["starter"])
     assert fg.limit_for(biz, "max_businesses") == 1
     pro = {"subscription_status": "active", "subscription_plan": "price_pro"}
     monkeypatch.setenv("STRIPE_PRICE_ID_PROFESSIONAL", "price_pro")
-    assert fg.limit_for(pro, "chief_messages_monthly") == 1000  # Pricing v2 locked
+    assert (fg.limit_for(pro, "chief_messages_monthly")
+            == pc.tier_credits()["professional"])
+    # Ranking must hold whatever the dials say.
+    assert (pc.tier_credits()["starter"] < pc.tier_credits()["professional"]
+            < pc.tier_credits()["practice"])

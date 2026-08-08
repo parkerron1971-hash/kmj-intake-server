@@ -15,6 +15,8 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
+import pricing_config
+
 PLANS = ("starter", "professional", "practice")
 _PLAN_RANK = {"starter": 1, "professional": 2, "practice": 3}
 
@@ -49,24 +51,36 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # until the full team experience ships
 }
 
-# Numeric limits per tier (gate-ready scaffold; UNENFORCED like everything
-# else). chief_messages_monthly metering can build on the existing api_usage
-# table; max_businesses needs an onboarding check. Both are Phase E v1.1
-# enforcement work — registered here so the hypothesis lives in code.
-# Pricing v2 allowances (docs/pricing_model_v2.md, Kevin 2026-07-12 —
-# raised from 75/350/1000: "75 seems so little"):
-# chief_messages_monthly = included WEIGHTED Chief interactions
-# (chat=1, hero regen=5, full site build=25 — usage_metering.UNIT_WEIGHTS).
-# Beyond the allowance, prepaid credits (credit_ledger) draw down.
-# plaid_connections = connected bank account limit per tier (F-A2).
-PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
-    "starter":      {"max_businesses": 1, "chief_messages_monthly": 300,
-                     "max_seats": 1, "plaid_connections": 2},
-    "professional": {"max_businesses": 1, "chief_messages_monthly": 1000,
-                     "max_seats": 1, "plaid_connections": 5},
-    "practice":     {"max_businesses": 3, "chief_messages_monthly": 3000,
-                     "max_seats": 5, "plaid_connections": None},
-}
+# Numeric limits per tier. plaid_connections = connected bank account
+# limit per tier (F-A2); max_businesses needs an onboarding check.
+def plan_limits() -> Dict[str, Dict[str, Optional[int]]]:
+    """Numeric limits per tier.
+
+    `chief_messages_monthly` is the monthly CREDIT GRANT and now comes
+    from pricing_config, where it is env-overridable — the 2026-08-08
+    config-driven launch ruling: we ship conservative opening defaults
+    and refine against real data once the meter works.
+
+    Opening defaults 3,000 / 10,000 / 25,000, up ~10x from the
+    300/1000/3000 of the 2026-07-12 spec. That rescale is what makes
+    per-action pricing expressible at all — a build priced at 600 is
+    impossible against a 300 tank. Beyond the allowance, prepaid credits
+    (credit_ledger) draw down.
+
+    A FUNCTION, not a constant, so a price change is a value change and
+    there is exactly one source of truth."""
+    credits = pricing_config.tier_credits()
+    return {
+        "starter":      {"max_businesses": 1,
+                         "chief_messages_monthly": credits["starter"],
+                         "max_seats": 1, "plaid_connections": 2},
+        "professional": {"max_businesses": 1,
+                         "chief_messages_monthly": credits["professional"],
+                         "max_seats": 1, "plaid_connections": 5},
+        "practice":     {"max_businesses": 3,
+                         "chief_messages_monthly": credits["practice"],
+                         "max_seats": 5, "plaid_connections": None},
+    }
 
 
 def limit_for(business_row: Optional[Dict[str, Any]], limit: str) -> Optional[int]:
@@ -74,10 +88,11 @@ def limit_for(business_row: Optional[Dict[str, Any]], limit: str) -> Optional[in
     (and unlimited) until BILLING_ENFORCE=on AND a plan exists."""
     if not enforcement_on():
         return None
+    limits = plan_limits()
     plan = plan_of(business_row)
     if not plan:
-        return PLAN_LIMITS["starter"].get(limit)
-    return PLAN_LIMITS.get(plan, {}).get(limit)
+        return limits["starter"].get(limit)
+    return limits.get(plan, {}).get(limit)
 
 
 # Price-id env aliases → the tier they entitle (2026-07-21 pricing

@@ -127,7 +127,7 @@ def _post_message(text, conversation_id=None, ip="1.2.3.4"):
 def test_metering_weight_and_feature_gate_registered():
     import usage_metering
     import feature_gates
-    assert usage_metering.UNIT_WEIGHTS["/concierge/reply"] == 1
+    assert usage_metering.unit_weights()["/concierge/reply"] == 1
     assert feature_gates.FEATURE_MIN_PLAN["site_concierge"] == "professional"
 
 

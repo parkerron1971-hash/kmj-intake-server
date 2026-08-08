@@ -4125,17 +4125,38 @@ def compose_site(business_id: str, brief_notes: str = "",
             logger.warning(f"[composer] multi-page build skipped (non-fatal): {_e}")
 
     # Arc 19 weight-hole fix (2026-07-30): THE one billable row for this
-    # build — weighted 25 by usage_metering.UNIT_WEIGHTS while the per-call
-    # authoring rows above it are weight 0. Only a shipped LLM compose
-    # bills: a blocked build raises out of render_and_persist before this
-    # line, and deterministic/fallback composes (source != "llm") are free.
+    # build — the per-call authoring rows above it are priced 0, so one
+    # build never bills per-LLM-call. Only a shipped LLM compose bills:
+    # a blocked build raises out of render_and_persist before this line,
+    # and deterministic/fallback composes (source != "llm") are free.
+    #
+    # CONFIG-DRIVEN PRICE (2026-08-08): the price is written onto the ROW
+    # as `units`, not looked up from the endpoint, because it VARIES:
+    # a full build is base + sections x per_section, while a revamp of an
+    # already-authored site is a flat lower price. Both log the same
+    # endpoint label from this same function, so the endpoint→weight
+    # table physically cannot tell them apart. Every number here is a
+    # pricing_config dial.
     if use_llm and source == "llm":
         try:
+            import pricing_config
             from api_usage_logger import log_api_usage_sync
+            if refine:
+                _units = pricing_config.revamp_price()
+                _kind = "site_revamp"
+            else:
+                # len(spec) is the composed section count — the thing the
+                # practitioner actually receives.
+                _sections = len(spec or [])
+                _units = (pricing_config.build_base()
+                          + _sections * pricing_config.build_per_section())
+                _kind = "site_build_marker"
             log_api_usage_sync(
                 endpoint="/composer/compose", model="site-build-marker",
                 input_tokens=0, output_tokens=0, business_id=business_id,
-                task_type="site_build_marker", cost_cents_override=0.0)
+                task_type=_kind, cost_cents_override=0.0, units=_units)
+            logger.info(f"[composer] build marker for {business_id[:8]}: "
+                        f"{_kind} priced at {_units} credits")
         except Exception as _mk_e:
             logger.warning(f"[composer] build marker row failed "
                            f"(non-fatal): {_mk_e}")

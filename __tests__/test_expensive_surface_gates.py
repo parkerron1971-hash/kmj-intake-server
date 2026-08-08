@@ -52,6 +52,10 @@ def _enforce(monkeypatch):
 
 def test_require_units_dormant_and_enforced(fake, monkeypatch):
     fb = fake
+    # The Starter grant is a dial since 2026-08-08 (shipped default moved
+    # to 3,000). Pinned to 300 so the 305 rows below still mean "past the
+    # allowance" — the gate's dormant/enforced behaviour is the subject.
+    monkeypatch.setenv("CREDITS_STARTER_CREDITS", "300")
     _biz(fb, "b1", plan="price_starter")
     now_iso = datetime.now(timezone.utc).replace(day=2).isoformat()
     for i in range(305):                       # past the 300 starter allowance
