@@ -207,3 +207,32 @@ async def get_document(document_id: str, user: AuthedUser = Depends(require_user
     # Owner-check the document's own business before returning it.
     _require_owner(str(rows[0].get("business_id") or ""), user)
     return JSONResponse({"ok": True, "document": rows[0]})
+
+
+@router.post("/document/{document_id}/pdf")
+async def render_document_pdf(document_id: str,
+                              user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    """Render a stored Foundation document to a branded PDF in the Documents vault.
+
+    Closes TODO(foundation-track-v2).
+
+    The ownership check runs against the business on the DOCUMENT ROW, not one
+    supplied by the caller — the same rule as GET /document/{id}, which exists
+    because this router once let any tenant read another's legal documents by
+    id. It also runs BEFORE the render: this endpoint writes a file into a
+    tenant's vault, so authorizing after the work would mean a stranger could
+    still cause the write and merely be told 403 afterwards.
+    """
+    import httpx
+    async with httpx.AsyncClient() as client:
+        rows = await fa._sb_get(
+            client,
+            f"/foundation_documents?id=eq.{document_id}&select=business_id&limit=1") or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="document not found")
+    _require_owner(str(rows[0].get("business_id") or ""), user)
+
+    result = await fa.render_document_pdf(document_id)
+    status = int(result.pop("status", 200 if result.get("ok") else 400))
+    result.pop("business_id", None)
+    return JSONResponse(result, status_code=status)

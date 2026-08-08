@@ -743,6 +743,46 @@ def _build_pdf(
     return buf.getvalue()
 
 
+def build_document_pdf(
+    *,
+    business_name: str,
+    practitioner_name: str,
+    prepared_for: str,
+    subject: str,
+    body: str,
+    prepared_for_org: Optional[str] = None,
+    accent_hex: str = PDF_ACCENT,
+    serif: bool = False,
+    logo_bytes: Optional[bytes] = None,
+) -> bytes:
+    """Public seam over _build_pdf for documents that are not client proposals.
+
+    Foundation Track's Operating Agreement, Privacy Policy and Terms of Service
+    are governance documents about the business itself. There is no counterparty
+    contact, so they cannot go through /agents/contract/pdf, which requires one
+    and 404s without it. They still want the same paper: the Brand Studio accent,
+    the font lean, the logo, and the clause classifier that keeps numbered
+    sections from rendering as bullets.
+
+    `prepared_for` is the party the document is FOR. For a governance document
+    that is the business's own legal name, which reads correctly in the
+    "Prepared for …" line without needing a special case.
+
+    Exists so callers need not depend on the private _build_pdf name.
+    """
+    return _build_pdf(
+        business_name=business_name,
+        practitioner_name=practitioner_name,
+        contact_name=prepared_for,
+        contact_org=prepared_for_org,
+        subject=subject,
+        body=body,
+        accent_hex=accent_hex,
+        serif=serif,
+        logo_bytes=logo_bytes,
+    )
+
+
 async def _upload_pdf_to_supabase(
     client: httpx.AsyncClient,
     pdf_bytes: bytes,
