@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
-from availability import BusinessAvailability
+from availability import BusinessAvailability, normalize_tz, tz_resolves
 from availability_engine import (
     DEFAULT_LOOKAHEAD_DAYS,
     MAX_LOOKAHEAD_DAYS,
@@ -277,6 +277,29 @@ def patch_availability(
     owner-gated. Writes to businesses.settings.availability (preserves
     other settings keys via merge)."""
     _require_owner(business_id, user)
+
+    # THE TIMEZONE, LOUDLY — this is the one place a human is present.
+    #
+    # The model's validator repairs what it can and drops the rest to
+    # None, because it also runs on READ and `from_settings_dict` turns a
+    # raised error into the open-default (24/7) config. That silence is
+    # right for reading and wrong for writing: a practitioner who saves a
+    # zone we cannot resolve would get a 200, a config quietly missing
+    # its timezone, and hours served in UTC — the failure that put a
+    # barber's 9-to-5 on his booking page as 5am-1pm.
+    #
+    # So the write path re-checks the RAW value before validation and
+    # says what it would have done, including the spelling it suspects.
+    raw_tz = (body or {}).get("timezone")
+    if raw_tz is not None and str(raw_tz).strip():
+        candidate = str(raw_tz).strip()
+        if not tz_resolves(candidate):
+            repaired = normalize_tz(candidate)
+            hint = (f" Did you mean '{repaired}'?" if repaired
+                    else " Use an IANA name like 'America/New_York'.")
+            raise HTTPException(
+                400, f"unknown timezone {candidate!r}.{hint}")
+
     try:
         av = BusinessAvailability.model_validate(body or {})
     except Exception as e:

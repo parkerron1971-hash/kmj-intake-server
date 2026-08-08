@@ -34,14 +34,71 @@ per D.1 audit D5/D6 rulings.
 """
 from __future__ import annotations
 
+import logging
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:                                    # pragma: no cover
+    ZoneInfo = None                                  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 
 # Day-of-week keys used in WeeklyAvailability. Keep lowercase 3-letter
 # canonical so we can match by `now.strftime("%a").lower()` in the engine.
 WEEKDAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def tz_resolves(name: str) -> bool:
+    """True when zoneinfo can load `name`. When zoneinfo is unavailable
+    we cannot disprove anything, so everything 'resolves' — the engine
+    already degrades to naive times in that environment."""
+    if ZoneInfo is None:                             # pragma: no cover
+        return True
+    try:
+        ZoneInfo(name)
+        return True
+    except Exception:
+        return False
+
+
+def normalize_tz(value: Optional[str]) -> Optional[str]:
+    """Best-effort repair of a stored IANA name; None when unusable.
+
+    Found live on a real business (2026-08-08): a timezone stored as
+    "America/New York" — a space where the IANA name has an underscore.
+    `availability_engine._resolve_tz` logs the unknown zone and falls
+    back to UTC, so that shop's 09:00-17:00 was being served to guests
+    as 9am-5pm UTC, i.e. 5am-1pm Eastern. The 9-to-5-as-UTC bug of
+    2026-07-10, back from a malformed value instead of a missing one.
+
+    Underscoring the spaces is the one repair that is unambiguous, so it
+    is applied. Anything still unresolvable becomes None RATHER THAN
+    RAISING, and that choice is load-bearing: `from_settings_dict`
+    catches validation errors and returns the OPEN-DEFAULT config, so a
+    raising validator would turn a shop with a typo'd zone into one
+    bookable 24/7 — hours gone entirely, which is worse than the UTC
+    fallback it replaces. None instead lets the documented chain
+    (practitioner_profiles.timezone → PLATFORM_DEFAULT_TZ → UTC) do its
+    job. The loud rejection belongs on the WRITE path, where a human is
+    present to fix it — see availability_router.patch_availability.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    if tz_resolves(s):
+        return s
+    underscored = s.replace(" ", "_")
+    if underscored != s and tz_resolves(underscored):
+        logger.warning("availability timezone %r repaired to %r", s, underscored)
+        return underscored
+    logger.warning("availability timezone %r is unresolvable; falling back to the tz chain", s)
+    return None
 
 
 class TimeRange(BaseModel):
@@ -128,6 +185,12 @@ class BusinessAvailability(BaseModel):
         description="IANA tz e.g. 'America/New_York'. Falls back to "
                     "practitioner_profiles.timezone then 'UTC'.",
     )
+
+    @field_validator("timezone")
+    @classmethod
+    def _tz_usable(cls, v: Optional[str]) -> Optional[str]:
+        """Never raise — see normalize_tz for why None beats an error."""
+        return normalize_tz(v)
     weekly: WeeklyAvailability = Field(default_factory=WeeklyAvailability)
     overrides: List[DateOverride] = Field(default_factory=list)
     blocks: List[BlockedRange] = Field(default_factory=list)
