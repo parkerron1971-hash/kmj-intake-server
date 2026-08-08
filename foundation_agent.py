@@ -31,6 +31,7 @@ import os
 import llm_call
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -474,12 +475,14 @@ async def get_state_filing_info(state_code: str) -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────
 # Document generators (Phases 4 and 7)
 # ──────────────────────────────────────────────────────────────
-# These are working stubs — they produce real, usable plain-text
-# documents and persist them to foundation_documents. PDF rendering
-# is intentionally deferred to v2.
-# TODO(foundation-track-v2): render these to PDF via reportlab/weasyprint
-# and upload to Supabase Storage. For now we store the source text and
-# the frontend renders it inline.
+# These produce real, usable plain-text documents and persist them to
+# foundation_documents. The source text stays the record — it is what the
+# Chief reads and what a re-render starts from.
+#
+# PDF rendering is no longer deferred: render_document_pdf() below turns any
+# of these into branded paper filed in the Documents vault. Keep the text
+# authoritative and the PDF derived, not the other way round — regenerating
+# a document must never depend on parsing a PDF back.
 
 def _operating_agreement_text(business_name: str, state_code: str, members: List[Dict[str, Any]]) -> str:
     today = datetime.now(timezone.utc).strftime("%B %d, %Y")
@@ -669,6 +672,134 @@ async def generate_privacy_policy(business_id: str, business_data: Dict[str, Any
 
 async def generate_terms_of_service(business_id: str, business_data: Dict[str, Any]) -> Dict[str, Any]:
     return await _generate_policy(business_id, "terms_of_service", business_data)
+
+
+# ──────────────────────────────────────────────────────────────
+# PDF rendering — closes TODO(foundation-track-v2)
+# ──────────────────────────────────────────────────────────────
+# These three documents were produced as plain text and left there. The
+# foundation_documents table has carried an unused `storage_path` column
+# since the original migration, and the frontend rendered the source into
+# a <pre>. So the Operating Agreement a practitioner "generated" was
+# something they had to copy out of a code block by hand.
+#
+# They now render through the same branded builder the contracts use and
+# land in business-documents/{biz}/general/, which IS the Documents vault
+# — that panel lists storage objects under exactly that prefix, so filing
+# the object is filing the document. No new table, no second index.
+
+DOCS_BUCKET = "business-documents"
+
+_PDF_TITLES = {
+    "operating_agreement": "Operating Agreement",
+    "privacy_policy": "Privacy Policy",
+    "terms_of_service": "Terms of Service",
+    "entity_recommendation": "Entity Recommendation",
+}
+
+
+def _slugify(text: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", (text or "document")).strip("-").lower()
+    return (slug or "document")[:60]
+
+
+async def _fetch_document(client: httpx.AsyncClient, document_id: str) -> Optional[Dict[str, Any]]:
+    rows = await _sb_get(client, f"/foundation_documents?id=eq.{document_id}&limit=1") or []
+    return rows[0] if rows else None
+
+
+async def render_document_pdf(document_id: str) -> Dict[str, Any]:
+    """Render a stored foundation document to a branded PDF in the vault.
+
+    Returns the owning business_id so the router can enforce ownership on the
+    real owner of the row rather than on whatever the caller claimed.
+    """
+    import contract_agent
+
+    async with httpx.AsyncClient() as client:
+        doc = await _fetch_document(client, document_id)
+        if not doc:
+            return {"ok": False, "error": "document not found", "status": 404}
+
+        business_id = doc.get("business_id")
+        content = (doc.get("content") or "").strip()
+        if not content:
+            # An entity recommendation stores JSON, not prose. Rendering that
+            # to letterhead would produce an official-looking page of braces.
+            return {"ok": False, "business_id": business_id, "status": 400,
+                    "error": "This document has no written content to render."}
+
+        rows = await _sb_get(
+            client, f"/businesses?id=eq.{business_id}&select=id,name,settings&limit=1") or []
+        if not rows:
+            return {"ok": False, "business_id": business_id, "status": 404,
+                    "error": "business not found"}
+        biz = rows[0]
+        settings = biz.get("settings") or {}
+
+        # The party the document is FOR is the business itself. Prefer the
+        # filed legal name from the identity store (PR 1) over the display name.
+        try:
+            import business_identity
+            identity = await asyncio.to_thread(
+                lambda: business_identity.get_identity(business_id, biz))
+            prepared_for = identity.get("legal_name") or biz.get("name") or "This business"
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"render_document_pdf identity lookup failed: {e}")
+            prepared_for = biz.get("name") or "This business"
+
+        brand = contract_agent.brand_from_business(biz)
+        logo = await contract_agent.fetch_logo_bytes(client, brand.get("logo_url"))
+
+        title = doc.get("title") or _PDF_TITLES.get(doc.get("kind") or "", "Document")
+        try:
+            pdf_bytes = await asyncio.to_thread(
+                lambda: contract_agent.build_document_pdf(
+                    business_name=biz.get("name") or "",
+                    practitioner_name=settings.get("practitioner_name") or biz.get("name") or "",
+                    prepared_for=prepared_for,
+                    subject=title,
+                    body=content,
+                    accent_hex=brand.get("accent") or contract_agent.PDF_ACCENT,
+                    serif=bool(brand.get("serif")),
+                    logo_bytes=logo,
+                ))
+        except ImportError:
+            return {"ok": False, "business_id": business_id, "status": 500,
+                    "error": "PDF rendering is unavailable on this server (reportlab missing)."}
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"render_document_pdf build failed: {e}")
+            return {"ok": False, "business_id": business_id, "status": 500,
+                    "error": f"Could not build the PDF: {e}"}
+
+        stamp = int(datetime.now(timezone.utc).timestamp())
+        path = f"{business_id}/general/{stamp}-{_slugify(title)}.pdf"
+        service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        up = await client.post(
+            f"{_sb_url()}/storage/v1/object/{DOCS_BUCKET}/{path}",
+            headers={"Authorization": f"Bearer {service_key}",
+                     "apikey": service_key,
+                     "Content-Type": "application/pdf"},
+            content=pdf_bytes,
+            timeout=HTTP_TIMEOUT,
+        )
+        if up.status_code >= 400:
+            logger.error(f"foundation PDF upload failed {up.status_code}: {up.text[:200]}")
+            return {"ok": False, "business_id": business_id, "status": 502,
+                    "error": "Couldn't file the PDF in your Documents."}
+
+        # storage_path has existed unused since the first migration. Recording
+        # it means a second render can be recognised as a re-render.
+        await _sb_patch(client, f"/foundation_documents?id=eq.{document_id}",
+                        {"storage_path": path})
+
+        return {
+            "ok": True,
+            "business_id": business_id,
+            "storage_path": path,
+            "pdf_url": f"{_sb_url()}/storage/v1/object/public/{DOCS_BUCKET}/{path}",
+            "size_bytes": len(pdf_bytes),
+        }
 
 
 # ──────────────────────────────────────────────────────────────
