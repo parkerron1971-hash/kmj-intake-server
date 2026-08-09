@@ -122,6 +122,60 @@ def test_brand_engine_router_is_fully_guarded():
     assert not gaps, f"brand_engine_router still has gaps: {gaps}"
 
 
+class TestTheOwnerGap:
+    """A brand-new business has an owner_id and NO business_users row.
+
+    A parallel session hit this exact class on 2026-08-09 (backend #464):
+    seat-only RLS policies locked out the owner, because the owner has no
+    seat. It breaks 100% of new signups and it looks correct in review —
+    every policy present, every role handled, except the one that never
+    appears in the table.
+
+    business_access is safe because role_of compares owner_id BEFORE
+    looking at business_users. That is an ordering, not a guarantee, and
+    a refactor that resolved seats first would reintroduce the bug for
+    every business created after it shipped. So it gets pinned here.
+    """
+
+    OWNER = "11111111-1111-1111-1111-111111111111"
+    BIZ = "22222222-2222-2222-2222-222222222222"
+
+    @pytest.fixture
+    def brand_new_business(self, monkeypatch):
+        import sb_clients
+
+        def _get(path):
+            if path.startswith("/businesses?"):
+                return [{"id": self.BIZ, "owner_id": self.OWNER}]
+            if path.startswith("/business_users?"):
+                return []          # the gap: no seat row exists yet
+            return []
+
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", _get)
+
+    def test_role_of_ranks_the_owner_without_a_seat_row(self, brand_new_business):
+        from business_users_router import role_of
+        assert role_of(self.BIZ, self.OWNER) == "owner"
+
+    def test_the_owner_passes_the_strictest_gate(self, brand_new_business):
+        import business_access
+
+        class _U:
+            id = TestTheOwnerGap.OWNER
+        assert business_access.assert_access(self.BIZ, _U(), "owner") == "owner"
+
+    def test_a_stranger_is_still_refused(self, brand_new_business):
+        """The guard must not have been made permissive to let owners in."""
+        import business_access
+        from fastapi import HTTPException
+
+        class _S:
+            id = "99999999-9999-9999-9999-999999999999"
+        with pytest.raises(HTTPException) as e:
+            business_access.assert_access(self.BIZ, _S(), "viewer")
+        assert e.value.status_code == 404
+
+
 def test_the_guard_binds_the_jwt_not_just_the_role():
     """business_access depends on authed_request, not require_user.
 
