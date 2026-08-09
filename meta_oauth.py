@@ -77,6 +77,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
+import oauth_connect_ticket
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -299,10 +300,40 @@ async def meta_health():
     }
 
 
+@router.get("/connect/meta/start")
+async def meta_connect_start(business_id: str, user: AuthedUser = Depends(require_user)):
+    """The authenticated half of the connect handshake — see
+    oauth_connect_ticket. The redirect below carries no bearer token, so
+    ownership is proved here and handed on as a short-lived ticket."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="business not found")
+    if str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(status_code=403, detail="not authorized for this business")
+    return {"authorize_url":
+            f"/connect/meta?ticket={oauth_connect_ticket.mint(business_id, user.id)}"}
+
+
 @router.get("/connect/meta")
-async def meta_connect(business_id: str):
-    """Redirect the user to Facebook OAuth. The business_id is signed
-    into the state param so we can recover + verify it in the callback."""
+async def meta_connect(business_id: str = "", ticket: str = ""):
+    """Redirect the user to Facebook OAuth.
+
+    The state param is signed, which proves it came from our server — not
+    that whoever holds it owns the business named inside. Without that
+    second fact, anyone could open this URL with a stranger's
+    business_id, authorise with their OWN Facebook account, and have
+    their Pages bound to that tenant. `ticket` supplies the missing fact.
+    """
+    if ticket:
+        verified_biz, _uid = oauth_connect_ticket.verify(ticket)
+        if not verified_biz:
+            raise HTTPException(400, "this connect link expired — start again from the app")
+        business_id = verified_biz
+    elif business_id:
+        if not oauth_connect_ticket.legacy_business_id_allowed():
+            raise HTTPException(400, "connect must be started from the app")
+        oauth_connect_ticket.warn_legacy("meta", business_id)
     if not business_id:
         raise HTTPException(400, "business_id required")
     state = _make_state(business_id)
