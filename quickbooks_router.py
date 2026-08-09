@@ -53,6 +53,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
+import oauth_connect_ticket
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -436,10 +437,48 @@ async def _qbo_post(biz: str, path: str, body: Dict[str, Any]) -> Dict[str, Any]
 
 # ─── OAuth entry + callback (mounted WITHOUT the /quickbooks prefix) ──
 
+def _require_owner(business_id: str, user: AuthedUser) -> None:
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="business not found")
+    if str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(status_code=403, detail="not authorized for this business")
+
+
+@connect_router.get("/connect/quickbooks/start")
+async def qb_connect_start(business_id: str, user: AuthedUser = Depends(require_user)):
+    """The authenticated half of the connect handshake.
+
+    The redirect below cannot check ownership — it is opened with
+    window.open and carries no bearer token, which is why the check was
+    absent rather than merely forgotten. It happens here instead, and
+    the caller gets a short-lived ticket to redirect with.
+    """
+    _require_owner(business_id, user)
+    return {"authorize_url":
+            f"/connect/quickbooks?ticket={oauth_connect_ticket.mint(business_id, user.id)}"}
+
+
 @connect_router.get("/connect/quickbooks")
-async def qb_connect(business_id: str):
-    """Redirect to Intuit's consent screen. business_id rides in the
-    signed state param (CSRF-proof, stateless)."""
+async def qb_connect(business_id: str = "", ticket: str = ""):
+    """Redirect to Intuit's consent screen.
+
+    A signed `state` proves the state came from our server — NOT that
+    whoever holds it owns the business it names. Without that second
+    fact anyone could open this URL with a stranger's business_id,
+    authorise with their own Intuit account, and have their realm bound
+    to that tenant. `ticket` carries the missing fact.
+    """
+    if ticket:
+        verified_biz, _uid = oauth_connect_ticket.verify(ticket)
+        if not verified_biz:
+            raise HTTPException(400, "this connect link expired — start again from the app")
+        business_id = verified_biz
+    elif business_id:
+        if not oauth_connect_ticket.legacy_business_id_allowed():
+            raise HTTPException(400, "connect must be started from the app")
+        oauth_connect_ticket.warn_legacy("quickbooks", business_id)
     if not business_id:
         raise HTTPException(400, "business_id required")
     params = {
