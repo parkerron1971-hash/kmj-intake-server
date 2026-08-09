@@ -1554,3 +1554,26 @@ async def platform_inbox_reply(
         )
     return {"ok": True, "reply": reply_entry, "reply_count": len(replies)}
 
+
+
+# ─── Margin: revenue minus what it cost to serve ─────────────────────
+#
+# The one number nobody had. pricing_config knows every price;
+# api_usage knows every cost; nothing subtracted them. See margin.py for
+# what is and is not counted — in particular that pack revenue is
+# missing because nothing records a pack PURCHASE, so these figures are
+# a floor rather than an estimate.
+
+@router.get("/margin")
+async def platform_margin_view(days: int = 30, _owner=Depends(require_owner)):
+    """Platform-wide margin, per tier, worst 20 accounts first."""
+    import margin
+    return margin.platform_margin(days=max(1, min(365, days)))
+
+
+@router.get("/margin/{business_id}")
+async def business_margin_view(business_id: str, days: int = 30,
+                               _owner=Depends(require_owner)):
+    """One account's revenue, COGS and margin over the window."""
+    import margin
+    return margin.business_margin(business_id, days=max(1, min(365, days)))
