@@ -102,9 +102,21 @@ def test_ttl_zero_disables_the_cache_entirely():
 
 
 def test_gzip_is_installed_on_the_app():
-    import inspect
+    """Composed pages are 100-250KB of inlined CSS/JS shipped to every
+    visitor on every view — they must be compressed.
+
+    This asserted the string "GZipMiddleware" appeared in the first 8,000
+    characters of the module's SOURCE, which measured where a line sits
+    in a file rather than whether the middleware is installed. Adding a
+    comment above it failed the test while gzip kept working perfectly;
+    moving the middleware to the bottom of the file and deleting the call
+    would have passed. Ask the app what middleware it has instead.
+    """
+    from starlette.middleware.gzip import GZipMiddleware
+
     import kmj_intake_automation as app_mod
-    src = inspect.getsource(app_mod)[:8000]
-    assert "GZipMiddleware" in src, (
-        "composed pages are 100-250KB of inlined CSS/JS shipped to every "
-        "visitor — they must be compressed")
+
+    installed = [m.cls for m in app_mod.app.user_middleware]
+    assert GZipMiddleware in installed, (
+        f"GZipMiddleware is not installed on the app; middleware stack is "
+        f"{[c.__name__ for c in installed]}")

@@ -117,7 +117,33 @@ if os.environ.get("SENTRY_DSN"):
     except Exception as _e:
         print(f"   [warn] Sentry init failed: {_e}")
 
-app = FastAPI(title="KMJ Intake Automation")
+# FastAPI serves /docs, /redoc and /openapi.json by default, and nothing
+# here ever turned them off — so the most complete, machine-readable map
+# of this platform (every path, parameter and response shape across ~650
+# routes) was published unauthenticated to anyone who asked. It was also,
+# by some distance, the most agent-legible artifact we had, which is the
+# part worth sitting with: an interface for machines shipped by accident
+# rather than by design.
+#
+# Off by default now; ENABLE_API_DOCS=1 restores them for local work.
+# When there IS a public API it should be a deliberate, versioned
+# document describing the routes we mean to support — not a mirror of
+# every internal handler that happens to exist.
+def api_docs_enabled() -> bool:
+    """Exactly "1" opts in. A separate function so the rule can be tested
+    without reimporting this module — reloading it re-registers ~100
+    routers and 20 scheduler jobs, which is a heavy and side-effecting
+    way to check a string comparison."""
+    return (os.environ.get("ENABLE_API_DOCS") or "").strip() == "1"
+
+
+_docs = api_docs_enabled()
+app = FastAPI(
+    title="KMJ Intake Automation",
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+)
 # CORS — env-driven. Default stays "*" DELIBERATELY: auth is bearer-token
 # (no cookies → no CSRF surface) and the public embeds (booking widget,
 # intake forms) are fetched from arbitrary practitioner-site origins, so a
