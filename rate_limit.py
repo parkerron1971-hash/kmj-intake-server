@@ -44,6 +44,14 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "auditor_link_jti": (int(os.environ.get("RL_AUDITOR_LINK_PER_LINK", "60")), 3600),
     # The ledger navigator: an LLM call plus a ledger row per request.
     "ledger_nav": (int(os.environ.get("RL_LEDGER_NAV_PER_MIN", "12")), 60),
+    # /pulse: anonymous, and the most expensive single request on the
+    # platform — a Sonnet call at 4k tokens with five forced web
+    # searches. It is called once when the app opens in the morning, so
+    # a real caller needs a handful an hour and a script needs none.
+    # Per HOUR rather than per minute, because the thing that matters is
+    # the daily total: spend_guard's ceiling is GLOBAL, so an anonymous
+    # loop here takes AI offline for every tenant at once.
+    "pulse": (int(os.environ.get("RL_PULSE_PER_HOUR", "10")), 3600),
 }
 _DEFAULT = (60, 60)
 
