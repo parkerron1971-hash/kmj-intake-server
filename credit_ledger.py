@@ -68,8 +68,14 @@ def balance(business_id: str) -> int:
 
 def grant_pack(business_id: str, pack: str, stripe_payment_id: str) -> bool:
     """Credit a purchased pack. Idempotent: the UNIQUE index on
-    stripe_payment_id turns a webhook retry into a 409 no-op."""
-    p = CREDIT_PACKS.get(pack)
+    stripe_payment_id turns a webhook retry into a 409 no-op.
+
+    Reads credit_packs() — NOT the import-time CREDIT_PACKS snapshot.
+    #450 moved checkout onto the live table and left this, the GRANT
+    side, on the snapshot: the customer would have been charged from one
+    source and credited from another. That is the exact defect #450's
+    message claimed to close, with the two halves swapped."""
+    p = credit_packs().get(pack)
     if not p:
         logger.error(f"[credits] unknown pack '{pack}' for {business_id}")
         return False

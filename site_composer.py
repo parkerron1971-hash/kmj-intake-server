@@ -5054,7 +5054,18 @@ def approve_design_spec(body: SpecStatusBody,
     the law of the page."""
     _require_owner(body.business_id, session.user.id)
     import spec_author
-    spec = spec_author.set_status(body.business_id, "approved")
+    try:
+        spec = spec_author.set_status(body.business_id, "approved")
+    except spec_author.SpecSaveFailed as e:
+        # #451 made set_status VERIFY its write and raise instead of
+        # silently swallowing a failed PATCH. Good — but this route only
+        # handled the falsy return, so a failed write became a raw 500.
+        # Approving is one click on a page the practitioner is reading;
+        # it deserves a sentence, not a stack trace.
+        logger.error(f"[spec] approve failed to save for "
+                     f"{body.business_id[:8]}: {e}")
+        raise HTTPException(503, "couldn't save the approval just now — "
+                                 "your blueprint is unchanged, please try again")
     if not spec:
         raise HTTPException(409, "no spec to approve — author one first")
     return {"ok": True, "spec": spec}

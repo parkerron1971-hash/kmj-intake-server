@@ -435,7 +435,9 @@ def credits_overview(business_id: str,
         "total_remaining": total_remaining,
         "low": low,
         "low_threshold_pct": LOW_CREDIT_PCT,
-        "catalog": credit_ledger.CREDIT_PACKS,
+        # Live table, not the import-time snapshot — /billing/usage and
+        # this overview must not quote two different catalogues.
+        "catalog": credit_ledger.credit_packs(),
         "weights": s["weights"],
     }
 

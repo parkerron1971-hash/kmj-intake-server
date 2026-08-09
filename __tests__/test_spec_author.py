@@ -516,3 +516,31 @@ def test_spec_usage_row_now_carries_duration(monkeypatch):
     assert logged["endpoint"] == "/composer/spec"
     assert logged["duration_ms"] >= 50, logged
     assert logged["output_tokens"] == 7800
+
+
+def test_approve_route_handles_a_failed_write_as_503_not_500(monkeypatch):
+    """#451 made set_status raise on a lost write, but /spec/approve only
+    handled the falsy return — a failed PATCH became a raw 500. Approving
+    is one click on a page the practitioner is reading; it deserves a
+    sentence. Regression guard for the 2026-08-09 restoration pass."""
+    from fastapi import HTTPException
+    import site_composer
+
+    monkeypatch.setattr(site_composer, "_require_owner", lambda *a, **k: None)
+
+    def _boom(*a, **k):
+        raise spec_author.SpecSaveFailed("PATCH did not land")
+    monkeypatch.setattr(spec_author, "set_status", _boom)
+
+    body = site_composer.SpecStatusBody(business_id="biz-1")
+    sess = type("S", (), {"user": type("U", (), {"id": "u1"})()})()
+    with pytest.raises(HTTPException) as ei:
+        site_composer.approve_design_spec(body, sess)
+    assert ei.value.status_code == 503
+    assert "unchanged" in str(ei.value.detail)
+
+    # The no-spec-to-approve path still answers 409, unchanged.
+    monkeypatch.setattr(spec_author, "set_status", lambda *a, **k: None)
+    with pytest.raises(HTTPException) as ei2:
+        site_composer.approve_design_spec(body, sess)
+    assert ei2.value.status_code == 409

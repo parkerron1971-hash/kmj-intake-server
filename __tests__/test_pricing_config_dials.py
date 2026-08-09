@@ -371,3 +371,55 @@ def test_shipped_packs_undercut_every_tier_and_that_is_flagged(monkeypatch):
         "pack-to-tier pricing moved — if this was deliberate, update the "
         f"pin; if not, the gap just changed silently: {pct}")
     assert len([w for w in e["warnings"] if "cheaper than" in w]) == 3
+
+
+# ─── 6. Dials must reach the endpoint they name (2026-08-09 audit) ───
+
+def test_chat_price_reaches_the_actual_chat_endpoint(monkeypatch):
+    """#448 claimed 'the price list the practitioner reads is the price
+    list they are charged'. It wasn't: /chief/backend — the real Chief
+    chat endpoint — had no key, so it fell to DEFAULT_WEIGHT while
+    price_list() quoted chat_price(). Moving the dial moved the quote
+    and not the charge."""
+    monkeypatch.setenv("PRICE_CHAT_PRICE", "7")
+    pc = _reload_config()
+    import usage_metering as um
+    importlib.reload(um)
+    assert pc.unit_weights()["/chief/backend"] == 7
+    assert um.weight_for("/chief/backend") == 7
+    assert um.price_list()["chat"] == 7          # quote and charge agree
+
+
+def test_one_chief_turn_bills_once_not_per_sub_call():
+    """A turn can fan out to the action reasoner / analyze-hard /
+    ask-transaction. The practitioner asked one question."""
+    import pricing_config as pc
+    w = pc.unit_weights()
+    for sub in ("/chief/action-reasoner", "/chief/analyze-hard",
+                "/chief/ask-transaction"):
+        assert w[sub] == 0, sub
+
+
+def test_proactive_work_is_not_billed():
+    """Insights sweeps and playbook warm-ups are scheduled background
+    jobs — billing them charges someone for a job they never started."""
+    import pricing_config as pc
+    w = pc.unit_weights()
+    assert w["/chief/insights"] == 0
+    assert w["/chief/playbook"] == 0
+    assert w["/platform/chief/message"] == 0
+
+
+def test_packs_are_granted_from_the_same_table_they_are_sold_from():
+    """#450 moved CHECKOUT to credit_packs() and left grant_pack() on the
+    import-time snapshot — charged from one source, credited from
+    another. Asserted behaviourally: move the dial, and the granted
+    units move with it."""
+    import pricing_config
+    import credit_ledger
+    import inspect
+    src = inspect.getsource(credit_ledger.grant_pack)
+    assert "credit_packs()" in src and "CREDIT_PACKS.get" not in src
+    # And the two catalogues the UI can read agree.
+    import usage_metering as um
+    assert credit_ledger.credit_packs() == pricing_config.credit_packs()

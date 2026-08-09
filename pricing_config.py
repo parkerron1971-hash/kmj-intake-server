@@ -240,6 +240,31 @@ def unit_weights() -> Dict[str, int]:
         "/composer/compose": build,
         "/director/build": build,        # legacy engine marker, old rows
 
+        # ── Chief chat: THE unit everything else is denominated in ──
+        # These were missing in #448, which meant chat_price() moved the
+        # number the UI QUOTED while the meter went on charging
+        # DEFAULT_WEIGHT — the exact quote-vs-charge divergence that PR
+        # claimed to close. Explicit now, at the same value, so the dial
+        # reaches the endpoint it names.
+        "/chief/backend": chat_price(),
+        "/chief/backend-fallback": chat_price(),   # backup brain, same turn
+        "/chief/draft": chat_price(),
+        "/ai/proxy": chat_price(),
+        "/composer/coach/turn": chat_price(),
+        # Chief's REASONING sub-calls inside a single turn — the
+        # practitioner asked one question and must not pay three times.
+        "/chief/action-reasoner": 0,
+        "/chief/analyze-hard": 0,
+        "/chief/ask-transaction": 0,
+        # PROACTIVE work the practitioner did not ask for. Priced 0 —
+        # flagged to Kevin 2026-08-09: these are scheduled/background
+        # (insights sweeps, playbook warm-ups), so billing them charges
+        # someone for a job they never started. If they should bill,
+        # they are dials like everything else.
+        "/chief/insights": 0,
+        "/chief/playbook": 0,
+        "/platform/chief/message": 0,      # platform owner, never billable
+
         # ── Per-action prices ──
         "/composer/hero": hero_regen(),
         "/composer/atelier": section_rewrite(),
