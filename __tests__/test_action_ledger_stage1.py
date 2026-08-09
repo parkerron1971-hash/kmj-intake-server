@@ -107,8 +107,17 @@ def test_vocabulary_namespaces_non_chief_sources():
 
 def test_sync_is_idempotent_and_never_raises(monkeypatch):
     calls = []
-    monkeypatch.setattr(audit_log.sb_clients, "sb_post_as_service",
-                        lambda path, rows, prefer=None: calls.append((path, rows)))
+
+    def _stub(path, rows, prefer=None):
+        calls.append((path, rows))
+        # Must return something truthy. list.append returns None, and
+        # None is exactly what sb_clients returns when the write was
+        # REJECTED — so the old stub simulated a failed sync while
+        # asserting a full verb count, and passed only because
+        # sync_action_types could not tell the difference.
+        return [{"verb": "x"}]
+
+    monkeypatch.setattr(audit_log.sb_clients, "sb_post_as_service", _stub)
     n = audit_log.sync_action_types()
     assert n > 150
     assert "on_conflict=verb" in calls[0][0]
