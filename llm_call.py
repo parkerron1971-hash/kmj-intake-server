@@ -50,11 +50,96 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+import time
 from typing import Any, Dict, Mapping, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# ─── Metering at the seam ────────────────────────────────────────────
+#
+# spend_guard is the only global brake on AI spend, and it works by
+# summing api_usage.cost_cents since midnight. 23 modules call this one
+# and never write an api_usage row — so the brake could not see
+# growth_engine, brand_engine, module_spec_generator, foundation_agent,
+# contract_agent, discovery, vertical_distill and sixteen others. The
+# single control meant to stop a runaway was blind to a large slice of
+# the spend it was counting, and credits under-billed by the same.
+#
+# Metering here rather than at those 23 call sites is the difference
+# between fixing 23 files and fixing the class: this is the one
+# transport seam every Anthropic call already passes through, so caller
+# number 24 is covered by code that already exists.
+#
+# The hazard is double counting. 19 modules DO meter themselves, and
+# metering them again here would inflate the very number the brake
+# reads — tripping it early and blocking AI for everyone, the same
+# outage from the opposite direction. So the seam skips modules that
+# meter for themselves, and a drift test recomputes this set from source
+# so it cannot quietly rot.
+_SELF_METERING = frozenset({
+    "ai_proxy", "atelier", "builder_v2", "canvas", "chief_action_reasoner",
+    "chief_insights", "chief_llm", "chief_of_staff", "chief_playbook",
+    "design_coach", "design_intent", "doc_intelligence_router",
+    "doc_templates_router", "passes", "platform_console", "site_composer",
+    "site_concierge", "spec_author", "vision_grader",
+})
+
+# Frames to walk past when deciding who the caller is. model_ladder
+# wraps this seam — blaming it would hide every real caller behind one
+# name and, worse, would let a self-metering module reach the seam
+# disguised as one that isn't.
+_TRANSPARENT = frozenset({"llm_call", "model_ladder"})
+
+
+def _caller_module() -> str:
+    """The first module up the stack that is not this seam or a wrapper."""
+    try:
+        frame = sys._getframe(1)
+        while frame is not None:
+            name = (frame.f_globals.get("__name__") or "").rsplit(".", 1)[-1]
+            if name and name not in _TRANSPARENT:
+                return name
+            frame = frame.f_back
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _meter(response: Any, payload: Optional[Dict[str, Any]],
+           caller: str, started: float) -> None:
+    """Write one api_usage row for a call whose caller does not log it.
+
+    Never raises and never blocks: a metering failure must not fail an
+    AI call that already succeeded.
+    """
+    if caller in _SELF_METERING:
+        return
+    try:
+        if getattr(response, "status_code", 500) >= 400:
+            return
+        data = response.json()
+    except Exception:
+        return
+    try:
+        usage = (data or {}).get("usage") or {}
+        if not usage:
+            return
+        from api_usage_logger import log_api_usage_sync
+        log_api_usage_sync(
+            endpoint=f"llm:{caller}",
+            model=str((data or {}).get("model")
+                      or (payload or {}).get("model") or "unknown"),
+            input_tokens=int(usage.get("input_tokens") or 0),
+            output_tokens=int(usage.get("output_tokens") or 0),
+            cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
+            cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+            duration_ms=int((time.time() - started) * 1000),
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("[llm_call] metering failed for %s: %s", caller, e)
 
 # The Messages API version every call site was already sending.
 ANTHROPIC_VERSION = "2023-06-01"
@@ -139,12 +224,15 @@ async def apost(client: httpx.AsyncClient,
     modules send ensure_ascii=False UTF-8 bytes on purpose)."""
     _route(task)
     body = {"content": content} if content is not None else {"json": payload}
-    return await client.post(
+    caller, started = _caller_module(), time.time()
+    resp = await client.post(
         messages_url(),
         headers=headers(extra_headers, key=key),
         timeout=_CLIENT_DEFAULT if timeout is None else timeout,
         **body,
     )
+    _meter(resp, payload, caller, started)
+    return resp
 
 
 def post_with(client: httpx.Client,
@@ -159,12 +247,15 @@ def post_with(client: httpx.Client,
     timeout=…) as client` shape. Same client-default rule as `apost`."""
     _route(task)
     body = {"content": content} if content is not None else {"json": payload}
-    return client.post(
+    caller, started = _caller_module(), time.time()
+    resp = client.post(
         messages_url(),
         headers=headers(extra_headers, key=key),
         timeout=_CLIENT_DEFAULT if timeout is None else timeout,
         **body,
     )
+    _meter(resp, payload, caller, started)
+    return resp
 
 
 def post(payload: Optional[Dict[str, Any]] = None,
@@ -178,12 +269,15 @@ def post(payload: Optional[Dict[str, Any]] = None,
     for the modules that were already calling httpx.post directly."""
     _route(task)
     body = {"content": content} if content is not None else {"json": payload}
-    return httpx.post(
+    caller, started = _caller_module(), time.time()
+    resp = httpx.post(
         messages_url(),
         headers=headers(extra_headers, key=key),
         timeout=DEFAULT_TIMEOUT if timeout is None else timeout,
         **body,
     )
+    _meter(resp, payload, caller, started)
+    return resp
 
 
 def astream(client: httpx.AsyncClient,
