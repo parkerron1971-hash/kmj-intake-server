@@ -150,6 +150,16 @@ def _compile(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]],
 
     A(f"CANVAS BRIEF — {biz.get('name') or 'this business'}")
     A("")
+    # THE BRAND MARK (2026-08-09) — the canvas author had no logo either.
+    # Its image vocabulary is the 9-name slot allowlist plus the gallery,
+    # and the mark lives in businesses.settings.brand_kit. See brand_mark.
+    try:
+        import brand_mark
+        A(brand_mark.real_data_block(ctx, str(biz.get("id") or ""),
+                                     str(biz.get("name") or "")))
+        A("")
+    except Exception as e:
+        logger.info(f"[canvas-brief] brand mark skipped: {e}")
 
     # ── THE APPROVED SPEC (Director's Cut arc 3) ──
     # The owner read and approved this document; it outranks everything

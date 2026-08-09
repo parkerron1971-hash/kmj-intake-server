@@ -143,6 +143,7 @@ OUTPUT: the HTML document only. No commentary, no code fences."""
 import design_moves as _dm
 _SYSTEM = _SYSTEM + chr(10)*2 + _dm.builder_block(
     "the element's own class")
+_SYSTEM = _SYSTEM + "\n\n== TWO HARD RULES ON WHAT THE PAGE DOES WITHOUT HELP ==\n\n1. THE PAGE MUST SURVIVE WITHOUT JAVASCRIPT.\nScroll-reveal is the classic way to ship a blank page. If you write\n`.reveal{opacity:0}` and clear it from script, then ANY script error, a\nblocked asset, or a crawler that does not execute JS sees your nav and a\nblack rectangle. On the live site this hid 14 elements below the hero.\nSo: gate every reveal on a class the script itself adds, and give a\nno-script escape.\n\n   <script>document.documentElement.className+=' js'</script>  (put it in <head>)\n   .js .reveal{opacity:0;transform:translateY(14px)}\n   .js .reveal.in{opacity:1;transform:none}\n   <noscript><style>.reveal{opacity:1!important;transform:none!important}</style></noscript>\n\nNever write a bare `.reveal{opacity:0}`. Content is visible by default and\nJS may only take it away.\n\n2. THE BRAND MARK IS NOT A PORTFOLIO PIECE.\nUse the BRAND MARK url from the real-data block for the header logo, and\nnothing else. If no mark was supplied, set a typographic wordmark. A\ngallery image in the header is a broken brand: it shipped once as a\n1200x675 campaign flyer squashed into a 59x34 box. Give the mark its own\nbox with object-fit: contain so it keeps its aspect ratio.\n"
 
 def build_user_prompt(spec_text: str, real_data: str,
                       violations: Optional[List[str]] = None,
@@ -226,6 +227,21 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
     if imgs:
         parts.append("IMAGES (every one appears on the page, exact urls):\n"
                      + "\n".join(dict.fromkeys(imgs)))
+    # THE BRAND MARK (2026-08-09, Kevin: "my logo doesn't get on the site").
+    # The inventory above is slots + gallery, and the owner's logo lives in
+    # NEITHER — it is uploaded to businesses.settings.brand_kit. The word
+    # "logo" appeared zero times in this file, canvas.py and atelier.py, so
+    # no page author had ever been handed one. The Director COULD see it
+    # (spec_author sends it as a vision block) and wrote specs referencing a
+    # mark in the header; the builder, holding only portfolio pieces,
+    # drafted a 1200x675 campaign flyer into a 59x34 header slot and
+    # shipped it as the brand.
+    try:
+        import brand_mark
+        parts.append(brand_mark.real_data_block(
+            ctx, business_id, (biz.get("name") or "")))
+    except Exception as e:
+        logger.info(f"[v2] brand mark skipped: {e}")
     try:
         import discovery
         dd = (((ctx.get("site") or {}).get("site_config") or {})

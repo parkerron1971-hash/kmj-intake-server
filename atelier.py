@@ -938,6 +938,7 @@ import design_moves as _dm
 
 _SYSTEM_PROMPT = _SYSTEM_PROMPT + "\n\n" + _dm.builder_block(
     "your .atl-{uid} root class")
+_SYSTEM_PROMPT = _SYSTEM_PROMPT + "\n\n== TWO HARD RULES ON WHAT THE PAGE DOES WITHOUT HELP ==\n\n1. THE PAGE MUST SURVIVE WITHOUT JAVASCRIPT.\nScroll-reveal is the classic way to ship a blank page. If you write\n`.reveal{opacity:0}` and clear it from script, then ANY script error, a\nblocked asset, or a crawler that does not execute JS sees your nav and a\nblack rectangle. On the live site this hid 14 elements below the hero.\nSo: gate every reveal on a class the script itself adds, and give a\nno-script escape.\n\n   <script>document.documentElement.className+=' js'</script>  (put it in <head>)\n   .js .reveal{opacity:0;transform:translateY(14px)}\n   .js .reveal.in{opacity:1;transform:none}\n   <noscript><style>.reveal{opacity:1!important;transform:none!important}</style></noscript>\n\nNever write a bare `.reveal{opacity:0}`. Content is visible by default and\nJS may only take it away.\n\n2. THE BRAND MARK IS NOT A PORTFOLIO PIECE.\nUse the BRAND MARK url from the real-data block for the header logo, and\nnothing else. If no mark was supplied, set a typographic wordmark. A\ngallery image in the header is a broken brand: it shipped once as a\n1200x675 campaign flyer squashed into a 59x34 box. Give the mark its own\nbox with object-fit: contain so it keeps its aspect ratio.\n"
 
 
 # ─── Site Arc 11 — THE RESIDENT CREATOR: refine one section ──────────
