@@ -1571,6 +1571,79 @@ def _format_business_profile_block(ctx: Dict[str, Any]) -> str:
     return f"{block}\n{steering}\n"
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Untrusted content boundary.
+#
+# Inbound SMS bodies and email replies are written by whoever sent them,
+# and they are interpolated into the system prompt so Chief can quote a
+# client verbatim — which is the whole point of the Email Hub. The cost
+# is that a stranger gets to put text next to the operating instructions,
+# and the action parser downstream is deliberately tolerant (it recovers
+# malformed tags rather than dropping them). So a reply body containing
+# an [ACTION:{...}] tag is a live instruction-injection path, and the
+# single-target class-C verbs it could reach — send one email, send one
+# SMS — execute immediately by design.
+#
+# Two moves, in order of how much they matter:
+#
+#   1. Defuse the tag syntax in third-party text before it reaches the
+#      prompt. This is the real fix — it removes the capability rather
+#      than guarding it, and costs nothing in normal operation because
+#      no genuine client reply contains "[ACTION:".
+#
+#   2. Remember that it happened. A neutralised span is not a formatting
+#      quirk, it is someone trying; the turn is marked and single-target
+#      class-C sends hold for confirmation rather than firing. Narrow on
+#      purpose: gating every turn that merely HAS an inbound message
+#      would hold almost every send and would quietly overturn the
+#      registry's standing doctrine that a practitioner's chat request
+#      IS the approval. Only an actual attempt changes the behaviour.
+# ─────────────────────────────────────────────────────────────────────
+
+_UNTRUSTED_TAINT: "contextvars.ContextVar[int]" = contextvars.ContextVar(
+    "chief_untrusted_taint", default=0)
+
+# "[ACTION", optionally spaced, optionally followed by a colon. The word
+# boundary keeps ordinary prose safe — "take action on that invoice" and
+# "what action should I take?" are not attempts and must not hold a send.
+_ACTION_TAGLIKE_RE = re.compile(r"\[\s*action\b\s*:?", re.IGNORECASE)
+
+
+def _neutralize_untrusted(text: Any) -> str:
+    """Strip action-tag syntax out of third-party-authored text.
+
+    Returns the defused string and bumps the per-turn taint counter when
+    anything was found. The replacement is visible rather than silent —
+    the practitioner should be able to see that a client's message tried
+    this, and Chief should be able to describe it.
+    """
+    s = _as_str(text or "")
+    if not s:
+        return ""
+    # ONE pattern decides both "is this an attempt" and "what gets
+    # rewritten" — a detector stricter than its own substitution is how
+    # "[  ACTION :" slips through a guard that only looked for "[action".
+    #
+    # Deliberately wider than the parser: it matches "[ACTION:" exactly,
+    # but a near-miss is still someone trying, and a model told to
+    # "repeat the following exactly" can supply the colon itself.
+    out, n = _ACTION_TAGLIKE_RE.subn("[redacted-tag ", s)
+    if not n:
+        return s
+    _UNTRUSTED_TAINT.set(_UNTRUSTED_TAINT.get() + n)
+    logger.warning(
+        "[chief] neutralised action-tag syntax in third-party content — "
+        "treating this turn as tainted; class-C sends will hold for "
+        "confirmation."
+    )
+    return out
+
+
+def untrusted_taint() -> int:
+    """How many third-party spans were defused while building this turn."""
+    return _UNTRUSTED_TAINT.get()
+
+
 def _format_sms_block(ctx: Dict[str, Any]) -> str:
     """Render the recent SMS thread for the system prompt.
 
@@ -1601,7 +1674,10 @@ def _format_sms_block(ctx: Dict[str, Any]) -> str:
         name = contact_by_id.get(cid, {}).get("name") or m.get("phone_number") or "Unknown"
         direction = "->" if m.get("direction") == "outbound" else "<-"
         flag = " [UNREAD]" if m.get("direction") == "inbound" and not m.get("read") else ""
-        body = (m.get("message") or "").replace("\n", " ").strip()
+        # Inbound bodies are written by the sender; outbound ones by us or
+        # by Chief. Defuse either way — an outbound row can carry text a
+        # client dictated over the phone.
+        body = _neutralize_untrusted(m.get("message") or "").replace("\n", " ").strip()
         if len(body) > 140:
             body = body[:140] + "…"
         when = (m.get("created_at") or "")[:16]
@@ -1637,9 +1713,13 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
         "",
     ]
     for r in replies[:6]:
-        name = r.get("from_name") or contact_by_id.get(r.get("contact_id") or "", {}).get("name") or r.get("from_email") or "Unknown"
-        subject = (r.get("subject") or "").strip() or "(no subject)"
-        body = (r.get("body_text") or "").strip()
+        # from_name and subject are attacker-chosen too, not just the body.
+        name = _neutralize_untrusted(
+            r.get("from_name")
+            or contact_by_id.get(r.get("contact_id") or "", {}).get("name")
+            or r.get("from_email") or "Unknown")
+        subject = _neutralize_untrusted(r.get("subject") or "").strip() or "(no subject)"
+        body = _neutralize_untrusted(r.get("body_text") or "").strip()
         # Trim to ~280 chars for prompt economy; the full body is one
         # mark_reply_read action away if the Chief needs more.
         if len(body) > 280:
@@ -1672,6 +1752,10 @@ def _format_site_info(ctx: Dict[str, Any]) -> str:
 
 
 def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
+    # One turn, one taint count. Reset here rather than in the injectors
+    # so it doesn't matter which of them runs first, or whether a given
+    # turn renders both blocks at all.
+    _UNTRUSTED_TAINT.set(0)
     """Compact text block for the system prompt."""
     if not ctx:
         return "NO BUSINESS DATA AVAILABLE."
@@ -4095,9 +4179,17 @@ async def _should_auto_approve(
         if not verdict.allowed:
             return False, verdict.rule
     except Exception as e:
-        # Fail OPEN to preserve today's behaviour on an engine hiccup —
-        # but say so, because a silent skip here is a silent send.
-        print(f"[Chief] policy check unavailable, autopilot proceeding: {e}", flush=True)
+        # Fail CLOSED. This used to proceed on an engine hiccup to
+        # preserve existing behaviour, with a comment noting that a
+        # silent skip here is a silent send — which is exactly the
+        # argument for not doing it. This function is the unattended
+        # sender: if the check that decides whether a regulated practice
+        # may contact a client cannot run, the answer is no. The cost of
+        # being wrong is a draft that waits for a human; the cost the
+        # other way is a therapist's client receiving mail their
+        # practitioner's own settings forbade.
+        print(f"[Chief] policy check unavailable, holding draft: {e}", flush=True)
+        return False, "policy_engine_unavailable"
 
     level = _autopilot_level(biz, agent_name)
     if level == "manual":
@@ -11474,6 +11566,27 @@ async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
         # Single-target class C: the practitioner asked in chat — that is
         # the approval (action_registry doctrine: class C means never
         # UNPROMPTED, not never).
+        #
+        # Unless the prompt this turn was built over third-party text that
+        # tried to smuggle an action tag. Then "the practitioner asked"
+        # is precisely what is in doubt, and the doctrine's premise does
+        # not hold. Hold for confirmation instead of sending.
+        if untrusted_taint():
+            logger.warning(
+                f"[gate] holding single-target class-C {atype}: this turn's "
+                f"context contained neutralised action-tag syntax from "
+                f"third-party content")
+            return "handled", {
+                "type": atype,
+                "result": (
+                    "Failed: I held this one. A message in your inbox "
+                    "contained text shaped like an instruction to me — "
+                    "which is how someone would try to make me send "
+                    "something on your behalf. I ignored the instruction. "
+                    "If this was your idea, ask me again and I'll do it."),
+                "label": f"Held: {_humanize_action_type(atype)} (suspicious content in inbox)",
+                "nav": None, "failed": True,
+            }
         return "execute", None
 
     if registry_ok and bulk:
