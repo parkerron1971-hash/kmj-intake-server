@@ -120,9 +120,17 @@ _INTENTIONALLY_PUBLIC = {
 }
 
 
+# Either satisfies this sweep. business_access is the STRONGER of the
+# two — it authenticates, binds the JWT for RLS, and then checks the
+# caller's role on the business named in the path — so a route that has
+# it does not also need require_user, and adding one back would be a
+# downgrade dressed as belt-and-braces.
+_AUTH_MARKERS = ("require_user", "business_access")
+
+
 def test_no_site_write_endpoint_is_accidentally_public():
-    """Sweep: every /sites/{business_id}/... POST either depends on
-    require_user or is explicitly declared public above. smart-preview
+    """Sweep: every /sites/{business_id}/... POST either authenticates
+    the caller or is explicitly declared public above. smart-preview
     shipped with neither — it rendered a tenant's real brand + content
     for anyone who knew a business_id."""
     src = pathlib.Path(public_site.__file__).read_text(encoding="utf-8")
@@ -133,7 +141,8 @@ def test_no_site_write_endpoint_is_accidentally_public():
     for path, fn_name, params in blocks:
         if path in _INTENTIONALLY_PUBLIC:
             continue
-        assert "require_user" in params, (
+        assert any(m in params for m in _AUTH_MARKERS), (
             f"POST /sites/{{business_id}}/{path} ({fn_name}) has no auth — "
-            f"add require_user, or declare it in _INTENTIONALLY_PUBLIC "
-            f"with a reason")
+            f"add Depends(business_access(...)) (preferred: it also checks "
+            f"the caller's role on this business) or require_user, or "
+            f"declare it in _INTENTIONALLY_PUBLIC with a reason")

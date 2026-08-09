@@ -15,7 +15,9 @@ from fastapi.responses import JSONResponse
 
 import brand_engine
 import sb_clients
-from auth_supabase import UserSession
+from auth_supabase import AuthedUser, UserSession, require_user
+
+from business_access import assert_access, business_access
 
 router = APIRouter(prefix="/brand", tags=["brand"])
 logger = logging.getLogger("brand_engine_router")
@@ -48,7 +50,7 @@ def health() -> JSONResponse:
 @router.get("/bundle/{business_id}")
 def bundle(
     business_id: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("viewer")),
 ) -> JSONResponse:
     try:
         b = brand_engine.get_bundle(business_id)
@@ -62,7 +64,7 @@ def bundle(
 def save(
     business_id: str,
     body: Dict[str, Any],
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> JSONResponse:
     """Body: {kit: {...}}"""
     kit = body.get("kit") if isinstance(body, dict) else None
@@ -76,7 +78,7 @@ def save(
 def restore(
     business_id: str,
     body: Dict[str, Any],
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> JSONResponse:
     """Body: {snapshot_idx: 0|1}"""
     try:
@@ -90,7 +92,7 @@ def restore(
 @router.post("/generate-from-context/{business_id}")
 def generate(
     business_id: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> JSONResponse:
     result = brand_engine.generate_from_context(business_id)
     return JSONResponse(result, status_code=200 if result.get("ok") else 400)
@@ -100,7 +102,7 @@ def generate(
 def learn(
     business_id: str,
     body: Dict[str, Any],
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> JSONResponse:
     """Body: {url: "https://..."}"""
     url = (body or {}).get("url") if isinstance(body, dict) else None
@@ -117,10 +119,15 @@ async def upload_brand_asset(
     business_id: str = Form(...),
     variant: str = Form(...),
     file: UploadFile = File(...),
-    _: UserSession = Depends(sb_clients.authed_request),
+    user: AuthedUser = Depends(require_user),
 ) -> JSONResponse:
     """Upload an asset variant. Multipart form: business_id, variant, file.
     Variants: primary, logo_light, logo_dark, square, favicon, social_card."""
+    # Imperative form, not the dependency: business_id arrives as a FORM
+    # field here, and a dependency's own parameters resolve out of the
+    # QUERY string — the dependency would reject every valid upload
+    # looking for a `?business_id=` that never comes.
+    assert_access(business_id, user, "admin")
     file_bytes = await file.read()
     result = brand_engine.upload_asset(
         business_id=business_id,
@@ -138,7 +145,7 @@ async def upload_brand_asset(
 def remove_brand_asset(
     business_id: str,
     body: Dict[str, Any],
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> JSONResponse:
     """Body: {variant: 'primary' | 'logo_dark' | ...}"""
     variant = (body or {}).get("variant") if isinstance(body, dict) else None
@@ -162,6 +169,11 @@ def remove_brand_asset(
 def diag_recent_brand_kits(
     limit: int = 20,
     name_filter: str = "",
+    # Left as a plain session check: this route names NO business — it
+    # lists across them — so there is nothing for business_access to
+    # scope to. Whether it should be platform-owner-only is a real
+    # question and a separate one; making it look guarded here would be
+    # worse than leaving it visibly as it was.
     _: UserSession = Depends(sb_clients.authed_request),
 ) -> JSONResponse:
     """List recently-updated businesses + their brand_kit color shapes.
