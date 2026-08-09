@@ -156,9 +156,17 @@ def log_api_usage_sync(
     cache_creation_tokens: int = 0,
     cost_cents_override: Optional[float] = None,
     units: Optional[int] = None,
+    duration_ms: Optional[int] = None,
 ) -> None:
     """Synchronous variant for sync call sites (composer/director). Same
     row shape; never raises.
+
+    `duration_ms` was async-only until 2026-08-09, which meant every
+    composer and spec row had a NULL duration. When the Design Studio's
+    blueprint call started timing out the browser, the one number that
+    would have settled why — how long the call actually took — did not
+    exist for any of the thirteen prior runs. Pass it wherever the call
+    site can measure it.
 
     `units` = the PRICE of this action in credits, written onto the row.
     Pass it whenever the price is not a flat function of the endpoint —
@@ -185,6 +193,7 @@ def log_api_usage_sync(
     if business_id: body["business_id"] = business_id
     if task_type:   body["task_type"] = task_type
     if units is not None: body["units"] = int(units)
+    if duration_ms is not None: body["duration_ms"] = int(duration_ms)
     try:
         httpx.post(
             f"{SUPABASE_URL}/rest/v1/api_usage",

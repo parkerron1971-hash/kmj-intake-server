@@ -100,6 +100,23 @@ KIND_META: Dict[str, Dict[str, Any]] = {
         "done": "your section rework is ready",
         "nav": "build:mysite",
     },
+    # 2026-08-09 — THE BLUEPRINT. The longest single LLM call the product
+    # makes (a live draft ran 30.6k in / 7.8k out) and it used to sit on a
+    # synchronous request, so the browser gave up while the server happily
+    # finished and charged for it. Same road as rebuild_site now: the job
+    # outlives the tab, and the desktop recap announces it.
+    "author_spec": {
+        "label": "Blueprint",
+        "working": "drafting your design blueprint",
+        "done": "your blueprint is ready to read",
+        "nav": "build:mysite",
+    },
+    "revise_spec": {
+        "label": "Blueprint revision",
+        "working": "revising your design blueprint",
+        "done": "your revised blueprint is ready",
+        "nav": "build:mysite",
+    },
 }
 
 
@@ -184,6 +201,21 @@ def _execute_kind(kind: str, business_id: str, params: dict,
             business_id,
             section=str((params or {}).get("section") or ""),
             instruction=str((params or {}).get("instruction") or ""),
+            progress_cb=progress)
+        return result if isinstance(result, dict) else {}
+    if kind in ("author_spec", "revise_spec"):
+        # THE BLUEPRINT (2026-08-09). Text-only — never triggers a build,
+        # never touches the composed page. author_spec_work returns
+        # {ok: false, error} for the honest failures (nothing to revise,
+        # notes missing, the author didn't answer, the save didn't land),
+        # so those complete as jobs carrying their reason rather than
+        # crashing — the practitioner needs to know whether they were
+        # charged, and a stack trace can't tell them.
+        from site_composer import author_spec_work
+        result = author_spec_work(
+            business_id,
+            notes=str((params or {}).get("notes") or ""),
+            revise=(kind == "revise_spec"),
             progress_cb=progress)
         return result if isinstance(result, dict) else {}
     raise ValueError(f"unknown job kind: {kind}")
@@ -370,6 +402,50 @@ async def rebuild_site_endpoint(req: _RebuildReq,
                 params["design_prefs"] = prefs
         job = await enqueue(client, user_id=uid, business_id=req.business_id,
                             kind="rebuild_site", params=params, source="desktop")
+    out = {"ok": True, "job_id": (job or {}).get("id")}
+    if (job or {}).get("deduped"):
+        out["deduped"] = True
+    return out
+
+
+class _SpecJobReq(BaseModel):
+    business_id: str
+    notes: Optional[str] = None      # owner's words; REQUIRED when revising
+    revise: bool = False
+
+
+@router.post("/jobs/spec")
+async def author_spec_endpoint(req: _SpecJobReq,
+                               user_session: UserSession = Depends(require_user_session)):
+    """Enqueue blueprint authoring (or revision) as a BACKGROUND job.
+
+    THE CANONICAL BLUEPRINT PATH (2026-08-09). The synchronous
+    /composer/spec/author still works for older clients, but it regularly
+    outlives the browser: one live draft ran 30.6k in / 7.8k out, the
+    request died, and the practitioner saw "failed to fetch" over a call
+    that had actually SUCCEEDED and been charged for. Enqueuing means the
+    work outlives the tab and the result is readable afterwards, so a
+    timeout can never again cost a second full charge.
+
+    Ownership verified before enqueuing, same as the rebuild path."""
+    uid = getattr(getattr(user_session, "user", None), "id", None)
+    if not uid:
+        raise HTTPException(401, "auth required")
+    notes = (req.notes or "").strip()
+    if req.revise and not notes:
+        raise HTTPException(400, "revision notes are required")
+    async with httpx.AsyncClient() as client:
+        owned = await _sb(client, "GET",
+                          f"/businesses?id=eq.{req.business_id}&owner_id=eq.{uid}"
+                          "&select=id&limit=1")
+        if not owned:
+            raise HTTPException(403, "not your business")
+        params: Dict[str, Any] = {}
+        if notes:
+            params["notes"] = notes[:2000]
+        job = await enqueue(client, user_id=uid, business_id=req.business_id,
+                            kind=("revise_spec" if req.revise else "author_spec"),
+                            params=params, source="desktop")
     out = {"ok": True, "job_id": (job or {}).get("id")}
     if (job or {}).get("deduped"):
         out["deduped"] = True

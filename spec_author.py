@@ -28,6 +28,7 @@ import llm_call
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -434,9 +435,11 @@ def _call_llm(system: str, user: str, business_id: str,
                         **model_ladder.sampling_kwargs(model, SPEC_TEMPERATURE))
                 raise
 
+        _started_ms = int(time.monotonic() * 1000)
         msg, used_model = model_ladder.call_with_ladder(
             _do, model=_model(), task="spec_author",
             business_id=business_id, max_tokens=SPEC_MAX_TOKENS)
+        _elapsed_ms = int(time.monotonic() * 1000) - _started_ms
         if getattr(msg, "stop_reason", "") == "max_tokens":
             # The document was cut mid-sentence — ship it anyway (the
             # owner can revise) but say so LOUDLY; a silent truncation
@@ -450,9 +453,18 @@ def _call_llm(system: str, user: str, business_id: str,
                 endpoint="/composer/spec", model=used_model or "",
                 input_tokens=getattr(u, "input_tokens", 0) or 0,
                 output_tokens=getattr(u, "output_tokens", 0) or 0,
-                business_id=business_id, task_type="spec_author")
+                business_id=business_id, task_type="spec_author",
+                duration_ms=_elapsed_ms)
         except Exception:
             pass
+        # The blueprint is the longest single LLM call the product makes.
+        # Log the wall-clock LOUDLY: this is what a synchronous caller is
+        # waiting on, and it is the number that was missing when the
+        # Design Studio started timing out.
+        logger.info(f"[spec] authored for {business_id[:8]} in "
+                    f"{_elapsed_ms / 1000:.1f}s "
+                    f"({getattr(getattr(msg, 'usage', None), 'output_tokens', 0)} "
+                    f"output tokens, model={used_model})")
         return "".join(b.text for b in msg.content
                        if getattr(b, "type", None) == "text")
     except Exception as e:
@@ -619,10 +631,48 @@ def get_spec(business_id: str) -> Optional[Dict[str, Any]]:
     return spec if isinstance(spec, dict) and spec.get("text") else None
 
 
+class SpecSaveFailed(RuntimeError):
+    """The spec was authored but could not be persisted.
+
+    A DISTINCT exception because the two failures need different words to
+    the practitioner: 'the author is unavailable, try again' costs them
+    nothing, while this one means we already spent their credits and lost
+    the result. Never collapse them into a generic 502."""
+
+
+def _patch_site_config(row_id: str, cfg: Dict[str, Any], what: str) -> None:
+    """PATCH site_config and VERIFY the write landed.
+
+    THE SILENT-LOSS BUG (2026-08-09, Kevin's blueprint that vanished):
+    this used to be a bare sb_patch_as_service() whose return value was
+    dropped on the floor, and the caller returned the spec dict either
+    way. A failed write was indistinguishable from a successful one — the
+    API answered "here is your blueprint, revision 14" with nothing in
+    the database, and the 20.88c the authoring call cost was gone with
+    no trace but an api_usage row.
+
+    sb_patch_as_service sends Prefer: return=representation, so a
+    successful PATCH returns the updated rows and any failure (4xx/5xx or
+    transport) returns None. That makes the check a truthiness test —
+    which is exactly the check that was missing."""
+    import sb_clients
+    res = sb_clients.sb_patch_as_service(
+        f"/business_sites?id=eq.{row_id}", {"site_config": cfg})
+    if not res:
+        # sb_clients already logged the status + body. Raise so the
+        # caller cannot report success over a lost write.
+        raise SpecSaveFailed(
+            f"the design spec was written but not saved ({what}) — "
+            "site_config PATCH did not land")
+
+
 def save_spec(business_id: str, text: str,
               status: str = "draft") -> Optional[Dict[str, Any]]:
-    """Persist the spec document. Bumps revision when one exists."""
-    import sb_clients
+    """Persist the spec document. Bumps revision when one exists.
+
+    Raises SpecSaveFailed if the write does not land — see
+    _patch_site_config. Returns None only when there is no site row to
+    write to, which is a different (and harmless) condition."""
     row = _site_row(business_id)
     if not row:
         return None
@@ -636,13 +686,13 @@ def save_spec(business_id: str, text: str,
         "revision": int(prior.get("revision") or 0) + 1,
     }
     cfg["design_spec"] = spec
-    sb_clients.sb_patch_as_service(
-        f"/business_sites?id=eq.{row['id']}", {"site_config": cfg})
+    _patch_site_config(row["id"], cfg, f"save_spec rev {spec['revision']}")
+    logger.info(f"[spec_author] saved spec rev {spec['revision']} "
+                f"({len(spec['text'])} chars) for {business_id[:8]}")
     return spec
 
 
 def set_status(business_id: str, status: str) -> Optional[Dict[str, Any]]:
-    import sb_clients
     row = _site_row(business_id)
     if not row:
         return None
@@ -653,8 +703,7 @@ def set_status(business_id: str, status: str) -> Optional[Dict[str, Any]]:
     spec = dict(spec)
     spec["status"] = status
     cfg["design_spec"] = spec
-    sb_clients.sb_patch_as_service(
-        f"/business_sites?id=eq.{row['id']}", {"site_config": cfg})
+    _patch_site_config(row["id"], cfg, f"set_status {status}")
     return spec
 
 
