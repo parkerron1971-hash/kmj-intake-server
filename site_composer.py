@@ -2121,7 +2121,22 @@ _RESTORE_KEYS = ("page_spec", "atelier", "design_rationale_id", "dro_status",
                  "quality_report", "generated_html", "html_generated_at",
                  # Canvas Pass: the keep-better restore must reinstate the
                  # canvas document + report with everything else.
-                 "canvas", "canvas_report")
+                 "canvas", "canvas_report",
+                 # THE VERDICT MUST TRAVEL WITH ITS PAGE (2026-08-09).
+                 # It didn't, and that cost a real build. Kevin restored a
+                 # canvas page at 01:56; vision_verdict stayed behind
+                 # holding the DISCARDED build's composite of 30. The next
+                 # build scored 25, PASSED the quality bar
+                 # (passes_gate: true), and was destroyed anyway by the
+                 # never-downgrade ratchet comparing it against a score
+                 # belonging to a page that no longer existed — $4.73 and
+                 # 26 minutes for nothing. A verdict is a description of
+                 # one specific page; leaving it behind makes the ratchet
+                 # defend a ghost.
+                 "vision_verdict", "vision_verdict_prior",
+                 # Same argument: these describe the page that was built,
+                 # and are displayed as facts about the live page.
+                 "invention_verification", "html_source")
 
 
 def restore_previous_compose(business_id: str) -> Dict[str, Any]:
@@ -2152,6 +2167,21 @@ def restore_previous_compose(business_id: str) -> Dict[str, Any]:
     for k, v in (prev.get("keys") or {}).items():
         if k in _RESTORE_KEYS:
             cfg[k] = v
+
+    # LEGACY SNAPSHOTS. A slot banked before a key joined _RESTORE_KEYS
+    # carries no value for it, so the swap above drops it. For a pure
+    # DESCRIPTION that is the honest answer — an absent verdict beats one
+    # belonging to another page, which is the bug this list just fixed.
+    # html_source is different: it ROUTES rendering
+    # (public_site._use_smart_sites returns early on "module-composer"),
+    # so losing it can let the retired Smart Sites engine shadow the page.
+    # Derive it from what actually came back instead of dropping it.
+    if "html_source" not in cfg:
+        if isinstance(cfg.get("canvas"), dict) and cfg.get("canvas"):
+            cfg["html_source"] = "canvas"
+        elif cfg.get("generated_html"):
+            cfg["html_source"] = "module-composer"
+
     cfg["previous_compose"] = cur_snapshot
     sb_clients.sb_patch_as_service(
         f"/business_sites?id=eq.{site['id']}",
