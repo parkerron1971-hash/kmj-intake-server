@@ -335,6 +335,14 @@ WHAT MEDIOCRE LOOKS LIKE (never do these):
 You never invent facts, prices, testimonials, stats or credentials. You render ONLY the data you are given, in the concept's voice — the data sections are pre-rendered truth, and the fact-checker traces every number on the page back to the business data."""
 
 
+
+# THE PRIMITIVES (2026-08-09 design review) — see design_moves.
+# The atmosphere techniques the spec names were never taught to any
+# author, while the colour validator banned the natural syntax.
+import design_moves as _dm
+_SYSTEM_PROMPT = _SYSTEM_PROMPT + chr(10)*2 + _dm.builder_block(
+    "your section's scope class")
+
 def _canvas_contract(span: List[Dict[str, Any]], is_final: bool,
                      kf_budget: int) -> str:
     """The canvas HARD OUTPUT CONTRACT (§4) — the atelier's 11 clauses

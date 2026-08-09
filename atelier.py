@@ -926,6 +926,20 @@ def _module_fields(kind: str) -> Tuple[str, ...]:
         return ()
 
 
+# THE PRIMITIVES (2026-08-09 design review). Until today this prompt asked
+# for atmosphere in ADJECTIVES while the colour validator BANNED the natural
+# way to write it (non-neutral rgba) and nothing anywhere taught the one
+# legal technique — color-mix() against the --sx-* tokens. color-mix
+# appeared 134 times in site_modules/ and ZERO times in any authoring
+# prompt, so every AI-authored surface came out structurally flatter than
+# the template it replaced, and the judge kept marking it down for exactly
+# that absence. Appended here, ABOVE the refine prompt, so both inherit it.
+import design_moves as _dm
+
+_SYSTEM_PROMPT = _SYSTEM_PROMPT + "\n\n" + _dm.builder_block(
+    "your .atl-{uid} root class")
+
+
 # ─── Site Arc 11 — THE RESIDENT CREATOR: refine one section ──────────
 
 _REFINE_SYSTEM_PROMPT = _SYSTEM_PROMPT + """

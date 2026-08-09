@@ -29,6 +29,8 @@ import logging
 import os
 import re
 import time
+
+import design_moves
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -59,7 +61,7 @@ def _model() -> str:
 # The format is taught as a RUBRIC (the shape of decidedness), never a
 # lookup table of content — the standing generalization rule.
 
-_SYSTEM = """You are the DIRECTOR — a senior creative director writing the complete design specification for one business's website. A builder (another craftsperson) will execute your document exactly as written, so the quality of the final page equals the decidedness of your spec.
+_SYSTEM_TEMPLATE = """You are the DIRECTOR — a senior creative director writing the complete design specification for one business's website. A builder (another craftsperson) will execute your document exactly as written, so the quality of the final page equals the decidedness of your spec.
 
 THE ARCHAEOLOGY — do this FIRST, before writing a word:
 You are shown the owner's REAL WORK as images. The design is already inside it — your job is to translate a visual voice that already exists, never to invent a new brand over it. Study the images and extract:
@@ -88,22 +90,7 @@ A vague brief gets filled with the median of the internet. Your spec leaves NO d
 - Decide the interactions: what moves, when, and what every hover/click does. One signature interaction maximum; name it.
 - Decide the mobile behavior in one line per non-obvious section.
 
-THE MOVES VOCABULARY — the difference between "has a motif" and "is built out of its motif." These are named, proven moves; your spec commits to ONE OR TWO by name and writes exactly where each recurs (a move used once is decoration; used three ways it becomes the site's spine):
-- THE THREAD: one drawn line/element that walks the whole page and marks every section as a station on it (vertical rail, lit dots, a horizontal turn inside one section).
-- TYPE AS IMAGE: an oversized ghost word behind the hero, outline-stroke display words, numerals as stroked italic monuments that fill on hover.
-- THE CEREMONY: a marquee/ticker of the brand promise between sections, a rotating circular text stamp on a portrait, a self-drawing underline on THE word.
-- THE EXHIBITION: the work hung like a gallery wall — lead pieces large and full-bleed, rhythmic bands after, one designed typographic tile sitting among the artwork.
-- THE ECHO FRAME: portraits and lead images in hairline frames with a second offset frame behind; captions running vertical along the frame edge.
-- THE STAGE LIGHT: one warm radial glow that owns the hero and returns once at the close, grain over everything, gradient depth between grounds.
-MATERIAL MOVES (audited builder-native, 2026-07-25 — order them by name):
-- THE FOIL: metallic type via gradient clipped to the letters (gold, bronze, silver) — a luxury headline that costs nothing.
-- THE EMBOSS: pressed-in or raised surfaces from pure inset light and shadow — swatches, seals, cards that read as physical.
-- THE TEAR: torn-paper section breaks via inline SVG masks — the hand-made edge between grounds.
-MOTION MOVES (the Emergent-class arrivals — all pure CSS/JS, no libraries; the builder cannot load external scripts):
-- THE KINETIC HERO: the headline arrives line by MASKED line (overflow-hidden line wrappers, staggered rise), the accent word landing last with its own gesture. One-time, on arrival.
-- THE DEPTH: two or three layers drifting at different speeds on scroll (transform-only parallax; subtle, never seasick).
-- THE ORBIT: the work turning slowly in 3D space (CSS preserve-3d ring) as the gallery's signature — reserved for businesses whose work IS the show.
-- THE PIN: one scroll scene that HOLDS (position: sticky) while its content changes beside it — the modern storytelling beat, used once.
+{MOVES_VOCABULARY}
 MICRO-DELIGHT is a floor, not a move: every interactive element answers its hover with something small and intentional (a lift, a fill, an underline drawing itself) — 21st-century pages feel alive at the fingertips.
 Motion discipline is unchanged and absolute: ONE signature motion moment per page, scroll reveals scroll-position driven, prefers-reduced-motion shows everything instantly.
 Choose from this vocabulary or invent a move of equal specificity and NAME it — "tasteful animations" is not a move. The chosen move(s) must appear in section 1 by name, in section 3 at every recurrence, and in section 4 with their exact behavior.
@@ -151,6 +138,17 @@ TRUTH LAW (absolute): every fact, price, service, testimonial, stat and claim in
 TASTE: commit. The safe generic version of this page is a failure. One move a visitor describes to a friend tomorrow — designed, decided, and named in section 1. Honor the owner's words above everything except truth. If judge lessons are present, every one of them is a ban you design around. Do not reuse the same accent treatment the lessons criticize (no default gold-underline crutch).
 
 OUTPUT: the document only. No preamble, no commentary, no code."""
+
+# THE VOCABULARY IS GENERATED, NOT HARDCODED (2026-08-09 design review).
+# It used to be a literal list in this prompt, and a grep of the whole
+# render path found ZERO implementations of any of the thirteen moves it
+# taught. The Director committed specs to moves no builder had heard of,
+# the judge reported them missing, and the complaint was recycled into the
+# next brief as a prohibition — a loop that burned a build per iteration.
+# Both this block and the builders' primitives now come from design_moves,
+# so a move that has no renderer cannot be taught here at all.
+_SYSTEM = _SYSTEM_TEMPLATE.replace(
+    "{MOVES_VOCABULARY}", design_moves.director_block())
 
 
 def _digest_plan(spec_plan: List[Dict[str, Any]]) -> str:

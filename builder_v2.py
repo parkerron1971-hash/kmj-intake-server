@@ -136,6 +136,14 @@ CRAFT FLOOR: generous, complete pages beat austere concepts; restraint disciplin
 OUTPUT: the HTML document only. No commentary, no code fences."""
 
 
+
+# THE PRIMITIVES (2026-08-09 design review) — see design_moves.
+# The atmosphere techniques the spec names were never taught to any
+# author, while the colour validator banned the natural syntax.
+import design_moves as _dm
+_SYSTEM = _SYSTEM + chr(10)*2 + _dm.builder_block(
+    "the element's own class")
+
 def build_user_prompt(spec_text: str, real_data: str,
                       violations: Optional[List[str]] = None,
                       prior_doc: str = "") -> str:
