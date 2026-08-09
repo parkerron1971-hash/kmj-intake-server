@@ -11,11 +11,23 @@ from unittest import mock
 import audit_log
 
 
-def _capture():
+# A successful PostgREST insert under return=representation. The stub was
+# `lambda ...: calls.append(...)`, and list.append returns None — which is
+# precisely what sb_clients returns when the database REJECTS a row. So
+# every test in this file simulated a failed write while asserting
+# success, and passed only because record() could not tell the two apart.
+_INSERTED = [{"id": "11111111-1111-1111-1111-111111111111"}]
+
+
+def _capture(returns=_INSERTED):
     calls = []
+
+    def _stub(path, body, prefer=None):
+        calls.append((path, body))
+        return returns
+
     patcher = mock.patch.object(
-        audit_log.sb_clients, "sb_post_as_service",
-        side_effect=lambda path, body, prefer=None: calls.append((path, body)))
+        audit_log.sb_clients, "sb_post_as_service", side_effect=_stub)
     return calls, patcher
 
 
@@ -29,7 +41,10 @@ def test_record_shapes_the_row():
                               source="mobile")
     assert ok is True
     path, row = calls[0]
-    assert path == "/audit_log"
+    # ?select=id is appended so a rejected insert is distinguishable from
+    # a successful one — under prefer=None both returned an empty body.
+    assert path.startswith("/audit_log")
+    assert "select=id" in path
     assert row["business_id"] == "biz-1"
     assert row["actor_type"] == "chief"
     assert row["verb"] == "create_invoice"

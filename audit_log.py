@@ -118,14 +118,25 @@ def sync_action_types() -> int:
     vocab = list(vocabulary().values())
     if not vocab:
         return 0
+    # Same shape as record() below: the result was discarded and the
+    # count returned regardless, so the boot line "vocabulary synced: N
+    # verbs" printed N whether or not a single row landed. A verb that
+    # is not in action_types gets its ledger rows stamped
+    # verb_registered=false, so a silent failure here shows up later as
+    # a ledger that quietly doubts itself.
     try:
-        sb_clients.sb_post_as_service(
-            "/action_types?on_conflict=verb", vocab,
-            prefer="resolution=merge-duplicates")
-        return len(vocab)
+        written = sb_clients.sb_post_as_service(
+            "/action_types?on_conflict=verb&select=verb", vocab,
+            prefer="resolution=merge-duplicates,return=representation")
     except Exception as e:
-        logger.warning(f"[ledger] action_types sync failed: {e}")
+        logger.error(f"[ledger] action_types sync raised: {e}")
         return 0
+    if not written:
+        logger.error("[ledger] action_types sync LOST — the vocabulary was "
+                     "not published, so new verbs will be stamped "
+                     "verb_registered=false")
+        return 0
+    return len(vocab)
 
 
 def _cap_json(value: Any) -> Dict[str, Any]:
@@ -189,12 +200,34 @@ def record(business_id: Optional[str], *, actor_type: str, verb: str,
         "subject_refs": refs,
         "display_timezone": display_timezone,
     }
+    # This returned True unconditionally. sb_clients returns None on 4xx,
+    # on 5xx and on transport error WITHOUT raising, so the except below
+    # could only ever have caught a JSON error — every rejected ledger
+    # write reported success. Callers believed it: rules_router:564 logs
+    # a warning on a False return, and that warning had never once fired.
+    #
+    # prefer=None made the failure undetectable even in principle,
+    # because a SUCCESSFUL insert also returns an empty body. `?select=id`
+    # asks for the primary key back and nothing else: enough to tell the
+    # two apart, small enough not to ship the payload we just wrote.
+    #
+    # ERROR rather than WARNING. A row that did not land is a gap in an
+    # append-only chain that claims to be tamper-evident, and every
+    # coverage number quoted about this ledger is an upper bound until
+    # this is loud.
     try:
-        sb_clients.sb_post_as_service("/audit_log", row, prefer=None)
-        return True
+        written = sb_clients.sb_post_as_service(
+            "/audit_log?select=id", row, prefer="return=representation")
     except Exception as e:
-        logger.warning(f"[audit] record({verb}) failed: {e}")
+        logger.error(f"[audit] record({verb}) raised for {business_id}: {e}")
         return False
+    if not written:
+        logger.error(
+            f"[audit] record({verb}) LOST for {business_id} — the database "
+            f"rejected the row (sb_clients logged the status above). This "
+            f"action is NOT in the ledger.")
+        return False
+    return True
 
 
 def _error_text(t: Dict[str, Any]) -> str:
