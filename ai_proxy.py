@@ -192,9 +192,15 @@ async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depen
     """Proxy a Claude Messages API call. The API key never leaves Railway."""
 
     # Per-caller rate limit (beta-readiness audit) — stop one source from
-    # firing thousands of paid calls. Keyed by business (when supplied)
-    # else client IP. Fail-open. Cheapest check first.
-    _rl_key = str((req.metadata or {}).get("business_id") or "") or rate_limit.client_ip(request)
+    # firing thousands of paid calls. Fail-open. Cheapest check first.
+    #
+    # Keyed on the authenticated user id. It keyed on
+    # req.metadata.business_id falling back to client_ip — both values
+    # the CALLER supplies, so an account could reset its own budget by
+    # varying a field in its own request body. This endpoint already
+    # requires a session, so the one identifier the caller cannot edit
+    # was available the whole time.
+    _rl_key = str(getattr(user, "id", "") or "") or rate_limit.trusted_client_ip(request)
     if not rate_limit.allow("proxy", _rl_key):
         raise HTTPException(status_code=429, detail={"error": "rate_limited",
             "message": "Too many requests — give it a moment and try again."},

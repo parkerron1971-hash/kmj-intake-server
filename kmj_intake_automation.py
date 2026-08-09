@@ -12,6 +12,7 @@
 
 import os
 import llm_call
+import rate_limit
 import json
 import httpx
 import asyncio
@@ -1083,6 +1084,24 @@ async def run_pulse(request: Request):
     Reads accumulated observations from the observer layer.
     Returns full briefing JSON.
     """
+    # Anonymous, and the most expensive single request the platform
+    # serves — a Sonnet call at 4k tokens with five forced web searches.
+    # spend_guard's ceiling is GLOBAL rather than per-tenant, so an
+    # unrated loop here does not merely cost money: it exhausts the cap
+    # and takes Chief offline for every customer at once, for about fifty
+    # dollars.
+    #
+    # Keyed on trusted_client_ip — the LAST X-Forwarded-For hop, which
+    # Railway appends — not client_ip, which is the first hop and
+    # therefore whatever the caller typed. On an unauthenticated surface
+    # the limiter is a control rather than a courtesy, and a control
+    # keyed on a value the attacker chooses is decorative. allow_strict
+    # so that a limiter error denies instead of permitting.
+    if not rate_limit.allow_strict("pulse", rate_limit.trusted_client_ip(request)):
+        raise HTTPException(
+            status_code=429, detail="Too many requests — try again shortly.",
+            headers={"Retry-After": str(rate_limit.retry_after("pulse"))})
+
     try:
         data = await request.json()
     except Exception:

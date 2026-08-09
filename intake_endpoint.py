@@ -60,6 +60,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 import llm_call
+import rate_limit
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -346,8 +347,14 @@ async def submit_intake(req: IntakeSubmission, request: Request):
         raise HTTPException(status_code=500, detail="SUPABASE_URL and SUPABASE_ANON must be set")
 
     # Arc 29 — abuse gates (anon endpoint; runs before any AI/DB write).
-    client_ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() \
-        or (request.client.host if request.client else "unknown")
+    #
+    # The LAST X-Forwarded-For hop, not the first. Railway appends the
+    # peer it actually observed, so the last entry is the one nobody
+    # upstream chose; the first is whatever the caller put in the header.
+    # This is an anonymous endpoint that spends money on AI, so the
+    # limiter has to be a control rather than a courtesy — and a control
+    # keyed on an attacker-supplied string is neither.
+    client_ip = rate_limit.trusted_client_ip(request)
     if not _intake_rate_ok(client_ip):
         logger.warning(f"[intake] rate-limited ip={client_ip}")
         raise HTTPException(status_code=429, detail="Too many submissions — please wait a minute and try again.")
