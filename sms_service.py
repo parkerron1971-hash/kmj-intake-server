@@ -11,14 +11,19 @@ Routes:
 Env:
   TELNYX_API_KEY        — required for sending. https://portal.telnyx.com
   TELNYX_PHONE_NUMBER   — the From number (E.164, e.g. +12315551234)
-  TELNYX_PUBLIC_KEY     — optional, for webhook signature verification
+  TELNYX_PUBLIC_KEY     — REQUIRED to accept inbound webhooks. Base64
+                          Ed25519 public key from the Telnyx portal.
+                          Without it /sms/inbound drops every payload
+                          (see webhook_guard for the deliberate override).
 
 Storage: sms_messages table (see supabase/sms-messages-migration.sql).
 """
 
+import base64
 import os
 import json
 import logging
+import time as _time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -28,6 +33,7 @@ from auth_supabase import require_user, AuthedUser
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import pii_mask
+import webhook_guard
 
 router = APIRouter(tags=["sms"])
 logger = logging.getLogger("sms_service")
@@ -527,6 +533,61 @@ async def _find_contact_global(
 
 # ─── Inbound webhook ─────────────────────────────────────────────────
 
+# Telnyx signs webhooks with Ed25519. The signed payload is
+# "{telnyx-timestamp}|{raw body}", the signature arrives base64 in
+# telnyx-signature-ed25519, and TELNYX_PUBLIC_KEY is the base64 32-byte
+# public key from the portal.
+_TELNYX_TOLERANCE_SECONDS = 300
+
+
+def _verify_telnyx_signature(raw_body: bytes, headers: Any) -> bool:
+    """Verify a Telnyx webhook signature. Fail-CLOSED when unconfigured.
+
+    This endpoint had no verification at all, while an inbound SMS body
+    is interpolated verbatim into Chief's system prompt and Chief can
+    send — so anyone who knew the URL could put text in front of the
+    model. Unverifiable payloads are now dropped.
+    """
+    public_key_b64 = (os.environ.get("TELNYX_PUBLIC_KEY") or "").strip()
+    if not public_key_b64:
+        if webhook_guard.unsigned_allowed("telnyx"):
+            return True
+        webhook_guard.reject_unsigned("telnyx", "TELNYX_PUBLIC_KEY is not set")
+        return False
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PublicKey,
+        )
+    except ImportError:  # pragma: no cover - cryptography ships with PyJWT[crypto]
+        logger.error("[SMS] cryptography unavailable — cannot verify Telnyx signature")
+        return False
+
+    signature_b64 = headers.get("telnyx-signature-ed25519") or ""
+    timestamp = headers.get("telnyx-timestamp") or ""
+    if not (signature_b64 and timestamp):
+        logger.warning("[SMS] inbound REJECTED — missing Telnyx signature headers")
+        return False
+    try:
+        if abs(_time.time() - int(timestamp)) > _TELNYX_TOLERANCE_SECONDS:
+            logger.warning("[SMS] inbound REJECTED — Telnyx timestamp outside tolerance")
+            return False
+    except (TypeError, ValueError):
+        logger.warning("[SMS] inbound REJECTED — malformed Telnyx timestamp")
+        return False
+    try:
+        key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64))
+        key.verify(base64.b64decode(signature_b64),
+                   f"{timestamp}|".encode() + raw_body)
+        return True
+    except InvalidSignature:
+        logger.warning("[SMS] inbound REJECTED — Telnyx signature mismatch")
+        return False
+    except Exception as e:
+        logger.warning(f"[SMS] inbound REJECTED — signature verification error: {e}")
+        return False
+
+
 @router.post("/sms/inbound")
 async def receive_sms(request: Request):
     """Telnyx webhook handler.
@@ -539,8 +600,13 @@ async def receive_sms(request: Request):
 
     Always returns 200 so Telnyx doesn't retry; failures are logged.
     """
+    raw_body = await request.body()
+    if not _verify_telnyx_signature(raw_body, request.headers):
+        # 200 so a real-but-misconfigured sender doesn't hammer retries,
+        # but the payload is not processed.
+        return JSONResponse({"status": "ignored", "reason": "unverified_signature"}, 200)
     try:
-        payload = await request.json()
+        payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
         return JSONResponse({"status": "ignored", "reason": "non-json"}, 200)
 
@@ -560,7 +626,7 @@ async def receive_sms(request: Request):
             }
             new_status = status_map.get(event_type)
             if telnyx_id and new_status:
-                await _sb_patch(client, f"/sms_messages?telnyx_id=eq.{telnyx_id}",
+                await _sb_patch(client, f"/sms_messages?telnyx_id=eq.{_pq(telnyx_id)}",
                                 {"status": new_status})
                 logger.info(f"[SMS] delivery {event_type} telnyx={telnyx_id}")
             return {"status": "ok", "event": event_type}

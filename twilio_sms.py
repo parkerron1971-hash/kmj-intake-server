@@ -149,12 +149,12 @@ async def twilio_inbound_sms(request: Request):
             return Response(status_code=403)
     else:
         # API-key setups can't validate signatures — that needs the
-        # ACCOUNT auth token. Process anyway (don't break inbound), but
-        # say so on every request until TWILIO_AUTH_TOKEN is set.
-        logger.warning(
-            "inbound SMS accepted UNVALIDATED — set TWILIO_AUTH_TOKEN on "
-            "Railway to enable X-Twilio-Signature verification"
-        )
+        # ACCOUNT auth token. An unvalidated inbound body reaches Chief's
+        # prompt and Chief can send, so drop it rather than trust it.
+        import webhook_guard
+        if not webhook_guard.unsigned_allowed("twilio"):
+            webhook_guard.reject_unsigned("twilio", "TWILIO_AUTH_TOKEN is not set")
+            return Response(status_code=403)
 
     from_number = params.get("From", "")
     body = params.get("Body", "")

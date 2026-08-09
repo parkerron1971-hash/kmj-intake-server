@@ -33,11 +33,15 @@ import hmac
 import json
 import logging
 import os
+import re
 import time as _time
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+import webhook_guard
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import HTMLResponse
 from auth_supabase import require_user, AuthedUser
@@ -619,6 +623,26 @@ def build_routed_reply_to(business_id: str, contact_id: Optional[str]) -> Option
     return f"reply+{biz_short}+{contact_short}@{domain}"
 
 
+# build_routed_reply_to emits the first 8 chars of a uuid, or the literal
+# "anon" for the contact half. Anything else is not an address we wrote.
+#
+# This is load-bearing, not cosmetic: both halves are interpolated into a
+# PostgREST query string, so an unvalidated value is a query injection —
+# `reply+%+%@domain` turns `id=like.{biz}%` into a match-anything filter
+# and binds a stranger's mail to an arbitrary business, and an `&` gets a
+# whole extra PostgREST parameter. The sender chooses this address, so
+# treat it as hostile and reject anything that isn't the exact shape we
+# emit. (Values are percent-encoded at the call site as well — belt and
+# braces, since the shape check is what actually makes them safe.)
+_ROUTE_TOKEN_RE = re.compile(r"^[0-9a-f]{8}$")
+
+
+def _valid_route_token(tok: str, *, allow_anon: bool = False) -> bool:
+    if allow_anon and tok == "anon":
+        return True
+    return bool(_ROUTE_TOKEN_RE.match(tok or ""))
+
+
 def _parse_routed_address(addr: str) -> Optional[Dict[str, str]]:
     """Reverse of build_routed_reply_to. Returns {biz_short, contact_short}
     when the address matches our inbound routing pattern, else None."""
@@ -637,7 +661,14 @@ def _parse_routed_address(addr: str) -> Optional[Dict[str, str]]:
     parts = local[len("reply+"):].split("+")
     if len(parts) < 2:
         return None
-    return {"biz_short": parts[0], "contact_short": parts[1]}
+    biz_short, contact_short = parts[0].lower(), parts[1].lower()
+    if not _valid_route_token(biz_short):
+        logger.warning("[INBOUND] routed address rejected — malformed business token")
+        return None
+    if not _valid_route_token(contact_short, allow_anon=True):
+        logger.warning("[INBOUND] routed address rejected — malformed contact token")
+        return None
+    return {"biz_short": biz_short, "contact_short": contact_short}
 
 
 # Local parts at INBOUND_EMAIL_DOMAIN that belong to the PLATFORM, not to
@@ -875,16 +906,18 @@ def _verify_resend_signature(raw_body: bytes, headers: Any) -> bool:
     base64-decoded secret (the part after the 'whsec_' prefix), and the
     svix-signature header is a space-separated list of 'v1,<b64sig>'.
 
-    Fail-OPEN until configured (matches the platform's webhook pattern):
-    if RESEND_WEBHOOK_SECRET isn't set, allow + log a loud warning so
-    inbound email keeps working pre-setup; the moment the secret is set
-    on Railway, verification is strict and forged payloads are rejected.
+    Fail-CLOSED when unconfigured: an inbound body reaches Chief's system
+    prompt verbatim, and Chief can send, so an unverifiable payload is
+    dropped rather than trusted. Set RESEND_WEBHOOK_SECRET on Railway. To
+    knowingly run unverified while wiring the provider up, see
+    webhook_guard.WEBHOOK_ALLOW_UNSIGNED.
     Replay window: 5 minutes on the svix timestamp."""
     secret = (os.environ.get("RESEND_WEBHOOK_SECRET") or "").strip()
     if not secret:
-        logger.warning("[INBOUND] RESEND_WEBHOOK_SECRET not set — webhook "
-                       "signature NOT verified (set it on Railway to harden).")
-        return True
+        if webhook_guard.unsigned_allowed("resend"):
+            return True
+        webhook_guard.reject_unsigned("resend", "RESEND_WEBHOOK_SECRET is not set")
+        return False
     try:
         svix_id = headers.get("svix-id") or headers.get("webhook-id") or ""
         svix_ts = headers.get("svix-timestamp") or headers.get("webhook-timestamp") or ""
@@ -977,8 +1010,8 @@ async def inbound_email(request: Request):
             parsed_addr = _parse_routed_address(addr)
             if not parsed_addr:
                 continue
-            biz_short = parsed_addr["biz_short"]
-            contact_short = parsed_addr["contact_short"]
+            biz_short = urllib.parse.quote(parsed_addr["biz_short"], safe="")
+            contact_short = urllib.parse.quote(parsed_addr["contact_short"], safe="")
             biz_rows = await _sb_get(client,
                 f"/businesses?id=like.{biz_short}%25&select=id&limit=1")
             if not biz_rows:
