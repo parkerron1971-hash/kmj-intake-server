@@ -125,6 +125,7 @@ def _brand_head_meta_tags(business_id: str) -> str:
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from auth_supabase import require_user, AuthedUser
+from business_access import business_access
 from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
                                RedirectResponse, Response)
 
@@ -2949,7 +2950,8 @@ _multi_page_in_flight: set = set()
 
 
 @router.post("/sites/{business_id}/set-site-type")
-async def set_site_type_endpoint(business_id: str, site_type: str, user: AuthedUser = Depends(require_user)):
+async def set_site_type_endpoint(business_id: str, site_type: str,
+                                 _biz: dict = Depends(business_access("admin"))):
     """Switch a business between landing-page and multi-page rendering.
 
     Persists site_config.site_type. Routing reads this on every public
@@ -3298,7 +3300,8 @@ async def design_signals_endpoint(business_id: str):
 
 
 @router.post("/sites/{business_id}/expand-design-brief")
-async def expand_brief_endpoint(business_id: str, user: AuthedUser = Depends(require_user)):
+async def expand_brief_endpoint(business_id: str,
+                                _biz: dict = Depends(business_access("admin"))):
     """Pass 3.8b — manual idempotent Brief Expander call.
 
     Reads the persisted design_recommendation, runs LLM #2 to expand it
