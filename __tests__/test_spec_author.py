@@ -351,3 +351,168 @@ def test_filled_space_law_rides_the_system_prompt():
     assert "REVEAL GRAMMAR VARIETY" in s
     # the one-signature-motion discipline survives the addition
     assert "ONE signature motion moment" in s
+
+
+# ═══ The blueprint that vanished (2026-08-09) ════════════════════════
+#
+# Kevin drafted a blueprint after a 14-turn coach session. The call ran
+# 30,594 in / 7,800 out, SUCCEEDED server-side, and cost 20.88c — and the
+# browser gave up before the response arrived. He saw "failed to fetch".
+# The stored design_spec was still revision 13 from 2026-07-25, so the
+# draft was generated, charged for, and lost.
+#
+# Two defects, both pinned below: save_spec dropped its PATCH result on
+# the floor (a failed write was indistinguishable from a good one), and
+# a multi-minute LLM call sat on a synchronous HTTP request.
+
+import pytest
+
+
+class _FakeSB:
+    """Minimal sb_clients stand-in: one site row, a togglable PATCH."""
+    def __init__(self, patch_ok=True, has_row=True):
+        self.patch_ok, self.has_row = patch_ok, has_row
+        self.patches = []
+        self.config = {"design_spec": {"text": "old", "status": "approved",
+                                       "revision": 13}}
+
+    def sb_get_as_service(self, path):
+        if not self.has_row:
+            return []
+        return [{"id": "site-1", "site_config": self.config}]
+
+    def sb_patch_as_service(self, path, body):
+        self.patches.append(body)
+        if not self.patch_ok:
+            return None            # what sb_clients returns on 4xx/5xx
+        self.config = body["site_config"]
+        return [{"id": "site-1"}]  # Prefer: return=representation
+
+
+def _wire(monkeypatch, fake):
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", fake.sb_get_as_service)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", fake.sb_patch_as_service)
+
+
+def test_save_spec_raises_when_the_write_does_not_land(monkeypatch):
+    """THE SILENT-LOSS BUG. save_spec used to return the spec dict
+    whether or not the PATCH succeeded, so the API could answer 'here is
+    your blueprint, revision 14' with nothing in the database."""
+    fake = _FakeSB(patch_ok=False)
+    _wire(monkeypatch, fake)
+    with pytest.raises(spec_author.SpecSaveFailed):
+        spec_author.save_spec("biz-1", "a fresh document")
+    # And the stored spec is untouched — the old revision survives.
+    assert fake.config["design_spec"]["revision"] == 13
+
+
+def test_save_spec_bumps_revision_when_the_write_lands(monkeypatch):
+    fake = _FakeSB(patch_ok=True)
+    _wire(monkeypatch, fake)
+    saved = spec_author.save_spec("biz-1", "a fresh document")
+    assert saved["revision"] == 14 and saved["status"] == "draft"
+    assert fake.config["design_spec"]["text"] == "a fresh document"
+
+
+def test_save_spec_returns_none_without_a_site_row(monkeypatch):
+    """No site to attach to is a DIFFERENT condition from a failed
+    write — harmless, and must not raise."""
+    _wire(monkeypatch, _FakeSB(has_row=False))
+    assert spec_author.save_spec("biz-1", "doc") is None
+
+
+def test_set_status_also_verifies_its_write(monkeypatch):
+    """Approving a blueprint is the same write through the same door."""
+    fake = _FakeSB(patch_ok=False)
+    _wire(monkeypatch, fake)
+    with pytest.raises(spec_author.SpecSaveFailed):
+        spec_author.set_status("biz-1", "approved")
+
+
+def test_authoring_reports_a_lost_save_without_inviting_a_reretry(monkeypatch):
+    """The expensive failure needs different WORDS from the cheap one.
+
+    'The author didn't answer' costs the practitioner nothing. 'We wrote
+    it and lost it' already spent their credits — saying only "try again"
+    would invite a second full charge while hiding that the first one
+    was lost."""
+    import site_composer
+    monkeypatch.setattr(site_composer, "_spec_inputs",
+                        lambda b: ({}, None, []))
+    monkeypatch.setattr(spec_author, "author_spec",
+                        lambda *a, **k: "a real document")
+
+    def _boom(*a, **k):
+        raise spec_author.SpecSaveFailed("PATCH did not land")
+    monkeypatch.setattr(spec_author, "save_spec", _boom)
+
+    out = site_composer.author_spec_work("biz-1")
+    assert out["ok"] is False
+    assert "couldn't be saved" in out["error"]
+    assert "nothing was lost" in out["error"].lower()
+
+    # The cheap failure reads differently and says nothing was charged.
+    monkeypatch.setattr(spec_author, "author_spec", lambda *a, **k: None)
+    out2 = site_composer.author_spec_work("biz-1")
+    assert out2["ok"] is False and "didn't answer" in out2["error"]
+    assert out2["error"] != out["error"]
+
+
+def test_revise_refuses_without_a_prior_or_notes(monkeypatch):
+    """Honest ok:false results, not crashes — a job carries its reason."""
+    import site_composer
+    monkeypatch.setattr(spec_author, "get_spec", lambda b: None)
+    out = site_composer.author_spec_work("biz-1", notes="bolder", revise=True)
+    assert out["ok"] is False and "draft one first" in out["error"]
+
+    monkeypatch.setattr(spec_author, "get_spec", lambda b: {"text": "prior"})
+    out2 = site_composer.author_spec_work("biz-1", notes="  ", revise=True)
+    assert out2["ok"] is False and "notes are required" in out2["error"]
+
+
+def test_blueprint_is_a_registered_background_job_kind():
+    """The fix for the timeout itself: authoring rides chief_jobs, the
+    same road rebuild_site already uses, so the work outlives the tab."""
+    import chief_jobs
+    for kind in ("author_spec", "revise_spec"):
+        assert kind in chief_jobs.KIND_META, kind
+        meta = chief_jobs.KIND_META[kind]
+        assert meta["nav"] == "build:mysite"
+        assert meta["working"] and meta["done"]
+
+
+def test_spec_usage_row_now_carries_duration(monkeypatch):
+    """duration_ms was async-only, so every one of the thirteen prior
+    spec runs logged NULL — the one number that would have said whether
+    the call was slow enough to time out the browser.
+
+    Asserted BEHAVIOURALLY (what reaches the logger), not by reading the
+    source: a test that greps for a variable name passes happily while
+    the value it names is wrong."""
+    import model_ladder
+    import api_usage_logger
+
+    class _Msg:
+        stop_reason = "end_turn"
+        usage = type("U", (), {"input_tokens": 30594, "output_tokens": 7800})()
+        content = [type("B", (), {"type": "text", "text": "THE DOCUMENT"})()]
+
+    def _slow_call(fn, **kw):
+        import time as _t
+        _t.sleep(0.05)                 # 50ms of measurable wall-clock
+        return _Msg(), "claude-sonnet-5"
+
+    logged = {}
+    monkeypatch.setattr(model_ladder, "call_with_ladder", _slow_call)
+    monkeypatch.setattr(api_usage_logger, "log_api_usage_sync",
+                        lambda **kw: logged.update(kw))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(spec_author.llm_call, "sdk_client",
+                        lambda **kw: object())
+
+    out = spec_author._call_llm("sys", "user", "biz-1")
+    assert out == "THE DOCUMENT"
+    assert logged["endpoint"] == "/composer/spec"
+    assert logged["duration_ms"] >= 50, logged
+    assert logged["output_tokens"] == 7800

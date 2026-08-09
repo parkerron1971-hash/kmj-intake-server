@@ -4933,6 +4933,69 @@ def _spec_inputs(business_id: str):
     return ctx, dro, plan
 
 
+def author_spec_work(business_id: str, notes: str = "", revise: bool = False,
+                     progress_cb=None) -> Dict[str, Any]:
+    """THE blueprint authoring work — one place, called by the background
+    job and by the legacy synchronous route.
+
+    WHY IT IS A JOB NOW (2026-08-09): this is the longest single LLM call
+    the product makes. Kevin's live failure — a 30.6k-in / 7.8k-out draft
+    that ran past the browser's patience — showed the shape of the
+    problem: the call SUCCEEDED server-side and cost real money, while
+    the practitioner saw "failed to fetch" and had no way to know whether
+    to retry. Every retry is another full charge. rebuild_site solved
+    exactly this with chief_jobs years of arcs ago; authoring now uses
+    the same road.
+
+    Returns the job-result shape: {ok, spec} or {ok: False, error}. An
+    honest failure is a COMPLETED job with ok:false — never a crash —
+    because the practitioner needs the reason, not a stack trace.
+
+    Callers must not re-implement any of this: the sync route delegates
+    here so the two paths cannot drift in what they charge or save."""
+    import spec_author
+    _report_progress(progress_cb, 5, "Reading everything we know")
+    prior_doc = spec_author.get_spec(business_id) if revise else None
+    if revise and not prior_doc:
+        return {"ok": False, "error": "no blueprint to revise — draft one first"}
+    if revise and not (notes or "").strip():
+        return {"ok": False, "error": "revision notes are required"}
+
+    ctx, dro, plan = _spec_inputs(business_id)
+    if (notes or "").strip() and not revise:
+        ctx["owner_brief"] = notes.strip()[:600]
+
+    _report_progress(progress_cb, 25,
+                     "Revising the blueprint" if revise else "Drafting the blueprint")
+    text = spec_author.author_spec(
+        business_id, ctx, dro, plan,
+        prior_spec=str((prior_doc or {}).get("text") or "") if revise else "",
+        feedback=notes.strip() if revise else "")
+    if not text:
+        return {"ok": False,
+                "error": "the blueprint author didn't answer — nothing was "
+                         "charged for a document, try again"}
+
+    _report_progress(progress_cb, 85, "Saving the blueprint")
+    try:
+        saved = spec_author.save_spec(business_id, text, status="draft")
+    except spec_author.SpecSaveFailed as e:
+        # THE EXPENSIVE FAILURE. The document exists and was paid for; we
+        # simply could not store it. Say so plainly — a generic "try
+        # again" would invite a second full charge for the same work
+        # without admitting the first one was lost.
+        logger.error(f"[spec] authored but NOT saved for {business_id[:8]}: {e}")
+        return {"ok": False,
+                "error": "your blueprint was written but couldn't be saved. "
+                         "Nothing was lost from your existing blueprint — "
+                         "please try again, and tell Kevin if it repeats."}
+    if not saved:
+        return {"ok": False, "error": "this business has no site to attach a "
+                                      "blueprint to yet"}
+    _report_progress(progress_cb, 100, "Done")
+    return {"ok": True, "spec": saved}
+
+
 @router.get("/spec/{business_id}")
 def get_design_spec(business_id: str,
                     session: UserSession = Depends(sb_clients.authed_request)
@@ -4948,17 +5011,17 @@ def author_design_spec(body: SpecAuthorBody,
                        session: UserSession = Depends(sb_clients.authed_request)
                        ) -> Dict[str, Any]:
     """Author a fresh spec draft from everything the system knows.
-    Text-only call — cheap by design; never triggers a build."""
+
+    LEGACY SYNCHRONOUS PATH. Kept so an older client keeps working, but
+    this call regularly outlives a browser's patience (see
+    author_spec_work). New callers enqueue POST /agents/chief/jobs/spec
+    and watch the job instead."""
     _require_owner(body.business_id, session.user.id)
-    import spec_author
-    ctx, dro, plan = _spec_inputs(body.business_id)
-    if (body.notes or "").strip():
-        ctx["owner_brief"] = body.notes.strip()[:600]
-    text = spec_author.author_spec(body.business_id, ctx, dro, plan)
-    if not text:
-        raise HTTPException(502, "spec author unavailable — try again")
-    saved = spec_author.save_spec(body.business_id, text, status="draft")
-    return {"ok": True, "spec": saved}
+    out = author_spec_work(body.business_id, notes=body.notes or "",
+                           revise=False)
+    if not out.get("ok"):
+        raise HTTPException(502, str(out.get("error") or "spec author unavailable"))
+    return out
 
 
 @router.post("/spec/revise")
@@ -4966,22 +5029,21 @@ def revise_design_spec(body: SpecReviseBody,
                        session: UserSession = Depends(sb_clients.authed_request)
                        ) -> Dict[str, Any]:
     """Revise the existing spec with the owner's notes — keeps every
-    decision the notes don't question."""
+    decision the notes don't question.
+
+    LEGACY SYNCHRONOUS PATH — see author_design_spec above."""
     _require_owner(body.business_id, session.user.id)
-    import spec_author
-    prior = spec_author.get_spec(body.business_id)
-    if not prior:
-        raise HTTPException(409, "no spec to revise — author one first")
-    if not (body.notes or "").strip():
-        raise HTTPException(400, "revision notes are required")
-    ctx, dro, plan = _spec_inputs(body.business_id)
-    text = spec_author.author_spec(
-        body.business_id, ctx, dro, plan,
-        prior_spec=str(prior.get("text") or ""), feedback=body.notes.strip())
-    if not text:
-        raise HTTPException(502, "spec author unavailable — try again")
-    saved = spec_author.save_spec(body.business_id, text, status="draft")
-    return {"ok": True, "spec": saved}
+    out = author_spec_work(body.business_id, notes=body.notes or "",
+                           revise=True)
+    if not out.get("ok"):
+        err = str(out.get("error") or "spec author unavailable")
+        # Preserve the old status codes the client already handles.
+        if "no blueprint to revise" in err:
+            raise HTTPException(409, err)
+        if "revision notes are required" in err:
+            raise HTTPException(400, err)
+        raise HTTPException(502, err)
+    return out
 
 
 @router.post("/spec/approve")
