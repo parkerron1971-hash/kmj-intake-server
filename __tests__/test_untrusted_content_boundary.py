@@ -15,6 +15,7 @@ Two defences, tested separately because they fail differently:
 """
 from __future__ import annotations
 
+import asyncio
 import pathlib
 import sys
 
@@ -131,7 +132,6 @@ class TestInjectorsApplyIt:
 
 # ── 3. A tainted turn holds class-C sends ────────────────────────────
 
-@pytest.mark.asyncio
 class TestGateHoldsWhenTainted:
     # Real registry verbs. An invented name is default-denied by the
     # gate's own drift rule, which would make these tests pass for the
@@ -139,45 +139,47 @@ class TestGateHoldsWhenTainted:
     SEND = "send_sms"        # write / class C / single-target
     READ = "list_offerings"  # not a write
 
-    async def _gate(self, atype=None):
-        return await cos._gate_class_c(
-            None, {"id": "b1"}, atype or self.SEND, {}, 0)
+    def _gate(self, atype=None):
+        # asyncio.run, not pytest-asyncio — the repo has no such
+        # dependency, so @pytest.mark.asyncio is a silent no-op in CI
+        # and every async test "passes" without running.
+        return asyncio.run(cos._gate_class_c(
+            None, {"id": "b1"}, atype or self.SEND, {}, 0))
 
-    async def test_clean_turn_still_sends_immediately(self):
+    def test_clean_turn_still_sends_immediately(self):
         """The registry's doctrine is intact for ordinary turns: the
         practitioner asking in chat IS the approval."""
-        verdict, _ = await self._gate()
+        verdict, _ = self._gate()
         assert verdict == "execute"
 
-    async def test_tainted_turn_holds(self):
+    def test_tainted_turn_holds(self):
         cos._UNTRUSTED_TAINT.set(1)
-        verdict, result = await self._gate()
+        verdict, result = self._gate()
         assert verdict == "handled"
         assert result["failed"] is True
         assert "held" in result["result"].lower()
 
-    async def test_hold_result_has_the_required_shape(self):
+    def test_hold_result_has_the_required_shape(self):
         """Every handler return must carry result+label or the app blanks."""
         cos._UNTRUSTED_TAINT.set(1)
-        _verdict, result = await self._gate()
+        _verdict, result = self._gate()
         assert result.get("result") and result.get("label")
 
-    async def test_non_class_c_is_unaffected_by_taint(self):
+    def test_non_class_c_is_unaffected_by_taint(self):
         cos._UNTRUSTED_TAINT.set(1)
-        verdict, _ = await self._gate(self.READ)
+        verdict, _ = self._gate(self.READ)
         assert verdict == "pass"
 
-    async def test_unknown_verb_is_still_default_denied(self):
+    def test_unknown_verb_is_still_default_denied(self):
         """The gate's pre-existing drift rule must survive this change."""
-        verdict, _ = await self._gate("not_a_real_verb")
+        verdict, _ = self._gate("not_a_real_verb")
         assert verdict == "handled"
 
 
 # ── 4. The unattended sender fails closed ────────────────────────────
 
-@pytest.mark.asyncio
 class TestAutoApproveFailsClosed:
-    async def test_policy_engine_failure_holds_the_draft(self, monkeypatch):
+    def test_policy_engine_failure_holds_the_draft(self, monkeypatch):
         """Was fail-OPEN: an engine hiccup meant a silent send."""
         import policy_engine
 
@@ -185,12 +187,12 @@ class TestAutoApproveFailsClosed:
             raise RuntimeError("engine down")
 
         monkeypatch.setattr(policy_engine, "evaluate", _boom)
-        ok, reason = await cos._should_auto_approve(
-            None, {"id": "b1", "settings": {}}, "nurture", {})
+        ok, reason = asyncio.run(cos._should_auto_approve(
+            None, {"id": "b1", "settings": {}}, "nurture", {}))
         assert ok is False
         assert reason == "policy_engine_unavailable"
 
-    async def test_explicit_denial_still_holds(self, monkeypatch):
+    def test_explicit_denial_still_holds(self, monkeypatch):
         import policy_engine
 
         class _V:
@@ -198,7 +200,7 @@ class TestAutoApproveFailsClosed:
             rule = "client_facing_autonomy_disabled"
 
         monkeypatch.setattr(policy_engine, "evaluate", lambda *a, **k: _V())
-        ok, reason = await cos._should_auto_approve(
-            None, {"id": "b1", "settings": {}}, "nurture", {})
+        ok, reason = asyncio.run(cos._should_auto_approve(
+            None, {"id": "b1", "settings": {}}, "nurture", {}))
         assert ok is False
         assert reason == "client_facing_autonomy_disabled"
