@@ -834,6 +834,63 @@ async def check_followup_sequences():
 
 scheduler = AsyncIOScheduler()
 
+# Jobs whose interval is at least this long get an explicit first run.
+# Below it, the job fires soon enough after boot that the deploy clock
+# does not matter.
+STAGGER_THRESHOLD_MINUTES = int(os.environ.get("SCHEDULER_STAGGER_THRESHOLD_MIN", "60"))
+STAGGER_SLOT_MINUTES = int(os.environ.get("SCHEDULER_STAGGER_SLOT_MIN", "2"))
+
+
+def stagger_long_interval_first_runs(sched, *, now=None) -> list:
+    """Give every long-interval job a first run shortly after boot.
+
+    APScheduler schedules an interval job's FIRST run at now + interval,
+    and that clock restarts with the process. On a repo that deploys
+    several times a day, a 24-hour job is reset before it ever fires —
+    it exists, it is registered, it is visible in the job list, and it
+    never runs once. `stripe_usage_report` is on that list, which means
+    metered usage was not reaching Stripe.
+
+    Two jobs already passed next_run_time by hand. The problem with
+    fixing this at the call site is that it has to be remembered twenty
+    times and then again for the twenty-first job, silently, by whoever
+    adds it. Doing it here means a new job is covered by existing code.
+
+    Deliberate first runs are left alone: a job whose next_run_time is
+    already meaningfully sooner than now + interval was set on purpose,
+    and this must not overwrite that reasoning. Runs are staggered so a
+    boot does not fire everything at once.
+
+    Returns the ids it moved, for logging and for tests.
+    """
+    from datetime import datetime as _d, timedelta as _t, timezone as _z
+    try:
+        from apscheduler.triggers.interval import IntervalTrigger
+    except Exception:
+        return []
+
+    now = now or _d.now(_z.utc)
+    threshold = _t(minutes=STAGGER_THRESHOLD_MINUTES)
+    moved, slot = [], 0
+    for job in sched.get_jobs():
+        trigger = getattr(job, "trigger", None)
+        if not isinstance(trigger, IntervalTrigger):
+            continue  # cron jobs already have a real wall-clock time
+        interval = getattr(trigger, "interval", None)
+        if interval is None or interval < threshold:
+            continue
+        scheduled = getattr(job, "next_run_time", None)
+        if scheduled is not None and scheduled < (now + interval) - _t(seconds=30):
+            continue  # someone chose this; leave it
+        slot += 1
+        try:
+            job.modify(next_run_time=now + _t(minutes=STAGGER_SLOT_MINUTES * slot))
+            moved.append(job.id)
+        except Exception as e:
+            print(f"   [warn] could not set first run for {job.id}: {e}")
+    return moved
+
+
 @app.on_event("startup")
 async def startup():
     # Re-arm the URL-credential redaction. The import-time install above
@@ -1058,6 +1115,11 @@ async def startup():
                           next_run_time=_dt.now(_tz.utc) + _td(minutes=5))
     except Exception as e:
         print(f"   [warn] ledger anchor sweep not scheduled: {e}")
+
+    _staggered = stagger_long_interval_first_runs(scheduler)
+    if _staggered:
+        print(f"   [scheduler] first run armed for {len(_staggered)} long-interval "
+              f"job(s): {', '.join(_staggered)}")
     scheduler.start()
     print(f"🚀 KMJ Intake Automation running")
     print(f"   Owner: {OWNER_NAME} | {BUSINESS_NAME}")
