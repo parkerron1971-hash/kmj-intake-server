@@ -68,6 +68,7 @@ HINTS = (
     "owner_id", "_assert_owner", "_require_business", "_require_membership",
     "owner_business",
     "authed_request",  # binds the JWT so RLS scopes the query itself
+    "set_user_jwt",    # the same thing, called directly (chief_of_staff)
 )
 
 BIZ_PARAMS = ("business_id", "biz", "biz_id", "businessId")
@@ -101,6 +102,42 @@ PUBLIC_BY_DESIGN = frozenset({
     "stripe_proxy", "stripe_payments_router",
     "sms_service", "sms_routing",
     "meta_oauth",
+})
+
+
+# Handlers that take a business id, are NOT a public surface, and still
+# do not resolve ownership against it — because they are scoped on a
+# different axis that this sweep cannot express. Each was read by hand.
+# This is a list of judgements, not a snooze button, and its size is
+# pinned by a test.
+#
+#   chief_jobs.list_jobs / retry_job
+#       scoped by USER, not business: every query carries
+#       user_id=eq.<session uid>, and retry re-reads the job under that
+#       filter before re-queueing. business_id is an optional narrowing
+#       filter on top of an already-scoped set.
+#
+#   whisper_proxy.text_to_speech
+#       auth is optional BY DESIGN — OpenAI voices work for anyone and
+#       never touch business data. The premium ElevenLabs path does check,
+#       via _owns_business(), which returns a bool instead of raising, so
+#       the gate rule cannot see it. Every deny falls back to OpenAI.
+#
+#   auditor_portal.auditor_navigate
+#       built for a reader with a link and no account. It also never sees
+#       a row: the model receives the question and a verb vocabulary and
+#       returns a FILTER.
+#
+#   vertical_intelligence_router.get_vertical
+#       a public read of the terminology dictionary ("Clients" vs
+#       "Members"). business_id only selects which overrides to apply to
+#       a vocabulary the frontend renders publicly anyway.
+VERIFIED_BY_HAND = frozenset({
+    ("chief_jobs", "list_jobs"),
+    ("chief_jobs", "retry_job"),
+    ("whisper_proxy", "text_to_speech"),
+    ("auditor_portal", "auditor_navigate"),
+    ("vertical_intelligence_router", "get_vertical"),
 })
 
 
@@ -165,6 +202,7 @@ def sweep() -> Dict[str, Any]:
                 "write": any(m in ("post", "put", "patch", "delete")
                              for m in methods),
                 "public_by_design": stem in PUBLIC_BY_DESIGN,
+                "verified_by_hand": (stem, node.name) in VERIFIED_BY_HAND,
             })
 
     # A gate refuses AND consults ownership.
