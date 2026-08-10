@@ -65,6 +65,21 @@ print('yes' if sys.argv[1] in names else 'no')
 
 if [ "$exists" = "yes" ]; then
   echo "  service '$DST' already exists — skipping creation"
+  # BUT STILL SET THE ROLE.
+  #
+  # `railway add --variables` is what sets PROCESS_ROLE, so skipping
+  # creation skipped it — and the copy below deliberately does not carry
+  # PROCESS_ROLE over from the source. A service created in the
+  # dashboard therefore ended up with no role at all.
+  #
+  # It defaults to `all`, so the worker still runs jobs and nothing
+  # breaks. That is exactly what makes it worth doing explicitly: a
+  # silently-correct default is indistinguishable from a setting
+  # somebody chose, right up until the day the default changes.
+  railway variable set --service "$DST" --skip-deploys PROCESS_ROLE=worker \
+    >/dev/null 2>&1 \
+    && echo "  PROCESS_ROLE=worker set explicitly" \
+    || echo "  WARNING: could not set PROCESS_ROLE (it will default to 'all')"
   probe=""
   add_rc=0
 else
@@ -150,6 +165,17 @@ i=0
 failed=""
 err=""
 while IFS= read -r k; do
+  # STRIP THE CARRIAGE RETURN.
+  #
+  # Python on Windows writes "\n" to stdout as "\r\n". Command
+  # substitution strips the trailing newline but not the \r, so every
+  # key arrives as "ANTHROPIC_API_KEY\r" — which `d.get()` misses,
+  # yielding None, an empty stdin, and Railway's "Empty value provided
+  # via stdin" for all 75.
+  #
+  # It hid well: every isolated test passed the key as a bash literal,
+  # so the \r only existed on the path through the loop.
+  k="${k%$'\r'}"
   [ -z "$k" ] && continue
   i=$((i+1))
   # The value goes down this pipe and nowhere else. stderr is CAPTURED,
