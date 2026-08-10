@@ -34,8 +34,11 @@ import pricing_config as pc
 # What a customer who spends their WHOLE tank on chat may cost, as a
 # share of what they pay. Not a typical customer — the one who decides
 # whether a tier can be sold at all.
+# EVERY tier, not just the entry one. The first pass solved for Starter
+# and left Professional at 46% and Practice at 58%; a 70% ceiling would
+# not have noticed either. Tightened to 40 once chat_price went to 12.
 ENTRY_TIER_COGS_CEILING_PCT = 40.0
-ANY_TIER_COGS_CEILING_PCT = 70.0
+ANY_TIER_COGS_CEILING_PCT = 40.0
 
 
 class TestThePriceReflectsTheCost:
@@ -49,7 +52,11 @@ class TestThePriceReflectsTheCost:
     def test_it_is_not_so_high_the_product_stops_working(self):
         """Strict parity with a build's implied credit cost is 22, which
         leaves a Starter four turns a day. A repricing that fixes the
-        spreadsheet by breaking the product is not a fix."""
+        spreadsheet by breaking the product is not a fix.
+
+        At 12 a Starter gets 250 turns — eight a day. That is the floor
+        this is willing to trade for solvency; below it the entry tier
+        stops being a product you can hold a conversation with."""
         starter_turns = pc.chat_tank_economics()["starter"]["turns_in_the_tank"]
         assert starter_turns >= 200, (
             f"a Starter gets {starter_turns:.0f} turns a month — too few for "
@@ -110,8 +117,8 @@ class TestItStaysADial:
 
     def test_a_typo_falls_back_to_the_shipped_default(self, monkeypatch):
         """Fail safe and loud, not silently free."""
-        monkeypatch.setenv("PRICE_CHAT_PRICE", "8o")
-        assert pc.chat_price() == 8
+        monkeypatch.setenv("PRICE_CHAT_PRICE", "12o")
+        assert pc.chat_price() == 12
 
     def test_the_economics_helper_follows_the_dial(self, monkeypatch):
         monkeypatch.setenv("PRICE_CHAT_PRICE", "16")
@@ -132,3 +139,46 @@ class TestConciergeWasHeldBack:
         assert "anecdote" in src or "single row" in src, (
             "if concierge no longer tracks a Chief turn, the docstring has "
             "to say why, or the next reader treats it as an oversight")
+
+
+class TestTheIdentityHolds:
+    """Everything about this reduces to one relationship, and pinning it
+    means the next repricing is arithmetic instead of guess-and-check.
+
+        worst-case chat COGS % = cost_per_turn / (chat_price x cents_per_credit)
+    """
+
+    @pytest.mark.parametrize("plan", ["starter", "professional", "practice"])
+    def test_the_helper_agrees_with_the_formula(self, plan):
+        rate = pc.tier_cents_per_credit()[plan]
+        expected = pc.MEASURED_CHAT_COST_CENTS / (pc.chat_price() * rate) * 100
+        assert pc.chat_tank_economics()[plan]["cogs_pct"] == pytest.approx(
+            expected, rel=0.01)
+
+    def test_the_cheapest_credit_is_the_binding_tier(self):
+        """Practice was never specially broken — it is just the tier with
+        the cheapest credit. Whichever tier that is sets the required
+        chat_price, so a future tier priced more generously than Practice
+        would silently become the new problem."""
+        rates = pc.tier_cents_per_credit()
+        worst = max(pc.chat_tank_economics(),
+                    key=lambda t: pc.chat_tank_economics()[t]["cogs_pct"])
+        buyable = pc.purchasable_tier_cents_per_credit()
+        assert worst == min(buyable, key=lambda t: buyable[t])
+
+    def test_chat_price_clears_the_threshold_every_tier_needs(self):
+        """chat_price x cents_per_credit >= cost / ceiling, for all of
+        them — the single check the first repricing was missing."""
+        needed = pc.MEASURED_CHAT_COST_CENTS / (ANY_TIER_COGS_CEILING_PCT / 100)
+        for plan, rate in pc.purchasable_tier_cents_per_credit().items():
+            assert pc.chat_price() * rate >= needed, (
+                f"{plan}: {pc.chat_price()} x {rate:.3f} = "
+                f"{pc.chat_price()*rate:.2f}, needs {needed:.2f}")
+
+    def test_it_would_fail_at_the_previous_price(self, monkeypatch):
+        """Guards the guard, again: at 8 the bigger tiers must breach the
+        40% ceiling, or this class is measuring nothing."""
+        monkeypatch.setenv("PRICE_CHAT_PRICE", "8")
+        e = pc.chat_tank_economics()
+        assert e["practice"]["cogs_pct"] > ANY_TIER_COGS_CEILING_PCT
+        assert e["professional"]["cogs_pct"] > ANY_TIER_COGS_CEILING_PCT

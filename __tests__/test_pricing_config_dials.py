@@ -78,7 +78,8 @@ def test_opening_defaults_are_kevins_ruling(monkeypatch):
     These are the numbers we launch on; they are expected to move.
 
     One HAS moved, and this is the record of it rather than a quiet edit:
-    chat_price went 1 -> 8 on 2026-08-10. The module's own rule is that
+    chat_price went 1 -> 8 -> 12 on 2026-08-10 (8 solved the entry tier;
+    12 was needed to get Professional and Practice under 40% too). The module's own rule is that
     opening defaults get refined once the meter works, and it now does —
     640 real turns say a Chief turn costs 7.37c at the mean, against a
     build's implied 0.333c per credit. At 1 credit a turn, a Starter
@@ -104,7 +105,7 @@ def test_opening_defaults_are_kevins_ruling(monkeypatch):
     assert pc.small_edit() == 40
     assert pc.hero_regen() == 30
     assert pc.doc_gen() == 40
-    assert pc.chat_price() == 8          # was 1 until 2026-08-10
+    assert pc.chat_price() == 12         # 1 -> 8 -> 12, both on 2026-08-10
     assert pc.chat_daily_soft_ceiling() == 250
 
 

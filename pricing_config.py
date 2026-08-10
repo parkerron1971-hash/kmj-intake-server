@@ -158,8 +158,8 @@ def doc_gen() -> int:
 def chat_price() -> int:
     """One Chief turn.
 
-    RAISED 1 -> 8 on 2026-08-10, against measured data rather than the
-    estimate it shipped on. This module says opening defaults get refined
+    RAISED 1 -> 8, then 8 -> 12, both on 2026-08-10, against measured
+    data rather than the estimate it shipped on. This module says opening defaults get refined
     once the meter works; the meter now works (#448/#450 made it record
     anything at all, #470/#471 made it record WHOSE), and 640 real turns
     say a Chief turn costs:
@@ -188,22 +188,57 @@ def chat_price() -> int:
     they pay. 3,000 / 8 x 7.37c = $27.64 against $79. It leaves a Starter
     375 turns a month, twelve a day, which a practitioner can live in.
 
-    WHAT 8 DOES NOT FIX
+    WHY 12 AND NOT 8
 
-    The same worst case runs hotter on the bigger tiers, because credits
-    per dollar go UP with tier while the cost of a turn does not:
+    8 was solved for the ENTRY tier alone and left the bigger ones over
+    the line — starter 35%, pro 46%, practice 58% — because credits per
+    dollar go UP with tier while the cost of a turn does not.
 
-        starter  35%   pro 46%   practice 58%
+    The whole thing turns out to be one identity:
 
-    That is a tank-SIZING question, not a chat-price one — one price
-    cannot flatten it, and chat_tank_economics() below makes it visible
-    instead of leaving it implied. Practice is the one to look at first.
+        worst-case chat COGS %  =  cost_per_turn / (chat_price x cents_per_credit)
+
+    So a tier is under 40% only when chat_price x cents_per_credit >=
+    18.43. Practice has the cheapest credit at 1.596c, which needs
+    chat_price >= 11.54. Twelve is the first whole number that puts
+    EVERY tier under:
+
+        starter 23.3%   pro 30.9%   practice 38.5%
+
+    It costs the entry tier 375 turns a month -> 250, twelve a day ->
+    eight.
+
+    WHY NOT FIX PRACTICE ON ITS OWN
+
+    Because neither single-tier lever is available, which is only
+    visible once the arithmetic is written down:
+
+      shrink the tank   the pack ladder needs practice >= 24,897 credits
+                        (or a top-up beats upgrading again); 40% needs
+                        <= 17,324. No number satisfies both.
+      raise the price   $576/mo would do it, at which a practice credit
+                        costs 2.303c against professional's 1.990c —
+                        the biggest plan becomes worse value than the
+                        middle one.
+
+    Practice was never specially broken. It is just the tier with the
+    cheapest credit, and at chat_price 8 anything under 2.303c was over
+    the line. Fixing only Practice would have left Professional next.
+
+    THE LEVER THAT COSTS CUSTOMERS NOTHING
+
+    Practice clears 40% at chat_price 8 if a turn costs 5.11c. The
+    median already IS 5.18c — the 7.37c mean is dragged by a tail (p95
+    20.15c, max 52.55c). Trimming that tail is the version where nobody
+    pays more, and it is an engineering job rather than a pricing one.
+    This change does not preclude it; if the mean comes down, chat_price
+    can come back down with it.
 
     Nothing changes for a customer today: BILLING_ENFORCE is off in
     production, so allowances are recorded and not enforced. This is
     positioning for the day that flips, which is the safe moment to do it.
     """
-    return _dial("CHAT_PRICE", "PRICE_", 8)
+    return _dial("CHAT_PRICE", "PRICE_", 12)
 
 
 def concierge_price() -> int:
