@@ -19,7 +19,7 @@ unverified — it is loud, per-provider, and shows up in every log line, so
 it reads as a decision rather than an accident.
 
     WEBHOOK_ALLOW_UNSIGNED=resend          # one provider
-    WEBHOOK_ALLOW_UNSIGNED=resend,telnyx   # several
+    WEBHOOK_ALLOW_UNSIGNED=resend,twilio   # several
     WEBHOOK_ALLOW_UNSIGNED=all             # everything (don't)
 
 Unset — the default — means every provider verifies or is dropped.

@@ -442,18 +442,18 @@ def _fetch_public_modules(business_id: str) -> List[Dict[str, Any]]:
 
 
 def _platform_sms_capable() -> bool:
-    """True when the platform can actually send SMS (Twilio primary or
-    Telnyx fallback env present) — gates the contact-form SMS opt-in
-    checkbox so we never collect consent we can't honor."""
-    import os
+    """True when the platform can actually send SMS — gates the
+    contact-form SMS opt-in checkbox so we never collect consent we
+    can't honor.
+
+    Fails CLOSED if sms_service cannot be imported: offering an opt-in
+    we cannot honor is worse than hiding one we could.
+    """
     try:
         from sms_service import _twilio_configured
-        if _twilio_configured():
-            return True
+        return bool(_twilio_configured())
     except Exception:
-        pass
-    return bool((os.environ.get("TELNYX_API_KEY") or "").strip()
-                and (os.environ.get("TELNYX_PHONE_NUMBER") or "").strip())
+        return False
 
 
 def gather_context(business_id: str) -> Dict[str, Any]:

@@ -6,9 +6,11 @@ had no verification at all) and /webhooks/twilio/sms. All three feed
 untrusted text into Chief's system prompt, and Chief can send — so the
 default is now to drop what cannot be verified.
 
-These tests generate a real Ed25519 keypair and sign real Svix HMACs
-rather than monkeypatching the verifiers, so a regression in the actual
-signing maths fails here.
+Two remain. Telnyx's endpoint was deleted with the provider rather than
+kept and guarded; TestTelnyxIsRetired pins that it stays deleted.
+
+These tests sign real Svix HMACs rather than monkeypatching the
+verifiers, so a regression in the actual signing maths fails here.
 """
 from __future__ import annotations
 
@@ -24,34 +26,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import pytest
 
-ed = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.ed25519")
+# The cryptography importorskip that used to guard this module went with
+# the Telnyx Ed25519 keypair. Svix HMACs need only hashlib/hmac, so these
+# tests now run everywhere instead of skipping where it is absent.
 
 import email_sender
 import sms_service
 import webhook_guard
-from cryptography.hazmat.primitives import serialization
-
-
-# ── Telnyx: a real Ed25519 keypair ───────────────────────────────────
-_TELNYX_PRIVATE = ed.Ed25519PrivateKey.generate()
-_TELNYX_PUBLIC_B64 = base64.b64encode(
-    _TELNYX_PRIVATE.public_key().public_bytes(
-        serialization.Encoding.Raw, serialization.PublicFormat.Raw
-    )
-).decode()
-
-_TELNYX_BODY = json.dumps(
-    {"data": {"event_type": "message.received", "payload": {"text": "hi"}}}
-).encode()
-
-
-def _telnyx_headers(body: bytes = _TELNYX_BODY, *, ts: int | None = None,
-                    sig: str | None = None) -> dict:
-    ts = int(time.time()) if ts is None else ts
-    if sig is None:
-        signed = f"{ts}|".encode() + body
-        sig = base64.b64encode(_TELNYX_PRIVATE.sign(signed)).decode()
-    return {"telnyx-signature-ed25519": sig, "telnyx-timestamp": str(ts)}
 
 
 # ── Resend/Svix: a real HMAC secret ──────────────────────────────────
@@ -78,54 +59,37 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("RESEND_WEBHOOK_SECRET", raising=False)
 
 
-# ── Telnyx ───────────────────────────────────────────────────────────
+# ── Telnyx is gone ───────────────────────────────────────────────────
 
-class TestTelnyxSignature:
-    def test_valid_signature_accepted(self, monkeypatch):
-        monkeypatch.setenv("TELNYX_PUBLIC_KEY", _TELNYX_PUBLIC_B64)
-        assert sms_service._verify_telnyx_signature(_TELNYX_BODY, _telnyx_headers())
+class TestTelnyxIsRetired:
+    """The Ed25519 verifier these tests used to exercise was added by
+    this same audit and deleted three days later, with the provider.
 
-    def test_unset_public_key_now_rejects(self, monkeypatch):
-        """The regression this PR exists for: no key used to mean no check."""
-        assert not sms_service._verify_telnyx_signature(_TELNYX_BODY, _telnyx_headers())
+    That is not a reversal. Signing /sms/inbound was correct while the
+    endpoint was reachable and unverified; once Twilio was the only
+    sender, the endpoint was an unused door into Chief's prompt, and
+    removing a door beats fitting it with a better lock. What is worth
+    pinning is that it does not quietly come back -- a re-added Telnyx
+    fallback would be unreachable, unsigned by default, and invisible.
+    """
 
-    def test_tampered_body_rejected(self, monkeypatch):
-        monkeypatch.setenv("TELNYX_PUBLIC_KEY", _TELNYX_PUBLIC_B64)
-        headers = _telnyx_headers()
-        assert not sms_service._verify_telnyx_signature(b'{"data":"forged"}', headers)
+    def test_the_verifier_is_gone(self):
+        assert not hasattr(sms_service, "_verify_telnyx_signature")
 
-    def test_missing_headers_rejected(self, monkeypatch):
-        monkeypatch.setenv("TELNYX_PUBLIC_KEY", _TELNYX_PUBLIC_B64)
-        assert not sms_service._verify_telnyx_signature(_TELNYX_BODY, {})
+    def test_the_send_path_is_gone(self):
+        assert not hasattr(sms_service, "_send_via_telnyx")
 
-    def test_stale_timestamp_rejected(self, monkeypatch):
-        monkeypatch.setenv("TELNYX_PUBLIC_KEY", _TELNYX_PUBLIC_B64)
-        old = int(time.time()) - 3600
-        assert not sms_service._verify_telnyx_signature(
-            _TELNYX_BODY, _telnyx_headers(ts=old))
+    def test_no_inbound_route_survives(self):
+        paths = [getattr(r, "path", "") for r in sms_service.router.routes]
+        assert "/sms/inbound" not in paths
 
-    def test_malformed_timestamp_rejected(self, monkeypatch):
-        monkeypatch.setenv("TELNYX_PUBLIC_KEY", _TELNYX_PUBLIC_B64)
-        headers = _telnyx_headers()
-        headers["telnyx-timestamp"] = "not-a-number"
-        assert not sms_service._verify_telnyx_signature(_TELNYX_BODY, headers)
-
-    def test_signature_from_a_different_key_rejected(self, monkeypatch):
-        monkeypatch.setenv("TELNYX_PUBLIC_KEY", _TELNYX_PUBLIC_B64)
-        other = ed.Ed25519PrivateKey.generate()
-        ts = int(time.time())
-        forged = base64.b64encode(
-            other.sign(f"{ts}|".encode() + _TELNYX_BODY)).decode()
-        assert not sms_service._verify_telnyx_signature(
-            _TELNYX_BODY, _telnyx_headers(ts=ts, sig=forged))
-
-    def test_explicit_allowlist_permits_unsigned(self, monkeypatch):
-        monkeypatch.setenv("WEBHOOK_ALLOW_UNSIGNED", "telnyx")
-        assert sms_service._verify_telnyx_signature(_TELNYX_BODY, {})
-
-    def test_allowlist_is_per_provider(self, monkeypatch):
-        monkeypatch.setenv("WEBHOOK_ALLOW_UNSIGNED", "resend")
-        assert not sms_service._verify_telnyx_signature(_TELNYX_BODY, {})
+    def test_twilio_still_owns_inbound(self):
+        """Guards the guard: the assertions above would also pass if SMS
+        had simply stopped receiving anything at all."""
+        import twilio_sms
+        paths = [getattr(r, "path", "") for r in twilio_sms.router.routes]
+        assert "/webhooks/twilio/sms" in paths
+        assert "/webhooks/twilio/status" in paths
 
 
 # ── Resend ───────────────────────────────────────────────────────────

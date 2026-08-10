@@ -98,18 +98,22 @@ CONTINUITY_HOURS = 72
 # ─── Outbound (single seam for auto-replies + broadcast) ──────────────
 
 async def _send_platform_sms(to_number: str, body: str) -> str:
-    """Send one SMS as the platform brand. Returns provider message id
-    ('' on providers without one). Twilio Messaging Service when
-    configured; raises on hard failure."""
-    if _twilio_configured():
-        from starlette.concurrency import run_in_threadpool
-        import twilio_sms
-        return await run_in_threadpool(twilio_sms.send_sms, to_number, body)
-    # Telnyx fallback (pre-Twilio environments)
-    from sms_service import _send_via_telnyx
-    async with httpx.AsyncClient() as client:
-        tx = await _send_via_telnyx(client, to_number, body)
-    return (tx.get("data") or {}).get("id", "") if isinstance(tx, dict) else ""
+    """Send one SMS as the platform brand via Twilio's Messaging
+    Service. Returns the provider message id; raises on hard failure.
+
+    This used to fall through to Telnyx when Twilio was unconfigured.
+    That branch was only reachable in an environment with no Twilio
+    credentials — where it then failed on the missing Telnyx ones. So
+    the fallback's real effect was to answer a Twilio misconfiguration
+    with an error naming a provider nobody uses. An unconfigured
+    platform should say so in the words of the provider it actually has.
+    """
+    if not _twilio_configured():
+        raise RuntimeError(
+            "SMS is not configured — set the TWILIO_* vars in Railway.")
+    from starlette.concurrency import run_in_threadpool
+    import twilio_sms
+    return await run_in_threadpool(twilio_sms.send_sms, to_number, body)
 
 
 # ─── Routing helpers ──────────────────────────────────────────────────
