@@ -498,12 +498,21 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                        model: Optional[str] = None,
                        stream_sink=None) -> str:
     # Spend circuit breaker (beta-readiness audit): soft-block new AI
-    # turns once the account crosses its daily-dollar ceiling. Fail-open —
-    # a bookkeeping hiccup must never brick Chief.
+    # turns once this business crosses its daily-dollar ceiling, or the
+    # platform crosses its own. Fail-open — a bookkeeping hiccup must
+    # never brick Chief.
+    #
+    # business_id is passed explicitly rather than left to the ambient
+    # billing context. Both resolve to the same tenant on a normal turn,
+    # but _call_claude is reached from paths that never went through
+    # chief_chat and so carry no context — there, the parameter is the
+    # only thing that keeps one runaway tenant from being measured
+    # against, and blocked by, the platform ceiling everyone shares.
     try:
         import spend_guard
-        if spend_guard.over_budget():
-            logger.warning("[chief] daily spend cap hit — turn soft-blocked")
+        if spend_guard.over_budget(business_id):
+            logger.warning("[chief] daily spend cap hit — turn soft-blocked "
+                           "(business=%s)", business_id or "unattributed")
             return spend_guard.block_message()
     except Exception:
         pass

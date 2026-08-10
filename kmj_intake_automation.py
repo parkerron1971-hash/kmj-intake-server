@@ -1148,10 +1148,14 @@ async def run_pulse(request: Request):
     """
     # Anonymous, and the most expensive single request the platform
     # serves — a Sonnet call at 4k tokens with five forced web searches.
-    # spend_guard's ceiling is GLOBAL rather than per-tenant, so an
-    # unrated loop here does not merely cost money: it exhausts the cap
-    # and takes Chief offline for every customer at once, for about fifty
-    # dollars.
+    #
+    # spend_guard grew a per-tenant ceiling, and this endpoint is exactly
+    # the case it CANNOT help with: an anonymous caller has no business
+    # to bill, so the spend is unattributed and counts only toward the
+    # PLATFORM ceiling. An unrated loop here therefore still does what it
+    # always did — exhausts the shared cap and takes Chief offline for
+    # every customer at once, for about fifty dollars. The rate limit
+    # below is the only thing standing in front of that.
     #
     # Keyed on trusted_client_ip — the LAST X-Forwarded-For hop, which
     # Railway appends — not client_ip, which is the first hop and
