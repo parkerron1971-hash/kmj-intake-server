@@ -970,4 +970,63 @@ def verification_report(biz: str) -> Dict[str, Any]:
         "unverifiable_rows": len(unhashed),
         "note": ("Rows recorded before the hash chain began carry no hash "
                  "and cannot be proven either way.") if unhashed else None,
+        # THE PART THAT DOES NOT DEPEND ON TRUSTING US.
+        #
+        # Everything above proves the chain is internally consistent: our
+        # hashes match our rows. That is exactly what somebody rewriting
+        # history would also be able to produce, because they would
+        # recompute the hashes too. It is a useful check and it is not
+        # evidence against US.
+        #
+        # The anchors are. Each one published a merkle root to a public
+        # network at a time we did not control, so a root that matches
+        # today could not have been written after the fact. The auditor
+        # gets the topic, the root and the URL to fetch it from — no
+        # account, no SDK, and no cooperation from us.
+        "anchors": _anchor_summary(biz),
     }
+
+
+def _anchor_summary(biz: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """The most recent anchors, with what an auditor needs to check one.
+
+    Deliberately does NOT call the network. This runs inside a page load
+    an auditor is waiting on, and a slow mirror node must not read as a
+    slow ledger — the same reason verify_anchor() is separate from
+    proof_status(). What is returned is the ADDRESS of the proof, which
+    is the thing they can act on independently.
+    """
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/ledger_anchors?business_id=eq.{biz}"
+            f"&select=first_sequence,last_sequence,row_count,merkle_root,"
+            f"provider,provider_ref,anchored_at"
+            f"&order=anchored_at.desc&limit={int(limit)}") or []
+    except Exception as e:
+        logger.warning(f"[ledger] anchor summary failed for {biz}: {e}")
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        item: Dict[str, Any] = {
+            "anchored_at": r.get("anchored_at"),
+            "covers": {"first_sequence": r.get("first_sequence"),
+                       "last_sequence": r.get("last_sequence"),
+                       "rows": r.get("row_count")},
+            "merkle_root": r.get("merkle_root"),
+            "provider": r.get("provider"),
+            "independent": False,
+            "verify_url": None,
+            "network": None,
+        }
+        try:
+            import ledger_anchor
+            st = ledger_anchor.proof_status(r.get("provider_ref"),
+                                            provider=r.get("provider"))
+            item["independent"] = bool(st.get("confirmed"))
+            item["verify_url"] = st.get("verify_url")
+            item["network"] = st.get("network")
+        except Exception:
+            pass
+        out.append(item)
+    return out
