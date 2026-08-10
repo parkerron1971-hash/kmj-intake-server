@@ -513,7 +513,22 @@ async def health_ready():
         "sentry": bool(os.environ.get("SENTRY_DSN")),
         "billing_enforce": (os.environ.get("BILLING_ENFORCE") or "off").lower() == "on",
     }
-    ready = supabase_ok and scheduler.running
+    # A WEB REPLICA HAS NO SCHEDULER, AND THAT IS NOT AN OUTAGE.
+    #
+    # This line predates the role split and read `supabase_ok and
+    # scheduler.running`, which was right when every process ran the
+    # scheduler and became a trap the moment one could decline to. Set
+    # PROCESS_ROLE=web and scheduler.running is false BY DESIGN — so
+    # readiness would 503, Railway's healthcheck would fail, and the
+    # entire web tier would never come up. The change meant to stop the
+    # jobs running twenty times would instead have taken the front door
+    # down.
+    #
+    # What this probe actually asks is whether the process is doing the
+    # job it was configured to do. A web replica is ready without a
+    # scheduler; a worker is not.
+    scheduler_ok = scheduler.running or not runs_scheduled_jobs()
+    ready = supabase_ok and scheduler_ok
     return _JSONResponse(status_code=200 if ready else 503,
                          content={"ready": ready, **checks})
 
