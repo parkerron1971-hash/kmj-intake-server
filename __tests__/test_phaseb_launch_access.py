@@ -19,6 +19,22 @@ import usage_metering as um  # noqa: E402
 import billing_limits as bl  # noqa: E402
 from test_i2_gl_sync import FakeSB  # noqa: E402
 
+@pytest.fixture(autouse=True)
+def _pin_chat_price(monkeypatch):
+    """These tests are about MECHANICS — thresholds firing once, drawdown
+    order, weighted totals — and their expected numbers were written when
+    a Chief turn cost 1 credit. It went to 8 on 2026-08-10, priced against
+    measured cost.
+
+    Pinning the dial keeps each assertion measuring the behaviour it
+    names instead of re-encoding today's price list; a notification test
+    should not change meaning because pricing moved. The price itself is
+    covered by test_chat_repricing.py.
+    """
+    monkeypatch.setenv("PRICE_CHAT_PRICE", "1")
+
+
+
 
 def _u(uid):
     return type("U", (), {"id": uid})()

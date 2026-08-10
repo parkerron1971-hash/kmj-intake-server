@@ -75,7 +75,18 @@ def _reload_config():
 
 def test_opening_defaults_are_kevins_ruling(monkeypatch):
     """The 2026-08-08 opening defaults, with every env override cleared.
-    These are the numbers we launch on; they are expected to move."""
+    These are the numbers we launch on; they are expected to move.
+
+    One HAS moved, and this is the record of it rather than a quiet edit:
+    chat_price went 1 -> 8 on 2026-08-10. The module's own rule is that
+    opening defaults get refined once the meter works, and it now does —
+    640 real turns say a Chief turn costs 7.37c at the mean, against a
+    build's implied 0.333c per credit. At 1 credit a turn, a Starter
+    spending their whole tank on conversation cost $221 against $79 paid.
+
+    Everything else here is untouched. If a second number moves, it gets
+    a paragraph too — a defaults test that is edited silently stops being
+    a record of anything."""
     for k in list(os.environ):
         if k.startswith(("PRICE_", "CREDITS_", "LIMIT_")) or k in (
                 "BUILD_BASE", "BUILD_PER_SECTION", "REVAMP_PRICE",
@@ -93,7 +104,7 @@ def test_opening_defaults_are_kevins_ruling(monkeypatch):
     assert pc.small_edit() == 40
     assert pc.hero_regen() == 30
     assert pc.doc_gen() == 40
-    assert pc.chat_price() == 1
+    assert pc.chat_price() == 8          # was 1 until 2026-08-10
     assert pc.chat_daily_soft_ceiling() == 250
 
 
