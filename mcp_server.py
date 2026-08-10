@@ -378,6 +378,43 @@ def _audit(*, actor: str, tool: str, ok: bool, duration_ms: int,
         logger.warning("[audit] agent_runs write failed (non-fatal): %s", e)
 
 
+def _ledger(business_id: Optional[str], tool: str, caller: "Caller", *,
+            allowed: bool, ok: bool, reason: Optional[str] = None,
+            error: Optional[str] = None) -> None:
+    """Record an MCP call in the ACTION LEDGER, not only in agent_runs.
+
+    agent_runs is the surface's own operational log — arg names, duration,
+    scope. The ledger is the trust artifact: append-only at the database
+    level, hash-chained, and anchored on Hedera. Until now an agent could
+    read a practitioner's business and leave no trace in the one place an
+    auditor is told to look. "Everything Chief does is in the ledger" was
+    true and "everything an AGENT does is" was not, and nothing in the
+    ledger said so.
+
+    actor_type='agent' is the table's own vocabulary. authorized_by
+    carries the POLICY REASON rather than the caller — the spec's sixth
+    field is which rule permitted this, not who ran it.
+
+    Never fatal: a ledger write that could take down the surface it
+    records would be worse than the gap it closes.
+    """
+    try:
+        import audit_log
+        audit_log.record(
+            business_id,
+            actor_type="agent",
+            actor_id=(caller.actor or "mcp")[:120],
+            verb=tool,
+            ok=bool(ok),
+            error=error,
+            source="mcp",
+            authorized_by=reason,
+            summary=(None if allowed else "refused by policy"),
+        )
+    except Exception as e:
+        logger.warning("[mcp] ledger write failed (non-fatal): %s", e)
+
+
 # ─── Tenancy ─────────────────────────────────────────────────────────
 
 async def _business_by_id(client: httpx.AsyncClient,
@@ -459,10 +496,55 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
         biz = await _resolve_business(client, caller)
         if not biz:
             return True, False, "no business resolved for this account", None
+        business_id = str(biz.get("id") or "") or None
+
+        # THE POLICY ENGINE, on this surface too.
+        #
+        # Until now the agent surface authorised itself from the registry
+        # alone — may_expose_to_agent() — and never consulted the engine
+        # that decides whether an action is allowed for THIS business,
+        # unprompted, right now. Every exposed verb is a read today, so
+        # evaluate() returns allowed and nothing changes. That is exactly
+        # why it goes in now: the same argument the scope check already
+        # makes about itself two functions up — "a system that is only
+        # wired when it starts mattering is one that gets wired wrong".
+        #
+        # prompted=False is not a default, it is the truth about this
+        # path. Nobody is sitting in front of an MCP call asking for THIS
+        # action; a token is. Passing True here would hand the agent
+        # surface the one exemption the engine grants a human.
+        verdict = None
+        try:
+            import policy_engine
+            verdict = policy_engine.evaluate(
+                business_id or "", verb=name, surface="agent",
+                prompted=False, user_id=caller.user_id, biz_row=biz)
+        except Exception as e:
+            # Fail CLOSED. An authorisation check that cannot run is not
+            # permission to proceed — the posture the engine itself takes
+            # on registry drift.
+            logger.warning("[mcp] policy evaluation failed for %s: %s", name, e)
+            _ledger(business_id, name, caller, allowed=False, ok=False,
+                    reason="policy:unavailable")
+            return False, False, "the action policy is unavailable", business_id
+
+        if not verdict.allowed:
+            _ledger(business_id, name, caller, allowed=False, ok=False,
+                    reason=getattr(verdict, "reason", "policy:denied"))
+            return False, False, getattr(verdict, "message", "not permitted"), business_id
+
         action = dict(arguments or {})
         action["type"] = name
-        result = await handler(client, biz, action)
-    return True, True, result, str(biz.get("id") or "") or None
+        try:
+            result = await handler(client, biz, action)
+        except Exception as e:
+            _ledger(business_id, name, caller, allowed=True, ok=False,
+                    reason=getattr(verdict, "reason", None),
+                    error=f"{type(e).__name__}")
+            raise
+        _ledger(business_id, name, caller, allowed=True, ok=True,
+                reason=getattr(verdict, "reason", None))
+    return True, True, result, business_id
 
 
 # ─── JSON-RPC methods ────────────────────────────────────────────────
