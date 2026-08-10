@@ -1147,12 +1147,33 @@ async def widget_js(slug: str) -> Response:
     greeting = (cs.get("greeting") or "").strip()[:300] or (
         f"Hi! I'm the {name} assistant — ask me about services, "
         f"prices, or booking.")
+    # The client-facing AI disclosure, from ai_disclosure — never a second
+    # copy written here. The backend pins the hash of the exact words a
+    # consent record refers to, and a duplicate in the widget is a
+    # duplicate that drifts.
+    #
+    # This is the ONLY place most of these people meet the AI. They never
+    # signed up for anything: they are on a salon's website asking about
+    # an appointment, and something answers. Telling them so is the
+    # difference between a tool and a deception.
+    ai_notice = ""
+    try:
+        import ai_disclosure
+        doc = ai_disclosure.current("client")
+        # First line only, in the header. The full text is one fetch away
+        # at /consent/disclosure/client and is deliberately short; a wall
+        # of policy above a chat box does not get read either.
+        ai_notice = (doc or {}).get("text", "").strip().splitlines()[0]
+    except Exception as e:      # a missing notice must not 500 the widget
+        logger.warning("[concierge] ai notice unavailable: %s", e)
+
     cfg = {
         "slug": site.get("slug") or slug,
         "apiBase": _API_ORIGIN,
         "businessName": name,
         "greeting": greeting,
         "accent": _accent_color(biz, site),
+        "aiNotice": ai_notice,
     }
     # </script>-safe JSON so the config can never break out of the tag.
     cfg_json = json.dumps(cfg, ensure_ascii=True).replace("</", "<\\/")
@@ -1182,8 +1203,14 @@ _WIDGET_JS_TEMPLATE = r"""(function () {
     + 'box-shadow:0 12px 40px rgba(0,0,0,.3);}'
     + '#sol-cg-panel.sol-open{display:flex;}'
     + '#sol-cg-head{background:' + CFG.accent + ';color:#fff;padding:14px 16px;'
-    + 'display:flex;align-items:center;justify-content:space-between;}'
+    + 'display:flex;align-items:center;justify-content:space-between;'
+    // flex-wrap so the AI notice takes its own line. Without it the
+    // notice becomes a third flex child and lands beside the close
+    // button, squeezing the business name.
+    + 'flex-wrap:wrap;}'
     + '#sol-cg-head strong{font-size:15px;font-weight:600;}'
+    + '#sol-cg-ai{flex-basis:100%;order:3;margin-top:4px;font-size:11px;'
+    + 'line-height:1.4;opacity:0.92;}'
     + '#sol-cg-close{background:none;border:none;color:#fff;font-size:20px;cursor:pointer;'
     + 'min-width:44px;min-height:44px;margin:-10px -10px -10px 0;}'
     + '#sol-cg-thread{flex:1;overflow-y:auto;padding:14px;display:flex;'
@@ -1250,6 +1277,15 @@ _WIDGET_JS_TEMPLATE = r"""(function () {
   closeBtn.textContent = '×';
   head.appendChild(title);
   head.appendChild(closeBtn);
+  if (CFG.aiNotice) {
+    // textContent, like every other string here: this is escape armor,
+    // not decoration. It also sits ABOVE the thread rather than inside
+    // it, so it cannot be scrolled away mid-conversation.
+    var notice = document.createElement('div');
+    notice.id = 'sol-cg-ai';
+    notice.textContent = CFG.aiNotice;
+    head.appendChild(notice);
+  }
   panel.appendChild(head);
 
   var thread = document.createElement('div');
