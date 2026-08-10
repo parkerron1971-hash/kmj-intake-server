@@ -94,6 +94,26 @@ jobs:
                 detail="${detail}- backend did not report \`$key: true\`"$'\n'
               fi
             done
+
+            # NOBODY IS RUNNING THE SCHEDULER.
+            #
+            # Splitting the worker off the web tier makes a new outage
+            # possible: set every service to PROCESS_ROLE=web, never
+            # create the worker, and the scheduled work stops while
+            # every health check stays green — each web replica is
+            # genuinely healthy and honestly reports that it does not
+            # run jobs. No per-replica check can see it; only something
+            # looking at the shared lease can.
+            #
+            # Only an explicit `false` pages. The field is null when the
+            # answer is UNKNOWN (lock disabled, table absent, read
+            # failed), and treating unknown as broken would cry wolf on
+            # exactly the single-replica deploys that never needed a
+            # lease in the first place.
+            if grep -Eq '"scheduler_lease_fresh"[[:space:]]*:[[:space:]]*false' /tmp/ready.json; then
+              fail="yes"
+              detail="${detail}- the scheduler lease is STALE — no replica is running scheduled jobs. Check that a PROCESS_ROLE=worker service is up."$'\n'
+            fi
           fi
 
           # ── the app itself ──

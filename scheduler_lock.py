@@ -33,6 +33,7 @@ import logging
 import os
 import time
 import uuid
+from typing import Optional
 from datetime import datetime, timezone, timedelta
 
 import sb_clients
@@ -130,6 +131,49 @@ def _seed_if_absent(now_iso: str, expires: str) -> bool:
 def is_leader() -> bool:
     """Cheap cached read for scheduled jobs to gate on."""
     return _is_leader
+
+
+def lease_is_fresh(max_age_sec: int = LEASE_TTL_SEC * 2) -> Optional[bool]:
+    """Is ANY replica, anywhere, still running the scheduler?
+
+    Splitting the worker off the web tier creates a failure this system
+    did not have before: every service set to PROCESS_ROLE=web, no
+    worker ever created, and the scheduled work simply stops — while
+    every health check stays green, because each web replica is
+    perfectly healthy and correctly reports scheduler_running=false.
+
+    The lease is the one shared fact that answers it. Whichever process
+    runs the scheduler refreshes it every RENEW_SEC, so a lease older
+    than a couple of TTLs means nobody is running jobs at all.
+
+    Returns None, never False, when the answer is unknown — the lock
+    disabled, the table absent, the read failing. "We could not check"
+    and "nothing is scheduled" are different alarms, and collapsing them
+    would either cry wolf on a single-replica deploy that never needed a
+    lease, or hide the outage behind a read error.
+    """
+    if _disabled() or not _lease_table_present:
+        return None
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/scheduler_lease?id=eq.{_LEASE_ID}&select=expires_at&limit=1") or []
+        if not rows:
+            return None
+        raw = str(rows[0].get("expires_at") or "")
+        if not raw:
+            return None
+        # Z form, not +00:00 — PostgREST hands back the latter and
+        # fromisoformat on older Pythons chokes on the Z. Normalise both.
+        exp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        # expires_at is already TTL seconds ahead of the last renewal, so
+        # the age of the RENEWAL is (now - expires) + TTL.
+        age = (_now() - exp).total_seconds() + LEASE_TTL_SEC
+        return age <= max_age_sec
+    except Exception as e:
+        logger.warning("[lease] freshness check failed: %s", e)
+        return None
 
 
 async def renew_tick() -> None:
