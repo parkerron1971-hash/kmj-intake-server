@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+import authorship
 import billing_context
 import llm_call
 from fastapi import APIRouter, Depends, HTTPException
@@ -636,6 +637,13 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                 {"type": "text", "text": dynamic.strip()},
             ], "cached-2seg"
         return system, "uncached-single"
+
+    # Every ledger row written while this turn runs records the model
+    # that produced it. Set here rather than at the chat entry point
+    # because `model` is only resolved once the ladder has picked one,
+    # and a row stamped with the requested model rather than the used one
+    # would be a plausible-looking lie in an audit trail.
+    authorship.set_model(model)
 
     _extended = _extended_cache_enabled()
     sys_payload, prompt_shape = _build_system(_extended)

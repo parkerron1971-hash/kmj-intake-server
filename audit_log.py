@@ -39,6 +39,8 @@ losing the record of an action is worse than recording an odd verb.
 """
 from __future__ import annotations
 
+import authorship
+
 import json
 import logging
 import re
@@ -199,6 +201,11 @@ def record(business_id: Optional[str], *, actor_type: str, verb: str,
         "authorized_by": (str(authorized_by)[:120] if authorized_by else None),
         "subject_refs": refs,
         "display_timezone": display_timezone,
+        # WHICH machine decided. actor_type says a machine did; this says
+        # which one, captured at write time because the model that made a
+        # decision will have been superseded twice by the time anyone
+        # disputes it. NULL means NOT RECORDED — never inferred.
+        "ai_model": authorship.current_model(),
     }
     # This returned True unconditionally. sb_clients returns None on 4xx,
     # on 5xx and on transport error WITHOUT raising, so the except below
