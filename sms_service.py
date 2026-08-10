@@ -1,39 +1,45 @@
 """
-sms_service.py — Telnyx-backed SMS for the Solutionist System.
+sms_service.py — the shared SMS core for the Solutionist System.
+
+Despite the history in the name of one column below, this module is not
+provider-specific. It owns phone normalisation, outbound body
+composition, opt-out handling and the sms_messages store — all of which
+a dozen other modules import. Sending itself is Twilio's, via
+twilio_sms.py.
 
 Routes:
-  POST /sms/send                            send an SMS via Telnyx
-  POST /sms/inbound                         Telnyx webhook for incoming SMS
+  POST /sms/send                            send an SMS
   GET  /sms/conversation/{biz}/{contact}    fetch a conversation thread
   POST /sms/session-reminder                send a session reminder by SMS
   GET  /sms/health                          status check
 
-Env:
-  TELNYX_API_KEY        — required for sending. https://portal.telnyx.com
-  TELNYX_PHONE_NUMBER   — the From number (E.164, e.g. +12315551234)
-  TELNYX_PUBLIC_KEY     — REQUIRED to accept inbound webhooks. Base64
-                          Ed25519 public key from the Telnyx portal.
-                          Without it /sms/inbound drops every payload
-                          (see webhook_guard for the deliberate override).
+Inbound arrives on Twilio's own webhooks in twilio_sms.py
+(/webhooks/twilio/sms and /webhooks/twilio/status), which validate
+X-Twilio-Signature and hand off to sms_routing.route_inbound.
+
+Env: the TWILIO_* vars. See twilio_sms.py.
 
 Storage: sms_messages table (see supabase/sms-messages-migration.sql).
+
+  NOTE ON `telnyx_id`: that column holds the PROVIDER message id and has
+  done since before Twilio replaced Telnyx. Twilio's MessageSid is what
+  goes in it now, and /webhooks/twilio/status PATCHes delivery receipts
+  by matching on it. The name is wrong and the column is load-bearing;
+  renaming it is a migration plus a sweep of every reader, not a tidy-up
+  to fold into removing a dead provider. Left as history, deliberately.
 """
 
-import base64
 import os
 import json
 import logging
-import time as _time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Depends
 from auth_supabase import require_user, AuthedUser
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import pii_mask
-import webhook_guard
 
 router = APIRouter(tags=["sms"])
 logger = logging.getLogger("sms_service")
@@ -44,7 +50,6 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 
-TELNYX_API_URL = "https://api.telnyx.com/v2"
 HTTP_TIMEOUT = 15.0
 
 # ─── Supabase helpers (anon key, same pattern as the rest of railway/) ──
@@ -157,42 +162,6 @@ class SendSmsRequest(BaseModel):
     contact_id: Optional[str] = None
     to: str
     message: str
-
-
-async def _send_via_telnyx(
-    client: httpx.AsyncClient,
-    to_number: str,
-    message: str,
-) -> Dict[str, Any]:
-    """Low-level Telnyx send. Returns the response JSON (which includes
-    the Telnyx message id) or raises RuntimeError on a non-2xx.
-
-    Uses the messages endpoint — Telnyx auto-segments long messages."""
-    api_key = os.environ.get("TELNYX_API_KEY", "")
-    from_number = os.environ.get("TELNYX_PHONE_NUMBER", "")
-    if not api_key:
-        raise RuntimeError("TELNYX_API_KEY not configured")
-    if not from_number:
-        raise RuntimeError("TELNYX_PHONE_NUMBER not configured")
-
-    payload = {
-        "from": from_number,
-        "to": to_number,
-        "text": message,
-        "type": "SMS",
-    }
-    r = await client.post(
-        f"{TELNYX_API_URL}/messages",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=HTTP_TIMEOUT,
-    )
-    if r.status_code not in (200, 201, 202):
-        raise RuntimeError(f"Telnyx {r.status_code}: {r.text[:300]}")
-    return r.json() if r.text else {}
 
 
 async def _store_sms(
@@ -392,11 +361,9 @@ async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
     if not (message or "").strip():
         raise SmsSendError("Message body required", 400)
 
-    use_twilio = _twilio_configured()
-    if not use_twilio and not os.environ.get("TELNYX_API_KEY"):
+    if not _twilio_configured():
         raise SmsSendError(
-            "SMS not configured. Set the TWILIO_* vars (or TELNYX_API_KEY) in Railway.",
-            503)
+            "SMS is not configured. Set the TWILIO_* vars in Railway.", 503)
 
     # Consent gate — never send to a number that opted out.
     if await is_opted_out(client, to_clean):
@@ -424,24 +391,16 @@ async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
     first_time = await _is_first_outbound(client, business_id, to_clean)
     message = compose_outbound_body(biz_name, message, include_optout=first_time)
 
-    if use_twilio:
-        try:
-            from starlette.concurrency import run_in_threadpool
-            import twilio_sms
-            # Provider message id lands in the telnyx_id column —
-            # provider-agnostic in intent; the status callback
-            # (/webhooks/twilio/status) PATCHes on it.
-            telnyx_id = await run_in_threadpool(twilio_sms.send_sms, to_clean, message)
-        except Exception as e:
-            logger.warning(f"[SMS] twilio send failed: {e}")
-            raise SmsSendError(str(e)[:300], 502)
-    else:
-        try:
-            tx = await _send_via_telnyx(client, to_clean, message)
-        except RuntimeError as e:
-            logger.warning(f"[SMS] send failed: {e}")
-            raise SmsSendError(str(e), 502)
-        telnyx_id = (tx.get("data") or {}).get("id", "") if isinstance(tx, dict) else ""
+    try:
+        from starlette.concurrency import run_in_threadpool
+        import twilio_sms
+        # Twilio's MessageSid lands in the telnyx_id column — see the
+        # note at the top of this file. /webhooks/twilio/status PATCHes
+        # delivery receipts by matching on it.
+        telnyx_id = await run_in_threadpool(twilio_sms.send_sms, to_clean, message)
+    except Exception as e:
+        logger.warning(f"[SMS] twilio send failed: {e}")
+        raise SmsSendError(str(e)[:300], 502)
 
     msg_id = await _store_sms(
         client,
@@ -508,225 +467,66 @@ async def _find_contact_by_phone(
     return rows[0] if rows else None
 
 
-async def _find_contact_global(
-    client: httpx.AsyncClient,
-    phone: str,
-) -> Optional[Dict[str, Any]]:
-    """Find a contact across ALL businesses by phone. Used by the
-    inbound webhook since Telnyx doesn't pass business routing info —
-    we infer the business from whichever contact owns the number."""
-    if not phone:
-        return None
-    rows = await _sb_get(client,
-        f"/contacts?phone=eq.{_pq(phone)}"
-        f"&select=id,name,phone,business_id,health_score,status&limit=1")
-    if rows:
-        return rows[0]
-    last10 = "".join(ch for ch in phone if ch.isdigit())[-10:]
-    if not last10:
-        return None
-    rows = await _sb_get(client,
-        f"/contacts?phone=like.%25{last10}"
-        f"&select=id,name,phone,business_id,health_score,status&limit=1")
-    return rows[0] if rows else None
-
-
-# ─── Inbound webhook ─────────────────────────────────────────────────
-
-# Telnyx signs webhooks with Ed25519. The signed payload is
-# "{telnyx-timestamp}|{raw body}", the signature arrives base64 in
-# telnyx-signature-ed25519, and TELNYX_PUBLIC_KEY is the base64 32-byte
-# public key from the portal.
-_TELNYX_TOLERANCE_SECONDS = 300
-
-
-def _verify_telnyx_signature(raw_body: bytes, headers: Any) -> bool:
-    """Verify a Telnyx webhook signature. Fail-CLOSED when unconfigured.
-
-    This endpoint had no verification at all, while an inbound SMS body
-    is interpolated verbatim into Chief's system prompt and Chief can
-    send — so anyone who knew the URL could put text in front of the
-    model. Unverifiable payloads are now dropped.
-    """
-    public_key_b64 = (os.environ.get("TELNYX_PUBLIC_KEY") or "").strip()
-    if not public_key_b64:
-        if webhook_guard.unsigned_allowed("telnyx"):
-            return True
-        webhook_guard.reject_unsigned("telnyx", "TELNYX_PUBLIC_KEY is not set")
-        return False
-    try:
-        from cryptography.exceptions import InvalidSignature
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-            Ed25519PublicKey,
-        )
-    except ImportError:  # pragma: no cover - cryptography ships with PyJWT[crypto]
-        logger.error("[SMS] cryptography unavailable — cannot verify Telnyx signature")
-        return False
-
-    signature_b64 = headers.get("telnyx-signature-ed25519") or ""
-    timestamp = headers.get("telnyx-timestamp") or ""
-    if not (signature_b64 and timestamp):
-        logger.warning("[SMS] inbound REJECTED — missing Telnyx signature headers")
-        return False
-    try:
-        if abs(_time.time() - int(timestamp)) > _TELNYX_TOLERANCE_SECONDS:
-            logger.warning("[SMS] inbound REJECTED — Telnyx timestamp outside tolerance")
-            return False
-    except (TypeError, ValueError):
-        logger.warning("[SMS] inbound REJECTED — malformed Telnyx timestamp")
-        return False
-    try:
-        key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64))
-        key.verify(base64.b64decode(signature_b64),
-                   f"{timestamp}|".encode() + raw_body)
-        return True
-    except InvalidSignature:
-        logger.warning("[SMS] inbound REJECTED — Telnyx signature mismatch")
-        return False
-    except Exception as e:
-        logger.warning(f"[SMS] inbound REJECTED — signature verification error: {e}")
-        return False
-
-
-@router.post("/sms/inbound")
-async def receive_sms(request: Request):
-    """Telnyx webhook handler.
-
-    Expected events:
-      - message.received   inbound text from a recipient
-      - message.sent       delivery status (we log + flip our row)
-      - message.finalized  delivery final status
-      - message.failed     delivery failure
-
-    Always returns 200 so Telnyx doesn't retry; failures are logged.
-    """
-    raw_body = await request.body()
-    if not _verify_telnyx_signature(raw_body, request.headers):
-        # 200 so a real-but-misconfigured sender doesn't hammer retries,
-        # but the payload is not processed.
-        return JSONResponse({"status": "ignored", "reason": "unverified_signature"}, 200)
-    try:
-        payload = json.loads(raw_body.decode("utf-8"))
-    except Exception:
-        return JSONResponse({"status": "ignored", "reason": "non-json"}, 200)
-
-    data = payload.get("data") or {}
-    event_type = (data.get("event_type") or "").lower()
-    msg_payload = data.get("payload") or {}
-
-    async with httpx.AsyncClient() as client:
-        # Delivery status updates — flip status on the matching row.
-        if event_type in ("message.sent", "message.delivered", "message.finalized", "message.failed"):
-            telnyx_id = msg_payload.get("id", "")
-            status_map = {
-                "message.sent":       "sent",
-                "message.delivered":  "delivered",
-                "message.finalized":  "delivered",
-                "message.failed":     "failed",
-            }
-            new_status = status_map.get(event_type)
-            if telnyx_id and new_status:
-                await _sb_patch(client, f"/sms_messages?telnyx_id=eq.{_pq(telnyx_id)}",
-                                {"status": new_status})
-                logger.info(f"[SMS] delivery {event_type} telnyx={telnyx_id}")
-            return {"status": "ok", "event": event_type}
-
-        if event_type != "message.received":
-            return {"status": "ignored", "event": event_type or "unknown"}
-
-        # Inbound text. Extract sender + recipient + body.
-        from_obj = msg_payload.get("from") or {}
-        from_number_raw = from_obj.get("phone_number") if isinstance(from_obj, dict) else str(from_obj)
-        from_number = normalize_phone(from_number_raw or "")
-        text = (msg_payload.get("text") or "").strip()
-        telnyx_id = msg_payload.get("id", "")
-        media = msg_payload.get("media") or []
-
-        if not from_number or not text:
-            logger.info(f"[SMS] dropped inbound — from={pii_mask.mask_phone(from_number_raw)} text_len={len(text)}")
-            return {"status": "ignored", "reason": "missing_from_or_text"}
-
-        # Consent keywords (compliance fix, 2026-07-10): the Twilio
-        # webhook routes STOP/START through sms_routing.route_inbound,
-        # but this legacy Telnyx path stored a STOP as a plain inbound
-        # message WITHOUT recording the opt-out. Telnyx is currently
-        # unconfigured in prod, but the path must be compliant if it
-        # ever carries traffic again.
-        import sms_routing as _routing
-        first_word = text.split()[0].upper() if text.split() else ""
-        if first_word in _routing.STOP_WORDS:
-            await _sb_post(client, "/sms_opt_outs?on_conflict=phone,business_id",
-                           {"phone": from_number, "business_id": None})
-            logger.info(f"[SMS] STOP via Telnyx path from {pii_mask.mask_phone(from_number)} — opt-out recorded")
-            return {"status": "ok", "action": "opt_out"}
-        if first_word in _routing.START_WORDS:
-            try:
-                await client.delete(
-                    f"{_sb_url()}/rest/v1/sms_opt_outs?phone=eq.{_pq(from_number)}",
-                    headers=_sb_headers(), timeout=HTTP_TIMEOUT)
-                logger.info(f"[SMS] START via Telnyx path from {pii_mask.mask_phone(from_number)} — opt-out cleared")
-            except httpx.HTTPError as e:
-                logger.warning(f"[SMS] opt-out clear failed: {e}")
-            return {"status": "ok", "action": "opt_in"}
-
-        return await record_inbound_sms(
-            client, from_number=from_number, text=text,
-            provider_id=telnyx_id, media=media,
-        )
-
+# ─── Inbound ─────────────────────────────────────────────────────────
+#
+# There is no inbound handler here any more. Telnyx's /sms/inbound
+# endpoint, and the Ed25519 verifier that guarded it, are gone with the
+# rest of the provider.
+#
+# Inbound SMS arrives on Twilio's own webhooks in twilio_sms.py:
+#   POST /webhooks/twilio/sms      validates X-Twilio-Signature, then
+#                                  sms_routing.route_inbound, replying
+#                                  as TwiML on the same response
+#   POST /webhooks/twilio/status   delivery receipts, PATCHed onto
+#                                  sms_messages by provider id
+#
+# Worth stating plainly: the deleted verifier was ADDED in this same
+# audit, three days ago, as part of signing the unauthenticated inbound
+# webhooks. Signing a dead endpoint was the right move while it was
+# still reachable and the wrong one to keep — an endpoint that cannot be
+# removed is worth hardening, and one that can is worth removing. The
+# whole surface goes rather than the risk being managed.
 
 async def record_inbound_sms(
     client: httpx.AsyncClient,
     *,
     from_number: str,
     text: str,
+    business_id: str,
     provider_id: str = "",
     media: Optional[List[Dict[str, Any]]] = None,
-    business_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Shared inbound pipeline — used by the Telnyx webhook and by the
-    Twilio routing layer (sms_routing.route_inbound). Resolves the
-    contact, persists the row (read=false → drives the unread badge),
-    logs the event, notifies Chief, and bumps contact health.
+    """Shared inbound pipeline, called by sms_routing.route_inbound once
+    routing has decided WHICH business a text belongs to. Resolves the
+    contact within that business (creating one if needed), persists the
+    row (read=false -> drives the unread badge), logs the event,
+    notifies Chief, and bumps contact health.
 
-    Business resolution:
-      • business_id given (Twilio path) — the BINDING decided it; the
-        contact is looked up (or created) INSIDE that business only.
-      • business_id None (legacy Telnyx path) — global contact match,
-        else oldest business (single-tenant default)."""
+    business_id is required. It used to be optional: the Telnyx webhook
+    called this with None and the function then guessed -- global
+    contact match, else "the oldest business on the platform". On a
+    single-tenant install that was a sensible default. On this one it
+    means an unrecognised number's text lands in whichever practitioner
+    signed up first. Routing already knows the answer by the time it
+    gets here, so the guess is gone with the webhook that needed it.
+    """
     contact_id: Optional[str] = None
     contact_name: Optional[str] = None
     current_health = 50
 
-    if business_id:
-        contact = await _find_contact_by_phone(client, business_id, from_number)
-        if not contact:
-            created = await _sb_post(client, "/contacts", {
-                "business_id": business_id,
-                "name": from_number,      # practitioner renames later
-                "phone": from_number,
-                "status": "active",
-            })
-            contact = (created or [None])[0] if isinstance(created, list) else created
-        if contact:
-            contact_id = contact.get("id")
-            contact_name = contact.get("name")
-            current_health = int(contact.get("health_score") or 50)
-    else:
-        contact = await _find_contact_global(client, from_number)
-        if contact:
-            contact_id = contact.get("id")
-            contact_name = contact.get("name")
-            business_id = contact.get("business_id")
-            current_health = int(contact.get("health_score") or 50)
-        else:
-            biz_rows = await _sb_get(client, "/businesses?select=id&order=created_at.asc&limit=1") or []
-            if biz_rows:
-                business_id = biz_rows[0]["id"]
-
-    if not business_id:
-        logger.info(f"[SMS] no business found for inbound from {pii_mask.mask_phone(from_number)}")
-        return {"status": "unresolved", "from": from_number}
+    contact = await _find_contact_by_phone(client, business_id, from_number)
+    if not contact:
+        created = await _sb_post(client, "/contacts", {
+            "business_id": business_id,
+            "name": from_number,      # practitioner renames later
+            "phone": from_number,
+            "status": "active",
+        })
+        contact = (created or [None])[0] if isinstance(created, list) else created
+    if contact:
+        contact_id = contact.get("id")
+        contact_name = contact.get("name")
+        current_health = int(contact.get("health_score") or 50)
 
     # Persist
     msg_id = await _store_sms(
@@ -860,11 +660,9 @@ async def send_session_reminder(req: SessionReminderRequest, user: AuthedUser = 
 
 @router.get("/sms/health")
 async def sms_health():
+    configured = _twilio_configured()
     return {
         "status": "ok",
-        "provider": "twilio" if _twilio_configured() else
-                    ("telnyx" if os.environ.get("TELNYX_API_KEY") else "none"),
-        "twilio_configured": _twilio_configured(),
-        "telnyx_configured": bool(os.environ.get("TELNYX_API_KEY")),
-        "telnyx_phone": os.environ.get("TELNYX_PHONE_NUMBER", ""),
+        "provider": "twilio" if configured else "none",
+        "twilio_configured": configured,
     }
