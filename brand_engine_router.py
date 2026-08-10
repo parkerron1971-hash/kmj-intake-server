@@ -60,6 +60,33 @@ def bundle(
         raise HTTPException(status_code=500, detail=f"bundle composition failed: {e}")
 
 
+@router.get("/dna/{business_id}")
+def dna(
+    business_id: str,
+    _biz: Dict[str, Any] = Depends(business_access("viewer")),
+) -> JSONResponse:
+    """The derived design system — the door brand_dna never had.
+
+    brand_dna.py is 1,304 lines that turn a brand kit into a complete
+    token set: a role palette with derived on-colours, a real type scale
+    with per-face weight clamping, an 8pt spacing rhythm, a radius
+    language and a motion tier. Until today it had ZERO HTTP routes — it
+    materialised only as inline CSS inside a composed site, so the
+    practitioner whose brand it describes could never see any of it, and
+    could not tell why their pages looked the way they do.
+
+    Read-only and derived: nothing here is stored, so a GET is always
+    safe and always current with the kit. `viewer`, because seeing your
+    own design system is not an administrative act."""
+    try:
+        import brand_dna
+        return JSONResponse({"ok": True,
+                             "dna": brand_dna.build_brand_dna(business_id)})
+    except Exception as e:
+        logger.warning(f"dna derivation failed for {business_id[:8]}: {e}")
+        raise HTTPException(status_code=500, detail=f"dna derivation failed: {e}")
+
+
 @router.post("/save/{business_id}")
 def save(
     business_id: str,
