@@ -355,36 +355,24 @@ def test_the_undercut_guard_actually_detects_both_directions(monkeypatch):
     assert any("small" in w and "cheaper than" in w for w in e["warnings"])
 
 
-def test_shipped_packs_undercut_every_tier_and_that_is_flagged(monkeypatch):
-    """THE OPEN PRICING QUESTION, PINNED (2026-08-08).
+def test_the_pack_ladder_is_no_longer_inverted():
+    """WAS: test_shipped_packs_undercut_every_tier_and_that_is_flagged.
 
-    At the shipped numbers all three packs price a credit BELOW every
-    subscription tier — the cheapest being the Founder seat at $149 for
-    the Professional grant (1.490c/credit):
+    That test pinned a known-bad state — all three packs priced a credit
+    BELOW every subscription — and said in its own docstring what to do
+    when it was fixed: "it fails once the packs are repriced above the
+    line, at which point delete it and assert the invariant directly."
 
-        small  $10 / 1,000 = 1.000c/credit — 67% of the founder rate
-        medium $25 / 2,750 = 0.909c/credit — 61%
-        large  $50 / 6,000 = 0.833c/credit — 56%
-
-    This is INHERITED, not introduced: the 2026-07-12 packs sat at the
-    identical 0.380 / 0.457 pack-to-tier ratio against the old tank, so
-    the 10x rescale carried the relationship through untouched.
-
-    Kevin has the numbers and the ruling is his. This test does not
-    demand a fix — it RATCHETS: it fails if the gap ever widens, and it
-    fails once the packs are repriced above the line, at which point
-    delete it and assert the invariant directly."""
-    pc = _reload_config()
+    Repriced 2026-08-10. Doing as instructed. The invariants now live in
+    test_pack_ladder.py; this is the tombstone, so the next reader does
+    not go looking for a deleted ratchet and wonder what happened to it.
+    """
+    import pricing_config as pc
     e = pc.pack_economics()
-    assert e["cheapest_tier"] == "founder"
-    pct = {n: r["pct_of_cheapest_tier_rate"] for n, r in e["packs"].items()}
-    assert pct == {"small": 67.1, "medium": 61.0, "large": 55.9}, (
-        "pack-to-tier pricing moved — if this was deliberate, update the "
-        f"pin; if not, the gap just changed silently: {pct}")
-    assert len([w for w in e["warnings"] if "cheaper than" in w]) == 3
+    assert not [n for n, r in e["packs"].items() if r["undercuts_subscription"]]
+    assert not [n for n, r in e["packs"].items() if r["undercuts_buyable_tier"]]
+    assert not e["warnings"]
 
-
-# ─── 6. Dials must reach the endpoint they name (2026-08-09 audit) ───
 
 def test_chat_price_reaches_the_actual_chat_endpoint(monkeypatch):
     """#448 claimed 'the price list the practitioner reads is the price

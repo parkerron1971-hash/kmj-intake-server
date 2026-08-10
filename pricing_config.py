@@ -411,6 +411,20 @@ def tier_price_cents() -> Dict[str, int]:
     }
 
 
+# Founder is a closed 50-seat promotion, not something a new customer
+# can choose. Pricing packs against IT left them undercutting every tier
+# anyone can actually buy — which is the behaviour the invariant exists
+# to prevent, passing its own check. Kept separate so the distinction is
+# a named thing rather than a fact someone has to remember.
+PROMOTIONAL_TIERS = frozenset({"founder"})
+
+
+def purchasable_tier_cents_per_credit() -> Dict[str, float]:
+    """Tier rates a NEW customer can choose between today."""
+    return {t: r for t, r in tier_cents_per_credit().items()
+            if t not in PROMOTIONAL_TIERS}
+
+
 def tier_cents_per_credit() -> Dict[str, float]:
     """What one credit costs inside each subscription."""
     prices, credits = tier_price_cents(), tier_credits()
@@ -422,22 +436,55 @@ def tier_cents_per_credit() -> Dict[str, float]:
 # ─── Credit packs ────────────────────────────────────────────────────
 #
 # RESCALED 2026-08-08 (Kevin's ruling, second pass) to 1000 / 2750 /
-# 6000 units. The previous numbers were sized against the OLD
-# 300/1000/3000 tank and could not complete a single action at the new
-# scale — the $10 pack could not buy one section rewrite and the $50
-# pack bought exactly one build with nothing left. A top-up that cannot
-# finish one action is a bad checkout.
+# 6000 units, so a pack could complete one action at the new tank scale.
+# That fixed the product and broke the economics: it left every pack
+# CHEAPER per credit than every subscription — 1.000c / 0.909c / 0.833c
+# against a 1.490c founder credit. warn_on_pack_economics() has been
+# saying so at every boot since.
+#
+# RESCALED AGAIN 2026-08-10 (Kevin: "fix the pack pricing so it's not
+# cheaper than the tiers") to 740 / 1555 / 3120, and the SMALL PACK MOVED
+# FROM $10 TO $12 — the one price point that had to give, because two of
+# Kevin's own rules turned out to be jointly impossible at $10:
+#
+#   shape rule    the small pack covers a build PLUS an edit  -> >= 720 credits
+#   ladder rule   it must not undercut a buyable tier         -> <= 626 credits at $10
+#
+# 720 credits cannot honestly cost less than $11.49. Holding $10 would
+# have meant quietly dropping one of the two rules; $12 keeps both, and
+# it is the smaller change.
+#
+# The two invariants pull in opposite directions and both have to hold,
+# which is what makes this arithmetic rather than taste:
+#
+#   a pack must not undercut a subscription   -> FEWER credits per dollar
+#   a pack must complete a build with change  -> MORE credits per dollar
+#
+# A build is 600 credits and an edit is 120, so the small pack needs 720
+# and $12 to buy them honestly. The ladder still rewards buying bigger:
+# 1.622c / 1.608c / 1.603c.
+#
+# The benchmark moved too, and deliberately. The old one was the FOUNDER
+# rate, 1.490c — but founder is a closed 50-seat promotion, so pricing
+# against it left packs undercutting every tier a customer can actually
+# buy. These clear PRACTICE at 1.596c, the cheapest generally available
+# tier, which is the number that decides whether topping up beats
+# upgrading.
 #
 # Cents are unchanged: the packs stay $10 / $25 / $50.
+#
+# Safe to change today: zero credit packs have ever been sold (verified
+# against credit_ledger — no purchase rows exist), so no customer is
+# holding a balance bought at the old rate.
 
 def credit_packs() -> Dict[str, Dict[str, int]]:
     return {
-        "small":  {"cents": _dial("PACK_SMALL_CENTS", "PRICE_", 1000),
-                   "units": _dial("PACK_SMALL_UNITS", "PRICE_", 1000)},
+        "small":  {"cents": _dial("PACK_SMALL_CENTS", "PRICE_", 1200),
+                   "units": _dial("PACK_SMALL_UNITS", "PRICE_", 740)},
         "medium": {"cents": _dial("PACK_MEDIUM_CENTS", "PRICE_", 2500),
-                   "units": _dial("PACK_MEDIUM_UNITS", "PRICE_", 2750)},
+                   "units": _dial("PACK_MEDIUM_UNITS", "PRICE_", 1555)},
         "large":  {"cents": _dial("PACK_LARGE_CENTS", "PRICE_", 5000),
-                   "units": _dial("PACK_LARGE_UNITS", "PRICE_", 6000)},
+                   "units": _dial("PACK_LARGE_UNITS", "PRICE_", 3120)},
     }
 
 
@@ -462,6 +509,14 @@ def pack_economics() -> Dict[str, object]:
     tier_rates = tier_cents_per_credit()
     floor_tier = min(tier_rates, key=lambda t: tier_rates[t])
     floor = tier_rates[floor_tier]
+
+    # The rate that actually decides "top up or upgrade?" — a customer
+    # cannot choose the founder promotion, so beating it is not the test
+    # that matters.
+    buyable = purchasable_tier_cents_per_credit()
+    buy_tier = min(buyable, key=lambda t: buyable[t])
+    buy_floor = buyable[buy_tier]
+
     typical_build = price_for_build(build_included_sections())
 
     rows = {}
@@ -472,7 +527,9 @@ def pack_economics() -> Dict[str, object]:
             "cents": p["cents"], "units": units,
             "cents_per_credit": round(rate, 4),
             "pct_of_cheapest_tier_rate": round(rate / floor * 100, 1),
+            "pct_of_cheapest_buyable_rate": round(rate / buy_floor * 100, 1),
             "undercuts_subscription": rate < floor,
+            "undercuts_buyable_tier": rate < buy_floor,
             "builds_afforded": units // typical_build if typical_build else None,
             "credits_left_after_one_build": units - typical_build,
             "completes_an_action_with_change": units > typical_build,
@@ -480,6 +537,8 @@ def pack_economics() -> Dict[str, object]:
     return {
         "cheapest_tier": floor_tier,
         "cheapest_tier_cents_per_credit": round(floor, 4),
+        "cheapest_buyable_tier": buy_tier,
+        "cheapest_buyable_cents_per_credit": round(buy_floor, 4),
         "typical_build_credits": typical_build,
         "packs": rows,
         "warnings": (
@@ -488,6 +547,11 @@ def pack_economics() -> Dict[str, object]:
              f"({round(floor, 3)}c) — a top-up credit is cheaper than a "
              f"subscription credit"
              for n, r in rows.items() if r["undercuts_subscription"]]
+            + [f"{n}: {r['cents_per_credit']}c/credit undercuts the "
+               f"{buy_tier} rate ({round(buy_floor, 3)}c) — topping up beats "
+               f"upgrading, which is the ladder inverting"
+               for n, r in rows.items()
+               if r["undercuts_buyable_tier"] and not r["undercuts_subscription"]]
             + [f"{n}: {r['units']} credits cannot complete one "
                f"{typical_build}-credit build with change to spare"
                for n, r in rows.items()
