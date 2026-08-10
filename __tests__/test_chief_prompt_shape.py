@@ -35,13 +35,21 @@ class TestTheShapeIsRecorded:
         for shape in ("cached-3seg", "cached-2seg", "uncached-single"):
             assert f'"{shape}"' in SRC, f"{shape} is never assigned"
 
-    def test_it_defaults_to_uncached(self):
-        """The default has to be the pessimistic one. If an unrecognised
-        prompt were labelled as cached, the query that answers 'what are
-        we actually sending' would answer it wrongly."""
-        i = SRC.index('prompt_shape = "uncached-single"')
-        j = SRC.index('if isinstance(system, str) and "[[CHIEF_CACHE_SPLIT]]"')
-        assert i < j, "the shape must default before the split is examined"
+    def test_an_unrecognised_prompt_falls_back_to_uncached(self):
+        """The fallback has to be the pessimistic one. If a prompt with no
+        cache markers were labelled cached, the query that answers 'what
+        are we actually sending' would answer it wrongly.
+
+        Asserted on the FALLBACK RETURN rather than on statement order —
+        the first version of this test pinned the order of two lines and
+        broke the moment the builder became a function, against code that
+        was still correct.
+        """
+        assert 'return system, "uncached-single"' in SRC, (
+            "the no-markers path must return the uncached label")
+        # ...and the 1h suffix must never be appended to it, or an
+        # uncached prompt would be reported as an extended-cache one.
+        assert 'if _extended and prompt_shape != "uncached-single"' in SRC
 
     def test_both_success_paths_carry_it(self):
         """Streaming and non-streaming both log usage. Tagging one and

@@ -491,6 +491,67 @@ WEB_SEARCH_TOOL = {
 }
 
 
+# ── Extended prompt cache ────────────────────────────────────────────
+#
+# Measured live on 2026-08-10, two real turns through production:
+#
+#     cold   cache_write 43,603 tok   19.75c
+#     warm   cache_read  43,603 tok    4.31c
+#
+# A warm turn is 78% cheaper, and the cached prefix is 43.6k tokens —
+# nearly the whole prompt. The cache was NOT broken; it was expiring.
+# Without an anthropic-beta header, cache_control uses the default
+# FIVE MINUTE ttl, so a practitioner who sends a message, thinks for six
+# minutes and sends another pays the full cold price again. Real
+# conversation has pauses in it.
+#
+# A 1h write costs 2x base instead of 1.25x; reads stay at 0.1x. On the
+# measured 43,603 tokens that is 26.2c to write instead of 16.4c, and
+# 1.31c to read. Six exchanges spread across an hour:
+#
+#     5-minute ttl   six cold turns      ~118c
+#     1-hour ttl     one write + 5 reads  ~51c      (-57%)
+#
+# It only loses if a business sends exactly one turn an hour forever,
+# paying the higher write every time and never reading it back.
+_EXTENDED_CACHE_BETA = "extended-cache-ttl-2025-04-11"
+
+# Capability probe, resolved once per process rather than per call. If
+# the API rejects the beta — wrong name, not enabled on the account, a
+# model that does not support it — we fall back to the 5-minute default
+# and stop asking. This matters because _call_claude treats 4xx as OUR
+# bug and does NOT retry it: without this, an unsupported header would
+# take Chief down completely rather than making it slightly dearer.
+_extended_cache_ok: bool = True
+
+
+def _extended_cache_enabled() -> bool:
+    if (os.environ.get("CHIEF_EXTENDED_CACHE") or "on").strip().lower() == "off":
+        return False
+    return _extended_cache_ok
+
+
+def _cache_control(extended: bool) -> Dict[str, Any]:
+    cc: Dict[str, Any] = {"type": "ephemeral"}
+    if extended:
+        cc["ttl"] = "1h"
+    return cc
+
+
+def _beta_headers(extended: bool) -> Optional[Dict[str, str]]:
+    return {"anthropic-beta": _EXTENDED_CACHE_BETA} if extended else None
+
+
+def _looks_like_beta_rejection(status: int, body: str) -> bool:
+    """A 400 naming the ttl or the beta is the API telling us it does not
+    support this. Anything else is a real error and must not be swallowed
+    into a silent downgrade."""
+    if status != 400:
+        return False
+    b = (body or "").lower()
+    return any(t in b for t in ("ttl", "extended-cache", "anthropic-beta", "beta"))
+
+
 async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Dict],
                        max_tokens: int = 1600,
                        enable_web_search: bool = True,
@@ -557,27 +618,29 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # 381 calls carry, because api_usage records the endpoint and not the
     # shape. Every /chief/backend row looks alike. So the shape gets
     # recorded, and the next question is a SELECT.
-    sys_payload: Any = system
-    prompt_shape = "uncached-single"
-    if isinstance(system, str) and "[[CHIEF_CACHE_SPLIT]]" in system:
-        stable, _, dynamic = system.partition("[[CHIEF_CACHE_SPLIT]]")
-        if "[[CHIEF_GLOBAL_SPLIT]]" in stable:
-            universal, _, per_business = stable.partition("[[CHIEF_GLOBAL_SPLIT]]")
-            prompt_shape = "cached-3seg"
-            sys_payload = [
-                {"type": "text", "text": universal.rstrip(),
-                 "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": per_business.strip(),
-                 "cache_control": {"type": "ephemeral"}},
+    def _build_system(extended: bool):
+        """Returns (system_payload, shape). Rebuildable, because a beta
+        rejection means doing this again without the extended ttl."""
+        cc = _cache_control(extended)
+        if isinstance(system, str) and "[[CHIEF_CACHE_SPLIT]]" in system:
+            stable, _, dynamic = system.partition("[[CHIEF_CACHE_SPLIT]]")
+            if "[[CHIEF_GLOBAL_SPLIT]]" in stable:
+                universal, _, per_business = stable.partition("[[CHIEF_GLOBAL_SPLIT]]")
+                return [
+                    {"type": "text", "text": universal.rstrip(), "cache_control": dict(cc)},
+                    {"type": "text", "text": per_business.strip(), "cache_control": dict(cc)},
+                    {"type": "text", "text": dynamic.strip()},
+                ], "cached-3seg"
+            return [
+                {"type": "text", "text": stable.rstrip(), "cache_control": dict(cc)},
                 {"type": "text", "text": dynamic.strip()},
-            ]
-        else:
-            prompt_shape = "cached-2seg"
-            sys_payload = [
-                {"type": "text", "text": stable.rstrip(),
-                 "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": dynamic.strip()},
-            ]
+            ], "cached-2seg"
+        return system, "uncached-single"
+
+    _extended = _extended_cache_enabled()
+    sys_payload, prompt_shape = _build_system(_extended)
+    if _extended and prompt_shape != "uncached-single":
+        prompt_shape += "-1h"
 
     # A cache_control segment under the model's minimum cacheable prefix
     # is accepted and silently never cached — no error, no warning, just
@@ -611,9 +674,25 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         in_tok = out_tok = 0
         cache_read_tok = cache_write_tok = 0
         try:
-            async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key) as resp:
+            async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key,
+                                        extra_headers=_beta_headers(_extended)) as resp:
                 if resp.status_code >= 400:
                     body = await resp.aread()
+                    # If the API is rejecting the extended-ttl beta, stop
+                    # asking for it PROCESS-WIDE and retry this turn on the
+                    # 5-minute default. Without this a bad beta name is not
+                    # a costlier cache, it is Chief being down.
+                    if _extended and _looks_like_beta_rejection(
+                            resp.status_code, body.decode("utf-8", "replace")):
+                        globals()["_extended_cache_ok"] = False
+                        logger.warning(
+                            "[chief] extended cache ttl rejected (%s) — falling back "
+                            "to the 5-minute default for this process", resp.status_code)
+                        return await _call_claude(
+                            client, system, messages, max_tokens=max_tokens,
+                            enable_web_search=enable_web_search,
+                            business_id=business_id, model=model,
+                            stream_sink=stream_sink)
                     logger.warning(f"Claude stream error: {resp.status_code} {body[:300]}")
                     await log_api_usage(endpoint="/chief/backend", model=model,
                         input_tokens=0, output_tokens=0, business_id=business_id,
@@ -695,7 +774,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         if attempt:
             await asyncio.sleep(1.5 * attempt)
         try:
-            resp = await llm_call.apost(client, payload, timeout=HTTP_TIMEOUT, key=key)
+            resp = await llm_call.apost(client, payload, timeout=HTTP_TIMEOUT, key=key,
+                                        extra_headers=_beta_headers(_extended))
         except httpx.HTTPError as e:
             last_err = str(e)
             logger.warning(f"Claude request failed (attempt {attempt + 1}/3): {e}")
@@ -704,6 +784,18 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         if resp.status_code >= 400:
             last_err = f"{resp.status_code}"
             logger.warning(f"Claude error (attempt {attempt + 1}/3): {resp.status_code} {resp.text[:300]}")
+            # Same downgrade as the streaming path: a rejected beta must
+            # cost us a cheaper cache, never the turn. 400 is otherwise
+            # treated as our bug and never retried.
+            if _extended and _looks_like_beta_rejection(resp.status_code, resp.text):
+                globals()["_extended_cache_ok"] = False
+                logger.warning(
+                    "[chief] extended cache ttl rejected (%s) — falling back to "
+                    "the 5-minute default for this process", resp.status_code)
+                return await _call_claude(
+                    client, system, messages, max_tokens=max_tokens,
+                    enable_web_search=enable_web_search,
+                    business_id=business_id, model=model, stream_sink=stream_sink)
             if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
                 resp = None
                 continue
