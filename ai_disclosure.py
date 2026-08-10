@@ -84,12 +84,37 @@ Your messages are stored by the business you're contacting. Reply STOP
 to any text to stop receiving them.
 """
 
+# ── The client-facing disclosure, in one line, for SMS ────────────────
+# A text message is not a web page. CLIENT_V1 is already short for a
+# policy and is still four paragraphs, which on SMS means several paid
+# segments stapled to somebody's appointment reminder — and a notice
+# that annoying is one practitioners will ask to turn off.
+#
+# So this says the one thing that cannot be left out: that the thing
+# replying is not a person, and that a person is available. Everything
+# else in CLIENT_V1 (storage, STOP) is either already in the message
+# tail or belongs in a conversation nobody is having by text.
+#
+# It is a SEPARATE VERSIONED DOCUMENT rather than a slice of CLIENT_V1
+# because it is separately shown, and a record of what somebody was
+# told has to hash the words they actually saw.
+#
+# EVERY CHARACTER HERE IS GSM-7. This is not stylistic. A single
+# character outside that alphabet — an em dash, a curly apostrophe, an
+# ellipsis — forces the entire message into UCS-2, and a UCS-2 segment
+# holds 70 characters instead of 160. One typographic dash would more
+# than double the segment count, and the cost, of every message this
+# notice rides on. The first draft of this line had one.
+CLIENT_SMS_V1 = "Replies here are AI-generated. Ask for a human any time."
+
 _DOCUMENTS: Dict[str, Dict[str, str]] = {
     "practitioner": {"1": PRACTITIONER_V1},
     "client": {"1": CLIENT_V1},
+    "client_sms": {"1": CLIENT_SMS_V1},
 }
 
-CURRENT: Dict[str, str] = {"practitioner": "1", "client": "1"}
+CURRENT: Dict[str, str] = {"practitioner": "1", "client": "1",
+                           "client_sms": "1"}
 
 
 def text_hash(text: str) -> str:
