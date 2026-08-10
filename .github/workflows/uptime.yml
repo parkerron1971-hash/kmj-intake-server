@@ -115,6 +115,13 @@ jobs:
         if: steps.probe.outputs.failed == 'yes'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job deliberately does not check the repo out — a monitor
+          # has no use for the source. But `gh` infers which repository
+          # it is talking to from git remotes, so with no checkout every
+          # gh command dies with "not a git repository" and the alarm
+          # goes silent at exactly the moment it is needed. GH_REPO tells
+          # it directly, and keeps the job checkout-free.
+          GH_REPO: ${{ github.repository }}
           DETAIL: ${{ steps.probe.outputs.detail }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -158,6 +165,7 @@ jobs:
         if: steps.probe.outputs.failed != 'yes'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           # Auto-close, so the issue list means "something is wrong right
           # now" rather than "something was wrong once". Tolerates the
