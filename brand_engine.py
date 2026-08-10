@@ -422,6 +422,12 @@ def _empty_bundle(business_id: str) -> Dict[str, Any]:
                             "business_name": "Unknown", "site_url": None},
         "assets": {"primary": None, "logo_light": None, "logo_dark": None,
                    "square": None, "favicon": None, "social_card": None},
+        # Same keys as `assets`, all False — an empty bundle has uploaded
+        # nothing, and a consumer must never have to guess whether this
+        # key exists on one bundle shape and not the other.
+        "assets_uploaded": {"primary": False, "logo_light": False,
+                            "logo_dark": False, "square": False,
+                            "favicon": False, "social_card": False},
         "snapshot_count": 0,
         "meta": {"completeness": 0.0, "missing_fields": ["business.id"],
                  "has_brand_kit": False},
@@ -843,6 +849,25 @@ def get_bundle(business_id: str, use_cache: bool = True) -> Dict[str, Any]:
         "favicon": assets_raw.get("favicon"),
         "social_card": assets_raw.get("social_card"),
     }
+    # WHICH OF THOSE ARE REAL (2026-08-10). The fallbacks above are
+    # load-bearing for rendering — site_modules/header.py needs a
+    # logo_light on a dark ground whether or not the owner uploaded one.
+    # But the Brand Room read `assets` directly and therefore showed the
+    # primary logo sitting in the light, dark and square plates, each
+    # with a Replace button and a Remove button that did nothing:
+    # remove_asset deletes a key that was never set, returns ok, and the
+    # tile does not change. The practitioner was told they had three
+    # variants they had never made.
+    #
+    # So ship the truth alongside the fallback. Consumers that render
+    # keep using `assets`; the UI uses this to say "inherits your
+    # primary" instead of pretending.
+    assets_uploaded = {
+        k: bool((assets_raw.get(k) or "").strip())
+        for k in ("logo_light", "logo_dark", "square", "favicon", "social_card")
+    }
+    assets_uploaded["primary"] = bool(
+        (assets_raw.get("primary") or brand_kit.get("logo_url") or "").strip())
 
     # Pass 3.8a — practitioner intelligence composition
     try:
@@ -869,6 +894,7 @@ def get_bundle(business_id: str, use_cache: bool = True) -> Dict[str, Any]:
         "footer": footer_section,
         "signature_block": signature_section,
         "assets": assets_section,
+        "assets_uploaded": assets_uploaded,
         "practitioner_intelligence": intelligence_section,
         "snapshot_count": len(business.get("brand_kit_history") or []),
     }
