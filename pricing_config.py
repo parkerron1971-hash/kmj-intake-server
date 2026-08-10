@@ -156,18 +156,109 @@ def doc_gen() -> int:
 
 
 def chat_price() -> int:
-    """One Chief turn. The unit everything else is denominated against."""
-    return _dial("CHAT_PRICE", "PRICE_", 1)
+    """One Chief turn.
+
+    RAISED 1 -> 8 on 2026-08-10, against measured data rather than the
+    estimate it shipped on. This module says opening defaults get refined
+    once the meter works; the meter now works (#448/#450 made it record
+    anything at all, #470/#471 made it record WHOSE), and 640 real turns
+    say a Chief turn costs:
+
+        mean 7.37c   p50 5.18c   p95 20.15c   max 52.55c
+
+    At 1 credit per turn the credit stopped being a currency. A build is
+    600 credits for roughly $2.00 of cost — about 0.333c of COGS per
+    credit. A turn at 7.37c was being sold for one credit, which is 22x
+    more expensive per credit than a build. A customer spending their
+    whole tank on conversation cost, against what they paid:
+
+        starter   3,000 turns   $221 COGS   vs $79     2.8x
+        pro      10,000 turns   $737 COGS   vs $199    3.7x
+        practice 25,000 turns $1,842 COGS   vs $399    4.6x
+
+    WHY 8 AND NOT 22
+
+    Strict parity with the build's implied credit cost is 22, which
+    leaves a Starter 136 turns a month — four and a half a day, for a
+    product sold as a chief of staff you talk to. That is a repricing
+    that fixes the spreadsheet by breaking the thing being sold.
+
+    8 is solved from the opposite end: cap the ENTRY tier's worst case —
+    a customer who spends every credit on chat — at about a third of what
+    they pay. 3,000 / 8 x 7.37c = $27.64 against $79. It leaves a Starter
+    375 turns a month, twelve a day, which a practitioner can live in.
+
+    WHAT 8 DOES NOT FIX
+
+    The same worst case runs hotter on the bigger tiers, because credits
+    per dollar go UP with tier while the cost of a turn does not:
+
+        starter  35%   pro 46%   practice 58%
+
+    That is a tank-SIZING question, not a chat-price one — one price
+    cannot flatten it, and chat_tank_economics() below makes it visible
+    instead of leaving it implied. Practice is the one to look at first.
+
+    Nothing changes for a customer today: BILLING_ENFORCE is off in
+    production, so allowances are recorded and not enforced. This is
+    positioning for the day that flips, which is the safe moment to do it.
+    """
+    return _dial("CHAT_PRICE", "PRICE_", 8)
 
 
 def concierge_price() -> int:
-    """One customer-facing website reply — same rate as a Chief turn."""
+    """One customer-facing website reply.
+
+    Left at 1 while chat_price went to 8, deliberately. Its docstring
+    used to say "same rate as a Chief turn", and the honest reason it no
+    longer tracks is that there is ONE metered concierge call in all of
+    production, at 0.12c. That is not a sample, it is an anecdote, and
+    repricing a customer-facing surface off a single row would be
+    inventing a number and calling it data.
+
+    Revisit once the meter has seen real traffic. If it lands near a
+    Chief turn's cost it should move with it."""
     return _dial("CONCIERGE_PRICE", "PRICE_", 1)
 
 
 def premium_voice_price() -> int:
     """ElevenLabs spoken chunk. Standard OpenAI TTS stays free (0)."""
     return _dial("PREMIUM_VOICE_PRICE", "PRICE_", 1)
+
+
+# ─── Does the tank pay for itself? ───────────────────────────────────
+
+# Measured from api_usage over 640 real Chief turns, 2026-07-23..08-10.
+# A constant rather than a live query on purpose: this is a PRICING
+# input, and a price that silently re-derives itself from yesterday's
+# traffic is a price nobody can reason about. Re-measure deliberately
+# and move the number deliberately.
+MEASURED_CHAT_COST_CENTS = 7.37
+
+
+def chat_tank_economics(cost_cents: Optional[float] = None) -> Dict[str, Dict[str, float]]:
+    """Worst case per tier: a customer who spends their ENTIRE monthly
+    credit allowance on conversation.
+
+    Not the typical case — most credits go to builds — but it is the one
+    that decides whether a tier can be sold at all, and it was invisible
+    until now. `cogs_pct` above 100 means that customer costs more than
+    they pay.
+    """
+    cost = float(cost_cents if cost_cents is not None else MEASURED_CHAT_COST_CENTS)
+    price = max(1, chat_price())
+    out: Dict[str, Dict[str, float]] = {}
+    for plan, credits in tier_credits().items():
+        revenue_c = float(tier_price_cents().get(plan, 0))
+        turns = credits / price
+        cogs_c = turns * cost
+        out[plan] = {
+            "turns_in_the_tank": round(turns, 1),
+            "cogs_cents": round(cogs_c, 2),
+            "revenue_cents": revenue_c,
+            "cogs_pct": round(cogs_c / revenue_c * 100, 1) if revenue_c else 0.0,
+        }
+    return out
 
 
 # ─── Chat fair-use ───────────────────────────────────────────────────
