@@ -2,9 +2,11 @@
 cannot choose.
 
 Three surfaces spend real money on AI. /pulse was anonymous and had no
-limiter at all — and because spend_guard's ceiling is GLOBAL rather than
-per-tenant, one anonymous loop there exhausts the cap and takes Chief
-offline for EVERY customer at once, for about fifty dollars.
+limiter at all — and an anonymous caller has no business to bill, so its
+spend is unattributed and counts only toward the PLATFORM ceiling. The
+per-tenant ceiling added later cannot help here; one loop still exhausts
+the shared cap and takes Chief offline for EVERY customer at once, for
+about fifty dollars. This limiter is what stands in front of that.
 
 The other two had limiters keyed on values the caller supplies: the
 intake endpoint on the first X-Forwarded-For hop (whatever the caller

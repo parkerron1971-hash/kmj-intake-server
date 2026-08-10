@@ -49,8 +49,10 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # searches. It is called once when the app opens in the morning, so
     # a real caller needs a handful an hour and a script needs none.
     # Per HOUR rather than per minute, because the thing that matters is
-    # the daily total: spend_guard's ceiling is GLOBAL, so an anonymous
-    # loop here takes AI offline for every tenant at once.
+    # the daily total. spend_guard's per-tenant ceiling does not cover
+    # this one: an anonymous caller has no business to bill, so the spend
+    # counts platform-only — and an unrated loop here still takes AI
+    # offline for every tenant at once.
     "pulse": (int(os.environ.get("RL_PULSE_PER_HOUR", "10")), 3600),
 }
 _DEFAULT = (60, 60)

@@ -206,19 +206,6 @@ async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depen
             "message": "Too many requests — give it a moment and try again."},
             headers={"Retry-After": str(rate_limit.retry_after("proxy"))})
 
-    # Spend circuit breaker (beta-readiness audit): soft-block once the
-    # account crosses its daily-dollar ceiling. Fail-open.
-    try:
-        import spend_guard
-        if spend_guard.over_budget():
-            raise HTTPException(
-                status_code=503,
-                detail={"error": "daily_spend_cap", "message": spend_guard.block_message()})
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-
     # Phase E v1.1 — Chief message cap (dormant until BILLING_ENFORCE=on).
     _cap_biz = (req.metadata or {}).get("business_id") if hasattr(req, "metadata") else None
 
@@ -232,6 +219,12 @@ async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depen
     # merely untidy while the ceiling is global; it becomes a way to
     # exhaust a competitor's allowance the moment the ceiling is
     # per-tenant. Verify first, attribute second.
+    #
+    # This runs BEFORE the spend check below, and the order is
+    # load-bearing: over_budget() reads the ambient tenant to decide
+    # WHICH ceiling applies. Attribute afterwards and every proxy call
+    # would be measured against the platform ceiling alone, which is the
+    # shared-fate behaviour this arc exists to remove.
     if _cap_biz:
         try:
             import billing_context
@@ -245,6 +238,19 @@ async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depen
                     getattr(user, "id", "?"), _cap_biz)
         except Exception as _attr_err:
             logger.warning(f"[ai_proxy] attribution failed (non-fatal): {_attr_err}")
+
+    # Spend circuit breaker (beta-readiness audit): soft-block once the
+    # account crosses its daily-dollar ceiling. Fail-open.
+    try:
+        import spend_guard
+        if spend_guard.over_budget():
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "daily_spend_cap", "message": spend_guard.block_message()})
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
     if _cap_biz:
         try:
