@@ -513,6 +513,55 @@ def _render(d: Dict[str, Any]) -> str:
             "The gap it leaves is deliberate and stays visible — it is not "
             "evidence of tampering, and it is not hidden either.</p>")
 
+    # ── The proof that does not require trusting us ──────────────────
+    #
+    # Everything above proves the chain agrees with itself: our hashes
+    # match our rows. Somebody rewriting history would produce exactly
+    # that, because they would recompute the hashes too. It is a real
+    # check and it is not evidence against US.
+    #
+    # An anchor is. Each published a fingerprint of the records to a
+    # public network at a time we did not control, so a root that still
+    # matches could not have been written afterwards. The auditor gets
+    # the address and checks it without us.
+    anchors = v.get("anchors") or []
+    an_html = ""
+    if anchors:
+        items = []
+        for a in anchors:
+            cov = a.get("covers") or {}
+            where = (f"#{_e(cov.get('first_sequence'))}–#{_e(cov.get('last_sequence'))}"
+                     if cov.get("first_sequence") is not None else "—")
+            root = _e(str(a.get("merkle_root") or "")[:24])
+            url = a.get("verify_url")
+            # Only the word "independently" is load-bearing here, so it is
+            # only used when the receipt actually says a durable public
+            # network. A testnet proof looks identical and disappears.
+            claim = ("published to a public network"
+                     if a.get("independent") else
+                     "recorded, but NOT on a durable public network")
+            link = (f"<a href='{_e(url)}' rel='noopener nofollow'>check it yourself</a>"
+                    if url else "")
+            items.append(
+                f"<li><b>{_e(str(a.get('anchored_at'))[:16])}</b> — records {where}, "
+                f"{claim}. Fingerprint <code>{root}…</code> {link}</li>")
+        an_html = (
+            "<h2>Independent proof</h2><ul class='er'>" + "".join(items) + "</ul>"
+            "<p class='note'>The checks above show these records agree with "
+            "themselves. These entries are different: a fingerprint of them was "
+            "published to a public network at a time nobody here controlled. "
+            "Fetch it at the link and compare it to the fingerprint shown — if "
+            "they match, these records existed then and have not changed since. "
+            "You do not need our cooperation to do that, and you should not "
+            "take our word for it.</p>")
+    else:
+        an_html = (
+            "<h2>Independent proof</h2>"
+            "<p class='note'>No fingerprint of these records has been published "
+            "to a public network. Everything above still shows the records agree "
+            "with themselves — but that is a check we run on our own data, and it "
+            "is not proof against us.</p>")
+
     rows = []
     for e in (d.get("entries") or []):
         refs = " ".join(
@@ -582,7 +631,7 @@ footer{{color:#9aa0a6;font-size:11.5px;margin:24px 0 8px;text-align:center}}
   <div class="state"><span class="pill">{_e(state_word)}</span>
   <span style="font-size:13.5px">{state_line}</span></div>
   <div style="margin-top:12px">{fact_html}</div>
-  {er_html}
+  {er_html}{an_html}
   {window}
   <a class="btn" href="/public/audit/view/export?format=csv">Download CSV</a>
   <a class="btn" href="/public/audit/view/export?format=pdf">Download PDF</a>
