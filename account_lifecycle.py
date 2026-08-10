@@ -31,9 +31,10 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException
 
 from audit_log import LEDGER_EXPORT_SELECT
@@ -258,18 +259,65 @@ async def _owned_businesses(client: httpx.AsyncClient, user_id: str) -> List[Dic
 _TABLE_SELECT = {"audit_log": LEDGER_EXPORT_SELECT}
 
 
-async def _fetch_table(client: httpx.AsyncClient, table: str, business_id: str) -> List[Dict[str, Any]]:
-    """All rows of `table` for this business; [] if the table doesn't
-    exist or has no business_id column."""
-    r = await client.get(
-        f"{SUPABASE_URL}/rest/v1/{table}",
-        headers=_service_headers(),
-        params={"business_id": f"eq.{business_id}",
-                "select": _TABLE_SELECT.get(table, "*"), "limit": "10000"},
-    )
-    if r.status_code >= 400:
-        return []
-    return r.json() or []
+# One page of a table, and the ceiling past which we stop and SAY SO.
+#
+# The old code asked for limit=10000 and returned whatever came back.
+# Nothing paginated and nothing checked, so a business with more than
+# 10,000 rows in any table exported the first 10,000 and reported
+# success — while deletion, which has no such cap, removed all of them.
+# "What we delete is what we export" is this module's stated contract,
+# and that made it false in the one direction that cannot be undone.
+#
+# No table is over the cap today (largest business-scoped table in
+# production is ~3k rows), so this was a loaded gun rather than active
+# loss. It fires the first time a busy practitioner's events table grows
+# up.
+_EXPORT_PAGE = 1000
+_EXPORT_MAX_ROWS = 500_000
+
+
+async def _fetch_table(client: httpx.AsyncClient, table: str, business_id: str
+                       ) -> Tuple[List[Dict[str, Any]], bool]:
+    """Every row of `table` for this business, and whether that is ALL of
+    them.
+
+    Returns (rows, complete). `complete` is False only when the safety
+    ceiling was reached — and the caller writes that into the export
+    document, because a portability file that is quietly partial is
+    worse than one that admits it. A missing table (404) or one with no
+    business_id column returns ([], True): nothing to export is not the
+    same as failing to export.
+    """
+    rows: List[Dict[str, Any]] = []
+    offset = 0
+    while True:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/{table}",
+            headers=_service_headers(),
+            params={"business_id": f"eq.{business_id}",
+                    "select": _TABLE_SELECT.get(table, "*"),
+                    "order": "business_id",     # stable paging order
+                    "offset": str(offset), "limit": str(_EXPORT_PAGE)},
+        )
+        if r.status_code >= 400:
+            # First page failing means the table is absent or unscoped —
+            # expected, and not an incomplete export. A LATER page
+            # failing is a real fault and must not look like the end of
+            # the data.
+            if offset == 0:
+                return [], True
+            logger.error("export: %s page at offset %d failed (%s) — "
+                         "marking incomplete", table, offset, r.status_code)
+            return rows, False
+        page = r.json() or []
+        rows.extend(page)
+        if len(page) < _EXPORT_PAGE:
+            return rows, True
+        offset += _EXPORT_PAGE
+        if len(rows) >= _EXPORT_MAX_ROWS:
+            logger.error("export: %s hit the %d-row ceiling for %s",
+                         table, _EXPORT_MAX_ROWS, business_id)
+            return rows, False
 
 
 async def _erase_ledger(client: httpx.AsyncClient, business_id: str,
@@ -327,20 +375,187 @@ async def export_account(user: AuthedUser = Depends(require_user)):
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         businesses = await _owned_businesses(client, user.id)
         out: Dict[str, Any] = {
-            "export_version": 1,
+            # 2 — rows are paginated rather than capped at 10,000, and
+            # every bundle now carries row_counts plus an explicit
+            # `complete` flag. An importer can tell v1 (which may be
+            # silently short) from v2 (which says so).
+            "export_version": 2,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "user": {"id": user.id, "email": user.email},
             "businesses": [],
         }
         for biz in businesses:
-            bundle: Dict[str, Any] = {"business": biz, "tables": {}}
+            bundle: Dict[str, Any] = {"business": biz, "tables": {},
+                                      "row_counts": {}, "complete": True,
+                                      "incomplete_tables": []}
             for table in BUSINESS_CHILD_TABLES:
-                rows = await _fetch_table(client, table, biz["id"])
+                rows, complete = await _fetch_table(client, table, biz["id"])
                 if rows:
                     bundle["tables"][table] = rows
+                    # Counts ride along so a recipient can check what
+                    # they got against what we said we sent, without
+                    # trusting either of us.
+                    bundle["row_counts"][table] = len(rows)
+                if not complete:
+                    bundle["complete"] = False
+                    bundle["incomplete_tables"].append(table)
             out["businesses"].append(bundle)
     logger.info(f"export user={user.id} businesses={len(out['businesses'])}")
     return out
+
+
+# ─── Import ─────────────────────────────────────────────────────────────
+#
+# An export nobody can import is a file, not portability. This restores a
+# bundle from GET /account/export into a NEW business owned by the caller.
+#
+# THE THREE RULES IT WILL NOT BEND
+#
+# 1. NEVER into an existing business. Merging an export into live data
+#    means deciding what wins on every conflicting row, and getting that
+#    wrong destroys the thing they were trying to protect. A fresh
+#    business has nothing to lose an argument with.
+# 2. Row ids are NOT reused. They may already exist here — a bundle can
+#    be imported twice, or back into the account it came from — and
+#    reusing them would either collide or silently overwrite. New ids
+#    are minted and business_id is remapped.
+# 3. It reports every table it could not restore. A partial import that
+#    claims success is how somebody finds out three months later that
+#    their invoices never came back.
+#
+# WHAT IT DELIBERATELY DOES NOT IMPORT
+#
+#   audit_log      the ledger is append-only, sequence-numbered per
+#                  tenant and hash-chained. Rows imported into a new
+#                  business would take new sequences and break the chain
+#                  they exist to prove. History belongs to the business
+#                  that lived it; the export keeps it readable.
+#   agent_runs,    operational logs of a system this is not.
+#   chief_jobs
+#   mcp_tokens     live credentials. Re-importing them would resurrect
+#                  access somebody may have revoked.
+#
+# Storage FILES are not covered either — the export is JSON and the
+# documents live in S3. Stated here rather than discovered later.
+
+_IMPORT_SKIP = {"audit_log", "agent_runs", "chief_jobs", "mcp_tokens"}
+
+# Columns the platform owns. Carrying them across would let an import
+# assert its own billing state, or claim rows the hash chain wrote.
+_IMPORT_STRIP = {"id", "business_id", "created_at", "sequence",
+                 "prev_hash", "row_hash", "verb_registered", "redacted_at"}
+
+
+class ImportBody(BaseModel):
+    bundle: Dict[str, Any]
+    business_name: Optional[str] = None
+
+
+@router.post("/import")
+async def import_account(body: ImportBody,
+                         user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Restore ONE business bundle into a new business owned by the caller."""
+    bundle = body.bundle or {}
+    version = bundle.get("export_version")
+
+    # v1 exports could be silently short — they capped every table at
+    # 10,000 rows with no pagination and no flag. Importing one is
+    # allowed, because refusing somebody their own data would be worse,
+    # but the response says what it is rather than letting a partial
+    # restore look complete.
+    warnings: List[str] = []
+    if version == 1:
+        warnings.append(
+            "this export predates pagination: any table with more than "
+            "10,000 rows was silently truncated when it was written")
+    elif version != 2:
+        raise HTTPException(400, "unsupported export_version")
+
+    businesses = bundle.get("businesses") or []
+    if len(businesses) != 1:
+        # One at a time, on purpose: a failure halfway through three
+        # businesses leaves a mess nobody can reason about.
+        raise HTTPException(
+            400, "import one business at a time - send a single-business bundle")
+
+    src = businesses[0] or {}
+    src_biz = src.get("business") or {}
+    if src.get("complete") is False:
+        bad = ", ".join(src.get("incomplete_tables") or []) or "unknown tables"
+        warnings.append("the export declares itself incomplete: " + bad)
+
+    name = (body.business_name or src_biz.get("name") or "Imported business")
+
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        created = await client.post(
+            SUPABASE_URL + "/rest/v1/businesses",
+            headers={**_service_headers(), "Prefer": "return=representation"},
+            json={"name": str(name)[:200], "owner_id": str(user.id),
+                  "type": src_biz.get("type"),
+                  "settings": src_biz.get("settings") or {}},
+        )
+        if created.status_code >= 400:
+            logger.error("import: business create failed: %s", created.text[:300])
+            raise HTTPException(502, "could not create the business to import into")
+        made = created.json() or []
+        row0 = made[0] if isinstance(made, list) and made else made
+        new_id = str((row0 or {}).get("id") or "")
+        if not new_id:
+            raise HTTPException(502, "the new business came back without an id")
+
+        restored: Dict[str, int] = {}
+        skipped: Dict[str, str] = {}
+        # Deletion runs children-first, so restoration runs parents-first.
+        for table in reversed(BUSINESS_CHILD_TABLES):
+            if table in _IMPORT_SKIP:
+                skipped[table] = "not portable by design"
+                continue
+            src_rows = (src.get("tables") or {}).get(table) or []
+            if not src_rows:
+                continue
+            payload = []
+            for r in src_rows:
+                if not isinstance(r, dict):
+                    continue
+                clean = {k: v for k, v in r.items() if k not in _IMPORT_STRIP}
+                clean["business_id"] = new_id
+                payload.append(clean)
+            if not payload:
+                continue
+
+            ok = 0
+            for i in range(0, len(payload), _EXPORT_PAGE):
+                chunk = payload[i:i + _EXPORT_PAGE]
+                resp = await client.post(
+                    SUPABASE_URL + "/rest/v1/" + table,
+                    headers={**_service_headers(), "Prefer": "return=minimal"},
+                    json=chunk)
+                if resp.status_code >= 400:
+                    # Never abort the whole import for one table. A
+                    # dropped column or a renamed table should cost that
+                    # table, not the other ninety.
+                    skipped[table] = str(resp.status_code) + ": " + resp.text[:120]
+                    break
+                ok += len(chunk)
+            if ok:
+                restored[table] = ok
+
+    logger.info("import user=%s -> business=%s tables=%d skipped=%d",
+                user.id, new_id, len(restored), len(skipped))
+
+    try:
+        import audit_log
+        audit_log.record(
+            new_id, actor_type="user", actor_id=str(user.id),
+            verb="import_business", ok=True, source="account",
+            summary="imported " + str(sum(restored.values())) + " rows into a new business",
+            payload={"tables": len(restored), "skipped": len(skipped)})
+    except Exception:
+        pass
+
+    return {"ok": True, "business_id": new_id, "name": name,
+            "restored": restored, "rows": sum(restored.values()),
+            "skipped": skipped, "warnings": warnings}
 
 
 # ─── Deletion ───────────────────────────────────────────────────────────
