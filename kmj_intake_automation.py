@@ -236,7 +236,9 @@ app.include_router(twilio_sms_router)
 # SMS routing brain (Kevin's one-number architecture): binding-first
 # routing, practitioner keywords, opt-out ledger, scoped broadcast.
 from sms_routing import router as sms_routing_router
+from consent_router import router as consent_router
 app.include_router(sms_routing_router)
+app.include_router(consent_router)
 app.include_router(brand_engine_router)
 app.include_router(voice_depth_router)
 # THE OBSERVATORY — research a card (docs/STRATEGY_ROOM.md phase 3c)
