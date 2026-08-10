@@ -479,8 +479,27 @@ async def health_ready():
     except Exception as e:
         checks["supabase_error"] = str(e)[:200]
     checks["supabase"] = supabase_ok
+    checks["role"] = process_role()
     checks["scheduler_running"] = scheduler.running
     checks["is_scheduler_leader"] = scheduler_lock.is_leader()
+
+    # THE CHECK THE SPLIT CREATES A NEED FOR.
+    #
+    # A web replica reporting scheduler_running=false is correct and
+    # says nothing about whether anything is scheduled. The lease does:
+    # whichever process runs the scheduler refreshes it every RENEW_SEC,
+    # so a lease older than a couple of ttls means NO replica anywhere is
+    # running jobs — the silent failure this whole change makes possible.
+    #
+    # Reported, not folded into `ready`. A stale lease means the
+    # scheduled work has stopped, not that this replica cannot serve
+    # requests, and 503ing the web tier for it would turn a background
+    # outage into a front-door one.
+    try:
+        checks["scheduler_lease_fresh"] = scheduler_lock.lease_is_fresh()
+    except Exception as e:
+        checks["scheduler_lease_fresh"] = None
+        checks["scheduler_lease_error"] = str(e)[:120]
     checks["integrations"] = {
         "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "openai": bool(os.environ.get("OPENAI_API_KEY")),
@@ -837,6 +856,41 @@ async def check_followup_sequences():
 
 scheduler = AsyncIOScheduler()
 
+
+# ─── Process role ────────────────────────────────────────────────────
+#
+# One image, one start command, two jobs. PROCESS_ROLE decides whether
+# this replica RUNS the scheduled work:
+#
+#   all     (default) web + scheduler in one process. Exactly today's
+#           behaviour, so an unset variable changes nothing.
+#   web     serves HTTP, runs NO scheduled jobs.
+#   worker  runs the jobs. Still serves HTTP, deliberately — Railway
+#           health-checks a port, and giving the worker the same app
+#           means one image, one command, and /health tells you which
+#           role you are looking at instead of you having to guess.
+#
+# WHY THIS IS THE WHOLE CHANGE. Leader election already exists (Arc 29):
+# renew_tick refreshes a lease and every other job is .gate()d to the
+# single leader, so extra replicas were already safe. What was NOT
+# possible was a replica that deliberately runs no jobs. Registering a
+# job and never calling scheduler.start() achieves exactly that, which
+# is why this is a one-branch change rather than a second entrypoint.
+#
+# THE FAILURE MODE THAT MATTERS is not double-execution — the lease
+# handles that. It is NOBODY running the scheduler: set every service to
+# `web`, forget the worker, and the jobs stop with every health check
+# still green. That is why the default is `all`, why the role is printed
+# loudly at boot, and why /health/ready now reports whether the lease is
+# actually being refreshed by SOMEONE.
+def process_role() -> str:
+    r = (os.environ.get("PROCESS_ROLE") or "all").strip().lower()
+    return r if r in ("all", "web", "worker") else "all"
+
+
+def runs_scheduled_jobs() -> bool:
+    return process_role() in ("all", "worker")
+
 # Jobs whose interval is at least this long get an explicit first run.
 # Below it, the job fires soon enough after boot that the deploy clock
 # does not matter.
@@ -1123,8 +1177,17 @@ async def startup():
     if _staggered:
         print(f"   [scheduler] first run armed for {len(_staggered)} long-interval "
               f"job(s): {', '.join(_staggered)}")
-    scheduler.start()
-    print(f"🚀 KMJ Intake Automation running")
+    if runs_scheduled_jobs():
+        scheduler.start()
+    else:
+        # Jobs are registered above and simply never fire: an APScheduler
+        # that was not started runs nothing. Cheaper and far less
+        # error-prone than maintaining a second list of what a web
+        # replica may schedule, which would drift the first time somebody
+        # adds a job.
+        print(f"   [role] {process_role()} — scheduler NOT started; a worker "
+              f"replica must be running or NOTHING is scheduled")
+    print(f"🚀 KMJ Intake Automation running  [role={process_role()}]")
     print(f"   Owner: {OWNER_NAME} | {BUSINESS_NAME}")
     print(f"   Scheduler: follow-ups hourly + workflow drain every 5 min")
     print(f"   Webhook: POST /webhook/netlify-form")
@@ -1132,7 +1195,10 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    scheduler.shutdown()
+    # .shutdown() raises SchedulerNotRunningError on a web replica, which
+    # would turn every graceful stop into a noisy failed shutdown.
+    if scheduler.running:
+        scheduler.shutdown()
 
 
 
