@@ -461,7 +461,7 @@ async def qb_connect_start(business_id: str, user: AuthedUser = Depends(require_
 
 
 @connect_router.get("/connect/quickbooks")
-async def qb_connect(business_id: str = "", ticket: str = ""):
+async def qb_connect(ticket: str = ""):
     """Redirect to Intuit's consent screen.
 
     A signed `state` proves the state came from our server — NOT that
@@ -469,18 +469,13 @@ async def qb_connect(business_id: str = "", ticket: str = ""):
     fact anyone could open this URL with a stranger's business_id,
     authorise with their own Intuit account, and have their realm bound
     to that tenant. `ticket` carries the missing fact.
+
+    The business id now arrives ONLY inside the ticket — see the note on
+    meta_connect. The bare parameter is deleted, not flagged off.
     """
-    if ticket:
-        verified_biz, _uid = oauth_connect_ticket.verify(ticket)
-        if not verified_biz:
-            raise HTTPException(400, "this connect link expired — start again from the app")
-        business_id = verified_biz
-    elif business_id:
-        if not oauth_connect_ticket.legacy_business_id_allowed():
-            raise HTTPException(400, "connect must be started from the app")
-        oauth_connect_ticket.warn_legacy("quickbooks", business_id)
+    business_id, _uid = oauth_connect_ticket.verify(ticket) if ticket else (None, None)
     if not business_id:
-        raise HTTPException(400, "business_id required")
+        raise HTTPException(400, "this connect link expired — start again from the app")
     params = {
         "client_id": _client_id(),
         "response_type": "code",

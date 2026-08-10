@@ -30,12 +30,9 @@ import base64
 import hashlib
 import hmac
 import json
-import logging
 import os
 import time
 from typing import Optional, Tuple
-
-logger = logging.getLogger("oauth_connect_ticket")
 
 TICKET_TTL_SECONDS = 300
 
@@ -86,25 +83,3 @@ def verify(ticket: str, max_age_s: int = TICKET_TTL_SECONDS
         return biz, usr
     except Exception:
         return None, None
-
-
-def legacy_business_id_allowed() -> bool:
-    """The unauthenticated business_id path, kept alive for one deploy
-    while the frontend switches to tickets.
-
-    Default is ON so shipping the backend first does not break Connect
-    for every practitioner mid-arc; it flips OFF — and the parameter is
-    deleted — once the frontend ships. Until then the hole is open, and
-    every use says so in the log.
-    """
-    raw = (os.environ.get("OAUTH_ALLOW_UNVERIFIED_CONNECT") or "1").strip()
-    return raw != "0"
-
-
-def warn_legacy(provider: str, business_id: str) -> None:
-    logger.warning(
-        "[oauth] %s connect started from an UNVERIFIED business_id (%s) — "
-        "the caller was not required to prove they own it. Set "
-        "OAUTH_ALLOW_UNVERIFIED_CONNECT=0 once the frontend sends tickets.",
-        provider, business_id,
-    )

@@ -316,7 +316,7 @@ async def meta_connect_start(business_id: str, user: AuthedUser = Depends(requir
 
 
 @router.get("/connect/meta")
-async def meta_connect(business_id: str = "", ticket: str = ""):
+async def meta_connect(ticket: str = ""):
     """Redirect the user to Facebook OAuth.
 
     The state param is signed, which proves it came from our server — not
@@ -324,18 +324,17 @@ async def meta_connect(business_id: str = "", ticket: str = ""):
     second fact, anyone could open this URL with a stranger's
     business_id, authorise with their OWN Facebook account, and have
     their Pages bound to that tenant. `ticket` supplies the missing fact.
+
+    The business id now arrives ONLY inside the ticket. It was also
+    accepted as a bare query parameter for one deploy, behind a flag
+    that defaulted open so the backend could ship before the frontend.
+    The frontend sends tickets now, so the parameter is deleted rather
+    than merely disabled — a flag whose default is the unsafe branch is
+    one forgotten environment variable away from being the hole again.
     """
-    if ticket:
-        verified_biz, _uid = oauth_connect_ticket.verify(ticket)
-        if not verified_biz:
-            raise HTTPException(400, "this connect link expired — start again from the app")
-        business_id = verified_biz
-    elif business_id:
-        if not oauth_connect_ticket.legacy_business_id_allowed():
-            raise HTTPException(400, "connect must be started from the app")
-        oauth_connect_ticket.warn_legacy("meta", business_id)
+    business_id, _uid = oauth_connect_ticket.verify(ticket) if ticket else (None, None)
     if not business_id:
-        raise HTTPException(400, "business_id required")
+        raise HTTPException(400, "this connect link expired — start again from the app")
     state = _make_state(business_id)
     params = {
         "client_id": _meta_app_id(),

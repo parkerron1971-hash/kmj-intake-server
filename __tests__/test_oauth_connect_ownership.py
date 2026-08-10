@@ -71,24 +71,83 @@ class TestTicket:
         assert tk.verify(f"{body}.{'0' * 64}") == tk.verify("garbage")
 
 
-class TestLegacyEscapeHatch:
-    def test_defaults_open_so_the_frontend_keeps_working(self, monkeypatch):
-        """Backend ships before the frontend; flipping this on day one
-        would break Connect for every practitioner mid-arc."""
-        monkeypatch.delenv("OAUTH_ALLOW_UNVERIFIED_CONNECT", raising=False)
-        assert tk.legacy_business_id_allowed() is True
+class TestTheLegacyPathIsGone:
+    """The bare business_id parameter is deleted, not disabled.
 
-    def test_zero_closes_it(self, monkeypatch):
-        monkeypatch.setenv("OAUTH_ALLOW_UNVERIFIED_CONNECT", "0")
-        assert tk.legacy_business_id_allowed() is False
+    For one deploy both redirects also accepted `?business_id=`, behind
+    OAUTH_ALLOW_UNVERIFIED_CONNECT, which defaulted OPEN so the backend
+    could ship before the frontend. That default is itself the hazard:
+    it fails toward working rather than toward secure, and it lives in
+    an environment variable — so the hole reopens by being forgotten. A
+    new Railway service, a restored config, a fresh region. The frontend
+    sends tickets now (verified against production), so the parameter
+    and the flag both go.
+    """
 
-    @pytest.mark.parametrize("value", ["1", "yes", "true", ""])
-    def test_anything_else_leaves_it_open(self, monkeypatch, value):
-        """Fails toward WORKING, not toward secure — deliberately, and
-        only until the frontend ships. The inverse of every other
-        default in this arc, which is why it is temporary."""
-        monkeypatch.setenv("OAUTH_ALLOW_UNVERIFIED_CONNECT", value)
-        assert tk.legacy_business_id_allowed() is True
+    REDIRECTS = [("meta_oauth", "meta_connect"),
+                 ("quickbooks_router", "qb_connect")]
+
+    def test_the_escape_hatch_functions_no_longer_exist(self):
+        assert not hasattr(tk, "legacy_business_id_allowed")
+        assert not hasattr(tk, "warn_legacy")
+
+    @pytest.mark.parametrize("mod_name,fn_name", REDIRECTS)
+    def test_the_redirect_no_longer_accepts_a_business_id(self, mod_name, fn_name):
+        """The load-bearing assertion of the arc.
+
+        While the parameter exists, the hijack is still a well-formed
+        call into the handler and the only thing refusing it is a
+        branch. Once it is gone the request cannot be expressed at all:
+        FastAPI drops the unknown query param and the handler is left
+        holding no ticket.
+        """
+        import importlib
+        import inspect
+        mod = importlib.import_module(mod_name)
+        params = inspect.signature(getattr(mod, fn_name)).parameters
+        assert "business_id" not in params, (
+            f"{mod_name}.{fn_name} still takes a bare business_id")
+        assert "ticket" in params
+
+    @pytest.mark.parametrize("mod_name,fn_name", REDIRECTS)
+    def test_no_ticket_is_refused_rather_than_redirecting(self, mod_name, fn_name):
+        import asyncio
+        import importlib
+        from fastapi import HTTPException
+        mod = importlib.import_module(mod_name)
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(getattr(mod, fn_name)())
+        assert e.value.status_code == 400
+
+    @pytest.mark.parametrize("mod_name,fn_name", REDIRECTS)
+    def test_a_forged_ticket_is_refused(self, mod_name, fn_name):
+        """Knowing the business id is no longer enough to build one —
+        that is the whole difference between a ticket and a parameter."""
+        import asyncio
+        import importlib
+        from fastapi import HTTPException
+        mod = importlib.import_module(mod_name)
+        body = tk.mint(BIZ, USER).split(".", 1)[0]
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(getattr(mod, fn_name)(ticket=f"{body}.{'0' * 64}"))
+        assert e.value.status_code == 400
+
+    def test_a_valid_ticket_still_reaches_facebook(self, monkeypatch):
+        """Guards the guard: a redirect that refused EVERYTHING would
+        pass every assertion above while breaking Connect for everyone."""
+        import asyncio
+        from urllib.parse import parse_qs, urlparse
+
+        import meta_oauth
+        monkeypatch.setenv("META_APP_ID", "test-app-id")
+        monkeypatch.setenv("META_REDIRECT_URI", "https://example.test/cb")
+        monkeypatch.setenv("META_OAUTH_STATE_SECRET", "test-state-secret")
+        resp = asyncio.run(meta_oauth.meta_connect(ticket=tk.mint(BIZ, USER)))
+        assert resp.status_code == 302
+        assert "facebook.com" in resp.headers["location"]
+        # ...carrying the business the TICKET named, not one a caller chose
+        state = parse_qs(urlparse(resp.headers["location"]).query)["state"][0]
+        assert meta_oauth._parse_state(state)["business_id"] == BIZ
 
 
 class TestEndpointsAreWired:
