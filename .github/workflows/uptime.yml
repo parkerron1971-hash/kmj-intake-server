@@ -26,6 +26,13 @@ on:
     # one-minute SLA it cannot keep.
     - cron: "*/10 * * * *"
   workflow_dispatch:
+    inputs:
+      backend:
+        description: "Backend base URL (override to rehearse the alarm)"
+        required: false
+      app:
+        description: "App URL (override to rehearse the alarm)"
+        required: false
 
 permissions:
   issues: write
@@ -42,8 +49,14 @@ jobs:
       - name: Probe the backend and the app
         id: probe
         env:
-          BACKEND: https://kmj-intake-server-production.up.railway.app
-          APP: https://mysolutionist.app
+          # Overridable ONLY on a manual dispatch. A scheduled run always
+          # gets the real targets, so the override cannot quietly turn the
+          # monitor into something that watches a URL guaranteed to pass.
+          # It exists so the ALARM can be rehearsed against a host that is
+          # certainly down — an alert path nobody has fired is a
+          # hypothesis, the same way an untested backup is.
+          BACKEND: ${{ inputs.backend || 'https://kmj-intake-server-production.up.railway.app' }}
+          APP: ${{ inputs.app || 'https://mysolutionist.app' }}
         run: |
           set +e
           fail=""
