@@ -541,11 +541,29 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # below. Backward compatible: with only [[CHIEF_CACHE_SPLIT]] present we
     # fall back to the original two-block split; with neither (e.g. the
     # Strategy Coach prompt) the system stays a single uncached string.
+    # `prompt_shape` rides onto the api_usage row as task_type, which
+    # makes the question below answerable with a query instead of
+    # archaeology.
+    #
+    # 640 metered turns say caching almost never happens: 627 of them
+    # neither wrote nor read a single cached token, and input is ~86% of
+    # what a turn costs. But it is NOT that the machinery is broken —
+    # when the full operating-manual prompt goes out it caches fine (one
+    # day in the sample read 632k tokens back). The spend is concentrated
+    # somewhere else: 381 calls in the 5k-15k input band, $34.93 of
+    # $47.15 total, with ONE cache hit between them.
+    #
+    # What could not be settled from the outside is which prompt those
+    # 381 calls carry, because api_usage records the endpoint and not the
+    # shape. Every /chief/backend row looks alike. So the shape gets
+    # recorded, and the next question is a SELECT.
     sys_payload: Any = system
+    prompt_shape = "uncached-single"
     if isinstance(system, str) and "[[CHIEF_CACHE_SPLIT]]" in system:
         stable, _, dynamic = system.partition("[[CHIEF_CACHE_SPLIT]]")
         if "[[CHIEF_GLOBAL_SPLIT]]" in stable:
             universal, _, per_business = stable.partition("[[CHIEF_GLOBAL_SPLIT]]")
+            prompt_shape = "cached-3seg"
             sys_payload = [
                 {"type": "text", "text": universal.rstrip(),
                  "cache_control": {"type": "ephemeral"}},
@@ -554,11 +572,26 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                 {"type": "text", "text": dynamic.strip()},
             ]
         else:
+            prompt_shape = "cached-2seg"
             sys_payload = [
                 {"type": "text", "text": stable.rstrip(),
                  "cache_control": {"type": "ephemeral"}},
                 {"type": "text", "text": dynamic.strip()},
             ]
+
+    # A cache_control segment under the model's minimum cacheable prefix
+    # is accepted and silently never cached — no error, no warning, just
+    # a bill. Estimated in chars because the exact tokeniser is not worth
+    # a round trip here; 4 chars/token is close enough to spot a segment
+    # that is an order of magnitude short.
+    if isinstance(sys_payload, list):
+        segs = [len(b["text"]) // 4 for b in sys_payload]
+        cacheable = [n for b, n in zip(sys_payload, segs) if "cache_control" in b]
+        if any(n < 1024 for n in cacheable):
+            logger.warning(
+                "[chief] a cache_control segment is below the ~1024-token "
+                "minimum and will NOT cache: segments=%s shape=%s", segs,
+                prompt_shape)
     payload: Dict[str, Any] = {
         "model": model, "max_tokens": max_tokens, "system": sys_payload,
         "messages": messages,
@@ -646,7 +679,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
             endpoint="/chief/backend", model=model,
             input_tokens=in_tok, output_tokens=out_tok,
             cache_read_tokens=cache_read_tok, cache_creation_tokens=cache_write_tok,
-            business_id=business_id,
+            business_id=business_id, task_type=prompt_shape,
             duration_ms=int(time.time() * 1000) - started_ms)
         return "".join(full_parts).strip()
 
@@ -730,7 +763,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         # understating every cached turn. Fold them into the cost.
         cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
         cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
-        business_id=business_id,
+        business_id=business_id, task_type=prompt_shape,
         duration_ms=int(time.time() * 1000) - started_ms,
     )
     return _text_from_content(data.get("content", []))
