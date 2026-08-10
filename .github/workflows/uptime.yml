@@ -1,0 +1,157 @@
+name: Uptime
+
+# Something outside the system, watching the system.
+#
+# /health/ready has existed since Arc 29 and its docstring says what it
+# was for: "503 when a hard dependency (Supabase) is unreachable so an
+# uptime monitor can react". The probe was built. The monitor never was.
+# If Railway died at 2am, the first thing to notice would have been a
+# practitioner opening the app.
+#
+# GitHub Actions is the right host precisely because it is somewhere
+# else. A monitor that runs on Railway cannot report that Railway is
+# down, and one that writes its alert into Supabase cannot tell you
+# Supabase is unreachable. This depends on neither.
+#
+# It alerts by opening a GitHub issue, for the same reason: email goes
+# through Resend, push goes through the backend, and both are things
+# that break when the thing being watched breaks. An issue needs only
+# GitHub.
+
+on:
+  schedule:
+    # Every 10 minutes. GitHub does not honour this exactly — scheduled
+    # runs queue and can drift several minutes under load — which is
+    # fine for "is it dead", and is why this is not written as a
+    # one-minute SLA it cannot keep.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe the backend and the app
+        id: probe
+        env:
+          BACKEND: https://kmj-intake-server-production.up.railway.app
+          APP: https://mysolutionist.app
+        run: |
+          set +e
+          fail=""
+          detail=""
+
+          # ── backend readiness: reaches Supabase, reports the scheduler ──
+          # --max-time, not just a status check: a hung request that never
+          # returns is an outage too, and without a timeout this step
+          # would sit there until the job limit and report nothing.
+          body=$(curl -s --max-time 20 -o /tmp/ready.json -w '%{http_code}' "$BACKEND/health/ready")
+          echo "backend /health/ready -> $body"
+          cat /tmp/ready.json 2>/dev/null || true
+          echo
+          if [ "$body" != "200" ]; then
+            fail="yes"
+            detail="${detail}- backend /health/ready returned **${body}** (expected 200)"$'\n'
+            detail="${detail}\`\`\`"$'\n'"$(head -c 500 /tmp/ready.json 2>/dev/null)"$'\n'"\`\`\`"$'\n'
+          else
+            # 200 is not the same as healthy: this endpoint reports its
+            # dependencies in the body and a degraded backend still
+            # answers 200. Matched with grep rather than parsed, because
+            # grep is the one tool guaranteed present on any runner AND
+            # on the machine this was written and dry-run on. The first
+            # draft shelled out to python3, which is absent from the
+            # authoring shell — the check silently produced an empty
+            # string, was treated as "not true", and would have paged
+            # every ten minutes forever. A monitor whose own failure
+            # looks exactly like an outage is worse than none.
+            #
+            # Tolerant of whitespace so pretty-printing the response
+            # later does not read as an outage.
+            for key in ready supabase; do
+              if ! grep -Eq "\"$key\"[[:space:]]*:[[:space:]]*true" /tmp/ready.json; then
+                fail="yes"
+                detail="${detail}- backend did not report \`$key: true\`"$'\n'
+              fi
+            done
+          fi
+
+          # ── the app itself ──
+          app=$(curl -s --max-time 20 -o /dev/null -w '%{http_code}' "$APP")
+          echo "app -> $app"
+          case "$app" in
+            2*|3*) ;;
+            *) fail="yes"; detail="${detail}- app returned **${app}**"$'\n' ;;
+          esac
+
+          {
+            echo "failed=${fail}"
+            echo "detail<<EOF"
+            echo "${detail}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update an incident issue
+        if: steps.probe.outputs.failed == 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DETAIL: ${{ steps.probe.outputs.detail }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # The label has to exist before --label will accept it. A
+          # monitor that fails to raise the alarm because a label is
+          # missing is worse than no monitor, and this repo has no
+          # `uptime` label today. Idempotent — --force stops a re-run
+          # erroring on "already exists".
+          gh label create uptime --color b60205 \
+            --description "Production probe is failing" --force || true
+
+          # One issue per incident, not one per probe. Ten-minute checks
+          # would otherwise file 144 issues a day through an outage, and
+          # an alert channel that floods is one people mute.
+          existing=$(gh issue list --label uptime --state open \
+                       --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing at $(date -u '+%Y-%m-%d %H:%M UTC').
+
+          $DETAIL
+
+          [run]($RUN)"
+          else
+            gh issue create --label uptime \
+              --title "Uptime: production is not answering" \
+              --body "An external probe could not confirm production is healthy.
+
+          $DETAIL
+
+          Checked from GitHub Actions, which does not depend on Railway,
+          Supabase or Vercel — so this alert survives all three being
+          down.
+
+          [run]($RUN)
+
+          This issue stays open and gets a comment per failed check.
+          Close it once things recover; the next failure opens a new one."
+          fi
+
+      - name: Close the incident on recovery
+        if: steps.probe.outputs.failed != 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Auto-close, so the issue list means "something is wrong right
+          # now" rather than "something was wrong once". Tolerates the
+          # label not existing — on a green first run it never has.
+          existing=$(gh issue list --label uptime --state open \
+                       --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Recovered — probe green at $(date -u '+%Y-%m-%d %H:%M UTC')."
+            gh issue close "$existing"
+          fi
