@@ -45,24 +45,67 @@ winpath() { cygpath -w "$1" 2>/dev/null || echo "$1"; }
 # their stderr was being discarded. One broken thing must not print as
 # seventy-five.
 echo "── 0/3  checking write access ───────────────────────────────"
-probe="$(railway add --service "$DST" --repo "$GH_REPO" \
-           --variables "PROCESS_ROLE=worker" 2>&1)"
-add_rc=$?
-echo "$probe"
+
+# DOES IT ALREADY EXIST? Ask before trying to create.
+#
+# `railway add --repo` needs Railway's GITHUB authorisation, which is a
+# browser OAuth grant and NOT part of the CLI token — so it can fail
+# with "Unauthorized" on a session whose writes are otherwise fine
+# (setting variables works). When that happens the service gets made in
+# the dashboard instead, and this script's job is only the variable
+# copy. Re-attempting creation would then fail on the same GitHub grant
+# and stop a script that had nothing left to fail at.
+exists="$(railway status --json 2>/dev/null | python -c "
+import sys,json
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+names=[e['node'].get('name') for e in d.get('services',{}).get('edges',[])]
+print('yes' if sys.argv[1] in names else 'no')
+" "$DST" 2>/dev/null)"
+
+if [ "$exists" = "yes" ]; then
+  echo "  service '$DST' already exists — skipping creation"
+  probe=""
+  add_rc=0
+else
+  probe="$(railway add --service "$DST" --repo "$GH_REPO" \
+             --variables "PROCESS_ROLE=worker" 2>&1)"
+  add_rc=$?
+  echo "$probe"
+fi
 
 if printf '%s' "$probe" | grep -qi "unauthor\|please run .railway login\|not logged in"; then
   cat <<'MSG'
 
   ──────────────────────────────────────────────────────────────
-  STOPPED. This Railway session can read but not write.
+  STOPPED. Could not create the service.
 
-  `railway whoami` still answers with your email — that is not
-  the same as being authorised, and is why this looked fine
-  until the first mutation.
+  Two different things produce this message, and they need
+  different fixes.
 
-  Fix it with:      railway login
+  1. The CLI session cannot write at all. Fix with:
 
-  then run this script again. Nothing was created or changed.
+         railway login
+
+     (`railway whoami` answering with your email is NOT the
+      same as being authorised.)
+
+  2. The session CAN write, but Railway is not authorised
+     against GitHub for this repo — creating a repo-linked
+     service is a browser OAuth grant, not part of the CLI
+     token. Setting variables keeps working throughout, which
+     is what makes this one confusing.
+
+     Tell them apart: if `railway variable delete --service
+     kmj-intake-server _NOPE_` exits 0, writes are fine and
+     this is case 2.
+
+     For case 2, create the service in the Railway dashboard
+     (New → GitHub Repo → this repo, named kmj-intake-worker),
+     then run this script again — it will detect the service
+     and only copy the variables.
+
+  Nothing was created or changed.
   ──────────────────────────────────────────────────────────────
 MSG
   exit 1
