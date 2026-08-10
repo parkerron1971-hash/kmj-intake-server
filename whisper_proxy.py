@@ -46,6 +46,7 @@ from api_usage_logger import log_api_usage
 from auth_supabase import AuthedUser, optional_user, require_user
 import rate_limit
 import sb_clients
+from speech_text import normalize_for_speech
 
 
 def _voice_rate_guard(request: Request) -> None:
@@ -327,6 +328,12 @@ async def text_to_speech(req: TTSRequest, request: Request,
     if model not in (TTS_MODEL_DEFAULT, TTS_MODEL_HD):
         model = TTS_MODEL_DEFAULT
 
+    # Symbols become words at the wire, so "$1,234.56" is spoken the same
+    # way no matter which client called us — the web app normalizes for
+    # its own local browser-speech path, but the KAI agent and the mobile
+    # app do not, and they reach this endpoint too.
+    spoken = normalize_for_speech(text)[:TTS_MAX_CHARS]
+
     # Use httpx streaming so we forward chunks as OpenAI produces them,
     # instead of buffering the entire mp3 in memory first.
     client = httpx.AsyncClient(timeout=TTS_TIMEOUT)
@@ -342,7 +349,7 @@ async def text_to_speech(req: TTSRequest, request: Request,
                 },
                 json={
                     "model": model,
-                    "input": text,
+                    "input": spoken,
                     "voice": voice,
                     "response_format": "mp3",
                 },
@@ -365,16 +372,23 @@ async def text_to_speech(req: TTSRequest, request: Request,
         logger.warning(f"TTS {upstream.status_code}: {body}")
         raise HTTPException(upstream.status_code, f"TTS error: {body}")
 
-    logger.info(f"TTS streaming: chars={len(text)} voice={voice} model={model}")
+    logger.info(
+        f"TTS streaming: chars={len(text)} spoken={len(spoken)} "
+        f"voice={voice} model={model}")
     # Metering (beta-readiness audit): every spoken reply was dark. TTS is
     # priced per character — pass the char count as input_tokens; the
     # tts-1 / tts-1-hd table entries are per-1M-char so the cost is exact.
     # business_id/user_id attribute the row for analytics; /ai/tts carries
     # UNIT weight 0 (included with every plan — see usage_metering).
+    #
+    # Counts the SPOKEN length, not the raw: OpenAI bills what we send, and
+    # this row feeds the spend guard, so anything shorter would understate
+    # real money. (The ElevenLabs row is the other way round — it also
+    # drives a per-business quota. See _elevenlabs_speak.)
     try:
         await log_api_usage(
             endpoint="/ai/tts", model=model,
-            input_tokens=len(text), output_tokens=0,
+            input_tokens=len(spoken), output_tokens=0,
             business_id=metered_biz, user_id=user.id if user else None)
     except Exception:
         pass
@@ -403,6 +417,13 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
     if len(text) > ELEVENLABS_MAX_CHARS:
         text = text[:ELEVENLABS_MAX_CHARS]
 
+    # Symbols become words at the wire. turbo_v2_5 does NOT normalize on
+    # its own — apply_text_normalization is Enterprise-only on the v2.5
+    # models — so without this a premium voice reads money worse than the
+    # free one. `text` stays the raw form on purpose; see the metering
+    # note below.
+    spoken = normalize_for_speech(text)[:ELEVENLABS_MAX_CHARS]
+
     client = httpx.AsyncClient(timeout=TTS_TIMEOUT)
     try:
         upstream = await client.send(
@@ -410,7 +431,7 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
                 "POST",
                 f"{ELEVENLABS_TTS_URL}/{voice_id}/stream?output_format=mp3_44100_128",
                 headers={"xi-api-key": key, "Content-Type": "application/json"},
-                json={"text": text, "model_id": ELEVENLABS_MODEL},
+                json={"text": spoken, "model_id": ELEVENLABS_MODEL},
             ),
             stream=True,
         )
@@ -430,11 +451,22 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
         logger.warning(f"ElevenLabs TTS {upstream.status_code}: {body}")
         raise HTTPException(upstream.status_code, f"TTS error: {body}")
 
-    logger.info(f"ElevenLabs TTS streaming: chars={len(text)} voice={voice_id} biz={business_id}")
+    logger.info(
+        f"ElevenLabs TTS streaming: chars={len(text)} spoken={len(spoken)} "
+        f"voice={voice_id} biz={business_id}")
     # Metering — per character (input_tokens), attributed to the business.
     # Endpoint /ai/tts-el is DISTINCT from /ai/tts on purpose: it bills
     # 1 unit per chunk on the plan-allowance rails (usage_metering
     # UNIT_WEIGHTS) and is what the monthly char cap sums.
+    #
+    # Counts the RAW length, not the spoken one. This row drives
+    # ELEVENLABS_MONTHLY_CHARS_PER_BIZ, and spelling "$" out is OUR
+    # formatting decision — a practitioner should not lose voice
+    # allowance because we made the number pronounceable. The tradeoff is
+    # deliberate and small: the cost side of this row now understates the
+    # true billed characters by the width of the expansion (money-bearing
+    # text only, single digits of percent). If that ever needs to be
+    # exact, the fix is a second field, not a bigger number here.
     try:
         await log_api_usage(
             endpoint="/ai/tts-el", model=ELEVENLABS_MODEL,
