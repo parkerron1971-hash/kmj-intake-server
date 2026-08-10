@@ -28,7 +28,7 @@ BIZ_A = "aaaaaaaa-0000-0000-0000-000000000001"
 BIZ_B = "bbbbbbbb-0000-0000-0000-000000000002"
 
 
-def _wire(monkeypatch, businesses, usage):
+def _wire(monkeypatch, businesses, usage, purchases=None):
     def _get(path):
         if path.startswith("/businesses?id=eq."):
             wanted = path.split("id=eq.")[1].split("&")[0]
@@ -37,6 +37,8 @@ def _wire(monkeypatch, businesses, usage):
             return businesses
         if path.startswith("/api_usage?"):
             return usage
+        if path.startswith("/credit_ledger?"):
+            return purchases or []
         return []
     monkeypatch.setattr(sb_clients, "sb_get_as_service", _get)
 
@@ -132,14 +134,20 @@ class TestPlatform:
         assert p["totals"]["cogs_cents"] == pytest.approx(650.0)
 
     def test_the_caveats_are_carried_with_the_numbers(self, monkeypatch):
-        """Pack revenue is uncounted because nothing records a purchase.
-        A margin figure without that sentence attached is misleading, so
-        it travels in the payload rather than in a doc nobody opens."""
+        """A margin figure without its caveats attached is misleading, so
+        they travel in the payload rather than in a doc nobody opens.
+
+        The sentence this used to assert — "real margin is at least this
+        good, never worse" — was true only while pack sales were missing
+        entirely. It is now false, and a caveat that is false is worse
+        than no caveat, because it is read as reassurance."""
         _wire(monkeypatch, [], [])
         p = margin.platform_margin()
         joined = " ".join(p["caveats"]).lower()
         assert "pack" in joined
-        assert "at least this good" in joined
+        assert "at least this good" not in joined
+        assert "guess" in joined, (
+            "the estimated-pack caveat must say it is not a measurement")
 
     def test_inactive_accounts_are_excluded_from_tier_rollups(self, monkeypatch):
         _wire(monkeypatch, [
@@ -191,3 +199,162 @@ class TestWiring:
                          if getattr(d, "call", None)]
                 assert "require_owner" in names, f"{r.path} is not owner-gated"
         assert found == 2, f"expected 2 margin routes, found {found}"
+
+
+class TestPackRevenue:
+    """Credit-pack sales used to be missing from margin entirely.
+
+    credit_ledger recorded how many UNITS moved and never how much money
+    did, so the panel understated real margin by the value of every pack
+    ever sold. credit_ledger.cents (2026-08-09) captures the amount
+    charged, at purchase.
+    """
+
+    def _pack(self, biz, cents=None, source="stripe:pack_medium"):
+        row = {"business_id": biz, "source": source}
+        if cents is not None:
+            row["cents"] = cents
+        return row
+
+    def test_a_captured_purchase_is_revenue(self, monkeypatch):
+        _wire(monkeypatch,
+              [{"id": BIZ_A, "name": "A", "subscription_plan": "starter",
+                "subscription_status": "active"}],
+              [],
+              [self._pack(BIZ_A, 2500)])
+        m = margin.business_margin(BIZ_A, days=30)
+        assert m["pack_revenue_cents"] == pytest.approx(2500.0)
+        assert m["subscription_revenue_cents"] == pytest.approx(STARTER)
+        assert m["revenue_cents"] == pytest.approx(STARTER + 2500.0)
+
+    def test_an_uncaptured_purchase_is_estimated_and_kept_out_of_revenue(
+            self, monkeypatch):
+        """The honesty rule. A row predating the cents column is priced
+        from today's list — that is a guess, and margin is a number
+        decisions get taken on. It is reported beside the total, never
+        inside it."""
+        _wire(monkeypatch,
+              [{"id": BIZ_A, "name": "A", "subscription_plan": "starter",
+                "subscription_status": "active"}],
+              [],
+              [self._pack(BIZ_A, None, "stripe:pack_medium")])
+        m = margin.business_margin(BIZ_A, days=30)
+        medium = pricing_config.credit_packs()["medium"]["cents"]
+        assert m["pack_revenue_estimated_cents"] == pytest.approx(medium)
+        assert m["pack_revenue_cents"] == 0
+        assert m["revenue_cents"] == pytest.approx(STARTER)
+
+    def test_a_purchase_naming_an_unknown_pack_is_not_invented(
+            self, monkeypatch):
+        """Excluded rather than guessed at — but logged, because
+        silently dropping revenue looks identical to having none."""
+        _wire(monkeypatch,
+              [{"id": BIZ_A, "name": "A", "subscription_plan": "starter",
+                "subscription_status": "active"}],
+              [],
+              [self._pack(BIZ_A, None, "stripe:pack_gigantic")])
+        m = margin.business_margin(BIZ_A, days=30)
+        assert m["pack_revenue_estimated_cents"] == 0
+        assert m["pack_revenue_cents"] == 0
+
+    def test_pack_revenue_reaches_the_platform_totals(self, monkeypatch):
+        _wire(monkeypatch,
+              [{"id": BIZ_A, "name": "A", "subscription_plan": "starter",
+                "subscription_status": "active"}],
+              [],
+              [self._pack(BIZ_A, 1000), self._pack(BIZ_A, 5000)])
+        p = margin.platform_margin()
+        assert p["totals"]["pack_revenue_cents"] == pytest.approx(6000.0)
+        assert p["totals"]["revenue_cents"] == pytest.approx(STARTER + 6000.0)
+
+    def test_the_estimate_is_reported_outside_the_totals_block(
+            self, monkeypatch):
+        """Structural, not cosmetic: inside `totals` it would eventually
+        be summed with the rest by something downstream."""
+        _wire(monkeypatch,
+              [{"id": BIZ_A, "name": "A", "subscription_plan": "starter",
+                "subscription_status": "active"}],
+              [], [self._pack(BIZ_A, None)])
+        p = margin.platform_margin()
+        assert "pack_revenue_estimated_cents" in p
+        assert "pack_revenue_estimated_cents" not in p["totals"]
+
+    def test_a_cancelled_business_burning_prepaid_credits_still_counts(
+            self, monkeypatch):
+        """Credits never expire, so they outlive the plan that bought
+        them. Such a business has real revenue and real COGS, and the
+        rollup used to skip every inactive row — which made the tier
+        look more profitable than it was."""
+        _wire(monkeypatch,
+              [{"id": BIZ_A, "name": "A", "subscription_plan": "starter",
+                "subscription_status": "canceled"}],
+              [{"business_id": BIZ_A, "cost_cents": 4000.0}],
+              [self._pack(BIZ_A, 1000)])
+        p = margin.platform_margin()
+        assert p["by_tier"], "a cancelled account with spend vanished from the rollup"
+        assert p["by_tier"]["starter"]["cogs_cents"] == pytest.approx(4000.0)
+        assert p["by_tier"]["starter"]["revenue_cents"] == pytest.approx(1000.0)
+
+    def test_such_a_business_is_flagged_underwater(self, monkeypatch):
+        """It is being served at a loss, which is the whole point of the
+        flag. It was excluded because the check required `active`."""
+        _wire(monkeypatch,
+              [{"id": BIZ_A, "name": "A", "subscription_plan": "starter",
+                "subscription_status": "canceled"}],
+              [{"business_id": BIZ_A, "cost_cents": 4000.0}],
+              [self._pack(BIZ_A, 1000)])
+        m = margin.business_margin(BIZ_A)
+        assert m["active"] is False
+        assert m["underwater"] is True
+
+    def test_a_truly_dormant_account_still_stays_out(self, monkeypatch):
+        """Guards the guard: the rollup change must not readmit every
+        cancelled account that costs and earns nothing."""
+        _wire(monkeypatch,
+              [{"id": BIZ_A, "name": "A", "subscription_plan": "starter",
+                "subscription_status": "canceled"}],
+              [], [])
+        p = margin.platform_margin()
+        assert p["by_tier"] == {}
+
+    def test_a_ledger_read_failure_does_not_take_the_panel_down(
+            self, monkeypatch):
+        def _get(path):
+            if path.startswith("/credit_ledger?"):
+                raise RuntimeError("postgrest down")
+            if path.startswith("/businesses?"):
+                return [{"id": BIZ_A, "name": "A",
+                         "subscription_plan": "starter",
+                         "subscription_status": "active"}]
+            return []
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", _get)
+        m = margin.business_margin(BIZ_A)
+        assert m["pack_revenue_cents"] == 0
+        assert m["revenue_cents"] == pytest.approx(STARTER)
+
+
+class TestTheLedgerCapturesTheMoney:
+    def test_grant_pack_writes_the_price_it_charged(self, monkeypatch):
+        """Without this the cents column exists and stays empty, and
+        pack revenue reads zero forever while looking like it works."""
+        import credit_ledger
+        posted = {}
+        monkeypatch.setattr(credit_ledger.sb_clients, "sb_post_as_service",
+                            lambda path, row: posted.update(row) or [{"id": "x"}])
+        assert credit_ledger.grant_pack(BIZ_A, "medium", "pi_test_1") is True
+        expected = pricing_config.credit_packs()["medium"]["cents"]
+        assert posted["cents"] == expected
+        assert posted["kind"] == "purchase"
+
+    def test_the_captured_price_comes_from_the_live_table(self, monkeypatch):
+        """Not the import-time snapshot. #450 fixed exactly this on the
+        checkout side and left the grant side behind, so a customer could
+        be charged from one source and credited from another."""
+        import credit_ledger
+        posted = {}
+        monkeypatch.setattr(credit_ledger, "credit_packs",
+                            lambda: {"medium": {"units": 9, "cents": 4242}})
+        monkeypatch.setattr(credit_ledger.sb_clients, "sb_post_as_service",
+                            lambda path, row: posted.update(row) or [{"id": "x"}])
+        credit_ledger.grant_pack(BIZ_A, "medium", "pi_test_2")
+        assert posted["cents"] == 4242
