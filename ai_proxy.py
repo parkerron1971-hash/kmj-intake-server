@@ -221,6 +221,31 @@ async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depen
 
     # Phase E v1.1 — Chief message cap (dormant until BILLING_ENFORCE=on).
     _cap_biz = (req.metadata or {}).get("business_id") if hasattr(req, "metadata") else None
+
+    # Whose bill this call lands on. The business id arrives in
+    # req.metadata — caller-supplied, and unlike the Chief handler there
+    # is no RLS-backed read here to corroborate it. So it is checked
+    # against the caller's actual role before anything is attributed.
+    #
+    # Attributing on trust would let a signed-in account name a
+    # stranger's business and have its spend recorded there. That is
+    # merely untidy while the ceiling is global; it becomes a way to
+    # exhaust a competitor's allowance the moment the ceiling is
+    # per-tenant. Verify first, attribute second.
+    if _cap_biz:
+        try:
+            import billing_context
+            from business_users_router import role_of
+            if role_of(str(_cap_biz), str(getattr(user, "id", "") or "")):
+                billing_context.set_current(str(_cap_biz))
+            else:
+                logger.warning(
+                    "[ai_proxy] caller %s named business %s it has no role on "
+                    "— spend left unattributed",
+                    getattr(user, "id", "?"), _cap_biz)
+        except Exception as _attr_err:
+            logger.warning(f"[ai_proxy] attribution failed (non-fatal): {_attr_err}")
+
     if _cap_biz:
         try:
             import billing_limits

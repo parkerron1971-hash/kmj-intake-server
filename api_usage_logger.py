@@ -45,6 +45,8 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+import billing_context
+
 
 logger = logging.getLogger("api_usage_logger")
 if not logger.handlers:
@@ -190,6 +192,11 @@ def log_api_usage_sync(
         "cache_read_tokens": int(cache_read_tokens or 0),
         "cache_creation_tokens": int(cache_creation_tokens or 0),
     }
+    # Fall back to the ambient billing tenant. This is what gives
+    # llm_call._meter a business to name: the seam stands in for 22
+    # modules that never had one to pass. An explicit business_id
+    # always wins, so the 42 call sites that pass one are untouched.
+    business_id = business_id or billing_context.current()
     if business_id: body["business_id"] = business_id
     if task_type:   body["task_type"] = task_type
     if units is not None: body["units"] = int(units)
@@ -248,6 +255,11 @@ async def log_api_usage(
         "cache_read_tokens":     int(cache_read_tokens or 0),
         "cache_creation_tokens": int(cache_creation_tokens or 0),
     }
+    # Fall back to the ambient billing tenant. This is what gives
+    # llm_call._meter a business to name: the seam stands in for 22
+    # modules that never had one to pass. An explicit business_id
+    # always wins, so the 42 call sites that pass one are untouched.
+    business_id = business_id or billing_context.current()
     if business_id: body["business_id"] = business_id
     if user_id:     body["user_id"] = user_id
     if task_type:   body["task_type"] = task_type

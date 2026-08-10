@@ -39,6 +39,7 @@ from typing import Any, Callable, Dict
 
 from fastapi import Depends, HTTPException
 
+import billing_context
 import sb_clients
 from auth_supabase import AuthedUser, UserSession, require_user
 
@@ -107,6 +108,13 @@ def business_access(min_role: str = DEFAULT_MIN_ROLE) -> Callable:
                            user.id, business_id, role or "none", min_role)
             raise HTTPException(status_code=404, detail="business not found")
 
+        # Whose bill any AI spend on this request lands on. Set only
+        # AFTER the access check passes, and never before — a caller who
+        # is refused must not be able to name the tenant a later row is
+        # attributed to. Bookkeeping follows authorization; it does not
+        # grant it.
+        billing_context.set_current(business_id)
+
         row = dict(rows[0])
         row["_caller_role"] = role
         return row
@@ -142,6 +150,8 @@ def assert_access(business_id: str, user: AuthedUser,
         logger.warning("[access] denied %s on %s (role=%s, needs=%s)",
                        user.id, business_id, role or "none", min_role)
         raise HTTPException(status_code=404, detail="business not found")
+    # Same as the dependency: only after the check passes.
+    billing_context.set_current(business_id)
     return role
 
 

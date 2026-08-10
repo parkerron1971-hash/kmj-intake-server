@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+import billing_context
 import llm_call
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -14877,6 +14878,20 @@ async def chief_chat(
                 biz_rows = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=id,name,type,settings,owner_id")
                 biz_lite = (biz_rows or [None])[0]
                 if biz_lite:
+                    # Whose bill this turn lands on. req.business_id is
+                    # caller-supplied, so it is not attributed on trust:
+                    # this read ran under the practitioner's OWN JWT, so
+                    # a row coming back is RLS saying they may read it.
+                    # No row, no attribution — the spend stays orphaned
+                    # rather than landing on a stranger's ledger, which
+                    # is the failure that starts to matter the moment a
+                    # per-tenant ceiling can be exhausted by whoever
+                    # names the tenant.
+                    #
+                    # Set here rather than further down so the autopilot
+                    # and escalation sweeps below — which call AI too —
+                    # are billed to the same business as the turn.
+                    billing_context.set_current(req.business_id)
                     auto_count = await _autopilot_sweep(client, biz_lite)
                     if auto_count:
                         print(f"[Chief Autopilot] swept {auto_count} draft(s)", flush=True)
