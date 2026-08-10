@@ -188,6 +188,74 @@ class TestReadinessReportsTheNewFacts:
         assert not ready_lines, f"lease folded into the ready verdict: {ready_lines}"
 
 
+class TestAWebReplicaIsReadyWithoutAScheduler:
+    """The bug this class exists for was in the line the split did NOT
+    touch.
+
+    `ready = supabase_ok and scheduler.running` was correct while every
+    process ran the scheduler, and became a trap the moment one could
+    decline to: PROCESS_ROLE=web makes scheduler.running false BY
+    DESIGN, so readiness would 503, Railway's healthcheck would fail,
+    and the entire web tier would never come up. The change meant to
+    stop twenty schedulers would have taken the front door down instead.
+
+    It was missed by checking only the fields the split ADDED — the new
+    lease field correctly stays out of the verdict, which is what the
+    first pass verified. The pre-existing term was the one that broke.
+    """
+
+    @staticmethod
+    def _ready_expr():
+        """The real assignments from health_ready, evaluated in a
+        namespace we control. Reading the truth table off the shipped
+        expression, not off a paraphrase of it in this file."""
+        lines = [ln.strip() for ln in SRC.splitlines()]
+        got = [ln for ln in lines
+               if ln.startswith("scheduler_ok =") or ln.startswith("ready = ")]
+        assert got, "readiness verdict not found"
+        return got
+
+    @pytest.mark.parametrize("role,sched_running,expect_ready", [
+        # a web replica, correctly running no scheduler
+        ("web", False, True),
+        # a worker whose scheduler died — a real outage, must 503
+        ("worker", False, False),
+        ("all", False, False),
+        # everything healthy
+        ("web", True, True),
+        ("worker", True, True),
+        ("all", True, True),
+    ])
+    def test_the_truth_table(self, monkeypatch, role, sched_running, expect_ready):
+        monkeypatch.setenv("PROCESS_ROLE", role)
+        ns = _role_fns()
+
+        class _Sched:
+            running = sched_running
+
+        env = {"scheduler": _Sched(), "supabase_ok": True,
+               "runs_scheduled_jobs": ns["runs_scheduled_jobs"]}
+        for line in self._ready_expr():
+            exec(line, env)
+        assert env["ready"] is expect_ready
+
+    def test_supabase_still_dominates(self, monkeypatch):
+        """The original hard dependency must survive the fix — a
+        readiness probe that stops noticing an unreachable database is
+        worse than the bug it replaced."""
+        monkeypatch.setenv("PROCESS_ROLE", "web")
+        ns = _role_fns()
+
+        class _Sched:
+            running = True
+
+        env = {"scheduler": _Sched(), "supabase_ok": False,
+               "runs_scheduled_jobs": ns["runs_scheduled_jobs"]}
+        for line in self._ready_expr():
+            exec(line, env)
+        assert env["ready"] is False
+
+
 class TestUnknownIsNotFalse:
     """The property the whole alarm rests on."""
 
