@@ -39,6 +39,7 @@ import re
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SQL = ROOT / "supabase" / "APPLY-2026-08-09-storage-write-lockdown.sql"
+READ_SQL = ROOT / "supabase" / "APPLY-2026-08-10-close-the-document-vault.sql"
 
 WRITE_BUCKETS = ("business-assets", "site_images", "business-documents",
                  "proposals", "client-images", "ets-event-files")
@@ -169,3 +170,60 @@ class TestScopeIsStated:
         assert "project" in s and "event" in s, (
             "the ETS buckets are keyed on project/event ids, not business "
             "ids; that has to be written down or it reads as an oversight")
+
+
+class TestTheReadSideIsClosed:
+    """Step 3: business-documents and proposals stop being public.
+
+    Verified against production at apply time:
+
+        bucket flags      business-documents / proposals -> private
+        as anon           neither bucket appears at all
+        as the OWNER      1 document + 5 proposals still readable
+
+    That last line is the one that matters as much as the first two. A
+    read lockdown that also locked out the owner would have passed every
+    "anon cannot see it" assertion while making the Documents panel look
+    like the files had been deleted.
+    """
+
+    def _code(self):
+        return "\n".join(
+            line.split("--", 1)[0]
+            for line in READ_SQL.read_text(encoding="utf-8").splitlines())
+
+    def test_the_migration_exists(self):
+        assert READ_SQL.exists()
+
+    def test_public_read_is_dropped_for_both(self):
+        s = self._code()
+        assert 'drop policy if exists "Allow public read business-documents"' in s
+        assert 'drop policy if exists "Allow public read proposals"' in s
+
+    def test_owner_scoped_read_REPLACES_it_rather_than_just_removing_it(self):
+        """createSignedUrl asks Postgres for SELECT before it will sign.
+        A bucket with no select policy cannot be read even by its owner —
+        the panel goes blank and it looks like the files are gone."""
+        s = self._code()
+        for bucket in ("business-documents", "proposals"):
+            assert f"create policy \"biz read: {bucket}\"" in s, (
+                f"{bucket} lost its public read without gaining a scoped one")
+        assert s.count("user_can_access_business") >= 5
+
+    def test_both_buckets_are_marked_private(self):
+        s = self._code()
+        assert "set public = false" in s
+        assert "business-documents" in s and "proposals" in s
+
+    def test_product_files_is_fetchable_but_not_listable(self):
+        """The deliberate opposite: a buyer clicks that link from an
+        email months later with nobody signed in, so the bucket is
+        public to FETCH. It gets no select policy, so it cannot be
+        enumerated — knowing one path reveals no others."""
+        s = self._code()
+        assert "'product-files'" in s
+        assert "'product-files', true" in s, "the bucket must be public to fetch"
+        for verb in ("insert", "update", "delete"):
+            assert f'create policy "product-files {verb}"' in s
+        assert 'create policy "product-files select"' not in s, (
+            "a select policy on product-files would make it listable")
