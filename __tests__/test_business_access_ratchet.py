@@ -1,13 +1,5 @@
 """Handlers that take a business id from the caller must check the caller.
 
-The audit named "37 handlers missing an ownership check". An AST sweep
-puts it far higher: 446 handlers accept a client-supplied business id and
-roughly half have nothing in the body that resolves ownership or role.
-The count is soft — a handler can delegate the check into a helper this
-sweep cannot see — but the shape is not: **the check is something you
-have to remember to write**, and the pattern that omits it is invisible
-on review:
-
     def save(business_id: str, body: dict,
              _: UserSession = Depends(sb_clients.authed_request)):
 
@@ -15,111 +7,126 @@ That authenticates and discards the session. It proves somebody is
 signed in and nothing about whose data is being written, and it reads as
 guarded because there is a Depends on the line.
 
-So this file is a ratchet, not a wall. It pins the current number and
-fails if it grows. Fixing all of them is a migration; letting it get
-worse while that happens is the thing worth preventing.
+WHAT CHANGED, AND WHY IT MATTERED
+
+This file used to carry its own sweep, which asked one question of each
+handler: does its own source contain something that looks like a check?
+That cannot see a check the handler DELEGATES, and almost every router
+here delegates — `_owner(biz, user)` into `_access` into a raise, or
+`chief_bookkeeping.owner_business(...)` in another module entirely.
+
+138 handlers were reported as gaps that were already guarded:
+reports_router 33 (via _owner_or_reader), rules_router 15, plaid_router
+10, quickbooks_router 6, and so on. The true count was 57, not 195.
+
+The damage ran the opposite way to the obvious one. This is a ratchet:
+its job is to FAIL when a new unguarded handler ships. Pinned at 203
+against a true 57, it had ~146 handlers of slack — that many genuinely
+unguarded routes could have landed before it made a sound. A ceiling
+measured against noise is not a ceiling.
+
+The sweep now lives in ownership_sweep.py and follows the call graph to
+a fixed point, across modules. See that file for why `raise
+HTTPException` is required before a helper counts as a gate.
 """
 from __future__ import annotations
 
-import ast
 import pathlib
-import re
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import pytest
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+import ownership_sweep
 
-# Anything in a handler body that plausibly resolves who the caller is
-# relative to the business. Deliberately generous: a false "covered" is
-# a missed gap, but a false "gap" makes the ratchet noisy and it gets
-# raised to shut it up, which is worse.
-COVER_HINTS = (
-    "business_access", "assert_access", "_require_owner", "require_owner",
-    "_access(", "require_role", "role_of", "require_business_admin",
-    "owner_id", "_assert_owner", "_require_business", "_require_membership",
-    "authed_request",  # binds the JWT so RLS scopes the query itself
-)
+RESULT = ownership_sweep.sweep()
+ALL = RESULT["handlers"]
+UNGUARDED = RESULT["unguarded"]
+RESIDUAL = [h for h in UNGUARDED if not h["public_by_design"]]
 
-BIZ_PARAMS = ("business_id", "biz", "biz_id", "businessId")
-
-# The measured floor. Lower it when handlers are fixed; never raise it.
-# A rise means a new route shipped taking a business id from the caller
-# without resolving the caller's relationship to it.
-MAX_UNGUARDED = 203
+# The measured floor, 2026-08-10. Lower it when handlers are fixed;
+# never raise it. A rise means a new route ships taking a business id
+# from the caller without resolving the caller's relationship to it.
+#
+# Two numbers, because they mean different things. The residual is the
+# one that is a bug list. The total includes surfaces that are anonymous
+# on purpose (public sites, public forms, signature-verified webhooks) —
+# still worth pinning, so that set cannot grow quietly either.
+MAX_UNGUARDED_TOTAL = 57
+MAX_UNGUARDED_RESIDUAL = 10
 
 
-def _handlers():
-    for path in sorted(ROOT.rglob("*.py")):
-        s = str(path)
-        if "__pycache__" in s or "__tests__" in s or "site-packages" in s:
-            continue
-        try:
-            src = path.read_text(encoding="utf-8", errors="ignore")
-            tree = ast.parse(src)
-        except Exception:
-            continue
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            methods = []
-            for d in node.decorator_list:
-                f = d.func if isinstance(d, ast.Call) else d
-                if isinstance(f, ast.Attribute) and f.attr in (
-                        "get", "post", "put", "patch", "delete"):
-                    methods.append(f.attr)
-            if not methods:
-                continue
-            body = ast.get_source_segment(src, node) or ""
-            args = ([a.arg for a in node.args.args]
-                    + [a.arg for a in node.args.kwonlyargs])
-            takes_biz = any(a in BIZ_PARAMS for a in args) or bool(
-                re.search(r"\.business_id\b|\[[\"']business_id[\"']\]", body))
-            if not takes_biz:
-                continue
-            yield {
-                "file": path.name, "fn": node.name, "line": node.lineno,
-                "write": any(m in ("post", "put", "patch", "delete")
-                             for m in methods),
-                "covered": any(h in body for h in COVER_HINTS),
-            }
-
-
-ALL = list(_handlers())
-UNGUARDED = [h for h in ALL if not h["covered"]]
+def _fmt(rows):
+    return "\n".join(f"    {h['file']}:{h['line']} {h['fn']}"
+                     f"{' [WRITE]' if h['write'] else ''}"
+                     for h in sorted(rows, key=lambda h: (not h["write"], h["file"])))
 
 
 def test_the_sweep_actually_found_routes():
-    """Guards the guard: a refactor that breaks the AST walk would
+    """Guards the guard: a refactor that broke the AST walk would
     otherwise make this whole file pass by finding nothing."""
     assert len(ALL) > 300, f"only found {len(ALL)} handlers — sweep is broken"
 
 
+def test_the_sweep_resolves_delegated_checks():
+    """The whole point of the rewrite. reports_router delegates every
+    check into _owner_or_reader; if that stops resolving, 33 handlers
+    reappear as false gaps and the number goes back to meaning nothing."""
+    names = {(h["file"], h["fn"]) for h in UNGUARDED}
+    assert ("reports_router.py", "pl") not in names
+    assert ("contractors_router.py", "list_contractors") not in names, (
+        "a two-hop delegation (_owner -> _access -> raise) stopped resolving")
+    assert ("chief_bookkeeping_router.py", "analyze_unmatched") not in names, (
+        "a CROSS-MODULE delegation stopped resolving")
+
+
 def test_unguarded_handlers_do_not_increase():
     count = len(UNGUARDED)
-    worst = "\n".join(
-        f"    {h['file']}:{h['line']} {h['fn']}"
-        for h in sorted(UNGUARDED, key=lambda h: (not h["write"], h["file"]))[:15])
-    assert count <= MAX_UNGUARDED, (
+    assert count <= MAX_UNGUARDED_TOTAL, (
         f"{count} handlers take a business id without resolving the caller's "
-        f"relationship to it (ceiling {MAX_UNGUARDED}).\n"
+        f"relationship to it (ceiling {MAX_UNGUARDED_TOTAL}).\n"
         f"Use Depends(business_access(...)) — or assert_access(...) when the "
-        f"id arrives in a form or body.\nFirst offenders:\n{worst}")
+        f"id arrives in a form or body.\nFirst offenders:\n{_fmt(UNGUARDED)[:1200]}")
 
 
-def test_the_ceiling_tracks_reality():
-    """If the real number drops well below the ceiling, lower it — a
-    ratchet that has gone slack stops ratcheting."""
-    slack = MAX_UNGUARDED - len(UNGUARDED)
-    assert slack < 25, (
-        f"{len(UNGUARDED)} unguarded vs a ceiling of {MAX_UNGUARDED} — "
-        f"lower MAX_UNGUARDED to about {len(UNGUARDED) + 5}")
+def test_the_real_gap_list_does_not_increase():
+    """Excluding the surfaces that are anonymous by design. This is the
+    number that is actually a list of bugs."""
+    count = len(RESIDUAL)
+    assert count <= MAX_UNGUARDED_RESIDUAL, (
+        f"{count} non-public handlers take a business id without checking "
+        f"the caller (ceiling {MAX_UNGUARDED_RESIDUAL}):\n{_fmt(RESIDUAL)}")
+
+
+@pytest.mark.parametrize("ceiling,rows,label", [
+    (MAX_UNGUARDED_TOTAL, UNGUARDED, "MAX_UNGUARDED_TOTAL"),
+    (MAX_UNGUARDED_RESIDUAL, RESIDUAL, "MAX_UNGUARDED_RESIDUAL"),
+])
+def test_the_ceilings_track_reality(ceiling, rows, label):
+    """A ratchet that has gone slack stops ratcheting — which is exactly
+    how the old one came to allow 146 new gaps without complaining."""
+    slack = ceiling - len(rows)
+    assert slack < 10, (
+        f"{len(rows)} unguarded vs a ceiling of {ceiling} — "
+        f"lower {label} to about {len(rows)}")
+
+
+def test_the_public_allowlist_does_not_grow_quietly():
+    """PUBLIC_BY_DESIGN is where a judgement gets recorded. It is also
+    the cheapest possible way to make this test pass while shipping an
+    unguarded handler, so its size is pinned too."""
+    assert len(ownership_sweep.PUBLIC_BY_DESIGN) <= 15, (
+        "the public-by-design allowlist grew — every entry must be a "
+        "surface that a stranger is SUPPOSED to reach, not a handler that "
+        "was inconvenient to guard")
 
 
 def test_brand_engine_router_is_fully_guarded():
-    """The router the audit named: 7 endpoints, 6 of them writes, and
-    every one authenticated-then-discarded."""
+    """The router the original audit named: 7 endpoints, 6 of them
+    writes, every one authenticated-then-discarded."""
     gaps = [h for h in UNGUARDED if h["file"] == "brand_engine_router.py"]
-    assert not gaps, f"brand_engine_router still has gaps: {gaps}"
+    assert not gaps, f"brand_engine_router still has gaps:\n{_fmt(gaps)}"
 
 
 class TestTheOwnerGap:
@@ -129,12 +136,11 @@ class TestTheOwnerGap:
     seat-only RLS policies locked out the owner, because the owner has no
     seat. It breaks 100% of new signups and it looks correct in review —
     every policy present, every role handled, except the one that never
-    appears in the table.
+    appears in the table. It is not hypothetical for storage either:
+    business_users has zero rows in production today.
 
     business_access is safe because role_of compares owner_id BEFORE
-    looking at business_users. That is an ordering, not a guarantee, and
-    a refactor that resolved seats first would reintroduce the bug for
-    every business created after it shipped. So it gets pinned here.
+    looking at business_users. That is an ordering, not a guarantee.
     """
 
     OWNER = "11111111-1111-1111-1111-111111111111"
