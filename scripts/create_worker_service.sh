@@ -33,14 +33,51 @@ trap 'rm -f "$TMP"' EXIT
 # is not where Git Bash put it. Every path handed to Python is converted.
 winpath() { cygpath -w "$1" 2>/dev/null || echo "$1"; }
 
-echo "── 1/3  creating service '$DST' ─────────────────────────────"
-railway add --service "$DST" --repo "$GH_REPO" --variables "PROCESS_ROLE=worker"
-if [ $? -ne 0 ]; then
-  echo
-  echo "  'railway add' failed. If it says the service already exists,"
-  echo "  that is fine — the copy below is the part that matters."
-  echo "  Anything else: stop here and paste the error back."
-  echo
+# ── 0/3  is this session allowed to WRITE? ───────────────────────────
+#
+# `railway whoami` answering with an email is not the same as being
+# authorised. Reads keep working against an expired session while every
+# mutation returns "Unauthorized. Please run `railway login` again."
+#
+# The first run of this script hit exactly that: `railway add` failed
+# for that reason, and then 75 variable sets failed for the SAME reason
+# — reported as 75 separate FAILs, with the cause invisible because
+# their stderr was being discarded. One broken thing must not print as
+# seventy-five.
+echo "── 0/3  checking write access ───────────────────────────────"
+probe="$(railway add --service "$DST" --repo "$GH_REPO" \
+           --variables "PROCESS_ROLE=worker" 2>&1)"
+add_rc=$?
+echo "$probe"
+
+if printf '%s' "$probe" | grep -qi "unauthor\|please run .railway login\|not logged in"; then
+  cat <<'MSG'
+
+  ──────────────────────────────────────────────────────────────
+  STOPPED. This Railway session can read but not write.
+
+  `railway whoami` still answers with your email — that is not
+  the same as being authorised, and is why this looked fine
+  until the first mutation.
+
+  Fix it with:      railway login
+
+  then run this script again. Nothing was created or changed.
+  ──────────────────────────────────────────────────────────────
+MSG
+  exit 1
+fi
+
+if [ $add_rc -ne 0 ]; then
+  if printf '%s' "$probe" | grep -qi "already exists\|name.*taken"; then
+    echo "  service already exists — continuing to the variable copy"
+  else
+    echo
+    echo "  'railway add' failed for a reason this script does not"
+    echo "  recognise (above). Stopping rather than half-building a"
+    echo "  service. Nothing was changed."
+    exit 1
+  fi
 fi
 
 echo
@@ -68,29 +105,43 @@ echo "  $total to copy (Railway-injected vars and PROCESS_ROLE skipped)"
 
 i=0
 failed=""
+err=""
 while IFS= read -r k; do
   [ -z "$k" ] && continue
   i=$((i+1))
-  # The value goes down this pipe and nowhere else.
-  if python -c "
+  # The value goes down this pipe and nowhere else. stderr is CAPTURED,
+  # not discarded — the first version threw it away, which turned one
+  # auth failure into 75 mystery FAILs.
+  out="$(python -c "
 import json,sys
 d=json.load(open(sys.argv[1],encoding='utf-8'))
 v=d.get(sys.argv[2])
 sys.stdout.write('' if v is None else str(v))
-" "$TMPW" "$k" | railway variable set --service "$DST" --stdin --skip-deploys "$k" >/dev/null 2>&1
-  then
+" "$TMPW" "$k" | railway variable set --service "$DST" --stdin --skip-deploys "$k" 2>&1)"
+  if [ $? -eq 0 ]; then
     printf '  [%2d/%d] ok   %s\n' "$i" "$total" "$k"
   else
     printf '  [%2d/%d] FAIL %s\n' "$i" "$total" "$k"
     failed="$failed $k"
+    err="$out"
+    # STOP AT THE FIRST ONE. Every remaining key would fail the same
+    # way, and a wall of identical failures buries the one line that
+    # says why. It also means a half-populated service is never left
+    # sitting there looking plausible.
+    echo
+    echo "  Reason given by Railway:"
+    printf '%s\n' "$err" | sed 's/^/    /'
+    break
   fi
 done <<< "$KEYS"
 
 if [ -n "$failed" ]; then
   echo
-  echo "  FAILED:$failed"
-  echo "  Not deploying. Fix these first — a worker missing a credential"
-  echo "  starts, looks healthy, and fails the jobs that need it."
+  echo "  Stopped at the first failure ($i of $total). Nothing deployed."
+  echo "  A worker missing a credential starts, looks healthy, and fails"
+  echo "  the jobs that need it — so a partial copy is not worth having."
+  echo "  Fix the cause above and re-run; already-copied variables are"
+  echo "  simply set again."
   exit 1
 fi
 
