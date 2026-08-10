@@ -30,6 +30,8 @@ begins the moment a provider publishes the root somewhere independent.
 """
 from __future__ import annotations
 
+import base64
+
 import hashlib
 import json
 import logging
@@ -416,6 +418,32 @@ class OpenTimestampsProvider(AnchorProvider):
         return urllib.request.urlopen(req, timeout=timeout).read()
 
 
+def verify_anchor(provider_ref: Optional[str],
+                  provider: Optional[str] = None,
+                  timeout: float = 8.0) -> Dict[str, Any]:
+    """Independently check an anchor against the network that holds it.
+
+    Separate from proof_status() on purpose: status() is cheap and local
+    and is called on health surfaces, while this makes a live HTTP call
+    to a third party. Folding them together would put a network
+    round-trip behind a dashboard refresh and, worse, would make a slow
+    mirror node look like a degraded ledger.
+
+    Providers that cannot be checked return verified=None (unknown), not
+    False. Only a provider that ANSWERS AND CONTRADICTS US is False.
+    """
+    p = get_provider(provider)
+    fn = getattr(p, "verify_on_chain", None)
+    if not callable(fn):
+        return {"verified": None, "provider": p.name,
+                "detail": f"{p.name} has no independent verification path"}
+    try:
+        return {**fn(provider_ref, timeout=timeout), "provider": p.name}
+    except Exception as e:      # never let a diagnostic raise
+        return {"verified": None, "provider": p.name,
+                "detail": f"verification errored: {type(e).__name__}"}
+
+
 def proof_status(provider_ref: Optional[str],
                  provider: Optional[str] = None) -> Dict[str, Any]:
     """Ask the PROVIDER what its own receipt proves.
@@ -532,6 +560,129 @@ class HederaProvider(AnchorProvider):
             if v is not None and label not in ref:
                 ref[label] = str(v)
         return json.dumps(ref, separators=(",", ":"), sort_keys=True), None
+
+    def verify_on_chain(self, provider_ref: Optional[str],
+                        timeout: float = 8.0) -> Dict[str, Any]:
+        """Ask the PUBLIC mirror node whether the message we claim to have
+        published is actually there, and says what we say it says.
+
+        status() below reports `confirmed` from the receipt WE wrote —
+        network == "mainnet" and nothing else. That is a self-attestation.
+        It is a fair one as far as it goes, because Hedera reaches
+        consensus before submit returns, but it cannot distinguish a real
+        anchor from a receipt that was corrupted, truncated, hand-edited,
+        or written by a submit that silently did something else. The
+        docstring above tells an auditor to curl the mirror; this does the
+        same thing ourselves instead of only recommending it.
+
+        THE THREE OUTCOMES ARE DELIBERATELY NOT TWO.
+
+          verified=True    the mirror returned our message and its bytes
+                           equal the root we claim
+          verified=False   the mirror answered and CONTRADICTS us —
+                           missing message, or a different root. This is
+                           the alarm; it means the evidence is not there.
+          verified=None    we could not reach the mirror. UNKNOWN, and it
+                           must never be rendered as False: a network
+                           blip is not proof that a proof is bad, and
+                           collapsing the two would turn a flaky DNS
+                           lookup into "your audit trail is fake".
+        """
+        out: Dict[str, Any] = {"verified": None, "detail": "not attempted"}
+        if not provider_ref:
+            return {**out, "detail": "no receipt"}
+        try:
+            ref = json.loads(provider_ref)
+        except Exception:
+            return {"verified": False, "detail": "receipt is not readable JSON"}
+
+        net = str(ref.get("network") or "")
+        topic = str(ref.get("topic") or "")
+        seq = ref.get("sequence")
+        root = str(ref.get("root") or "")
+        mirror = self.MIRRORS.get(net)
+        if not (mirror and topic and root):
+            return {"verified": None,
+                    "detail": f"receipt lacks what verification needs "
+                              f"(network/topic/root): {net or '?'}"}
+
+        # NO SEQUENCE IS THE COMMON CASE, NOT THE EDGE CASE.
+        #
+        # anchor() only records `sequence` if the SDK receipt happens to
+        # expose topic_sequence_number / topicSequenceNumber. It does not,
+        # so every anchor written to date carries network/topic/root/
+        # transaction_id and NO sequence — checked against production:
+        # 5 of 5. A verifier that needed one would have called every real
+        # anchor unverifiable and looked like the anchors were the
+        # problem.
+        #
+        # The root is what is published, so it is also what to search
+        # for. Scanning the topic is what an auditor with the same
+        # receipt would have to do, which makes this the honest check
+        # rather than a privileged shortcut.
+        import httpx
+        if seq:
+            url = f"{mirror}/api/v1/topics/{topic}/messages/{seq}"
+        else:
+            url = (f"{mirror}/api/v1/topics/{topic}/messages"
+                   f"?limit=100&order=desc")
+        try:
+            r = httpx.get(url, timeout=timeout)
+        except Exception as e:
+            # Unreachable != disproven.
+            return {"verified": None,
+                    "detail": f"mirror unreachable: {type(e).__name__}", "url": url}
+
+        if not seq and r.status_code == 200:
+            try:
+                msgs = (r.json() or {}).get("messages") or []
+            except Exception as e:
+                return {"verified": None,
+                        "detail": f"mirror response unparseable: {type(e).__name__}",
+                        "url": url}
+            for m in msgs:
+                try:
+                    body = base64.b64decode(m.get("message") or "").decode(
+                        "utf-8", "replace").strip()
+                except Exception:
+                    continue
+                if body == root:
+                    return {"verified": True,
+                            "detail": "found our root on the topic",
+                            "url": url,
+                            "sequence": m.get("sequence_number"),
+                            "consensus_timestamp": m.get("consensus_timestamp")}
+            # Searched and did not find. Say that it was a bounded search,
+            # because "not in the last 100" is weaker than "not present".
+            return {"verified": False,
+                    "detail": f"our root is not among the last {len(msgs)} "
+                              f"messages on this topic",
+                    "url": url, "searched": len(msgs)}
+
+        if r.status_code == 404:
+            return {"verified": False,
+                    "detail": "the mirror node has no message at that sequence",
+                    "url": url, "http": 404}
+        if r.status_code >= 400:
+            return {"verified": None,
+                    "detail": f"mirror returned {r.status_code}", "url": url}
+
+        try:
+            payload = r.json()
+            published = base64.b64decode(payload.get("message") or "").decode(
+                "utf-8", "replace").strip()
+        except Exception as e:
+            return {"verified": None,
+                    "detail": f"mirror response unparseable: {type(e).__name__}",
+                    "url": url}
+
+        if published == root:
+            return {"verified": True, "detail": "mirror message equals our root",
+                    "url": url, "consensus_timestamp": payload.get("consensus_timestamp")}
+        return {"verified": False,
+                "detail": "the message on the network does NOT match our root",
+                "url": url,
+                "published_prefix": published[:16], "claimed_prefix": root[:16]}
 
     def status(self, provider_ref: Optional[str]) -> Dict[str, Any]:
         """Hedera reaches consensus before the call returns, so a stored
