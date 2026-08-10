@@ -11,6 +11,24 @@ download mints a short-lived (300s) signed URL per request via the
 service role. The buyer-facing link is STABLE (email links must not
 rot); only the storage URL is ephemeral.
 
+"PRIVATE" IS A REQUIREMENT OF THIS MODULE, NOT A DESCRIPTION OF IT.
+Audited 2026-08-10: the bucket was public=true. An anonymous GET of
+/object/public/product-files/<path> returned 200 with the file body and
+no credentials of any kind — which makes the signed URL below, its 300s
+expiry, the rate limit, and the HMAC purchase token in front of it all
+decorative. Anyone with a path could take a paid file without buying
+it.
+
+Nothing had leaked only because the bucket was still empty; it would
+have fired the first time a practitioner sold a digital product. Closed
+via scripts/close_product_files_bucket.sh, which proves the change by
+fetching the same object anonymously before and after.
+
+A test now asserts the bucket flag, so the sentence above is checked
+rather than believed. That is the actual lesson: this docstring has
+claimed "NO public access" since the day it was written, and the
+storage layer never agreed with it.
+
 File METADATA lives in businesses.settings.store.product_files =
 {offering_id: {path, filename, size_bytes, content_type, uploaded_at}}
 — the settings.superbill.service_codes precedent; no SQL migration.
