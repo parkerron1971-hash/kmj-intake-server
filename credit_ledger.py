@@ -86,6 +86,14 @@ def grant_pack(business_id: str, pack: str, stripe_payment_id: str) -> bool:
             "kind": "purchase",
             "source": f"stripe:pack_{pack}",
             "stripe_payment_id": stripe_payment_id,
+            # The MONEY, captured at purchase. This ledger recorded only
+            # units until 2026-08-09, which is why margin.py could not
+            # count pack sales as revenue at all. Deriving the price
+            # later from credit_packs() would use TODAY's list, so every
+            # repricing would silently restate past months — and the
+            # packs have already been repriced once. Same discipline as
+            # api_usage_logger: old rows keep their captured cost.
+            "cents": int(p["cents"]),
             "note": f"{p['units']} units (${p['cents'] / 100:.0f} pack)",
         })
         if res is None:
