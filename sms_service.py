@@ -255,7 +255,8 @@ OPTOUT_TAIL = " Reply STOP to opt out."
 
 
 def compose_outbound_body(business_name: Optional[str], message: str,
-                          *, include_optout: bool = False) -> str:
+                          *, include_optout: bool = False,
+                          include_ai_notice: bool = False) -> str:
     """Lead every practitioner-initiated text with the business name.
 
     WHY THIS EXISTS
@@ -288,7 +289,7 @@ def compose_outbound_body(business_name: Optional[str], message: str,
     if not body:
         return body
     if not name:
-        return body + (OPTOUT_TAIL if include_optout and "STOP" not in body.upper() else "")
+        return _append_tails(body, include_ai_notice, include_optout)
 
     # Long names would eat the segment; the recipient only needs enough to
     # recognise who this is.
@@ -302,6 +303,30 @@ def compose_outbound_body(business_name: Optional[str], message: str,
         out = body
     else:
         out = f"{name}: {body}"
+
+    return _append_tails(out, include_ai_notice, include_optout)
+
+
+def _append_tails(out: str, include_ai_notice: bool,
+                  include_optout: bool) -> str:
+    """The AI notice, then the opt-out line — in that order.
+
+    ORDER IS DELIBERATE. "Reply STOP to opt out." is the last thing on
+    the message because that is where people look for it. The AI notice
+    goes ahead of it so the opt-out stays in its conventional place.
+
+    Both are idempotent. Chief writes its own text and sometimes says
+    these things unprompted; appending a second copy would read as a
+    machine that is not listening to itself.
+    """
+    if include_ai_notice:
+        notice = _ai_notice_text()
+        # Match on the marker, not the whole sentence — Chief may phrase
+        # it its own way ("I'm an AI assistant"), and stapling the
+        # canned line onto a message that already said so is worse than
+        # not adding it.
+        if notice and AI_NOTICE_MARK.lower() not in out.lower():
+            out = f"{out.rstrip()} {notice}"
 
     if include_optout and "STOP" not in out.upper():
         out += OPTOUT_TAIL
@@ -329,6 +354,56 @@ async def _is_first_outbound(client: httpx.AsyncClient, business_id: str,
         return len(rows) == 0
     except Exception as e:
         logger.warning(f"[SMS] first-outbound check failed, omitting opt-out tail: {e}")
+        return False
+
+
+def _ai_notice_text() -> str:
+    """The one-line client notice, from ai_disclosure — never a second
+    copy. A disclosure that exists twice drifts, and then the record of
+    what somebody was told stops matching what they were told."""
+    import ai_disclosure
+    doc = ai_disclosure.current("client_sms")
+    return (doc or {}).get("text", "")
+
+
+# A stable, human-readable fragment of the notice used to recognise it in
+# messages already sent. Deliberately a SUBSTRING rather than the whole
+# sentence: the composed body may have been trimmed or edited, and a
+# check that only matches the exact string would re-disclose forever
+# after any wording change.
+AI_NOTICE_MARK = "AI-generated"
+
+
+async def _ai_notice_already_sent(client: httpx.AsyncClient, business_id: str,
+                                  to_clean: str) -> bool:
+    """Has this business already told this number it is talking to an AI?
+
+    WHY NOT REUSE _is_first_outbound. That answers "have we ever texted
+    them", which is the wrong question. A practitioner types the first
+    message themselves, Chief answers the second — under a first-ever
+    rule the notice attaches to the human message and never to the AI
+    one, disclosing at exactly the wrong moment.
+
+    WHY THIS FAILS OPEN, THE OPPOSITE OF THE OPT-OUT TAIL. On a read
+    error this returns False, so the notice IS included. The two are
+    genuinely different risks: a duplicated opt-out line is noise, while
+    a missing AI disclosure is the harm the feature exists to prevent.
+    Telling somebody twice costs a few characters; not telling them
+    costs the thing itself.
+    """
+    if not business_id or not to_clean:
+        return False
+    try:
+        rows = await _sb_get(
+            client,
+            f"/sms_messages?business_id=eq.{business_id}"
+            f"&phone_number=eq.{_pq(to_clean)}"
+            f"&direction=eq.outbound&message=ilike.*{AI_NOTICE_MARK}*"
+            "&select=id&limit=1") or []
+        return len(rows) > 0
+    except Exception as e:
+        logger.warning(
+            "[SMS] AI-notice history check failed, including the notice: %s", e)
         return False
 
 
@@ -389,7 +464,35 @@ async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
     # not the draft it was written from.
     biz_name = await _business_name(client, business_id)
     first_time = await _is_first_outbound(client, business_id, to_clean)
-    message = compose_outbound_body(biz_name, message, include_optout=first_time)
+
+    # TELLING THE RECIPIENT AN AI IS WRITING.
+    #
+    # The practitioner is shown an interrupting modal about how AI works
+    # here. Their customer, who never signed up for anything, was being
+    # texted by that same AI with no notice at all. That asymmetry was
+    # the gap — the client disclosure existed, hashed and versioned, and
+    # nothing sent it.
+    #
+    # Gated on AUTHORSHIP, not on the caller. authorship.current_model()
+    # is set inside a Chief turn and unset when a practitioner types a
+    # message and hits send, so the notice follows who actually wrote
+    # the words rather than which code path carried them. Attaching it
+    # to a human-written text would be its own kind of lie.
+    ai_model = None
+    try:
+        import authorship
+        ai_model = authorship.current_model()
+    except Exception as e:                      # never block a send on this
+        logger.warning("[SMS] authorship lookup failed: %s", e)
+
+    include_ai = False
+    if ai_model:
+        include_ai = not await _ai_notice_already_sent(
+            client, business_id, to_clean)
+
+    message = compose_outbound_body(biz_name, message,
+                                    include_optout=first_time,
+                                    include_ai_notice=include_ai)
 
     try:
         from starlette.concurrency import run_in_threadpool
