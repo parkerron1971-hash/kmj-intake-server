@@ -449,6 +449,12 @@ async def send_via_resend(
 
 @router.post("/email/send", response_model=SendEmailResponse)
 async def send_email(req: SendEmailRequest, user: AuthedUser = Depends(require_user)):
+    # Any signed-in caller could send through the platform's Resend
+    # account attributed to ANY business_id — the send is logged and
+    # routed under that business, so it spends someone else's sending
+    # reputation and appears in their trail.
+    import business_access
+    business_access.assert_access(str(req.business_id), user, "member")
     if not os.environ.get("RESEND_API_KEY"):
         raise HTTPException(500, "Resend API key not configured")
 

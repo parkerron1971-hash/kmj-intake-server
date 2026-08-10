@@ -41,6 +41,37 @@ class FakeSBModule:
 def fake_sb(monkeypatch):
     fake = FakeSBModule()
     monkeypatch.setattr(push, "sb_clients", fake)
+
+    # subscribe() now calls business_access.assert_access, which imports
+    # sb_clients itself — patching push.sb_clients alone leaves the guard
+    # reaching for a real service key. Make the caller the OWNER of b-1
+    # so these tests exercise the guard rather than stub it away.
+    import sb_clients as real_sb
+
+    def _get(path):
+        if path.startswith("/businesses?"):
+            return [{"id": "b-1", "owner_id": _user().id}]
+        if path.startswith("/business_users?"):
+            return []          # owner has no seat row — the #464 shape
+        return []
+
+    monkeypatch.setattr(real_sb, "sb_get_as_service", _get)
+    return fake
+
+
+@pytest.fixture()
+def sb_stranger(monkeypatch):
+    """Same, but the business belongs to somebody else."""
+    fake = FakeSBModule()
+    monkeypatch.setattr(push, "sb_clients", fake)
+    import sb_clients as real_sb
+
+    def _get(path):
+        if path.startswith("/businesses?"):
+            return [{"id": "b-1", "owner_id": "99999999-9999-9999-9999-999999999999"}]
+        return []
+
+    monkeypatch.setattr(real_sb, "sb_get_as_service", _get)
     return fake
 
 
@@ -157,3 +188,20 @@ def test_send_to_business_delivers(monkeypatch, fake_sb):
     payload = _json.loads(calls[0]["data"])
     assert payload["nav"] == "operate:queue"
     assert payload["title"] == "Chief"
+
+
+def test_subscribe_refuses_a_business_the_caller_does_not_own(monkeypatch, sb_stranger):
+    """send_to_business() fans out to every push_subscriptions row with
+    that business_id. Unchecked, a signed-in stranger could subscribe to
+    another practitioner's business and start receiving their morning
+    brief, overdue invoices and session alerts."""
+    from fastapi import HTTPException
+    _enable(monkeypatch)
+    body = push.SubscribeBody(
+        business_id="b-1",
+        subscription={"endpoint": "https://push.example/evil", "keys": {"p256dh": "x", "auth": "y"}},
+    )
+    with pytest.raises(HTTPException) as e:
+        push.subscribe(body, user=_user())
+    assert e.value.status_code == 404          # indistinguishable from "no such business"
+    assert not sb_stranger.posts, "a refused subscribe still wrote a row"

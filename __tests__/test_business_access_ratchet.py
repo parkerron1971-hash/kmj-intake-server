@@ -43,7 +43,8 @@ import ownership_sweep
 RESULT = ownership_sweep.sweep()
 ALL = RESULT["handlers"]
 UNGUARDED = RESULT["unguarded"]
-RESIDUAL = [h for h in UNGUARDED if not h["public_by_design"]]
+RESIDUAL = [h for h in UNGUARDED
+            if not h["public_by_design"] and not h["verified_by_hand"]]
 
 # The measured floor, 2026-08-10. Lower it when handlers are fixed;
 # never raise it. A rise means a new route ships taking a business id
@@ -53,8 +54,8 @@ RESIDUAL = [h for h in UNGUARDED if not h["public_by_design"]]
 # one that is a bug list. The total includes surfaces that are anonymous
 # on purpose (public sites, public forms, signature-verified webhooks) —
 # still worth pinning, so that set cannot grow quietly either.
-MAX_UNGUARDED_TOTAL = 57
-MAX_UNGUARDED_RESIDUAL = 10
+MAX_UNGUARDED_TOTAL = 52
+MAX_UNGUARDED_RESIDUAL = 0
 
 
 def _fmt(rows):
@@ -91,8 +92,13 @@ def test_unguarded_handlers_do_not_increase():
 
 
 def test_the_real_gap_list_does_not_increase():
-    """Excluding the surfaces that are anonymous by design. This is the
-    number that is actually a list of bugs."""
+    """Excluding surfaces that are anonymous by design, and the five
+    read by hand and found to be scoped on another axis.
+
+    This ceiling is ZERO. Every handler that takes a business id from
+    the caller either checks it, is deliberately public, or is written
+    down in VERIFIED_BY_HAND with a reason. A new one has nowhere to
+    hide."""
     count = len(RESIDUAL)
     assert count <= MAX_UNGUARDED_RESIDUAL, (
         f"{count} non-public handlers take a business id without checking "
@@ -194,3 +200,52 @@ def test_the_guard_binds_the_jwt_not_just_the_role():
     import business_access
     src = inspect.getsource(business_access)
     assert "Depends(sb_clients.authed_request)" in src
+
+
+class TestTheThreeThatWereReal:
+    """The gaps the corrected sweep actually found, now closed.
+
+    All three took business_id from a BODY, so they use assert_access
+    rather than the dependency — a dependency's parameters resolve from
+    the QUERY STRING, and putting business_access on a body route makes
+    FastAPI look for a query param that never arrives.
+    """
+
+    @pytest.mark.parametrize("module,fn", [
+        ("push_notifications", "subscribe"),
+        ("contract_agent", "contract_pdf"),
+        ("email_sender", "send_email"),
+    ])
+    def test_it_now_asserts_access(self, module, fn):
+        import importlib
+        import inspect
+        src = inspect.getsource(getattr(importlib.import_module(module), fn))
+        assert "assert_access" in src, f"{module}.{fn} lost its ownership check"
+
+    def test_push_subscribe_is_the_one_that_leaked_alerts(self):
+        """send_to_business() fans out to every push_subscriptions row
+        carrying that business_id, so an unchecked subscribe meant a
+        stranger could receive another practitioner's morning brief,
+        overdue invoices and session alerts."""
+        import inspect
+        import push_notifications
+        fan = inspect.getsource(push_notifications.send_to_business)
+        assert "business_id=eq." in fan
+        sub = inspect.getsource(push_notifications.subscribe)
+        assert "assert_access" in sub
+
+    def test_the_check_runs_before_the_work(self):
+        """A check after the read has already disclosed the row."""
+        import inspect
+        import contract_agent
+        src = inspect.getsource(contract_agent.contract_pdf)
+        assert src.index("assert_access") < src.index("/businesses?id=eq.")
+
+
+def test_the_verified_by_hand_list_does_not_grow_quietly():
+    """The other way to make a zero ceiling pass. Every entry is a
+    handler someone read and justified; growing it is a decision."""
+    import ownership_sweep
+    assert len(ownership_sweep.VERIFIED_BY_HAND) <= 5, (
+        "VERIFIED_BY_HAND grew — add the ownership check instead, or "
+        "explain the new entry the way the existing five are explained")

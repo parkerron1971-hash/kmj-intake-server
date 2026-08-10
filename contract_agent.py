@@ -818,6 +818,12 @@ class PdfRequest(BaseModel):
 
 @router.post("/agents/contract/pdf")
 async def contract_pdf(req: PdfRequest, user: AuthedUser = Depends(require_user)):
+    # Reads a whole business row (settings included) and a whole contact
+    # row, then renders both into a PDF. Authenticated-then-discarded
+    # meant any signed-in caller could do that for ANY business and ANY
+    # contact — this is a disclosure endpoint, not just a render one.
+    import business_access
+    business_access.assert_access(str(req.business_id), user, "member")
     async with httpx.AsyncClient() as client:
         # Fetch business + contact for header/recipient info
         businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")

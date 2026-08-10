@@ -71,6 +71,14 @@ def vapid_public() -> Dict[str, Any]:
 def subscribe(body: SubscribeBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     if not push_enabled():
         return {"ok": False, "enabled": False}
+    # business_id arrives in the BODY and decides who gets fanned out to:
+    # send_to_business() pushes to every subscription row carrying it. So
+    # a signed-in stranger naming someone else's business would start
+    # receiving that practitioner's morning brief, overdue invoices and
+    # session alerts. assert_access, not the dependency, because a
+    # dependency's parameters resolve from the QUERY STRING.
+    import business_access
+    business_access.assert_access(str(body.business_id), user, "member")
     endpoint = str(body.subscription.get("endpoint") or "")
     if not endpoint:
         raise HTTPException(status_code=422, detail="subscription.endpoint required")
