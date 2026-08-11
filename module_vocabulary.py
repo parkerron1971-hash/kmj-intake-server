@@ -38,10 +38,10 @@ DISCIPLINE
   - Renderers, routers and validators may branch on individual members.
     That is consuming the vocabulary, not redeclaring it.
   - The frontend keeps its own mirror because a TS union has to exist at
-    compile time. `GET /modules/vocabulary` (see module_spec_router)
-    serves this list at runtime so data-driven surfaces can stop
-    mirroring; the compile-time unions are checked by the parity test in
-    each repo, not by an import across repos.
+    compile time. `GET /module-specs/vocabulary` serves this list at
+    runtime, so the builder asks the server what the server allows rather
+    than guessing — and reports the difference instead of silently
+    offering a type Chief will never produce, or hiding one it will.
 """
 
 from __future__ import annotations

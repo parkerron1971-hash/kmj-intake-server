@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from auth_supabase import AuthedUser, require_user
 import module_spec_generator as msg
+import module_vocabulary
 
 logger = logging.getLogger("module_spec_router")
 router = APIRouter(prefix="/module-specs", tags=["module-specs"])
@@ -187,3 +188,26 @@ async def list_specs(business_id: str, status: Optional[str] = None,
     import asyncio
     rows = await asyncio.to_thread(msg.list_specs, business_id, status)
     return {"ok": True, "specs": rows}
+
+
+@router.get("/vocabulary")
+async def vocabulary(user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """The module vocabulary as data — field types, view kinds, trigger
+    kinds, offering categories.
+
+    WHY THIS EXISTS. The vocabulary is declared once per repo
+    (module_vocabulary.py here, moduleVocabulary.ts in the studio) and a
+    TS union has to exist at compile time, so the frontend copy cannot
+    simply be deleted. What it CAN stop doing is guessing: the builder
+    now asks the server what the server allows, and reports the
+    difference instead of silently offering a type Chief will never
+    produce — or hiding one it will.
+
+    Authenticated but not business-scoped: this is a platform constant,
+    identical for every tenant, and contains no tenant data. It is behind
+    auth because every read in this service is.
+
+    Route lives under /module-specs because that is the router that owns
+    the spec surface; nothing here is spec-specific.
+    """
+    return {"ok": True, "vocabulary": module_vocabulary.as_dict()}
