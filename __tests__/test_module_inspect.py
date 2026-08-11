@@ -65,7 +65,10 @@ def test_missing_label_is_a_problem():
 
 
 def test_unknown_field_type_is_a_problem():
-    rep = mi.inspect_module_schema(_schema(fields=[_field("x", "rating")]))
+    # NB: this used to say "rating", which then became a real field type —
+    # the test failed, correctly, the moment the vocabulary widened. Use a
+    # string no one would plausibly add.
+    rep = mi.inspect_module_schema(_schema(fields=[_field("x", "not_a_real_type")]))
     assert not rep["renderable"]
     assert any("type invalid" in p for p in rep["problems"])
 
