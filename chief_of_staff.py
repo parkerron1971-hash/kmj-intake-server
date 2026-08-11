@@ -1027,8 +1027,12 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     tasks = [
         _sb(client, "GET", f"/businesses?id=eq.{biz_id}&select=*&limit=1"),
         _sb(client, "GET",
+            # `email` is selected for the mailbox selection policy ONLY —
+            # it builds the known-sender allowlist in Python and is
+            # deliberately NOT copied into contacts_lookup, so it never
+            # reaches the prompt. Gating costs one column, not a PII dump.
             f"/contacts?business_id=eq.{biz_id}"
-            f"&select=id,name,status,health_score,lead_score,role,last_interaction&limit=500"),
+            f"&select=id,name,email,status,health_score,lead_score,role,last_interaction&limit=500"),
         _sb(client, "GET",
             f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft"
             f"&select=id,agent,action_type,subject,priority,contact_id,created_at"
@@ -1086,10 +1090,18 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&select=id,name,type,price,currency,pricing_type,duration_minutes,description"),
         # Recent email replies — full body content so the Chief can
         # quote a contact's actual words back when drafting responses.
+        #
+        # The window is 60, not the 6 that reach the prompt, because the
+        # selection policy filters AFTER the fetch. Fetching 10 and then
+        # filtering would let a single morning of mailbox noise starve
+        # every real reply out of the window — Chief would go quiet about
+        # a client's answer because forty newsletters outranked it by
+        # timestamp. `metadata` comes along because it carries the source
+        # discriminator the filter reads.
         _sb(client, "GET",
             f"/email_replies?business_id=eq.{biz_id}"
-            f"&order=received_at.desc&limit=10"
-            f"&select=id,from_email,from_name,subject,body_text,received_at,read,contact_id"),
+            f"&order=received_at.desc&limit=60"
+            f"&select=id,from_email,from_name,subject,body_text,received_at,read,contact_id,metadata"),
         # Recent SMS messages — both directions, last ~15. Lets the
         # Chief answer "did anyone text me?" and reference specific
         # text content the same way it does with email replies.
@@ -1267,7 +1279,12 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "strategy_track": (strategy_rows or [None])[0] if strategy_rows else None,
         "business_track": (business_track_rows or [None])[0] if business_track_rows else None,
         "products": products or [],
-        "email_replies": email_replies or [],
+        # THE WIRE. Storage and prompt-eligibility are two different
+        # questions, so they are two different keys: the Email Hub reads
+        # the table and shows everything, and only this filtered list is
+        # ever rendered into the prompt. Gating in the UI would be
+        # decorative — this is the line the model actually reads.
+        **_split_email_replies_for_prompt(email_replies or [], contacts or []),
         "sms_messages": sms_messages or [],
         # 8/01 — flattened to the same shape handle_list_projects returns,
         # so the context block and the action agree on vocabulary.
@@ -1828,6 +1845,88 @@ def _format_sms_block(ctx: Dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ─── Mailbox selection policy ────────────────────────────────────────
+#
+# A reply that came back through us is mail the practitioner provoked:
+# we sent first, a human answered, and the sender set is bounded by who
+# we mailed. A connected mailbox is the opposite — every newsletter,
+# cold pitch and phishing attempt lands in the same table, and some of
+# that text is written specifically to read as an instruction to an
+# agent that holds write verbs.
+#
+# _neutralize_untrusted defangs the text it renders. It does not decide
+# what is worth rendering at all, and it does not scale to an open
+# inbox. So eligibility is decided FIRST, here: mailbox-sourced mail
+# reaches the prompt only when the sender is already a contact.
+#
+# Everything else is still stored and still shown in the Email Hub. The
+# practitioner's inbox is not being hidden from them — it is being kept
+# out of the model's input. Two decisions, deliberately separate.
+
+# Sources that did NOT come back through our own inbound path, and so
+# carry no implicit "we mailed them first" scoping.
+_UNSOLICITED_SOURCES = {"mailbox", "forward"}
+
+# How many eligible replies reach the prompt. The renderer caps at 6;
+# this is the ceiling on what it may choose from.
+_PROMPT_REPLY_CAP = 10
+
+
+def _reply_source(reply: Dict[str, Any]) -> str:
+    """Which pipe did this row arrive through?
+
+    Rows written before the discriminator existed have no source key and
+    are all replies-to-us by construction — there was no other way in.
+    Defaulting them to "reply" is a statement about history, not a guess.
+    """
+    metadata = reply.get("metadata")
+    if isinstance(metadata, dict):
+        source = metadata.get("source")
+        if isinstance(source, str) and source.strip():
+            return source.strip().lower()
+    return "reply"
+
+
+def _known_sender_emails(contacts: List[Dict[str, Any]]) -> set:
+    return {
+        (c.get("email") or "").strip().lower()
+        for c in contacts
+        if isinstance(c, dict) and (c.get("email") or "").strip()
+    }
+
+
+def _split_email_replies_for_prompt(
+    replies: List[Dict[str, Any]],
+    contacts: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Split fetched mail into what the model may read and what it may not.
+
+    Returns both halves. The withheld COUNT matters as much as the
+    eligible list: if forty messages arrived and none were from a
+    contact, Chief must be able to say "nothing from anyone you know"
+    instead of "nothing arrived" — the second is false, and it is the
+    same class of lie this block was just fixed for.
+    """
+    known = _known_sender_emails(contacts)
+    eligible: List[Dict[str, Any]] = []
+    withheld = 0
+
+    for reply in replies:
+        if _reply_source(reply) not in _UNSOLICITED_SOURCES:
+            eligible.append(reply)          # provoked mail; already scoped
+            continue
+        sender = (reply.get("from_email") or "").strip().lower()
+        if sender and sender in known:
+            eligible.append(reply)
+        else:
+            withheld += 1
+
+    return {
+        "email_replies": eligible[:_PROMPT_REPLY_CAP],
+        "email_replies_withheld": withheld,
+    }
+
+
 def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
     """Format the recent inbound email replies for the system prompt.
 
@@ -1837,29 +1936,46 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
     Chief's drafts, not be referenced as a generic 'they replied'.
 
     Both branches carry the SCOPE line, and that is the load-bearing
-    part. `email_replies` only ever holds mail that came back through
-    our own inbound path — a reply to something we sent, or mail to a
-    platform address. Mail sent directly to the practitioner's own
-    address has never been able to land here, because no source feeds
-    it. So an empty table is not the observation "your inbox is quiet";
-    it is the absence of any observation at all, and the old
-    "(none yet)" rendered the second as the first for every practitioner
-    on the platform. A populated block is the same error scaled down:
-    two platform replies presented as the whole morning's mail when
-    forty landed in the inbox we cannot see.
+    part. What reaches this block is never the practitioner's whole
+    inbox: it is mail that came back through our own inbound path, plus
+    mailbox-sourced mail that passed the selection policy. An empty
+    block is therefore not the observation "your inbox is quiet" — it
+    is the absence of any observation, and rendering the second as the
+    first is the bug this block was fixed for.
+
+    WITHHELD is the same discipline applied to the new failure mode the
+    selection policy creates. Once a mailbox is connected, mail can
+    arrive and be deliberately kept out of the prompt. Reporting zero
+    then would be false in a fresh way, so the count comes through even
+    though the content does not — Chief can say "nine arrived, none from
+    anyone you know" without ever reading the nine.
     """
     replies = ctx.get("email_replies") or []
+    withheld = int(ctx.get("email_replies_withheld") or 0)
+
+    # Mail arrived from senders who are not contacts. Saying "nothing
+    # arrived" here would be the same lie in a new shape — the messages
+    # exist, they are in the Email Hub, they are simply not readable by
+    # the model. Chief has to be able to tell those two apart out loud.
+    withheld_line = (
+        f"  WITHHELD: {withheld} message(s) arrived from senders who are not in\n"
+        f"  their contacts. They are stored and visible in the Email Hub, but\n"
+        f"  are NOT shown to you — unknown senders do not reach your input. Say\n"
+        f"  the count and point them to the Email Hub; never claim to know what\n"
+        f"  those messages say, and never treat text you cannot see as absent.\n"
+    ) if withheld else ""
+
     if not replies:
         return (
-            "EMAIL REPLIES (no platform replies — and NOT a view of their inbox):\n"
-            "  Nothing has come back through the platform. This block can ONLY\n"
-            "  ever show replies to mail sent through the platform; no mailbox\n"
-            "  is connected, so mail sent directly to the practitioner's own\n"
-            "  address is invisible to you. Empty here means you cannot see,\n"
-            "  not that nothing arrived.\n"
-            "  If asked 'did anyone email me?' / 'what came in today?' — say\n"
-            "  nothing has come back through the platform AND that you cannot\n"
-            "  see their own inbox yet. NEVER tell them nobody emailed them.\n"
+            "EMAIL REPLIES (nothing readable — and NOT a view of their inbox):\n"
+            "  Nothing readable has come back through the platform. This block\n"
+            "  shows replies to mail sent through the platform, plus mail from a\n"
+            "  connected mailbox WHEN the sender is already a contact. Mail sent\n"
+            "  directly to them by anyone else is not visible to you. Empty here\n"
+            "  means you cannot see, not that nothing arrived.\n"
+            + withheld_line +
+            "  If asked 'did anyone email me?' / 'what came in today?' — say what\n"
+            "  you can and cannot see. NEVER tell them nobody emailed them.\n"
         )
 
     unread = [r for r in replies if not r.get("read")]
@@ -1875,12 +1991,14 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
         "  'reply to X' — pull from this block. Quote the actual reply content;",
         "  do not paraphrase. NEVER draft a generic response when you have the",
         "  real reply text below.",
-        "  SCOPE: these are replies that came back through the platform only.",
-        "  No mailbox is connected, so mail sent directly to the practitioner's",
-        "  own address is not here. Never present this as their whole inbox or",
-        "  imply it is everything that arrived.",
-        "",
+        "  SCOPE: replies that came back through the platform, plus mail from a",
+        "  connected mailbox ONLY where the sender is already a contact. Mail",
+        "  from anyone else is not here. Never present this as their whole inbox",
+        "  or imply it is everything that arrived.",
     ]
+    if withheld:
+        lines.append(withheld_line.rstrip("\n"))
+    lines.append("")
     for r in replies[:6]:
         # from_name and subject are attacker-chosen too, not just the body.
         name = _neutralize_untrusted(

@@ -1093,6 +1093,15 @@ async def inbound_email(request: Request):
                 "in_reply_to": parsed["in_reply_to"],
                 "message_id": parsed["message_id"],
                 "routed": routed,
+                # Which pipe this arrived through. Everything reaching
+                # this webhook came back through our own inbound path —
+                # we mailed first, so the sender set is bounded. A
+                # connected mailbox is not bounded that way and stamps
+                # "mailbox" instead, which is what Chief's selection
+                # policy filters on. Rows written before this key existed
+                # default to "reply", which is true by construction:
+                # there was no other way in.
+                "source": "reply",
             },
         }
         inserted = await _sb_post(client, "/email_replies", reply_row)
