@@ -225,3 +225,53 @@ def test_every_expected_skill_actually_exists():
         want = case.get("expect_skill")
         if want:
             assert want in names, f"{case['id']} expects missing skill {want!r}"
+
+
+# ─── Confidence, the contract a vague intake actually has ─────────────
+
+VAGUE_CASE = next(c for c in mbe.CASES if c["id"] == "vague")
+
+
+def test_a_confident_answer_to_a_vague_question_fails():
+    """Run 2 produced a full 'Items' module for "I need to stay on top of
+    things" and scored 4/4 — the score ROSE while the behaviour looked
+    worse, because every check only asked "did it build something that
+    renders".
+
+    The generator's stated contract for a vague intake is not refusal
+    (that rule is in the frontend AI tab, a different path) — it is
+    confidence: 'low'. Building a reasonable guess is fine. Claiming
+    certainty about it is not."""
+    spec = {"name": "Items", "confidence": "high",
+            "schema": {"fields": [{"name": "t", "type": "text", "label": "T"}],
+                       "views": ["list"]},
+            "agent_config": {}}
+    scored = mbe.score_case(VAGUE_CASE, {"ok": True, "specs": [spec]}, [])
+    c = next(c for c in scored["checks"] if c["check"].startswith("confidence:"))
+    assert c["ok"] is False
+    assert "high" in c["detail"]
+
+
+def test_low_confidence_on_a_vague_intake_passes():
+    spec = {"name": "Items", "confidence": "low",
+            "schema": {"fields": [{"name": "t", "type": "text", "label": "T"}],
+                       "views": ["list"]},
+            "agent_config": {}}
+    scored = mbe.score_case(VAGUE_CASE, {"ok": True, "specs": [spec]}, [])
+    c = next(c for c in scored["checks"] if c["check"].startswith("confidence:"))
+    assert c["ok"] is True
+
+
+def test_confidence_is_only_checked_where_declared():
+    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [_good_spec()]},
+                            ["booking-module"])
+    assert not any(c["check"].startswith("confidence:") for c in scored["checks"])
+
+
+def test_expected_confidence_values_are_real():
+    """Literal["high","medium","low"] — an expectation outside that set
+    could never be satisfied."""
+    for case in mbe.CASES:
+        want = case.get("expect_confidence")
+        if want:
+            assert want in {"high", "medium", "low"}, case["id"]
