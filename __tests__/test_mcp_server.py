@@ -102,7 +102,13 @@ def test_the_exposed_read_verbs_and_nothing_else():
     show_revenue/unbilled_time class. `check_inventory` (22) is stock
     counts for the business's own products — the list_offerings/
     list_products class, no customer data (adjust_stock stays a class-C
-    write and stays off). It has also produced a deliberate NO:
+    write and stays off). `inspect_module` (23) checks whether the
+    practitioner's own custom modules actually render and whether their
+    automations can fire: structural self-description in the
+    list_offerings/site_health class, no entry data and no customer data —
+    it reads the module's SHAPE, never its rows (list_module_entries is
+    the verb that reads rows, and it was already exposed). It has also
+    produced a deliberate NO:
     the giving-statement reads are marked `sensitive` in action_registry and
     never reach here at all, which is the mechanism to reach for when the
     answer is no.
@@ -110,7 +116,7 @@ def test_the_exposed_read_verbs_and_nothing_else():
     Bump this ONLY together with a TOOL_SCHEMAS entry and a reason.
     """
     tools = mcp.exposed_tools()
-    assert len(tools) == 22, (
+    assert len(tools) == 23, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
