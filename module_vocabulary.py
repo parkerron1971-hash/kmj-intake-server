@@ -66,6 +66,14 @@ FieldType = Literal[
     # the dropdown from offerings filtered by the field's
     # offering_categories constraint.
     "offering_ref",
+    # ── Added once the vocabulary had ONE declaration. Each cost a line
+    # here plus a renderer branch, rather than edits to a union, a
+    # validator, a dropdown and two prompts across two repos. The prompt
+    # picked them up for free — that is the whole point of the
+    # consolidation.
+    "phone",     # tel input; stored as typed
+    "currency",  # stored as a NUMBER so sorting and totals keep working
+    "rating",    # integer 1-5
 ]
 
 FIELD_TYPES: tuple[str, ...] = get_args(FieldType)
