@@ -10811,6 +10811,109 @@ async def handle_propose_module_from_intake(client, biz, action):
     }
 
 
+
+async def handle_add_module_field(client, biz, action) -> Dict:
+    """Add a field to a module that already exists. ADDITIVE ONLY.
+
+    Chief could build a module and then never touch it again — the verbs
+    were create / accept / reject / upgrade-archetype / inspect and row
+    CRUD, with nothing that edits a schema. So "add a phone number to my
+    bookings" had no answer from the one surface whose whole promise is
+    that you can just ask.
+
+    WHY ADDITIVE ONLY. Removing or retyping a field does not delete the
+    data — module_entries.data is jsonb and keeps every key — it makes it
+    INVISIBLE, silently, with no way for the practitioner to know a value
+    is still in there. Adding is reversible by removing; removing is not
+    reversible by adding, because nobody can see what was lost. Renames
+    and deletions stay in the manual editor where the whole schema is on
+    screen at once.
+
+    action: {module: slug|uuid, name, type, label, required?, options?,
+             module_slug?, placeholder?}
+    """
+    import module_inspect
+    import module_vocabulary
+
+    ref = (action.get("module") or action.get("module_id")
+           or action.get("slug") or "").strip()
+    if not ref:
+        return _fail("add_module_field", "which module? pass module=<slug>")
+
+    fname = (action.get("name") or "").strip()
+    ftype = (action.get("type") or "").strip()
+    if not fname:
+        return _fail("add_module_field", "the new field needs a name")
+    if ftype not in module_vocabulary.FIELD_TYPES:
+        return _fail("add_module_field",
+                     f"'{ftype}' is not a field type — one of: "
+                     + ", ".join(module_vocabulary.FIELD_TYPES))
+
+    # A uuid is 36 chars with 4 hyphens; slugs are kebab-case and never
+    # that shape, so this cannot mistake one for the other.
+    import re as _re
+    is_uuid = bool(_re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", ref))
+    q = f"/custom_modules?business_id=eq.{biz['id']}&select=*&limit=1"
+    q += f"&id=eq.{ref}" if is_uuid else f"&slug=eq.{ref}"
+    rows = await _sb(client, "GET", q) or []
+    if not rows:
+        return _fail("add_module_field", f"no module called '{ref}'")
+    module = rows[0]
+
+    schema = dict(module.get("schema") or {})
+    fields = list(schema.get("fields") or [])
+    if any((f.get("name") or "") == fname for f in fields if isinstance(f, dict)):
+        return _fail("add_module_field",
+                     f"'{fname}' is already a field on {module.get('name')}")
+
+    new_field: Dict[str, Any] = {
+        "name": fname,
+        "type": ftype,
+        "label": (action.get("label") or fname.replace("_", " ").title()),
+    }
+    for k in ("required", "options", "module_slug", "placeholder",
+              "offering_categories"):
+        if action.get(k) is not None:
+            new_field[k] = action[k]
+
+    candidate = {**schema, "fields": fields + [new_field]}
+
+    # CHECK BEFORE WRITING. The renderer replaces the entire module with an
+    # error panel on any schema fault, so a bad field would not damage one
+    # row — it would take the whole module and every entry in it off the
+    # screen. Inspect the candidate first and refuse rather than repair:
+    # the practitioner asked for a specific field, and quietly writing a
+    # different one is worse than saying no.
+    report = module_inspect.inspect_module_schema(candidate, module.get("agent_config"))
+    if not report["renderable"]:
+        return _fail("add_module_field",
+                     "that field would stop the module displaying: "
+                     + "; ".join(report["problems"][:2]))
+
+    patched = await _sb(client, "PATCH",
+                        f"/custom_modules?id=eq.{module['id']}", {"schema": candidate})
+    if not patched:
+        return _fail("add_module_field", "the change was rejected — nothing was saved")
+
+    # Read back. A 200 is not evidence the column holds what we sent.
+    after = await _sb(client, "GET",
+                      f"/custom_modules?id=eq.{module['id']}&select=schema&limit=1") or []
+    landed = [f.get("name") for f in
+              ((after[0].get("schema") or {}).get("fields") or [])] if after else []
+    if fname not in landed:
+        return _fail("add_module_field",
+                     "the save reported success but the field is not there")
+
+    label = f"✅ {new_field['label']} added to {module.get('name') or module.get('slug')}"
+    result = f"added a {ftype} field"
+    if report["warnings"]:
+        result += " — " + "; ".join(report["warnings"][:2])
+    return {"type": "add_module_field", "result": result, "label": label,
+            "module_id": module["id"], "nav": _nav("build")}
+
+
 async def handle_inspect_module(client, biz, action):
     """Look at a module that already exists and say whether it actually
     works. Pure read.
@@ -11154,6 +11257,7 @@ ACTION_HANDLERS = {
     "propose_module_from_intake": handle_propose_module_from_intake,
     "accept_module_spec":         handle_accept_module_spec,
     "inspect_module":             handle_inspect_module,
+    "add_module_field":           handle_add_module_field,
     "reject_module_spec":         handle_reject_module_spec,
     "upgrade_module_archetype":   handle_upgrade_module_archetype,
     "draft_nurture":         handle_draft_nurture,
@@ -14218,6 +14322,10 @@ ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MOD
     — DIRECT creation. Use ONLY when the practitioner literally dictates "create a module called X with fields A, B, C" (explicit name AND explicit fields). After creating, tell them: "I created a [name] module — you'll find it in BUILD on your sidebar."
   [ACTION:{{"type":"create_module_entry","module_id":"<uuid>","data":{{"title":"...","status":"active"}}}}]
     — Adds an entry to a module. Use the module id from the CUSTOM MODULES context block.
+  [ACTION:{{"type":"add_module_field","module":"bookings","name":"phone","type":"phone","label":"Phone"}}]
+    — Adds ONE field to a module that already exists. Use when they ask for something the module is missing ("add a phone number to my bookings", "I need a due date on jobs"). ADDITIVE ONLY: there is no rename, retype or delete — those stay in the manual editor, because hiding a value the practitioner cannot see is not something to do from a chat message. Field types: text, textarea, select (needs options), date, number, checkbox, contact_link, url, email, phone, currency, rating, offering_ref (needs offering_categories), module_ref (needs module_slug naming the target module). Refuses if the field would stop the module displaying, and tells you why.
+  [ACTION:{{"type":"inspect_module","module":"bookings"}}]
+    — Checks whether a module actually displays and whether its automations can fire, and names the specific problem. Use when they say a module looks wrong, is empty, or "isn't working", BEFORE guessing. Omit `module` to check every module at once.
   [ACTION:{{"type":"list_module_entries","module_id":"<uuid>"}}]
   [ACTION:{{"type":"list_module_entries","module_name":"Client Progress"}}]  — fuzzy match by name when id isn't handy
   [ACTION:{{"type":"update_module_entry","entry_id":"<uuid>","data":{{"status":"done"}}}}]  — patches the entry's data; existing fields are preserved.
