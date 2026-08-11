@@ -1,7 +1,7 @@
 ---
 name: feedback-module
 description: designing a feedback, review or satisfaction tracker
-triggers: [feedback, review, reviews, rating, ratings, testimonial, testimonials, satisfaction, survey, nps, complaint, complaints]
+triggers: [feedback, review, reviews, rating, ratings, rated, rate them, out of five, out of ten, stars, score, scored, testimonial, testimonials, satisfaction, survey, nps, complaint, complaints, how it went]
 ---
 A feedback module exists to be acted on, not archived. Every field should
 help decide what to do next.

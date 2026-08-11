@@ -46,7 +46,7 @@ import json
 import os
 import sys
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -68,6 +68,7 @@ CASES: List[Dict[str, Any]] = [
         "expect_field_types": ["date", "select"],
         "expect_any_field_types": ["contact_link", "offering_ref"],
         "expect_trigger_kinds": ["overdue"],
+        "expect_skill": "booking-module",
     },
     {
         "id": "pipeline",
@@ -77,6 +78,7 @@ CASES: List[Dict[str, Any]] = [
         "expect_field_types": ["select"],
         "expect_views": ["board"],
         "expect_trigger_kinds": [],
+        "expect_skill": "pipeline-module",
     },
     {
         "id": "feedback",
@@ -85,6 +87,7 @@ CASES: List[Dict[str, Any]] = [
                    "out of five and what they said, so I can spot a bad trend."),
         "expect_field_types": ["rating", "textarea"],
         "expect_trigger_kinds": [],
+        "expect_skill": "feedback-module",
     },
     {
         "id": "equipment",
@@ -112,12 +115,24 @@ CASES: List[Dict[str, Any]] = [
 
 # ─── Scoring ──────────────────────────────────────────────────────────
 
-def score_case(case: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+def score_case(case: Dict[str, Any], result: Dict[str, Any],
+               skills: Optional[List[str]] = None) -> Dict[str, Any]:
     """Deterministic. Every point is a fact about the produced spec."""
     checks: List[Dict[str, Any]] = []
 
     def check(name: str, ok: bool, detail: str = "") -> None:
         checks.append({"check": name, "ok": bool(ok), "detail": detail})
+
+    # WHICH SKILL ATTACHED is scored, because the first live run found the
+    # feedback case pulling booking-module ("rating" is not a substring of
+    # "rated", while "session" matched booking) and every structural check
+    # still passed. Chief was handed the wrong playbook and the number
+    # said nothing. Checked before generation so a total failure still
+    # reports the selection.
+    want = case.get("expect_skill")
+    if want is not None:
+        got = skills or []
+        check(f"skill:{want}", want in got, f"attached {got or '-'}")
 
     if not result.get("ok"):
         check("generated", False, str(result.get("error"))[:200])
@@ -198,20 +213,22 @@ def run(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
     for case in cases:
         print(f"→ {case['id']} …", file=sys.stderr, flush=True)
         started = time.time()
+        # Resolve the selection first so it can be scored even if the
+        # generation blows up.
+        try:
+            import build_skills
+            attached = [s["name"] for s in build_skills.select_skills(
+                case["intake"], case["business"].get("type", ""))]
+        except Exception:                                     # noqa: BLE001
+            attached = []
         try:
             out = module_spec_generator.generate_module_proposal(
                 case["business"], case["intake"])
         except Exception as e:                                # noqa: BLE001
             out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-        scored = score_case(case, out)
+        scored = score_case(case, out, attached)
         scored["seconds"] = round(time.time() - started, 1)
-        # The skills that attached — the thing an extraction changes.
-        try:
-            import build_skills
-            scored["skills"] = [s["name"] for s in build_skills.select_skills(
-                case["intake"], case["business"].get("type", ""))]
-        except Exception:                                     # noqa: BLE001
-            scored["skills"] = []
+        scored["skills"] = attached
         results.append(scored)
         print(f"  {scored['score']}/{scored['total']}"
               f"  skills={scored['skills'] or '-'}", file=sys.stderr)

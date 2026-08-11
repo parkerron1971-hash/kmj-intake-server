@@ -70,23 +70,24 @@ def test_case_ids_are_unique():
 # ─── Scoring ──────────────────────────────────────────────────────────
 
 def test_a_good_spec_scores_full_marks():
-    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [_good_spec()]})
+    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [_good_spec()]},
+                            ["booking-module"])
     failing = [c for c in scored["checks"] if not c["ok"]]
     assert not failing, failing
     assert scored["score"] == scored["total"]
 
 
 def test_a_failed_generation_scores_zero_and_says_why():
-    scored = mbe.score_case(BOOKING_CASE, {"ok": False, "error": "boom"})
+    scored = mbe.score_case(BOOKING_CASE, {"ok": False, "error": "boom"}, [])
     assert scored["score"] == 0
-    assert "boom" in scored["checks"][0]["detail"]
+    assert any("boom" in c["detail"] for c in scored["checks"])
 
 
 def test_a_spec_that_would_not_render_loses_the_render_check():
     """The check that matters most: the practitioner sees a red panel."""
     spec = _good_spec()
     spec["schema"]["board_column"] = None          # board view, no column
-    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [spec]})
+    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [spec]}, ["booking-module"])
     renders = next(c for c in scored["checks"] if c["check"] == "renders")
     assert renders["ok"] is False
     assert "board_column" in renders["detail"]
@@ -97,14 +98,14 @@ def test_a_missing_expected_field_type_is_caught():
     spec["schema"]["fields"] = [f for f in spec["schema"]["fields"] if f["type"] != "date"]
     spec["schema"]["views"] = ["list"]             # keep the board legal
     spec["schema"].pop("board_column", None)
-    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [spec]})
+    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [spec]}, ["booking-module"])
     assert not next(c for c in scored["checks"] if c["check"] == "field_type:date")["ok"]
 
 
 def test_an_invented_field_type_is_caught():
     spec = _good_spec()
     spec["schema"]["fields"].append({"name": "x", "type": "colour_picker", "label": "X"})
-    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [spec]})
+    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [spec]}, ["booking-module"])
     known = next(c for c in scored["checks"] if c["check"] == "known_field_types")
     assert known["ok"] is False
     assert "colour_picker" in known["detail"]
@@ -112,7 +113,7 @@ def test_an_invented_field_type_is_caught():
 
 def test_any_of_passes_on_one_match():
     spec = _good_spec()   # has contact_link but no offering_ref
-    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [spec]})
+    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [spec]}, ["booking-module"])
     any_check = next(c for c in scored["checks"] if c["check"].startswith("field_type:any_of"))
     assert any_check["ok"] is True
 
@@ -122,7 +123,7 @@ def test_the_scorer_is_not_vacuous():
     an extraction that broke the generator. An empty spec must fail
     several distinct checks, not merely score fewer points."""
     empty = {"name": "X", "schema": {"fields": [], "views": []}, "agent_config": {}}
-    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [empty]})
+    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [empty]}, ["booking-module"])
     failed = {c["check"] for c in scored["checks"] if not c["ok"]}
     assert "renders" in failed
     assert "field_type:date" in failed
@@ -184,3 +185,43 @@ def test_run_refuses_without_an_api_key(monkeypatch):
     with pytest.raises(SystemExit) as e:
         mbe.run(mbe.CASES)
     assert e.value.code == 2
+
+
+# ─── Selection is scored ──────────────────────────────────────────────
+
+def test_the_wrong_skill_fails_the_case():
+    """The first live run had the feedback case pulling booking-module
+    while every structural check passed — Chief was handed the wrong
+    playbook and the score said nothing. Now it says something."""
+    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [_good_spec()]},
+                            ["pipeline-module"])
+    c = next(c for c in scored["checks"] if c["check"].startswith("skill:"))
+    assert c["ok"] is False
+    assert "pipeline-module" in c["detail"]
+
+
+def test_selection_is_scored_even_when_generation_fails():
+    """Checked before generation, so a total failure still reports which
+    skill attached — otherwise the one run that most needs diagnosing is
+    the one that tells you least."""
+    scored = mbe.score_case(BOOKING_CASE, {"ok": False, "error": "boom"},
+                            ["booking-module"])
+    c = next(c for c in scored["checks"] if c["check"].startswith("skill:"))
+    assert c["ok"] is True
+
+
+def test_cases_without_an_expected_skill_are_not_penalised():
+    equip = next(c for c in mbe.CASES if c["id"] == "equipment")
+    scored = mbe.score_case(equip, {"ok": False, "error": "x"}, [])
+    assert not any(c["check"].startswith("skill:") for c in scored["checks"])
+
+
+def test_every_expected_skill_actually_exists():
+    """An expect_skill naming a file nobody wrote would fail forever."""
+    import build_skills as bs
+
+    names = {s["name"] for s in bs.load_skills()}
+    for case in mbe.CASES:
+        want = case.get("expect_skill")
+        if want:
+            assert want in names, f"{case['id']} expects missing skill {want!r}"
