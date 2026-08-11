@@ -30,11 +30,15 @@ DELIBERATE PROPERTIES
     keyword/type match is inspectable and testable; "the model picks its
     own context" is neither, and it would put a model call in front of
     every model call.
-  - **Additive only.** This PR does NOT move existing content out of
-    _SYSTEM_PROMPT. Extracting a section means every build that does not
-    match that skill silently loses guidance it has today, and there is
-    no eval harness to prove that is safe. The mechanism lands first; the
-    extraction is a separate change with a way to measure it.
+  - **Additive only — and now permanently so.** This does not move content
+    out of _SYSTEM_PROMPT, and the investigation into doing that is CLOSED:
+    see docs/PROMPT_EXTRACTION_RULING.md. Short version: the model picks
+    its archetype and fills that archetype's params in ONE call, so the
+    detail must be present BEFORE we know which one it picks — and keyword
+    selection runs before generation. booking_calendar (45% of the prompt)
+    requires primary_date_field; a missed selection there means Pydantic
+    rejects the whole envelope and Chief builds nothing. Skills ADD what
+    Chief lacks. They are not a way to slim this prompt.
   - **Bounded.** MAX_SKILLS caps how many attach to one request, so the
     prompt cannot grow without limit as the library does.
   - **Failure is silent and safe.** A malformed skill is skipped, never
