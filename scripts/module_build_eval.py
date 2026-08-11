@@ -99,6 +99,27 @@ CASES: List[Dict[str, Any]] = [
         "expect_trigger_kinds": ["overdue"],
     },
     {
+        # Added after round 2 shipped module_ref. The four changes scored a
+        # clean 36/36 and NOT ONE CASE PRODUCED A module_ref — none of the
+        # intakes described a relationship between two modules, so the
+        # headline field type of that round was unverified end to end. Unit
+        # tests proved the contract; nothing proved Chief emits one. That is
+        # the exact shape of every bug this harness has caught.
+        #
+        # This intake names two trackable objects AND the link between them,
+        # so decomposition (G13) should produce both modules and wire the
+        # dependent one back with module_ref. A single module with a text
+        # "job" field is precisely the failure module_ref exists to fix, and
+        # should score as one.
+        "id": "linked",
+        "business": {"name": "Harbour Trades", "type": "service_provider"},
+        "intake": ("I run jobs for customers, and I invoice against each job. "
+                   "I want to see what is still unbilled on a job."),
+        "expect_field_types": ["module_ref", "currency"],
+        "expect_trigger_kinds": [],
+        "expect_skill": "payments-module",
+    },
+    {
         "id": "vague",
         "business": {"name": "Harbour Co", "type": "custom"},
         "intake": "I need to stay on top of things.",
