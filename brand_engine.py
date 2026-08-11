@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+import brand_dna
 import llm_call
 
 logger = logging.getLogger("brand_engine")
@@ -288,6 +289,21 @@ def _compose_design(business: Dict[str, Any]) -> Dict[str, Any]:
         # ran. These flags carry the distinction.
         "fonts_owner_set": bool(font_pair.get("heading") or brand_kit.get("font_heading")),
         "fonts_locked": bool(brand_kit.get("fonts_locked")),
+        # Will the composer honour the owner's heading face, or take it
+        # over? site_composer DEMOTES a pinned face that is a generic
+        # display tell (Inter, Montserrat, Open Sans, Lato, Roboto —
+        # five of the eighteen the Brand Room itself offers) unless
+        # fonts_locked says otherwise. That is the right default: those
+        # faces are seeded far more often than chosen. But the Brand
+        # Room's Type chapter promises "what you see here is what your
+        # site will set", and for those five it was not true.
+        #
+        # Shipped as a fact rather than as a list, so the Brand Room
+        # cannot hold a second copy of GENERIC_DISPLAY_FACES that drifts
+        # from the one the composer actually branches on.
+        "font_heading_generic": brand_dna.is_generic_display(
+            font_pair.get("heading") or brand_kit.get("font_heading") or ""
+        ),
     }
 
 
@@ -497,7 +513,13 @@ def _compute_completeness(bundle: Dict[str, Any]) -> Tuple[float, List[str]]:
 
 def _empty_bundle(business_id: str) -> Dict[str, Any]:
     design = dict(DEFAULT_DESIGN)
-    design.update({"vibe_family": "warm", "tone_words": [], "visual_style": None})
+    design.update({"vibe_family": "warm", "tone_words": [], "visual_style": None,
+                   # Same keys as a real bundle's design. An empty bundle
+                   # has no owner fonts and nothing locked — but a consumer
+                   # must never have to guess whether the key exists on one
+                   # bundle shape and not the other.
+                   "fonts_owner_set": False, "fonts_locked": False,
+                   "font_heading_generic": False})
     return {
         "business": {"id": business_id, "name": "Unknown", "type": "custom",
                      "subtype": None, "slug": None, "tagline": None,
@@ -1063,6 +1085,35 @@ def save_brand_kit(business_id: str, new_kit: Dict[str, Any]) -> Dict[str, Any]:
 
     current_kit = (business.get("settings") or {}).get("brand_kit")
     history = list(business.get("brand_kit_history") or [])
+
+    # PUBLISHED OVERRIDES MERGE, they do not replace.
+    #
+    # This function REPLACES settings.brand_kit wholesale, so every field
+    # the caller omits is dropped. The Brand Room sends only the override
+    # it just edited (that is the sparse design — store a value only
+    # where the owner disagreed), and it re-hydrates its local kit from
+    # the bundle after each save. The bundle exposes which fields are
+    # overridden but not their raw values, so the second edit of a
+    # session arrived carrying only itself and SILENTLY DELETED the
+    # first. Two edits, and the earlier one was gone.
+    #
+    # Merging here rather than making the caller round-trip the whole map
+    # keeps the reset mechanism intact: an empty string still deletes,
+    # because _normalize_brand_kit drops blanks after this merge.
+    prior_ov = (current_kit or {}).get("published_overrides")
+    if isinstance(prior_ov, dict) and prior_ov:
+        incoming = new_kit.get("published_overrides") if isinstance(new_kit, dict) else None
+        new_kit = dict(new_kit or {})
+        if isinstance(incoming, dict):
+            merged = dict(prior_ov)
+            merged.update(incoming)
+            new_kit["published_overrides"] = merged
+        else:
+            # No map at all — which is what EVERY save from the chapters
+            # above sends. Absence means "I am not editing these", not
+            # "clear them". Without this, editing a colour and pressing
+            # Save wiped every published override the owner had set.
+            new_kit["published_overrides"] = dict(prior_ov)
 
     if current_kit:
         history.insert(0, {
