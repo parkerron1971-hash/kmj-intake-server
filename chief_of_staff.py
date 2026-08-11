@@ -10823,6 +10823,72 @@ async def handle_propose_module_from_intake(client, biz, action):
     }
 
 
+async def handle_inspect_module(client, biz, action):
+    """Look at a module that already exists and say whether it actually
+    works. Pure read.
+
+    Chief could build a module and never see it again. This is the verb
+    that closes that loop: it checks a live custom_modules row against the
+    renderer's own contract (module_inspect), so "is it working?" has an
+    answer that doesn't require the practitioner to click into Build and
+    find a red panel.
+
+    action: {module_id: str} or {slug: str} or {} for every module.
+    """
+    import module_inspect
+
+    module_id = (action.get("module_id") or "").strip()
+    slug = (action.get("slug") or action.get("module") or "").strip()
+
+    q = f"/custom_modules?business_id=eq.{biz['id']}&select=*"
+    if module_id:
+        q += f"&id=eq.{module_id}"
+    elif slug:
+        q += f"&slug=eq.{slug}"
+    q += "&order=sort_order.asc,created_at.asc"
+
+    rows = await _sb(client, "GET", q) or []
+    if not rows:
+        which = module_id or slug or "any module"
+        return _fail("inspect_module", f"no module found for {which}")
+
+    reports = []
+    broken = 0
+    for row in rows:
+        rep = module_inspect.inspect_module_row(row)
+        if not rep["renderable"]:
+            broken += 1
+        reports.append({
+            "module_id": row.get("id"),
+            "name": row.get("name") or row.get("slug"),
+            "renderable": rep["renderable"],
+            "summary": rep["summary"],
+            "problems": rep["problems"],
+            "warnings": rep["warnings"],
+        })
+
+    if len(reports) == 1:
+        r = reports[0]
+        detail = r["summary"]
+        if r["problems"]:
+            detail += " — " + "; ".join(r["problems"][:3])
+        elif r["warnings"]:
+            detail += " — " + "; ".join(r["warnings"][:2])
+        label = ("✅ " if r["renderable"] else "⚠️ ") + f"{r['name']}: {r['summary']}"
+        return {"type": "inspect_module", "result": detail, "label": label,
+                "reports": reports, "nav": None}
+
+    label = (f"⚠️ {broken} of {len(reports)} modules won't display"
+             if broken else f"✅ all {len(reports)} modules render")
+    return {
+        "type": "inspect_module",
+        "result": "; ".join(f"{r['name']}: {r['summary']}" for r in reports),
+        "label": label,
+        "reports": reports,
+        "nav": None,
+    }
+
+
 async def handle_accept_module_spec(client, biz, action):
     """Materialize a draft ModuleSpec into a custom_modules row. Idempotent.
     action: {spec_id: str}"""
@@ -10870,10 +10936,38 @@ async def handle_accept_module_spec(client, biz, action):
     if not res.get("ok"):
         return _fail("accept_module_spec", res.get("error", "materialize failed"))
     mod = res.get("module") or {}
+    name = mod.get("name") or mod.get("slug") or "module"
+
+    # What did we actually build? materialize_spec now reads the row back
+    # and checks it against the renderer's contract. "Is live in Build" was
+    # previously said on the strength of an insert returning — including for
+    # modules that were about to show the practitioner a red error panel.
+    verification = res.get("verification") or {}
+    problems = verification.get("problems") or []
+    warnings = verification.get("warnings") or []
+    repairs = verification.get("repairs") or []
+
+    if problems:
+        return {
+            "type": "accept_module_spec",
+            "result": ("saved, but it will not display correctly: "
+                       + "; ".join(problems[:3])),
+            "label": f"⚠️ {name} saved — but it won't display yet",
+            "module_id": mod.get("id"),
+            "nav": _nav("build"),
+        }
+
+    label = f"✅ {name} is live in Build"
+    if repairs:
+        label += f" — {repairs[0]}"
+    result = "module accepted"
+    if warnings:
+        result = "module accepted — " + "; ".join(warnings[:2])
+
     return {
         "type": "accept_module_spec",
-        "result": "module accepted",
-        "label": f"✅ {mod.get('name', mod.get('slug', 'module'))} is live in Build",
+        "result": result,
+        "label": label,
         "module_id": mod.get("id"),
         "nav": _nav("build"),
     }
@@ -11071,6 +11165,7 @@ ACTION_HANDLERS = {
     "enqueue_job":            handle_enqueue_job,
     "propose_module_from_intake": handle_propose_module_from_intake,
     "accept_module_spec":         handle_accept_module_spec,
+    "inspect_module":             handle_inspect_module,
     "reject_module_spec":         handle_reject_module_spec,
     "upgrade_module_archetype":   handle_upgrade_module_archetype,
     "draft_nurture":         handle_draft_nurture,

@@ -131,6 +131,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "catch_up":            _r("summarizes recent activity from reads only"),
     "check_goals":         _r("computes goal progress from business settings + live data"),
     "contact_deep_dive":   _r("assembles one contact's history"),
+    "inspect_module":      _r("checks a built module against the renderer's contract; "
+                              "reads one custom_modules row, writes nothing"),
     "list_availability":   _r("reads the availability configuration"),
     "list_module_entries": _r("lists rows of a custom module"),
     "list_offerings":      _r("lists offerings"),

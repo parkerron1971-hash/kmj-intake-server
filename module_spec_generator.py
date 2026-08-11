@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+import module_inspect
 import module_vocabulary
 # The one declaration of the module vocabulary. Re-exported from this
 # module because importers have referred to these names here for months.
@@ -1610,13 +1611,24 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
     if refused:
         return refused
 
+    # ─── Repair before writing ────────────────────────────────────────
+    # Narrow, unambiguous fixes only (see module_inspect.repair_schema).
+    # The case that matters: views:['board'] with no usable board_column
+    # materializes fine and then makes DynamicModule replace the ENTIRE
+    # module with a red "schema is invalid" panel. Writing that and
+    # announcing "is live in Build" is the failure this pass exists to end.
+    repaired_schema, repair_notes = module_inspect.repair_schema(
+        spec.get("schema") or {"fields": []})
+    if repair_notes:
+        logger.info(f"[inspect] repaired spec {spec_id}: {'; '.join(repair_notes)}")
+
     # Common shape used for both fresh-insert AND upgrade UPDATE.
     write_payload = {
         "name": spec.get("name") or slug,
         "slug": slug,
         "description": spec.get("description"),
         "icon": spec.get("icon") or "📋",
-        "schema": spec.get("schema") or {"fields": []},
+        "schema": repaired_schema,
         "agent_config": spec.get("agent_config") or {"enabled": True, "triggers": []},
         "is_active": True,
         # Archetype layer (Phase C.1). Existing rows keep defaults
@@ -1651,9 +1663,16 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
             merged_ac["__deprecated_services"] = legacy_services
             merged_ac["__deprecated_pre_c12"] = True
             write_payload = {**write_payload, "agent_config": merged_ac}
-        sb_clients.sb_patch_as_service(
+        # VERIFY THE WRITE LANDED. sb_patch_as_service returns None on a
+        # 4xx; discarding it meant a rejected upgrade still fell through to
+        # ok:True with the target's own id, and Chief announced a refined
+        # module that was never refined.
+        patched = sb_clients.sb_patch_as_service(
             f"/custom_modules?id=eq.{upgrade_target}", write_payload
         )
+        if not patched:
+            return {"ok": False,
+                    "error": "upgrade write was rejected — the module is unchanged"}
         module_id = upgrade_target
     else:
         # ─── C.1.5 Plan A — single-instance archetype guard (M3-δ) ─────
@@ -1726,10 +1745,25 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
         except Exception as _gap_err:
             logger.warning(f"library_gap_log insert failed (non-blocking): {_gap_err}")
 
+    # ─── Look at what we actually built ───────────────────────────────
+    # Read the row BACK and inspect it against the renderer's own contract.
+    # Until this landed, materialize reported success on the strength of
+    # the insert returning, and Chief said "is live in Build" over a module
+    # that could be about to show the practitioner a red error panel.
     mod = sb_clients.sb_get_as_service(
         f"/custom_modules?id=eq.{module_id}&select=*&limit=1") or []
-    return {"ok": True, "spec_id": spec_id, "module": mod[0] if mod else None,
-            "workflow_ids": workflow_ids}
+    module_row = mod[0] if mod else None
+
+    verification = module_inspect.inspect_module_row(module_row)
+    if repair_notes:
+        verification["repairs"] = repair_notes
+    if not verification["renderable"]:
+        logger.warning(
+            f"[inspect] materialized module {module_id} will NOT render: "
+            f"{'; '.join(verification['problems'])}")
+
+    return {"ok": True, "spec_id": spec_id, "module": module_row,
+            "workflow_ids": workflow_ids, "verification": dict(verification)}
 
 
 def _log_library_gap_from_spec(business_id: str, spec_row: Dict[str, Any],
