@@ -109,6 +109,11 @@ def test_the_exposed_read_verbs_and_nothing_else():
     it reads the module's SHAPE, never its rows (list_module_entries is
     the verb that reads rows, and it was already exposed). It has also
     produced a deliberate NO:
+    `summarize_module` (24) counts and totals the practitioner's OWN module
+    rows. It exposes strictly LESS than list_module_entries, which is
+    already on the surface and returns those rows verbatim — an aggregate
+    over readable data cannot reveal more than the data. Same class as
+    show_revenue and check_inventory. It has also produced a deliberate NO:
     the giving-statement reads are marked `sensitive` in action_registry and
     never reach here at all, which is the mechanism to reach for when the
     answer is no.
@@ -116,7 +121,7 @@ def test_the_exposed_read_verbs_and_nothing_else():
     Bump this ONLY together with a TOOL_SCHEMAS entry and a reason.
     """
     tools = mcp.exposed_tools()
-    assert len(tools) == 23, (
+    assert len(tools) == 24, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")

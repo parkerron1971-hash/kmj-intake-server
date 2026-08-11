@@ -10812,6 +10812,142 @@ async def handle_propose_module_from_intake(client, biz, action):
 
 
 
+
+async def handle_summarize_module(client, biz, action) -> Dict:
+    """Turn a module's rows into an answer. Pure read, no LLM.
+
+    Chief stored data beautifully and summarised none of it. A
+    practitioner with Bookings and Payments could not ask "what am I owed,
+    by stage" or "how many jobs finished this month" — the data was right
+    there and nothing counted it.
+
+    Deliberately ARITHMETIC, not a model call. Counting rows is not a
+    judgement, and routing it through an LLM would make a deterministic
+    fact cost money and vary between asks.
+
+    action: {module, group_by?: <select field>, sum?: <currency/number
+             field>, since?: YYYY-MM-DD, until?: YYYY-MM-DD}
+    """
+    import re as _re
+    from collections import OrderedDict
+
+    ref = (action.get("module") or action.get("module_id")
+           or action.get("slug") or "").strip()
+    if not ref:
+        return _fail("summarize_module", "which module? pass module=<slug>")
+
+    is_uuid = bool(_re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", ref))
+    q = f"/custom_modules?business_id=eq.{biz['id']}&select=*&limit=1"
+    q += f"&id=eq.{ref}" if is_uuid else f"&slug=eq.{ref}"
+    mods = await _sb(client, "GET", q) or []
+    if not mods:
+        return _fail("summarize_module", f"no module called '{ref}'")
+    module = mods[0]
+    fields = {f.get("name"): f for f in (module.get("schema") or {}).get("fields") or []
+              if isinstance(f, dict)}
+
+    group_by = (action.get("group_by") or "").strip() or None
+    sum_field = (action.get("sum") or "").strip() or None
+    for label, fname, wanted in (("group_by", group_by, ("select",)),
+                                 ("sum", sum_field, ("currency", "number"))):
+        if fname and fname not in fields:
+            return _fail("summarize_module",
+                         f"'{fname}' is not a field on {module.get('name')}")
+        if fname and fields[fname].get("type") not in wanted:
+            return _fail("summarize_module",
+                         f"{label} needs a {' or '.join(wanted)} field; "
+                         f"'{fname}' is {fields[fname].get('type')}")
+
+    # Default: group by the first select field, sum the first currency one.
+    # A summary nobody had to configure is the one a practitioner asks for.
+    if not group_by:
+        group_by = next((n for n, f in fields.items() if f.get("type") == "select"), None)
+    if not sum_field:
+        sum_field = next((n for n, f in fields.items() if f.get("type") == "currency"), None)
+
+    rows = await _sb(client, "GET",
+                     f"/module_entries?module_id=eq.{module['id']}"
+                     f"&select=data,created_at&limit=2000") or []
+
+    since, until = action.get("since"), action.get("until")
+    if since or until:
+        kept = []
+        for r in rows:
+            stamp = str(r.get("created_at") or "")[:10]
+            if since and stamp < str(since)[:10]:
+                continue
+            if until and stamp > str(until)[:10]:
+                continue
+            kept.append(r)
+        rows = kept
+
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    buckets: "OrderedDict[str, Dict[str, float]]" = OrderedDict()
+    total_sum = 0.0
+    # Bucket order follows the select's declared options, so a summary
+    # reads in workflow order rather than alphabetically or by luck.
+    if group_by:
+        for opt in (fields[group_by].get("options") or []):
+            buckets[str(opt)] = {"count": 0, "sum": 0.0}
+    for r in rows:
+        d = r.get("data") or {}
+        key = str(d.get(group_by) or "(not set)") if group_by else "all"
+        b = buckets.setdefault(key, {"count": 0, "sum": 0.0})
+        b["count"] += 1
+        if sum_field:
+            v = _num(d.get(sum_field))
+            b["sum"] += v
+            total_sum += v
+
+    shown = [(k, v) for k, v in buckets.items() if v["count"]]
+    name = module.get("name") or module.get("slug")
+    if not rows:
+        return {"type": "summarize_module",
+                "result": f"{name} has no rows yet, so there is nothing to total.",
+                "label": f"{name}: empty", "nav": None,
+                "summary": {"total_rows": 0, "buckets": []}}
+
+    def _money(x):
+        return f"${x:,.2f}"
+
+    parts = []
+    for k, v in shown:
+        seg = f"{k}: {v['count']}"
+        if sum_field:
+            seg += f" ({_money(v['sum'])})"
+        parts.append(seg)
+
+    headline = f"{len(rows)} {'row' if len(rows) == 1 else 'rows'}"
+    if sum_field:
+        headline += f", {_money(total_sum)} total"
+    if group_by:
+        headline += f" — by {fields[group_by].get('label') or group_by}"
+
+    return {
+        "type": "summarize_module",
+        "result": headline + (": " + "; ".join(parts) if parts else ""),
+        "label": f"📊 {name} — {headline}",
+        "nav": None,
+        "summary": {
+            "module": name,
+            "total_rows": len(rows),
+            "group_by": group_by,
+            "sum_field": sum_field,
+            "total": round(total_sum, 2) if sum_field else None,
+            "buckets": [{"key": k, "count": v["count"],
+                         "sum": round(v["sum"], 2) if sum_field else None}
+                        for k, v in shown],
+        },
+    }
+
+
 async def handle_add_module_field(client, biz, action) -> Dict:
     """Add a field to a module that already exists. ADDITIVE ONLY.
 
@@ -11258,6 +11394,7 @@ ACTION_HANDLERS = {
     "accept_module_spec":         handle_accept_module_spec,
     "inspect_module":             handle_inspect_module,
     "add_module_field":           handle_add_module_field,
+    "summarize_module":           handle_summarize_module,
     "reject_module_spec":         handle_reject_module_spec,
     "upgrade_module_archetype":   handle_upgrade_module_archetype,
     "draft_nurture":         handle_draft_nurture,
@@ -14324,6 +14461,8 @@ ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MOD
     — Adds an entry to a module. Use the module id from the CUSTOM MODULES context block.
   [ACTION:{{"type":"add_module_field","module":"bookings","name":"phone","type":"phone","label":"Phone"}}]
     — Adds ONE field to a module that already exists. Use when they ask for something the module is missing ("add a phone number to my bookings", "I need a due date on jobs"). ADDITIVE ONLY: there is no rename, retype or delete — those stay in the manual editor, because hiding a value the practitioner cannot see is not something to do from a chat message. Field types: text, textarea, select (needs options), date, number, checkbox, contact_link, url, email, phone, currency, rating, offering_ref (needs offering_categories), module_ref (needs module_slug naming the target module). Refuses if the field would stop the module displaying, and tells you why.
+  [ACTION:{{"type":"summarize_module","module":"payments","group_by":"status","sum":"amount","since":"2026-07-01"}}]
+    — Counts and totals a module's rows, broken down by a choice field. Use for "how many", "what am I owed", "what did I bring in last month", "how many are still open". group_by and sum are optional — it defaults to the module's first choice field and first money field, so a bare summarize_module answers most asks. This is arithmetic, not an estimate: report the numbers it returns, do not round them or add your own.
   [ACTION:{{"type":"inspect_module","module":"bookings"}}]
     — Checks whether a module actually displays and whether its automations can fire, and names the specific problem. Use when they say a module looks wrong, is empty, or "isn't working", BEFORE guessing. Omit `module` to check every module at once.
   [ACTION:{{"type":"list_module_entries","module_id":"<uuid>"}}]

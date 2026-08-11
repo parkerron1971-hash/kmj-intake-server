@@ -133,6 +133,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "contact_deep_dive":   _r("assembles one contact's history"),
     "inspect_module":      _r("checks a built module against the renderer's contract; "
                               "reads one custom_modules row, writes nothing"),
+    "summarize_module":    _r("counts and totals a module's own rows; arithmetic "
+                              "over data the caller can already read row by row"),
     "list_availability":   _r("reads the availability configuration"),
     "list_module_entries": _r("lists rows of a custom module"),
     "list_offerings":      _r("lists offerings"),

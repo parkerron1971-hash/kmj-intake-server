@@ -229,6 +229,21 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
               "slug": {"type": "string",
                        "description": "Module slug. Optional."}},
              [])),
+    "summarize_module": (
+        "Counts and totals the rows of one custom module — how many in each "
+        "state, and the money total if it has an amount field. Use for "
+        "'how many', 'what am I owed', 'what did I do last month'.",
+        _obj({"module": {"type": "string",
+                         "description": "Module slug or uuid."},
+              "group_by": {"type": "string",
+                           "description": "A choice field to break the counts down by. "
+                                          "Defaults to the module's first choice field."},
+              "sum": {"type": "string",
+                      "description": "A money or number field to total. Defaults to the "
+                                     "module's first money field."},
+              "since": {"type": "string", "description": "YYYY-MM-DD, inclusive."},
+              "until": {"type": "string", "description": "YYYY-MM-DD, inclusive."}},
+             ["module"])),
     "list_module_entries": (
         "Rows of one custom module. Modules are the practitioner's own data "
         "structures; name the module by slug or id.",
