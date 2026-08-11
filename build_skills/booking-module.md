@@ -27,10 +27,26 @@ DEFAULTS THAT EARN THEIR PLACE
   to it. A board with no status column will not render at all.
 
 TRIGGERS
-- `overdue` on the date field, with closed_statuses covering every finished
-  state (completed, cancelled, no_show). Miss one and the practitioner is
-  chased about appointments that already happened.
-- `new_entry` for the confirmation the client expects.
+Every trigger object needs BOTH `type` and `action`. A trigger missing
+either fails validation and the WHOLE proposal is rejected — not just that
+trigger. Copy this shape exactly:
+
+    "triggers": [
+      {"type": "overdue", "field": "appointment_at",
+       "action": "draft_reminder",
+       "template": "{{title}} is {{days_overdue}} days overdue"},
+      {"type": "new_entry", "action": "draft_acknowledgment",
+       "template": "New booking: {{title}}"}
+    ]
+
+`type` is one of new_entry, overdue, field_change. `action` is one of
+draft_acknowledgment, draft_reminder, draft_notification. It is `type`,
+never `event`.
+
+- Point `overdue` at the appointment date field, and put every finished
+  state in closed_statuses (completed, cancelled, no_show). Miss one and
+  the practitioner is chased about appointments that already happened.
+- `new_entry` sends the confirmation the client expects.
 
 DO NOT
 - Do not add a price field. Pricing belongs to the offering, and a second

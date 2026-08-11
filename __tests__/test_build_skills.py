@@ -175,12 +175,22 @@ def test_shipped_skills_only_reference_real_field_types():
     for s in bs.load_skills():
         # Backticked words are how these skills name a type.
         for token in re.findall(r"`([a-z_]+)`", s["body"]):
+            # Schema KEYS and conventional field names, as opposed to
+            # field TYPES. The skills name both, and only the second kind
+            # has to exist in the vocabulary.
             if token.endswith("_field") or token in {"status", "stage",
                                                      "closed_statuses",
                                                      "board_column",
                                                      "default_view",
                                                      "offering_categories",
-                                                     "created_at", "date"}:
+                                                     "created_at", "date",
+                                                     # keys of a trigger object
+                                                     "type", "action",
+                                                     "template", "field",
+                                                     # the key the model
+                                                     # wrongly invented, which
+                                                     # the skills now warn off
+                                                     "event"}:
                 continue
             assert token in known or "_" in token, (
                 f"skill {s['name']} names `{token}`, which is not a field "
@@ -240,3 +250,52 @@ def test_no_skill_block_when_nothing_applies(monkeypatch):
     system = captured.get("system", "")
     assert "APPLICABLE BUILD SKILLS" not in system
     assert system == msg._SYSTEM_PROMPT
+
+
+# ─── A skill that asks for triggers must show their shape ─────────────
+
+def test_a_skill_that_names_a_trigger_kind_shows_the_required_keys():
+    """THE REGRESSION THIS EXISTS FOR, caught by the eval harness on its
+    first live run.
+
+    Both reference examples in _SYSTEM_PROMPT show `"triggers": []` —
+    EMPTY. The model is never shown a populated trigger. The skills then
+    told it to ADD one ("`overdue` on the date field") without stating
+    the shape, so it invented {"event": "overdue", "field": ...}.
+    ModuleTrigger requires `type` and `action`, Pydantic rejected the
+    whole ProposalEnvelope, and Chief built NOTHING — strictly worse than
+    the empty-triggers module it produced before the skills existed.
+
+    Naming a trigger kind is an instruction to emit one. Any skill that
+    does so has to carry the keys, because the base prompt does not.
+    """
+    import module_vocabulary as mv
+
+    for s in bs.load_skills():
+        body = s["body"]
+        if not any(k in body for k in mv.TRIGGER_KINDS):
+            continue
+        assert '"type"' in body, (
+            f"skill {s['name']} names a trigger kind but never shows the "
+            f'required "type" key — the base prompt only ever shows '
+            f'"triggers": [], so the model has nothing to copy')
+        assert '"action"' in body, (
+            f"skill {s['name']} names a trigger kind but never shows the "
+            f'required "action" key')
+        assert '"event"' not in body, (
+            f"skill {s['name']} mentions \"event\" — that is the key the "
+            f"model wrongly invented; the field is \"type\"")
+
+
+def test_skills_only_name_real_trigger_actions():
+    """module_agent maps action -> agent_queue.action_type. An unknown
+    action still runs but falls through to 'other', so the practitioner's
+    queue loses the distinction between a reminder and an acknowledgment."""
+    import re
+
+    known = {"draft_acknowledgment", "draft_reminder", "draft_notification"}
+    for s in bs.load_skills():
+        for m in re.finditer(r'"action":\s*"([a-z_]+)"', s["body"]):
+            assert m.group(1) in known, (
+                f"skill {s['name']} uses action {m.group(1)!r}, which "
+                f"module_agent does not map — expected one of {sorted(known)}")
