@@ -1086,6 +1086,35 @@ def save_brand_kit(business_id: str, new_kit: Dict[str, Any]) -> Dict[str, Any]:
     current_kit = (business.get("settings") or {}).get("brand_kit")
     history = list(business.get("brand_kit_history") or [])
 
+    # PUBLISHED OVERRIDES MERGE, they do not replace.
+    #
+    # This function REPLACES settings.brand_kit wholesale, so every field
+    # the caller omits is dropped. The Brand Room sends only the override
+    # it just edited (that is the sparse design — store a value only
+    # where the owner disagreed), and it re-hydrates its local kit from
+    # the bundle after each save. The bundle exposes which fields are
+    # overridden but not their raw values, so the second edit of a
+    # session arrived carrying only itself and SILENTLY DELETED the
+    # first. Two edits, and the earlier one was gone.
+    #
+    # Merging here rather than making the caller round-trip the whole map
+    # keeps the reset mechanism intact: an empty string still deletes,
+    # because _normalize_brand_kit drops blanks after this merge.
+    prior_ov = (current_kit or {}).get("published_overrides")
+    if isinstance(prior_ov, dict) and prior_ov:
+        incoming = new_kit.get("published_overrides") if isinstance(new_kit, dict) else None
+        new_kit = dict(new_kit or {})
+        if isinstance(incoming, dict):
+            merged = dict(prior_ov)
+            merged.update(incoming)
+            new_kit["published_overrides"] = merged
+        else:
+            # No map at all — which is what EVERY save from the chapters
+            # above sends. Absence means "I am not editing these", not
+            # "clear them". Without this, editing a colour and pressing
+            # Save wiped every published override the owner had set.
+            new_kit["published_overrides"] = dict(prior_ov)
+
     if current_kit:
         history.insert(0, {
             "kit": current_kit,
