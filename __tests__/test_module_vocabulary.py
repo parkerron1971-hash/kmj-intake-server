@@ -216,3 +216,68 @@ def test_offering_categories_match_the_db_check_constraint():
         f"app vocabulary {sorted(mv.OFFERING_CATEGORIES)} != "
         f"DB CHECK {sorted(in_db)} — a write would fail at the database"
     )
+
+
+# ─── Served to the frontend ───────────────────────────────────────────
+# GET /module-specs/vocabulary is how the studio's builder stops guessing
+# what the backend allows. A TS union must exist at compile time, so the
+# frontend copy cannot be deleted — but it can be CHECKED against this.
+
+def test_as_dict_carries_all_four_vocabularies():
+    d = mv.as_dict()
+    assert set(d) == {"field_types", "view_kinds", "trigger_kinds",
+                      "offering_categories"}
+    assert d["field_types"] == list(mv.FIELD_TYPES)
+    assert d["view_kinds"] == list(mv.VIEW_KINDS)
+    assert d["trigger_kinds"] == list(mv.TRIGGER_KINDS)
+    assert d["offering_categories"] == list(mv.OFFERING_CATEGORIES)
+
+
+def test_as_dict_is_json_serializable():
+    """It is served over HTTP; a tuple that survives in Python and fails
+    at the wire would only show up in production."""
+    import json
+
+    assert json.loads(json.dumps(mv.as_dict())) == mv.as_dict()
+
+
+def test_the_vocabulary_endpoint_requires_auth_and_returns_the_list():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import module_spec_router as msr
+    from auth_supabase import require_user
+
+    app = FastAPI()
+    app.include_router(msr.router)
+
+    # Unauthenticated first — this is a platform constant, not tenant
+    # data, but every read in this service sits behind auth and this one
+    # should not be the exception that teaches otherwise.
+    assert TestClient(app).get("/module-specs/vocabulary").status_code in (401, 403)
+
+    class _User:
+        id = "u1"
+
+    app.dependency_overrides[require_user] = lambda: _User()
+    body = TestClient(app).get("/module-specs/vocabulary").json()
+
+    assert body["ok"] is True
+    assert body["vocabulary"] == mv.as_dict()
+    # The thing the frontend actually needs from it.
+    assert "offering_ref" in body["vocabulary"]["field_types"]
+
+
+def test_vocabulary_route_is_not_shadowed_by_a_path_param():
+    """/vocabulary sits on a router that also serves /{spec_id} shaped
+    routes. If one of those ever becomes a GET declared earlier, this
+    endpoint quietly starts resolving a spec named "vocabulary"."""
+    import module_spec_router as msr
+
+    paths = [r.path for r in msr.router.routes]
+    vocab_i = paths.index("/module-specs/vocabulary")
+    for i, p in enumerate(paths):
+        if i < vocab_i and "{" in p and "GET" in getattr(
+                msr.router.routes[i], "methods", set()):
+            raise AssertionError(
+                f"GET {p} is declared before /vocabulary and will shadow it")
