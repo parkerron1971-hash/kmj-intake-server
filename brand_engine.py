@@ -198,6 +198,18 @@ PUBLISHED_OVERRIDE_FIELDS = (
     "signature_name", "signature_title", "signature_business_name",
 )
 
+# ── PRINT COLOURS (Brandpad pattern) ─────────────────────────────────
+# Hex is truth. RGB is exactly derivable from it and never needs storing.
+# CMYK can only be APPROXIMATED without the press profile and the stock,
+# and Pantone cannot be derived at all — we ship no PMS library. So the
+# two a printer actually hands back are the two the owner can store.
+#
+# Free text on purpose: a printer says "C0 M13 Y100 K0, uncoated" or
+# "PMS 116 C", and forcing that into four integers would lose the half
+# of it that matters.
+PRINT_COLOR_ROLES = ("primary", "secondary", "accent", "background", "text")
+PRINT_COLOR_FIELDS = ("cmyk", "pantone")
+
 
 def _normalize_brand_kit(kit: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -247,6 +259,34 @@ def _normalize_brand_kit(kit: Dict[str, Any]) -> Dict[str, Any]:
     # without needing a second endpoint. A blank legal footer stored as
     # an override would silently strip a practitioner's disclaimers from
     # every contract, which is the failure worth designing against.
+    # PRINT COLOURS. Same shape of guard as the published overrides
+    # below: whitelisted roles and fields, trimmed, length capped, and a
+    # blank DELETES rather than storing an empty string — so clearing a
+    # value falls back to the derived approximation instead of printing
+    # nothing where a CMYK build should be.
+    raw_pc = out.get("print_colors")
+    if isinstance(raw_pc, dict):
+        clean_pc: Dict[str, Any] = {}
+        for role, vals in raw_pc.items():
+            if role not in PRINT_COLOR_ROLES or not isinstance(vals, dict):
+                continue
+            entry = {}
+            for f in PRINT_COLOR_FIELDS:
+                v = vals.get(f)
+                if not isinstance(v, str):
+                    continue
+                v = v.strip()[:60]
+                if v:
+                    entry[f] = v
+            if entry:
+                clean_pc[role] = entry
+        if clean_pc:
+            out["print_colors"] = clean_pc
+        else:
+            out.pop("print_colors", None)
+    elif "print_colors" in out:
+        out.pop("print_colors", None)
+
     raw_ov = out.get("published_overrides")
     if isinstance(raw_ov, dict):
         clean_ov = {}
@@ -301,6 +341,9 @@ def _compose_design(business: Dict[str, Any]) -> Dict[str, Any]:
         # Shipped as a fact rather than as a list, so the Brand Room
         # cannot hold a second copy of GENERIC_DISPLAY_FACES that drifts
         # from the one the composer actually branches on.
+        # What the OWNER stored, per role. Absent roles/fields mean the
+        # book falls back to its derived approximation and says so.
+        "print_colors": brand_kit.get("print_colors") or {},
         "font_heading_generic": brand_dna.is_generic_display(
             font_pair.get("heading") or brand_kit.get("font_heading") or ""
         ),
@@ -519,7 +562,7 @@ def _empty_bundle(business_id: str) -> Dict[str, Any]:
                    # must never have to guess whether the key exists on one
                    # bundle shape and not the other.
                    "fonts_owner_set": False, "fonts_locked": False,
-                   "font_heading_generic": False})
+                   "font_heading_generic": False, "print_colors": {}})
     return {
         "business": {"id": business_id, "name": "Unknown", "type": "custom",
                      "subtype": None, "slug": None, "tagline": None,
