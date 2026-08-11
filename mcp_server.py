@@ -220,6 +220,15 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "The booking availability configuration — weekly hours, overrides, "
         "lead time, slot size.",
         _NO_ARGS),
+    "inspect_module": (
+        "Health check on the practitioner's custom modules: does each one "
+        "actually display, and will its automations fire? Names the specific "
+        "problems. Omit both arguments to check every module.",
+        _obj({"module_id": {"type": "string",
+                            "description": "Module uuid. Optional."},
+              "slug": {"type": "string",
+                       "description": "Module slug. Optional."}},
+             [])),
     "list_module_entries": (
         "Rows of one custom module. Modules are the practitioner's own data "
         "structures; name the module by slug or id.",

@@ -46,6 +46,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from auth_supabase import AuthedUser, require_user
+import module_vocabulary
 import sb_clients
 
 logger = logging.getLogger("offerings_router")
@@ -80,7 +81,9 @@ def _owner_for_offering(offering_id: str) -> Optional[str]:
 
 
 _SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-_VALID_CATEGORIES = {"service", "session", "event", "course", "product", "package", "custom"}
+# Derived from the one vocabulary declaration (module_vocabulary.py), not
+# a hand-kept copy of it beside the Literal it is supposed to enforce.
+_VALID_CATEGORIES = module_vocabulary.VALID_OFFERING_CATEGORIES
 
 
 def _refresh_composed_site(business_id: Optional[str]) -> None:

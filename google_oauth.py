@@ -372,8 +372,38 @@ async def google_callback(code: Optional[str] = None,
                                        "try again.")
 
     logger.info("[GOOGLE] connected mailbox for business=%s", business_id)
-    return _result_html(True, f"{google_email} is connected. Chief can now read "
-                              f"mail sent to this address.")
+    # What is true at this point is that the grant is stored and revocable.
+    # Nothing reads the mailbox yet — there is no ingest, so promising that
+    # "Chief can now read mail sent to this address" would leave the
+    # practitioner waiting on a feed that was never going to arrive, and
+    return _result_html(True, f"{google_email} is connected. New mail arriving here "
+                              f"will start appearing in your Email Hub within a few "
+                              f"minutes. You can disconnect any time.")
+
+
+@router.get("/mailbox/messages")
+async def mailbox_messages(business_id: str, limit: int = 50,
+                           user: AuthedUser = Depends(require_user)):
+    """The Email Hub's window onto a connected mailbox.
+
+    This endpoint exists because mailbox_messages has RLS on with zero
+    policies — the frontend cannot read the table directly, deliberately.
+    A seat member holding a valid JWT gets nothing from PostgREST, and
+    gets 403 here. That is the owner-only decision enforced in the two
+    places that can actually enforce it, rather than by hiding a tab.
+
+    body_text is included: the practitioner is reading their own mail.
+    The selection policy governs what reaches the MODEL, not what its
+    owner is allowed to see.
+    """
+    _require_owner(business_id, user)
+    capped = max(1, min(int(limit or 50), 200))
+    rows = sb_clients.sb_get_as_service(
+        f"/mailbox_messages?business_id=eq.{business_id}"
+        f"&order=received_at.desc&limit={capped}"
+        f"&select=id,google_email,from_email,from_name,subject,body_text,"
+        f"received_at,read,contact_id") or []
+    return {"messages": rows, "count": len(rows)}
 
 
 @router.get("/connect/google/status")
@@ -385,7 +415,12 @@ async def google_status(business_id: str,
     _require_owner(business_id, user)
     rows = sb_clients.sb_get_as_service(
         f"/google_mailboxes?business_id=eq.{business_id}"
-        f"&select=google_email,status,last_error,connected_at,updated_at"
+        # last_synced_at is the difference between "connected" and
+        # "working". A grant can be stored and valid while the sync has
+        # not completed in days, and those two states look identical to a
+        # practitioner staring at an empty list — silence is what a dead
+        # feed looks like. The card cannot say so unless it is told.
+        f"&select=google_email,status,last_error,connected_at,updated_at,last_synced_at"
         f"&order=connected_at.desc") or []
     return {"connected": bool(rows), "mailboxes": rows}
 

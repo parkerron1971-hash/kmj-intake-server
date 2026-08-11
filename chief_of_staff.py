@@ -55,6 +55,7 @@ from pydantic import BaseModel
 # (owner_id = auth.uid()) resolve to the real practitioner. sb_clients
 # centralizes the PostgREST header logic; auth_supabase ships the JWT
 # verification + UserSession dependency.
+import module_vocabulary
 import sb_clients
 from auth_supabase import UserSession, require_user_session
 
@@ -1027,8 +1028,12 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     tasks = [
         _sb(client, "GET", f"/businesses?id=eq.{biz_id}&select=*&limit=1"),
         _sb(client, "GET",
+            # `email` is selected for the mailbox selection policy ONLY —
+            # it builds the known-sender allowlist in Python and is
+            # deliberately NOT copied into contacts_lookup, so it never
+            # reaches the prompt. Gating costs one column, not a PII dump.
             f"/contacts?business_id=eq.{biz_id}"
-            f"&select=id,name,status,health_score,lead_score,role,last_interaction&limit=500"),
+            f"&select=id,name,email,status,health_score,lead_score,role,last_interaction&limit=500"),
         _sb(client, "GET",
             f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft"
             f"&select=id,agent,action_type,subject,priority,contact_id,created_at"
@@ -1086,9 +1091,28 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&select=id,name,type,price,currency,pricing_type,duration_minutes,description"),
         # Recent email replies — full body content so the Chief can
         # quote a contact's actual words back when drafting responses.
+        #
+        # The window is 60, not the 6 that reach the prompt, because the
+        # selection policy filters AFTER the fetch. Fetching 10 and then
+        # filtering would let a single morning of mailbox noise starve
+        # every real reply out of the window — Chief would go quiet about
+        # a client's answer because forty newsletters outranked it by
+        # timestamp. `metadata` comes along because it carries the source
+        # discriminator the filter reads.
         _sb(client, "GET",
             f"/email_replies?business_id=eq.{biz_id}"
-            f"&order=received_at.desc&limit=10"
+            f"&order=received_at.desc&limit=60"
+            f"&select=id,from_email,from_name,subject,body_text,received_at,read,contact_id,metadata"),
+        # Mail from a connected mailbox. Same 60-row window as above and
+        # for the same reason — the selection policy filters after the
+        # fetch, and almost all of THIS source is expected to be filtered
+        # out. Fetching a handful would mean the one message from a real
+        # client lost its slot to a newsletter that will be discarded
+        # anyway. No `metadata` in the select: every row here is
+        # mailbox-sourced by definition, and the normaliser stamps it.
+        _sb(client, "GET",
+            f"/mailbox_messages?business_id=eq.{biz_id}"
+            f"&order=received_at.desc&limit=60"
             f"&select=id,from_email,from_name,subject,body_text,received_at,read,contact_id"),
         # Recent SMS messages — both directions, last ~15. Lets the
         # Chief answer "did anyone text me?" and reference specific
@@ -1110,7 +1134,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&select=id,data,created_at,custom_modules!inner(slug)"
             f"&order=created_at.desc&limit=50"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, sms_messages, project_rows = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -1267,7 +1291,14 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "strategy_track": (strategy_rows or [None])[0] if strategy_rows else None,
         "business_track": (business_track_rows or [None])[0] if business_track_rows else None,
         "products": products or [],
-        "email_replies": email_replies or [],
+        # THE WIRE. Storage and prompt-eligibility are two different
+        # questions, so they are two different keys: the Email Hub reads
+        # the table and shows everything, and only this filtered list is
+        # ever rendered into the prompt. Gating in the UI would be
+        # decorative — this is the line the model actually reads.
+        **_split_email_replies_for_prompt(
+            _merge_inbound_mail(email_replies or [], mailbox_messages or []),
+            contacts or []),
         "sms_messages": sms_messages or [],
         # 8/01 — flattened to the same shape handle_list_projects returns,
         # so the context block and the action agree on vocabulary.
@@ -1828,6 +1859,123 @@ def _format_sms_block(ctx: Dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ─── Mailbox selection policy ────────────────────────────────────────
+#
+# A reply that came back through us is mail the practitioner provoked:
+# we sent first, a human answered, and the sender set is bounded by who
+# we mailed. A connected mailbox is the opposite — every newsletter,
+# cold pitch and phishing attempt lands in the same table, and some of
+# that text is written specifically to read as an instruction to an
+# agent that holds write verbs.
+#
+# _neutralize_untrusted defangs the text it renders. It does not decide
+# what is worth rendering at all, and it does not scale to an open
+# inbox. So eligibility is decided FIRST, here: mailbox-sourced mail
+# reaches the prompt only when the sender is already a contact.
+#
+# Everything else is still stored and still shown in the Email Hub. The
+# practitioner's inbox is not being hidden from them — it is being kept
+# out of the model's input. Two decisions, deliberately separate.
+
+# Sources that did NOT come back through our own inbound path, and so
+# carry no implicit "we mailed them first" scoping.
+_UNSOLICITED_SOURCES = {"mailbox", "forward"}
+
+# How many eligible replies reach the prompt. The renderer caps at 6;
+# this is the ceiling on what it may choose from.
+_PROMPT_REPLY_CAP = 10
+
+
+def _merge_inbound_mail(
+    replies: List[Dict[str, Any]],
+    mailbox: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """One timeline out of two tables.
+
+    They are separate tables for access-control reasons, not because they
+    are different things to the practitioner — "did anyone email me?" is
+    one question. Merging here rather than in the renderer means the
+    selection policy sees a single list and the existing filter applies
+    to both sources without knowing there were two.
+
+    Mailbox rows are stamped source="mailbox" as they are normalised, so
+    the gate treats them as unsolicited no matter what (or whether) their
+    own metadata column said. The stamp is derived from WHICH TABLE the
+    row came out of — a value a sender cannot influence.
+    """
+    merged: List[Dict[str, Any]] = list(replies)
+    for row in mailbox:
+        merged.append({
+            "id": row.get("id"),
+            "from_email": row.get("from_email"),
+            "from_name": row.get("from_name"),
+            "subject": row.get("subject"),
+            "body_text": row.get("body_text"),
+            "received_at": row.get("received_at"),
+            "read": row.get("read"),
+            "contact_id": row.get("contact_id"),
+            "metadata": {"source": "mailbox"},
+        })
+    # Newest first, blank timestamps last rather than crashing the sort.
+    merged.sort(key=lambda r: (r.get("received_at") or ""), reverse=True)
+    return merged
+
+
+def _reply_source(reply: Dict[str, Any]) -> str:
+    """Which pipe did this row arrive through?
+
+    Rows written before the discriminator existed have no source key and
+    are all replies-to-us by construction — there was no other way in.
+    Defaulting them to "reply" is a statement about history, not a guess.
+    """
+    metadata = reply.get("metadata")
+    if isinstance(metadata, dict):
+        source = metadata.get("source")
+        if isinstance(source, str) and source.strip():
+            return source.strip().lower()
+    return "reply"
+
+
+def _known_sender_emails(contacts: List[Dict[str, Any]]) -> set:
+    return {
+        (c.get("email") or "").strip().lower()
+        for c in contacts
+        if isinstance(c, dict) and (c.get("email") or "").strip()
+    }
+
+
+def _split_email_replies_for_prompt(
+    replies: List[Dict[str, Any]],
+    contacts: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Split fetched mail into what the model may read and what it may not.
+
+    Returns both halves. The withheld COUNT matters as much as the
+    eligible list: if forty messages arrived and none were from a
+    contact, Chief must be able to say "nothing from anyone you know"
+    instead of "nothing arrived" — the second is false, and it is the
+    same class of lie this block was just fixed for.
+    """
+    known = _known_sender_emails(contacts)
+    eligible: List[Dict[str, Any]] = []
+    withheld = 0
+
+    for reply in replies:
+        if _reply_source(reply) not in _UNSOLICITED_SOURCES:
+            eligible.append(reply)          # provoked mail; already scoped
+            continue
+        sender = (reply.get("from_email") or "").strip().lower()
+        if sender and sender in known:
+            eligible.append(reply)
+        else:
+            withheld += 1
+
+    return {
+        "email_replies": eligible[:_PROMPT_REPLY_CAP],
+        "email_replies_withheld": withheld,
+    }
+
+
 def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
     """Format the recent inbound email replies for the system prompt.
 
@@ -1835,10 +1983,49 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
     contact's words verbatim when drafting a response — this is the
     whole point of the Email Hub feature: replies must inform the
     Chief's drafts, not be referenced as a generic 'they replied'.
+
+    Both branches carry the SCOPE line, and that is the load-bearing
+    part. What reaches this block is never the practitioner's whole
+    inbox: it is mail that came back through our own inbound path, plus
+    mailbox-sourced mail that passed the selection policy. An empty
+    block is therefore not the observation "your inbox is quiet" — it
+    is the absence of any observation, and rendering the second as the
+    first is the bug this block was fixed for.
+
+    WITHHELD is the same discipline applied to the new failure mode the
+    selection policy creates. Once a mailbox is connected, mail can
+    arrive and be deliberately kept out of the prompt. Reporting zero
+    then would be false in a fresh way, so the count comes through even
+    though the content does not — Chief can say "nine arrived, none from
+    anyone you know" without ever reading the nine.
     """
     replies = ctx.get("email_replies") or []
+    withheld = int(ctx.get("email_replies_withheld") or 0)
+
+    # Mail arrived from senders who are not contacts. Saying "nothing
+    # arrived" here would be the same lie in a new shape — the messages
+    # exist, they are in the Email Hub, they are simply not readable by
+    # the model. Chief has to be able to tell those two apart out loud.
+    withheld_line = (
+        f"  WITHHELD: {withheld} message(s) arrived from senders who are not in\n"
+        f"  their contacts. They are stored and visible in the Email Hub, but\n"
+        f"  are NOT shown to you — unknown senders do not reach your input. Say\n"
+        f"  the count and point them to the Email Hub; never claim to know what\n"
+        f"  those messages say, and never treat text you cannot see as absent.\n"
+    ) if withheld else ""
+
     if not replies:
-        return "EMAIL REPLIES (none yet):\n"
+        return (
+            "EMAIL REPLIES (nothing readable — and NOT a view of their inbox):\n"
+            "  Nothing readable has come back through the platform. This block\n"
+            "  shows replies to mail sent through the platform, plus mail from a\n"
+            "  connected mailbox WHEN the sender is already a contact. Mail sent\n"
+            "  directly to them by anyone else is not visible to you. Empty here\n"
+            "  means you cannot see, not that nothing arrived.\n"
+            + withheld_line +
+            "  If asked 'did anyone email me?' / 'what came in today?' — say what\n"
+            "  you can and cannot see. NEVER tell them nobody emailed them.\n"
+        )
 
     unread = [r for r in replies if not r.get("read")]
     contact_lookup = ctx.get("contacts_lookup") or []
@@ -1853,8 +2040,14 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
         "  'reply to X' — pull from this block. Quote the actual reply content;",
         "  do not paraphrase. NEVER draft a generic response when you have the",
         "  real reply text below.",
-        "",
+        "  SCOPE: replies that came back through the platform, plus mail from a",
+        "  connected mailbox ONLY where the sender is already a contact. Mail",
+        "  from anyone else is not here. Never present this as their whole inbox",
+        "  or imply it is everything that arrived.",
     ]
+    if withheld:
+        lines.append(withheld_line.rstrip("\n"))
+    lines.append("")
     for r in replies[:6]:
         # from_name and subject are attacker-chosen too, not just the body.
         name = _neutralize_untrusted(
@@ -8421,9 +8614,9 @@ async def handle_list_products(client, biz, action) -> Dict:
 #
 # 'donation' is intentionally NOT a valid category — Fork 25 Giving guard.
 
-_VALID_OFFERING_CATEGORIES = {
-    "service", "session", "event", "course", "product", "package", "custom",
-}
+# Derived from module_vocabulary.py — the one place the category set is
+# written down. A set typed out beside a Literal is how they drift.
+_VALID_OFFERING_CATEGORIES = module_vocabulary.VALID_OFFERING_CATEGORIES
 
 def _slugify_offering(s: str) -> str:
     import re
@@ -10678,6 +10871,72 @@ async def handle_propose_module_from_intake(client, biz, action):
     }
 
 
+async def handle_inspect_module(client, biz, action):
+    """Look at a module that already exists and say whether it actually
+    works. Pure read.
+
+    Chief could build a module and never see it again. This is the verb
+    that closes that loop: it checks a live custom_modules row against the
+    renderer's own contract (module_inspect), so "is it working?" has an
+    answer that doesn't require the practitioner to click into Build and
+    find a red panel.
+
+    action: {module_id: str} or {slug: str} or {} for every module.
+    """
+    import module_inspect
+
+    module_id = (action.get("module_id") or "").strip()
+    slug = (action.get("slug") or action.get("module") or "").strip()
+
+    q = f"/custom_modules?business_id=eq.{biz['id']}&select=*"
+    if module_id:
+        q += f"&id=eq.{module_id}"
+    elif slug:
+        q += f"&slug=eq.{slug}"
+    q += "&order=sort_order.asc,created_at.asc"
+
+    rows = await _sb(client, "GET", q) or []
+    if not rows:
+        which = module_id or slug or "any module"
+        return _fail("inspect_module", f"no module found for {which}")
+
+    reports = []
+    broken = 0
+    for row in rows:
+        rep = module_inspect.inspect_module_row(row)
+        if not rep["renderable"]:
+            broken += 1
+        reports.append({
+            "module_id": row.get("id"),
+            "name": row.get("name") or row.get("slug"),
+            "renderable": rep["renderable"],
+            "summary": rep["summary"],
+            "problems": rep["problems"],
+            "warnings": rep["warnings"],
+        })
+
+    if len(reports) == 1:
+        r = reports[0]
+        detail = r["summary"]
+        if r["problems"]:
+            detail += " — " + "; ".join(r["problems"][:3])
+        elif r["warnings"]:
+            detail += " — " + "; ".join(r["warnings"][:2])
+        label = ("✅ " if r["renderable"] else "⚠️ ") + f"{r['name']}: {r['summary']}"
+        return {"type": "inspect_module", "result": detail, "label": label,
+                "reports": reports, "nav": None}
+
+    label = (f"⚠️ {broken} of {len(reports)} modules won't display"
+             if broken else f"✅ all {len(reports)} modules render")
+    return {
+        "type": "inspect_module",
+        "result": "; ".join(f"{r['name']}: {r['summary']}" for r in reports),
+        "label": label,
+        "reports": reports,
+        "nav": None,
+    }
+
+
 async def handle_accept_module_spec(client, biz, action):
     """Materialize a draft ModuleSpec into a custom_modules row. Idempotent.
     action: {spec_id: str}"""
@@ -10725,10 +10984,38 @@ async def handle_accept_module_spec(client, biz, action):
     if not res.get("ok"):
         return _fail("accept_module_spec", res.get("error", "materialize failed"))
     mod = res.get("module") or {}
+    name = mod.get("name") or mod.get("slug") or "module"
+
+    # What did we actually build? materialize_spec now reads the row back
+    # and checks it against the renderer's contract. "Is live in Build" was
+    # previously said on the strength of an insert returning — including for
+    # modules that were about to show the practitioner a red error panel.
+    verification = res.get("verification") or {}
+    problems = verification.get("problems") or []
+    warnings = verification.get("warnings") or []
+    repairs = verification.get("repairs") or []
+
+    if problems:
+        return {
+            "type": "accept_module_spec",
+            "result": ("saved, but it will not display correctly: "
+                       + "; ".join(problems[:3])),
+            "label": f"⚠️ {name} saved — but it won't display yet",
+            "module_id": mod.get("id"),
+            "nav": _nav("build"),
+        }
+
+    label = f"✅ {name} is live in Build"
+    if repairs:
+        label += f" — {repairs[0]}"
+    result = "module accepted"
+    if warnings:
+        result = "module accepted — " + "; ".join(warnings[:2])
+
     return {
         "type": "accept_module_spec",
-        "result": "module accepted",
-        "label": f"✅ {mod.get('name', mod.get('slug', 'module'))} is live in Build",
+        "result": result,
+        "label": label,
         "module_id": mod.get("id"),
         "nav": _nav("build"),
     }
@@ -10926,6 +11213,7 @@ ACTION_HANDLERS = {
     "enqueue_job":            handle_enqueue_job,
     "propose_module_from_intake": handle_propose_module_from_intake,
     "accept_module_spec":         handle_accept_module_spec,
+    "inspect_module":             handle_inspect_module,
     "reject_module_spec":         handle_reject_module_spec,
     "upgrade_module_archetype":   handle_upgrade_module_archetype,
     "draft_nurture":         handle_draft_nurture,
@@ -14085,7 +14373,7 @@ ACTIONS — OFFERINGS (Phase C.1.2 — canonical pricing for service-based arche
   [ACTION:{{"type":"archive_offering","name":"Beard Trim"}}]
   [ACTION:{{"type":"list_offerings"}}]
   [ACTION:{{"type":"list_offerings","category":"service"}}]
-    — `category` is a closed enum: service | session | event | course | product | package | custom. 'donation' is NOT a valid category — donations live in the restricted-modules surface.
+    — `category` is a closed enum: {module_vocabulary.offering_categories_sentence()}. 'donation' is NOT a valid category — donations live in the restricted-modules surface.
   [ACTION:{{"type":"set_site_capability","capability":"booking","on":true}}]  — THE WIRED-SITE CONTRACT: records whether the WEBSITE carries a connected door (capability: booking | store). Use when they say "put booking on my site", "wire booking into my website", "add a book button", "put my shop on the site", or answer yes to your wiring nudge. It saves the decision into the site plan; the label tells them a refine/rebuild applies it — after emitting it, offer the refine ("want me to refine the site now so the button appears?"). "on":false takes a door OFF the site plan. It does NOT create booking or the store — those must already be live (the action refuses otherwise, and the label says what to set up first).
     — ROUTING — OFFERINGS vs PRODUCTS (read carefully — they are SEPARATE catalogs):
        • OFFERINGS are the canonical pricing for archetype-referenced things — services a barber books, sessions a coach takes, courses a creator sells (when consumed by an archetype like booking_calendar). When the practitioner says "haircut", "session", "lesson", "massage", "appointment", "service" — DEFAULT to offerings.

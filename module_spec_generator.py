@@ -30,6 +30,17 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+import build_skills
+import module_inspect
+import module_vocabulary
+# The one declaration of the module vocabulary. Re-exported from this
+# module because importers have referred to these names here for months.
+from module_vocabulary import (  # noqa: F401
+    FieldType,
+    ViewKind,
+    TriggerKind,
+    OfferingCategory,
+)
 import sb_clients
 
 logger = logging.getLogger("module_spec_generator")
@@ -43,25 +54,16 @@ if not logger.handlers:
 # ──────────────────────────────────────────────────────────────
 # ModuleSpec — what the LLM fills + what materializes
 # ──────────────────────────────────────────────────────────────
-# Field types mirror useCustomModules.FieldType exactly — drift would mean
-# DynamicModule rejects the schema.
-
-FieldType = Literal["text", "textarea", "select", "date", "number",
-                    "checkbox", "contact_link", "url", "email",
-                    # Phase C.1.2 — references an offerings row by id.
-                    # Widget resolves the dropdown from offerings filtered
-                    # by the field's offering_categories constraint.
-                    "offering_ref"]
-ViewKind = Literal["list", "board"]
-TriggerKind = Literal["new_entry", "overdue", "field_change"]
-
-# Phase C.1.2 — closed enum mirroring the offerings.category CHECK constraint.
-# Mirrored to TS in src/core/types/archetypes.gen.ts. 'donation' is
-# intentionally NOT a category — donations live in the restricted-modules
-# surface (Fork 25 Giving guard).
-OfferingCategory = Literal[
-    "service", "session", "event", "course", "product", "package", "custom"
-]
+# The module vocabulary — FieldType, ViewKind, TriggerKind,
+# OfferingCategory — used to be declared right here, and re-typed by hand
+# in a dozen places besides. It now lives once in module_vocabulary.py
+# and is imported at the top of this file.
+#
+# The copy that actually mattered was the prose list inside
+# _SYSTEM_PROMPT, which never learned about offering_ref — so the model
+# was never told it could use a type this Literal had allowed for months.
+# The prompt interpolates the vocabulary now; see _SYSTEM_PROMPT below
+# and test_module_vocabulary.py, which fails if a word is missing from it.
 
 
 class ModuleField(BaseModel):
@@ -706,12 +708,16 @@ for new specs — that's pre-C.1.2 read-back compat only):
 """.strip()
 
 
+# NOTE: a plain string with __TOKEN__ placeholders substituted at the end,
+# NOT an f-string. The prompt is full of literal JSON examples, and every
+# brace in them would have to be doubled to make it one — a large, silent
+# footgun for whoever edits the prompt next.
 _SYSTEM_PROMPT = """You design custom data modules for solo practitioners. Given a free-text \
 intake answer describing a tracking/workflow need, you output a JSON envelope \
 containing one or more ModuleSpecs plus your decomposition reasoning. Modules \
-will be rendered by a generic schema-driven renderer (list + kanban views; \
-field types: text, textarea, select, date, number, checkbox, contact_link, \
-url, email) and rules in workflows[] will be materialized into a workflow engine.
+will be rendered by a generic schema-driven renderer (views: __VIEW_KINDS__; \
+field types: __FIELD_TYPES__) \
+and rules in workflows[] will be materialized into a workflow engine.
 
 ═══════════════════════════════════════════════════════════════════════
 VERTICAL AWARENESS — open knowledge inside a closed archetype (NT8f)
@@ -1016,6 +1022,18 @@ Output STRICT JSON only matching this envelope:
 No markdown, no commentary, no leading text.
 """
 
+# The vocabulary reaches the model HERE. Before this, the prompt carried a
+# hand-typed field-type list that had gone stale (no offering_ref), which
+# meant the model could not emit a type the validator had accepted for
+# months. test_module_vocabulary.py asserts every word survives this
+# substitution.
+_SYSTEM_PROMPT = (
+    _SYSTEM_PROMPT
+    .replace("__FIELD_TYPES__", module_vocabulary.field_types_sentence())
+    .replace("__VIEW_KINDS__", module_vocabulary.view_kinds_sentence())
+    .replace("__TRIGGER_KINDS__", module_vocabulary.trigger_kinds_sentence())
+)
+
 
 _USER_TEMPLATE = """Practitioner business: {business_name} (type: {business_type})
 
@@ -1081,13 +1099,32 @@ def generate_module_proposal(
     if extra_guidance:
         user += ("\n\nAdditional practitioner guidance (use to revise the design "
                  "and update decomposition_reasoning):\n" + extra_guidance.strip())
+    # Build skills — the guidance for THIS kind of module, selected
+    # deterministically (no model call) and appended only when it applies.
+    # Empty string when nothing matches, which is the common case and costs
+    # nothing. A skill can never remove or override what _SYSTEM_PROMPT
+    # already establishes; it only refines it.
+    try:
+        selected_skills = build_skills.select_skills(
+            intake_excerpt, business.get("type", ""))
+    except Exception as _skill_err:          # never break a build over this
+        logger.warning(f"[skills] selection failed (continuing): {_skill_err}")
+        selected_skills = []
+    skill_block = build_skills.skills_block(selected_skills)
+    system_prompt = (
+        f"{_SYSTEM_PROMPT}\n\n{skill_block}" if skill_block else _SYSTEM_PROMPT
+    )
+    if selected_skills:
+        logger.info("[skills] attached: "
+                    + ", ".join(s["name"] for s in selected_skills))
+
     try:
         client = llm_call.sdk_client(key=api_key)
         msg = client.messages.create(
             model=GENERATOR_MODEL,
             max_tokens=GENERATOR_MAX_TOKENS,
             temperature=0.4,
-            system=_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": user}],
         )
         raw = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
@@ -1594,13 +1631,24 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
     if refused:
         return refused
 
+    # ─── Repair before writing ────────────────────────────────────────
+    # Narrow, unambiguous fixes only (see module_inspect.repair_schema).
+    # The case that matters: views:['board'] with no usable board_column
+    # materializes fine and then makes DynamicModule replace the ENTIRE
+    # module with a red "schema is invalid" panel. Writing that and
+    # announcing "is live in Build" is the failure this pass exists to end.
+    repaired_schema, repair_notes = module_inspect.repair_schema(
+        spec.get("schema") or {"fields": []})
+    if repair_notes:
+        logger.info(f"[inspect] repaired spec {spec_id}: {'; '.join(repair_notes)}")
+
     # Common shape used for both fresh-insert AND upgrade UPDATE.
     write_payload = {
         "name": spec.get("name") or slug,
         "slug": slug,
         "description": spec.get("description"),
         "icon": spec.get("icon") or "📋",
-        "schema": spec.get("schema") or {"fields": []},
+        "schema": repaired_schema,
         "agent_config": spec.get("agent_config") or {"enabled": True, "triggers": []},
         "is_active": True,
         # Archetype layer (Phase C.1). Existing rows keep defaults
@@ -1635,9 +1683,16 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
             merged_ac["__deprecated_services"] = legacy_services
             merged_ac["__deprecated_pre_c12"] = True
             write_payload = {**write_payload, "agent_config": merged_ac}
-        sb_clients.sb_patch_as_service(
+        # VERIFY THE WRITE LANDED. sb_patch_as_service returns None on a
+        # 4xx; discarding it meant a rejected upgrade still fell through to
+        # ok:True with the target's own id, and Chief announced a refined
+        # module that was never refined.
+        patched = sb_clients.sb_patch_as_service(
             f"/custom_modules?id=eq.{upgrade_target}", write_payload
         )
+        if not patched:
+            return {"ok": False,
+                    "error": "upgrade write was rejected — the module is unchanged"}
         module_id = upgrade_target
     else:
         # ─── C.1.5 Plan A — single-instance archetype guard (M3-δ) ─────
@@ -1710,10 +1765,25 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
         except Exception as _gap_err:
             logger.warning(f"library_gap_log insert failed (non-blocking): {_gap_err}")
 
+    # ─── Look at what we actually built ───────────────────────────────
+    # Read the row BACK and inspect it against the renderer's own contract.
+    # Until this landed, materialize reported success on the strength of
+    # the insert returning, and Chief said "is live in Build" over a module
+    # that could be about to show the practitioner a red error panel.
     mod = sb_clients.sb_get_as_service(
         f"/custom_modules?id=eq.{module_id}&select=*&limit=1") or []
-    return {"ok": True, "spec_id": spec_id, "module": mod[0] if mod else None,
-            "workflow_ids": workflow_ids}
+    module_row = mod[0] if mod else None
+
+    verification = module_inspect.inspect_module_row(module_row)
+    if repair_notes:
+        verification["repairs"] = repair_notes
+    if not verification["renderable"]:
+        logger.warning(
+            f"[inspect] materialized module {module_id} will NOT render: "
+            f"{'; '.join(verification['problems'])}")
+
+    return {"ok": True, "spec_id": spec_id, "module": module_row,
+            "workflow_ids": workflow_ids, "verification": dict(verification)}
 
 
 def _log_library_gap_from_spec(business_id: str, spec_row: Dict[str, Any],
