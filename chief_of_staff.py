@@ -10291,7 +10291,7 @@ async def handle_propose_brand_kit_from_context(client, biz, action) -> Dict:
             "detail": {"business_id": biz["id"], "kit": result["kit"]},
         },
         "toast": {
-            "message": "Brand kit drafted — open About My Brand to review.",
+            "message": "Brand kit drafted — open Brand Studio to review it.",
             "kind": "success",
         },
     }

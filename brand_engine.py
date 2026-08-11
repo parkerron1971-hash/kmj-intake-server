@@ -526,6 +526,7 @@ def _empty_bundle(business_id: str) -> Dict[str, Any]:
                             "logo_dark": False, "square": False,
                             "favicon": False, "social_card": False},
         "snapshot_count": 0,
+        "snapshots": [],
         "meta": {"completeness": 0.0, "missing_fields": ["business.id"],
                  "has_brand_kit": False},
     }
@@ -998,6 +999,9 @@ def get_bundle(business_id: str, use_cache: bool = True) -> Dict[str, Any]:
         "assets_uploaded": assets_uploaded,
         "practitioner_intelligence": intelligence_section,
         "snapshot_count": len(business.get("brand_kit_history") or []),
+        # Beside the count, not instead of it — site_composer and the
+        # Chief brief both read snapshot_count.
+        "snapshots": _summarize_snapshots(business.get("brand_kit_history") or []),
     }
     completeness, missing = _compute_completeness(bundle)
     bundle["meta"] = {
@@ -1013,6 +1017,41 @@ def get_bundle(business_id: str, use_cache: bool = True) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────
 # Save path with snapshot history (cap 2)
 # ─────────────────────────────────────────────────────────────
+
+def _summarize_snapshots(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """What each stored version WAS, so Restore stops being a coin flip.
+
+    The bundle only ever carried `snapshot_count`, so the Brand Room could
+    offer "Restore most recent" and "Restore the one before" and nothing
+    else. The practitioner clicking one had no way to know which design
+    they were about to get back, or how old it was — and restoring the
+    wrong one costs them the kit they have now (it is pushed to history,
+    so it is recoverable, but only if they realise in the next save).
+
+    `saved_at` was written on every snapshot from the start and simply
+    never left the server. The three fields beside it are the ones that
+    make two versions visibly different at a glance: the colour, the
+    face, and the line.
+
+    Reads BOTH kit shapes. `_normalize_brand_kit` writes nested and flat
+    together now, but snapshots taken by older code carry only one, and a
+    summary that silently rendered blank for those would put an unlabelled
+    row in the list — worse than no list.
+    """
+    out: List[Dict[str, Any]] = []
+    for idx, entry in enumerate(history or []):
+        kit = (entry or {}).get("kit") or {}
+        colors = kit.get("colors") or {}
+        fonts = kit.get("font_pair") or {}
+        out.append({
+            "idx": idx,
+            "saved_at": (entry or {}).get("saved_at"),
+            "tagline": (kit.get("tagline") or "").strip() or None,
+            "primary_color": colors.get("primary") or kit.get("primary_color"),
+            "font_heading": fonts.get("heading") or kit.get("font_heading"),
+        })
+    return out
+
 
 def save_brand_kit(business_id: str, new_kit: Dict[str, Any]) -> Dict[str, Any]:
     """Canonical save. Pushes current kit to history (cap 2). Normalizes
