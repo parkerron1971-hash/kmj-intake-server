@@ -14,7 +14,8 @@ Reads from:
 
 Writes to:
   businesses.settings.brand_kit       (always BOTH nested AND flat shape)
-  businesses.brand_kit_history        (snapshot array, capped at 2)
+  businesses.brand_kit_history        (snapshot array, capped at
+                                       BRAND_HISTORY_DEPTH)
 
 Public API:
   get_bundle(business_id) -> dict
@@ -207,6 +208,17 @@ PUBLISHED_OVERRIDE_FIELDS = (
 # Free text on purpose: a printer says "C0 M13 Y100 K0, uncoated" or
 # "PMS 116 C", and forcing that into four integers would lose the half
 # of it that matters.
+# How many previous kits to keep. Was 2, set when nothing could SEE the
+# history — the Brand Room offered "Restore most recent" and "the one
+# before", so two was as much as the UI could use. It now lists every
+# stored version with its date, primary colour, heading face and tagline,
+# and the limit became the cap rather than the interface.
+#
+# A full kit measures ~2.1KB, so ten is ~21KB on a business row. Applies
+# GOING FORWARD only: existing rows hold at most two and accumulate from
+# their next save. Nobody gets history retroactively.
+BRAND_HISTORY_DEPTH = 10
+
 PRINT_COLOR_ROLES = ("primary", "secondary", "accent", "background", "text")
 PRINT_COLOR_FIELDS = ("cmyk", "pantone")
 
@@ -1080,7 +1092,7 @@ def get_bundle(business_id: str, use_cache: bool = True) -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────
-# Save path with snapshot history (cap 2)
+# Save path with snapshot history (cap BRAND_HISTORY_DEPTH)
 # ─────────────────────────────────────────────────────────────
 
 def _summarize_snapshots(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1119,7 +1131,8 @@ def _summarize_snapshots(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def save_brand_kit(business_id: str, new_kit: Dict[str, Any]) -> Dict[str, Any]:
-    """Canonical save. Pushes current kit to history (cap 2). Normalizes
+    """Canonical save. Pushes current kit to history (cap
+    BRAND_HISTORY_DEPTH). Normalizes
     both nested and flat shapes. Updates settings.brand_kit AND
     brand_kit_history in one PATCH."""
     business = _safe_get_one("businesses", "id", business_id)
@@ -1163,7 +1176,7 @@ def save_brand_kit(business_id: str, new_kit: Dict[str, Any]) -> Dict[str, Any]:
             "kit": current_kit,
             "saved_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         })
-        history = history[:2]  # hard cap
+        history = history[:BRAND_HISTORY_DEPTH]
 
     normalized = _normalize_brand_kit(new_kit or {})
     new_settings = dict(business.get("settings") or {})
