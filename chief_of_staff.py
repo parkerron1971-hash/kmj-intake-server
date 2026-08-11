@@ -57,6 +57,7 @@ from pydantic import BaseModel
 # verification + UserSession dependency.
 import module_vocabulary
 import sb_clients
+import mailbox_policy
 from auth_supabase import UserSession, require_user_session
 
 import foundation_agent
@@ -1861,29 +1862,23 @@ def _format_sms_block(ctx: Dict[str, Any]) -> str:
 
 # ─── Mailbox selection policy ────────────────────────────────────────
 #
-# A reply that came back through us is mail the practitioner provoked:
-# we sent first, a human answered, and the sender set is bounded by who
-# we mailed. A connected mailbox is the opposite — every newsletter,
-# cold pitch and phishing attempt lands in the same table, and some of
-# that text is written specifically to read as an instruction to an
-# agent that holds write verbs.
+# The rule itself lives in mailbox_policy, because it is not only this
+# module's rule. The Email Hub labels every message "Chief can read" or
+# "Not shown to Chief", and that label is worthless if it is computed
+# from a different definition than the one enforced here — which is
+# exactly what happened: the Hub keyed off the contact_id stored at
+# ingest, while this gate matches the sender against the CURRENT contact
+# list on every turn. Someone who emails and then becomes a contact
+# drifts the two answers apart.
 #
-# _neutralize_untrusted defangs the text it renders. It does not decide
-# what is worth rendering at all, and it does not scale to an open
-# inbox. So eligibility is decided FIRST, here: mailbox-sourced mail
-# reaches the prompt only when the sender is already a contact.
-#
-# Everything else is still stored and still shown in the Email Hub. The
-# practitioner's inbox is not being hidden from them — it is being kept
-# out of the model's input. Two decisions, deliberately separate.
+# So both callers import one function. These thin aliases keep the local
+# names (and the tests that use them) pointing at it.
 
-# Sources that did NOT come back through our own inbound path, and so
-# carry no implicit "we mailed them first" scoping.
-_UNSOLICITED_SOURCES = {"mailbox", "forward"}
-
-# How many eligible replies reach the prompt. The renderer caps at 6;
-# this is the ceiling on what it may choose from.
-_PROMPT_REPLY_CAP = 10
+_UNSOLICITED_SOURCES = mailbox_policy.UNSOLICITED_SOURCES
+_PROMPT_REPLY_CAP = mailbox_policy.PROMPT_REPLY_CAP
+_reply_source = mailbox_policy.reply_source
+_known_sender_emails = mailbox_policy.known_sender_emails
+_split_email_replies_for_prompt = mailbox_policy.split_for_prompt
 
 
 def _merge_inbound_mail(
@@ -1919,61 +1914,6 @@ def _merge_inbound_mail(
     # Newest first, blank timestamps last rather than crashing the sort.
     merged.sort(key=lambda r: (r.get("received_at") or ""), reverse=True)
     return merged
-
-
-def _reply_source(reply: Dict[str, Any]) -> str:
-    """Which pipe did this row arrive through?
-
-    Rows written before the discriminator existed have no source key and
-    are all replies-to-us by construction — there was no other way in.
-    Defaulting them to "reply" is a statement about history, not a guess.
-    """
-    metadata = reply.get("metadata")
-    if isinstance(metadata, dict):
-        source = metadata.get("source")
-        if isinstance(source, str) and source.strip():
-            return source.strip().lower()
-    return "reply"
-
-
-def _known_sender_emails(contacts: List[Dict[str, Any]]) -> set:
-    return {
-        (c.get("email") or "").strip().lower()
-        for c in contacts
-        if isinstance(c, dict) and (c.get("email") or "").strip()
-    }
-
-
-def _split_email_replies_for_prompt(
-    replies: List[Dict[str, Any]],
-    contacts: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Split fetched mail into what the model may read and what it may not.
-
-    Returns both halves. The withheld COUNT matters as much as the
-    eligible list: if forty messages arrived and none were from a
-    contact, Chief must be able to say "nothing from anyone you know"
-    instead of "nothing arrived" — the second is false, and it is the
-    same class of lie this block was just fixed for.
-    """
-    known = _known_sender_emails(contacts)
-    eligible: List[Dict[str, Any]] = []
-    withheld = 0
-
-    for reply in replies:
-        if _reply_source(reply) not in _UNSOLICITED_SOURCES:
-            eligible.append(reply)          # provoked mail; already scoped
-            continue
-        sender = (reply.get("from_email") or "").strip().lower()
-        if sender and sender in known:
-            eligible.append(reply)
-        else:
-            withheld += 1
-
-    return {
-        "email_replies": eligible[:_PROMPT_REPLY_CAP],
-        "email_replies_withheld": withheld,
-    }
 
 
 def _format_email_replies_block(ctx: Dict[str, Any]) -> str:

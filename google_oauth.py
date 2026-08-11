@@ -35,18 +35,26 @@ SCOPE
     gmail.users.getProfile, which gmail.readonly already permits. Asking
     for a scope we did not register in the console would fail consent.
 
-WHAT THIS FILE DOES NOT DO
-  It connects and stores. It does not sync. Ingesting messages into
-  email_replies is deliberately a separate change, because it needs the
-  selection policy decided first — a whole mailbox means every
-  newsletter and phishing attempt becomes candidate input for an agent
-  that holds write verbs. Storage and prompt-eligibility are two
-  different questions and must stay two different decisions.
+WHAT THIS FILE DOES AND DOES NOT DO
+  It connects, stores, and serves the practitioner's own view of what was
+  ingested. The syncing itself lives in gmail_sync, on the worker.
+
+  Mail lands in mailbox_messages, NOT email_replies: that table is
+  seat-readable, and a connected mailbox is a personal inbox. This one is
+  RLS-on with zero policies, so the browser cannot reach it at all — both
+  the read and the mark-read endpoints below exist because of that, and
+  each checks ownership itself.
+
+  Storage and prompt-eligibility stay two different questions. This file
+  answers the first and defers the second to mailbox_policy, which is
+  also what the prompt gate calls — so the "Chief can read" label the Hub
+  renders can never drift from the rule actually enforced.
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -58,6 +66,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 import oauth_connect_ticket
 import sb_clients
+import mailbox_policy
 from auth_supabase import AuthedUser, require_user
 
 logger = logging.getLogger("google_oauth")
@@ -75,6 +84,9 @@ GOOGLE_SCOPES = "https://www.googleapis.com/auth/gmail.readonly"
 # an account and read a consent screen. Five minutes (the ticket default)
 # is too tight for that; ten matches what meta_oauth allows its state.
 STATE_MAX_AGE_SECONDS = 10 * 60
+
+# Shape guard for ids that land in a PostgREST filter string.
+_UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 
 # Refresh a little early. A token that expires mid-request is a failed
 # sync that looks like an auth bug.
@@ -403,7 +415,59 @@ async def mailbox_messages(business_id: str, limit: int = 50,
         f"&order=received_at.desc&limit={capped}"
         f"&select=id,google_email,from_email,from_name,subject,body_text,"
         f"received_at,read,contact_id") or []
-    return {"messages": rows, "count": len(rows)}
+
+    # chief_can_read is computed with the SAME function the prompt gate
+    # uses, against the CURRENT contact list — never from the stored
+    # contact_id. That column is resolved once, at ingest. The gate
+    # re-evaluates every turn, so a sender who emails first and becomes a
+    # contact afterwards is readable by Chief while their stored
+    # contact_id is still NULL. Labelling from the column would have the
+    # Hub confidently contradicting the rule it exists to explain.
+    contacts = sb_clients.sb_get_as_service(
+        f"/contacts?business_id=eq.{business_id}&select=email&limit=500") or []
+    known = mailbox_policy.known_sender_emails(contacts)
+    for row in rows:
+        row["chief_can_read"] = mailbox_policy.is_prompt_eligible(
+            {**row, "metadata": {"source": "mailbox"}}, known)
+
+    return {"messages": rows, "count": len(rows),
+            "readable": sum(1 for r in rows if r["chief_can_read"])}
+
+
+@router.patch("/mailbox/messages/read")
+async def mailbox_mark_read(business_id: str, payload: Dict[str, Any],
+                            user: AuthedUser = Depends(require_user)):
+    """Mark connected-mailbox messages read (or unread).
+
+    This endpoint exists because the table is deliberately unreachable
+    from the browser: RLS on with zero policies means PostgREST refuses
+    a user JWT for writes exactly as it does for reads. Without a
+    server-side path the unread badge could only ever count up — which
+    is what shipped, and what this fixes.
+
+    business_id is taken from the query and ownership checked against it,
+    then used to scope the UPDATE itself. Passing ids alone would let an
+    owner of one business mark another business's mail read.
+    """
+    _require_owner(business_id, user)
+    ids = payload.get("ids") or []
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=400, detail="ids required")
+    # Shape-check before interpolation: these land in a PostgREST filter.
+    clean = [str(i) for i in ids[:200] if _UUID_RE.match(str(i))]
+    if not clean:
+        raise HTTPException(status_code=400, detail="no valid ids")
+
+    read = bool(payload.get("read", True))
+    updated = sb_clients.sb_patch_as_service(
+        f"/mailbox_messages?business_id=eq.{business_id}"
+        f"&id=in.({','.join(clean)})",
+        {"read": read})
+    # sb_* returns None on 4xx/5xx. Reporting success over a write that
+    # never landed is how a badge starts lying again.
+    if updated is None:
+        raise HTTPException(status_code=502, detail="could not update messages")
+    return {"updated": len(clean), "read": read}
 
 
 @router.get("/connect/google/status")
