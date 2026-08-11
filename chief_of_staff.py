@@ -1835,10 +1835,32 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
     contact's words verbatim when drafting a response — this is the
     whole point of the Email Hub feature: replies must inform the
     Chief's drafts, not be referenced as a generic 'they replied'.
+
+    Both branches carry the SCOPE line, and that is the load-bearing
+    part. `email_replies` only ever holds mail that came back through
+    our own inbound path — a reply to something we sent, or mail to a
+    platform address. Mail sent directly to the practitioner's own
+    address has never been able to land here, because no source feeds
+    it. So an empty table is not the observation "your inbox is quiet";
+    it is the absence of any observation at all, and the old
+    "(none yet)" rendered the second as the first for every practitioner
+    on the platform. A populated block is the same error scaled down:
+    two platform replies presented as the whole morning's mail when
+    forty landed in the inbox we cannot see.
     """
     replies = ctx.get("email_replies") or []
     if not replies:
-        return "EMAIL REPLIES (none yet):\n"
+        return (
+            "EMAIL REPLIES (no platform replies — and NOT a view of their inbox):\n"
+            "  Nothing has come back through the platform. This block can ONLY\n"
+            "  ever show replies to mail sent through the platform; no mailbox\n"
+            "  is connected, so mail sent directly to the practitioner's own\n"
+            "  address is invisible to you. Empty here means you cannot see,\n"
+            "  not that nothing arrived.\n"
+            "  If asked 'did anyone email me?' / 'what came in today?' — say\n"
+            "  nothing has come back through the platform AND that you cannot\n"
+            "  see their own inbox yet. NEVER tell them nobody emailed them.\n"
+        )
 
     unread = [r for r in replies if not r.get("read")]
     contact_lookup = ctx.get("contacts_lookup") or []
@@ -1853,6 +1875,10 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
         "  'reply to X' — pull from this block. Quote the actual reply content;",
         "  do not paraphrase. NEVER draft a generic response when you have the",
         "  real reply text below.",
+        "  SCOPE: these are replies that came back through the platform only.",
+        "  No mailbox is connected, so mail sent directly to the practitioner's",
+        "  own address is not here. Never present this as their whole inbox or",
+        "  imply it is everything that arrived.",
         "",
     ]
     for r in replies[:6]:
