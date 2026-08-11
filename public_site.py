@@ -4973,7 +4973,7 @@ MARKETING_HTML = """<!DOCTYPE html>
       <div class="card step-card">
         <span class="step-num">2</span>
         <h3 style="margin-top:14px;">Connect your tools</h3>
-        <p style="font-size:14px;color:var(--text-muted);">Plug in Stripe, Facebook Page, Gmail, Calendar — whatever you already use. Tokens stay server-side; you control disconnection.</p>
+        <p style="font-size:14px;color:var(--text-muted);">Plug in Stripe, your Facebook Page, QuickBooks, your bank — whatever you already use. Tokens stay server-side; you control disconnection.</p>
       </div>
       <div class="card step-card">
         <span class="step-num">3</span>
