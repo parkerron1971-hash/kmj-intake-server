@@ -345,11 +345,35 @@ def _compose_practitioner(practitioner: Optional[Dict[str, Any]], business: Dict
     }
 
 
+def public_site_url(site: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The address to PRINT for this business.
+
+    Kevin, 2026-08-10: his email signature carried
+    kmj-creative-solutions.mysolutionist.app while kmjcreate.com had been
+    verified for weeks. Both _compose_footer and _compose_signature built
+    the url from the slug and never looked at the custom domain, so every
+    signature, footer and copyright line the platform published named an
+    address the owner had already replaced.
+
+    ONLY a verified domain is used. A pending one has no DNS behind it
+    yet, and a dead address in an email signature is worse than a working
+    default — the platform subdomain always resolves."""
+    if not site:
+        return None
+    cfg = site.get("site_config") or {}
+    domain = (cfg.get("custom_domain") or "").strip().lower()
+    status = (cfg.get("custom_domain_status") or "").strip().lower()
+    if domain and status == "verified":
+        return f"https://{domain.lstrip('/').removeprefix('https://').removeprefix('http://')}"
+    slug = site.get("slug")
+    return f"https://{slug}.mysolutionist.app" if slug else None
+
+
 def _compose_footer(
     business: Dict[str, Any],
     practitioner_section: Dict[str, Any],
     legal_section: Dict[str, Any],
-    site_slug: Optional[str],
+    site_url: Optional[str],
 ) -> Dict[str, Any]:
     year = datetime.now(timezone.utc).year
     legal_name = practitioner_section.get("full_legal_name") or business.get("name") or "The Practitioner"
@@ -357,7 +381,6 @@ def _compose_footer(
     disclaimer_lines = [DISCLAIMER_PHRASES[d] for d in legal_section.get("required_disclaimers") or [] if d in DISCLAIMER_PHRASES]
     state_line = f"Governing law: {legal_section['governing_state']}." if legal_section.get("governing_state") else ""
     legal_footer = " ".join(p for p in [state_line] + disclaimer_lines if p)
-    site_url = f"https://{site_slug}.mysolutionist.app" if site_slug else None
     contact_email = (business.get("settings") or {}).get("contact_email")
     return {
         "copyright_line": copyright_line,
@@ -370,10 +393,9 @@ def _compose_footer(
 def _compose_signature(
     practitioner_section: Dict[str, Any],
     business: Dict[str, Any],
-    site_slug: Optional[str],
+    site_url: Optional[str],
 ) -> Dict[str, Any]:
     name = practitioner_section.get("full_legal_name") or practitioner_section.get("display_name")
-    site_url = f"https://{site_slug}.mysolutionist.app" if site_slug else None
     return {
         "name": name,
         "title": practitioner_section.get("preferred_title"),
@@ -832,8 +854,9 @@ def get_bundle(business_id: str, use_cache: bool = True) -> Dict[str, Any]:
     design_section["tone_words"] = brand_kit.get("tone_words") or []
     design_section["visual_style"] = brand_kit.get("visual_style")
     legal_section = _compose_legal(profile, archetype_row, foundation_complete)
-    footer_section = _compose_footer(business, practitioner_section, legal_section, site_slug)
-    signature_section = _compose_signature(practitioner_section, business, site_slug)
+    site_url = public_site_url(site)
+    footer_section = _compose_footer(business, practitioner_section, legal_section, site_url)
+    signature_section = _compose_signature(practitioner_section, business, site_url)
 
     # Asset registry (Pass 2.5a). Six variants. Missing variants fall
     # back to primary; primary falls back to legacy logo_url; both fall
