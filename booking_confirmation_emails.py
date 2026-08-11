@@ -410,18 +410,24 @@ def _resolve_offering(business_id: str, offering_id: Optional[str]) -> Dict[str,
 
 
 def _resolve_hosted_url(business_id: str) -> Optional[str]:
-    """Resolve the hosted booking URL via business_sites.slug. Best-effort."""
+    """Resolve the hosted booking URL. Best-effort.
+
+    Prefers a VERIFIED custom domain over the platform subdomain — this
+    link goes to the practitioner's customer, so it should name the
+    address the practitioner actually advertises. Same defect and the
+    same rule as brand_engine.public_site_url: a pending domain has no
+    DNS behind it, and a dead booking link is far worse than an
+    unfamiliar one."""
     try:
         rows = sb_clients.sb_get_as_service(
             f"/business_sites?business_id=eq.{business_id}"
-            f"&select=slug&limit=1"
+            f"&select=slug,site_config&limit=1"
         ) or []
         if not rows:
             return None
-        slug = rows[0].get("slug")
-        if not slug:
-            return None
-        return f"https://{slug}.mysolutionist.app/book"
+        import brand_engine
+        base = brand_engine.public_site_url(rows[0])
+        return f"{base}/book" if base else None
     except Exception:
         return None
 
