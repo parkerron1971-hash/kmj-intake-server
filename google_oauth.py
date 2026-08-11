@@ -415,7 +415,12 @@ async def google_status(business_id: str,
     _require_owner(business_id, user)
     rows = sb_clients.sb_get_as_service(
         f"/google_mailboxes?business_id=eq.{business_id}"
-        f"&select=google_email,status,last_error,connected_at,updated_at"
+        # last_synced_at is the difference between "connected" and
+        # "working". A grant can be stored and valid while the sync has
+        # not completed in days, and those two states look identical to a
+        # practitioner staring at an empty list — silence is what a dead
+        # feed looks like. The card cannot say so unless it is told.
+        f"&select=google_email,status,last_error,connected_at,updated_at,last_synced_at"
         f"&order=connected_at.desc") or []
     return {"connected": bool(rows), "mailboxes": rows}
 
