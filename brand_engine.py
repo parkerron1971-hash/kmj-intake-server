@@ -192,6 +192,12 @@ def _anthropic_key() -> str:
 # Brand kit shape normalization (transitional both-shapes write)
 # ─────────────────────────────────────────────────────────────
 
+PUBLISHED_OVERRIDE_FIELDS = (
+    "copyright_line", "legal_footer", "site_url", "contact_email",
+    "signature_name", "signature_title", "signature_business_name",
+)
+
+
 def _normalize_brand_kit(kit: Dict[str, Any]) -> Dict[str, Any]:
     """
     Idempotent. Ensures both modern nested keys (colors.primary,
@@ -233,6 +239,28 @@ def _normalize_brand_kit(kit: Dict[str, Any]) -> Dict[str, Any]:
     if assets.get("primary") and not out.get("logo_url"):
         out["logo_url"] = assets["primary"]
     out["assets"] = assets
+
+    # PUBLISHED-COPY OVERRIDES. Whitelisted keys only, trimmed, length
+    # capped, and an empty string DELETES the override rather than
+    # storing a blank — that is how "reset to derived" works from the UI
+    # without needing a second endpoint. A blank legal footer stored as
+    # an override would silently strip a practitioner's disclaimers from
+    # every contract, which is the failure worth designing against.
+    raw_ov = out.get("published_overrides")
+    if isinstance(raw_ov, dict):
+        clean_ov = {}
+        for k, v in raw_ov.items():
+            if k not in PUBLISHED_OVERRIDE_FIELDS or not isinstance(v, str):
+                continue
+            v = v.strip()[:400]
+            if v:
+                clean_ov[k] = v
+        if clean_ov:
+            out["published_overrides"] = clean_ov
+        else:
+            out.pop("published_overrides", None)
+    elif "published_overrides" in out:
+        out.pop("published_overrides", None)
 
     return out
 
@@ -345,6 +373,52 @@ def _compose_practitioner(practitioner: Optional[Dict[str, Any]], business: Dict
     }
 
 
+# ─── PUBLISHED-COPY OVERRIDES ────────────────────────────────────────
+# Kevin, 2026-08-10: he wanted to EDIT what goes out in his name. The
+# first answer was to fix the derivation — his signature was printing
+# the platform subdomain while his verified domain sat unread (#508) —
+# and that was the right fix for a WRONG derivation. It is not an answer
+# for a derivation that is merely not what he wants.
+#
+# So: derived by default, overridable per field, and always reversible.
+# An override is stored only when it DIFFERS from what we would derive,
+# so "reset" is just deleting the key, and a later improvement to the
+# derivation reaches everyone who never disagreed with it.
+def _published_overrides(brand_kit: Dict[str, Any]) -> Dict[str, str]:
+    raw = brand_kit.get("published_overrides")
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v.strip() for k, v in raw.items()
+            if k in PUBLISHED_OVERRIDE_FIELDS
+            and isinstance(v, str) and v.strip()}
+
+
+def _apply_published_overrides(footer: Dict[str, Any],
+                               signature: Dict[str, Any],
+                               brand_kit: Dict[str, Any]) -> Dict[str, Any]:
+    """Overlay the owner's edits and report which fields they own.
+
+    `derived` keeps the computed value for every overridden field, so the
+    UI can show what it WOULD say and offer a way back. Without that,
+    an override is a one-way door."""
+    ov = _published_overrides(brand_kit)
+    derived: Dict[str, str] = {}
+    for key in ("copyright_line", "legal_footer", "site_url", "contact_email"):
+        if key in ov:
+            derived[key] = footer.get(key) or ""
+            footer[key] = ov[key]
+    for key, sig_key in (("signature_name", "name"),
+                         ("signature_title", "title"),
+                         ("signature_business_name", "business_name")):
+        if key in ov:
+            derived[key] = signature.get(sig_key) or ""
+            signature[sig_key] = ov[key]
+    # The signature's url is the footer's url — one business, one address.
+    if "site_url" in ov:
+        signature["site_url"] = ov["site_url"]
+    return {"fields": sorted(ov), "derived": derived}
+
+
 def public_site_url(site: Optional[Dict[str, Any]]) -> Optional[str]:
     """The address to PRINT for this business.
 
@@ -442,6 +516,7 @@ def _empty_bundle(business_id: str) -> Dict[str, Any]:
                    "contact_email": None},
         "signature_block": {"name": "The Practitioner", "title": None,
                             "business_name": "Unknown", "site_url": None},
+        "published_overrides": {"fields": [], "derived": {}},
         "assets": {"primary": None, "logo_light": None, "logo_dark": None,
                    "square": None, "favicon": None, "social_card": None},
         # Same keys as `assets`, all False — an empty bundle has uploaded
@@ -857,6 +932,8 @@ def get_bundle(business_id: str, use_cache: bool = True) -> Dict[str, Any]:
     site_url = public_site_url(site)
     footer_section = _compose_footer(business, practitioner_section, legal_section, site_url)
     signature_section = _compose_signature(practitioner_section, business, site_url)
+    published_overrides = _apply_published_overrides(
+        footer_section, signature_section, brand_kit)
 
     # Asset registry (Pass 2.5a). Six variants. Missing variants fall
     # back to primary; primary falls back to legacy logo_url; both fall
@@ -916,6 +993,7 @@ def get_bundle(business_id: str, use_cache: bool = True) -> Dict[str, Any]:
         "legal": legal_section,
         "footer": footer_section,
         "signature_block": signature_section,
+        "published_overrides": published_overrides,
         "assets": assets_section,
         "assets_uploaded": assets_uploaded,
         "practitioner_intelligence": intelligence_section,
