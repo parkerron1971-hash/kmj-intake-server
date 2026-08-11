@@ -86,7 +86,16 @@ KNOWN_GAPS: Dict[str, Dict[str, str]] = {
     # blueprint.sql) + smart-sites touch. Now first-class end-to-end.
     # nonprofit CLOSED 2026-07-14: intel (Leg 1), then onboarding picker +
     # module blueprint (APPLY-2026-07-14-nonprofit-blueprint.sql) + smart-
-    # sites touch + type_steer. Now first-class end-to-end.
+    # sites touch + type_steer.
+    #   CORRECTION 2026-08-11: "first-class end-to-end" was NOT true when it
+    #   was written. The blueprint FILE existed; its rows were never applied.
+    #   business_type_module_blueprint held 0 nonprofit rows for four weeks,
+    #   so a nonprofit signup was provisioned nothing at all — while this
+    #   comment said the vertical was closed. Applied 2026-08-11 (5 rows:
+    #   donors, programs, grants, events, volunteers) and VERIFIED against
+    #   the live DB, the way the personal_services note below already did.
+    #   Writing a migration is not applying it, and a closure note that
+    #   cites a file has only checked that the file exists.
     # personal_services CLOSED 2026-07-25: both recorded gaps had gone stale.
     # onboarding — solutionist-studio#218 adds it to BUSINESS_TYPES (canonical
     # position, CDI warm-community), so it is a picker card, not an admin stamp.

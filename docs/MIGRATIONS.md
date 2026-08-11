@@ -42,6 +42,20 @@ SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = '<table>';
 **The beta gate queries** (RLS + migration presence) are in
 `docs/BETA_VERIFY_QUERIES.md`.
 
+## Recent / pending migrations (2026-08)
+
+| File | What | Status |
+|---|---|---|
+| `../solutionist-studio/supabase/APPLY-2026-07-14-nonprofit-blueprint.sql` | the 5 nonprofit blueprint rows (donors, programs, grants, events, volunteers) | **applied 2026-08-11 — four weeks late.** The file was written 07-14 and `vertical_registry` recorded the vertical as "first-class end-to-end", but the rows were never applied: `business_type_module_blueprint` held **zero** nonprofit rows, so a nonprofit signup was provisioned nothing. Found by counting the table against the seed files (62 declared, 57 present). Verified after applying: 62 = 62. |
+| `../solutionist-studio/supabase/APPLY-2026-08-11-blueprint-boards-sweep.sql` | kanban for every blueprint module whose status/stage select has ≥3 options (36 rows) | applied 2026-08-11, verified (32/57 rows carry a board; 76-row `module_inspect` sweep clean) |
+| `../solutionist-studio/supabase/APPLY-2026-08-11-lawyer-matters-board.sql` + `-board-default.sql` | lawyer/matters gets the kanban its `work_pipeline` archetype implied, and opens on it | applied 2026-08-11, verified |
+| `../solutionist-studio/supabase/APPLY-2026-08-11-matters-fixture-schema.sql` + `-mirrors-blueprint.sql` | the Vertical Test Lawyer fixture rendered a red panel (`schema` was `[]`); now mirrors the blueprint | applied 2026-08-11, verified |
+
+> **The lesson these four share:** writing a migration is not applying it, and a
+> closure note that cites a file has only checked that the file exists. The cheap
+> guard is the count — `SELECT count(*) FROM business_type_module_blueprint` against
+> the rows the seed files declare. It disagreed for four weeks and nothing said so.
+
 ## Recent / pending migrations (2026-07)
 
 | File | What | Status |
