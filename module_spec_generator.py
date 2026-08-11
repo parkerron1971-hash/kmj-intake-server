@@ -690,7 +690,12 @@ for new specs — that's pre-C.1.2 read-back compat only):
   },
   "agent_config": {
     "enabled": true,
-    "triggers": [],
+    "triggers": [
+      {"type":"overdue","field":"appointment_at","action":"draft_reminder",
+       "template":"{{title}} is {{days_overdue}} days overdue"},
+      {"type":"new_entry","action":"draft_acknowledgment",
+       "template":"New booking: {{title}}"}
+    ],
     "closed_statuses": ["completed","cancelled","no_show"]
   },
   "public_display": null,
