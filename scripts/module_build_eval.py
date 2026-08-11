@@ -102,13 +102,24 @@ CASES: List[Dict[str, Any]] = [
         "id": "vague",
         "business": {"name": "Harbour Co", "type": "custom"},
         "intake": "I need to stay on top of things.",
-        # Deliberately underspecified. The prompt tells the model to ask ONE
-        # clarifying question rather than invent a module; a build that
-        # confidently produces a 7-field schema here is a regression even
-        # though every structural check would pass.
+        # Deliberately underspecified.
+        #
+        # CORRECTED after run 2. This case used to assert that the model
+        # REFUSES and asks a clarifying question. That rule lives in the
+        # frontend AI tab (ModuleBuilder.tsx), NOT in this path — the
+        # generator's only stated contract for a vague intake is
+        # "confidence: 'low' if vague". Run 1 produced no specs and run 2
+        # produced a generic "Items" module, and BOTH are within spec; the
+        # score rose 1/1 -> 4/4 for what looked like worse behaviour, and
+        # neither number meant what the note claimed.
+        #
+        # So test the contract that exists: whatever it builds, it must say
+        # it is not sure.
         "expect_field_types": [],
         "expect_trigger_kinds": [],
-        "note": "underspecified on purpose — watch what it does, don't just score it",
+        "expect_confidence": "low",
+        "note": "underspecified on purpose — the contract is low confidence, "
+                "not refusal; read what it built",
     },
 ]
 
@@ -179,6 +190,15 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any],
     unknown = types - set(module_vocabulary.FIELD_TYPES)
     check("known_field_types", not unknown, f"unknown: {sorted(unknown)}")
 
+    # A vague intake may still produce a module — what it must not do is
+    # claim certainty about one. This is the generator's actual stated
+    # contract, and the only thing separating "reasonable guess" from
+    # "confidently wrong".
+    want_conf = case.get("expect_confidence")
+    if want_conf:
+        got_conf = spec.get("confidence")
+        check(f"confidence:{want_conf}", got_conf == want_conf, f"got {got_conf!r}")
+
     return _finish(case, checks, spec)
 
 
@@ -198,6 +218,7 @@ def _finish(case, checks, spec) -> Dict[str, Any]:
             "views": (spec.get("schema") or {}).get("views"),
             "triggers": [t.get("type") for t in
                          ((spec.get("agent_config") or {}).get("triggers") or [])],
+            "confidence": spec.get("confidence"),
         },
     }
 
