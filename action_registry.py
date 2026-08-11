@@ -211,6 +211,14 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "create_module_entry":           _w("A", "creates a module row"),
     "update_module_entry":           _w("A", "edits a module row"),
     "ensure_module":                 _w("A", "creates a module if absent"),
+    # Class A because it is ADDITIVE ONLY — a field can be removed again
+    # and no data is touched. The verb deliberately cannot rename, retype
+    # or delete a field: those do not destroy module_entries.data (it is
+    # jsonb and keeps every key) but they make a value INVISIBLE with no
+    # way for the practitioner to see that it is still there, which is
+    # not reversible in any sense that matters.
+    "add_module_field":              _w("A", "adds one field to an existing "
+                                             "module schema; additive only"),
     "create_offering":               _w("A", "creates an offering"),
     "update_offering":               _w("A", "edits an offering"),
     "draft_email":                   _w("A", "queues a draft to /agent_queue — approval still required to send"),
