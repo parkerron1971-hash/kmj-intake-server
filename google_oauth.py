@@ -372,8 +372,15 @@ async def google_callback(code: Optional[str] = None,
                                        "try again.")
 
     logger.info("[GOOGLE] connected mailbox for business=%s", business_id)
-    return _result_html(True, f"{google_email} is connected. Chief can now read "
-                              f"mail sent to this address.")
+    # What is true at this point is that the grant is stored and revocable.
+    # Nothing reads the mailbox yet — there is no ingest, so promising that
+    # "Chief can now read mail sent to this address" would leave the
+    # practitioner waiting on a feed that was never going to arrive, and
+    # reading silence as an empty inbox.
+    return _result_html(True, f"{google_email} is connected and we can revoke it "
+                              f"any time. Chief is not reading this mailbox yet — "
+                              f"inbox reading ships separately, and we will say so "
+                              f"when it is live.")
 
 
 @router.get("/connect/google/status")
