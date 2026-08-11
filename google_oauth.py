@@ -376,11 +376,34 @@ async def google_callback(code: Optional[str] = None,
     # Nothing reads the mailbox yet — there is no ingest, so promising that
     # "Chief can now read mail sent to this address" would leave the
     # practitioner waiting on a feed that was never going to arrive, and
-    # reading silence as an empty inbox.
-    return _result_html(True, f"{google_email} is connected and we can revoke it "
-                              f"any time. Chief is not reading this mailbox yet — "
-                              f"inbox reading ships separately, and we will say so "
-                              f"when it is live.")
+    return _result_html(True, f"{google_email} is connected. New mail arriving here "
+                              f"will start appearing in your Email Hub within a few "
+                              f"minutes. You can disconnect any time.")
+
+
+@router.get("/mailbox/messages")
+async def mailbox_messages(business_id: str, limit: int = 50,
+                           user: AuthedUser = Depends(require_user)):
+    """The Email Hub's window onto a connected mailbox.
+
+    This endpoint exists because mailbox_messages has RLS on with zero
+    policies — the frontend cannot read the table directly, deliberately.
+    A seat member holding a valid JWT gets nothing from PostgREST, and
+    gets 403 here. That is the owner-only decision enforced in the two
+    places that can actually enforce it, rather than by hiding a tab.
+
+    body_text is included: the practitioner is reading their own mail.
+    The selection policy governs what reaches the MODEL, not what its
+    owner is allowed to see.
+    """
+    _require_owner(business_id, user)
+    capped = max(1, min(int(limit or 50), 200))
+    rows = sb_clients.sb_get_as_service(
+        f"/mailbox_messages?business_id=eq.{business_id}"
+        f"&order=received_at.desc&limit={capped}"
+        f"&select=id,google_email,from_email,from_name,subject,body_text,"
+        f"received_at,read,contact_id") or []
+    return {"messages": rows, "count": len(rows)}
 
 
 @router.get("/connect/google/status")

@@ -1045,6 +1045,16 @@ async def startup():
             scheduler.add_job(g("push_morning_brief", _push.morning_brief_tick), "cron", hour=13, minute=0,
                               id="push_morning_brief")
             scheduler.add_job(g("gl_divergence", _gl.divergence_tick), "interval", minutes=15, id="gl_divergence")
+            # Email Connect — pull recent INBOX mail from connected Google
+            # mailboxes. 10 minutes because "did anyone email me?" is a
+            # question people ask about the last hour, not the last day;
+            # the per-run cap is what keeps a busy mailbox bounded, not a
+            # long interval. Below the stagger threshold on purpose: it
+            # fires soon enough after a deploy that the reset clock
+            # APScheduler applies to interval jobs does not matter.
+            import gmail_sync as _gmail
+            scheduler.add_job(g("gmail_sync", _gmail.sync_tick), "interval",
+                              minutes=10, id="gmail_sync")
             # Hermes (2026-07-04) — the comms watcher: hourly deterministic
             # pass over the SMS/email rails; findings → platform_changelog
             # → Business Chief snapshot. One brain, many senses.

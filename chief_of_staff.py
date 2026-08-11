@@ -1103,6 +1103,17 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/email_replies?business_id=eq.{biz_id}"
             f"&order=received_at.desc&limit=60"
             f"&select=id,from_email,from_name,subject,body_text,received_at,read,contact_id,metadata"),
+        # Mail from a connected mailbox. Same 60-row window as above and
+        # for the same reason — the selection policy filters after the
+        # fetch, and almost all of THIS source is expected to be filtered
+        # out. Fetching a handful would mean the one message from a real
+        # client lost its slot to a newsletter that will be discarded
+        # anyway. No `metadata` in the select: every row here is
+        # mailbox-sourced by definition, and the normaliser stamps it.
+        _sb(client, "GET",
+            f"/mailbox_messages?business_id=eq.{biz_id}"
+            f"&order=received_at.desc&limit=60"
+            f"&select=id,from_email,from_name,subject,body_text,received_at,read,contact_id"),
         # Recent SMS messages — both directions, last ~15. Lets the
         # Chief answer "did anyone text me?" and reference specific
         # text content the same way it does with email replies.
@@ -1123,7 +1134,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&select=id,data,created_at,custom_modules!inner(slug)"
             f"&order=created_at.desc&limit=50"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, sms_messages, project_rows = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -1285,7 +1296,9 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # the table and shows everything, and only this filtered list is
         # ever rendered into the prompt. Gating in the UI would be
         # decorative — this is the line the model actually reads.
-        **_split_email_replies_for_prompt(email_replies or [], contacts or []),
+        **_split_email_replies_for_prompt(
+            _merge_inbound_mail(email_replies or [], mailbox_messages or []),
+            contacts or []),
         "sms_messages": sms_messages or [],
         # 8/01 — flattened to the same shape handle_list_projects returns,
         # so the context block and the action agree on vocabulary.
@@ -1871,6 +1884,41 @@ _UNSOLICITED_SOURCES = {"mailbox", "forward"}
 # How many eligible replies reach the prompt. The renderer caps at 6;
 # this is the ceiling on what it may choose from.
 _PROMPT_REPLY_CAP = 10
+
+
+def _merge_inbound_mail(
+    replies: List[Dict[str, Any]],
+    mailbox: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """One timeline out of two tables.
+
+    They are separate tables for access-control reasons, not because they
+    are different things to the practitioner — "did anyone email me?" is
+    one question. Merging here rather than in the renderer means the
+    selection policy sees a single list and the existing filter applies
+    to both sources without knowing there were two.
+
+    Mailbox rows are stamped source="mailbox" as they are normalised, so
+    the gate treats them as unsolicited no matter what (or whether) their
+    own metadata column said. The stamp is derived from WHICH TABLE the
+    row came out of — a value a sender cannot influence.
+    """
+    merged: List[Dict[str, Any]] = list(replies)
+    for row in mailbox:
+        merged.append({
+            "id": row.get("id"),
+            "from_email": row.get("from_email"),
+            "from_name": row.get("from_name"),
+            "subject": row.get("subject"),
+            "body_text": row.get("body_text"),
+            "received_at": row.get("received_at"),
+            "read": row.get("read"),
+            "contact_id": row.get("contact_id"),
+            "metadata": {"source": "mailbox"},
+        })
+    # Newest first, blank timestamps last rather than crashing the sort.
+    merged.sort(key=lambda r: (r.get("received_at") or ""), reverse=True)
+    return merged
 
 
 def _reply_source(reply: Dict[str, Any]) -> str:
