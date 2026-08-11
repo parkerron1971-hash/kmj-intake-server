@@ -51,6 +51,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 import sb_clients
+import mailbox_policy
 import google_oauth
 
 logger = logging.getLogger("gmail_sync")
@@ -255,16 +256,20 @@ def _contact_by_email(business_id: str, email: str) -> Optional[str]:
 
 
 def _store(business_id: str, google_email: str,
-           msg: Dict[str, Any]) -> bool:
-    """Returns True when a row was written. Idempotent on
-    (business_id, gmail_message_id) — a history replay or an overlapping
-    run must not create a second copy."""
+           msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Returns the stored row, or None when nothing was written.
+
+    The row comes back rather than a bool because the caller has to decide
+    who is worth interrupting for, and that decision needs the sender.
+    Idempotent on (business_id, gmail_message_id) — a history replay or an
+    overlapping run must not create a second copy.
+    """
     payload = msg.get("payload") or {}
     from_email, from_name = _split_from(_header(payload, "From"))
 
     # The practitioner's own sent mail is not "mail that arrived".
     if from_email and from_email == (google_email or "").strip().lower():
-        return False
+        return None
 
     row = {
         "business_id": business_id,
@@ -290,7 +295,121 @@ def _store(business_id: str, google_email: str,
         prefer="resolution=ignore-duplicates,return=minimal")
     # sb_* returns None on 4xx/5xx. Treating that as success would report
     # mail as ingested over a write that never landed.
-    return written is not None
+    return row if written is not None else None
+
+
+# ─── Telling the practitioner ────────────────────────────────────────
+#
+# Ingest without an alert solved half the problem. The arc exists because
+# "a new lead emails you and nobody knows" — and a mailbox that fills a
+# tray you have to remember to open is still nobody knowing.
+#
+# THREE RULES, ALL OF THEM ABOUT RESTRAINT
+#
+# 1. Only mail that passed the selection policy is worth interrupting
+#    for. Pushing on every newsletter trains someone to swipe the channel
+#    away, which is worse than silence because it also buries the message
+#    that mattered.
+#
+# 2. NO SENDER-CONTROLLED TEXT IN THE NOTIFICATION. Not the subject, not
+#    even the From display name. Both are attacker-chosen, and a lock
+#    screen showing "Your account is suspended — click here" under this
+#    app's name is a phishing message WE delivered. _neutralize_untrusted
+#    does not help: it guards the prompt, not the push.
+#
+#    The name shown comes from OUR contacts row — text the practitioner
+#    typed themselves. If we cannot resolve one, the alert says how many
+#    arrived and no more.
+#
+# 3. One notification per sync pass, never one per message. The pass runs
+#    every ten minutes, so that is also the rate limit: a morning of mail
+#    is at most six buzzes, each bundling whatever landed.
+
+def _contact_names_by_email(business_id: str) -> Dict[str, str]:
+    rows = sb_clients.sb_get_as_service(
+        f"/contacts?business_id=eq.{business_id}&select=name,email&limit=500") or []
+    out: Dict[str, str] = {}
+    for r in rows:
+        email = (r.get("email") or "").strip().lower()
+        if email and (r.get("name") or "").strip():
+            out[email] = r["name"].strip()
+    return out
+
+
+def _describe(names: List[str], count: int) -> str:
+    """Notification body from trusted names only."""
+    if not names:
+        # Eligible but unnamed: the contact row has an email and no name.
+        return f"{count} new email{'s' if count != 1 else ''} from your contacts."
+    if count == 1:
+        return f"{names[0]} emailed you."
+    if len(names) == 1:
+        return f"{names[0]} and {count - 1} other{'s' if count > 2 else ''} emailed you."
+    if count == 2:
+        return f"{names[0]} and {names[1]} emailed you."
+    return f"{names[0]}, {names[1]} and {count - 2} other{'s' if count > 3 else ''} emailed you."
+
+
+def _alert_new_mail(business_id: str, stored: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """One bundled alert for the eligible mail from a single sync pass.
+
+    Never raises. A failed notification must not fail the sync — the mail
+    is already stored and visible; the alert is a courtesy on top.
+    """
+    result = {"eligible": 0, "notified": False, "pushed": 0}
+    if not stored:
+        return result
+    try:
+        contacts = sb_clients.sb_get_as_service(
+            f"/contacts?business_id=eq.{business_id}&select=email,name&limit=500") or []
+        known = mailbox_policy.known_sender_emails(contacts)
+        eligible = [r for r in stored
+                    if mailbox_policy.is_prompt_eligible(r, known)]
+        result["eligible"] = len(eligible)
+        if not eligible:
+            # Mail arrived, none of it from anyone they know. Stays in the
+            # Hub with a count; nobody's phone buzzes for a newsletter.
+            return result
+
+        by_email = _contact_names_by_email(business_id)
+        names: List[str] = []
+        for row in eligible:
+            name = by_email.get((row.get("from_email") or "").strip().lower())
+            if name and name not in names:
+                names.append(name)
+        body = _describe(names, len(eligible))
+
+        # In-app first: this is the one that makes Chief LEAD with the news
+        # next time they open a chat, rather than waiting to be asked.
+        sb_clients.sb_post_as_service("/chief_notifications", {
+            "business_id": business_id,
+            "type": "reminder",
+            "title": "New email"[:120],
+            "body": body[:300],
+            "priority": "normal",
+            "data": {"source": "mailbox", "count": len(eligible)},
+        })
+        result["notified"] = True
+
+        try:
+            import push_notifications
+            result["pushed"] = push_notifications.send_to_business(
+                # "operate:email", not "email". The service worker hands
+                # nav to resolveNav, which splits on ":" into tab and sub
+                # — a bare "email" matches no tab and silently lands on
+                # home. A notification that opens the wrong screen is a
+                # dead end wearing a working button's clothes.
+                business_id, title="New email", body=body, nav="operate:email",
+                # Same tag collapses an unread stack into the latest one
+                # instead of stacking six separate banners.
+                tag="mailbox-new-mail")
+        except Exception as exc:
+            logger.warning("[GMAIL] push failed for business=%s: %s",
+                           business_id, exc)
+    except Exception as exc:
+        logger.warning("[GMAIL] alert failed for business=%s: %s",
+                       business_id, exc)
+    return result
 
 
 # ─── One mailbox ─────────────────────────────────────────────────────
@@ -333,12 +452,26 @@ async def _sync_one(client: httpx.AsyncClient,
         ids = await _list_recent_ids(client, token)
 
     result["seen"] = len(ids)
+    stored_rows: List[Dict[str, Any]] = []
     for msg_id in ids[:MAX_MESSAGES_PER_RUN]:
         msg = await _get_message(client, token, msg_id)
         if not msg:
             continue
-        if _store(business_id, google_email, msg):
+        row = _store(business_id, google_email, msg)
+        if row:
+            stored_rows.append(row)
             result["stored"] += 1
+
+    # Do NOT alert on the first pass. Without a watermark this run is the
+    # initial seven-day backfill, so everything looks new — connecting a
+    # mailbox would fire a notification about last Tuesday's mail the
+    # instant you finished the consent screen. The first pass establishes
+    # the baseline silently; from the second on, new means new.
+    if watermark:
+        result["alert"] = _alert_new_mail(business_id, stored_rows)
+    elif stored_rows:
+        logger.info("[GMAIL] first pass for business=%s: %d stored, no alert",
+                    business_id, len(stored_rows))
 
     # Watermark AFTER processing, never before. Advancing first would make
     # a mid-run failure skip mail permanently, and the hole would be
