@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+import build_skills
 import module_inspect
 import module_vocabulary
 # The one declaration of the module vocabulary. Re-exported from this
@@ -1098,13 +1099,32 @@ def generate_module_proposal(
     if extra_guidance:
         user += ("\n\nAdditional practitioner guidance (use to revise the design "
                  "and update decomposition_reasoning):\n" + extra_guidance.strip())
+    # Build skills — the guidance for THIS kind of module, selected
+    # deterministically (no model call) and appended only when it applies.
+    # Empty string when nothing matches, which is the common case and costs
+    # nothing. A skill can never remove or override what _SYSTEM_PROMPT
+    # already establishes; it only refines it.
+    try:
+        selected_skills = build_skills.select_skills(
+            intake_excerpt, business.get("type", ""))
+    except Exception as _skill_err:          # never break a build over this
+        logger.warning(f"[skills] selection failed (continuing): {_skill_err}")
+        selected_skills = []
+    skill_block = build_skills.skills_block(selected_skills)
+    system_prompt = (
+        f"{_SYSTEM_PROMPT}\n\n{skill_block}" if skill_block else _SYSTEM_PROMPT
+    )
+    if selected_skills:
+        logger.info("[skills] attached: "
+                    + ", ".join(s["name"] for s in selected_skills))
+
     try:
         client = llm_call.sdk_client(key=api_key)
         msg = client.messages.create(
             model=GENERATOR_MODEL,
             max_tokens=GENERATOR_MAX_TOKENS,
             temperature=0.4,
-            system=_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": user}],
         )
         raw = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
