@@ -30,6 +30,20 @@ MOVEMENT, NOT JUST STATE
 - Put every terminal option in closed_statuses so finished work stops
   being chased.
 
+Every trigger object needs BOTH `type` and `action`. A trigger missing
+either fails validation and the WHOLE proposal is rejected — not just that
+trigger. Copy this shape exactly:
+
+    "triggers": [
+      {"type": "field_change", "field": "status",
+       "action": "draft_notification",
+       "template": "{{title}} moved to {{status}}"}
+    ]
+
+`type` is one of new_entry, overdue, field_change. `action` is one of
+draft_acknowledgment, draft_reminder, draft_notification. It is `type`,
+never `event`.
+
 DO NOT
 - Do not use a checkbox for done. A checkbox cannot show a board and
   collapses the middle of the process, which is the part worth seeing.

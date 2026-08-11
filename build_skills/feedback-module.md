@@ -20,8 +20,21 @@ ACTING ON IT
 - A `select` for what happens next — new, responded, resolved,
   published — with the finished states in closed_statuses. Feedback with
   no handling state is a pile, not a process.
-- `new_entry` trigger so a low score is seen the day it lands rather than
-  at the end of the month.
+- A `new_entry` trigger so a low score is seen the day it lands rather
+  than at the end of the month.
+
+Every trigger object needs BOTH `type` and `action`. A trigger missing
+either fails validation and the WHOLE proposal is rejected — not just that
+trigger. Copy this shape exactly:
+
+    "triggers": [
+      {"type": "new_entry", "action": "draft_acknowledgment",
+       "template": "New feedback: {{title}}"}
+    ]
+
+`type` is one of new_entry, overdue, field_change. `action` is one of
+draft_acknowledgment, draft_reminder, draft_notification. It is `type`,
+never `event`.
 
 PERMISSION BEFORE PUBLICATION
 - If the practitioner intends to show reviews publicly, add a `checkbox`
