@@ -106,6 +106,17 @@ def inspect_module_schema(schema: Any,
                 problems.append(f'field "{name}".type invalid: {ftype}')
             elif ftype == "select" and not (isinstance(f.get("options"), list) and f.get("options")):
                 problems.append(f'field "{name}" is select but has no options')
+            elif ftype == "module_ref" and not str(f.get("module_slug") or "").strip():
+                # A PROBLEM, not a warning — unlike offering_ref below.
+                # module_ref is new, so no live row can already be missing
+                # its constraint; enforcing from day one costs nothing and
+                # a module_ref without a target renders a dropdown that can
+                # never be populated. The offering_ref leniency exists only
+                # because rows predate the rule.
+                problems.append(
+                    f'field "{name}" is module_ref with no module_slug — '
+                    f"nothing tells it which module's rows to offer"
+                )
             elif ftype == "offering_ref" and not (
                 isinstance(f.get("offering_categories"), list) and f.get("offering_categories")
             ):

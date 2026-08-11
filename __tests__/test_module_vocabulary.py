@@ -281,3 +281,72 @@ def test_vocabulary_route_is_not_shadowed_by_a_path_param():
                 msr.router.routes[i], "methods", set()):
             raise AssertionError(
                 f"GET {p} is declared before /vocabulary and will shadow it")
+
+
+# ─── module_ref, the spec-level contract ──────────────────────────────
+
+def _spec(fields, slug="payments", archetype="fallback_generic"):
+    import module_spec_generator as msg
+
+    return msg.ModuleSpec(
+        name="Payments", slug=slug, description="d", icon="💳",
+        intake_excerpt="track payments against matters",
+        schema={"fields": fields, "views": ["list"]},
+        agent_config={"enabled": True, "triggers": []},
+        archetype=archetype, archetype_params={},
+        archetype_fallback_reason="test", reasoning="r", confidence="high",
+    )
+
+
+def _f(name, ftype="text", **kw):
+    d = {"name": name, "type": ftype, "label": name.title()}
+    d.update(kw)
+    return d
+
+
+def test_module_ref_needs_a_target():
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError, match="module_slug"):
+        _spec([_f("matter", "module_ref")])
+
+
+def test_module_ref_with_a_target_validates():
+    s = _spec([_f("matter", "module_ref", module_slug="matters")])
+    assert s.schema_.fields[0].module_slug == "matters"
+
+
+def test_module_ref_cannot_point_at_its_own_module():
+    """A payments row referencing the payments module is a loop with no
+    meaning, and the likeliest generator slip when it decomposes."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError, match="its own module"):
+        _spec([_f("self", "module_ref", module_slug="payments")], slug="payments")
+
+
+def test_module_ref_must_not_carry_options():
+    """The choices ARE the target module's rows, resolved at render time.
+    A populated options[] means the model built a select and mislabelled
+    it, which would render an empty dropdown of stale strings."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError, match="options"):
+        _spec([_f("m", "module_ref", module_slug="matters", options=["a"])])
+
+
+def test_module_ref_is_checked_for_every_archetype():
+    """The offering_ref rule lives inside the booking_calendar block and
+    so only ever guarded one archetype. This one is deliberately outside
+    them — a field pointing at another module is a schema concern."""
+    import pydantic
+
+    for arch in ("fallback_generic", "work_pipeline", "event_roster"):
+        with pytest.raises(pydantic.ValidationError, match="module_slug"):
+            _spec([_f("matter", "module_ref")], archetype=arch)
+
+
+@pytest.mark.parametrize("field_type", ["module_ref"])
+def test_prompt_teaches_module_ref(field_type):
+    """A type the prompt never names is a type Chief never emits."""
+    assert field_type in _declared_field_types_in_prompt()

@@ -74,6 +74,17 @@ FieldType = Literal[
     "phone",     # tel input; stored as typed
     "currency",  # stored as a NUMBER so sorting and totals keep working
     "rating",    # integer 1-5
+    # Points at a ROW of another custom module, by id. The field carries
+    # `module_slug` naming the target, exactly as offering_ref carries
+    # offering_categories.
+    #
+    # WHY: 20 blueprint fields across all 10 verticals named another module
+    # and stored it as free TEXT — lawyer/payments.matter, consultant/
+    # payments.project, service_provider/invoices.job. The Matters module
+    # sat right beside the payment and nothing connected them, so "what is
+    # unbilled on the Nakamura matter" had no answer, a rename orphaned
+    # every child row, and a typo broke the link silently.
+    "module_ref",
 ]
 
 FIELD_TYPES: tuple[str, ...] = get_args(FieldType)
