@@ -79,8 +79,13 @@ def test_every_vocabulary_field_type_is_accepted():
     point is undone at the next gate."""
     for ftype in mv.FIELD_TYPES:
         f = _field("f", ftype)
+        # Types with a required constraint get it, the same way a real
+        # spec would. The point of this test is that no type is rejected
+        # when properly formed — not that every type is constraint-free.
         if ftype == "select":
             f["options"] = ["a"]
+        if ftype == "module_ref":
+            f["module_slug"] = "other-module"
         rep = mi.inspect_module_schema({"fields": [f], "views": ["list"]})
         assert rep["renderable"], f"{ftype} rejected: {rep['problems']}"
 
@@ -303,3 +308,30 @@ def test_chief_surfaces_a_trigger_that_will_never_fire(monkeypatch):
     })
     assert "✅" in out["label"]
     assert "not a date field" in out["result"]
+
+
+# ─── module_ref: a row that points at another module's row ────────────
+
+def test_module_ref_without_a_target_is_a_problem():
+    """Enforced as a PROBLEM, unlike offering_ref's warning. module_ref is
+    new, so no live row can already be missing its constraint — there is
+    no legacy data to black out, and a module_ref with no target renders a
+    dropdown that can never be populated."""
+    rep = mi.inspect_module_schema(_schema(fields=[_field("matter", "module_ref")]))
+    assert not rep["renderable"]
+    assert any("module_slug" in p for p in rep["problems"])
+
+
+def test_module_ref_with_a_target_renders():
+    rep = mi.inspect_module_schema(_schema(
+        fields=[_field("matter", "module_ref", module_slug="matters")]))
+    assert rep["renderable"], rep["problems"]
+    assert rep["warnings"] == []
+
+
+def test_module_ref_target_may_differ_per_field():
+    rep = mi.inspect_module_schema(_schema(fields=[
+        _field("matter", "module_ref", module_slug="matters"),
+        _field("job", "module_ref", module_slug="jobs"),
+    ]))
+    assert rep["renderable"], rep["problems"]

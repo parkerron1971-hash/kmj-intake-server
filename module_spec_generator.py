@@ -91,6 +91,14 @@ class ModuleField(BaseModel):
     # service field has ['service','session']; future Invoicing line
     # items would accept all categories. Required when type='offering_ref'.
     offering_categories: Optional[List[OfferingCategory]] = None
+    # For type='module_ref' — the slug of the custom module this field
+    # points at. REQUIRED for module_ref; the renderer needs it to know
+    # which module's rows to offer, and there is nothing sensible to
+    # default to. Unlike offering_ref (whose constraint is enforced only
+    # at generation because live rows predate it), module_ref is new, so
+    # this is enforced everywhere including the render gate — there is no
+    # legacy data to black out.
+    module_slug: Optional[str] = None
 
 
 class ModuleSchema(BaseModel):
@@ -472,6 +480,32 @@ class ModuleSpec(BaseModel):
 
     @model_validator(mode="after")
     def _validate_archetype(self):
+        # ─── module_ref, for EVERY archetype ──────────────────────────
+        # Deliberately outside the archetype blocks below: a field that
+        # points at another module is a schema concern, not a booking or
+        # pipeline one, and the offering_ref check being buried inside
+        # booking_calendar is why it only ever guarded one archetype.
+        for f in self.schema_.fields:
+            if f.type == "module_ref":
+                if not (f.module_slug or "").strip():
+                    raise ValueError(
+                        f"field '{f.name}' has type='module_ref' but no "
+                        f"module_slug — the renderer has no way to know "
+                        f"which module's rows to offer"
+                    )
+                if f.module_slug == self.slug:
+                    raise ValueError(
+                        f"field '{f.name}' points module_ref at its own "
+                        f"module ('{self.slug}') — a row cannot reference "
+                        f"the module it lives in"
+                    )
+                if f.options:
+                    raise ValueError(
+                        f"field '{f.name}' is module_ref and must not carry "
+                        f"options[] — the choices are the target module's "
+                        f"rows, resolved at render time"
+                    )
+
         # Dispatch archetype_params to its typed submodel.
         model = _ARCHETYPE_PARAM_MODELS.get(self.archetype)
         if model is None:
@@ -780,6 +814,17 @@ DESIGN PRINCIPLES per ModuleSpec:
 - Fields reflect REAL operational data the practitioner needs (not generic placeholders)
 - `default_view: board` when one field is a clear status/progress column; else `list`
 - `board_column` MUST be the name of a `select` field when using board view
+- `module_ref` when an entry belongs to a ROW OF ANOTHER MODULE — a payment
+  against a matter, an invoice against a job, a deliverable against a project.
+  Carry `module_slug` naming the target module; never `options[]`. This is the
+  difference between a set of lists and a system: with a text field the
+  practitioner types "Nakamura estate" and nothing connects, a rename orphans
+  every child row, and "what is unbilled on this matter" has no answer.
+    {"name":"matter","type":"module_ref","label":"Matter","module_slug":"matters"}
+  Only reference a module that EXISTS in this proposal or that the practitioner
+  already has. When you decompose an intake into several modules, wire the
+  dependent ones to the primary one this way rather than repeating its name as
+  text. A field must not point at its own module.
 - `contact_link` when an entry should reference a person already in the practitioner's contacts (this is the FK between linked modules — use the same `contact_link` field name across modules so they link cleanly)
 - `select` (with options) for any short enumerated value (status, type, category)
 - Mark `required: true` ONLY on fields without which the row is meaningless
