@@ -55,6 +55,7 @@ from pydantic import BaseModel
 # (owner_id = auth.uid()) resolve to the real practitioner. sb_clients
 # centralizes the PostgREST header logic; auth_supabase ships the JWT
 # verification + UserSession dependency.
+import module_vocabulary
 import sb_clients
 from auth_supabase import UserSession, require_user_session
 
@@ -8421,9 +8422,9 @@ async def handle_list_products(client, biz, action) -> Dict:
 #
 # 'donation' is intentionally NOT a valid category — Fork 25 Giving guard.
 
-_VALID_OFFERING_CATEGORIES = {
-    "service", "session", "event", "course", "product", "package", "custom",
-}
+# Derived from module_vocabulary.py — the one place the category set is
+# written down. A set typed out beside a Literal is how they drift.
+_VALID_OFFERING_CATEGORIES = module_vocabulary.VALID_OFFERING_CATEGORIES
 
 def _slugify_offering(s: str) -> str:
     import re
@@ -14085,7 +14086,7 @@ ACTIONS — OFFERINGS (Phase C.1.2 — canonical pricing for service-based arche
   [ACTION:{{"type":"archive_offering","name":"Beard Trim"}}]
   [ACTION:{{"type":"list_offerings"}}]
   [ACTION:{{"type":"list_offerings","category":"service"}}]
-    — `category` is a closed enum: service | session | event | course | product | package | custom. 'donation' is NOT a valid category — donations live in the restricted-modules surface.
+    — `category` is a closed enum: {module_vocabulary.offering_categories_sentence()}. 'donation' is NOT a valid category — donations live in the restricted-modules surface.
   [ACTION:{{"type":"set_site_capability","capability":"booking","on":true}}]  — THE WIRED-SITE CONTRACT: records whether the WEBSITE carries a connected door (capability: booking | store). Use when they say "put booking on my site", "wire booking into my website", "add a book button", "put my shop on the site", or answer yes to your wiring nudge. It saves the decision into the site plan; the label tells them a refine/rebuild applies it — after emitting it, offer the refine ("want me to refine the site now so the button appears?"). "on":false takes a door OFF the site plan. It does NOT create booking or the store — those must already be live (the action refuses otherwise, and the label says what to set up first).
     — ROUTING — OFFERINGS vs PRODUCTS (read carefully — they are SEPARATE catalogs):
        • OFFERINGS are the canonical pricing for archetype-referenced things — services a barber books, sessions a coach takes, courses a creator sells (when consumed by an archetype like booking_calendar). When the practitioner says "haircut", "session", "lesson", "massage", "appointment", "service" — DEFAULT to offerings.

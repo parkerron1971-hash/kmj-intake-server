@@ -30,6 +30,15 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+import module_vocabulary
+# The one declaration of the module vocabulary. Re-exported from this
+# module because importers have referred to these names here for months.
+from module_vocabulary import (  # noqa: F401
+    FieldType,
+    ViewKind,
+    TriggerKind,
+    OfferingCategory,
+)
 import sb_clients
 
 logger = logging.getLogger("module_spec_generator")
@@ -43,25 +52,16 @@ if not logger.handlers:
 # ──────────────────────────────────────────────────────────────
 # ModuleSpec — what the LLM fills + what materializes
 # ──────────────────────────────────────────────────────────────
-# Field types mirror useCustomModules.FieldType exactly — drift would mean
-# DynamicModule rejects the schema.
-
-FieldType = Literal["text", "textarea", "select", "date", "number",
-                    "checkbox", "contact_link", "url", "email",
-                    # Phase C.1.2 — references an offerings row by id.
-                    # Widget resolves the dropdown from offerings filtered
-                    # by the field's offering_categories constraint.
-                    "offering_ref"]
-ViewKind = Literal["list", "board"]
-TriggerKind = Literal["new_entry", "overdue", "field_change"]
-
-# Phase C.1.2 — closed enum mirroring the offerings.category CHECK constraint.
-# Mirrored to TS in src/core/types/archetypes.gen.ts. 'donation' is
-# intentionally NOT a category — donations live in the restricted-modules
-# surface (Fork 25 Giving guard).
-OfferingCategory = Literal[
-    "service", "session", "event", "course", "product", "package", "custom"
-]
+# The module vocabulary — FieldType, ViewKind, TriggerKind,
+# OfferingCategory — used to be declared right here, and re-typed by hand
+# in a dozen places besides. It now lives once in module_vocabulary.py
+# and is imported at the top of this file.
+#
+# The copy that actually mattered was the prose list inside
+# _SYSTEM_PROMPT, which never learned about offering_ref — so the model
+# was never told it could use a type this Literal had allowed for months.
+# The prompt interpolates the vocabulary now; see _SYSTEM_PROMPT below
+# and test_module_vocabulary.py, which fails if a word is missing from it.
 
 
 class ModuleField(BaseModel):
@@ -706,12 +706,16 @@ for new specs — that's pre-C.1.2 read-back compat only):
 """.strip()
 
 
+# NOTE: a plain string with __TOKEN__ placeholders substituted at the end,
+# NOT an f-string. The prompt is full of literal JSON examples, and every
+# brace in them would have to be doubled to make it one — a large, silent
+# footgun for whoever edits the prompt next.
 _SYSTEM_PROMPT = """You design custom data modules for solo practitioners. Given a free-text \
 intake answer describing a tracking/workflow need, you output a JSON envelope \
 containing one or more ModuleSpecs plus your decomposition reasoning. Modules \
-will be rendered by a generic schema-driven renderer (list + kanban views; \
-field types: text, textarea, select, date, number, checkbox, contact_link, \
-url, email) and rules in workflows[] will be materialized into a workflow engine.
+will be rendered by a generic schema-driven renderer (views: __VIEW_KINDS__; \
+field types: __FIELD_TYPES__) \
+and rules in workflows[] will be materialized into a workflow engine.
 
 ═══════════════════════════════════════════════════════════════════════
 VERTICAL AWARENESS — open knowledge inside a closed archetype (NT8f)
@@ -1015,6 +1019,18 @@ Output STRICT JSON only matching this envelope:
 }
 No markdown, no commentary, no leading text.
 """
+
+# The vocabulary reaches the model HERE. Before this, the prompt carried a
+# hand-typed field-type list that had gone stale (no offering_ref), which
+# meant the model could not emit a type the validator had accepted for
+# months. test_module_vocabulary.py asserts every word survives this
+# substitution.
+_SYSTEM_PROMPT = (
+    _SYSTEM_PROMPT
+    .replace("__FIELD_TYPES__", module_vocabulary.field_types_sentence())
+    .replace("__VIEW_KINDS__", module_vocabulary.view_kinds_sentence())
+    .replace("__TRIGGER_KINDS__", module_vocabulary.trigger_kinds_sentence())
+)
 
 
 _USER_TEMPLATE = """Practitioner business: {business_name} (type: {business_type})
