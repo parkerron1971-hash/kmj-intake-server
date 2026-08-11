@@ -299,3 +299,46 @@ def test_skills_only_name_real_trigger_actions():
             assert m.group(1) in known, (
                 f"skill {s['name']} uses action {m.group(1)!r}, which "
                 f"module_agent does not map — expected one of {sorted(known)}")
+
+
+# ─── Matching is by WORD, not substring ───────────────────────────────
+
+def test_a_trigger_does_not_match_inside_another_word():
+    """THE bug this replaced: payments-module attached to a booking intake
+    because "owe" and "owed" both sit inside "showed up". Short trigger
+    words are common substrings, so containment grows false positives as
+    the library grows — and every one spends prompt budget teaching the
+    model about the wrong kind of module."""
+    lib = None
+    got = [s["name"] for s in bs.select_skills(
+        "who's coming in, what they booked, and whether they showed up", "barber", lib)]
+    assert "payments-module" not in got, got
+
+
+@pytest.mark.parametrize("text,trigger_word", [
+    ("the invoice is unpaid", "unpaid"),
+    ("who owes me money", "owes"),
+    ("send invoices", "invoices"),
+])
+def test_real_words_still_match(text, trigger_word):
+    got = [s["name"] for s in bs.select_skills(text, "consultant")]
+    assert "payments-module" in got, f"{trigger_word!r} should have matched: {got}"
+
+
+def test_multi_word_triggers_still_work():
+    """Phrases contain spaces; the boundary rule must not break them."""
+    got = [s["name"] for s in bs.select_skills(
+        "record how they rated it out of five", "coach")]
+    assert "feedback-module" in got, got
+
+
+def test_short_triggers_are_the_risky_ones():
+    """Documents the hazard for whoever adds the next skill: a 3-4 letter
+    trigger is a substring of a great many words, and only the boundary
+    rule makes it safe to use one."""
+    risky = [(s["name"], t) for s in bs.load_skills()
+             for t in (s.get("triggers") or []) if len(t) <= 4]
+    for name, t in risky:
+        # each must be matched as a word, never inside one
+        assert not bs._trigger_re(t).search(f"x{t}x"), (name, t)
+        assert bs._trigger_re(t).search(f"a {t} b"), (name, t)

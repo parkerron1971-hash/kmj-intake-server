@@ -48,6 +48,7 @@ DELIBERATE PROPERTIES
 
 from __future__ import annotations
 
+import functools
 import logging
 import pathlib
 import re
@@ -137,6 +138,31 @@ def load_skills(directory: Optional[pathlib.Path] = None) -> List[Skill]:
     return out
 
 
+@functools.lru_cache(maxsize=512)
+def _trigger_re(trigger: str) -> "re.Pattern[str]":
+    """Word-boundary match, NOT substring.
+
+    A raw `trigger in text` looked equivalent and quietly attached
+    payments-module to "whether they showed up" — "owe" and "owed" both
+    sit inside "showed". Short trigger words (owe, bill, fee, rate) are
+    common substrings of unrelated words, so a plain containment test
+    grows false positives as the library grows, and each one spends
+    prompt budget teaching the model about the wrong kind of module.
+
+    Phrases work unchanged: internal spaces are literal.
+    Lookarounds rather than a word-boundary escape, so the pattern
+    carries no backslash of its own — and because the text is lowercased
+    before matching, this is the precise rule: a trigger must not be
+    flanked by another word character.
+
+    A single optional trailing "s" is allowed, so "appointment" matches
+    "appointments" the way the old substring rule did. It cannot
+    reintroduce the bug: the FRONT boundary is what stops "owe" matching
+    inside "showed".
+    """
+    return re.compile("(?<![a-z0-9])" + re.escape(trigger) + "s?(?![a-z0-9])")
+
+
 def _score(skill: Skill, business_type: str, text: str) -> int:
     """Trigger hits, plus a bonus when the skill names this business type.
 
@@ -148,7 +174,8 @@ def _score(skill: Skill, business_type: str, text: str) -> int:
     if types and business_type not in types:
         return 0
 
-    hits = sum(1 for t in (skill.get("triggers") or []) if t and t in text)
+    hits = sum(1 for t in (skill.get("triggers") or [])
+               if t and _trigger_re(t).search(text))
     if not hits:
         return 0
     return hits + (2 if business_type and business_type in types else 0)
