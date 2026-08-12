@@ -168,28 +168,47 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any],
 
     if not result.get("ok"):
         check("generated", False, str(result.get("error"))[:200])
-        return _finish(case, checks, None)
+        return _finish(case, checks, None, specs if 'specs' in dir() else [])
 
     specs = result.get("specs") or []
     check("generated", True, f"{len(specs)} spec(s)")
     if not specs:
-        return _finish(case, checks, None)
+        return _finish(case, checks, None, specs if 'specs' in dir() else [])
 
-    spec = specs[0]
-    schema = spec.get("schema") or {}
-    fields = schema.get("fields") or []
-    types = {f.get("type") for f in fields if isinstance(f, dict)}
-    views = set(schema.get("views") or [])
-    trigger_kinds = {
-        t.get("type") for t in ((spec.get("agent_config") or {}).get("triggers") or [])
-        if isinstance(t, dict)
-    }
+    # ACROSS EVERY SPEC, not just the first.
+    #
+    # This read specs[0] and nothing else, which made it blind to exactly
+    # the thing it was extended to check. The `linked` case decomposed
+    # correctly into Jobs + Invoices and scored field_type:module_ref as a
+    # MISS — because the module_ref lives on the Invoices spec, pointing
+    # back at Jobs, and the scorer only ever looked at Jobs. The parent of
+    # a relationship never holds the reference; the child does. So a
+    # harness that reads one spec can never see a link.
+    #
+    # A proposal is one answer to one intake. Score the answer.
+    spec = specs[0]                      # for confidence + the summary
+    types, views, trigger_kinds = set(), set(), set()
+    unrenderable, all_warnings = [], []
+    for sp in specs:
+        sch = sp.get("schema") or {}
+        for f in (sch.get("fields") or []):
+            if isinstance(f, dict):
+                types.add(f.get("type"))
+        views |= set(sch.get("views") or [])
+        for t in ((sp.get("agent_config") or {}).get("triggers") or []):
+            if isinstance(t, dict):
+                trigger_kinds.add(t.get("type"))
+        rep = module_inspect.inspect_module_schema(sch, sp.get("agent_config"))
+        if not rep["renderable"]:
+            unrenderable.append(f"{sp.get('slug') or sp.get('name')}: "
+                                + "; ".join(rep["problems"][:2]))
+        all_warnings.extend(f"{sp.get('slug') or sp.get('name')}: {w}"
+                            for w in rep["warnings"])
 
-    # The one that matters most: would the practitioner see this, or the
-    # red panel? Same contract the frontend enforces.
-    report = module_inspect.inspect_module_schema(schema, spec.get("agent_config"))
-    check("renders", report["renderable"], "; ".join(report["problems"][:3]))
-    check("no_warnings", not report["warnings"], "; ".join(report["warnings"][:3]))
+    # EVERY spec must render. One red module in a two-module proposal is
+    # still a practitioner staring at an error panel.
+    check("renders", not unrenderable, "; ".join(unrenderable[:3]))
+    check("no_warnings", not all_warnings, "; ".join(all_warnings[:3]))
 
     for t in case.get("expect_field_types", []):
         check(f"field_type:{t}", t in types, f"got {sorted(types)}")
@@ -220,10 +239,26 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any],
         got_conf = spec.get("confidence")
         check(f"confidence:{want_conf}", got_conf == want_conf, f"got {got_conf!r}")
 
-    return _finish(case, checks, spec)
+    return _finish(case, checks, spec, specs)
 
 
-def _finish(case, checks, spec) -> Dict[str, Any]:
+def _summarise(spec: Dict[str, Any]) -> Dict[str, Any]:
+    sch = spec.get("schema") or {}
+    return {
+        "name": spec.get("name"),
+        "slug": spec.get("slug"),
+        "archetype": spec.get("archetype"),
+        "fields": [(f.get("name"), f.get("type"))
+                   + ((f.get("module_slug"),) if f.get("type") == "module_ref" else ())
+                   for f in (sch.get("fields") or [])],
+        "views": sch.get("views"),
+        "triggers": [t.get("type") for t in
+                     ((spec.get("agent_config") or {}).get("triggers") or [])],
+        "confidence": spec.get("confidence"),
+    }
+
+
+def _finish(case, checks, spec, specs=None) -> Dict[str, Any]:
     passed = sum(1 for c in checks if c["ok"])
     return {
         "id": case["id"],
@@ -231,16 +266,11 @@ def _finish(case, checks, spec) -> Dict[str, Any]:
         "total": len(checks),
         "checks": checks,
         "note": case.get("note"),
-        "spec_summary": None if not spec else {
-            "name": spec.get("name"),
-            "archetype": spec.get("archetype"),
-            "fields": [(f.get("name"), f.get("type"))
-                       for f in (spec.get("schema") or {}).get("fields") or []],
-            "views": (spec.get("schema") or {}).get("views"),
-            "triggers": [t.get("type") for t in
-                         ((spec.get("agent_config") or {}).get("triggers") or [])],
-            "confidence": spec.get("confidence"),
-        },
+        "spec_summary": None if not spec else _summarise(spec),
+        # Every module in the proposal, so a decomposition can be read.
+        # Showing only the first is how the linked case looked like a
+        # failure when the answer was on the module the summary omitted.
+        "specs": [_summarise(sp) for sp in (specs or [])],
     }
 
 
