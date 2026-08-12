@@ -350,3 +350,41 @@ def test_module_ref_is_checked_for_every_archetype():
 def test_prompt_teaches_module_ref(field_type):
     """A type the prompt never names is a type Chief never emits."""
     assert field_type in _declared_field_types_in_prompt()
+
+
+# ─── file attachments, the spec-level contract ────────────────────────
+
+def test_a_file_field_validates():
+    s = _spec([_f("contract", "file")])
+    assert s.schema_.fields[0].type == "file"
+
+
+def test_a_customer_facing_file_field_is_refused_at_generation():
+    """Refused here rather than left as prompt guidance, because guidance
+    is something a model can talk itself past. Storage writes need an
+    authenticated JWT; the customer widget is anonymous; honouring this
+    would mean reopening anonymous writes to the bucket."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError, match="customer_facing"):
+        _spec([_f("scan", "file", customer_facing=True)])
+
+
+def test_the_rule_holds_for_every_archetype():
+    import pydantic
+
+    for arch in ("fallback_generic", "work_pipeline", "event_roster"):
+        with pytest.raises(pydantic.ValidationError, match="customer_facing"):
+            _spec([_f("scan", "file", customer_facing=True)], archetype=arch)
+
+
+def test_prompt_teaches_file():
+    assert "file" in _declared_field_types_in_prompt()
+
+
+def test_prompt_states_the_practitioner_only_rule():
+    """The enforcement is the validator; the prompt still has to say it,
+    or every proposal spends a retry discovering the rule."""
+    import module_spec_generator as msg
+
+    assert "NEVER mark a file field" in msg._SYSTEM_PROMPT
