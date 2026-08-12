@@ -1785,6 +1785,98 @@ BOARD_SCRIPT = """
 """
 
 
+# ══════════════════════════════════════════════════════════════════════
+# THE PAGE SPINE
+#
+# The board makes the argument inside one section. This carries the same
+# language through the whole page: a single thread down the left gutter,
+# with a node at each numbered section, lighting as the reader descends.
+#
+# It threads a sequence the page ALREADY tells — 01 the engine, 02 Chief,
+# 03 the shape of it, 04 the rooms, 05 the demo, 06 who it's for, 07 why,
+# 08 what it costs. The numbering was already load-bearing; this only
+# draws the line that was implied between them.
+#
+# Deliberately almost invisible: a 1.5px rail, small dots, and accent
+# only on the part you have actually read. It is chrome, not content —
+# if it competes with the board for attention it has failed.
+# ══════════════════════════════════════════════════════════════════════
+
+SPINE_CSS = """
+      .pspine{position:absolute;left:0;width:44px;pointer-events:none;z-index:2;}
+      .pspine-rail,.pspine-lit{position:absolute;left:21px;top:0;width:1.5px;border-radius:1px;}
+      .pspine-rail{height:100%;background:#1E2A3B;}
+      .pspine-lit{height:0;background:var(--accent);opacity:.7;}
+      .pspine-dot{position:absolute;left:17px;width:9px;height:9px;border-radius:50%;
+        background:var(--bg);border:1.5px solid #1E2A3B;transform:translateY(-50%);
+        transition:border-color .35s ease,background .35s ease;}
+      .pspine-dot.on{border-color:var(--accent);background:#0B1220;}
+      .pspine-dot.on::after{content:"";position:absolute;inset:2px;border-radius:50%;background:var(--accent);}
+      @media (max-width:900px){
+        .pspine{width:20px;}
+        .pspine-rail,.pspine-lit{left:8px;}
+        .pspine-dot{left:4.5px;width:7px;height:7px;}
+      }
+      @media (prefers-reduced-motion:reduce){
+        .pspine-dot{transition:none;}
+      }
+"""
+
+
+SPINE_SCRIPT = """
+<script>
+(function () {
+  var marks = [].slice.call(document.querySelectorAll('.sec-num'));
+  if (marks.length < 2) return;   /* nothing to thread */
+
+  var host = document.createElement('div');
+  host.className = 'pspine';
+  host.setAttribute('aria-hidden', 'true');
+  var rail = document.createElement('span'); rail.className = 'pspine-rail';
+  var lit  = document.createElement('span'); lit.className  = 'pspine-lit';
+  host.appendChild(rail); host.appendChild(lit);
+  var dots = marks.map(function () {
+    var d = document.createElement('span');
+    d.className = 'pspine-dot';
+    host.appendChild(d);
+    return d;
+  });
+  document.body.appendChild(host);
+
+  var ys = [], y0 = 0, y1 = 1;
+
+  function layout() {
+    ys = marks.map(function (el) {
+      var r = el.getBoundingClientRect();
+      return r.top + window.pageYOffset + r.height / 2;
+    });
+    y0 = ys[0]; y1 = ys[ys.length - 1];
+    host.style.top = y0 + 'px';
+    host.style.height = Math.max(1, y1 - y0) + 'px';
+    for (var i = 0; i < dots.length; i++) dots[i].style.top = (ys[i] - y0) + 'px';
+    paint();
+  }
+
+  /* the reader's position is the middle of their screen, not its top —
+     a section is "reached" when it is in front of them, not when its
+     first pixel clears the fold */
+  function paint() {
+    var cur = window.pageYOffset + window.innerHeight * 0.55;
+    var p = Math.max(0, Math.min(1, (cur - y0) / Math.max(1, y1 - y0)));
+    lit.style.height = (p * 100) + '%';
+    for (var i = 0; i < dots.length; i++) dots[i].classList.toggle('on', cur >= ys[i]);
+  }
+
+  layout();
+  window.addEventListener('scroll', paint, { passive: true });
+  window.addEventListener('resize', layout);
+  /* fonts and images settle after DOMContentLoaded and move every marker */
+  window.addEventListener('load', layout);
+})();
+</script>
+"""
+
+
 def render_home() -> str:
     #      1. blue leads (see :root) — the ember/brass pass read purple-
     #         adjacent to him and he asked to flip the original palette
@@ -2626,8 +2718,8 @@ def render_home() -> str:
         title="One workspace that runs your whole business",
         description="The business system that already knows how yours runs. Bookings, clients, invoices, and an AI chief of staff that logs every move and never acts without your approval.",
         content_html=body, path="/",
-        extra_css=extra_css + BOARD_CSS,
-        extra_scripts=extra_scripts + BOARD_SCRIPT,
+        extra_css=extra_css + BOARD_CSS + SPINE_CSS,
+        extra_scripts=extra_scripts + BOARD_SCRIPT + SPINE_SCRIPT,
     )
 
 
