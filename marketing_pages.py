@@ -120,13 +120,43 @@ SHARED_CSS = """
   .brand .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--info));box-shadow:0 0 8px var(--glow);}
   .brand-text{display:inline-block;}
   @media (max-width: 540px){.brand-text{display:none;}}
+  /* ══ PAGE TRANSITIONS ═══════════════════════════════════════════════
+     Navigating moves the accent marker to the page you picked, and the
+     content arrives underneath it. Cross-document, so there is no router
+     and no SPA rewrite — the browser morphs the marker between the two
+     documents because both name it `nav-current`.
+
+     It runs OVER the arrival, never in front of it: the incoming content
+     starts drawing at 60ms while the marker is still travelling, so the
+     transition never delays the page.
+
+     Chromium-only today. Everywhere else this is inert and navigation is
+     exactly what it was — no layout shift, no fallback to maintain. */
+  @view-transition { navigation: auto; }
+  @media (prefers-reduced-motion: reduce){ @view-transition { navigation: none; } }
+
+  .page-main{view-transition-name:page-main;}
+  ::view-transition-old(page-main){animation:pgOut .14s ease both;}
+  ::view-transition-new(page-main){animation:pgIn .26s cubic-bezier(.2,.7,.3,1) .06s backwards;}
+  @keyframes pgOut{to{opacity:0;transform:translateY(-6px);}}
+  @keyframes pgIn{from{opacity:0;transform:translateY(10px);}}
+  /* 340ms — Kevin compared 200 / 340 / 600 and picked this one */
+  ::view-transition-group(nav-current){animation-duration:.34s;
+    animation-timing-function:cubic-bezier(.2,.7,.3,1);}
+
   .nav-links{display:flex;align-items:center;gap:22px;font-size:13px;font-weight:500;}
   .nav-links a{color:var(--text-muted);transition:color 0.15s;position:relative;}
   .nav-links a:hover, .nav-links a.is-active{color:var(--text-primary);}
-  .nav-links a.is-active::after{content:'';position:absolute;left:0;right:0;bottom:-18px;height:2px;background:linear-gradient(90deg, var(--accent), var(--info));border-radius:2px;}
+  /* The active marker is a real element, not ::after, because a pseudo
+     element cannot carry a view-transition-name — and this is the thing that
+     travels between pages. Same 2px bar as before, identical at rest. */
+  .nav-links a .nav-mark{display:none;}
+  .nav-links a.is-active .nav-mark{display:block;position:absolute;left:0;right:0;bottom:-18px;height:2px;
+    background:linear-gradient(90deg, var(--accent), var(--info));border-radius:2px;
+    view-transition-name:nav-current;}
+  .nav-cta .nav-mark{display:none !important;}
   .nav-cta{white-space:nowrap;padding:8px 16px;background:var(--accent);color:var(--ink-on-accent) !important;border-radius:8px;font-weight:700;font-size:13px;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;}
   .nav-cta:hover{transform:translateY(-1px);background:var(--accent-2);box-shadow:0 4px 20px color-mix(in srgb, var(--accent) 45%, transparent);}
-  .nav-cta.is-active::after{display:none;}
   .nav-login{white-space:nowrap;padding:7px 15px;border:1px solid var(--border-strong);border-radius:8px;color:var(--text-primary) !important;font-weight:600;font-size:13px;transition:border-color 0.15s, background 0.15s;}
   .nav-login:hover{border-color:var(--accent);background:var(--surface);}
   /* 900, not 760: at ~768 every link still showed, which wrapped both the
@@ -351,12 +381,12 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       <span class="brand-text">The Solutionist System</span>
     </a>
     <div class="nav-links">
-      <a href="/features" class="{ax_features}">Features</a>
-      <a href="/compare" class="{ax_compare}">Compare</a>
-      <a href="/faq" class="{ax_faq}">FAQ</a>
-      <a href="/about" class="{ax_about}">About</a>
-      <a href="/help" class="{ax_help}">Help</a>
-      <a href="/download" class="{ax_download}" title="Get the app for Android, iPhone, Windows &amp; macOS">Get the App</a>
+      <a href="/features" class="{ax_features}">Features<span class="nav-mark"></span></a>
+      <a href="/compare" class="{ax_compare}">Compare<span class="nav-mark"></span></a>
+      <a href="/faq" class="{ax_faq}">FAQ<span class="nav-mark"></span></a>
+      <a href="/about" class="{ax_about}">About<span class="nav-mark"></span></a>
+      <a href="/help" class="{ax_help}">Help<span class="nav-mark"></span></a>
+      <a href="/download" class="{ax_download}" title="Get the app for Android, iPhone, Windows &amp; macOS">Get the App<span class="nav-mark"></span></a>
       <a class="nav-login" href="{app_url}">Log in</a>
       <a class="nav-cta {ax_get_started}" href="/get-started">Get Started</a>
       <button class="nav-burger" id="navBurger" type="button" aria-label="Open menu"
@@ -399,7 +429,9 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
   </div>
 </div>
 
+<main class="page-main">
 {content}
+</main>
 
 <footer>
   <div class="footer-inner">
