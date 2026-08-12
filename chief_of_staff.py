@@ -67,6 +67,7 @@ from business_profile_agent import chief_context_block as bp_chief_context_block
 import practitioner_profile_agent
 from practitioner_profile_agent import chief_context_block as pp_chief_context_block
 import brand_engine
+import untrusted_text
 from brand_engine import chief_context_block as brand_engine_chief_context_block
 import voice_depth_agent
 from voice_depth_agent import chief_voice_context_block as voice_chief_context_block
@@ -1781,7 +1782,11 @@ _UNTRUSTED_TAINT: "contextvars.ContextVar[int]" = contextvars.ContextVar(
 # "[ACTION", optionally spaced, optionally followed by a colon. The word
 # boundary keeps ordinary prose safe — "take action on that invoice" and
 # "what action should I take?" are not attempts and must not hold a send.
-_ACTION_TAGLIKE_RE = re.compile(r"\[\s*action\b\s*:?", re.IGNORECASE)
+# The pattern moved to untrusted_text so brand_engine can share it —
+# chief_of_staff imports brand_engine, so the dependency only runs one
+# way and a second copy of the regex was the alternative. Kept as an
+# alias because a rename is not what this change is about.
+_ACTION_TAGLIKE_RE = untrusted_text.ACTION_TAGLIKE_RE
 
 
 def _neutralize_untrusted(text: Any) -> str:
@@ -1802,7 +1807,7 @@ def _neutralize_untrusted(text: Any) -> str:
     # Deliberately wider than the parser: it matches "[ACTION:" exactly,
     # but a near-miss is still someone trying, and a model told to
     # "repeat the following exactly" can supply the colon itself.
-    out, n = _ACTION_TAGLIKE_RE.subn("[redacted-tag ", s)
+    out, n = untrusted_text.strip_action_tags(s)
     if not n:
         return s
     _UNTRUSTED_TAINT.set(_UNTRUSTED_TAINT.get() + n)
