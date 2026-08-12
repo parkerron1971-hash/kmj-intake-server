@@ -2091,8 +2091,11 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
             f"  - {m.get('name')} ({count} entries){desc} [id={m.get('id')}{slug_part}]{fields_part}")
 
     # At-risk contacts
+    # A stranger picks their own name on the public booking widget, and
+    # it lands in /contacts unchanged.
     at_risk_lines = [
-        f"  - {c.get('name')} (health {c.get('health_score')}) [id={c.get('id')}]"
+        f"  - {_neutralize_untrusted(c.get('name') or '')} "
+        f"(health {c.get('health_score')}) [id={c.get('id')}]"
         for c in ctx["at_risk"]
     ]
 
@@ -9594,7 +9597,8 @@ async def handle_catch_up(client, biz, action) -> Dict:
 
     # New contacts
     if new_contacts:
-        names = ", ".join(c.get("name") or "—" for c in new_contacts[:3])
+        names = ", ".join(_neutralize_untrusted(c.get("name") or "") or "—"
+                          for c in new_contacts[:3])
         suffix = "" if len(new_contacts) <= 3 else f" (+{len(new_contacts) - 3} more)"
         summary_parts.append(f"{len(new_contacts)} new contact(s): {names}{suffix}")
 
@@ -12493,14 +12497,21 @@ def _format_view_block(view: Optional[CurrentContext], detail: Dict[str, Any]) -
     session_rows = detail.get("session") or []
     if session_rows:
         s = session_rows[0]
-        cname = (s.get("contacts") or {}).get("name") or ""
+        # THIRD-PARTY AUTHORED. A visitor to the public booking form
+        # controls all three of these: public_site stores their message
+        # verbatim as `notes` and builds `title` around the name they
+        # typed. Same treatment the SMS and email channels already get —
+        # a defence wired to two channels and not a third is how this
+        # class of bug survives.
+        cname = _neutralize_untrusted((s.get("contacts") or {}).get("name") or "")
+        stitle = _neutralize_untrusted(s.get("title") or "")
         lines.append(
-            f"  SESSION: {s.get('title')} [id={s.get('id')}]"
+            f"  SESSION: {stitle} [id={s.get('id')}]"
             f" · {s.get('status')} · scheduled {s.get('scheduled_for', '')[:16]}"
             + (f" · with {cname}" if cname else "")
         )
         if s.get("notes"):
-            lines.append(f"    notes: {str(s['notes'])[:200]}")
+            lines.append(f"    notes: {_neutralize_untrusted(s['notes'])[:200]}")
 
     lines.append("")
     lines.append("When the practitioner says 'him'/'her'/'this one'/'it'/'this contact'/'this entry',")
@@ -13619,7 +13630,8 @@ async def _get_draft_context(client: httpx.AsyncClient, biz_id: str,
             when = (last.get("scheduled_for") or "")[:10]
             stype = last.get("session_type") or "session"
             parts.append(f"Last session: {when} ({stype})")
-            notes = (last.get("notes") or "").strip()
+            # Same public-booking origin as the block above.
+            notes = _neutralize_untrusted(last.get("notes") or "").strip()
             if notes:
                 parts.append(f"Session notes: {notes[:240]}")
             parts.append(f"Total completed sessions: {len(sessions)}+")
