@@ -29,11 +29,17 @@ from test_i2_gl_sync import FakeSB  # noqa: E402
 # The ledger now requires a fresh password confirmation. That is a
 # separate control with its own tests; here it is satisfied so each test
 # keeps asserting the thing it was written to assert.
-def _unlocked(user_id: str = "owner1"):
+def _unlocked(user_id: str = "owner1", scope: str | None = None):
+    """Redaction is DANGER-scoped: its own docstring calls it the one
+    operation that can empty rows in an append-only table, so the unlock
+    granted to READ the ledger deliberately does not authorise it.
+    test_step_up_scopes.py proves the gate refuses the wrong scope; these
+    tests satisfy it so each keeps asserting what it was written for."""
     import os
     os.environ.setdefault("AUDITOR_LINK_SECRET", "unit-test-secret")
     import ledger_unlock
-    tok = ledger_unlock.mint(str(user_id))["token"]
+    tok = ledger_unlock.mint(str(user_id),
+                             scope or ledger_unlock.SCOPE_DANGER)["token"]
     return type("R", (), {"headers": {"X-Ledger-Unlock": tok}})()
 
 _SQL = (_here.parent / "supabase" / "APPLY-2026-08-03-ledger-redaction.sql"

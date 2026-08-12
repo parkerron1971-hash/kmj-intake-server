@@ -101,7 +101,12 @@ def _require_owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
 def mint_link(request: Request, body: MintBody,
               user: AuthedUser = Depends(require_user)):
     """Mint a reviewer link. The plaintext is returned ONCE."""
-    ledger_unlock.require_unlock(request, user.id)
+    # ACCESS, not ledger. This mints an EXTERNAL credential to the audit
+    # trail — the record the whole integrity story rests on. Reading your
+    # own history is routine and its unlock is granted casually; handing
+    # someone else a key to it is a different question and must be asked
+    # as one.
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
     biz_row = _require_owner(body.business_id, user)
     import auditor_links
     try:
@@ -193,7 +198,10 @@ def redact_subject(request: Request, body: RedactBody,
     operation that can empty rows in an append-only table.
     """
     _require_owner(body.business_id, user)
-    ledger_unlock.require_unlock(request, user.id)
+    # DANGER. Its own docstring: "the one operation that can empty rows in
+    # an append-only table". A ledger unlock is granted to READ; it must
+    # not also authorise permanently editing what is read.
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER)
     subject_type = str(body.subject_type or "").strip()[:40]
     subject_id = str(body.subject_id or "").strip()[:80]
     if not subject_type or not subject_id:
