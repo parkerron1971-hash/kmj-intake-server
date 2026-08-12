@@ -16,6 +16,20 @@ import business_users_router as bu  # noqa: E402
 import business_collaborators_router as bc  # noqa: E402
 from test_i2_gl_sync import FakeSB  # noqa: E402
 
+# Invite is STEP-UP gated (grants access). These tests exercise the
+# authorisation logic BEHIND that gate, so they present a valid
+# access-scoped unlock. test_step_up_scopes.py is what proves the gate
+# itself refuses when the unlock is missing, wrong-scoped or expired.
+import os as _os
+_os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-step-up")
+import ledger_unlock as _lu
+
+
+def _stepup(user_id):
+    tok = _lu.mint(str(user_id), _lu.SCOPE_ACCESS)["token"]
+    return type("R", (), {"headers": {_lu.UNLOCK_HEADER: tok}})()
+
+
 
 @pytest.fixture
 def fake(monkeypatch):
@@ -59,13 +73,13 @@ def test_role_of_ladder(fake):
 def test_manager_can_invite_members_not_admins(fake):
     fb = fake
     _member(fb, "mg1", "manager")
-    out = asyncio.run(bu.invite("b1", bu.InviteBody(email="new@x.com", role="member"), _u("mg1")))
+    out = asyncio.run(bu.invite("b1", bu.InviteBody(email="new@x.com", role="member"), _stepup("mg1"), _u("mg1")))
     assert out["ok"]
     with pytest.raises(HTTPException) as e:
-        asyncio.run(bu.invite("b1", bu.InviteBody(email="boss@x.com", role="admin"), _u("mg1")))
+        asyncio.run(bu.invite("b1", bu.InviteBody(email="boss@x.com", role="admin"), _stepup("mg1"), _u("mg1")))
     assert e.value.status_code == 403
     # Owner can invite admins; viewer roles are inviteable now too.
-    out2 = asyncio.run(bu.invite("b1", bu.InviteBody(email="cpaview@x.com", role="viewer"), _u("owner1")))
+    out2 = asyncio.run(bu.invite("b1", bu.InviteBody(email="cpaview@x.com", role="viewer"), _stepup("owner1"), _u("owner1")))
     assert out2["member"]["role"] == "viewer"
 
 

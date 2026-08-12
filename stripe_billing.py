@@ -66,6 +66,7 @@ import os
 import time
 from typing import Any, Dict, Optional
 
+import ledger_unlock
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
@@ -593,9 +594,14 @@ class PortalBody(BaseModel):
 
 
 @router.post("/portal")
-async def create_portal(body: PortalBody, user: AuthedUser = Depends(require_user)):
+async def create_portal(body: PortalBody, request: Request,
+                        user: AuthedUser = Depends(require_user)):
     """Mint a Stripe Customer Portal session URL for managing the
     existing subscription. 400 if the business has never had a customer."""
+    # STEP-UP. Behind this door the card and the bank details change.
+    # Stripe re-authenticates for some of it, but not all, and the URL
+    # is a bearer link once minted.
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER)
     biz = await _load_business(body.business_id)
     _require_owner_of(user, biz)
     customer_id = biz.get("stripe_customer_id")

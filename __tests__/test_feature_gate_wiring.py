@@ -19,6 +19,20 @@ import reports_router as rr  # noqa: E402
 import business_collaborators_router as bc  # noqa: E402
 from test_i2_gl_sync import FakeSB  # noqa: E402
 
+# Invite is STEP-UP gated (grants access). These tests exercise the
+# authorisation logic BEHIND that gate, so they present a valid
+# access-scoped unlock. test_step_up_scopes.py is what proves the gate
+# itself refuses when the unlock is missing, wrong-scoped or expired.
+import os as _os
+_os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-step-up")
+import ledger_unlock as _lu
+
+
+def _stepup(user_id):
+    tok = _lu.mint(str(user_id), _lu.SCOPE_ACCESS)["token"]
+    return type("R", (), {"headers": {_lu.UNLOCK_HEADER: tok}})()
+
+
 
 class _User:
     id = "owner1"
@@ -115,7 +129,7 @@ def test_collaborator_invite_is_practice_gated(fake, monkeypatch):
     _biz(fake, "b1", plan="price_professional")
     _enforce(monkeypatch)
     with pytest.raises(HTTPException) as e:
-        asyncio.run(bc.invite("b1", bc.InviteBody(email="cpa@x.com"), _User()))
+        asyncio.run(bc.invite("b1", bc.InviteBody(email="cpa@x.com"), _stepup(_User().id), _User()))
     assert e.value.status_code == 402
     assert e.value.detail["feature"] == "accountant_collaborator"
     # Accepting an existing invite is never plan-locked: seed a pending row

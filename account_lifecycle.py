@@ -33,9 +33,10 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+import ledger_unlock
 import httpx
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from audit_log import LEDGER_EXPORT_SELECT
 from auth_supabase import AuthedUser, require_user
@@ -647,8 +648,13 @@ async def _delete_user_rows(client: httpx.AsyncClient, user_id: str) -> Dict[str
 
 
 @router.delete("/business/{business_id}")
-async def delete_business(business_id: str, user: AuthedUser = Depends(require_user)):
+async def delete_business(business_id: str, request: Request,
+                          user: AuthedUser = Depends(require_user)):
     """Permanently delete ONE business the caller owns. No undo."""
+    # STEP-UP. "No undo" is the whole reason: an unattended session must
+    # not be able to erase a practice, and a stolen JWT alone must not
+    # be enough either.
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         businesses = await _owned_businesses(client, user.id)
         target = next((b for b in businesses if b["id"] == business_id), None)
@@ -660,9 +666,12 @@ async def delete_business(business_id: str, user: AuthedUser = Depends(require_u
 
 
 @router.delete("")
-async def delete_account(user: AuthedUser = Depends(require_user)):
+async def delete_account(request: Request,
+                         user: AuthedUser = Depends(require_user)):
     """Permanently delete EVERY owned business, then the auth user.
     The session becomes invalid immediately after. No undo."""
+    # STEP-UP. The most destructive call in the system.
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         businesses = await _owned_businesses(client, user.id)
         logger.warning(f"DELETE ACCOUNT user={user.id} email={user.email} businesses={len(businesses)}")

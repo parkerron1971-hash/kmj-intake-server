@@ -40,6 +40,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+import ledger_unlock
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 from stripe_connect_helpers import (
@@ -249,8 +250,12 @@ async def stripe_connect_callback(request: Request) -> RedirectResponse:
 @router.post("/stripe-connect/disconnect")
 async def stripe_connect_disconnect(
     payload: Dict[str, Any],
+    request: Request,
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
+    # STEP-UP. This is how the practitioner gets paid. Reconnecting means
+    # going back through Stripe onboarding, so it is not a quick undo.
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_DANGER)
     business_id = (payload or {}).get("business_id")
     if not business_id:
         raise HTTPException(400, "business_id required")

@@ -20,9 +20,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+import ledger_unlock
 import sb_clients
 import billing_limits
 from auth_supabase import AuthedUser, require_user
@@ -113,8 +114,11 @@ class InviteBody(BaseModel):
 
 
 @router.post("/invite")
-async def invite(biz: str, body: InviteBody,
+async def invite(biz: str, body: InviteBody, request: Request,
                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    # STEP-UP on the GRANT only. Revoking is the emergency brake and
+    # must never have friction in front of it.
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
     inviter_role = require_role(biz, str(user.id), "manager")
     if body.role == "admin" and _ROLE_RANK[inviter_role] < _ROLE_RANK["admin"]:
         raise HTTPException(403, "only an admin or the owner can invite admins")

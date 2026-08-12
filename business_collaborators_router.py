@@ -11,9 +11,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+import ledger_unlock
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 import billing_limits
@@ -118,8 +119,11 @@ def accountant_overview(biz: str, user: AuthedUser = Depends(require_user)) -> D
 
 
 @router.post("/invite")
-async def invite(biz: str, body: InviteBody,
+async def invite(biz: str, body: InviteBody, request: Request,
                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    # STEP-UP on the GRANT only — an accountant invite reaches the books.
+    # Revoke stays open; the brake never gets a gate.
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
     biz_row = _owner(biz, user)
     # Gate the INVITE only: accepting an already-sent invite and revoking
     # access must never be plan-locked.
