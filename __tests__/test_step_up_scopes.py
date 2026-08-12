@@ -174,3 +174,40 @@ def test_revokes_are_not_gated():
         src = inspect.getsource(f)
         assert "require_unlock" not in src, \
             f"{mod.__name__}.{fn} must not require step-up — it REMOVES access"
+
+
+# ── the audit surfaces, by consequence rather than by location ──────
+
+def test_the_audit_endpoints_ask_for_the_right_scope():
+    """All three live in auditor_portal, and they are three different
+    questions:
+
+      LIST  is a read           -> ledger
+      MINT  hands out a key     -> access
+      REDACT edits the record   -> danger
+
+    Gating them all at `ledger` — which is where they started — meant
+    the unlock a practitioner grants casually to read their own history
+    also minted external credentials to it.
+    """
+    import inspect
+    import auditor_portal as ap
+    src = {fn: inspect.getsource(getattr(ap, fn))
+           for fn in ("list_links", "mint_link", "redact_subject")}
+    assert "SCOPE_ACCESS" in src["mint_link"]
+    assert "SCOPE_DANGER" in src["redact_subject"]
+    # The read keeps the read scope. Naming it explicitly would be fine
+    # too; what must NOT happen is it silently gaining a stronger one.
+    assert "SCOPE_DANGER" not in src["list_links"]
+    assert "SCOPE_ACCESS" not in src["list_links"]
+
+
+def test_revoking_a_reviewer_link_is_not_hardened_further():
+    """Same promise as seats: the brake keeps the friction it already
+    had and gains none. Pulling a live external credential must never
+    become harder than granting one."""
+    import inspect
+    import auditor_portal as ap
+    src = inspect.getsource(ap.revoke_link) if hasattr(ap, "revoke_link") else ""
+    assert "SCOPE_DANGER" not in src
+    assert "SCOPE_ACCESS" not in src
