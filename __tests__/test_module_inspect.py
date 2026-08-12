@@ -387,3 +387,30 @@ def test_repair_will_not_invent_a_date_field():
                                         views=["list", "calendar"]))
     assert fixed["views"] == ["list"]
     assert fixed.get("calendar_field") is None
+
+
+# ─── file attachments ─────────────────────────────────────────────────
+
+def test_a_plain_file_field_renders():
+    rep = mi.inspect_module_schema(_schema(fields=[_field("contract", "file")]))
+    assert rep["renderable"], rep["problems"]
+    assert rep["warnings"] == []
+
+
+def test_a_customer_facing_file_field_is_a_problem():
+    """Storage writes need an authenticated JWT and the customer widget is
+    anonymous. The only way to honour this field would be to reopen
+    anonymous writes to the bucket — the exact hole the 2026-08-09
+    lockdown closed. Refused, not warned."""
+    rep = mi.inspect_module_schema(
+        _schema(fields=[_field("scan", "file", customer_facing=True)]))
+    assert not rep["renderable"]
+    assert any("customer_facing" in p for p in rep["problems"])
+
+
+def test_a_practitioner_only_file_is_fine_alongside_customer_fields():
+    rep = mi.inspect_module_schema(_schema(fields=[
+        _field("notes", "textarea", customer_facing=True),
+        _field("signed_contract", "file"),
+    ]))
+    assert rep["renderable"], rep["problems"]

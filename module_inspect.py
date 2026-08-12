@@ -106,6 +106,17 @@ def inspect_module_schema(schema: Any,
                 problems.append(f'field "{name}".type invalid: {ftype}')
             elif ftype == "select" and not (isinstance(f.get("options"), list) and f.get("options")):
                 problems.append(f'field "{name}" is select but has no options')
+            elif ftype == "file" and f.get("customer_facing"):
+                # A PROBLEM, not a warning. The customer widget is
+                # anonymous and storage writes need a JWT, so this field
+                # cannot function on a customer form — and the only way
+                # to make it work would reopen anonymous writes to the
+                # bucket, which is the hole the storage lockdown closed.
+                problems.append(
+                    f'field "{name}" is a file marked customer_facing — '
+                    f"uploads need a signed-in user, so it cannot work on "
+                    f"a customer form"
+                )
             elif ftype == "module_ref" and not str(f.get("module_slug") or "").strip():
                 # A PROBLEM, not a warning — unlike offering_ref below.
                 # module_ref is new, so no live row can already be missing

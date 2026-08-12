@@ -507,6 +507,19 @@ class ModuleSpec(BaseModel):
                     f"calendar_field '{cf}' must be a date field "
                     f"(got '{by_name[cf].type}')")
 
+        # A file field can never be customer-facing. Storage writes need an
+        # authenticated JWT; the customer widget is anonymous. The only way
+        # to honour a customer-facing upload would be to reopen anonymous
+        # writes to the bucket, which is the vulnerability the storage
+        # lockdown closed — so this is refused at generation rather than
+        # left as guidance the model can talk itself past.
+        for f in self.schema_.fields:
+            if f.type == "file" and f.customer_facing:
+                raise ValueError(
+                    f"field '{f.name}' is a file and cannot be "
+                    f"customer_facing — uploads require a signed-in user, "
+                    f"and the customer widget is anonymous")
+
         for f in self.schema_.fields:
             if f.type == "module_ref":
                 if not (f.module_slug or "").strip():
@@ -853,6 +866,13 @@ DESIGN PRINCIPLES per ModuleSpec:
   date, with an `overdue` trigger. Only use calendar when the row IS an
   event.
 - `board_column` MUST be the name of a `select` field when using board view
+- `file` when the row needs a document attached — a signed contract, a
+  scan, a photo of the work, a receipt. The practitioner uploads it and it
+  lands in their private document store. NEVER mark a file field
+  customer_facing: uploading requires a signed-in user and the customer
+  widget is anonymous, so a customer-facing file field cannot work and
+  will be refused. If a customer needs to send something, that is an email
+  or an intake form, not a module field.
 - `module_ref` when an entry belongs to a ROW OF ANOTHER MODULE — a payment
   against a matter, an invoice against a job, a deliverable against a project.
   Carry `module_slug` naming the target module; never `options[]`. This is the

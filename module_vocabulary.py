@@ -85,6 +85,18 @@ FieldType = Literal[
     # unbilled on the Nakamura matter" had no answer, a rename orphaned
     # every child row, and a typo broke the link silently.
     "module_ref",
+    # An attachment. The stored VALUE is the object PATH inside the
+    # private `business-documents` bucket, always beginning with the
+    # business id — the shape storage_business_id() parses, so the
+    # existing owner-scoped policies cover it with no new bucket and no
+    # new policy.
+    #
+    # PRACTITIONER-ONLY, enforced: a file field may never be
+    # customer_facing. Storage writes require an authenticated JWT and
+    # the customer widget is anonymous, so a customer-facing upload could
+    # only work by reopening anonymous writes to storage — which is
+    # precisely the hole the 2026-08-09 lockdown closed.
+    "file",
 ]
 
 FIELD_TYPES: tuple[str, ...] = get_args(FieldType)
