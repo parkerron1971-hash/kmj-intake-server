@@ -1235,8 +1235,10 @@ BOARD_CSS = """
         background:radial-gradient(120% 72% at 50% 50%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 70%);}
       .board-scroll{overflow-x:auto;overflow-y:hidden;}
       .board-scroll svg{display:block;width:100%;height:auto;min-width:1180px;}
-      .board-frame.is-v .board-scroll{overflow-x:hidden;overflow-y:auto;max-height:64vh;
-        scrollbar-width:thin;scrollbar-color:#1E2A3B transparent;}
+      /* The page scroll pulls the vertical board through this frame, so it
+         must not carry a scrollbar of its own — a nested scroll region on a
+         phone traps the thumb that is supposed to be driving the current. */
+      .board-frame.is-v .board-scroll{overflow:hidden;max-height:64vh;}
       .board-frame.is-v .board-scroll svg{min-width:0;max-width:420px;margin:0 auto;}
 
       .tr-base{fill:none;stroke:#1E2A3B;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
@@ -1309,7 +1311,7 @@ BOARD_CSS = """
 
 
 BOARD_HTML = """
-    <div class="board-sec reveal reveal-delay-3">
+    <div class="board-sec reveal reveal-delay-3" id="bdSec">
       <div class="board-cap">
         <div class="board-cap-l">
           <span class="board-chip">Live</span>
@@ -1346,6 +1348,7 @@ BOARD_SCRIPT = """
 (function () {
   var scroller = document.getElementById('bdScroll');
   if (!scroller) return;
+  var sec    = document.getElementById('bdSec');
   var frame  = document.getElementById('bdFrame');
   var list   = document.getElementById('bdList');
   var evEl   = document.getElementById('bdEvent');
@@ -1682,21 +1685,46 @@ BOARD_SCRIPT = """
       var els = scroller.querySelectorAll('[data-bd="' + bid + '"]');
       for (i = 0; i < els.length; i++) els[i].classList.toggle('on', on);
     }
-    if (narrow.matches && n > 0) followTo(stops[n-1].id);
     syncList(n);
   }
 
-  function followTo(id) {
-    var g = scroller.querySelector('.nd[data-nd="' + id + '"]');
-    var svg = scroller.querySelector('svg');
-    if (!g || !svg || !svg.viewBox || !svg.viewBox.baseVal) return;
-    var scale = svg.clientHeight / svg.viewBox.baseVal.height;
-    if (!isFinite(scale) || scale <= 0) return;
-    var box = g.getBBox();
-    var target = (box.y + box.height / 2) * scale - scroller.clientHeight / 2;
-    scroller.scrollTo({ top:Math.max(0, target), behavior:reduced ? 'auto' : 'smooth' });
+  /* ── the reader sets the pace ──────────────────────────────────────
+     Progress is read from where the board sits in the viewport, never
+     from a timer. It starts as the board rises from the bottom and
+     completes as it settles into the upper half, so the current moves
+     exactly as fast as the person scrolling. Move slowly and it crawls;
+     stop and it stops; arriving at it never starts a race already run. */
+  function scrollProgress() {
+    var r = sec.getBoundingClientRect(), vh = window.innerHeight;
+    var startAt = vh * 0.85, endAt = vh * 0.45;
+    var span = startAt + r.height - endAt;
+    if (span <= 0) return 0;
+    return Math.max(0, Math.min(1, (startAt - r.top) / span));
   }
 
+  function paint() {
+    var e = reduced ? 1 : scrollProgress();
+    applyProgress(e);
+    if (narrow.matches) {
+      /* the page scroll pulls the vertical board up through its frame,
+         locked to the same progress that moves the current */
+      var svg = scroller.querySelector('svg');
+      if (svg) {
+        scroller.scrollTop = 0;
+        var over = svg.getBoundingClientRect().height - scroller.clientHeight;
+        svg.style.transform = 'translateY(' + (-Math.max(0, over) * e).toFixed(1) + 'px)';
+      }
+    }
+  }
+
+  /* Deliberately not rAF-throttled: the obvious guard leaves the board
+     frozen for good if the scheduled frame is ever dropped, because the
+     flag never clears. applyProgress returns early unless the lit count
+     actually moved. */
+  function onScroll() { if (!raf) paint(); }
+
+  /* Switching event redraws from zero up to wherever the reader already
+     is, so the click has feedback, then hands control back to the scroll. */
   function play() {
     if (raf) cancelAnimationFrame(raf);
     list.innerHTML = '';
@@ -1707,12 +1735,14 @@ BOARD_SCRIPT = """
 
     if (reduced) { applyProgress(1); return; }
 
-    var dur = Math.max(2400, Math.min(4800, total * 2.4)), t0 = null;
+    var target = scrollProgress(), t0 = null, dur = 900;
     function frameStep(t) {
       if (t0 === null) t0 = t;
       var p = Math.min(1, (t - t0) / dur);
-      applyProgress(p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2);
-      if (p < 1) raf = requestAnimationFrame(frameStep);
+      var e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+      applyProgress(e * target);
+      if (p < 1) { raf = requestAnimationFrame(frameStep); }
+      else { raf = null; paint(); }
     }
     raf = requestAnimationFrame(frameStep);
   }
@@ -1735,437 +1765,21 @@ BOARD_SCRIPT = """
     trigs.appendChild(b);
   });
 
-  build();
-  applyProgress(0);
+  function rebuild() {
+    var svg = scroller.querySelector('svg');
+    if (svg) svg.style.transform = '';
+    build();
+    paint();
+  }
+
   evEl.textContent  = cur.title;
   srcEl.textContent = cur.source;
+  rebuild();
 
-  if (narrow.addEventListener) narrow.addEventListener('change', play);
-  else if (narrow.addListener) narrow.addListener(play);
-
-  /* the board sits below the fold, so it starts when it is looked at
-     rather than on load, where it would finish before anyone arrived */
-  if ('IntersectionObserver' in window) {
-    var seen = false;
-    new IntersectionObserver(function (entries, obs) {
-      entries.forEach(function (en) {
-        if (en.isIntersecting && !seen) { seen = true; play(); obs.disconnect(); }
-      });
-    }, { threshold: 0.25 }).observe(frame);
-  } else { play(); }
-})();
-</script>
-"""
-
-
-# ══════════════════════════════════════════════════════════════════════
-# THE ROOMS BOARD (section 04)
-#
-# The hero board argues "these parts are connected" with a branched spine
-# and generic surfaces. Showing that same picture twice would halve it, so
-# this is a DIFFERENT diagram making a different argument: its stops are
-# the six rooms themselves, on one straight spine, visited in the order a
-# real decision actually crosses them. Section 04's headline stops being a
-# claim and becomes the picture.
-#
-# Reaching a stop swaps the panel beneath it to that room, so the rooms
-# stop being six things you click through and become six places the system
-# walks you through.
-#
-# Deliberately self-contained (own `rm-` prefix, own script) so it cannot
-# destabilise the hero board that is already live. It reuses only the
-# #bdglow filter, which that board already emits once per page.
-# ══════════════════════════════════════════════════════════════════════
-
-ROOMS_CSS = """
-      .rm-stage{position:relative;height:250vh;margin-top:56px;}
-      .rm-pin{position:sticky;top:0;height:100vh;display:flex;align-items:center;}
-      .rm-in{width:100%;}
-      .rm-cap{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
-        flex-wrap:wrap;margin-bottom:14px;}
-      .rm-cap-l{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap;}
-      .rm-chip{align-self:center;font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;
-        text-transform:uppercase;color:var(--accent);
-        border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);border-radius:4px;padding:3px 7px;}
-      .rm-cap b{font-family:var(--font-heading);font-size:17px;font-weight:600;letter-spacing:-.015em;}
-      .rm-cap .d{font-size:15px;color:var(--text-muted);}
-      .rm-hint{font-family:var(--font-mono);font-size:11.5px;color:var(--text-dim);}
-
-      .rm-board{background:radial-gradient(115% 80% at 50% 45%,
-        color-mix(in srgb,var(--accent) 8%,transparent),transparent 72%);}
-      .rm-board svg{display:block;width:100%;height:auto;max-height:34vh;}
-
-      .rm-base{fill:none;stroke:#1E2A3B;stroke-width:2;stroke-linecap:round;}
-      .rm-live{fill:none;stroke:var(--accent);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;}
-      .rm-glow{fill:none;stroke:var(--accent);stroke-width:7;stroke-linecap:round;stroke-linejoin:round;
-        opacity:.3;filter:url(#bdglow);}
-      .rm-tick{stroke:#1E2A3B;stroke-width:1.5;transition:stroke .3s ease;}
-      .rm-n.on .rm-tick{stroke:var(--accent);}
-      .rm-ring{fill:var(--bg-2);stroke:#1E2A3B;stroke-width:2;transition:stroke .3s,fill .3s;}
-      .rm-core{fill:#1E2A3B;transition:fill .3s;}
-      .rm-halo{fill:none;stroke:var(--accent);stroke-width:2;opacity:0;
-        transform-box:fill-box;transform-origin:center;}
-      .rm-n.on .rm-ring{stroke:var(--accent);fill:#0B1220;}
-      .rm-n.on .rm-core{fill:var(--accent);}
-      .rm-n.on .rm-halo{animation:rmhalo .85s cubic-bezier(.2,.7,.3,1) forwards;}
-      @keyframes rmhalo{0%{opacity:.7;transform:scale(1);}100%{opacity:0;transform:scale(3.2);}}
-      .rm-name{font-family:var(--font-mono);font-size:11.5px;fill:var(--text-muted);transition:fill .3s;}
-      .rm-n.on .rm-name{fill:var(--text-primary);}
-      .rm-term{font-family:var(--font-mono);font-size:11.5px;fill:var(--text-dim);transition:fill .3s;}
-      .rm-n.on .rm-term{fill:var(--text-primary);}
-      .rm-sub{font-family:var(--font-mono);font-size:9.5px;fill:var(--text-dim);transition:fill .3s;}
-      .rm-n.on .rm-sub{fill:var(--text-muted);}
-      .rm-say{font-family:var(--font-body);font-size:10px;fill:var(--text-muted);
-        opacity:0;transition:opacity .45s ease;}
-      .rm-n.on .rm-say{opacity:1;}
-      .rm-head{opacity:0;transition:opacity .2s;}
-      .rm-head.on{opacity:1;}
-      .rm-head-g{fill:var(--accent);opacity:.3;filter:url(#bdglow);}
-      .rm-head-c{fill:var(--info);}
-
-      .rm-panel{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);
-        gap:36px;align-items:center;margin-top:20px;min-height:200px;}
-      .rm-copy .role{font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;
-        text-transform:uppercase;color:var(--accent);display:block;margin-bottom:9px;}
-      .rm-copy h3{font-family:var(--font-heading);font-size:26px;font-weight:600;
-        letter-spacing:-.025em;margin-bottom:8px;}
-      .rm-copy p{color:var(--text-muted);font-size:15.5px;max-width:46ch;}
-      .rm-idle{color:var(--text-dim);font-family:var(--font-mono);font-size:12px;}
-      .rm-screen{border:1px solid var(--border);border-radius:12px;background:var(--bg-2);
-        overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);}
-      .rm-bar{display:flex;align-items:center;gap:7px;padding:9px 12px;border-bottom:1px solid var(--border);}
-      .rm-bar i{width:7px;height:7px;border-radius:50%;background:#1E2A3B;}
-      .rm-bar span{font-family:var(--font-mono);font-size:10px;color:var(--text-dim);
-        margin-left:6px;letter-spacing:.1em;text-transform:uppercase;}
-      .rm-body{padding:14px;display:grid;gap:8px;min-height:150px;align-content:start;}
-      .rm-row{height:11px;border-radius:3px;background:#151C28;}
-      .rm-row.w{background:#1E2A3B;}
-      .rm-row.a{background:color-mix(in srgb,var(--accent) 40%,#151C28);}
-      .rm-g3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
-      .rm-tile{height:44px;border-radius:6px;background:#151C28;border:1px solid var(--border);}
-      .rm-tile.a{background:color-mix(in srgb,var(--accent) 22%,#151C28);
-        border-color:color-mix(in srgb,var(--accent) 40%,transparent);}
-      .rm-cal{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;}
-      .rm-cal i{height:16px;border-radius:3px;background:#151C28;}
-      .rm-cal i.a{background:color-mix(in srgb,var(--accent) 45%,#151C28);}
-
-      /* The phone path hangs off an attribute rather than a bare media query
-         so it can be forced with ?rooms=m and reviewed without a phone; the
-         script sets the attribute from the same breakpoint. Nothing is pinned
-         here — the section simply travels past and the current is paced by
-         how fast the visitor scrolls, so arriving at it never starts a race
-         that is already half run. */
-      html[data-rm] .rm-stage{height:auto;margin-top:40px;}
-      html[data-rm] .rm-pin{position:static;height:auto;display:block;}
-      html[data-rm] .rm-in{max-width:430px;margin:0 auto;}
-      html[data-rm] .rm-board svg{max-height:none;}
-      html[data-rm] .rm-hint{display:none;}
-      /* the panel would sit under a board taller than the screen, so the two
-         could never be seen together — each stop already names its room and
-         says what it did, beside its own dot */
-      html[data-rm] .rm-panel{display:none;}
-
-      @media (max-width:900px){
-        .rm-panel{grid-template-columns:minmax(0,1fr);gap:22px;}
-      }
-      @media (prefers-reduced-motion:reduce){
-        .rm-n.on .rm-halo{animation:none;}
-      }
-"""
-
-
-ROOMS_HTML = """
-    <div class="rm-stage" id="rmStage">
-      <div class="rm-pin">
-        <div class="rm-in">
-          <div class="rm-cap">
-            <div class="rm-cap-l">
-              <span class="rm-chip">Live</span>
-              <b>One decision, six rooms</b>
-              <span class="d">&mdash; watch it cross all of them.</span>
-            </div>
-            <span class="rm-hint">scroll to move the current</span>
-          </div>
-          <div class="rm-board" id="rmBoard"></div>
-          <div class="rm-panel">
-            <div class="rm-copy" id="rmCopy">
-              <span class="rm-idle">The room the current is standing in appears here.</span>
-            </div>
-            <div class="rm-screen">
-              <div class="rm-bar"><i></i><i></i><i></i><span id="rmTitle">Solutionist</span></div>
-              <div class="rm-body" id="rmScreen"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-"""
-
-
-ROOMS_SCRIPT = """
-<script>
-(function () {
-  var stage = document.getElementById('rmStage');
-  if (!stage) return;
-  var boardEl = document.getElementById('rmBoard'),
-      copyEl  = document.getElementById('rmCopy'),
-      screenEl= document.getElementById('rmScreen'),
-      titleEl = document.getElementById('rmTitle');
-
-  var REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var NARROW  = window.matchMedia('(max-width: 900px)');
-  var FORCE_M = /[?&]rooms=m/.test(location.search);
-  function isNarrow(){ return FORCE_M || NARROW.matches; }
-  function syncMode(){ document.documentElement.toggleAttribute('data-rm', isNarrow()); }
-
-  /* One decision, walked through all six rooms in the order it really
-     touches them. Every room earns its stop — none is filling the spine. */
-  var ENTRY = 'You decide to sell something new';
-  var EXIT  = "It's live, and it sells";
-
-  var ROOMS = [
-    { id:'academy', name:'The Academy', role:'Decide it',
-      say:"The course that settles what you're selling and what it costs.",
-      blurb:'Eight courses. The Foundation Track is where the offer and the price get decided, before anything is built.',
-      screen:'rows' },
-    { id:'studio', name:'The Studio', role:'Dress it',
-      say:'The brand it will wear — fonts, colours, the lot.',
-      blurb:'Your brand DNA, applied to every artifact at once. Change one colour and everything repaints.',
-      screen:'tiles' },
-    { id:'sites', name:'Smart Sites', role:'House it',
-      say:'The page it lives on, composed rather than templated.',
-      blurb:'A site reasoned from your brand instead of picked from a theme, published in a click.',
-      screen:'page' },
-    { id:'clients', name:'Clients', role:'Tell it',
-      say:'Who hears about it first, and in what order.',
-      blurb:'One register. Every conversation, invoice and booking already attached to the person.',
-      screen:'rows' },
-    { id:'operate', name:'Operate', role:'Sell it',
-      say:'How it gets booked, invoiced and paid for.',
-      blurb:"Invoices, payments and bookkeeping that reconcile themselves, and chase what's late for you.",
-      screen:'cal' },
-    { id:'autopilot', name:'Autopilot', role:'Keep it',
-      say:'What keeps running after you close the laptop.',
-      blurb:'The night shift. Every action logged in plain English, and nothing sent without your say-so.',
-      screen:'rows' }
-  ];
-
-  function layoutH(){
-    var W = 1320, sy = 176, PAD = 26;
-    var entryX = 76, chiefX = 176, first = 320, last = W - 190, exitX = W - 70;
-    var n = ROOMS.length, gap = (last - first) / (n - 1);
-    var stops = ROOMS.map(function(r,i){
-      return { id:r.id, label:r.name, say:r.say, x:first + gap*i, y:sy, dir:(i % 2 === 0 ? -1 : 1) };
-    });
-    return { orient:'h', W:W,
-             vb:{ x:0, y:sy-118-PAD, w:W, h:(sy+96+PAD)-(sy-118-PAD) },
-             entry:{x:entryX,y:sy}, chief:{x:chiefX,y:sy}, exit:{x:exitX,y:sy}, stops:stops };
-  }
-
-  function layoutV(){
-    var W = 356, sx = 46, STEP = 104, top = 58;
-    var chiefY = top + 78, first = chiefY + 96;
-    var stops = ROOMS.map(function(r,i){
-      return { id:r.id, label:r.name, say:r.say, x:sx, y:first + STEP*i, dir:1 };
-    });
-    var exitY = first + STEP*(ROOMS.length-1) + 96;
-    return { orient:'v', W:W, vb:{ x:0, y:0, w:W, h:exitY+62 },
-             entry:{x:sx,y:top}, chief:{x:sx,y:chiefY}, exit:{x:sx,y:exitY}, stops:stops };
-  }
-
-  function routePts(L){
-    var p = [{x:L.entry.x,y:L.entry.y,id:'entry'},{x:L.chief.x,y:L.chief.y,id:'chief'}];
-    L.stops.forEach(function(s){ p.push({x:s.x,y:s.y,id:s.id}); });
-    p.push({x:L.exit.x,y:L.exit.y,id:'exit'});
-    return p;
-  }
-  function measure(p){
-    var cum=[0], t=0;
-    for(var i=1;i<p.length;i++){
-      t += Math.sqrt(Math.pow(p[i].x-p[i-1].x,2)+Math.pow(p[i].y-p[i-1].y,2));
-      cum.push(t);
-    }
-    return {cum:cum,total:t};
-  }
-  function pointAt(p,cum,d){
-    if(d<=0) return {x:p[0].x,y:p[0].y};
-    for(var i=1;i<p.length;i++){
-      if(cum[i]>=d){ var s=cum[i]-cum[i-1], t=s===0?0:(d-cum[i-1])/s;
-        return {x:p[i-1].x+(p[i].x-p[i-1].x)*t, y:p[i-1].y+(p[i].y-p[i-1].y)*t}; }
-    }
-    var l=p[p.length-1]; return {x:l.x,y:l.y};
-  }
-  function dOf(p){ return p.map(function(q,i){ return (i?'L':'M')+q.x.toFixed(1)+' '+q.y.toFixed(1); }).join(' '); }
-  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-  /* SVG text does not wrap; greedy packing orphans the last word, so this
-     picks the narrowest width that still holds the same line count. */
-  function wrapText(str,max){
-    var w=String(str).split(' ');
-    function pack(n){ var L=[],l='';
-      for(var i=0;i<w.length;i++){ var t=l?l+' '+w[i]:w[i];
-        if(t.length>n&&l){L.push(l);l=w[i];} else l=t; }
-      if(l)L.push(l); return L; }
-    var g=pack(max), n=g.length;
-    if(n<=1) return g;
-    for(var k=Math.ceil(String(str).length/n);k<=max;k++){ var p=pack(k); if(p.length<=n) return p; }
-    return g;
-  }
-
-  function node(id,x,y,label,kind,L,dir,sub,say){
-    var v=(L.orient==='v'), lx,ly,anchor,subY=null,sayY=null,tick='';
-    if(v){
-      lx=x+(kind==='chief'?24:22); anchor='start';
-      if(say&&sub){ly=y-16;subY=y-3;sayY=y+13;}
-      else if(say){ly=y-8;sayY=y+6;}
-      else if(sub){ly=y-2;subY=y+13;}
-      else{ly=y+4;}
-    } else if(kind==='term'){
-      /* centre-anchored terminals run off both ends of the viewBox */
-      ly=y+34;
-      if(id==='entry'){ lx=x-12; anchor='start'; } else { lx=x+12; anchor='end'; }
-    } else if(kind==='chief'){ lx=x; ly=y-44; subY=y-28; anchor='middle'; }
-    else {
-      /* the six rooms alternate above and below a straight spine, each on a
-         short tick, so the line reads as a journey rather than a queue */
-      anchor='middle'; lx=x;
-      if(dir<0){ ly=y-46; tick='<line class="rm-tick" x1="'+x+'" y1="'+(y-11)+'" x2="'+x+'" y2="'+(y-34)+'"/>'; }
-      else     { ly=y+58; tick='<line class="rm-tick" x1="'+x+'" y1="'+(y+11)+'" x2="'+x+'" y2="'+(y+34)+'"/>'; }
-    }
-    var shape;
-    if(kind==='chief'){
-      shape='<rect class="rm-ring" x="'+(x-11)+'" y="'+(y-11)+'" width="22" height="22" rx="5" transform="rotate(45 '+x+' '+y+')"/>'
-          + '<circle class="rm-core" cx="'+x+'" cy="'+y+'" r="4"/>';
-    } else if(kind==='term'){
-      shape='<circle class="rm-ring" cx="'+x+'" cy="'+y+'" r="9"/><circle class="rm-core" cx="'+x+'" cy="'+y+'" r="3.6"/>';
-    } else {
-      shape='<circle class="rm-ring" cx="'+x+'" cy="'+y+'" r="7.5"/><circle class="rm-core" cx="'+x+'" cy="'+y+'" r="3"/>';
-    }
-    var out='<g class="rm-n" data-rn="'+id+'">'+tick
-          + '<circle class="rm-halo" cx="'+x+'" cy="'+y+'" r="9"/>'+shape
-          + '<text class="'+(kind==='term'?'rm-term':'rm-name')+'" x="'+lx+'" y="'+ly+'" text-anchor="'+anchor+'">'+esc(label)+'</text>';
-    if(sub&&subY!==null) out+='<text class="rm-sub" x="'+lx+'" y="'+subY+'" text-anchor="'+anchor+'">'+esc(sub)+'</text>';
-    if(sayY!==null&&say){
-      var lines=wrapText(say,38), t='';
-      for(var i=0;i<lines.length;i++) t+='<tspan x="'+lx+'" dy="'+(i?12:0)+'">'+esc(lines[i])+'</tspan>';
-      out+='<text class="rm-say" x="'+lx+'" y="'+sayY+'">'+t+'</text>';
-    }
-    return out+'</g>';
-  }
-
-  function render(L){
-    var vb=L.vb, v=(L.orient==='v');
-    var s='<svg viewBox="'+vb.x+' '+vb.y+' '+vb.w+' '+vb.h+'" role="img" aria-label="'
-        + 'One decision crossing all six rooms, from '+esc(ENTRY)+' to '+esc(EXIT)+'.">';
-    s+='<path class="rm-base" d="'+dOf([L.entry,L.exit])+'"/>';
-    var d=dOf(routePts(L));
-    s+='<path class="rm-glow js-g" d="'+d+'" pathLength="1000" stroke-dasharray="1000" stroke-dashoffset="1000"/>';
-    s+='<path class="rm-live js-t" d="'+d+'" pathLength="1000" stroke-dasharray="1000" stroke-dashoffset="1000"/>';
-    s+=node('entry',L.entry.x,L.entry.y,ENTRY,'term',L,1);
-    s+=node('chief',L.chief.x,L.chief.y,'Chief','chief',L,1,'your chief of staff',null);
-    L.stops.forEach(function(st){ s+=node(st.id,st.x,st.y,st.label,'stop',L,st.dir,null,v?st.say:null); });
-    s+=node('exit',L.exit.x,L.exit.y,EXIT,'term',L,1);
-    s+='<g class="rm-head js-h"><circle class="rm-head-g" r="11"/><circle class="rm-head-c" r="3.4"/></g>';
-    return s+'</svg>';
-  }
-
-  function screenHTML(kind){
-    if(kind==='tiles') return '<div class="rm-g3"><div class="rm-tile a"></div><div class="rm-tile"></div><div class="rm-tile"></div>'
-      + '<div class="rm-tile"></div><div class="rm-tile a"></div><div class="rm-tile"></div></div>'
-      + '<div class="rm-row" style="width:60%"></div>';
-    if(kind==='cal'){
-      var c=''; for(var i=0;i<21;i++) c+='<i'+([4,9,15].indexOf(i)>=0?' class="a"':'')+'></i>';
-      return '<div class="rm-cal">'+c+'</div><div class="rm-row" style="width:45%"></div>';
-    }
-    if(kind==='page') return '<div class="rm-row w" style="height:26px;width:70%"></div>'
-      + '<div class="rm-row a" style="width:40%"></div><div class="rm-row" style="width:88%"></div>'
-      + '<div class="rm-row" style="width:78%"></div><div class="rm-g3" style="margin-top:4px">'
-      + '<div class="rm-tile"></div><div class="rm-tile"></div><div class="rm-tile"></div></div>';
-    return '<div class="rm-row w" style="width:52%"></div><div class="rm-row a" style="width:80%"></div>'
-      + '<div class="rm-row" style="width:72%"></div><div class="rm-row" style="width:84%"></div>'
-      + '<div class="rm-row" style="width:64%"></div><div class="rm-row" style="width:76%"></div>';
-  }
-
-  var shown;
-  function showRoom(room){
-    if(shown===(room&&room.id)) return;
-    shown = room ? room.id : null;
-    if(!room){
-      copyEl.innerHTML='<span class="rm-idle">The room the current is standing in appears here.</span>';
-      screenEl.innerHTML=screenHTML('rows');
-      titleEl.textContent='Solutionist';
-      return;
-    }
-    copyEl.innerHTML='<span class="role">'+esc(room.role)+'</span><h3>'+esc(room.name)+'</h3><p>'+esc(room.blurb)+'</p>';
-    screenEl.innerHTML=screenHTML(room.screen);
-    titleEl.textContent=room.name;
-  }
-
-  var trace,glow,head,pts=[],cum=[],total=0,stops=[],litN=-1;
-
-  function build(){
-    var L = isNarrow() ? layoutV() : layoutH();
-    boardEl.innerHTML = render(L);
-    trace=boardEl.querySelector('.js-t');
-    glow =boardEl.querySelector('.js-g');
-    head =boardEl.querySelector('.js-h');
-    pts=routePts(L);
-    var m=measure(pts); cum=m.cum; total=m.total;
-    stops=[]; for(var i=0;i<pts.length;i++) if(pts[i].id) stops.push({id:pts[i].id,d:cum[i]});
-    litN=-1; shown=undefined;
-  }
-
-  function apply(e){
-    e=Math.max(0,Math.min(1,e));
-    var off=(1000*(1-e)).toFixed(2);
-    trace.setAttribute('stroke-dashoffset',off);
-    glow.setAttribute('stroke-dashoffset',off);
-    var d=e*total, pt=pointAt(pts,cum,d);
-    head.setAttribute('transform','translate('+pt.x.toFixed(1)+','+pt.y.toFixed(1)+')');
-    head.classList.toggle('on', e>0.002 && e<0.998);
-
-    var n=0,i; for(i=0;i<stops.length;i++) if(d>=stops[i].d) n++;
-    if(n===litN) return;
-    litN=n;
-    for(i=0;i<stops.length;i++){
-      var g=boardEl.querySelector('.rm-n[data-rn="'+stops[i].id+'"]');
-      if(g) g.classList.toggle('on', i<n);
-    }
-    var room=null;
-    for(i=n-1;i>=0;i--){
-      var hit=ROOMS.filter(function(r){ return r.id===stops[i].id; })[0];
-      if(hit){ room=hit; break; }
-    }
-    showRoom(room);
-  }
-
-  /* Progress is read from where the section sits, never from a timer, so the
-     current moves exactly as fast as the visitor does. */
-  function progress(){
-    var r=stage.getBoundingClientRect(), vh=window.innerHeight;
-    if(isNarrow()){
-      var startAt=vh*0.82, endAt=vh*0.50;
-      var span=startAt + r.height - endAt;
-      if(span<=0) return 0;
-      return Math.max(0,Math.min(1,(startAt - r.top)/span));
-    }
-    var s=stage.offsetHeight - vh;
-    if(s<=0) return 0;
-    var p=Math.max(0,Math.min(1,-r.top/s));
-    /* hold a beat at each end so it is readable before it draws and after it lands */
-    return Math.max(0,Math.min(1,(p-0.12)/0.68));
-  }
-
-  /* Deliberately not rAF-throttled: the obvious guard leaves the board frozen
-     for good if the scheduled frame is ever dropped, because the flag never
-     clears. Scroll fires at most once a frame and apply() returns early
-     unless the lit count actually changed. */
-  function tick(){ apply(REDUCED ? 1 : progress()); }
-
-  syncMode(); build(); tick();
-  window.addEventListener('scroll', tick, { passive:true });
-  window.addEventListener('resize', function(){ syncMode(); build(); tick(); });
-  if(NARROW.addEventListener) NARROW.addEventListener('change', function(){ syncMode(); build(); tick(); });
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', rebuild);
+  if (narrow.addEventListener) narrow.addEventListener('change', rebuild);
+  else if (narrow.addListener) narrow.addListener(rebuild);
 })();
 </script>
 """
@@ -2314,11 +1928,7 @@ def render_home() -> str:
       /* ══════════════════════════════════════════════════════════════
          THE ROOMS — a carousel of real product surfaces
          ══════════════════════════════════════════════════════════════ */
-      /* `clip` not `hidden`: both contain the 3D ring identically, but
-         `hidden` makes this a scroll container, which silently kills
-         position:sticky in every descendant — including the rooms board's
-         pin below. `clip` never creates one. */
-      .rooms{padding:104px 0 88px;border-top:1px solid var(--border);position:relative;overflow:clip;}
+      .rooms{padding:104px 0 88px;border-top:1px solid var(--border);position:relative;overflow:hidden;}
       .rooms .container-xl{position:relative;z-index:1;}
       .rooms-tabs{display:flex;flex-wrap:wrap;justify-content:center;gap:7px;margin:0 auto 40px;max-width:940px;}
       .room-tab{padding:8px 15px;border-radius:99px;font-size:12.5px;font-weight:600;
@@ -2810,9 +2420,6 @@ def render_home() -> str:
     </div>
     <p class="room-caption" id="roomCaption">Invoices, payments and bookkeeping that reconcile themselves. Chief chases what's late so you don't have to write another awkward email.</p>
 
-"""
-    + ROOMS_HTML + """
-
     <div style="text-align:center;margin-top:36px;" class="reveal">
       <a class="btn-secondary" href="/features">Explore every feature in depth &rarr;</a>
     </div>
@@ -3019,8 +2626,8 @@ def render_home() -> str:
         title="One workspace that runs your whole business",
         description="The business system that already knows how yours runs. Bookings, clients, invoices, and an AI chief of staff that logs every move and never acts without your approval.",
         content_html=body, path="/",
-        extra_css=extra_css + BOARD_CSS + ROOMS_CSS,
-        extra_scripts=extra_scripts + BOARD_SCRIPT + ROOMS_SCRIPT,
+        extra_css=extra_css + BOARD_CSS,
+        extra_scripts=extra_scripts + BOARD_SCRIPT,
     )
 
 
