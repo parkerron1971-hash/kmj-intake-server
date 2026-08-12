@@ -18,6 +18,20 @@ import business_users_router as bu  # noqa: E402
 import chief_llm  # noqa: E402
 from test_i2_gl_sync import FakeSB  # noqa: E402
 
+# Invite is STEP-UP gated (grants access). These tests exercise the
+# authorisation logic BEHIND that gate, so they present a valid
+# access-scoped unlock. test_step_up_scopes.py is what proves the gate
+# itself refuses when the unlock is missing, wrong-scoped or expired.
+import os as _os
+_os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-step-up")
+import ledger_unlock as _lu
+
+
+def _stepup(user_id):
+    tok = _lu.mint(str(user_id), _lu.SCOPE_ACCESS)["token"]
+    return type("R", (), {"headers": {_lu.UNLOCK_HEADER: tok}})()
+
+
 @pytest.fixture(autouse=True)
 def _pin_chat_price(monkeypatch):
     """These tests are about MECHANICS — thresholds firing once, drawdown
@@ -179,7 +193,7 @@ def test_seat_cap_and_invite_flow(fake, monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_ID_PRACTICE", "price_practice")
     _biz(fb, "b1", plan="price_practice")
     # Invite (dormant enforcement, but seat math is real).
-    out = asyncio.run(bu.invite("b1", bu.InviteBody(email="a@x.com", role="member"), _User()))
+    out = asyncio.run(bu.invite("b1", bu.InviteBody(email="a@x.com", role="member"), _stepup(_User().id), _User()))
     assert out["ok"] and out["member"]["status"] == "invited"
     # The invite link must point at the app's real home (app_base_url),
     # not a hardcoded domain — https://app.solutionist.studio never
@@ -189,7 +203,7 @@ def test_seat_cap_and_invite_flow(fake, monkeypatch):
     assert bl.seat_count("b1") == 2                             # owner + 1 invite
     # Duplicate invite rejected.
     with pytest.raises(HTTPException) as e:
-        asyncio.run(bu.invite("b1", bu.InviteBody(email="a@x.com"), _User()))
+        asyncio.run(bu.invite("b1", bu.InviteBody(email="a@x.com"), _stepup(_User().id), _User()))
     assert e.value.status_code == 409
     # Accept binds the user + activates.
     token = out["member"].get("token")
@@ -201,10 +215,10 @@ def test_seat_cap_and_invite_flow(fake, monkeypatch):
     # Enforced practice cap = 5 seats: fill to 5, 6th invite → 402.
     monkeypatch.setenv("BILLING_ENFORCE", "on")
     for i in range(3):
-        asyncio.run(bu.invite("b1", bu.InviteBody(email=f"m{i}@x.com"), _User()))
+        asyncio.run(bu.invite("b1", bu.InviteBody(email=f"m{i}@x.com"), _stepup(_User().id), _User()))
     assert bl.seat_count("b1") == 5
     with pytest.raises(HTTPException) as e:
-        asyncio.run(bu.invite("b1", bu.InviteBody(email="six@x.com"), _User()))
+        asyncio.run(bu.invite("b1", bu.InviteBody(email="six@x.com"), _stepup(_User().id), _User()))
     assert e.value.status_code == 402
     # Revoke frees the seat.
     rid = fb.rows("business_users")[1]["id"]
@@ -217,10 +231,11 @@ def test_invite_requires_owner_and_valid_role(fake):
     _biz(fb, "b1")
     with pytest.raises(HTTPException) as e:
         asyncio.run(bu.invite("b1", bu.InviteBody(email="a@x.com"),
+                              _stepup("intruder"),
                               type("U", (), {"id": "intruder"})()))
     assert e.value.status_code == 403
     with pytest.raises(HTTPException) as e:
-        asyncio.run(bu.invite("b1", bu.InviteBody(email="a@x.com", role="owner"), _User()))
+        asyncio.run(bu.invite("b1", bu.InviteBody(email="a@x.com", role="owner"), _stepup(_User().id), _User()))
     assert e.value.status_code == 400
 
 

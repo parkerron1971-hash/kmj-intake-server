@@ -41,13 +41,38 @@ import time
 from typing import Any, Dict, Optional
 
 import httpx
-from fastapi import HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 logger = logging.getLogger("ledger_unlock")
 
 SUPABASE_URL = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
 UNLOCK_TTL_SECONDS = 15 * 60
 UNLOCK_HEADER = "X-Ledger-Unlock"
+
+# ── SCOPES ───────────────────────────────────────────────────────────
+# An unlock is a proof that a specific person re-entered their password
+# just now. It is NOT a blanket authorisation for the next fifteen
+# minutes of whatever they feel like.
+#
+# Without a scope, confirming your password to READ the audit trail
+# would equally authorise disconnecting your payouts — two very
+# different questions answered by one prompt the practitioner thought
+# was about something else. This is the same domain-separation
+# reasoning that already keeps an unlock token from verifying as an
+# auditor link.
+SCOPE_LEDGER = "ledger"    # read the record
+SCOPE_ACCESS = "access"    # let someone else in: invites, audit links, redaction
+SCOPE_DANGER = "danger"    # money, and things with no undo
+SCOPES = (SCOPE_LEDGER, SCOPE_ACCESS, SCOPE_DANGER)
+
+# What each scope is asking the practitioner to agree to, in their
+# words. The prompt has to name the consequence or it is just a speed
+# bump people learn to type through.
+SCOPE_PROMPT = {
+    SCOPE_LEDGER: "Confirm your password to open the ledger.",
+    SCOPE_ACCESS: "Confirm your password to change who can get in.",
+    SCOPE_DANGER: "Confirm your password — this one cannot be undone.",
+}
 
 # Same key as the rest of the ledger's signing, in its own DOMAIN. The
 # auditor-session work established why that matters: without a distinct
@@ -87,23 +112,38 @@ def _sig(payload_b64: str) -> str:
                          hashlib.sha256).digest())
 
 
-def mint(user_id: str) -> Dict[str, Any]:
-    """A proof that THIS user re-entered their password just now.
+def mint(user_id: str, scope: str = SCOPE_LEDGER) -> Dict[str, Any]:
+    """A proof that THIS user re-entered their password just now, FOR A
+    PARTICULAR KIND OF ACTION.
 
     Bound to the user, not to a business: the person is what was
-    re-verified. Which businesses they may then read is still decided
-    by the read gate, which this does not touch.
+    re-verified. Which businesses they may then touch is still decided
+    by the ownership and read gates, which this does not replace.
     """
+    if scope not in SCOPES:
+        raise ValueError(f"unknown step-up scope: {scope}")
     now = int(time.time())
-    payload = {"typ": "unlock", "sub": str(user_id),
+    payload = {"typ": "unlock", "sub": str(user_id), "scp": scope,
                "iat": now, "exp": now + UNLOCK_TTL_SECONDS}
     p = _b64(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
     return {"token": f"{p}.{_sig(p)}", "expires_in": UNLOCK_TTL_SECONDS}
 
 
-def verify(token: str, user_id: str) -> bool:
-    """Signature → type → expiry → SAME USER. The last check is what
-    stops one signed-in user's unlock being replayed by another."""
+def verify(token: str, user_id: str, scope: str = SCOPE_LEDGER) -> bool:
+    """Signature → type → expiry → SAME USER → SAME SCOPE.
+
+    The user check stops one signed-in user's unlock being replayed by
+    another. The scope check stops a ledger unlock — which a
+    practitioner may grant casually, several times a day — from
+    silently authorising a payout change or a deletion.
+
+    A token minted before scopes existed carries no `scp`. Those are
+    read as `ledger`, which is what they were: the only gate that
+    existed. They expire within fifteen minutes anyway, so this is a
+    deployment courtesy rather than a permanent rule — but without it,
+    shipping this would have kicked every practitioner mid-session out
+    of a ledger they had just unlocked.
+    """
     try:
         if not isinstance(token, str) or token.count(".") != 1:
             return False
@@ -116,7 +156,9 @@ def verify(token: str, user_id: str) -> bool:
         exp = claims.get("exp")
         if not isinstance(exp, int) or exp <= time.time():
             return False
-        return str(claims.get("sub")) == str(user_id)
+        if str(claims.get("sub")) != str(user_id):
+            return False
+        return str(claims.get("scp") or SCOPE_LEDGER) == str(scope)
     except Exception:
         return False
 
@@ -151,18 +193,111 @@ async def check_password(email: str, password: str) -> bool:
     raise HTTPException(503, "Could not verify your password. Try again.")
 
 
-def require_unlock(request: Request, user_id: str) -> None:
-    """Gate for every authenticated ledger surface.
+def require_unlock(request: Request, user_id: str,
+                   scope: str = SCOPE_LEDGER) -> None:
+    """Gate for every surface that re-asks for the password.
 
     Raises 403 with a MACHINE-READABLE code. The frontend has to be
     able to tell "you must unlock" apart from "you may not read this
     at all" — rendering a password prompt at someone who will never be
     allowed in is its own small cruelty, and rendering "access denied"
     at someone who just needs to type their password is worse.
+
+    The code stays `ledger_locked` for every scope: it is what the
+    existing client already branches on, and the SCOPE in the body is
+    what tells the prompt which question to ask. Renaming it would
+    break the one consumer that works today for no gain.
     """
+    if scope not in SCOPES:
+        raise ValueError(f"unknown step-up scope: {scope}")
     token = request.headers.get(UNLOCK_HEADER) or ""
-    if not verify(token, user_id):
+    if not verify(token, user_id, scope):
         raise HTTPException(
             status_code=403,
-            detail={"code": "ledger_locked",
-                    "message": "Confirm your password to open the ledger."})
+            detail={"code": "ledger_locked", "scope": scope,
+                    "message": SCOPE_PROMPT[scope]})
+
+
+# ─── The general step-up endpoint ────────────────────────────────────
+#
+# /audit/unlock predates scopes and still serves the ledger. It stays
+# exactly as it was — its pre-check is "may you READ this ledger",
+# which is the right question there and the wrong one here.
+#
+# This route answers the other two: before letting someone re-prove a
+# password in order to grant access or do something irreversible, the
+# pre-check is OWNERSHIP. A viewer seat should never be handed a
+# password oracle for an account-deletion gate.
+
+from auth_supabase import AuthedUser, require_user  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
+
+router = APIRouter(tags=["step-up"])
+
+
+class _StepUpBody(BaseModel):
+    business_id: str
+    password: str
+    scope: str
+
+
+def _require_owner(business_id: str, user_id: str) -> Dict[str, Any]:
+    import sb_clients
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=id,name,owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    if str(rows[0].get("owner_id")) != str(user_id):
+        raise HTTPException(403, "not authorized")
+    return rows[0]
+
+
+@router.post("/auth/step-up")
+async def step_up(body: _StepUpBody,
+                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Re-prove the account password for one class of consequential action.
+
+    Rate limited on the USER, not the IP, for the same reason the ledger
+    unlock is: an attacker at an unlocked laptop already has the
+    session, so varying their IP is free while varying whose account
+    this is is not. FAIL-CLOSED — a limiter outage must not read as a
+    successful step-up on this surface.
+
+    Both outcomes are ledger rows. Repeated failed confirmations against
+    an account's danger gate is precisely the pattern someone should be
+    able to find afterwards.
+    """
+    import rate_limit
+    scope = (body.scope or "").strip()
+    if scope not in (SCOPE_ACCESS, SCOPE_DANGER):
+        # SCOPE_LEDGER deliberately excluded: it has its own endpoint
+        # with its own, correct, read-based pre-check.
+        raise HTTPException(400, "unknown step-up scope")
+
+    _require_owner(body.business_id, str(user.id))
+
+    if not rate_limit.allow_strict("step_up", str(user.id)):
+        raise HTTPException(429, "Too many attempts. Wait a moment.")
+    if not (body.password or "").strip():
+        raise HTTPException(400, "Enter your password.")
+
+    from audit_log import record
+    if not await check_password(user.email, body.password):
+        try:
+            record(body.business_id, actor_type="user", actor_id=str(user.id),
+                   verb=f"stepup:{scope}_failed", ok=False,
+                   summary=f"Failed password confirmation for a {scope} action",
+                   authorized_by="step_up")
+        except Exception:
+            pass
+        raise HTTPException(403, "That password did not match.")
+
+    out = mint(str(user.id), scope)
+    try:
+        record(body.business_id, actor_type="user", actor_id=str(user.id),
+               verb=f"stepup:{scope}",
+               summary=f"Confirmed password for {scope} actions",
+               authorized_by="step_up")
+    except Exception:
+        pass
+    return {"ok": True, "scope": scope, **out}

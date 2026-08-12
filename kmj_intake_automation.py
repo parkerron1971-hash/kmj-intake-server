@@ -275,6 +275,11 @@ app.include_router(events_rsvp_router)
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
 app.include_router(stripe_connect_router)
+# Step-up: /auth/step-up. The ledger keeps its own /audit/unlock —
+# that route's pre-check is "may you READ this ledger", which is the
+# right question there and the wrong one for a deletion gate.
+import ledger_unlock as _ledger_unlock
+app.include_router(_ledger_unlock.router)
 # Phase D.4 PR 2 — Charges / Payouts / Customers data tabs proxy.
 # Shares the /payments prefix with stripe_connect_router; FastAPI
 # merges them cleanly because the routes don't collide.
