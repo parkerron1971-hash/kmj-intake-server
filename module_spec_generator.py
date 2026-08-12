@@ -107,6 +107,10 @@ class ModuleSchema(BaseModel):
     default_view: ViewKind = "list"
     views: List[ViewKind] = Field(default_factory=lambda: ["list"])
     board_column: Optional[str] = None        # which field drives kanban columns
+    # Which DATE field the calendar view lays entries out on. Required
+    # when views includes 'calendar', the same way board_column is
+    # required for 'board'.
+    calendar_field: Optional[str] = None
 
 
 class ModuleTrigger(BaseModel):
@@ -485,6 +489,24 @@ class ModuleSpec(BaseModel):
         # points at another module is a schema concern, not a booking or
         # pipeline one, and the offering_ref check being buried inside
         # booking_calendar is why it only ever guarded one archetype.
+        # calendar needs a real date field to lay entries on. Same shape
+        # as the board_column rule, and outside the archetype blocks for
+        # the same reason: a view is a schema concern, not a booking one.
+        if "calendar" in (self.schema_.views or []):
+            cf = self.schema_.calendar_field
+            by_name = {f.name: f for f in self.schema_.fields}
+            if not cf:
+                raise ValueError(
+                    "views includes 'calendar' but schema.calendar_field is "
+                    "not set — nothing says which date to lay entries on")
+            if cf not in by_name:
+                raise ValueError(
+                    f"calendar_field '{cf}' is not one of schema.fields")
+            if by_name[cf].type != "date":
+                raise ValueError(
+                    f"calendar_field '{cf}' must be a date field "
+                    f"(got '{by_name[cf].type}')")
+
         for f in self.schema_.fields:
             if f.type == "module_ref":
                 if not (f.module_slug or "").strip():
@@ -813,6 +835,17 @@ ask to consolidate.
 DESIGN PRINCIPLES per ModuleSpec:
 - Fields reflect REAL operational data the practitioner needs (not generic placeholders)
 - `default_view: board` when one field is a clear status/progress column; else `list`
+- `calendar` in views when entries HAPPEN AT A TIME the practitioner plans
+  around — appointments, sessions, shifts, deliveries, court dates. Set
+  `calendar_field` to the date field holding when it happens, and prefer
+  `default_view: calendar` for booking-shaped modules: the practitioner
+  opens them to see what is next, and a list of dates makes them read
+  rather than see it. `calendar_field` MUST name a `date` field that
+  exists; a module without one must not offer the view at all.
+  A DUE DATE is not the same thing — an invoice due on the 3rd is a
+  deadline, not an appointment. Deadlines belong on a list sorted by
+  date, with an `overdue` trigger. Only use calendar when the row IS an
+  event.
 - `board_column` MUST be the name of a `select` field when using board view
 - `module_ref` when an entry belongs to a ROW OF ANOTHER MODULE — a payment
   against a matter, an invoice against a job, a deliverable against a project.

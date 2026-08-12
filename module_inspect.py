@@ -151,6 +151,18 @@ def inspect_module_schema(schema: Any,
             elif col.get("type") != "select":
                 problems.append(f'board_column "{board_column}" must be a select field')
 
+    if "calendar" in views:
+        cal = schema.get("calendar_field")
+        if not cal:
+            problems.append("calendar view requires calendar_field")
+        else:
+            col = next((f for f in fields
+                        if isinstance(f, dict) and f.get("name") == cal), None)
+            if not col:
+                problems.append(f'calendar_field "{cal}" not found in fields')
+            elif col.get("type") != "date":
+                problems.append(f'calendar_field "{cal}" must be a date field')
+
     default_view = schema.get("default_view")
     if default_view and views and default_view not in views:
         # Renders (DynamicModule falls back to its own state default), but the
@@ -298,6 +310,27 @@ def repair_schema(schema: Any) -> tuple[Any, List[str]]:
                     "removed the board view: it needs a choice field to group by, "
                     "and this module has none"
                 )
+
+    # A calendar with no usable date field, same treatment as the board:
+    # the calendar cannot be drawn and its presence takes the whole module
+    # down, while the list the practitioner also asked for is fine. Never
+    # invent a date field — a calendar laid out on a guess is worse than
+    # no calendar.
+    views = schema.get("views") if isinstance(schema.get("views"), list) else []
+    if "calendar" in views:
+        cal = schema.get("calendar_field")
+        col = next((f for f in fields
+                    if isinstance(f, dict) and f.get("name") == cal), None)
+        if not cal or not col or col.get("type") != "date":
+            remaining = [v for v in views if v != "calendar"]
+            if remaining:
+                schema["views"] = remaining
+                schema.pop("calendar_field", None)
+                if schema.get("default_view") == "calendar":
+                    schema["default_view"] = remaining[0]
+                notes.append(
+                    "removed the calendar view: it needs a date field to lay "
+                    "entries on, and this module has none")
 
     # default_view naming a view the module doesn't offer.
     views = schema.get("views") if isinstance(schema.get("views"), list) else []

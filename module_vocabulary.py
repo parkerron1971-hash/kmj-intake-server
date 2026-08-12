@@ -91,7 +91,10 @@ FIELD_TYPES: tuple[str, ...] = get_args(FieldType)
 
 # ─── Views ────────────────────────────────────────────────────────────
 
-ViewKind = Literal["list", "board"]
+# 'calendar' needs schema.calendar_field naming a date field, exactly as
+# 'board' needs board_column naming a select. A view that cannot say what
+# it groups by is a view that cannot be drawn.
+ViewKind = Literal["list", "board", "calendar"]
 VIEW_KINDS: tuple[str, ...] = get_args(ViewKind)
 
 # ─── Module-agent triggers ────────────────────────────────────────────
