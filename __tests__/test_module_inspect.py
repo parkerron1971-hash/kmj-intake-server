@@ -335,3 +335,55 @@ def test_module_ref_target_may_differ_per_field():
         _field("job", "module_ref", module_slug="jobs"),
     ]))
     assert rep["renderable"], rep["problems"]
+
+
+# ─── calendar view ────────────────────────────────────────────────────
+
+def test_calendar_without_a_date_field_is_a_problem():
+    rep = mi.inspect_module_schema(_schema(views=["list", "calendar"]))
+    assert not rep["renderable"]
+    assert any("calendar_field" in p for p in rep["problems"])
+
+
+def test_calendar_field_must_be_a_date():
+    rep = mi.inspect_module_schema(_schema(
+        fields=[_field("when", "text")], views=["calendar"], calendar_field="when"))
+    assert not rep["renderable"]
+    assert any("must be a date" in p for p in rep["problems"])
+
+
+def test_calendar_field_must_exist():
+    rep = mi.inspect_module_schema(_schema(views=["calendar"], calendar_field="ghost"))
+    assert not rep["renderable"]
+    assert any("not found in fields" in p for p in rep["problems"])
+
+
+def test_a_correct_calendar_module_renders():
+    rep = mi.inspect_module_schema(_schema(
+        fields=[_field("appointment_at", "date")],
+        views=["list", "calendar"], calendar_field="appointment_at"))
+    assert rep["renderable"], rep["problems"]
+
+
+def test_repair_drops_an_undrawable_calendar():
+    fixed, notes = mi.repair_schema(_schema(views=["list", "calendar"]))
+    assert fixed["views"] == ["list"]
+    assert "calendar_field" not in fixed
+    assert notes and "calendar" in notes[0]
+    assert mi.inspect_module_schema(fixed)["renderable"]
+
+
+def test_repair_leaves_a_valid_calendar_alone():
+    original = _schema(fields=[_field("due", "date")],
+                       views=["list", "calendar"], calendar_field="due")
+    fixed, notes = mi.repair_schema(original)
+    assert notes == [] and fixed["views"] == ["list", "calendar"]
+
+
+def test_repair_will_not_invent_a_date_field():
+    """A calendar laid out on a guessed field shows entries on dates that
+    mean nothing. Dropping the view is the honest repair."""
+    fixed, _ = mi.repair_schema(_schema(fields=[_field("a"), _field("b")],
+                                        views=["list", "calendar"]))
+    assert fixed["views"] == ["list"]
+    assert fixed.get("calendar_field") is None
