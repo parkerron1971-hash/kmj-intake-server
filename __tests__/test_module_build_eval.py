@@ -275,3 +275,76 @@ def test_expected_confidence_values_are_real():
         want = case.get("expect_confidence")
         if want:
             assert want in {"high", "medium", "low"}, case["id"]
+
+
+# ─── A proposal is one answer; score all of it ────────────────────────
+
+LINKED_CASE = next(c for c in mbe.CASES if c["id"] == "linked")
+
+
+def _two_specs():
+    """What a correct decomposition looks like: a parent and a child that
+    references it. The reference is on the CHILD."""
+    parent = {"name": "Jobs", "slug": "jobs", "confidence": "high",
+              "schema": {"fields": [{"name": "title", "type": "text", "label": "T"}],
+                         "views": ["list"]},
+              "agent_config": {}}
+    child = {"name": "Invoices", "slug": "invoices", "confidence": "high",
+             "schema": {"fields": [
+                 {"name": "job", "type": "module_ref", "label": "Job",
+                  "module_slug": "jobs"},
+                 {"name": "amount", "type": "currency", "label": "Amount"}],
+                 "views": ["list"]},
+             "agent_config": {}}
+    return [parent, child]
+
+
+def test_a_field_on_the_second_spec_is_seen():
+    """THE bug. score_case read specs[0] and nothing else, so the `linked`
+    case scored field_type:module_ref as a MISS while the module_ref sat
+    on the Invoices spec pointing back at Jobs.
+
+    The parent of a relationship never holds the reference — the child
+    does. A harness that reads one spec can never see a link, which made
+    it blind to precisely what it was extended to check."""
+    scored = mbe.score_case(LINKED_CASE, {"ok": True, "specs": _two_specs()},
+                            ["payments-module"])
+    failed = {c["check"] for c in scored["checks"] if not c["ok"]}
+    assert "field_type:module_ref" not in failed, scored["checks"]
+    assert scored["score"] == scored["total"], failed
+
+
+def test_a_broken_second_spec_still_fails_the_case():
+    """One red module in a two-module proposal is still a practitioner
+    staring at an error panel."""
+    specs = _two_specs()
+    specs[1]["schema"]["views"] = ["board"]        # board, no board_column
+    scored = mbe.score_case(LINKED_CASE, {"ok": True, "specs": specs},
+                            ["payments-module"])
+    renders = next(c for c in scored["checks"] if c["check"] == "renders")
+    assert renders["ok"] is False
+    assert "invoices" in renders["detail"], renders["detail"]
+
+
+def test_every_spec_appears_in_the_output():
+    """Showing only the first is how a correct decomposition read as a
+    failure — the answer was on the module the summary omitted."""
+    scored = mbe.score_case(LINKED_CASE, {"ok": True, "specs": _two_specs()},
+                            ["payments-module"])
+    assert [s["slug"] for s in scored["specs"]] == ["jobs", "invoices"]
+
+
+def test_a_module_ref_summary_names_its_target():
+    """Reading the output should answer 'pointing at what?' without
+    cross-referencing anything."""
+    scored = mbe.score_case(LINKED_CASE, {"ok": True, "specs": _two_specs()},
+                            ["payments-module"])
+    invoices = scored["specs"][1]
+    assert ("job", "module_ref", "jobs") in [tuple(f) for f in invoices["fields"]]
+
+
+def test_single_spec_cases_are_unaffected():
+    scored = mbe.score_case(BOOKING_CASE, {"ok": True, "specs": [_good_spec()]},
+                            ["booking-module"])
+    assert scored["score"] == scored["total"]
+    assert len(scored["specs"]) == 1
