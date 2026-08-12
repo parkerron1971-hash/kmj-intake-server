@@ -147,21 +147,33 @@ SHARED_CSS = """
   .nav-links{display:flex;align-items:center;gap:22px;font-size:13px;font-weight:500;}
   .nav-links a{color:var(--text-muted);transition:color 0.15s;position:relative;}
   .nav-links a:hover, .nav-links a.is-active{color:var(--text-primary);}
-  /* The active marker is a real element, not ::after, because a pseudo
-     element cannot carry a view-transition-name — and this is the thing that
-     travels between pages. Same 2px bar as before, identical at rest. */
-  .nav-links a .nav-mark{display:none;}
-  .nav-links a.is-active .nav-mark{display:block;position:absolute;left:0;right:0;bottom:-18px;height:2px;
-    background:linear-gradient(90deg, var(--accent), var(--info));border-radius:2px;
-    view-transition-name:nav-current;}
-  .nav-cta .nav-mark{display:none !important;}
+  /* THE NAV IS A TRACE. One rail under the page links, a node on it for each
+     page, and the current sits on the one you are looking at — home is the
+     node at the rail's origin, since the logo is the home link.
+
+     Navigating moves the lit node to the page you picked: both documents name
+     it `nav-current`, so the browser morphs it across the navigation. It has
+     to be a real element — a pseudo element cannot carry a
+     view-transition-name, which is why this is a span and not ::after. */
+  .nav-pages{display:flex;align-items:center;gap:22px;position:relative;}
+  .nav-pages::before{content:'';position:absolute;left:0;right:0;bottom:-17px;height:1.5px;
+    background:#1E2A3B;border-radius:1px;pointer-events:none;}
+  .nav-pages a{position:relative;}
+  .nav-home{display:block;width:7px;height:7px;position:relative;flex:none;}
+  .nav-dot{position:absolute;left:50%;margin-left:-3.5px;bottom:-20.5px;width:7px;height:7px;
+    border-radius:50%;background:var(--bg);border:1.5px solid #1E2A3B;
+    transition:border-color .25s ease, background .25s ease;}
+  .nav-pages a.is-active .nav-dot, .nav-home.is-active .nav-dot{
+    border-color:var(--accent);background:#0B1220;view-transition-name:nav-current;}
+  .nav-pages a.is-active .nav-dot::after, .nav-home.is-active .nav-dot::after{
+    content:'';position:absolute;inset:1.5px;border-radius:50%;background:var(--accent);}
   .nav-cta{white-space:nowrap;padding:8px 16px;background:var(--accent);color:var(--ink-on-accent) !important;border-radius:8px;font-weight:700;font-size:13px;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;}
   .nav-cta:hover{transform:translateY(-1px);background:var(--accent-2);box-shadow:0 4px 20px color-mix(in srgb, var(--accent) 45%, transparent);}
   .nav-login{white-space:nowrap;padding:7px 15px;border:1px solid var(--border-strong);border-radius:8px;color:var(--text-primary) !important;font-weight:600;font-size:13px;transition:border-color 0.15s, background 0.15s;}
   .nav-login:hover{border-color:var(--accent);background:var(--surface);}
   /* 900, not 760: at ~768 every link still showed, which wrapped both the
      brand and "Get the App" onto extra lines and buckled the whole bar. */
-  @media (max-width: 900px){.nav-links{gap:12px;font-size:12px;} .nav-links a:not(.nav-cta):not(.nav-login){display:none;}
+  @media (max-width: 900px){.nav-links{gap:12px;font-size:12px;} .nav-pages{display:none;} .nav-links a:not(.nav-cta):not(.nav-login){display:none;}
     .brand-text{white-space:nowrap;}}
   /* under ~420 the bar runs out of room: Log in lives in the menu instead */
   @media (max-width: 420px){.nav-inner{padding:12px 16px;} .nav-links .nav-login{display:none;}}
@@ -381,12 +393,15 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       <span class="brand-text">The Solutionist System</span>
     </a>
     <div class="nav-links">
-      <a href="/features" class="{ax_features}">Features<span class="nav-mark"></span></a>
-      <a href="/compare" class="{ax_compare}">Compare<span class="nav-mark"></span></a>
-      <a href="/faq" class="{ax_faq}">FAQ<span class="nav-mark"></span></a>
-      <a href="/about" class="{ax_about}">About<span class="nav-mark"></span></a>
-      <a href="/help" class="{ax_help}">Help<span class="nav-mark"></span></a>
-      <a href="/download" class="{ax_download}" title="Get the app for Android, iPhone, Windows &amp; macOS">Get the App<span class="nav-mark"></span></a>
+      <div class="nav-pages">
+        <span class="nav-home {ax_home}" aria-hidden="true"><span class="nav-dot"></span></span>
+        <a href="/features" class="{ax_features}">Features<span class="nav-dot"></span></a>
+        <a href="/compare" class="{ax_compare}">Compare<span class="nav-dot"></span></a>
+        <a href="/faq" class="{ax_faq}">FAQ<span class="nav-dot"></span></a>
+        <a href="/about" class="{ax_about}">About<span class="nav-dot"></span></a>
+        <a href="/help" class="{ax_help}">Help<span class="nav-dot"></span></a>
+        <a href="/download" class="{ax_download}" title="Get the app for Android, iPhone, Windows &amp; macOS">Get the App<span class="nav-dot"></span></a>
+      </div>
       <a class="nav-login" href="{app_url}">Log in</a>
       <a class="nav-cta {ax_get_started}" href="/get-started">Get Started</a>
       <button class="nav-burger" id="navBurger" type="button" aria-label="Open menu"
@@ -611,6 +626,7 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
     to mark the current page (one of: features, compare, faq, about,
     help, get_started)."""
     active_map = {
+        "ax_home":        "is-active" if path == "/"            else "",
         "ax_features":    "is-active" if active == "features"    else "",
         "ax_compare":     "is-active" if active == "compare"     else "",
         "ax_faq":         "is-active" if active == "faq"         else "",
