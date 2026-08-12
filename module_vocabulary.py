@@ -94,7 +94,11 @@ FIELD_TYPES: tuple[str, ...] = get_args(FieldType)
 # 'calendar' needs schema.calendar_field naming a date field, exactly as
 # 'board' needs board_column naming a select. A view that cannot say what
 # it groups by is a view that cannot be drawn.
-ViewKind = Literal["list", "board", "calendar"]
+# 'summary' needs no extra field: it groups by the first select and
+# totals the first currency, the same defaults summarize_module uses, so
+# the number on screen and the number Chief says in chat are the same
+# arithmetic over the same rules.
+ViewKind = Literal["list", "board", "calendar", "summary"]
 VIEW_KINDS: tuple[str, ...] = get_args(ViewKind)
 
 # ─── Module-agent triggers ────────────────────────────────────────────

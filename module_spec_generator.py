@@ -835,6 +835,12 @@ ask to consolidate.
 DESIGN PRINCIPLES per ModuleSpec:
 - Fields reflect REAL operational data the practitioner needs (not generic placeholders)
 - `default_view: board` when one field is a clear status/progress column; else `list`
+- `summary` in views when the practitioner would ask HOW MANY or HOW MUCH
+  of this — payments, invoices, jobs, anything with a status worth counting
+  or an amount worth totalling. It needs no extra setting: it groups by the
+  first `select` and totals the first `currency`. Add it whenever the module
+  has both; skip it for modules that are read one row at a time (notes,
+  documents, testimonials), where a count answers nothing anyone asked.
 - `calendar` in views when entries HAPPEN AT A TIME the practitioner plans
   around — appointments, sessions, shifts, deliveries, court dates. Set
   `calendar_field` to the date field holding when it happens, and prefer
