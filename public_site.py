@@ -2991,11 +2991,13 @@ async def promote_alternative_endpoint(business_id: str, alternative_index: int,
     }
 
 
-# ─── Pass 3.8g: site-type + multi-page generation ─────────────────────
-
-# In-flight set so two concurrent /generate-multi-page calls for the same
-# business can't race each other through the cost-cap counter.
-_multi_page_in_flight: set = set()
+# ─── Pass 3.8g: site-type ─────────────────────────────────────────────
+#
+# _multi_page_in_flight lived here — a guard stopping two concurrent
+# /generate-multi-page calls racing through the cost-cap counter. It went
+# with the endpoint (2026-08-13, site-builder audit). The concurrency it
+# protected is chief_jobs' problem now, and that holds the invariant in
+# the database rather than in a process-local set that a redeploy forgets.
 
 
 @router.post("/sites/{business_id}/set-site-type")
@@ -3041,231 +3043,38 @@ async def set_site_type_endpoint(business_id: str, site_type: str,
 @router.post("/sites/{business_id}/generate-multi-page")
 async def generate_multi_page_endpoint(business_id: str,
                                        user: AuthedUser = Depends(require_user)):
-    """Generate every page in a multi-page site. Owner-gated: both
-    branches kick background LLM builds.
+    """Generate every page in a multi-page site.
 
-    Runs Brief Expander + Builder once per page. Persists
-    site_config.generated_pages[page_id] = html. Cost-cap-gated AND
-    kill-switch-gated. Builds in a background daemon thread because a
-    full 4-page run takes ~4-8 minutes (longer than Railway's 60s edge
-    timeout).
+    ─── Smart Sites Arc 4 — RETIRED ENGINE, NO LIVE CALLER ─────────────
+    Decision: 410 (2026-08-13, site-builder audit). The frontend caller
+    — DesignDNAPanel's "Generate All Pages" — is gone, verified by grep
+    across solutionist-studio/src; only explanatory comments remain.
 
-    ─── Smart Sites Arc 4 — RETIRED ENGINE, LIVE CALLER ────────────────
-    Decision: LIVE frontend caller — DesignDNAPanel.tsx:271 "Generate All
-    Pages" → decorationGen.ts generateMultiPage (decorationGen.ts:393) —
-    so NOT 410'd. The Module Composer is single-page by design; the
-    composer equivalent is a fresh one-page compose. When
-    LEGACY_SITE_ENGINES is off (default) this runs compose_site in a
-    background thread (same returns-immediately semantics), then stamps
-    site_config.pages_generated_at + site_pages=["home"] purely so the
-    caller's waitForPagesComplete poll resolves and refreshes the preview
-    (which serves the composed page) instead of showing a 10-minute
-    timeout. generated_pages is NOT written — no fake multi-page state.
+    It had answered 503 to every caller since 2026-05-08 anyway
+    (studio_config.MULTI_PAGE_ENABLED = False), so the button's whole
+    observable history was "Multi-page generation failed".
 
-    Bug-sweep 2026-07: the reroute now sits BEHIND the kill-switch /
-    cost-cap / in-flight guards it used to bypass — an unauthed (now
-    authed) caller could previously fire unlimited background composes.
+    Flipping that switch would not have earned it back. The Builder
+    pipeline this drove is retired behind LEGACY_SITE_ENGINES, so the
+    body below had become a reroute to ONE compose_site call — and
+    compose_site already renders About / Services / Contact as a tail
+    step whenever site_type is multi-page (site_composer.py, the
+    site_multipage block). Every ordinary rebuild produces the pages.
+    This was a second, pricier door to that: one paid build per press,
+    against a daily cap shared across every tenant.
+
+    The reroute also stamped site_config.site_pages = ["home"] AFTER
+    compose_site had written ["home", "about", "services", "contact"],
+    so a successful multi-page build reported itself as a single page.
+    That clobber goes with it.
+
+    Pages are managed in the studio (ComposedSiteControls), which reads
+    site_config.generated_pages, and refreshed by rebuilding the site.
     """
-    _require_business_owner(business_id, user)
+    return JSONResponse(status_code=410, content={
+        "error": "This page-build engine was retired. Secondary pages are "
+                 "rendered with the site — rebuild it to refresh them."})
 
-    try:
-        from studio_config import MULTI_PAGE_ENABLED
-    except Exception as e:
-        logger.warning(f"[gen-multi-page] config import failed: {e}")
-        raise HTTPException(500, "Server misconfigured")
-
-    if not MULTI_PAGE_ENABLED:
-        raise HTTPException(
-            status_code=503,
-            detail="Multi-page generation is disabled (kill switch).",
-        )
-
-    try:
-        from studio_cost_cap import can_generate
-        allowed, current, cap = can_generate()
-    except Exception:
-        allowed, current, cap = True, 0, 0
-    if not allowed:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                f"Daily Builder cap reached ({current}/{cap}). "
-                "Try again tomorrow."
-            ),
-        )
-
-    if business_id in _multi_page_in_flight:
-        raise HTTPException(
-            status_code=429,
-            detail="Multi-page generation already running for this business.",
-        )
-
-    import site_composer as _sc
-    if not _sc.legacy_site_engines_enabled():
-        logger.warning(f"[gen-multi-page] DEPRECATED path hit — rerouting to a "
-                       f"single-page Module Composer compose for {business_id[:8]}")
-        # The reroute claims the same in-flight slot as the legacy build so
-        # concurrent calls can't stack background composes.
-        _multi_page_in_flight.add(business_id)
-
-        def _compose_bg_multipage():
-            try:
-                _sc.compose_site(business_id)
-                from brand_engine import _sb_get as be_get, _sb_patch as be_patch
-                rows = be_get(f"/business_sites?business_id=eq.{business_id}"
-                              "&select=id,site_config&limit=1") or []
-                if rows:
-                    cfg = dict(rows[0].get("site_config") or {})
-                    cfg["pages_generated_at"] = time.strftime(
-                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    cfg["site_pages"] = ["home"]
-                    be_patch(f"/business_sites?id=eq.{rows[0]['id']}",
-                             {"site_config": cfg})
-            except Exception as e:
-                logger.warning(f"[gen-multi-page] composer reroute failed: {e}")
-            finally:
-                _multi_page_in_flight.discard(business_id)
-
-        import threading
-        threading.Thread(target=_compose_bg_multipage,
-                         name=f"composer-multipage-{business_id[:8]}",
-                         daemon=True).start()
-        return {
-            "ok": True,
-            "engine": "module-composer",
-            "deprecated": True,
-            "site_pages": ["home"],
-            "note": ("Multi-page generation was retired — your site is composed "
-                     "as a single page by the Module Composer. "
-                     "POST /composer/compose directly next time."),
-        }
-
-    try:
-        from brand_engine import (
-            _sb_get as be_get, _sb_patch as be_patch, get_bundle,
-        )
-    except Exception as e:
-        logger.warning(f"[gen-multi-page] brand_engine import failed: {e}")
-        raise HTTPException(500, "Server misconfigured")
-
-    site_rows = be_get(
-        f"/business_sites?business_id=eq.{business_id}&select=id,site_config&limit=1"
-    ) or []
-    if not site_rows:
-        raise HTTPException(404, "business_sites missing")
-    site_id = site_rows[0]["id"]
-    site_config = site_rows[0].get("site_config") or {}
-
-    base_brief = site_config.get("design_brief")
-    if not base_brief:
-        raise HTTPException(
-            status_code=400,
-            detail="No design_brief. Run /generate-design-recommendation first.",
-        )
-
-    recommendation = site_config.get("design_recommendation") or {}
-    scheme = site_config.get("generated_decoration")
-
-    # Determine the page set from site_type. multi-page → 4 pages,
-    # landing-page → 1 page (still goes through the same orchestrator
-    # so the cost cap counts it).
-    site_type = site_config.get("site_type", "multi-page")
-    try:
-        from studio_page_types import default_page_set, landing_page_set
-        site_pages = (
-            default_page_set() if site_type == "multi-page" else landing_page_set()
-        )
-    except Exception:
-        site_pages = ["home"]
-
-    _multi_page_in_flight.add(business_id)
-
-    def _build_in_background():
-        try:
-            try:
-                bundle = get_bundle(business_id) or {}
-            except Exception:
-                bundle = {}
-            try:
-                products = be_get(
-                    f"/products?business_id=eq.{business_id}"
-                    f"&status=eq.active&display_on_website=eq.true"
-                    f"&select=*&limit=20"
-                ) or []
-                if not products:
-                    products = be_get(
-                        f"/products?business_id=eq.{business_id}"
-                        f"&status=eq.active&select=*&limit=20"
-                    ) or []
-            except Exception:
-                products = []
-            try:
-                testimonials = be_get(
-                    f"/testimonials?business_id=eq.{business_id}"
-                    f"&select=*&limit=10"
-                ) or []
-            except Exception:
-                testimonials = []
-
-            from studio_multi_page_builder import build_pages
-            pages, errors = build_pages(
-                site_pages, base_brief, bundle, scheme,
-                products, testimonials, recommendation,
-            )
-
-            fresh_rows = be_get(
-                f"/business_sites?id=eq.{site_id}&select=site_config&limit=1"
-            ) or []
-            fresh_config = (
-                fresh_rows[0].get("site_config") if fresh_rows else {}
-            ) or {}
-            # Merge with existing pages so a single-page failure doesn't
-            # blow away previously-good pages from a prior run.
-            existing_pages = fresh_config.get("generated_pages") or {}
-            existing_pages.update(pages)
-            fresh_config["generated_pages"] = existing_pages
-            fresh_config["pages_generated_at"] = time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-            )
-            if errors:
-                fresh_config["pages_errors"] = errors
-            else:
-                fresh_config.pop("pages_errors", None)
-            fresh_config["site_pages"] = site_pages
-            try:
-                be_patch(
-                    f"/business_sites?id=eq.{site_id}",
-                    {"site_config": fresh_config},
-                )
-                logger.info(
-                    f"[gen-multi-page] {business_id} built "
-                    f"{len(pages)}/{len(site_pages)} pages; errors={len(errors)}"
-                )
-            except Exception as e:
-                logger.warning(f"[gen-multi-page] persist failed: {e}")
-        except Exception as e:
-            import sys as _sys
-            print(
-                f"[gen-multi-page] background failed for {business_id}: {e}",
-                file=_sys.stderr,
-            )
-            logger.warning(f"[gen-multi-page] background failed: {e}")
-        finally:
-            _multi_page_in_flight.discard(business_id)
-
-    import threading
-    threading.Thread(
-        target=_build_in_background,
-        name=f"multipage-{business_id[:8]}",
-        daemon=True,
-    ).start()
-
-    return {
-        "ok": True,
-        "status": "building",
-        "site_pages": site_pages,
-        "site_type": site_type,
-    }
 
 
 @router.get("/sites/{business_id}/design-signals")
