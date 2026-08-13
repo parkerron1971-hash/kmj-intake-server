@@ -337,6 +337,30 @@ def _public_origin(slug: str, custom_domain: Optional[str] = None) -> str:
 # multi-page site are stored in site_config.generated_pages keyed by
 # page_id; these are the clean public paths that map onto them.
 _SITE_PAGE_PATHS = {"/about": "about", "/services": "services", "/contact": "contact"}
+
+
+def _rewrite_nav_for_preview(html: str, slug: str) -> str:
+    """Point the page nav at the preview base, for the preview base only.
+
+    2026-08-13 site-builder audit: site_multipage.build_page_nav now
+    emits root-relative hrefs (/about), because that is the only form
+    that is correct on BOTH the subdomain and a custom domain added
+    later, and because the clean routes are the ones that honour the
+    offline switch and set a per-page canonical.
+
+    The cost of root-relative is that /public/site/{slug} — the studio's
+    preview iframe — is not the site root, so those links would leave
+    the preview for the app root. Rewriting them here, at serve time and
+    on this handler only, keeps the preview navigable without putting
+    the internal URL back into the stored HTML that visitors get.
+    """
+    if not html or "sxm-header-pagenav" not in html:
+        return html   # single-page site, or a build older than the nav
+    base = f"/public/site/{slug}"
+    out = html.replace('href="/"', f'href="{base}"')
+    for path, pid in _SITE_PAGE_PATHS.items():
+        out = out.replace(f'href="{path}"', f'href="{base}/{pid}"')
+    return out
 # Sub-paths served by their own handlers — never 404, never in the
 # "unknown path" branch.
 _ALWAYS_WINS_PATHS = ("/book", "/give", "/events")
@@ -1347,6 +1371,9 @@ async def get_site_html(slug: str):
             _render_gallery_section(gallery),
             _render_testimonials_section(testimonials),
         )
+        # Preview base only — keeps the studio iframe navigable now that
+        # the stored nav is root-relative for the real site.
+        html = _rewrite_nav_for_preview(html, slug)
         return HTMLResponse(
             content=html,
             status_code=200,
@@ -1460,8 +1487,15 @@ async def get_site_page_html(slug: str, page_path: str):
         if not html:
             # Home, unknown page, or a single-page site → serve the main page.
             return await get_site_html(slug)
-        html = _inject_canonical(html, slug, cfg.get("custom_domain"))
+        # page_path makes this page canonical to ITSELF. Without it every
+        # secondary page claimed to be the home page, telling Google the
+        # site has one page and three duplicates. The clean-path handlers
+        # always passed it; this one — the one the old nav actually sent
+        # visitors to — never did.
+        html = _inject_canonical(html, slug, cfg.get("custom_domain"),
+                                 f"/{page_id}" if page_id != "home" else "")
         html = _inject_brand_meta(html, sites[0].get("business_id"))
+        html = _rewrite_nav_for_preview(html, slug)
         return HTMLResponse(content=html, status_code=200, media_type="text/html",
                             headers={"X-Solutionist-Source": "module-composer-multipage"})
 
