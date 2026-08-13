@@ -495,10 +495,16 @@ def gather_context(business_id: str) -> Dict[str, Any]:
     # path is the LEGACY page and 404s for module-based businesses —
     # every composed CTA was pointing visitors at it.
     from booking_widget_router import booking_is_live
-    from business_sites_helpers import booking_url_for_site
     booking = {
         "enabled": booking_is_live(business_id, settings) and bool(slug),
-        "url": booking_url_for_site(site) if (site and slug) else "",
+        # Root-relative on purpose (2026-08-13 gap list). This href is
+        # baked into stored HTML that may be served from the subdomain
+        # today and a custom domain next month; an absolute URL freezes
+        # whichever host existed at compose time, which is how the Book
+        # button came to walk custom-domain visitors onto
+        # mysolutionist.app mid-decision. /book is an always-wins path on
+        # both hosts, so the relative form is correct on either.
+        "url": "/book" if (site and slug) else "",
     }
 
     # Online giving — same connection pattern as booking: composed sites
@@ -601,7 +607,12 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         logger.info(f"[composer] charge-readiness check skipped: {_cc_e}")
         _can_sell = True
     store = {"enabled": bool(sellable) and bool(slug) and _can_sell,
-             "url": f"{RAILWAY_BASE}/public/store/{slug}/page" if slug else "",
+             # Root-relative, same reasoning as booking above: this used
+             # to be an absolute railway.app URL, so a visitor on the
+             # practitioner's own domain was walked off it at the exact
+             # moment they decided to buy. /store is now an always-wins
+             # path on the subdomain AND on custom domains.
+             "url": "/store" if slug else "",
              "items": sellable}
 
     # Logistics + socials the composer should KNOW (legacy renderer did).

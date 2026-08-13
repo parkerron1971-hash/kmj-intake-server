@@ -354,16 +354,28 @@ def _rewrite_nav_for_preview(html: str, slug: str) -> str:
     on this handler only, keeps the preview navigable without putting
     the internal URL back into the stored HTML that visitors get.
     """
-    if not html or "sxm-header-pagenav" not in html:
-        return html   # single-page site, or a build older than the nav
-    base = f"/public/site/{slug}"
-    out = html.replace('href="/"', f'href="{base}"')
-    for path, pid in _SITE_PAGE_PATHS.items():
-        out = out.replace(f'href="{path}"', f'href="{base}/{pid}"')
+    if not html:
+        return html
+    out = html
+    # Cross-page nav (multi-page sites only).
+    if "sxm-header-pagenav" in html:
+        base = f"/public/site/{slug}"
+        out = out.replace('href="/"', f'href="{base}"')
+        for path, pid in _SITE_PAGE_PATHS.items():
+            out = out.replace(f'href="{path}"', f'href="{base}/{pid}"')
+    # Always-wins sub-paths (/book, /store, /give, /events). These are
+    # root-relative in stored HTML so they stay correct on a custom
+    # domain, but the preview base is not the site root — left alone
+    # they would leave the studio for the app root. Absolute public URLs
+    # keep them clickable without putting a host back into the stored
+    # page a visitor receives.
+    origin = f"https://{slug}.mysolutionist.app"
+    for sub in _ALWAYS_WINS_PATHS:
+        out = out.replace(f'href="{sub}"', f'href="{origin}{sub}"')
     return out
 # Sub-paths served by their own handlers — never 404, never in the
 # "unknown path" branch.
-_ALWAYS_WINS_PATHS = ("/book", "/give", "/events")
+_ALWAYS_WINS_PATHS = ("/book", "/give", "/events", "/store")
 
 
 def _site_robots_txt(slug: str, custom_domain: Optional[str] = None) -> str:
@@ -5203,6 +5215,25 @@ _EMBED_ORIGIN = os.environ.get(
 )
 
 
+async def _serve_store_page(slug: str) -> HTMLResponse:
+    """Serve the hosted store at /store on the site's OWN domain.
+
+    2026-08-13 (post-audit gap list): the store CTA composed onto a site
+    pointed at {RAILWAY_BASE}/public/store/{slug}/page — so a visitor on
+    the custom domain the practitioner pays for was walked onto a
+    railway.app URL at the exact moment they decided to buy. /book,
+    /give and /events had all been given the always-wins treatment on
+    the site's own domain; the store never was.
+
+    The renderer is unchanged — this is a route in front of it, so both
+    addresses serve the same page and old links keep working.
+    """
+    from store_router import hosted_store_page
+    # hosted_store_page is sync (blocking PostgREST reads); keep it off
+    # the event loop the way every other blocking render here does.
+    return await asyncio.to_thread(hosted_store_page, slug)
+
+
 async def _serve_booking_page(client, biz_id: Optional[str], slug: str) -> HTMLResponse:
     """Phase D.2.1 — render the hosted booking page at
     https://<slug>.mysolutionist.app/book.
@@ -6087,6 +6118,10 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         # (same always-wins sub-path contract as /book and /give).
         if normalized_path == "/events":
             return await _serve_events_page(client, biz_id, slug)
+        # The shop, on the site's own domain rather than a railway.app
+        # URL the visitor has never seen (2026-08-13 gap list).
+        if normalized_path == "/store":
+            return await _serve_store_page(slug)
         # ─── Academy Phase 4 — /academy catalog + course pages ─────
         if normalized_path == "/academy" or normalized_path.startswith("/academy/"):
             return await _serve_academy(client, biz_id, normalized_path, standalone=False)
@@ -6218,6 +6253,10 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         # address they paid for.
         if _norm == "/book":
             return await _serve_booking_page(client, biz_id, slug)
+        # Store (2026-08-13): same parity gap /book had — the shop CTA
+        # sent custom-domain visitors to a railway.app address mid-purchase.
+        if _norm == "/store":
+            return await _serve_store_page(slug)
 
         # ─── Findability bundle (2026-08-02), custom-domain parity ──
         if _norm == "/robots.txt":
