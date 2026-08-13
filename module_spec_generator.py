@@ -8,8 +8,10 @@ existing DynamicModule renderer picks up unchanged.
 
 Mirrors the Composer pattern: LLM fills a structured model + post-validation
 catches drift. The runtime shape (custom_modules.schema) is preserved — the
-spec layer sits *above* it. workflows[] and public_display in the spec are
-captured but NOT materialized in this spike (Phase B / Phase C work).
+spec layer sits *above* it. workflows[] materialize on accept (Phase B);
+public_display materializes too as of 2026-08-13 (Phase C) — it was a
+captured-only slot for long enough that Chief's own decision to make a
+module customer-visible was silently discarded.
 
 Ruled forks honored:
   G2  Schema DSL + component library hybrid — the spec has the slots; we
@@ -174,7 +176,9 @@ class ModuleAgentConfig(BaseModel):
 
 
 # Phase B — workflow rules MATERIALIZED on accept (alongside custom_modules).
-# Phase C — public_display still a captured slot only.
+# Phase C — public_display MATERIALIZED (2026-08-13). Fields go public
+# only when the spec marked them customer_facing, and a module with none
+# stays private rather than being published empty.
 
 class WorkflowTrigger(BaseModel):
     """Event type + shallow-equality conditions matched by workflow_engine
@@ -217,6 +221,60 @@ class PublicDisplaySlot(BaseModel):
     """Widget hint (Phase C). Whether/how this module surfaces customer-side."""
     component: Optional[str] = None        # 'BookingCalendar' / 'RewardProgressCard'
     visibility: Literal["internal_only", "customer_visible"] = "internal_only"
+
+
+# Never publishable, whatever a spec says. Mirrors the frontend picker
+# (ComposedSiteControls) and the public renderers' hidden_fields.
+_NEVER_PUBLIC_TYPES = {"contact_link"}
+_NEVER_PUBLIC_NAMES = {"contact_id", "assigned_to", "internal_notes"}
+
+
+def _public_display_from_spec(spec: Dict[str, Any],
+                              schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Turn a spec's public_display slot into the stored public_display.
+
+    Two rules carry the safety guarantee, both inherited from the field
+    picker shipped the same day:
+
+    1. `customer_facing` decides which fields go out. It defaults to
+       False on every field ("fail-closed is load-bearing for the
+       customer-side safety guarantee" — the field model's own words),
+       so a module is published showing only what the spec deliberately
+       marked, never its whole schema.
+
+    2. A module with NOTHING to show is not published. enabled=True with
+       an empty visible_fields would render an empty section, and until
+       today it meant something far worse — the public renderers treated
+       an empty allow-list as permission to publish every field.
+    """
+    slot = spec.get("public_display") or {}
+    if not isinstance(slot, dict):
+        return {"enabled": False}
+    if str(slot.get("visibility") or "internal_only") != "customer_visible":
+        return {"enabled": False}
+
+    visible = [
+        f.get("name") for f in (schema.get("fields") or [])
+        if isinstance(f, dict)
+        and f.get("customer_facing") is True
+        and f.get("type") not in _NEVER_PUBLIC_TYPES
+        and f.get("name") not in _NEVER_PUBLIC_NAMES
+        and f.get("name")
+    ]
+    if not visible:
+        # Marked customer-visible but no field was marked customer-facing.
+        # That is an under-specified spec, not permission to guess.
+        logger.info("[module-spec] public_display: customer_visible with no "
+                    "customer_facing fields — leaving the module private")
+        return {"enabled": False}
+
+    return {
+        "enabled": True,
+        "display_type": "list",
+        "visible_fields": visible,
+        "hidden_fields": sorted(_NEVER_PUBLIC_NAMES),
+        "component": slot.get("component") or None,
+    }
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1765,6 +1823,13 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
         "archetype": spec.get("archetype") or "fallback_generic",
         "archetype_params": spec.get("archetype_params") or {},
         "archetype_fallback_reason": spec.get("archetype_fallback_reason"),
+        # Phase C, finally materialized (2026-08-13, post-audit gap list).
+        # public_display was a CAPTURED SLOT ONLY — the spec model carried
+        # it, this file's own docstring said so, and this payload dropped
+        # it. So an LLM ruling that a module is customer_visible was
+        # written down and then discarded, and Chief's main build path
+        # could not put a menu on a website whatever it decided.
+        "public_display": _public_display_from_spec(spec, repaired_schema),
     }
 
     # ─── Upgrade path (C.1.1) ────────────────────────────────────────
