@@ -1925,6 +1925,132 @@ SPINE_SCRIPT = """
 """
 
 
+# ══════════════════════════════════════════════════════════════════════
+# FOLD — the hero panel re-skins through the seven verticals it knows.
+#
+# The whole pitch is "tell it what you do and it arrives shaped around
+# your work." That is a demonstrable claim, so the fold demonstrates it
+# rather than asserting it: the sidebar relabels, the numbers change,
+# and Chief says something only that business would say. The vocabulary
+# here is the terminology the product actually ships (Regulars for a
+# barber, Members for a ministry) — if that drifts, this drifts with it.
+# ══════════════════════════════════════════════════════════════════════
+
+FOLD_SCRIPT = """
+<script>
+(function () {
+  var word  = document.getElementById('heroWord');
+  var chips = document.getElementById('heroChips');
+  var stage = document.getElementById('foldStage');
+  if (!word || !chips || !stage) return;
+
+  var TRADES = [
+    { word: 'barber', cap: 'for a barber', biz: 'Fade &amp; Co.',
+      av: 'linear-gradient(140deg,#F0913A,#D8622C)', grp: 'The chair',
+      nav: ['Regulars', 'Chair calendar', 'Walk-ins', 'Payments'],
+      k1: 'Chairs booked this week', v1: '38', f1: '4 open Friday',
+      k2: 'Regulars', v2: '124', f2: '9 overdue for a cut', v3: '$6,910',
+      say: 'Three regulars haven\\u2019t rebooked in six weeks. <b>Want me to text them your Tuesday openings?</b>' },
+    { word: 'therapist', cap: 'for a therapist', biz: 'Vale Counseling',
+      av: 'linear-gradient(140deg,#4FB6A8,#2E8B7E)', grp: 'The practice',
+      nav: ['Clients', 'Sessions', 'Intake forms', 'Superbills'],
+      k1: 'Sessions this week', v1: '22', f1: '2 unconfirmed',
+      k2: 'Active clients', v2: '31', f2: '4 on the waitlist', v3: '$9,340',
+      say: 'Two clients are unconfirmed for tomorrow. <b>I\\u2019ll send reminders</b> \\u2014 clinical notes stay in your EHR, not here.' },
+    { word: 'attorney', cap: 'for an attorney', biz: 'Okafor Law',
+      av: 'linear-gradient(140deg,#8C7BE8,#5C4BC7)', grp: 'The office',
+      nav: ['Clients', 'Matters', 'Time &amp; billing', 'Trust ledger'],
+      k1: 'Unbilled hours', v1: '14.5', f1: 'across 6 matters',
+      k2: 'Open matters', v2: '19', f2: '3 with deadlines this week', v3: '$28,600',
+      say: 'You have 14.5 unbilled hours across six matters. <b>Want me to draft this month\\u2019s invoices?</b>' },
+    { word: 'contractor', cap: 'for a contractor', biz: 'Halstead Build',
+      av: 'linear-gradient(140deg,#E8B33C,#C4841E)', grp: 'The jobs',
+      nav: ['Customers', 'Jobs', 'Estimates', 'Change orders'],
+      k1: 'Jobs scheduled', v1: '9', f1: '2 waiting on materials',
+      k2: 'Estimates out', v2: '6', f2: '$41,200 in play', v3: '$18,750',
+      say: 'The Kellerman estimate has been out eleven days with no answer. <b>Want me to follow up this morning?</b>' },
+    { word: 'coach', cap: 'for a coach', biz: 'Reyes &amp; Co.',
+      av: 'linear-gradient(140deg,#2E7DFF,#1D63E6)', grp: 'The practice',
+      nav: ['Clients', 'Programs', 'Sessions', 'Payments'],
+      k1: 'Active clients', v1: '17', f1: 'all in good standing',
+      k2: 'Renewals this month', v2: '3', f2: 'none contacted yet', v3: '$12,480',
+      say: 'Three clients renew this month and none have heard from you. <b>Want me to send the renewal offers?</b>' },
+    { word: 'consultant', cap: 'for a consultant', biz: 'Northbridge',
+      av: 'linear-gradient(140deg,#5AA9D6,#2E7DAF)', grp: 'The book',
+      nav: ['Clients', 'Engagements', 'Proposals', 'Retainers'],
+      k1: 'Retainer revenue', v1: '$12,480', f1: '\\u25b2 18% vs last mo',
+      k2: 'Proposals out', v2: '4', f2: '2 quiet past ten days', v3: '$12,480',
+      say: 'Two proposals have gone quiet past ten days. <b>Want me to nudge both with the case study attached?</b>' },
+    { word: 'pastor', cap: 'for a ministry', biz: 'Grace Chapel',
+      av: 'linear-gradient(140deg,#C9873F,#9E6222)', grp: 'The congregation',
+      nav: ['Members', 'Services', 'Giving', 'Volunteers'],
+      k1: 'Giving this month', v1: '$8,240', f1: '\\u25b2 6% vs last mo',
+      k2: 'Members', v2: '218', f2: '14 not seen in a month', v3: '$8,240',
+      say: 'Fourteen members haven\\u2019t attended in a month. <b>Want me to send each a check-in note?</b>' }
+  ];
+
+  var el = {};
+  ['heroCap', 'foldAv', 'foldBiz', 'foldGrp', 'foldN1', 'foldN2', 'foldN3', 'foldN4',
+   'foldK1', 'foldV1', 'foldF1', 'foldK2', 'foldV2', 'foldF2', 'foldV3', 'foldSay'
+  ].forEach(function (id) { el[id] = document.getElementById(id); });
+  for (var k in el) { if (!el[k]) return; }   /* markup drifted — leave the static state alone */
+
+  var reduced = window.matchMedia &&
+                window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var idx = 0, timer = null, held = false;
+
+  TRADES.forEach(function (t, i) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'hero-chip';
+    b.textContent = t.word.charAt(0).toUpperCase() + t.word.slice(1);
+    b.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
+    b.addEventListener('click', function () { held = true; stop(); show(i); });
+    chips.appendChild(b);
+  });
+
+  function show(i) {
+    idx = i;
+    var t = TRADES[i];
+    stage.classList.add('is-swapping');
+    window.setTimeout(function () {
+      word.textContent      = t.word;
+      el.heroCap.textContent = t.cap;
+      el.foldBiz.innerHTML   = t.biz;
+      el.foldAv.style.background = t.av;
+      el.foldGrp.textContent = t.grp;
+      for (var n = 0; n < 4; n++) { el['foldN' + (n + 1)].innerHTML = t.nav[n]; }
+      el.foldK1.textContent = t.k1; el.foldV1.textContent = t.v1; el.foldF1.textContent = t.f1;
+      el.foldK2.textContent = t.k2; el.foldV2.textContent = t.v2; el.foldF2.textContent = t.f2;
+      el.foldV3.textContent = t.v3;
+      el.foldSay.innerHTML  = t.say;
+      stage.classList.remove('is-swapping');
+    }, reduced ? 0 : 190);
+    for (var c = 0; c < chips.children.length; c++) {
+      chips.children[c].setAttribute('aria-pressed', c === i ? 'true' : 'false');
+    }
+  }
+
+  function stop()  { if (timer) { window.clearInterval(timer); timer = null; } }
+  function start() {
+    /* held = the visitor picked one; that choice outranks the tour */
+    if (!timer && !held && !reduced && !document.hidden) {
+      timer = window.setInterval(function () { show((idx + 1) % TRADES.length); }, 3600);
+    }
+  }
+
+  stage.addEventListener('mouseenter', stop);
+  stage.addEventListener('mouseleave', start);
+  chips.addEventListener('focusin', stop);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { stop(); } else { start(); }
+  });
+  start();
+})();
+</script>
+"""
+
+
 def render_home() -> str:
     #      1. blue leads (see :root) — the ember/brass pass read purple-
     #         adjacent to him and he asked to flip the original palette
@@ -1944,53 +2070,175 @@ def render_home() -> str:
 """ + REPLICA_KIT_CSS + """
 
       /* ══════════════════════════════════════════════════════════════
-         HERO — copy over a full-width Mission Control replica
+         HERO — the claim on the left, the claim happening on the right
+
+         The fold used to be copy alone over black: 41 words, no product,
+         and roughly the right 45% empty from the subhead down. Widening
+         the headline to 1180px closed the hole on line one only. The
+         panel now fills it, and it re-skins through the seven verticals
+         so the first screen performs "it already knows your business"
+         instead of asserting it.
+
+         The full 540px Mission Control replica that used to sit at
+         1363px — two screens down, where nobody met it — is gone: this
+         panel says the same thing inside the fold, and §04 already
+         carries the room-by-room detail.
          ══════════════════════════════════════════════════════════════ */
-      .hero{position:relative;padding:88px 0 20px;overflow:hidden;}
-      .hero::before{content:'';position:absolute;inset:-160px 0 auto;height:620px;pointer-events:none;
-        background:radial-gradient(52% 70% at 50% 0%, var(--glow), transparent 72%);opacity:.55;}
+      .hero{position:relative;padding:76px 0 20px;overflow:hidden;}
+      .hero::before{content:'';position:absolute;inset:-170px 0 auto;height:660px;pointer-events:none;
+        background:radial-gradient(46% 66% at 34% 0%, var(--glow), transparent 72%);opacity:.6;}
       .hero .container-xl{position:relative;z-index:1;}
-      /* The slogan runs the full measure on one line. At 80px over a 780px
-         column it filled under half the width and the right read as a hole;
-         big enough to hold the measure, a single left column needs nothing
-         beside it. It wraps on its own below ~900px. */
-      .hero-copy{max-width:1180px;}
-      .hero h1{margin:0 0 26px;font-size:clamp(34px,6.6vw,92px);line-height:1.0;
+
+      /* min-width:0 on both tracks — a grid child's automatic minimum is
+         its content, and the panel's own flex row would otherwise push
+         the column past the container instead of shrinking inside it */
+      .hero-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.04fr);
+        gap:clamp(30px,3.4vw,54px);align-items:center;}
+      .hero-copy{min-width:0;}
+      .hero h1{margin:0 0 22px;font-size:clamp(34px,4.5vw,64px);line-height:1.0;
         letter-spacing:-.042em;text-wrap:balance;}
-      /* was a second display-weight headline directly under the first, which
-         undercut it; now it hands off at reading size with the claim carried
-         in white, and it absorbs the 48-word paragraph that followed */
-      .hero-turn{max-width:67ch;margin:0 0 32px;font-size:clamp(16.5px,1.35vw,19px);
+      .hero-turn{max-width:44ch;margin:0 0 26px;font-size:clamp(16px,1.25vw,17.5px);
         font-family:var(--font-body);font-weight:400;line-height:1.55;
         color:var(--text-muted);text-wrap:pretty;}
       .hero-turn b{color:var(--text-primary);font-weight:500;}
       .hero-ctas{display:flex;flex-wrap:wrap;gap:12px;align-items:center;}
-      .hero-meta{display:flex;flex-wrap:wrap;align-items:center;gap:18px;margin-top:26px;}
+      .hero-meta{display:flex;flex-wrap:wrap;align-items:center;gap:14px 18px;margin-top:24px;}
       .hero-note{font-size:12.5px;color:var(--text-dim);}
 
-      .hero-app{margin-top:52px;}
-      .hero-app-cap{display:flex;align-items:center;gap:9px;margin-bottom:11px;font-size:11.5px;
-        color:var(--text-dim);letter-spacing:.02em;}
-      .hero-app-cap b{color:var(--text-secondary);font-weight:600;}
-      .hero-app-cap .dot{width:6px;height:6px;border-radius:50%;background:var(--success);
-        box-shadow:0 0 8px var(--success);flex-shrink:0;}
-      .hero-app .app{height:540px;}
-      .hero-2col{display:grid;grid-template-columns:1fr 226px;gap:10px;flex:1;min-height:0;}
-      @media (max-width:1100px){.hero-2col{grid-template-columns:1fr;} .hero-2col > .pnl{display:none;}}
+      /* ── the live slot: "Tell it what you do — [ barber ]" ────────── */
+      .hero-slot-line{display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+        margin:0 0 22px;font-family:var(--font-body);
+        font-size:clamp(16px,1.3vw,18px);color:var(--text-muted);}
+      .hero-slot{display:inline-flex;align-items:center;gap:8px;
+        border:1px solid rgba(46,125,255,.42);background:rgba(46,125,255,.11);
+        border-radius:9px;padding:6px 13px;color:var(--text-primary);
+        font-weight:600;letter-spacing:-.01em;min-width:11.5em;}
+      .hero-slot .caret{width:2px;height:1.1em;background:var(--accent);flex-shrink:0;
+        animation:heroCaret 1.1s steps(1,end) infinite;}
+      @keyframes heroCaret{0%,49%{opacity:1;}50%,100%{opacity:0;}}
+      .hero-chips{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 26px;}
+      .hero-chip{font-family:var(--font-body);font-size:12.5px;padding:6px 12px;
+        border-radius:99px;border:1px solid var(--border);color:var(--text-muted);
+        background:transparent;cursor:pointer;
+        transition:color .16s ease,border-color .16s ease,background .16s ease;}
+      .hero-chip:hover{color:var(--text-primary);border-color:rgba(255,255,255,.28);}
+      .hero-chip[aria-pressed="true"]{color:var(--text-primary);
+        border-color:rgba(46,125,255,.55);background:rgba(46,125,255,.13);}
 
-      /* the replica is the hero image — below ~980px it stops being
-         readable at any scale, so it scrolls horizontally at real size
-         rather than shrinking into illegible mush */
-      .app-scroll{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;
-        scrollbar-width:thin;padding-bottom:6px;}
-      @media (max-width:980px){
-        /* no sideways scroll — the replica is now narrow enough to fit */
-        .app-scroll{overflow:visible;margin:0;padding:0;}
-        .hero-app .app{width:100%;height:auto;min-height:430px;}
+      /* ── the fold panel ───────────────────────────────────────────── */
+      .fold-stage{min-width:0;}
+      .fold-cap{display:flex;align-items:center;gap:9px;margin-bottom:11px;
+        font-size:11.5px;color:var(--text-dim);letter-spacing:.02em;}
+      .fold-cap b{color:var(--text-secondary);font-weight:600;}
+      .fold-cap .dot{width:6px;height:6px;border-radius:50%;background:var(--success);
+        box-shadow:0 0 8px var(--success);flex-shrink:0;}
+      .fold-app{display:flex;background:var(--bg-2);border:1px solid var(--border);
+        border-radius:12px;overflow:hidden;box-shadow:0 30px 70px -26px rgba(0,0,0,.85);}
+      .fold-side{width:min(150px,34%);flex-shrink:0;padding:13px 0;
+        border-right:1px solid rgba(255,255,255,.06);}
+      .fold-who{display:flex;align-items:center;gap:8px;padding:0 13px 12px;
+        margin-bottom:9px;border-bottom:1px solid rgba(255,255,255,.05);}
+      .fold-who .av{width:20px;height:20px;border-radius:6px;flex-shrink:0;
+        background:linear-gradient(140deg,#F0913A,#D8622C);}
+      .fold-who b{font-size:11.5px;font-weight:600;letter-spacing:-.01em;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .fold-grp{font-size:8.5px;letter-spacing:.13em;color:var(--text-dim);
+        padding:9px 13px 5px;text-transform:uppercase;}
+      .fold-it{display:flex;align-items:center;gap:8px;padding:6px 13px;
+        font-size:11.5px;color:var(--text-muted);white-space:nowrap;
+        overflow:hidden;text-overflow:ellipsis;}
+      .fold-it i{width:5px;height:5px;border-radius:1.5px;background:#3A3F49;
+        flex-shrink:0;font-style:normal;}
+      .fold-it.is-on{color:var(--text-primary);background:rgba(46,125,255,.10);
+        box-shadow:inset 2px 0 0 var(--accent);}
+      .fold-it.is-on i{background:var(--accent);}
+      .fold-canvas{flex:1;min-width:0;padding:15px;}
+      .fold-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(120px,100%),1fr));gap:9px;}
+      .fold-kpi{background:var(--surface);border:1px solid var(--border);
+        border-radius:8px;padding:10px 12px;min-width:0;}
+      .fold-kpi .k{display:block;font-size:8.5px;letter-spacing:.09em;
+        text-transform:uppercase;color:var(--text-dim);}
+      .fold-kpi .v{display:block;margin-top:5px;font-size:21px;font-weight:700;
+        letter-spacing:-.028em;font-variant-numeric:tabular-nums;}
+      .fold-kpi .v.up{color:var(--success);}
+      .fold-kpi .f{display:block;margin-top:2px;font-size:10px;color:var(--text-dim);}
+      .fold-chief{margin-top:11px;background:var(--surface);border:1px solid var(--border);
+        border-radius:8px;padding:13px;}
+      .fold-chief .ch{display:flex;align-items:center;gap:7px;margin-bottom:10px;
+        font-size:11px;font-weight:600;}
+      .fold-chief .ch em{margin-left:auto;font-style:normal;font-size:8.5px;
+        letter-spacing:.1em;color:var(--success);}
+      .fold-chief .say{font-family:var(--font-body);font-size:13px;line-height:1.5;
+        color:var(--text-secondary);}
+      .fold-chief .say b{color:var(--text-primary);font-weight:600;}
+      .fold-chief .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:13px;}
+      .fold-chief .acts b{font-size:11.5px;font-weight:700;padding:7px 13px;
+        border-radius:6px;background:var(--accent);color:#fff;}
+      .fold-chief .acts i{font-size:11.5px;font-style:normal;padding:7px 13px;
+        border-radius:6px;border:1px solid var(--border);color:var(--text-secondary);}
+      /* the labels cross-fade; the frame never moves, so it reads as one
+         workspace changing its mind rather than a carousel */
+      .fold-swap{transition:opacity .2s ease;}
+      .is-swapping .fold-swap{opacity:.25;}
+
+      /* Tilt and bleed are desktop-only luxuries. The tilt's own
+         projection already overhangs the content edge by ~28px, and the
+         bleed only spends gutter that exists: clearance works out to a
+         constant (1404-1276)/2 = 64px at every width, so nothing is ever
+         cut. A flat -62px looked right at 1440 and sheared the third KPI
+         tile at 1250, where the gutter is only the container's 32px. */
+      @media (min-width:1200px){
+        .fold-stage{margin-right:calc(-1 * max(0px, (100vw - 1404px) / 2));}
+        .fold-app{transform:perspective(1600px) rotateY(-7deg) rotateX(1.2deg);
+          transform-origin:left center;}
       }
-      @media (max-width:700px){
-        .hero-app .app{min-height:0;}
-        .hero-app{margin-top:36px;}
+      @media (max-width:1000px){
+        .hero{padding-top:52px;}
+        .hero-grid{grid-template-columns:1fr;gap:36px;}
+        .hero h1{font-size:clamp(32px,7.2vw,54px);}
+        .hero-turn{max-width:56ch;}
+        .fold-stage{margin-right:0;}
+      }
+      /* Phones get the same deal the desktop fold gets, or the change is
+         only half shipped. Stacked at 390px the panel landed ~690px down
+         — a whole screen of copy again, which is the bug this pass
+         exists to kill. Three moves claw it back to ~490 without cutting
+         a word: the chips become one swipeable row instead of three
+         stacked ones, the stat pill and beta note move below the panel
+         (supporting detail, not the pitch), and the top padding tightens.
+
+         display:contents dissolves .hero-copy so its children become
+         flex items of .hero-grid and can be ordered around the panel.
+         Safe here only because .hero-copy carries no .reveal of its own
+         — a transform on a display:contents box does nothing. */
+      @media (max-width:640px){
+        .hero{padding-top:34px;}
+        .hero-grid{display:flex;flex-direction:column;gap:20px;}
+        .hero-copy{display:contents;}
+        /* display:contents moves these into the flex BOX tree, but
+           selectors still match the DOM tree — .hero-grid > .hero-meta
+           matches nothing, so these have to be addressed through their
+           real parent. `order` then applies because they are flex items. */
+        .hero-grid > *, .hero-copy > *{margin-top:0;margin-bottom:0;}
+        /* stacked, the chips read better as the panel's own control than
+           as a third thing to scroll past before reaching it */
+        .hero-grid > .fold-stage{order:1;}
+        .hero-copy > .hero-chips{order:2;}
+        .hero-copy > .hero-meta{order:3;}
+        .hero-slot{min-width:0;flex:1;}
+        /* a nowrap scroller's automatic minimum size is its content, so
+           without min-width:0 the chip row sets the column's width and
+           bleeds past the screen instead of scrolling inside it */
+        .hero-chips{flex-wrap:nowrap;overflow-x:auto;min-width:0;max-width:100%;
+          padding-bottom:2px;scrollbar-width:none;-webkit-overflow-scrolling:touch;}
+        .hero-chips::-webkit-scrollbar{display:none;}
+        .hero-chip{flex:0 0 auto;}
+        .fold-side{display:none;}
+        .fold-canvas{padding:13px;}
+      }
+      @media (prefers-reduced-motion:reduce){
+        .hero-slot .caret{animation:none;}
+        .fold-swap{transition:none;}
       }
 
 
@@ -2186,110 +2434,61 @@ def render_home() -> str:
           <div class="as-chief">Chief AI<span class="on">Online</span></div>
         </div>"""
 
-    TOPBAR = """
-      <div class="app-top">
-        <span class="at-mark"></span>
-        <span class="at-search">Ask the AI anything&hellip;<span class="kbd">&#8984;K</span></span>
-        <span class="at-cta">+ Quick Create</span>
-        <span class="at-urgent">Urgent</span>
-        <span class="at-av"></span>
-      </div>
-      <div class="app-strip">
-        <span class="biz">Reyes &amp; Co.</span>
-        <span class="sp">Foundation Track 4/7</span>
-        <span class="tab">Studio</span>
-        <span class="tab on">Mission Control</span>
-        <span class="tab">Solutionist System</span>
-      </div>"""
-
     body = ("""
 <section class="hero">
   <div class="container-xl">
-    <div class="hero-copy">
-      <h1 class="reveal">Every problem <span class="gradient-text">has a solution.</span></h1>
-      <p class="hero-turn reveal reveal-delay-1">Not a system you teach &mdash; <b>a system that already knows your business.</b> Tell it what you do, and the whole thing arrives shaped around your line of work.</p>
-      <div class="hero-ctas reveal reveal-delay-2">
-        <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
-        <a class="btn-secondary" href="#rooms">Look inside</a>
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <h1 class="reveal">Every problem <span class="gradient-text">has a solution.</span></h1>
+        <p class="hero-slot-line reveal reveal-delay-1">
+          <span>Tell it what you do &mdash;</span>
+          <span class="hero-slot"><span id="heroWord">barber</span><span class="caret" aria-hidden="true"></span></span>
+        </p>
+        <p class="hero-turn reveal reveal-delay-1">&mdash; and the whole system arrives already speaking that language. Not a system you teach: <b>a system that already knows your business.</b></p>
+        <div class="hero-chips reveal reveal-delay-2" id="heroChips" role="group" aria-label="See the system as a different business"></div>
+        <div class="hero-ctas reveal reveal-delay-2">
+          <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
+          <a class="btn-secondary" href="#rooms">Look inside</a>
+        </div>
+        <div class="hero-meta reveal reveal-delay-3">
+          <span class="stat-block"><span class="big">7</span><span>business types it already knows</span></span>
+          <span class="hero-note">Currently in private beta &middot; Every action logged and reversible</span>
+        </div>
       </div>
-      <div class="hero-meta reveal reveal-delay-3">
-        <span class="stat-block"><span class="big">7</span><span>business types it already knows</span></span>
-        <span class="hero-note">Currently in private beta &middot; Every action logged and reversible</span>
-      </div>
-    </div>
-"""
-    + BOARD_HTML + """
-    <div class="hero-app reveal reveal-delay-3">
-      <div class="hero-app-cap"><span class="dot"></span><b>Mission Control</b> &middot; the first thing you see every day</div>
-      <div class="app-scroll">
-        <div class="app">"""
-    + TOPBAR + """
-          <div class="app-body">"""
-    + SIDEBAR + """
-            <div class="app-canvas">
-              <div class="kpi-row">
-                <div class="kpi"><span class="kpi-ico"></span><span class="k">Revenue &middot; this month</span><span class="v gold">$12,480</span><span class="f up">&#9650; 18% vs last mo</span></div>
-                <div class="kpi"><span class="kpi-ico"></span><span class="k">Active clients</span><span class="v">17</span><span class="f">all in good standing</span></div>
-                <div class="kpi"><span class="kpi-ico"></span><span class="k">Projects in progress</span><span class="v">3</span><span class="f">open board &rarr;</span></div>
-                <div class="kpi"><span class="kpi-ico"></span><span class="k">Tasks today</span><span class="v">7</span><span class="f">2 due by 5:00</span></div>
-                <div class="kpi"><span class="kpi-ico"></span><span class="k">Business health</span><span class="v up">61%</span><span class="f">steady</span></div>
-              </div>
 
-              <div class="hero-2col">
-                <div class="brief">
-                  <div class="brief-l">
-                    <span class="date">Monday, July 27 &middot; Evening edition</span>
-                    <span class="hi">Good evening,<br><b>Jordan</b></span>
-                    <span class="cp">2 things need you today. Chief has them queued, and one word clears the deck.</span>
-                    <span class="brief-btns"><span class="ah-btn">Focus Mode &rarr;</span><span class="lnk">Read today&rsquo;s briefing</span></span>
-                    <img class="brief-mark" src="/assets/mark.webp" alt="" width="128" height="128" loading="lazy">
-                  </div>
-                  <div class="chief">
-                    <div class="chief-h">Chief AI<span class="on">Online</span></div>
-                    <div class="chief-body">
-                      <div class="cf cf-a">
-                        <div class="chief-lead">I&rsquo;ve analyzed your day. Here&rsquo;s what I found:</div>
-                        <div class="chief-f"><span class="sq warn"></span><span class="g">8 invoices overdue</span><span class="amt">$1,865</span></div>
-                        <div class="chief-f"><span class="sq"></span><span class="g">2 drafts waiting for you</span><span class="tag">Needs you</span></div>
-                        <div class="chief-f"><span class="sq ok"></span><span class="g">$12,480 collected this month</span></div>
-                        <div class="chief-ask">Would you like me to handle these?</div>
-                        <div class="chief-btns"><b>Yes, handle it</b><i>Review first</i></div>
-                      </div>
-                      <div class="cf cf-b" aria-hidden="true">
-                        <div class="chief-lead">Of the 8, two are past 20 days:</div>
-                        <div class="chief-f"><span class="sq warn"></span><span class="g">Marcus Bell &middot; 22 days</span><span class="amt">$420</span></div>
-                        <div class="chief-f"><span class="sq warn"></span><span class="g">Danielle Ortiz &middot; 24 days</span><span class="amt">$310</span></div>
-                        <div class="chief-ask">Send both a reminder?</div>
-                        <div class="chief-btns"><b>Yes, send them</b><i>Review first</i></div>
-                        <div class="chief-note">Drafted, not sent. Nothing leaves without you.</div>
-                      </div>
-                    </div>
-                    <div class="chief-in"><span class="cin-wrap"><span class="cin-ph">Ask Chief anything&hellip;</span><span class="cin-q" aria-hidden="true"><i style="animation-delay:0.00s">W</i><i style="animation-delay:0.05s">h</i><i style="animation-delay:0.10s">o</i><i style="animation-delay:0.15s">&nbsp;</i><i style="animation-delay:0.20s">h</i><i style="animation-delay:0.25s">a</i><i style="animation-delay:0.30s">s</i><i style="animation-delay:0.35s">n</i><i style="animation-delay:0.40s">&rsquo;</i><i style="animation-delay:0.45s">t</i><i style="animation-delay:0.50s">&nbsp;</i><i style="animation-delay:0.55s">p</i><i style="animation-delay:0.60s">a</i><i style="animation-delay:0.65s">i</i><i style="animation-delay:0.70s">d</i><i style="animation-delay:0.75s">&nbsp;</i><i style="animation-delay:0.80s">m</i><i style="animation-delay:0.85s">e</i><i style="animation-delay:0.90s">?</i></span></span><span class="go"></span></div>
-                  </div>
-                </div>
-
-                <div class="pnl">
-                  <div class="pnl-h">AI Suggestions<span class="ct">4</span></div>
-                  <div class="r"><span class="bar red"></span><span class="nm g">INV-2026-010 overdue<span>Marcus Bell &middot; 38 days</span></span><span class="pill sent">Remind</span></div>
-                  <div class="r"><span class="bar red"></span><span class="nm g">INV-2026-002 overdue<span>Grace Chapel &middot; 59 days</span></span><span class="pill sent">Remind</span></div>
-                  <div class="r"><span class="bar amb"></span><span class="nm g">2 drafts pending review<span>from your last agent run</span></span><span class="pill draft">Open</span></div>
-                  <div class="r"><span class="bar"></span><span class="nm g">Tia&rsquo;s card expires in 6 days<span>update payment method</span></span><span class="pill draft">Fix</span></div>
-                </div>
-              </div>
-
-              <div class="qa-h">Quick Actions<span class="hint">one click, Chief handles the rest</span></div>
-              <div class="qa">
-                <i style="--c:#3B82F6">Draft Email</i><i style="--c:#EF4444">Chase Overdue</i>
-                <i style="--c:#F59E0B">New Invoice</i><i style="--c:#22C55E">Add Contact</i>
-                <i style="--c:#06B6D4">Book Session</i><i style="--c:#A855F7">Create a Post</i>
-                <i style="--c:#7C3AED">Run Autopilot</i><i style="--c:#C9A84C">Set a Goal</i>
-                <i style="--c:#64748B">Custom</i>
-              </div>
+      <div class="fold-stage reveal reveal-delay-2" id="foldStage">
+        <div class="fold-cap"><span class="dot"></span><b>Your workspace</b> &middot; <span id="heroCap">for a barber</span></div>
+        <div class="fold-app">
+          <div class="fold-side">
+            <div class="fold-who"><span class="av" id="foldAv"></span><b id="foldBiz">Fade &amp; Co.</b></div>
+            <div class="fold-grp">Mission Control</div>
+            <div class="fold-it is-on"><i></i>Dashboard</div>
+            <div class="fold-grp fold-swap" id="foldGrp">The chair</div>
+            <div class="fold-it fold-swap"><i></i><span id="foldN1">Regulars</span></div>
+            <div class="fold-it fold-swap"><i></i><span id="foldN2">Chair calendar</span></div>
+            <div class="fold-it fold-swap"><i></i><span id="foldN3">Walk-ins</span></div>
+            <div class="fold-it fold-swap"><i></i><span id="foldN4">Payments</span></div>
+            <div class="fold-grp">Finance</div>
+            <div class="fold-it"><i></i>Invoices</div>
+            <div class="fold-it"><i></i>Expenses</div>
+          </div>
+          <div class="fold-canvas">
+            <div class="fold-kpis">
+              <div class="fold-kpi fold-swap"><span class="k" id="foldK1">Chairs booked this week</span><span class="v" id="foldV1">38</span><span class="f" id="foldF1">4 open Friday</span></div>
+              <div class="fold-kpi fold-swap"><span class="k" id="foldK2">Regulars</span><span class="v" id="foldV2">124</span><span class="f" id="foldF2">9 overdue for a cut</span></div>
+              <div class="fold-kpi fold-swap"><span class="k">Revenue &middot; this month</span><span class="v up" id="foldV3">$6,910</span><span class="f">&#9650; 12% vs last mo</span></div>
+            </div>
+            <div class="fold-chief">
+              <div class="ch">Chief<em>ONLINE</em></div>
+              <div class="say fold-swap" id="foldSay">Three regulars haven&rsquo;t rebooked in six weeks. <b>Want me to text them your Tuesday openings?</b></div>
+              <div class="acts"><b>Yes, do it</b><i>Show me who</i></div>
             </div>
           </div>
         </div>
       </div>
     </div>
+"""
+    + BOARD_HTML + """
   </div>
 </section>
 
@@ -2767,7 +2966,7 @@ def render_home() -> str:
         description="The business system that already knows how yours runs. Bookings, clients, invoices, and an AI chief of staff that logs every move and never acts without your approval.",
         content_html=body, path="/",
         extra_css=extra_css + BOARD_CSS + SPINE_CSS,
-        extra_scripts=extra_scripts + BOARD_SCRIPT + SPINE_SCRIPT,
+        extra_scripts=extra_scripts + BOARD_SCRIPT + SPINE_SCRIPT + FOLD_SCRIPT,
     )
 
 
