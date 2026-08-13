@@ -188,6 +188,22 @@ def offering_readiness(o: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, An
                         "a file, mark it shipped, or add a collection note"),
                 "fix": {"field": "fulfillment_note"},
             })
+        # 2026-08-13 (post-audit gap list): site_modules/store.py only
+        # COUNTS an item toward the shop section when it carries an http
+        # image and a price of at least $5 — "a one-test-product store
+        # destroys trust". That bar is deliberate and stays. What was
+        # wrong is that it was silent: a practitioner with two priced,
+        # in-stock, Stripe-connected products and no photos got a site
+        # with no shop on it and a readiness chip saying green.
+        #
+        # The bar is not lowered here, only made visible.
+        if not str(o.get("image_url") or "").startswith("http"):
+            issues.append({
+                "code": "no_image",
+                "msg": ("No photo — the shop section on your site only "
+                        "shows items that have one"),
+                "fix": {"field": "image_url"},
+            })
         if has_price and state["site_slug"]:
             surfaces.append({"kind": "store", "url": state["store_url"]})
 
@@ -216,17 +232,79 @@ def business_readiness(business_id: str,
             # requires_shipping + fulfillment_note are load-bearing for
             # the no_delivery_path check — omit them and every sellable
             # offering reports a missing delivery path it may well have.
+            # requires_shipping + fulfillment_note are load-bearing for
+            # the no_delivery_path check, image_url for no_image — omit
+            # any and the check reads a row that cannot answer it, which
+            # reports a fault on every offering that has none.
             "&select=id,name,category,current_price,duration_min,inventory_qty,"
-            "requires_shipping,fulfillment_note"
+            "requires_shipping,fulfillment_note,image_url"
             "&order=name.asc&limit=200") or []
     per = [dict(offering_readiness(o, state), name=o.get("name")) for o in offerings]
     return {
         "business": state,
         "offerings": per,
+        "store_section": store_section_status(offerings),
         "summary": {
             "total": len(per),
             "ready": sum(1 for r in per if r["ready"]),
             "bookable_ready": sum(1 for r in per if r["behavior"] == "bookable" and r["ready"]),
             "sellable_ready": sum(1 for r in per if r["behavior"] == "sellable" and r["ready"]),
         },
+    }
+
+
+# The shop section's own bar, mirrored from site_modules/store.py so the
+# practitioner can be told BEFORE a build why their shop is missing.
+STORE_MIN_REAL_PRODUCTS = 2
+STORE_MIN_REAL_PRICE = 5.0
+
+
+def store_section_status(offerings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Will the shop section actually appear on the site, and if not, why?
+
+    2026-08-13 (post-audit gap list): the section counts only items with
+    an http image AND a price >= $5, and needs at least two of them. The
+    bar is deliberate — "a one-test-product store destroys trust" — but
+    it was enforced silently at render time, so a practitioner could have
+    priced, in-stock, Stripe-connected products, a green readiness chip,
+    and a published site with no shop on it and no explanation.
+
+    Reports; never changes the bar.
+    """
+    sellable = [o for o in (offerings or [])
+                if str((o or {}).get("category") or "").lower()
+                in ("product", "course", "package")]
+
+    def _price(o):
+        try:
+            return float(o.get("current_price") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    counted = [o for o in sellable
+               if str(o.get("image_url") or "").startswith("http")
+               and _price(o) >= STORE_MIN_REAL_PRICE]
+    missing_photo = [o.get("name") or "Untitled" for o in sellable
+                     if not str(o.get("image_url") or "").startswith("http")]
+    below_price = [o.get("name") or "Untitled" for o in sellable
+                   if _price(o) < STORE_MIN_REAL_PRICE]
+
+    will_render = len(counted) >= STORE_MIN_REAL_PRODUCTS
+    reason = ""
+    if not sellable:
+        reason = "No products yet."
+    elif not will_render:
+        need = STORE_MIN_REAL_PRODUCTS - len(counted)
+        reason = (
+            f"Your site's shop section needs {STORE_MIN_REAL_PRODUCTS} products "
+            f"with a photo and a price of ${STORE_MIN_REAL_PRICE:.0f} or more — "
+            f"{len(counted)} qualify, so it stays hidden. "
+            f"{need} more would show it.")
+    return {
+        "will_render": will_render,
+        "qualifying": len(counted),
+        "required": STORE_MIN_REAL_PRODUCTS,
+        "missing_photo": missing_photo[:10],
+        "below_min_price": below_price[:10],
+        "reason": reason,
     }
