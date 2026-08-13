@@ -1361,47 +1361,10 @@ def _try_render_via_archetype(
         return None
 
 
-def _try_serve_multi_page(
-    business_id: str, site_config: Dict[str, Any], path: str
-) -> Optional[str]:
-    """Pass 3.8g Layer 0 — serve a multi-page site if configured.
-
-    Looks at site_config.site_type and site_config.generated_pages. When
-    site_type == "multi-page" and the requested path resolves to a known
-    page that has generated HTML, return that page's HTML with the
-    reactivity layer injected. Returns None on any miss / failure so the
-    caller falls through to the single-page chain.
-    """
-    import sys as _sys
-    if site_config.get("site_type") != "multi-page":
-        return None
-    pages = site_config.get("generated_pages") or {}
-    if not pages:
-        return None
-    try:
-        from studio_page_types import slug_to_page_id
-        page_id = slug_to_page_id(path or "/")
-    except Exception as e:
-        print(f"[smart_sites] slug_to_page_id failed: {e}", file=_sys.stderr)
-        page_id = "home"
-
-    page_html = pages.get(page_id) or pages.get("home")
-    if not page_html or not isinstance(page_html, str) or len(page_html) < 200:
-        return None
-
-    try:
-        from studio_html_validator import inject_motion_modules
-        scheme = site_config.get("generated_decoration")
-        brief = site_config.get("design_brief")
-        return inject_motion_modules(page_html, scheme, brief)
-    except Exception as e:
-        print(
-            f"[smart_sites] multi-page inject_motion_modules failed for "
-            f"{business_id}/{page_id}: {e}",
-            file=_sys.stderr,
-        )
-        # Last-ditch: return raw page_html so we don't break the live URL.
-        return page_html
+# _try_serve_multi_page() lived here — Smart Sites' multi-page Layer 0.
+# Removed 2026-08-13 (site-builder audit) with the flag that gated it;
+# it had no other caller. Multi-page is served by the composer path
+# (compose_site + site_multipage), not by Smart Sites.
 
 
 def render_smart_site_page(business_id: str, page_type: str, **opts: Any) -> str:
@@ -1431,17 +1394,12 @@ def render_smart_site_page(business_id: str, page_type: str, **opts: Any) -> str
     path = opts.get("path") or "/"
 
     if page_type == "home":
-        # Layer 0: 3.8g multi-page route
-        try:
-            from studio_config import MULTI_PAGE_ENABLED
-            if MULTI_PAGE_ENABLED:
-                multi_html = _try_serve_multi_page(business_id, site_config, path)
-                if multi_html:
-                    return multi_html
-        except Exception as e:
-            import sys as _sys
-            print(f"[smart_sites] multi-page layer crashed: {e}", file=_sys.stderr)
-            # Fall through silently — multi-page failure must never break the site.
+        # Layer 0 (3.8g multi-page route) was here, gated on
+        # MULTI_PAGE_ENABLED. Removed 2026-08-13 (site-builder audit):
+        # that flag was False from 2026-05-08 until it was deleted, so
+        # this layer never ran once. Multi-page lives on the composer
+        # path now — compose_site + site_multipage — which Smart Sites
+        # does not serve. The chain below is what actually ran.
 
         # Layer 1: Builder Agent output
         builder_html = _try_serve_builder_html(business_id, site_config)
