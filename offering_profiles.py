@@ -51,7 +51,31 @@ def business_state(business_id: str) -> Dict[str, Any]:
         f"/businesses?id=eq.{business_id}"
         "&select=settings,stripe_account_id&limit=1") or []
     settings = (rows[0].get("settings") if rows else {}) or {}
-    stripe_connected = bool(rows[0].get("stripe_account_id")) if rows else False
+    # 2026-08-13 site-builder audit: this asked whether an account id
+    # existed and called it "connected" — which a restricted or
+    # half-onboarded account satisfies while Stripe declines its
+    # charges. can_charge reads the flag the account.updated webhook has
+    # been storing all along.
+    try:
+        import payments_core
+        stripe_connected = payments_core.can_charge(rows[0]) if rows else False
+    except Exception:
+        stripe_connected = bool(rows[0].get("stripe_account_id")) if rows else False
+
+    # Which offerings have a hosted file attached. This is the ONLY
+    # signal in the data model that an item is delivered as a download —
+    # there is no is_digital column, which is why the readiness check
+    # below asks "is there ANY delivery path" rather than "is this
+    # digital and missing its file".
+    try:
+        from store_files import product_files_of
+        _files = product_files_of(rows[0] if rows else {})
+        product_file_ids = {
+            str(k) for k, v in (_files or {}).items()
+            if isinstance(v, dict) and str(v.get("path") or "").strip()
+        }
+    except Exception:
+        product_file_ids = set()
     # Booking detection fix (2026-07-10): readiness chips read the real
     # system (published booking module), not just the legacy flag.
     from booking_widget_router import booking_is_live
@@ -76,6 +100,7 @@ def business_state(business_id: str) -> Dict[str, Any]:
         "site_slug": slug,
         "booking_url": booking_url,
         "store_url": f"{RAILWAY_BASE}/public/store/{slug}/page" if slug else "",
+        "product_file_ids": product_file_ids,
     }
 
 
@@ -130,6 +155,27 @@ def offering_readiness(o: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, An
             issues.append({"code": "out_of_stock",
                            "msg": "Out of stock — shown as sold out",
                            "fix": {"field": "inventory_qty"}})
+        # 2026-08-13 site-builder audit: nothing anywhere checked that a
+        # buyer would ever RECEIVE what they paid for. There is no
+        # is_digital column — the frontend preset is category 'product'
+        # with requires_shipping false — so "digital product with no
+        # file" is not a state this schema can express. What IS
+        # expressible, and what actually hurts, is an item with no
+        # delivery path at all: not shipped, no hosted file to download,
+        # and no note telling the buyer how they get it. That sale ends
+        # with money taken and the buyer holding a receipt for nothing.
+        #
+        # Any ONE of the three answers "how does this reach them?", so
+        # this asks for one rather than prescribing which.
+        if not o.get("requires_shipping") \
+                and str(o.get("id")) not in (state.get("product_file_ids") or set()) \
+                and not str(o.get("fulfillment_note") or "").strip():
+            issues.append({
+                "code": "no_delivery_path",
+                "msg": ("Nothing says how the buyer receives this — attach "
+                        "a file, mark it shipped, or add a collection note"),
+                "fix": {"field": "fulfillment_note"},
+            })
         if has_price and state["site_slug"]:
             surfaces.append({"kind": "store", "url": state["store_url"]})
 
@@ -155,7 +201,11 @@ def business_readiness(business_id: str,
     if offerings is None:
         offerings = sb_clients.sb_get_as_service(
             f"/offerings?business_id=eq.{business_id}&is_active=eq.true"
-            "&select=id,name,category,current_price,duration_min,inventory_qty"
+            # requires_shipping + fulfillment_note are load-bearing for
+            # the no_delivery_path check — omit them and every sellable
+            # offering reports a missing delivery path it may well have.
+            "&select=id,name,category,current_price,duration_min,inventory_qty,"
+            "requires_shipping,fulfillment_note"
             "&order=name.asc&limit=200") or []
     per = [dict(offering_readiness(o, state), name=o.get("name")) for o in offerings]
     return {
