@@ -16,14 +16,21 @@ from __future__ import annotations
 # is "multi-page", and public_site serves them at /about, /services and
 # /contact. There is no flag on that path, because it is the live one.
 
-# Hard daily Builder cap. Disabling this means Builder runs are unmetered;
-# only useful for local dev or after a verified cost-control change.
+# COST_CAP_ENABLED lived here — the on/off switch for a hard daily
+# Builder cap (50 runs/day, system-wide, process-local). Removed
+# 2026-08-13 (site-builder audit) with studio_cost_cap itself.
 #
-# NOTE (2026-08-13): nothing reads this. studio_cost_cap enforces the cap
-# unconditionally. Left in place rather than removed with its neighbour
-# because it reads as a cost-control switch someone may have meant to
-# wire, and that is a money decision, not a cleanup one.
-COST_CAP_ENABLED: bool = True
+# It was never wired: introduced in the SAME commit as the cap it was
+# meant to gate (Pass 3.8g, a13b629), and read by nothing, ever. The
+# cap it guarded was reachable only through /generate-multi-page,
+# which has been 503 since 2026-05-08 and is 410 now — so the counter
+# sat at zero for three months and the UI showed a gauge that could
+# not move.
+#
+# Build spend is governed by CREDITS: pricing_config.build_base() +
+# billing_limits.require_units, metered per build on the composer
+# path. If a daily ceiling is ever wanted, it belongs there, not on
+# a retired engine.
 
 # Solutionist Quality rules block in Builder prompt + post-build validator.
 # Set False to ship Builder output without the SQ ceiling (debugging path).

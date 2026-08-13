@@ -2389,18 +2389,14 @@ async def decoration_status_endpoint(business_id: str):
         "generated_page_ids": list((site_config.get("generated_pages") or {}).keys()),
         "pages_generated_at": site_config.get("pages_generated_at"),
         "pages_errors": site_config.get("pages_errors") or [],
-        "cost_cap_status": _get_cost_cap_summary(),
     }
 
 
-def _get_cost_cap_summary() -> dict:
-    """Return current cost-cap status for UI display. Soft-fail on import
-    error so /decoration-status keeps working if studio_cost_cap is gone."""
-    try:
-        from studio_cost_cap import get_status
-        return get_status()
-    except Exception:
-        return {}
+# _get_cost_cap_summary() lived here, publishing cost_cap_status to the
+# design panel's "Daily Builder usage: N / 50" line. Removed 2026-08-13
+# (site-builder audit) with the counter itself — see studio_config for
+# why. Build spend is governed by credits (pricing_config +
+# billing_limits), not by a daily Builder counter.
 
 
 # ─── Pass 3.8f.2: MySite preview endpoint ─────────────────────────────
@@ -4376,15 +4372,9 @@ async def design_health(user: AuthedUser = Depends(require_user)):
                            "restatements": inv_restatements}}
 
 
-@router.get("/system/cost-cap-status")
-async def cost_cap_status_endpoint():
-    """Snapshot of today's Builder counter. Used by ops + frontend."""
-    try:
-        from studio_cost_cap import get_status
-        return get_status()
-    except Exception as e:
-        logger.warning(f"[cost-cap] status read failed: {e}")
-        return {"error": "cost_cap unavailable"}
+# GET /system/cost-cap-status lived here. Its docstring claimed "used by
+# ops + frontend"; at removal (2026-08-13, site-builder audit) it had
+# zero callers in either repo. It reported a counter nothing incremented.
 
 
 # ═══════════════════════════════════════════════════════════════════════
