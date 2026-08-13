@@ -217,6 +217,10 @@ button{font-family:inherit}
   flex-direction:column;gap:8px}
 .st-out{color:var(--sx-muted);font-size:.85rem;font-weight:700}
 .st-low{color:var(--sx-accent);font-size:.8rem;font-weight:700}
+/* Shown INSTEAD of Buy/Add when the store can't take a card. Says so
+   before the visitor builds a cart, rather than after they click. */
+.st-unavailable{margin:0;color:var(--sx-muted);font-size:.85rem;
+  line-height:1.45}
 .st-actions{display:flex;gap:8px}
 .st-actions button{flex:1}
 .st-add{padding:10px 16px;min-height:44px;
@@ -545,7 +549,7 @@ button{font-family:inherit}
 _CATEGORY_ORDER = ("product", "course", "package")
 
 
-def _card(o: Dict[str, Any]) -> str:
+def _card(o: Dict[str, Any], payments_ready: bool = True) -> str:
     category = str(o.get("category") or "product")
     image_url = str(o.get("image_url") or "")
     if not image_url.startswith("http"):
@@ -563,7 +567,18 @@ def _card(o: Dict[str, Any]) -> str:
     else:
         stock = ""
     actions = ""
-    if o.get("in_stock"):
+    if o.get("in_stock") and not payments_ready:
+        # 2026-08-13 site-builder audit: the store computed
+        # `payments_ready` for its JSON endpoint and never passed it to
+        # the HTML route, so Buy and Add-to-cart rendered for any
+        # in-stock item on a store that could not take a card. The
+        # visitor filled a cart, clicked Buy, and only THEN got a 409 —
+        # as a toast that auto-hides in five seconds. Giving already
+        # refuses to publish a page that can't take a gift; the store
+        # never inherited that rule. Say it up front instead.
+        actions = ('<p class="st-unavailable">Online payment isn’t set up '
+                   'yet — contact us to buy this.</p>')
+    elif o.get("in_stock"):
         # The add button's data attributes are the cart's item metadata
         # (name/price for lines, image/category/download for the drawer
         # thumbnails + hints) — every value HTML-escaped.
@@ -592,7 +607,8 @@ def _card(o: Dict[str, Any]) -> str:
             f'<div class="st-card-foot">{stock}{actions}</div></div></article>')
 
 
-def _sections(items: List[Dict[str, Any]], business_type: Optional[str]) -> str:
+def _sections(items: List[Dict[str, Any]], business_type: Optional[str],
+              payments_ready: bool = True) -> str:
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for o in items:
         groups.setdefault(str(o.get("category") or "product"), []).append(o)
@@ -604,7 +620,7 @@ def _sections(items: List[Dict[str, Any]], business_type: Optional[str]) -> str:
     out = []
     show_headings = len(ordered) > 1
     for cat in ordered:
-        cards = "".join(_card(o) for o in groups[cat])
+        cards = "".join(_card(o, payments_ready) for o in groups[cat])
         head = ""
         if show_headings:
             n = len(groups[cat])
@@ -619,7 +635,8 @@ def _sections(items: List[Dict[str, Any]], business_type: Optional[str]) -> str:
 
 def render_store_page(slug: str, biz: Dict[str, Any],
                       items: List[Dict[str, Any]], ss: Dict[str, Any],
-                      site: Optional[Dict[str, Any]] = None) -> str:
+                      site: Optional[Dict[str, Any]] = None,
+                      payments_ready: bool = True) -> str:
     ctx = store_design.resolve(site, biz)
     dna = ctx["dna"]
     business_type = biz.get("type")
@@ -656,7 +673,7 @@ def render_store_page(slug: str, biz: Dict[str, Any],
             .replace("@LOGO@", logo)
             .replace("@TAGLINE@", tagline)
             .replace("@SITELINK@", site_link)
-            .replace("@SECTIONS@", _sections(items, business_type))
+            .replace("@SECTIONS@", _sections(items, business_type, payments_ready))
             .replace("@NOTES@", notes_html)
             .replace("@CARTSVG@", _CART_SVG)
             .replace("@CLOSESVG@", _CLOSE_SVG)
