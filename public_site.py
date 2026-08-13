@@ -3677,7 +3677,10 @@ async def link_page_html(slug: str):
         # Gather links
         biz_id = biz["id"]
         sites, forms, modules = await asyncio.gather(
-            _sb(client, f"/business_sites?business_id=eq.{biz_id}&limit=1&select=slug"),
+            # site_config carries custom_domain — the Book link below is
+            # absolute, so without it a practitioner's own domain loses.
+            _sb(client, f"/business_sites?business_id=eq.{biz_id}&limit=1"
+                        "&select=slug,site_config"),
             _sb(client, f"/intake_forms?business_id=eq.{biz_id}&is_active=eq.true&select=id,name&limit=20"),
             _sb(client, f"/custom_modules?business_id=eq.{biz_id}&is_active=eq.true&select=id,name,icon,public_display&limit=20"),
         )
@@ -3687,9 +3690,24 @@ async def link_page_html(slug: str):
         site_slug = sites[0]["slug"] if sites else None
         if site_slug:
             auto_links.append(("🌐", "Website", f"/public/site/{site_slug}"))
-        booking = (biz.get("settings") or {}).get("booking") or {}
-        if booking.get("enabled") and site_slug:
-            auto_links.append(("📅", "Book a Session", f"/public/booking/{site_slug}"))
+        # 2026-08-13 (post-audit gap list): this read settings.booking
+        # .enabled — the retired store nothing writes any more — and
+        # pointed at /public/booking/{slug}, the LEGACY page that 404s
+        # for module-based businesses. So a practitioner with a fully
+        # published modern booking page got no Book link at all, and the
+        # only way to get one was the flag that produced a broken link.
+        # Same detector the composer uses, same URL the Embed tab shares.
+        if site_slug:
+            try:
+                from booking_widget_router import booking_is_live
+                from business_sites_helpers import booking_url_for_site
+                _live = await asyncio.to_thread(
+                    booking_is_live, biz_id, biz.get("settings") or {})
+                if _live:
+                    auto_links.append(
+                        ("📅", "Book a Session", booking_url_for_site(sites[0])))
+            except Exception as _bk_e:
+                logger.info(f"[link-page] booking link skipped: {_bk_e}")
         for f in (forms or []):
             auto_links.append(("📥", f["name"], "#"))
         for m in (modules or []):

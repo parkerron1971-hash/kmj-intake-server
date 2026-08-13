@@ -151,12 +151,20 @@ def booking_is_live(business_id: str,
     toggle). The composer, the interview's connect chips, and offering
     readiness were all reading settings.booking.enabled — a legacy key
     NOTHING in the current flow writes — so a fully published booking
-    setup was invisible to every one of them. Legacy flag still counts
-    for old configurations."""
+    setup was invisible to every one of them.
+
+    2026-08-13 (site-builder audit): the legacy branch is gone. It
+    returned True on the flag ALONE, without checking that a bookable
+    page existed — while the booking page server reads only
+    settings.booking_page.published. So ticking the old settings form
+    made this say yes, the composer built a "Book now" CTA, and the
+    visitor got 404 "this booking page isn't published yet". That was
+    the default path for every vertical except personal_services until
+    the form was deleted today.
+
+    A flag that can make this lie, that nothing writes any more, and
+    that no business in production has set, is a trap with no upside."""
     s = settings if isinstance(settings, dict) else {}
-    legacy = (s.get("booking") if isinstance(s.get("booking"), dict) else {})
-    if legacy.get("enabled"):
-        return True
     page = (s.get("booking_page")
             if isinstance(s.get("booking_page"), dict) else {})
     if not page.get("published"):
