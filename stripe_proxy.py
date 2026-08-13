@@ -55,6 +55,31 @@ if not logger.handlers:
 router = APIRouter(tags=["stripe"])
 
 
+def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
+    """Owner gate — same shape as booking_page_router._require_owner /
+    offerings_router._require_owner. Returns the business row so callers
+    reuse it instead of a second lookup.
+
+    2026-08-13 site-builder audit: BOTH link endpoints took business_id
+    from the request body behind require_user alone. Any signed-in user
+    could mint Payment Links on another merchant's connected account
+    (a card-testing rail on someone else's Stripe reputation), or pass
+    force_regenerate to rotate a competitor's product link — which is
+    the URL their live Buy button renders. Authentication was never the
+    missing piece; authorization was.
+    """
+    import sb_clients
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}"
+        "&select=id,owner_id,stripe_account_id&limit=1"
+    ) or []
+    if not rows:
+        raise HTTPException(404, "business not found")
+    if str(rows[0].get("owner_id")) != str(user.id):
+        raise HTTPException(status_code=403, detail="not authorized for this business")
+    return rows[0]
+
+
 class PaymentLinkRequest(BaseModel):
     amount: float
     currency: str = "usd"
@@ -196,16 +221,13 @@ async def create_payment_link(req: PaymentLinkRequest, user: AuthedUser = Depend
     """
     connected_account_id: Optional[str] = None
     if req.business_id:
-        try:
-            import sb_clients
-            rows = sb_clients.sb_get_as_service(
-                f"/businesses?id=eq.{req.business_id}&select=stripe_account_id&limit=1"
-            ) or []
-            if rows:
-                acct = (rows[0].get("stripe_account_id") or "").strip()
-                connected_account_id = acct or None
-        except Exception as e:
-            logger.warning(f"stripe link: business lookup failed: {e}")
+        # Owner gate BEFORE the account lookup — naming a business you
+        # don't own must not reach that business's Stripe account. A
+        # failure here is a 403/404, never a silent fall-through to the
+        # platform account (which would turn an unauthorized request
+        # into a successful charge on the wrong books).
+        biz = _require_owner(req.business_id, user)
+        connected_account_id = (biz.get("stripe_account_id") or "").strip() or None
 
     data = await _create_stripe_payment_link(
         amount=req.amount,
@@ -242,6 +264,14 @@ async def create_product_payment_link(req: ProductPaymentLinkRequest, user: Auth
     endpoint. Pricing types 'free' and 'custom' return 400 (no fixed
     price to charge against).
     """
+    # Owner gate first: the product lookup below is scoped by
+    # business_id, which stops a leaked product id being READ
+    # cross-tenant — but it never checked that the CALLER owns the
+    # business, so force_regenerate could rotate someone else's live
+    # Buy button. Scoping the row and authorizing the caller are two
+    # different guarantees; this endpoint only had the first.
+    _require_owner(req.business_id, user)
+
     key = os.environ.get("STRIPE_SECRET_KEY")
     if not key:
         raise HTTPException(500, "Stripe not configured on server - set STRIPE_SECRET_KEY")
@@ -425,10 +455,20 @@ async def _match_digital_product_for_payment(
     client: httpx.AsyncClient,
     payment_link_id: str,
     amount: float,
+    business_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Find an auto-deliverable digital product whose stripe_payment_url
     contains the payment link id (or whose price matches the captured
     amount). Returns the first hit or None.
+
+    2026-08-13 site-builder audit: the amount fallback carried NO
+    business filter, so a buyer paying $14.99 for business A's e-book
+    would receive whichever $14.99 auto-deliver product was created most
+    recently ANYWHERE on the platform — B's paid file emailed to A's
+    customer, the sale attributed to B, and B notified of a sale it
+    never made. Price is not an identity. The fallback is now scoped to
+    the business the payment belongs to, and when that business cannot
+    be resolved it does not guess at all.
     """
     if payment_link_id:
         rows = await _sb_get(
@@ -440,12 +480,23 @@ async def _match_digital_product_for_payment(
             return rows[0]
 
     if amount > 0:
+        if not business_id:
+            # No owning business ⇒ no safe amount match. Delivering the
+            # wrong tenant's file is strictly worse than delivering
+            # nothing and logging a miss a human can act on.
+            logger.warning(
+                "stripe webhook: digital amount-fallback skipped — no "
+                f"business_id on the session (amount=${amount:.2f}). "
+                "Refusing to match a product by price alone."
+            )
+            return None
         # Allow a 1¢ wiggle room for rounding edges
         low = max(0, amount - 0.01)
         high = amount + 0.01
         rows = await _sb_get(
             client,
             f"/products?type=eq.digital&auto_deliver=eq.true"
+            f"&business_id=eq.{business_id}"
             f"&price=gte.{low}&price=lte.{high}"
             f"&select=*&order=created_at.desc&limit=1",
         )
@@ -619,12 +670,19 @@ async def _match_invoice_for_payment(
     client: httpx.AsyncClient,
     payment_link_id: str,
     amount: float,
+    business_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Find the invoice this payment corresponds to. Strategy:
        1. If payment_link_id is non-empty, look for an invoice whose
           stripe_payment_url contains that id.
-       2. Fall back to recently-sent invoices with a matching total.
+       2. Fall back to recently-sent invoices with a matching total,
+          scoped to the paying business.
        Returns the first matching row, or None.
+
+    2026-08-13 site-builder audit: the amount fallback was unscoped, so
+    two businesses with a $500 invoice outstanding could have the wrong
+    one marked paid — the same cross-matched-$500s failure the newer
+    checkout rail was built to avoid.
     """
     if payment_link_id:
         rows = await _sb_get(
@@ -638,11 +696,19 @@ async def _match_invoice_for_payment(
     # Amount fallback — broaden the window a touch (1¢) to ride out
     # rounding inconsistencies between client display and Stripe totals.
     if amount > 0:
+        if not business_id:
+            logger.warning(
+                "stripe webhook: invoice amount-fallback skipped — no "
+                f"business_id on the session (amount=${amount:.2f}). "
+                "Refusing to mark an invoice paid on price alone."
+            )
+            return None
         amount_low = max(0, amount - 0.01)
         amount_high = amount + 0.01
         rows = await _sb_get(
             client,
             f"/invoices?status=in.(sent,viewed,overdue)"
+            f"&business_id=eq.{business_id}"
             f"&total=gte.{amount_low}&total=lte.{amount_high}"
             f"&select=id,invoice_number,business_id,contact_id,total,status,sent_at"
             f"&order=sent_at.desc.nullslast,created_at.desc&limit=1",
@@ -715,6 +781,16 @@ async def stripe_webhook(request: Request):
     customer_details = session_obj.get("customer_details") or {}
     customer_email = (customer_details.get("email") or "").strip().lower()
 
+    # Which business does this payment belong to? Links minted by
+    # _create_stripe_payment_link carry metadata[business_id]; a Checkout
+    # Session created from a Payment Link inherits that metadata. This
+    # scopes the amount-based fallbacks below so a price can never match
+    # another tenant's row. Absent metadata (older links) simply disables
+    # those fallbacks — the exact-link match still works.
+    _session_meta = session_obj.get("metadata")
+    _session_meta = _session_meta if isinstance(_session_meta, dict) else {}
+    evt_business_id = (_session_meta.get("business_id") or "").strip() or None
+
     try:
         amount_dollars = float(amount_total) / 100.0 if amount_total is not None else 0.0
     except (TypeError, ValueError):
@@ -726,10 +802,12 @@ async def stripe_webhook(request: Request):
     )
 
     async with httpx.AsyncClient() as client:
-        invoice = await _match_invoice_for_payment(client, payment_link, amount_dollars)
+        invoice = await _match_invoice_for_payment(
+            client, payment_link, amount_dollars, evt_business_id)
         if not invoice:
             # Maybe this is a digital product purchase rather than an invoice payment.
-            product = await _match_digital_product_for_payment(client, payment_link, amount_dollars)
+            product = await _match_digital_product_for_payment(
+                client, payment_link, amount_dollars, evt_business_id)
             if product:
                 customer_name = (customer_details.get("name") or "").strip()
                 delivered = await _deliver_digital_product(
