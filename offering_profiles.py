@@ -82,8 +82,17 @@ def business_state(business_id: str) -> Dict[str, Any]:
     booking_enabled = booking_is_live(business_id, settings)
 
     sites = sb_clients.sb_get_as_service(
-        f"/business_sites?business_id=eq.{business_id}&select=slug&limit=1") or []
+        # site_config carries custom_domain — without it every shared
+        # booking/store link falls back to the platform subdomain even
+        # for a practitioner who connected their own domain.
+        f"/business_sites?business_id=eq.{business_id}"
+        "&select=slug,site_config&limit=1") or []
     slug = (sites[0].get("slug") if sites else "") or ""
+    _site_cfg = (sites[0].get("site_config") if sites else None) or {}
+    _custom = str((_site_cfg if isinstance(_site_cfg, dict) else {})
+                  .get("custom_domain") or "").strip().lower().lstrip("/")
+    _site_origin = (f"https://{_custom}" if _custom
+                    else (f"https://{slug}.mysolutionist.app" if slug else ""))
 
     # One-calendar pass (2026-07-10): canonical hosted booking URL
     # (subdomain /book), not the legacy Railway path.
@@ -99,7 +108,10 @@ def business_state(business_id: str) -> Dict[str, Any]:
         "stripe_connected": stripe_connected,
         "site_slug": slug,
         "booking_url": booking_url,
-        "store_url": f"{RAILWAY_BASE}/public/store/{slug}/page" if slug else "",
+        # The shop on the practitioner's OWN address. /store is served on
+        # both the subdomain and a connected custom domain as of
+        # 2026-08-13; this used to hand out a railway.app URL.
+        "store_url": f"{_site_origin}/store" if _site_origin else "",
         "product_file_ids": product_file_ids,
     }
 

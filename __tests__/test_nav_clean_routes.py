@@ -91,9 +91,28 @@ def test_preview_rewrite_tolerates_empty_html():
     assert public_site._rewrite_nav_for_preview("", "acme") == ""
 
 
-def test_preview_rewrite_does_not_touch_other_root_links():
-    """Only the known page paths move; an unrelated /book link is served
-    by its own handler and must stay as it is."""
-    html = _NAV_HTML + '<a href="/book">Book</a>'
+def test_preview_rewrite_absolutises_always_wins_subpaths():
+    """/book and /store are root-relative in stored HTML so they stay
+    correct on a custom domain (2026-08-13 gap list). The preview base is
+    not the site root, so left alone they would leave the studio for the
+    app root. They become absolute public URLs here — clickable in the
+    preview, with no host baked into what a visitor receives."""
+    html = _NAV_HTML + '<a href="/book">Book</a><a href="/store">Shop</a>'
     out = public_site._rewrite_nav_for_preview(html, "acme")
-    assert 'href="/book"' in out
+    assert 'href="https://acme.mysolutionist.app/book"' in out
+    assert 'href="https://acme.mysolutionist.app/store"' in out
+    assert 'href="/book"' not in out
+
+
+def test_preview_rewrite_handles_a_single_page_site_with_a_book_link():
+    """A single-page site has no cross-page nav but still carries a Book
+    CTA — the rewrite must not skip it just because the nav is absent."""
+    html = '<a href="/book">Book</a>'
+    out = public_site._rewrite_nav_for_preview(html, "acme")
+    assert 'href="https://acme.mysolutionist.app/book"' in out
+
+
+def test_preview_rewrite_leaves_unrelated_links_alone():
+    html = _NAV_HTML + '<a href="/some-other-thing">Other</a>'
+    out = public_site._rewrite_nav_for_preview(html, "acme")
+    assert 'href="/some-other-thing"' in out

@@ -142,13 +142,27 @@ def ensure_business_site(
 
 
 def booking_url_for_site(site: Dict[str, Any]) -> str:
-    """Return the canonical booking URL for a given business_sites row.
-    All practitioner booking pages live at the same shape:
-        https://<slug>.<PUBLIC_DOMAIN>/book
-    Regardless of whether the practitioner also has a MySite published
-    at the root.
+    """Return the canonical booking URL for a given business_sites row:
+
+        https://<custom domain>/book        — when one is connected
+        https://<slug>.<PUBLIC_DOMAIN>/book — otherwise
+
+    2026-08-13 (post-audit gap list): this hardcoded the platform
+    subdomain, so every surface that shares a booking link — the Embed
+    tab's copy button, the QR code, email templates, readiness — handed
+    out a mysolutionist.app address to a practitioner who had connected
+    and paid for their own domain. The backend has served /book on
+    custom domains since 2026-08-02; only the URL builder never caught up.
+
+    Callers rendering a link INTO the site's own HTML should use the
+    root-relative "/book" instead, so the stored page stays correct on
+    whichever host serves it.
     """
     slug = site.get("slug") or "business"
+    cfg = site.get("site_config") if isinstance(site.get("site_config"), dict) else {}
+    custom = str((cfg or {}).get("custom_domain") or "").strip().lower().lstrip("/")
+    if custom:
+        return f"https://{custom}/book"
     return f"https://{slug}.{PUBLIC_DOMAIN}/book"
 
 
