@@ -1955,55 +1955,63 @@ FOLD_SCRIPT = """
       lead: 'I\\u2019ve analyzed your day. Here\\u2019s what I found:',
       ask: 'Want me to text them your Tuesday openings?',
       rows: [['3 regulars not rebooked', '6 weeks'], ['2 drafts waiting for you', null], ['$6,910 collected this month', null]],
-      sugg: [['Marcus Bell', 'last cut 41 days ago', 'Text'], ['Tia Okonkwo', 'last cut 38 days ago', 'Text'], ['2 drafts pending review', 'from last night\\u2019s run', 'Open']] },
+      sugg: [['Marcus Bell', 'last cut 41 days ago', 'Text'], ['Tia Okonkwo', 'last cut 38 days ago', 'Text'], ['2 drafts pending review', 'from last night\\u2019s run', 'Open']],
+      today: ['7', ['9:00 AM', 'Marcus Bell'], ['10:30 AM', 'Devon Pryce'], ['1:00 PM', 'Walk-in hold']] },
     { word: 'therapist', cap: 'for a therapist', biz: 'Vale Counseling', owner: 'Dana Vale', first: 'Dana',
       grp: 'The practice', nav: ['Clients', 'Sessions', 'Intake forms', 'Superbills'],
       kpi: [['Sessions this week', '22', '2 unconfirmed'], ['Active clients', '31', '4 on the waitlist'], ['Revenue \\u00b7 this month', '$9,340', '\\u25b2 9% vs last mo'], ['Business health', '74%', 'steady']],
       lead: 'Two things before your 9:00. Clinical notes stay in your EHR:',
       ask: 'Want me to send both a reminder?',
       rows: [['2 sessions unconfirmed', 'tomorrow'], ['1 intake form outstanding', null], ['$9,340 collected this month', null]],
-      sugg: [['Priya Raman', 'unconfirmed for 9:00 AM', 'Remind'], ['Lewis Barr', 'intake form never opened', 'Resend'], ['3 superbills ready', 'for July sessions', 'Send']] },
+      sugg: [['Priya Raman', 'unconfirmed for 9:00 AM', 'Remind'], ['Lewis Barr', 'intake form never opened', 'Resend'], ['3 superbills ready', 'for July sessions', 'Send']],
+      today: ['5', ['9:00 AM', 'Priya Raman'], ['11:00 AM', 'Lewis Barr'], ['2:00 PM', 'Intake &mdash; new']] },
     { word: 'attorney', cap: 'for an attorney', biz: 'Okafor Law', owner: 'Ada Okafor', first: 'Ada',
       grp: 'The office', nav: ['Clients', 'Matters', 'Time &amp; billing', 'Trust ledger'],
       kpi: [['Unbilled hours', '14.5', 'across 6 matters'], ['Open matters', '19', '3 with deadlines'], ['Collected \\u00b7 this month', '$28,600', 'trust reconciled'], ['Business health', '68%', 'steady']],
       lead: 'Your book as of this morning:',
       ask: 'Want me to draft this month\\u2019s invoices?',
       rows: [['14.5 hours unbilled', '6 matters'], ['3 filing deadlines this week', null], ['Trust account reconciled', null]],
-      sugg: [['Renner v. Colby', 'discovery due Thursday', 'Open'], ['Hartline LLC', '8.2 hours unbilled', 'Bill'], ['2 engagement letters', 'awaiting signature', 'Chase']] },
+      sugg: [['Renner v. Colby', 'discovery due Thursday', 'Open'], ['Hartline LLC', '8.2 hours unbilled', 'Bill'], ['2 engagement letters', 'awaiting signature', 'Chase']],
+      today: ['4', ['9:30 AM', 'Renner call'], ['11:00 AM', 'Hartline review'], ['3:00 PM', 'Filing deadline']] },
     { word: 'contractor', cap: 'for a contractor', biz: 'Halstead Build', owner: 'Ray Halstead', first: 'Ray',
       grp: 'The jobs', nav: ['Customers', 'Jobs', 'Estimates', 'Change orders'],
       kpi: [['Jobs scheduled', '9', '2 waiting on materials'], ['Estimates out', '6', '$41,200 in play'], ['Revenue \\u00b7 this month', '$18,750', '\\u25b2 14% vs last mo'], ['Business health', '57%', 'steady']],
       lead: 'Two jobs and one estimate need a decision:',
       ask: 'Want me to follow up on the estimate this morning?',
       rows: [['Kellerman estimate quiet', '11 days'], ['2 jobs waiting on materials', null], ['$18,750 collected this month', null]],
-      sugg: [['Kellerman deck', 'estimate out 11 days', 'Follow up'], ['Bryce kitchen', 'change order unsigned', 'Send'], ['Materials delayed', '2 jobs affected', 'Reschedule']] },
+      sugg: [['Kellerman deck', 'estimate out 11 days', 'Follow up'], ['Bryce kitchen', 'change order unsigned', 'Send'], ['Materials delayed', '2 jobs affected', 'Reschedule']],
+      today: ['4', ['7:30 AM', 'Kellerman site'], ['11:00 AM', 'Materials pickup'], ['2:30 PM', 'Bryce walkthrough']] },
     { word: 'coach', cap: 'for a coach', biz: 'Reyes &amp; Co.', owner: 'Jordan Reyes', first: 'Jordan',
       grp: 'The practice', nav: ['Clients', 'Programs', 'Sessions', 'Payments'],
       kpi: [['Active clients', '17', 'all in good standing'], ['Renewals this month', '3', 'none contacted yet'], ['Revenue \\u00b7 this month', '$12,480', '\\u25b2 18% vs last mo'], ['Business health', '61%', 'steady']],
       lead: 'I\\u2019ve analyzed your day. Here\\u2019s what I found:',
       ask: 'Want me to send the renewal offers now?',
       rows: [['3 renewals this month', 'uncontacted'], ['2 drafts waiting for you', null], ['$12,480 collected this month', null]],
-      sugg: [['Marcus Bell', 'renews in 9 days', 'Offer'], ['Grace Okoye', 'renews in 14 days', 'Offer'], ['2 drafts pending review', 'from your last agent run', 'Open']] },
+      sugg: [['Marcus Bell', 'renews in 9 days', 'Offer'], ['Grace Okoye', 'renews in 14 days', 'Offer'], ['2 drafts pending review', 'from your last agent run', 'Open']],
+      today: ['4', ['9:00 AM', 'Marcus Bell'], ['11:30 AM', 'Grace Okoye'], ['2:00 PM', 'Tia Okonkwo']] },
     { word: 'consultant', cap: 'for a consultant', biz: 'Northbridge', owner: 'Simone Aden', first: 'Simone',
       grp: 'The book', nav: ['Clients', 'Engagements', 'Proposals', 'Retainers'],
       kpi: [['Proposals out', '4', '2 quiet past ten days'], ['Live engagements', '7', '2 wrapping this month'], ['Retainer revenue', '$12,480', '\\u25b2 18% vs last mo'], ['Business health', '72%', 'steady']],
       lead: 'Your pipeline went quiet in two places:',
       ask: 'Want me to nudge both with the case study attached?',
       rows: [['2 proposals unanswered', '10+ days'], ['2 engagements wrapping', null], ['$12,480 in retainers this month', null]],
-      sugg: [['Lowell Group', 'proposal out 12 days', 'Nudge'], ['Anders Co.', 'proposal out 10 days', 'Nudge'], ['Q3 wrap reports', '2 engagements ending', 'Draft']] },
+      sugg: [['Lowell Group', 'proposal out 12 days', 'Nudge'], ['Anders Co.', 'proposal out 10 days', 'Nudge'], ['Q3 wrap reports', '2 engagements ending', 'Draft']],
+      today: ['3', ['10:00 AM', 'Lowell kickoff'], ['1:00 PM', 'Anders check-in'], ['4:00 PM', 'Q3 wrap draft']] },
     { word: 'pastor', cap: 'for a ministry', biz: 'Grace Chapel', owner: 'Elias Barrow', first: 'Elias',
       grp: 'The congregation', nav: ['Members', 'Services', 'Giving', 'Volunteers'],
       kpi: [['Giving this month', '$8,240', '\\u25b2 6% vs last mo'], ['Members', '218', '14 not seen in a month'], ['Volunteers serving', '34', '6 new this month'], ['Congregation health', '70%', 'steady']],
       lead: 'Before Sunday, two things worth your time:',
       ask: 'Want me to send each a check-in note?',
       rows: [['14 members not seen', 'a month'], ['3 volunteer slots open', null], ['$8,240 given this month', null]],
-      sugg: [['14 members quiet', 'no attendance in 30 days', 'Check in'], ['Nursery Sunday', '2 slots unfilled', 'Ask'], ['Giving statements', 'ready for Q2', 'Send']] }
+      sugg: [['14 members quiet', 'no attendance in 30 days', 'Check in'], ['Nursery Sunday', '2 slots unfilled', 'Ask'], ['Giving statements', 'ready for Q2', 'Send']],
+      today: ['5', ['8:00 AM', 'Staff prayer'], ['12:00 PM', 'Hospital visit'], ['6:30 PM', 'Youth group']] }
   ];
 
   var IDS = ['heroCap','fdBiz','fdOwner','fdFirst','fdGrp','fdN1','fdN2','fdN3','fdN4',
              'fdK1','fdV1','fdF1','fdK2','fdV2','fdF2','fdK3','fdV3','fdF3','fdK4','fdV4','fdF4',
              'fdLead','fdAsk','fdR1','fdA1','fdR2','fdR3',
-             'fdS1','fdS1b','fdS2','fdS2b','fdS3','fdS3b'];
+             'fdS1','fdS1b','fdS2','fdS2b','fdS3','fdS3b',
+             'fdTn','fdT1','fdT1b','fdT2','fdT2b','fdT3','fdT3b'];
   var el = {};
   IDS.forEach(function (id) { el[id] = document.getElementById(id); });
   for (var k in el) { if (!el[k]) return; }   /* markup drifted — leave the static state alone */
@@ -2053,7 +2061,10 @@ FOLD_SCRIPT = """
         var q = String(g + 1);
         el['fdS' + q].firstChild.nodeValue = t.sugg[g][0];
         el['fdS' + q + 'b'].innerHTML      = t.sugg[g][1];
+        el['fdT' + q].firstChild.nodeValue = t.today[g + 1][0];
+        el['fdT' + q + 'b'].innerHTML      = t.today[g + 1][1];
       }
+      el.fdTn.textContent = t.today[0];
       stage.classList.remove('is-swapping');
     }, reduced ? 0 : 190);
     for (var c = 0; c < chips.children.length; c++) {
@@ -2205,6 +2216,12 @@ def render_home() -> str:
          part that is recognisably this dashboard. */
       .hero .brief{flex-direction:column;gap:10px;}
       .hero .brief .cp, .hero .brief .brief-btns{display:none;}
+      /* 8 tiles through an auto-fit floor of 84px resolved to 7 tracks
+         and wrapped 7+1, which left a ragged single tile under a full
+         row. A fixed 4x2 block reads as a deliberate grid, and at the
+         widths the fold produces the tiles land near the size they are
+         in the product. */
+      .hero .qa{grid-template-columns:repeat(4,1fr);}
       /* the labels cross-fade; the frame never moves, so it reads as one
          workspace changing its mind rather than a carousel */
       .fold-swap{transition:opacity .2s ease;}
@@ -2226,14 +2243,20 @@ def render_home() -> str:
          broken, not generous. */
       .hero-grid{display:grid;grid-template-columns:minmax(0,clamp(340px,42%,560px)) minmax(0,1fr);
         gap:clamp(30px,3vw,52px);align-items:center;}
-      /* Tilt and bleed are desktop-only luxuries. The tilt's own
-         projection already overhangs the content edge by ~28px, and the
-         bleed is now capped at 72px so it can never outrun the gutter:
-         at every width the container keeps at least 32px on that side. */
+      /* NO TILT. rotateY under perspective magnifies the near edge, so
+         the panel's two vertical sides render at different heights —
+         measured, the tilt inflated the box from 618px to 645px, and
+         that difference is the whole of it: one side sat closer than
+         the other. On a photograph it reads as depth; on a dense grid
+         of rows and rules it reads as a crooked screen. It also fights
+         the reason this panel exists — a fold that says "this is what
+         you actually get" should not skew the thing it is showing.
+         Depth comes from the shadow, which does not bend anything.
+
+         The bleed stays: it only widens, and it is capped at 72px so it
+         can never outrun the container's 32px gutter. */
       @media (min-width:1200px){
         .fold-stage{margin-right:calc(-1 * min(72px, max(0px, (100vw - 1404px) / 2)));}
-        .fold-app-tilt{transform:perspective(1900px) rotateY(-6deg) rotateX(1deg);
-          transform-origin:left center;}
       }
 
       @media (max-width:1000px){
@@ -2242,7 +2265,6 @@ def render_home() -> str:
         .hero h1{font-size:clamp(32px,7.2vw,54px);}
         .hero-turn{max-width:56ch;}
         .fold-stage{margin-right:0;}
-        .fold-app-tilt{transform:none;}
       }
 
       /* Phones get the same deal the desktop fold gets, or the change is
@@ -2502,7 +2524,6 @@ def render_home() -> str:
 
       <div class="fold-stage reveal reveal-delay-2" id="foldStage">
         <div class="fold-cap"><span class="dot"></span><b>Mission Control</b> &middot; the first thing you see every day, <span id="heroCap">for a barber</span></div>
-        <div class="fold-app-tilt">
         <div class="app">
           <div class="app-top">
             <span class="at-mark"></span>
@@ -2518,6 +2539,7 @@ def render_home() -> str:
                 <span class="as-plan">STARTER</span></div>
               <div class="as-sec">Mission Control</div>
               <div class="as-item is-on"><span class="ic"></span>Dashboard</div>
+              <div class="as-item"><span class="ic"></span>Operations</div>
               <div class="as-item"><span class="ic"></span>Notifications<span class="ct">15</span></div>
               <div class="as-sec fold-swap" id="fdGrp">The chair</div>
               <div class="as-item fold-swap"><span class="ic"></span><span id="fdN1">Regulars</span></div>
@@ -2527,6 +2549,7 @@ def render_home() -> str:
               <div class="as-sec">Finance</div>
               <div class="as-item"><span class="ic"></span>Invoices</div>
               <div class="as-item"><span class="ic"></span>Expenses</div>
+              <div class="as-item"><span class="ic"></span>Revenue</div>
               <div class="as-chief">Chief AI<span class="on">Online</span></div>
             </div>
             <div class="app-canvas">
@@ -2564,6 +2587,10 @@ def render_home() -> str:
                   <div class="r fold-swap"><span class="bar red"></span><span class="nm g" id="fdS1">Marcus Bell<span id="fdS1b">last cut 41 days ago</span></span><span class="pill sent">Text</span></div>
                   <div class="r fold-swap"><span class="bar red"></span><span class="nm g" id="fdS2">Tia Okonkwo<span id="fdS2b">last cut 38 days ago</span></span><span class="pill sent">Text</span></div>
                   <div class="r fold-swap"><span class="bar amb"></span><span class="nm g" id="fdS3">2 drafts pending review<span id="fdS3b">from last night&rsquo;s run</span></span><span class="pill draft">Open</span></div>
+                  <div class="pnl-h" style="margin-top:4px;">Today<span class="ct" id="fdTn">4</span></div>
+                  <div class="r fold-swap"><span class="bar grn"></span><span class="nm g" id="fdT1">9:00 AM<span id="fdT1b">Marcus Bell</span></span></div>
+                  <div class="r fold-swap"><span class="bar grn"></span><span class="nm g" id="fdT2">11:30 AM<span id="fdT2b">Grace Okoye</span></span></div>
+                  <div class="r fold-swap"><span class="bar"></span><span class="nm g" id="fdT3">2:00 PM<span id="fdT3b">Tia Okonkwo</span></span></div>
                 </div>
               </div>
               <div class="qa-h">Quick Actions<span class="hint">one click, Chief handles the rest</span></div>
@@ -2575,7 +2602,6 @@ def render_home() -> str:
               </div>
             </div>
           </div>
-        </div>
         </div>
       </div>
     </div>
