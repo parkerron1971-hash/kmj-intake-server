@@ -579,7 +579,22 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         sellable = _sellable_offerings(business_id)
     except Exception:
         sellable = []
-    store = {"enabled": bool(sellable) and bool(slug),
+    # 2026-08-13 site-builder audit: this was gated on products + a slug
+    # and never on whether the business could actually take a card, so a
+    # site shipped a shop section whose Buy buttons 409 on click.
+    # offering_profiles.business_state() returns stripe_connected on the
+    # very same read, and the store line ignored it. Giving already
+    # refuses to publish a page that can't take a gift — "a give page
+    # that can't take a gift is dead weight". The store never inherited
+    # that rule; it does now.
+    try:
+        import payments_core
+        _can_sell = payments_core.can_charge(biz)
+    except Exception as _cc_e:
+        # Never let a readiness probe be the thing that breaks a build.
+        logger.info(f"[composer] charge-readiness check skipped: {_cc_e}")
+        _can_sell = True
+    store = {"enabled": bool(sellable) and bool(slug) and _can_sell,
              "url": f"{RAILWAY_BASE}/public/store/{slug}/page" if slug else "",
              "items": sellable}
 

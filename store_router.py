@@ -218,8 +218,9 @@ def store_data(slug: str) -> Dict[str, Any]:
     items = _flag_low_stock(
         _flag_instant_downloads(_sellable_offerings(site["business_id"]), biz), biz)
     ss = _store_settings(biz)
+    import payments_core
     return {"ok": True, "business_name": biz.get("name") or "",
-            "payments_ready": bool(biz.get("stripe_account_id")),
+            "payments_ready": payments_core.can_charge(biz),
             "items": [{k: o.get(k) for k in (
                 "id", "name", "description", "category", "current_price",
                 "currency", "image_url", "in_stock", "requires_shipping",
@@ -253,7 +254,11 @@ async def store_checkout(body: StoreCheckoutBody) -> Dict[str, Any]:
     biz = _business(site["business_id"])
     if not biz:
         raise HTTPException(404, "Business not found")
-    if not biz.get("stripe_account_id"):
+    import payments_core
+    if not payments_core.can_charge(biz):
+        # Was `stripe_account_id is not null`, which let a restricted or
+        # half-onboarded account reach Stripe and come back as a generic
+        # "Payment provider error" in front of the buyer.
         raise HTTPException(409, "This store isn't accepting payments yet.")
 
     sellable = {o["id"]: o for o in _sellable_offerings(site["business_id"])}
@@ -729,7 +734,9 @@ def hosted_store_page(slug: str) -> HTMLResponse:
     from store_page import render_store_page
     items = _flag_low_stock(
         _flag_instant_downloads(_sellable_offerings(site["business_id"]), biz), biz)
-    html = render_store_page(slug, biz, items, _store_settings(biz), site=site)
+    import payments_core
+    html = render_store_page(slug, biz, items, _store_settings(biz), site=site,
+                             payments_ready=payments_core.can_charge(biz))
     return HTMLResponse(html, headers={"X-Solutionist-Source": "store"})
 
 

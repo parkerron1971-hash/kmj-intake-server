@@ -172,6 +172,39 @@ def provider_for(biz_row: Dict[str, Any]) -> PaymentAdapter:
     return adapter
 
 
+def can_charge(biz_row: Dict[str, Any]) -> bool:
+    """Can this business ACTUALLY take a card right now?
+
+    2026-08-13 site-builder audit: every gate on the platform asked
+    `stripe_account_id is not null` and called that "can take money".
+    That is the cheapest available proxy, not the condition that has to
+    hold. Standard OAuth returns an account id for a restricted or
+    half-onboarded account, and the account.updated webhook faithfully
+    persists charges_enabled / payouts_enabled / details_submitted into
+    settings.stripe — where, until now, NOTHING read them back. At the
+    time of the audit one of the three connected businesses in
+    production had charges_enabled=false and passed every gate in the
+    codebase.
+
+    Unknown is deliberately treated as chargeable. A business that
+    connects before the webhook lands has no flags yet, and refusing it
+    would break onboarding to fix a subset of it. Only an explicit false
+    blocks — which is the state Stripe would reject anyway, so the
+    practitioner hears it from us instead of from a failed checkout in
+    front of a customer.
+    """
+    if not (biz_row or {}).get("stripe_account_id"):
+        return False
+    settings = (biz_row or {}).get("settings")
+    stripe_cfg = settings.get("stripe") if isinstance(settings, dict) else None
+    if not isinstance(stripe_cfg, dict):
+        return True
+    charges = stripe_cfg.get("charges_enabled")
+    if charges is None or str(charges).strip() == "":
+        return True          # never reported — assume yes, see docstring
+    return str(charges).strip().lower() in ("true", "1", "yes")
+
+
 def providers_status(biz_row: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Registry truth for status surfaces: which providers exist, which
     can be connected, which IS connected for this business."""
@@ -180,4 +213,6 @@ def providers_status(biz_row: Dict[str, Any]) -> List[Dict[str, Any]]:
         "name": a.display_name,
         "connectable": a.connectable,
         "connected": a.is_connected(biz_row),
+        # Connected is not the same as usable — see can_charge.
+        "can_charge": can_charge(biz_row) if a.id == "stripe" else a.is_connected(biz_row),
     } for a in REGISTRY.values()]
