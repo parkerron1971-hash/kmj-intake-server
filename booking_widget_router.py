@@ -277,6 +277,57 @@ def _merge_money_config(business_id: str,
     return rows
 
 
+def _notify_practitioner_of_booking(business_id: str, data: Dict[str, Any]) -> None:
+    """Tell the practitioner somebody just booked.
+
+    2026-08-13 site-builder audit: a completed booking emailed the
+    customer, texted the customer — and told the practitioner nothing.
+    No push, no notification row, no event. The rules engine that might
+    have covered it reads a table seeded empty for new businesses, and
+    the only surface that could surface it was the 13:00 UTC morning
+    brief, which counts TODAY's sessions — so a booking made today for
+    next week never appeared anywhere. Someone could book a chair and
+    the shop would find out when they walked in.
+
+    A paid store order already does both halves of this
+    (store_router.mark_order_paid); bookings inherited neither. Both are
+    best-effort: a booking is never rolled back because a notification
+    failed.
+    """
+    who = str(data.get("name") or data.get("customer_name") or "Someone").strip()
+    what = str(data.get("offering_name") or data.get("offering") or "").strip()
+    when = str(data.get("starts_at") or data.get("time") or data.get("slot") or "").strip()
+
+    line = f"{who} booked" + (f" {what}" if what else "")
+    when_line = f" for {when}" if when else ""
+
+    try:
+        import push_notifications
+        push_notifications.send_to_business(
+            business_id,
+            title="New booking 📅",
+            body=f"{line}{when_line}.",
+            nav="operate", tag=f"booking-{(data.get('contact_id') or who)[:8]}")
+    except Exception as e:
+        logger.warning(f"[booking] practitioner push failed (non-fatal): {e}")
+
+    # The push is a moment; the row is the record. A practitioner with
+    # notifications denied still needs to see this in the app.
+    try:
+        sb_clients.sb_post_as_service("/chief_notifications", {
+            "business_id": business_id,
+            "type": "booking_created",
+            "title": f"{line}{when_line}",
+            "body": ("A new booking came in through your booking page. "
+                     "It's already on your calendar."),
+            "priority": "normal",
+            "status": "unread",
+        })
+    except Exception as e:
+        logger.warning(f"[booking] practitioner notification row failed "
+                       f"(non-fatal): {e}")
+
+
 def _offerings_for_widget_fields(business_id: str, fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """For every offering_ref field on the spec, union the categories
     it wants; fetch once. Customer side gets a flat de-duplicated list
@@ -1309,6 +1360,7 @@ def _create_appointment(
             })
         except Exception as _re_err:
             logger.warning(f"rules emit booking_created failed soft: {_re_err}")
+        _notify_practitioner_of_booking(business_id, data or {})
         return created[0]
     # C22 polish — same friendly-error treatment as contact + customer
     # create. The caller's existing `if not entry: raise HTTPException(500,
