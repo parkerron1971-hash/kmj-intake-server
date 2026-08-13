@@ -4156,24 +4156,7 @@ def compose_site(business_id: str, brief_notes: str = "",
     # Multi-page: render the secondary pages (sharing the home's design) and
     # persist generated_pages. Best-effort — a failure never blocks the home.
     if _mp_slug:
-        try:
-            import site_multipage
-            _title_mp = (ctx.get("business") or {}).get("name") or "Welcome"
-            _pages = site_multipage.build_secondary_pages(ctx, _mp_slug, _title_mp)
-            if _pages:
-                _rows = sb_clients.sb_get_as_service(
-                    f"/business_sites?business_id=eq.{business_id}"
-                    f"&select=site_config&order=updated_at.desc&limit=1") or []
-                _cfg = (_rows[0].get("site_config") if _rows else {}) or {}
-                _cfg["generated_pages"] = _pages
-                _cfg["site_pages"] = ["home"] + list(site_multipage.SECONDARY_PAGES)
-                sb_clients.sb_patch_as_service(
-                    f"/business_sites?business_id=eq.{business_id}",
-                    {"site_config": _cfg})
-                logger.info(f"[composer] multi-page: persisted "
-                            f"{len(_pages)} secondary page(s) for {business_id[:8]}")
-        except Exception as _e:
-            logger.warning(f"[composer] multi-page build skipped (non-fatal): {_e}")
+        rebuild_secondary_pages(business_id, ctx, _mp_slug)
 
     # Arc 19 weight-hole fix (2026-07-30): THE one billable row for this
     # build — the per-call authoring rows above it are priced 0, so one
@@ -5902,6 +5885,61 @@ def choose_direction(body: ChooseDirectionBody,
 
 # ─── Arc 28b — live refresh on catalog change ─────────────────────────
 
+def rebuild_secondary_pages(business_id: str, ctx: Dict[str, Any],
+                            slug: str) -> int:
+    """Render About / Services / Contact and persist generated_pages.
+
+    Deterministic — module renderers only, no LLM, no cost. They share
+    the home page's design because ctx["dna"] has already been through
+    _apply_dro_design by the time either caller reaches here.
+
+    ONE implementation on purpose. It was inline in compose_site, which
+    is why 2026-08-13's audit found secondary pages going stale: every
+    incremental path (offerings CRUD, override saves, Chief edits) went
+    through refresh_if_composed, which rebuilt the home page alone. A
+    practitioner who added a service saw it on Home and not on Services
+    until the next full compose. Two call sites, one body, so they
+    cannot drift apart again.
+
+    Best-effort: a failure here never blocks or unwinds the home page.
+    Returns the number of pages written.
+    """
+    try:
+        import site_multipage
+        title = (ctx.get("business") or {}).get("name") or "Welcome"
+        pages = site_multipage.build_secondary_pages(ctx, slug, title)
+        if not pages:
+            return 0
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            f"&select=site_config&order=updated_at.desc&limit=1") or []
+        cfg = (rows[0].get("site_config") if rows else {}) or {}
+        cfg["generated_pages"] = pages
+        cfg["site_pages"] = ["home"] + list(site_multipage.SECONDARY_PAGES)
+        sb_clients.sb_patch_as_service(
+            f"/business_sites?business_id=eq.{business_id}",
+            {"site_config": cfg})
+        logger.info(f"[composer] multi-page: persisted {len(pages)} "
+                    f"secondary page(s) for {business_id[:8]}")
+        return len(pages)
+    except Exception as e:
+        logger.warning(f"[composer] multi-page build skipped (non-fatal): {e}")
+        return 0
+
+
+def _multi_page_slug(ctx: Dict[str, Any]) -> str:
+    """The site's slug when it has opted into multi-page, else ''."""
+    try:
+        import site_multipage
+        site = ctx.get("site") or {}
+        cfg = site.get("site_config") or {}
+        if site_multipage.is_multi_page(cfg) and site.get("slug"):
+            return str(site["slug"])
+    except Exception:
+        pass
+    return ""
+
+
 def refresh_if_composed(business_id: str) -> bool:
     """Re-render a module-composer site from its stored spec (no LLM —
     deterministic and cheap). Called when offerings change so the site's
@@ -5913,7 +5951,19 @@ def refresh_if_composed(business_id: str) -> bool:
     src = cfg.get("html_source")
     if src == "module-composer" and cfg.get("page_spec"):
         spec = sanitize_spec(cfg["page_spec"], ctx)
+        # page_nav BEFORE the render, so the home header carries its
+        # cross-page links on this path too — the same ordering
+        # compose_site uses.
+        _mp = _multi_page_slug(ctx)
+        if _mp:
+            import site_multipage
+            ctx["page_nav"] = site_multipage.build_page_nav(_mp, "home")
         render_and_persist(business_id, spec, ctx)
+        # AFTER: render_and_persist has applied the stored DRO to
+        # ctx["dna"] in place, so the secondary pages are rendered with
+        # the design the home page just used, not the pre-DRO base.
+        if _mp:
+            rebuild_secondary_pages(business_id, ctx, _mp)
         return True
     # TOUCHABLE PREVIEW (2026-07-25): canvas/v2 pages re-render too —
     # render_and_persist reuses the STORED canvas document on non-full
@@ -5923,7 +5973,15 @@ def refresh_if_composed(business_id: str) -> bool:
     _cv = cfg.get("canvas") if isinstance(cfg.get("canvas"), dict) else {}
     if src == "canvas" and str((_cv or {}).get("html") or "").strip():
         spec = sanitize_spec(cfg.get("page_spec") or {"sections": []}, ctx)
+        _mp = _multi_page_slug(ctx)
+        if _mp:
+            import site_multipage
+            ctx["page_nav"] = site_multipage.build_page_nav(_mp, "home")
         render_and_persist(business_id, spec, ctx)
+        # A canvas-authored home page still has module-rendered secondary
+        # pages, and they go just as stale.
+        if _mp:
+            rebuild_secondary_pages(business_id, ctx, _mp)
         return True
     return False
 
