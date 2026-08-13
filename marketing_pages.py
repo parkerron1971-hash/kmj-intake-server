@@ -1944,62 +1944,68 @@ FOLD_SCRIPT = """
   var stage = document.getElementById('foldStage');
   if (!word || !chips || !stage) return;
 
+  /* kpi = [label, value, footnote] x4 ; rows = [text, amount|null] x3 ;
+     sugg = [name, sub, pill] x3. The vocabulary is the terminology the
+     product actually ships (Regulars for a barber, Members for a
+     ministry) — if that drifts, this has to drift with it. */
   var TRADES = [
-    { word: 'barber', cap: 'for a barber', biz: 'Fade &amp; Co.',
-      av: 'linear-gradient(140deg,#F0913A,#D8622C)', grp: 'The chair',
-      nav: ['Regulars', 'Chair calendar', 'Walk-ins', 'Payments'],
-      k1: 'Chairs booked this week', v1: '38', f1: '4 open Friday',
-      k2: 'Regulars', v2: '124', f2: '9 overdue for a cut',
-      k3: 'Revenue \\u00b7 this month', v3: '$6,910', f3: '\\u25b2 12% vs last mo',
-      say: 'Three regulars haven\\u2019t rebooked in six weeks. <b>Want me to text them your Tuesday openings?</b>' },
-    { word: 'therapist', cap: 'for a therapist', biz: 'Vale Counseling',
-      av: 'linear-gradient(140deg,#4FB6A8,#2E8B7E)', grp: 'The practice',
-      nav: ['Clients', 'Sessions', 'Intake forms', 'Superbills'],
-      k1: 'Sessions this week', v1: '22', f1: '2 unconfirmed',
-      k2: 'Active clients', v2: '31', f2: '4 on the waitlist',
-      k3: 'Revenue \\u00b7 this month', v3: '$9,340', f3: '\\u25b2 9% vs last mo',
-      say: 'Two clients are unconfirmed for tomorrow. <b>I\\u2019ll send reminders</b> \\u2014 clinical notes stay in your EHR, not here.' },
-    { word: 'attorney', cap: 'for an attorney', biz: 'Okafor Law',
-      av: 'linear-gradient(140deg,#8C7BE8,#5C4BC7)', grp: 'The office',
-      nav: ['Clients', 'Matters', 'Time &amp; billing', 'Trust ledger'],
-      k1: 'Unbilled hours', v1: '14.5', f1: 'across 6 matters',
-      k2: 'Open matters', v2: '19', f2: '3 with deadlines this week',
-      k3: 'Collected \\u00b7 this month', v3: '$28,600', f3: 'trust account reconciled',
-      say: 'You have 14.5 unbilled hours across six matters. <b>Want me to draft this month\\u2019s invoices?</b>' },
-    { word: 'contractor', cap: 'for a contractor', biz: 'Halstead Build',
-      av: 'linear-gradient(140deg,#E8B33C,#C4841E)', grp: 'The jobs',
-      nav: ['Customers', 'Jobs', 'Estimates', 'Change orders'],
-      k1: 'Jobs scheduled', v1: '9', f1: '2 waiting on materials',
-      k2: 'Estimates out', v2: '6', f2: '$41,200 in play',
-      k3: 'Revenue \\u00b7 this month', v3: '$18,750', f3: '\\u25b2 14% vs last mo',
-      say: 'The Kellerman estimate has been out eleven days with no answer. <b>Want me to follow up this morning?</b>' },
-    { word: 'coach', cap: 'for a coach', biz: 'Reyes &amp; Co.',
-      av: 'linear-gradient(140deg,#2E7DFF,#1D63E6)', grp: 'The practice',
-      nav: ['Clients', 'Programs', 'Sessions', 'Payments'],
-      k1: 'Active clients', v1: '17', f1: 'all in good standing',
-      k2: 'Renewals this month', v2: '3', f2: 'none contacted yet',
-      k3: 'Revenue \\u00b7 this month', v3: '$12,480', f3: '\\u25b2 18% vs last mo',
-      say: 'Three clients renew this month and none have heard from you. <b>Want me to send the renewal offers?</b>' },
-    { word: 'consultant', cap: 'for a consultant', biz: 'Northbridge',
-      av: 'linear-gradient(140deg,#5AA9D6,#2E7DAF)', grp: 'The book',
-      nav: ['Clients', 'Engagements', 'Proposals', 'Retainers'],
-      k1: 'Proposals out', v1: '4', f1: '2 quiet past ten days',
-      k2: 'Live engagements', v2: '7', f2: '2 wrapping this month',
-      k3: 'Retainer revenue', v3: '$12,480', f3: '\\u25b2 18% vs last mo',
-      say: 'Two proposals have gone quiet past ten days. <b>Want me to nudge both with the case study attached?</b>' },
-    { word: 'pastor', cap: 'for a ministry', biz: 'Grace Chapel',
-      av: 'linear-gradient(140deg,#C9873F,#9E6222)', grp: 'The congregation',
-      nav: ['Members', 'Services', 'Giving', 'Volunteers'],
-      k1: 'Giving this month', v1: '$8,240', f1: '\\u25b2 6% vs last mo',
-      k2: 'Members', v2: '218', f2: '14 not seen in a month',
-      k3: 'Volunteers serving', v3: '34', f3: '6 new this month',
-      say: 'Fourteen members haven\\u2019t attended in a month. <b>Want me to send each a check-in note?</b>' }
+    { word: 'barber', cap: 'for a barber', biz: 'Fade &amp; Co.', owner: 'Andre Whitfield', first: 'Andre',
+      grp: 'The chair', nav: ['Regulars', 'Chair calendar', 'Walk-ins', 'Payments'],
+      kpi: [['Chairs booked this week', '38', '4 open Friday'], ['Regulars', '124', '9 overdue for a cut'], ['Revenue \\u00b7 this month', '$6,910', '\\u25b2 12% vs last mo'], ['Business health', '61%', 'steady']],
+      lead: 'I\\u2019ve analyzed your day. Here\\u2019s what I found:',
+      ask: 'Want me to text them your Tuesday openings?',
+      rows: [['3 regulars not rebooked', '6 weeks'], ['2 drafts waiting for you', null], ['$6,910 collected this month', null]],
+      sugg: [['Marcus Bell', 'last cut 41 days ago', 'Text'], ['Tia Okonkwo', 'last cut 38 days ago', 'Text'], ['2 drafts pending review', 'from last night\\u2019s run', 'Open']] },
+    { word: 'therapist', cap: 'for a therapist', biz: 'Vale Counseling', owner: 'Dana Vale', first: 'Dana',
+      grp: 'The practice', nav: ['Clients', 'Sessions', 'Intake forms', 'Superbills'],
+      kpi: [['Sessions this week', '22', '2 unconfirmed'], ['Active clients', '31', '4 on the waitlist'], ['Revenue \\u00b7 this month', '$9,340', '\\u25b2 9% vs last mo'], ['Business health', '74%', 'steady']],
+      lead: 'Two things before your 9:00. Clinical notes stay in your EHR:',
+      ask: 'Want me to send both a reminder?',
+      rows: [['2 sessions unconfirmed', 'tomorrow'], ['1 intake form outstanding', null], ['$9,340 collected this month', null]],
+      sugg: [['Priya Raman', 'unconfirmed for 9:00 AM', 'Remind'], ['Lewis Barr', 'intake form never opened', 'Resend'], ['3 superbills ready', 'for July sessions', 'Send']] },
+    { word: 'attorney', cap: 'for an attorney', biz: 'Okafor Law', owner: 'Ada Okafor', first: 'Ada',
+      grp: 'The office', nav: ['Clients', 'Matters', 'Time &amp; billing', 'Trust ledger'],
+      kpi: [['Unbilled hours', '14.5', 'across 6 matters'], ['Open matters', '19', '3 with deadlines'], ['Collected \\u00b7 this month', '$28,600', 'trust reconciled'], ['Business health', '68%', 'steady']],
+      lead: 'Your book as of this morning:',
+      ask: 'Want me to draft this month\\u2019s invoices?',
+      rows: [['14.5 hours unbilled', '6 matters'], ['3 filing deadlines this week', null], ['Trust account reconciled', null]],
+      sugg: [['Renner v. Colby', 'discovery due Thursday', 'Open'], ['Hartline LLC', '8.2 hours unbilled', 'Bill'], ['2 engagement letters', 'awaiting signature', 'Chase']] },
+    { word: 'contractor', cap: 'for a contractor', biz: 'Halstead Build', owner: 'Ray Halstead', first: 'Ray',
+      grp: 'The jobs', nav: ['Customers', 'Jobs', 'Estimates', 'Change orders'],
+      kpi: [['Jobs scheduled', '9', '2 waiting on materials'], ['Estimates out', '6', '$41,200 in play'], ['Revenue \\u00b7 this month', '$18,750', '\\u25b2 14% vs last mo'], ['Business health', '57%', 'steady']],
+      lead: 'Two jobs and one estimate need a decision:',
+      ask: 'Want me to follow up on the estimate this morning?',
+      rows: [['Kellerman estimate quiet', '11 days'], ['2 jobs waiting on materials', null], ['$18,750 collected this month', null]],
+      sugg: [['Kellerman deck', 'estimate out 11 days', 'Follow up'], ['Bryce kitchen', 'change order unsigned', 'Send'], ['Materials delayed', '2 jobs affected', 'Reschedule']] },
+    { word: 'coach', cap: 'for a coach', biz: 'Reyes &amp; Co.', owner: 'Jordan Reyes', first: 'Jordan',
+      grp: 'The practice', nav: ['Clients', 'Programs', 'Sessions', 'Payments'],
+      kpi: [['Active clients', '17', 'all in good standing'], ['Renewals this month', '3', 'none contacted yet'], ['Revenue \\u00b7 this month', '$12,480', '\\u25b2 18% vs last mo'], ['Business health', '61%', 'steady']],
+      lead: 'I\\u2019ve analyzed your day. Here\\u2019s what I found:',
+      ask: 'Want me to send the renewal offers now?',
+      rows: [['3 renewals this month', 'uncontacted'], ['2 drafts waiting for you', null], ['$12,480 collected this month', null]],
+      sugg: [['Marcus Bell', 'renews in 9 days', 'Offer'], ['Grace Okoye', 'renews in 14 days', 'Offer'], ['2 drafts pending review', 'from your last agent run', 'Open']] },
+    { word: 'consultant', cap: 'for a consultant', biz: 'Northbridge', owner: 'Simone Aden', first: 'Simone',
+      grp: 'The book', nav: ['Clients', 'Engagements', 'Proposals', 'Retainers'],
+      kpi: [['Proposals out', '4', '2 quiet past ten days'], ['Live engagements', '7', '2 wrapping this month'], ['Retainer revenue', '$12,480', '\\u25b2 18% vs last mo'], ['Business health', '72%', 'steady']],
+      lead: 'Your pipeline went quiet in two places:',
+      ask: 'Want me to nudge both with the case study attached?',
+      rows: [['2 proposals unanswered', '10+ days'], ['2 engagements wrapping', null], ['$12,480 in retainers this month', null]],
+      sugg: [['Lowell Group', 'proposal out 12 days', 'Nudge'], ['Anders Co.', 'proposal out 10 days', 'Nudge'], ['Q3 wrap reports', '2 engagements ending', 'Draft']] },
+    { word: 'pastor', cap: 'for a ministry', biz: 'Grace Chapel', owner: 'Elias Barrow', first: 'Elias',
+      grp: 'The congregation', nav: ['Members', 'Services', 'Giving', 'Volunteers'],
+      kpi: [['Giving this month', '$8,240', '\\u25b2 6% vs last mo'], ['Members', '218', '14 not seen in a month'], ['Volunteers serving', '34', '6 new this month'], ['Congregation health', '70%', 'steady']],
+      lead: 'Before Sunday, two things worth your time:',
+      ask: 'Want me to send each a check-in note?',
+      rows: [['14 members not seen', 'a month'], ['3 volunteer slots open', null], ['$8,240 given this month', null]],
+      sugg: [['14 members quiet', 'no attendance in 30 days', 'Check in'], ['Nursery Sunday', '2 slots unfilled', 'Ask'], ['Giving statements', 'ready for Q2', 'Send']] }
   ];
 
+  var IDS = ['heroCap','fdBiz','fdOwner','fdFirst','fdGrp','fdN1','fdN2','fdN3','fdN4',
+             'fdK1','fdV1','fdF1','fdK2','fdV2','fdF2','fdK3','fdV3','fdF3','fdK4','fdV4','fdF4',
+             'fdLead','fdAsk','fdR1','fdA1','fdR2','fdR3',
+             'fdS1','fdS1b','fdS2','fdS2b','fdS3','fdS3b'];
   var el = {};
-  ['heroCap', 'foldAv', 'foldBiz', 'foldGrp', 'foldN1', 'foldN2', 'foldN3', 'foldN4',
-   'foldK1', 'foldV1', 'foldF1', 'foldK2', 'foldV2', 'foldF2', 'foldK3', 'foldV3', 'foldF3', 'foldSay'
-  ].forEach(function (id) { el[id] = document.getElementById(id); });
+  IDS.forEach(function (id) { el[id] = document.getElementById(id); });
   for (var k in el) { if (!el[k]) return; }   /* markup drifted — leave the static state alone */
 
   var reduced = window.matchMedia &&
@@ -2023,14 +2029,31 @@ FOLD_SCRIPT = """
     window.setTimeout(function () {
       word.textContent      = t.word;
       el.heroCap.textContent = t.cap;
-      el.foldBiz.innerHTML   = t.biz;
-      el.foldAv.style.background = t.av;
-      el.foldGrp.textContent = t.grp;
-      for (var n = 0; n < 4; n++) { el['foldN' + (n + 1)].innerHTML = t.nav[n]; }
-      el.foldK1.textContent = t.k1; el.foldV1.textContent = t.v1; el.foldF1.textContent = t.f1;
-      el.foldK2.textContent = t.k2; el.foldV2.textContent = t.v2; el.foldF2.textContent = t.f2;
-      el.foldK3.textContent = t.k3; el.foldV3.textContent = t.v3; el.foldF3.textContent = t.f3;
-      el.foldSay.innerHTML  = t.say;
+      /* .nm and .nm.g hold their label as a leading TEXT NODE with a
+         nested span after it. textContent on the parent would delete
+         that span, so the label is written to the text node instead. */
+      el.fdOwner.firstChild.nodeValue = t.owner;
+      el.fdBiz.innerHTML     = t.biz;
+      el.fdFirst.textContent = t.first;
+      el.fdGrp.textContent   = t.grp;
+      for (var n = 0; n < 4; n++) { el['fdN' + (n + 1)].innerHTML = t.nav[n]; }
+      for (var m = 0; m < 4; m++) {
+        var s = String(m + 1);
+        el['fdK' + s].innerHTML   = t.kpi[m][0];
+        el['fdV' + s].textContent = t.kpi[m][1];
+        el['fdF' + s].innerHTML   = t.kpi[m][2];
+      }
+      el.fdLead.innerHTML = t.lead;
+      el.fdAsk.innerHTML  = t.ask;
+      el.fdR1.innerHTML   = t.rows[0][0];
+      el.fdA1.textContent = t.rows[0][1] || '';
+      el.fdR2.innerHTML   = t.rows[1][0];
+      el.fdR3.innerHTML   = t.rows[2][0];
+      for (var g = 0; g < 3; g++) {
+        var q = String(g + 1);
+        el['fdS' + q].firstChild.nodeValue = t.sugg[g][0];
+        el['fdS' + q + 'b'].innerHTML      = t.sugg[g][1];
+      }
       stage.classList.remove('is-swapping');
     }, reduced ? 0 : 190);
     for (var c = 0; c < chips.children.length; c++) {
@@ -2132,92 +2155,108 @@ def render_home() -> str:
       .hero-chip[aria-pressed="true"]{color:var(--text-primary);
         border-color:rgba(46,125,255,.55);background:rgba(46,125,255,.13);}
 
-      /* ── the fold panel ───────────────────────────────────────────── */
+      /* ── the fold panel: the REAL replica, not a stand-in ──────────
+         First pass built a simplified panel out of the SITE's tokens
+         (blue accent, site surfaces). Kevin's call: that misleads —
+         it promises a workspace the product does not actually look
+         like. So the fold now runs on the replica kit, the same
+         vocabulary traced from the product and used by the six room
+         faces: the product's own palette inside .app (amber actions,
+         violet briefing, magenta/cyan mark), the real top bar, the
+         real sidebar, the KPI row, the briefing beside Chief, the AI
+         Suggestions rail and the Quick Actions strip.
+
+         Every layout floor here is CONTAINER-relative (auto-fit +
+         min(), flex-wrap). The old .hero-2col dropped its rail on a
+         VIEWPORT media query, which never fires when the panel is the
+         narrow half of a wide screen — the rail stayed and crushed. */
       .fold-stage{min-width:0;}
       .fold-cap{display:flex;align-items:center;gap:9px;margin-bottom:11px;
         font-size:11.5px;color:var(--text-dim);letter-spacing:.02em;}
       .fold-cap b{color:var(--text-secondary);font-weight:600;}
       .fold-cap .dot{width:6px;height:6px;border-radius:50%;background:var(--success);
         box-shadow:0 0 8px var(--success);flex-shrink:0;}
-      .fold-app{display:flex;background:var(--bg-2);border:1px solid var(--border);
-        border-radius:12px;overflow:hidden;box-shadow:0 30px 70px -26px rgba(0,0,0,.85);}
-      .fold-side{width:min(150px,34%);flex-shrink:0;padding:13px 0;
-        border-right:1px solid rgba(255,255,255,.06);}
-      .fold-who{display:flex;align-items:center;gap:8px;padding:0 13px 12px;
-        margin-bottom:9px;border-bottom:1px solid rgba(255,255,255,.05);}
-      .fold-who .av{width:20px;height:20px;border-radius:6px;flex-shrink:0;
-        background:linear-gradient(140deg,#F0913A,#D8622C);}
-      .fold-who b{font-size:11.5px;font-weight:600;letter-spacing:-.01em;
-        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      .fold-grp{font-size:8.5px;letter-spacing:.13em;color:var(--text-dim);
-        padding:9px 13px 5px;text-transform:uppercase;}
-      .fold-it{display:flex;align-items:center;gap:8px;padding:6px 13px;
-        font-size:11.5px;color:var(--text-muted);white-space:nowrap;
-        overflow:hidden;text-overflow:ellipsis;}
-      .fold-it i{width:5px;height:5px;border-radius:1.5px;background:#3A3F49;
-        flex-shrink:0;font-style:normal;}
-      .fold-it.is-on{color:var(--text-primary);background:rgba(46,125,255,.10);
-        box-shadow:inset 2px 0 0 var(--accent);}
-      .fold-it.is-on i{background:var(--accent);}
-      .fold-canvas{flex:1;min-width:0;padding:15px;}
-      .fold-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(120px,100%),1fr));gap:9px;}
-      .fold-kpi{background:var(--surface);border:1px solid var(--border);
-        border-radius:8px;padding:10px 12px;min-width:0;}
-      .fold-kpi .k{display:block;font-size:8.5px;letter-spacing:.09em;
-        text-transform:uppercase;color:var(--text-dim);}
-      .fold-kpi .v{display:block;margin-top:5px;font-size:21px;font-weight:700;
-        letter-spacing:-.028em;font-variant-numeric:tabular-nums;}
-      .fold-kpi .v.up{color:var(--success);}
-      .fold-kpi .f{display:block;margin-top:2px;font-size:10px;color:var(--text-dim);}
-      .fold-chief{margin-top:11px;background:var(--surface);border:1px solid var(--border);
-        border-radius:8px;padding:13px;}
-      .fold-chief .ch{display:flex;align-items:center;gap:7px;margin-bottom:10px;
-        font-size:11px;font-weight:600;}
-      .fold-chief .ch em{margin-left:auto;font-style:normal;font-size:8.5px;
-        letter-spacing:.1em;color:var(--success);}
-      .fold-chief .say{font-family:var(--font-body);font-size:13px;line-height:1.5;
-        color:var(--text-secondary);}
-      .fold-chief .say b{color:var(--text-primary);font-weight:600;}
-      .fold-chief .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:13px;}
-      .fold-chief .acts b{font-size:11.5px;font-weight:700;padding:7px 13px;
-        border-radius:6px;background:var(--accent);color:#fff;}
-      .fold-chief .acts i{font-size:11.5px;font-style:normal;padding:7px 13px;
-        border-radius:6px;border:1px solid var(--border);color:var(--text-secondary);}
+
+      .hero .app{min-height:472px;}
+      .hero .kpi-row{grid-template-columns:repeat(auto-fit,minmax(min(112px,100%),1fr));}
+      .hero-panes{display:flex;flex-wrap:wrap;gap:9px;flex:1;min-height:0;}
+      .hero-panes > .brief{flex:1 1 300px;min-width:0;}
+      .hero-panes > .pnl{flex:1 1 186px;min-width:0;}
+      .hero .qa{grid-template-columns:repeat(auto-fit,minmax(min(84px,100%),1fr));}
+
+      /* The rail has to answer to the CANVAS, not the window. Left to
+         wrap it dropped under the briefing and took the panel to 789px
+         tall at a 1180 viewport, which shoves the whole fold off screen.
+         A viewport media query cannot express this — the same 1180
+         window holds a wide canvas or a narrow one depending on the copy
+         column — so the canvas becomes the query container and the rail
+         hides below the width where it stops being readable. Without
+         container-query support it just wraps: the old behaviour, still
+         legible. */
+      .hero .app-canvas{container-type:inline-size;}
+      @container (max-width:498px){
+        .hero-panes > .pnl{display:none;}
+      }
+      /* .brief puts the greeting beside Chief, which wants ~700px. In
+         the fold it gets 425–500, so side-by-side crushed the greeting
+         into a ~90px column. Stacked it reads correctly at any width the
+         fold can produce; the standing line and the buttons come out to
+         buy the height back, leaving the date and the greeting — the
+         part that is recognisably this dashboard. */
+      .hero .brief{flex-direction:column;gap:10px;}
+      .hero .brief .cp, .hero .brief .brief-btns{display:none;}
       /* the labels cross-fade; the frame never moves, so it reads as one
          workspace changing its mind rather than a carousel */
       .fold-swap{transition:opacity .2s ease;}
       .is-swapping .fold-swap{opacity:.25;}
 
+      /* ── measure ───────────────────────────────────────────────────
+         On a 2560 display the old rule sized the copy column at 599px
+         and let the panel balloon to 1201px — twice the copy. The bleed
+         was (100vw-1404)/2 with no ceiling, so it grew without limit
+         while the container stayed pinned at 1340: every pixel of a
+         bigger monitor went to the panel and none to anything else.
+
+         The bleed is now capped at 72px, and the split is a percentage
+         with a ceiling instead of a bare fr, so the copy keeps a
+         readable measure rather than stretching to half of whatever
+         screen is attached. The hero also keeps the site's own 1340px
+         container rather than opening wider on big screens: a fold
+         measured differently from every section under it reads as
+         broken, not generous. */
+      .hero-grid{display:grid;grid-template-columns:minmax(0,clamp(340px,42%,560px)) minmax(0,1fr);
+        gap:clamp(30px,3vw,52px);align-items:center;}
       /* Tilt and bleed are desktop-only luxuries. The tilt's own
          projection already overhangs the content edge by ~28px, and the
-         bleed only spends gutter that exists: clearance works out to a
-         constant (1404-1276)/2 = 64px at every width, so nothing is ever
-         cut. A flat -62px looked right at 1440 and sheared the third KPI
-         tile at 1250, where the gutter is only the container's 32px. */
+         bleed is now capped at 72px so it can never outrun the gutter:
+         at every width the container keeps at least 32px on that side. */
       @media (min-width:1200px){
-        .fold-stage{margin-right:calc(-1 * max(0px, (100vw - 1404px) / 2));}
-        .fold-app{transform:perspective(1600px) rotateY(-7deg) rotateX(1.2deg);
+        .fold-stage{margin-right:calc(-1 * min(72px, max(0px, (100vw - 1404px) / 2)));}
+        .fold-app-tilt{transform:perspective(1900px) rotateY(-6deg) rotateX(1deg);
           transform-origin:left center;}
       }
+
       @media (max-width:1000px){
         .hero{padding-top:52px;}
         .hero-grid{grid-template-columns:1fr;gap:36px;}
         .hero h1{font-size:clamp(32px,7.2vw,54px);}
         .hero-turn{max-width:56ch;}
         .fold-stage{margin-right:0;}
+        .fold-app-tilt{transform:none;}
       }
-      /* Phones get the same deal the desktop fold gets, or the change is
-         only half shipped. Stacked at 390px the panel landed ~690px down
-         — a whole screen of copy again, which is the bug this pass
-         exists to kill. Three moves claw it back to ~490 without cutting
-         a word: the chips become one swipeable row instead of three
-         stacked ones, the stat pill and beta note move below the panel
-         (supporting detail, not the pitch), and the top padding tightens.
 
-         display:contents dissolves .hero-copy so its children become
-         flex items of .hero-grid and can be ordered around the panel.
-         Safe here only because .hero-copy carries no .reveal of its own
-         — a transform on a display:contents box does nothing. */
+      /* Phones get the same deal the desktop fold gets, or the change is
+         only half shipped. Stacked at 390px the panel first landed ~690px
+         down — a whole screen of copy again, which is the bug this fold
+         exists to kill. Three moves claw it back without cutting a word:
+         the chips become one swipeable row instead of three stacked ones,
+         the stat pill and beta note move below the panel (supporting
+         detail, not the pitch), and the top padding tightens.
+
+         display:contents dissolves .hero-copy so its children become flex
+         items of .hero-grid and can be ordered around the panel. Safe
+         here only because .hero-copy carries no .reveal of its own — a
+         transform on a display:contents box does nothing. */
       @media (max-width:640px){
         .hero{padding-top:34px;}
         .hero-grid{display:flex;flex-direction:column;gap:20px;}
@@ -2227,8 +2266,6 @@ def render_home() -> str:
            matches nothing, so these have to be addressed through their
            real parent. `order` then applies because they are flex items. */
         .hero-grid > *, .hero-copy > *{margin-top:0;margin-bottom:0;}
-        /* stacked, the chips read better as the panel's own control than
-           as a third thing to scroll past before reaching it */
         .hero-grid > .fold-stage{order:1;}
         .hero-copy > .hero-chips{order:2;}
         .hero-copy > .hero-meta{order:3;}
@@ -2240,16 +2277,16 @@ def render_home() -> str:
           padding-bottom:2px;scrollbar-width:none;-webkit-overflow-scrolling:touch;}
         .hero-chips::-webkit-scrollbar{display:none;}
         .hero-chip{flex:0 0 auto;}
-        .fold-side{display:none;}
-        .fold-canvas{padding:13px;}
+        /* the phone keeps the numbers and Chief — the parts that carry
+           the claim — and drops the chrome that needs width to read */
+        .hero .app{min-height:0;}
+        .hero .app-side, .hero .qa, .hero .qa-h, .hero .app-top{display:none;}
+        .hero-panes > .pnl{display:none;}
       }
       @media (prefers-reduced-motion:reduce){
         .hero-slot .caret{animation:none;}
         .fold-swap{transition:none;}
       }
-
-
-
 
       /* ── pricing ─────────────────────────────────────────────────── */
       .pricing{padding:96px 0;border-top:1px solid var(--border);}
@@ -2464,33 +2501,81 @@ def render_home() -> str:
       </div>
 
       <div class="fold-stage reveal reveal-delay-2" id="foldStage">
-        <div class="fold-cap"><span class="dot"></span><b>Your workspace</b> &middot; <span id="heroCap">for a barber</span></div>
-        <div class="fold-app">
-          <div class="fold-side">
-            <div class="fold-who"><span class="av" id="foldAv"></span><b id="foldBiz">Fade &amp; Co.</b></div>
-            <div class="fold-grp">Mission Control</div>
-            <div class="fold-it is-on"><i></i>Dashboard</div>
-            <div class="fold-grp fold-swap" id="foldGrp">The chair</div>
-            <div class="fold-it fold-swap"><i></i><span id="foldN1">Regulars</span></div>
-            <div class="fold-it fold-swap"><i></i><span id="foldN2">Chair calendar</span></div>
-            <div class="fold-it fold-swap"><i></i><span id="foldN3">Walk-ins</span></div>
-            <div class="fold-it fold-swap"><i></i><span id="foldN4">Payments</span></div>
-            <div class="fold-grp">Finance</div>
-            <div class="fold-it"><i></i>Invoices</div>
-            <div class="fold-it"><i></i>Expenses</div>
+        <div class="fold-cap"><span class="dot"></span><b>Mission Control</b> &middot; the first thing you see every day, <span id="heroCap">for a barber</span></div>
+        <div class="fold-app-tilt">
+        <div class="app">
+          <div class="app-top">
+            <span class="at-mark"></span>
+            <span class="at-search">Ask Chief anything&hellip;<span class="kbd">&#8984;K</span></span>
+            <span class="at-cta">+ Quick Create</span>
+            <span class="at-urgent">Urgent</span>
+            <span class="at-av"></span>
           </div>
-          <div class="fold-canvas">
-            <div class="fold-kpis">
-              <div class="fold-kpi fold-swap"><span class="k" id="foldK1">Chairs booked this week</span><span class="v" id="foldV1">38</span><span class="f" id="foldF1">4 open Friday</span></div>
-              <div class="fold-kpi fold-swap"><span class="k" id="foldK2">Regulars</span><span class="v" id="foldV2">124</span><span class="f" id="foldF2">9 overdue for a cut</span></div>
-              <div class="fold-kpi fold-swap"><span class="k" id="foldK3">Revenue &middot; this month</span><span class="v up" id="foldV3">$6,910</span><span class="f" id="foldF3">&#9650; 12% vs last mo</span></div>
+          <div class="app-body">
+            <div class="app-side">
+              <div class="as-user"><span class="av"></span>
+                <span class="nm fold-swap" id="fdOwner">Jordan Reyes<span id="fdBiz">Fade &amp; Co.</span></span>
+                <span class="as-plan">STARTER</span></div>
+              <div class="as-sec">Mission Control</div>
+              <div class="as-item is-on"><span class="ic"></span>Dashboard</div>
+              <div class="as-item"><span class="ic"></span>Notifications<span class="ct">15</span></div>
+              <div class="as-sec fold-swap" id="fdGrp">The chair</div>
+              <div class="as-item fold-swap"><span class="ic"></span><span id="fdN1">Regulars</span></div>
+              <div class="as-item fold-swap"><span class="ic"></span><span id="fdN2">Chair calendar</span></div>
+              <div class="as-item fold-swap"><span class="ic"></span><span id="fdN3">Walk-ins</span></div>
+              <div class="as-item fold-swap"><span class="ic"></span><span id="fdN4">Payments</span></div>
+              <div class="as-sec">Finance</div>
+              <div class="as-item"><span class="ic"></span>Invoices</div>
+              <div class="as-item"><span class="ic"></span>Expenses</div>
+              <div class="as-chief">Chief AI<span class="on">Online</span></div>
             </div>
-            <div class="fold-chief">
-              <div class="ch">Chief<em>ONLINE</em></div>
-              <div class="say fold-swap" id="foldSay">Three regulars haven&rsquo;t rebooked in six weeks. <b>Want me to text them your Tuesday openings?</b></div>
-              <div class="acts"><b>Yes, do it</b><i>Show me who</i></div>
+            <div class="app-canvas">
+              <div class="kpi-row">
+                <div class="kpi fold-swap"><span class="k" id="fdK1">Chairs booked this week</span><span class="v" id="fdV1">38</span><span class="f" id="fdF1">4 open Friday</span></div>
+                <div class="kpi fold-swap"><span class="k" id="fdK2">Regulars</span><span class="v" id="fdV2">124</span><span class="f" id="fdF2">9 overdue for a cut</span></div>
+                <div class="kpi fold-swap"><span class="k" id="fdK3">Revenue &middot; this month</span><span class="v gold" id="fdV3">$6,910</span><span class="f up" id="fdF3">&#9650; 12% vs last mo</span></div>
+                <div class="kpi fold-swap"><span class="k" id="fdK4">Business health</span><span class="v up" id="fdV4">61%</span><span class="f" id="fdF4">steady</span></div>
+              </div>
+              <div class="hero-panes">
+                <div class="brief">
+                  <div class="brief-l">
+                    <span class="date">Monday, August 13 &middot; Morning edition</span>
+                    <span class="hi">Good morning,<br><b id="fdFirst">Jordan</b></span>
+                    <span class="cp">2 things need you today. Chief has them queued, and one word clears the deck.</span>
+                    <span class="brief-btns"><span class="ah-btn">Focus Mode &rarr;</span><span class="lnk">Read today&rsquo;s briefing</span></span>
+                  </div>
+                  <div class="chief">
+                    <div class="chief-h">Chief AI<span class="on">Online</span></div>
+                    <div class="chief-body">
+                      <div class="cf">
+                        <div class="chief-lead fold-swap" id="fdLead">I&rsquo;ve analyzed your day. Here&rsquo;s what I found:</div>
+                        <div class="chief-f fold-swap"><span class="sq warn"></span><span class="g" id="fdR1">3 regulars not rebooked</span><span class="amt" id="fdA1">6 weeks</span></div>
+                        <div class="chief-f fold-swap"><span class="sq"></span><span class="g" id="fdR2">2 drafts waiting for you</span><span class="tag">Needs you</span></div>
+                        <div class="chief-f fold-swap"><span class="sq ok"></span><span class="g" id="fdR3">$6,910 collected this month</span></div>
+                        <div class="chief-ask fold-swap" id="fdAsk">Want me to text them your Tuesday openings?</div>
+                        <div class="chief-btns"><b>Yes, handle it</b><i>Review first</i></div>
+                      </div>
+                    </div>
+                    <div class="chief-in"><span class="cin-wrap"><span class="cin-ph">Ask Chief anything&hellip;</span></span><span class="go"></span></div>
+                  </div>
+                </div>
+                <div class="pnl">
+                  <div class="pnl-h">AI Suggestions<span class="ct">4</span></div>
+                  <div class="r fold-swap"><span class="bar red"></span><span class="nm g" id="fdS1">Marcus Bell<span id="fdS1b">last cut 41 days ago</span></span><span class="pill sent">Text</span></div>
+                  <div class="r fold-swap"><span class="bar red"></span><span class="nm g" id="fdS2">Tia Okonkwo<span id="fdS2b">last cut 38 days ago</span></span><span class="pill sent">Text</span></div>
+                  <div class="r fold-swap"><span class="bar amb"></span><span class="nm g" id="fdS3">2 drafts pending review<span id="fdS3b">from last night&rsquo;s run</span></span><span class="pill draft">Open</span></div>
+                </div>
+              </div>
+              <div class="qa-h">Quick Actions<span class="hint">one click, Chief handles the rest</span></div>
+              <div class="qa">
+                <i style="--c:#3B82F6">Draft Email</i><i style="--c:#EF4444">Chase Overdue</i>
+                <i style="--c:#F59E0B">New Invoice</i><i style="--c:#22C55E">Add Contact</i>
+                <i style="--c:#06B6D4">Book Session</i><i style="--c:#A855F7">Create a Post</i>
+                <i style="--c:#7C3AED">Run Autopilot</i><i style="--c:#C9A84C">Set a Goal</i>
+              </div>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>
