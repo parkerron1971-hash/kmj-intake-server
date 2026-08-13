@@ -3050,8 +3050,8 @@ async def generate_multi_page_endpoint(business_id: str,
     — DesignDNAPanel's "Generate All Pages" — is gone, verified by grep
     across solutionist-studio/src; only explanatory comments remain.
 
-    It had answered 503 to every caller since 2026-05-08 anyway
-    (studio_config.MULTI_PAGE_ENABLED = False), so the button's whole
+    It had answered 503 to every caller since 2026-05-08 anyway, behind
+    a kill switch that is itself now deleted, so the button's whole
     observable history was "Multi-page generation failed".
 
     Flipping that switch would not have earned it back. The Builder
