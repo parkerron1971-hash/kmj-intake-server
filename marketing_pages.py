@@ -1949,49 +1949,56 @@ FOLD_SCRIPT = """
       av: 'linear-gradient(140deg,#F0913A,#D8622C)', grp: 'The chair',
       nav: ['Regulars', 'Chair calendar', 'Walk-ins', 'Payments'],
       k1: 'Chairs booked this week', v1: '38', f1: '4 open Friday',
-      k2: 'Regulars', v2: '124', f2: '9 overdue for a cut', v3: '$6,910',
+      k2: 'Regulars', v2: '124', f2: '9 overdue for a cut',
+      k3: 'Revenue \\u00b7 this month', v3: '$6,910', f3: '\\u25b2 12% vs last mo',
       say: 'Three regulars haven\\u2019t rebooked in six weeks. <b>Want me to text them your Tuesday openings?</b>' },
     { word: 'therapist', cap: 'for a therapist', biz: 'Vale Counseling',
       av: 'linear-gradient(140deg,#4FB6A8,#2E8B7E)', grp: 'The practice',
       nav: ['Clients', 'Sessions', 'Intake forms', 'Superbills'],
       k1: 'Sessions this week', v1: '22', f1: '2 unconfirmed',
-      k2: 'Active clients', v2: '31', f2: '4 on the waitlist', v3: '$9,340',
+      k2: 'Active clients', v2: '31', f2: '4 on the waitlist',
+      k3: 'Revenue \\u00b7 this month', v3: '$9,340', f3: '\\u25b2 9% vs last mo',
       say: 'Two clients are unconfirmed for tomorrow. <b>I\\u2019ll send reminders</b> \\u2014 clinical notes stay in your EHR, not here.' },
     { word: 'attorney', cap: 'for an attorney', biz: 'Okafor Law',
       av: 'linear-gradient(140deg,#8C7BE8,#5C4BC7)', grp: 'The office',
       nav: ['Clients', 'Matters', 'Time &amp; billing', 'Trust ledger'],
       k1: 'Unbilled hours', v1: '14.5', f1: 'across 6 matters',
-      k2: 'Open matters', v2: '19', f2: '3 with deadlines this week', v3: '$28,600',
+      k2: 'Open matters', v2: '19', f2: '3 with deadlines this week',
+      k3: 'Collected \\u00b7 this month', v3: '$28,600', f3: 'trust account reconciled',
       say: 'You have 14.5 unbilled hours across six matters. <b>Want me to draft this month\\u2019s invoices?</b>' },
     { word: 'contractor', cap: 'for a contractor', biz: 'Halstead Build',
       av: 'linear-gradient(140deg,#E8B33C,#C4841E)', grp: 'The jobs',
       nav: ['Customers', 'Jobs', 'Estimates', 'Change orders'],
       k1: 'Jobs scheduled', v1: '9', f1: '2 waiting on materials',
-      k2: 'Estimates out', v2: '6', f2: '$41,200 in play', v3: '$18,750',
+      k2: 'Estimates out', v2: '6', f2: '$41,200 in play',
+      k3: 'Revenue \\u00b7 this month', v3: '$18,750', f3: '\\u25b2 14% vs last mo',
       say: 'The Kellerman estimate has been out eleven days with no answer. <b>Want me to follow up this morning?</b>' },
     { word: 'coach', cap: 'for a coach', biz: 'Reyes &amp; Co.',
       av: 'linear-gradient(140deg,#2E7DFF,#1D63E6)', grp: 'The practice',
       nav: ['Clients', 'Programs', 'Sessions', 'Payments'],
       k1: 'Active clients', v1: '17', f1: 'all in good standing',
-      k2: 'Renewals this month', v2: '3', f2: 'none contacted yet', v3: '$12,480',
+      k2: 'Renewals this month', v2: '3', f2: 'none contacted yet',
+      k3: 'Revenue \\u00b7 this month', v3: '$12,480', f3: '\\u25b2 18% vs last mo',
       say: 'Three clients renew this month and none have heard from you. <b>Want me to send the renewal offers?</b>' },
     { word: 'consultant', cap: 'for a consultant', biz: 'Northbridge',
       av: 'linear-gradient(140deg,#5AA9D6,#2E7DAF)', grp: 'The book',
       nav: ['Clients', 'Engagements', 'Proposals', 'Retainers'],
-      k1: 'Retainer revenue', v1: '$12,480', f1: '\\u25b2 18% vs last mo',
-      k2: 'Proposals out', v2: '4', f2: '2 quiet past ten days', v3: '$12,480',
+      k1: 'Proposals out', v1: '4', f1: '2 quiet past ten days',
+      k2: 'Live engagements', v2: '7', f2: '2 wrapping this month',
+      k3: 'Retainer revenue', v3: '$12,480', f3: '\\u25b2 18% vs last mo',
       say: 'Two proposals have gone quiet past ten days. <b>Want me to nudge both with the case study attached?</b>' },
     { word: 'pastor', cap: 'for a ministry', biz: 'Grace Chapel',
       av: 'linear-gradient(140deg,#C9873F,#9E6222)', grp: 'The congregation',
       nav: ['Members', 'Services', 'Giving', 'Volunteers'],
       k1: 'Giving this month', v1: '$8,240', f1: '\\u25b2 6% vs last mo',
-      k2: 'Members', v2: '218', f2: '14 not seen in a month', v3: '$8,240',
+      k2: 'Members', v2: '218', f2: '14 not seen in a month',
+      k3: 'Volunteers serving', v3: '34', f3: '6 new this month',
       say: 'Fourteen members haven\\u2019t attended in a month. <b>Want me to send each a check-in note?</b>' }
   ];
 
   var el = {};
   ['heroCap', 'foldAv', 'foldBiz', 'foldGrp', 'foldN1', 'foldN2', 'foldN3', 'foldN4',
-   'foldK1', 'foldV1', 'foldF1', 'foldK2', 'foldV2', 'foldF2', 'foldV3', 'foldSay'
+   'foldK1', 'foldV1', 'foldF1', 'foldK2', 'foldV2', 'foldF2', 'foldK3', 'foldV3', 'foldF3', 'foldSay'
   ].forEach(function (id) { el[id] = document.getElementById(id); });
   for (var k in el) { if (!el[k]) return; }   /* markup drifted — leave the static state alone */
 
@@ -2022,7 +2029,7 @@ FOLD_SCRIPT = """
       for (var n = 0; n < 4; n++) { el['foldN' + (n + 1)].innerHTML = t.nav[n]; }
       el.foldK1.textContent = t.k1; el.foldV1.textContent = t.v1; el.foldF1.textContent = t.f1;
       el.foldK2.textContent = t.k2; el.foldV2.textContent = t.v2; el.foldF2.textContent = t.f2;
-      el.foldV3.textContent = t.v3;
+      el.foldK3.textContent = t.k3; el.foldV3.textContent = t.v3; el.foldF3.textContent = t.f3;
       el.foldSay.innerHTML  = t.say;
       stage.classList.remove('is-swapping');
     }, reduced ? 0 : 190);
@@ -2476,7 +2483,7 @@ def render_home() -> str:
             <div class="fold-kpis">
               <div class="fold-kpi fold-swap"><span class="k" id="foldK1">Chairs booked this week</span><span class="v" id="foldV1">38</span><span class="f" id="foldF1">4 open Friday</span></div>
               <div class="fold-kpi fold-swap"><span class="k" id="foldK2">Regulars</span><span class="v" id="foldV2">124</span><span class="f" id="foldF2">9 overdue for a cut</span></div>
-              <div class="fold-kpi fold-swap"><span class="k">Revenue &middot; this month</span><span class="v up" id="foldV3">$6,910</span><span class="f">&#9650; 12% vs last mo</span></div>
+              <div class="fold-kpi fold-swap"><span class="k" id="foldK3">Revenue &middot; this month</span><span class="v up" id="foldV3">$6,910</span><span class="f" id="foldF3">&#9650; 12% vs last mo</span></div>
             </div>
             <div class="fold-chief">
               <div class="ch">Chief<em>ONLINE</em></div>
