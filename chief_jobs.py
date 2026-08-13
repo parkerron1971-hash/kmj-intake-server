@@ -37,6 +37,23 @@ router = APIRouter(prefix="/agents/chief", tags=["chief-jobs"])
 
 HTTP_TIMEOUT = 180.0
 
+# Job ids whose runner is alive IN THIS PROCESS.
+#
+# Site-builder audit (2026-08-13): the stale sweep existed to clear rows
+# orphaned by a deploy — jobs run in-process, so a restart leaves them
+# stuck at queued/running forever. But it decided "orphaned" purely by
+# age, and a full Opus build genuinely approaches the 10-minute mark.
+# A slow-but-alive build was therefore marked failed while its thread
+# kept running, which (a) told the practitioner their build had died and
+# (b) freed the dedupe slot so the retry started a SECOND build over the
+# first — two threads writing the same site row and two 600-credit
+# markers.
+#
+# Age cannot tell the two apart. Process identity can: a row orphaned by
+# a restart belongs to a process that no longer exists, so its id cannot
+# be in this set. Anything in here is slow, not dead, and is never swept.
+_INFLIGHT: set = set()
+
 
 def _url() -> str:
     return os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -227,6 +244,17 @@ async def _run(job_id: str, user_id: str, business_id: str, kind: str, params: d
     # create_task's context copy — neutralize it so DB access is service role.
     sb_clients.clear_user_jwt()
     meta = KIND_META.get(kind, {"label": kind, "done": "done", "nav": None})
+    # Claim the in-process slot for the whole life of the runner, so the
+    # stale sweep can tell a slow build from one orphaned by a restart.
+    _INFLIGHT.add(job_id)
+    try:
+        await _run_inner(job_id, user_id, business_id, kind, params, meta)
+    finally:
+        _INFLIGHT.discard(job_id)
+
+
+async def _run_inner(job_id: str, user_id: str, business_id: str, kind: str,
+                     params: dict, meta: dict) -> None:
     async with httpx.AsyncClient() as client:
         await _sb(client, "PATCH", f"/chief_jobs?id=eq.{job_id}",
                   {"status": "running", "started_at": _now()})
@@ -302,7 +330,14 @@ async def enqueue(client: httpx.AsyncClient, *, user_id: str, business_id: str,
                 str(started).replace("Z", "+00:00"))).total_seconds() / 60
         except Exception:
             age_min = STALE_AFTER_MIN + 1  # unparseable → treat as stale
-        if age_min <= STALE_AFTER_MIN:
+        if age_min <= STALE_AFTER_MIN or str(row.get("id")) in _INFLIGHT:
+            # Fresh, or old but demonstrably still running in this
+            # process. Either way it is a live job: dedupe against it
+            # instead of killing it and starting a second paid build.
+            if str(row.get("id")) in _INFLIGHT and age_min > STALE_AFTER_MIN:
+                logger.info(f"[chief_jobs] {kind} job {row.get('id')} is "
+                            f"{age_min:.0f}min old but still running here — "
+                            f"slow, not orphaned; not sweeping")
             fresh = fresh or row
         else:
             logger.warning(f"[chief_jobs] sweeping stale {row.get('status')} "
@@ -324,6 +359,23 @@ async def enqueue(client: httpx.AsyncClient, *, user_id: str, business_id: str,
     }])
     job = rows[0] if isinstance(rows, list) and rows else None
     if not job:
+        # The read-above/insert-here pair is not atomic: two clicks
+        # inside one round-trip both saw "nothing fresh". The partial
+        # unique index (supabase/APPLY-2026-08-13-chief-jobs-single-
+        # active.sql) is what actually holds the invariant, and it
+        # rejects the loser with a unique violation. That loser must
+        # return the winner's row — NOT None, which the callers surface
+        # as "couldn't start your build" over a build that is in fact
+        # running, and which invites the retry that starts a second one.
+        raced = await _sb(
+            client, "GET",
+            f"/chief_jobs?business_id=eq.{business_id}&kind=eq.{kind}"
+            "&status=in.(queued,running)&select=*&order=created_at.desc&limit=1")
+        winner = raced[0] if isinstance(raced, list) and raced else None
+        if winner:
+            logger.info(f"[chief_jobs] enqueue raced for {business_id[:8]} "
+                        f"{kind} — returning the winning job {winner.get('id')}")
+            return {**winner, "deduped": True}
         return None
     asyncio.create_task(_run(job["id"], user_id, business_id, kind, params or {}))
     return job
