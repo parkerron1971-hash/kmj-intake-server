@@ -22,7 +22,7 @@ new code lands familiar.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -61,6 +61,54 @@ def _booking_page_dict(settings: Dict[str, Any]) -> Dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def publish_blockers(business_id: str) -> List[str]:
+    """What stops this booking page from being worth publishing.
+
+    2026-08-13 site-builder audit: publishing checked NOTHING — no
+    module, no services, no availability. The toggle flipped regardless,
+    the page went live, and every visitor was told "No services
+    available right now. Please check back soon." while the site's hero
+    still said Book now. The widget's empty state was honest; the site
+    around it was not. A working button to a page that cannot book
+    anything is exactly the dead end the standing rule exists to stop.
+
+    Returns human-readable blockers; empty means the page can really
+    take a booking.
+
+    Availability is deliberately NOT a blocker: no availability means
+    bookable 24/7 (availability.from_settings_dict returns the open
+    default), which is permissive rather than broken.
+    """
+    blockers: List[str] = []
+
+    module = sb_clients.sb_get_as_service(
+        f"/custom_modules?business_id=eq.{business_id}"
+        "&archetype=eq.booking_calendar&is_active=eq.true&limit=1&select=id"
+    ) or []
+    if not module:
+        blockers.append(
+            "Your booking page hasn't been built yet — ask Chief to set up "
+            "online booking first."
+        )
+
+    # A service with no duration is skipped by the slot engine
+    # (_slots_per_offering), so it appears in the picker and then offers
+    # zero times. That is the same rule, enforced where the practitioner
+    # can still do something about it.
+    bookable = sb_clients.sb_get_as_service(
+        f"/offerings?business_id=eq.{business_id}"
+        "&category=in.(service,session)&is_active=eq.true"
+        "&duration_min=gt.0&limit=1&select=id"
+    ) or []
+    if not bookable:
+        blockers.append(
+            "Add at least one service with a length in minutes — without "
+            "one there is nothing for a visitor to book."
+        )
+
+    return blockers
+
+
 @router.get("/{business_id}")
 def get_booking_page(
     business_id: str,
@@ -89,6 +137,10 @@ def get_booking_page(
             "tagline": page.get("tagline"),
             "footer_text": page.get("footer_text"),
         },
+        # What still stands between this page and a real booking, so the
+        # Embed tab can say so BEFORE the toggle is clicked rather than
+        # only refusing afterwards.
+        "publish_blockers": publish_blockers(business_id),
         "site_row_created_now": created,
     }
 
@@ -117,7 +169,26 @@ def patch_booking_page(
 
     # Optional booking_page fields
     if "published" in body:
-        page["published"] = bool(body["published"])
+        want_published = bool(body["published"])
+        # Going live is the one transition with a visitor on the other
+        # end of it. Unpublishing is always allowed — refusing to let
+        # someone take a broken page DOWN would be the worse failure.
+        if want_published and not page.get("published"):
+            blockers = publish_blockers(business_id)
+            if blockers:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "booking_page_not_ready",
+                        "message": (
+                            "This page can't take a booking yet, so "
+                            "publishing it would send visitors to an empty "
+                            "page."
+                        ),
+                        "blockers": blockers,
+                    },
+                )
+        page["published"] = want_published
     if "tagline" in body:
         page["tagline"] = (body.get("tagline") or "").strip() or None
     if "footer_text" in body:
