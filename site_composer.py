@@ -426,9 +426,15 @@ def _fetch_public_modules(business_id: str) -> List[Dict[str, Any]]:
             data = e.get("data") or {}
             if filter_status and data.get("status") not in filter_status:
                 continue
-            kept = ({k: data.get(k) for k in visible if data.get(k) not in (None, "")}
-                    if visible else {k: v for k, v in data.items()
-                                     if k not in hidden and v not in (None, "")})
+            # 2026-08-13 site-builder audit: the `else` here published
+            # EVERY field minus three hardcoded names whenever
+            # visible_fields was empty — and enabling a module without
+            # writing that list is exactly what Chief's ensure_module and
+            # the Resources library do. An empty allow-list is not a
+            # licence to show everything; it means nobody has said yet.
+            kept = {k: data.get(k) for k in visible
+                    if data.get(k) not in (None, "")} if visible else {}
+            kept = {k: v for k, v in kept.items() if k not in hidden}
             if kept:
                 rows.append(kept)
         out.append({

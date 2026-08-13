@@ -1134,10 +1134,25 @@ async def _sb_patch(client: httpx.AsyncClient, path: str, body: dict):
 # ═══════════════════════════════════════════════════════════════════════
 
 def _filter_entry(entry_data: Dict, visible: List[str], hidden: List[str]) -> Dict:
-    """Keep only visible fields, remove hidden ones. If visible is empty, show all except hidden."""
+    """Keep only the fields the practitioner chose to show.
+
+    2026-08-13 site-builder audit: an empty `visible` used to mean SHOW
+    EVERYTHING except three hardcoded names (assigned_to, internal_notes,
+    contact_id). That is an allow-list that silently becomes a deny-list
+    the moment it is empty — so a field called notes, phone, email, rate
+    or client published itself, and any writer that set
+    public_display.enabled WITHOUT also writing visible_fields (Chief's
+    ensure_module, the Resources library) opted a module's entire schema
+    onto the open web.
+
+    An empty allow-list now means nothing is shown. A module with no
+    chosen fields renders no entry data rather than all of it — the safe
+    reading of "the practitioner never said". The field picker in
+    ComposedSiteControls is where that choice gets made.
+    """
     if visible:
         return {k: v for k, v in entry_data.items() if k in visible and k not in hidden}
-    return {k: v for k, v in entry_data.items() if k not in hidden}
+    return {}
 
 
 def _palette_for(biz_type: str) -> Dict[str, str]:
