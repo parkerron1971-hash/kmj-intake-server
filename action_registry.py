@@ -156,6 +156,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                               "ledger and points at the rows. Returns counts, "
                               "never row contents", sensitive=True),
     "show_revenue":        _r("reads revenue figures"),
+    "show_view":           _r("fetches a bounded read-only list (invoices / contacts / "
+                              "sessions / products) under the caller's own JWT and returns "
+                              "it as typed rows for an in-chat table card; RLS is the gate, "
+                              "the handler adds no reach of its own"),
     "site_health":         _r("reads site + booking config and reports"),
     "what_undo":           _r("reports what undo_last WOULD reverse. Pure read — undo is "
                               "frightening in proportion to how vague it is"),

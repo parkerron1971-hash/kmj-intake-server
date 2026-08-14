@@ -1136,8 +1136,18 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&custom_modules.slug=eq.projects"
             f"&select=id,data,created_at,custom_modules!inner(slug)"
             f"&order=created_at.desc&limit=50"),
+        # Open invoices, ITEMIZED (8/14 — same class as the projects fix
+        # above). Chief knew only the aggregate ("$1,865 outstanding" via
+        # the forecast block), so "who owes what?" was answered with "I
+        # don't have the breakdown loaded" followed by a web_search reach
+        # on the practitioner's own books. These are the rows.
+        _sb(client, "GET",
+            f"/invoices?business_id=eq.{biz_id}"
+            f"&status=in.(draft,sent,viewed,overdue)"
+            f"&select=id,invoice_number,total,status,due_date,contact_id,contacts(name)"
+            f"&order=due_date.asc.nullslast&limit=40"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_invoices = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -1315,6 +1325,18 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
                 "target_date": (r.get("data") or {}).get("target_date") or "",
             }
             for r in (project_rows or [])
+        ],
+        "open_invoices": [
+            {
+                "id": r.get("id"),
+                "number": r.get("invoice_number") or "(no number)",
+                "client": ((r.get("contacts") or {}).get("name")
+                           if isinstance(r.get("contacts"), dict) else None) or "(no client)",
+                "total": float(r.get("total") or 0),
+                "status": r.get("status") or "draft",
+                "due_date": r.get("due_date") or "",
+            }
+            for r in (open_invoices or [])
         ],
         "foundation_block": foundation_block or "",
         "business_profile_block": business_profile_block or "",
@@ -2269,6 +2291,25 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         line += f" [id={p.get('id')}]"
         project_lines.append(line)
 
+    # Open invoices, itemized (8/14). Same contract as PROJECTS above:
+    # this IS the list, so "who owes what?" is answered from these rows
+    # — never with "I don't have the breakdown" and never via search.
+    invoice_lines = []
+    _today = datetime.now(timezone.utc).date()
+    for inv in (ctx.get("open_invoices") or [])[:25]:
+        line = f"  - {inv.get('number')} · {inv.get('client')} · ${float(inv.get('total') or 0):,.2f} · {inv.get('status')}"
+        due = inv.get("due_date") or ""
+        if due:
+            line += f" · due {due}"
+            try:
+                days_over = (_today - date.fromisoformat(str(due)[:10])).days
+                if days_over > 0 and (inv.get("status") or "") != "draft":
+                    line += f" ({days_over}d overdue)"
+            except (TypeError, ValueError):
+                pass
+        line += f" [id={inv.get('id')}]"
+        invoice_lines.append(line)
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
   Voice profile: {json.dumps(biz.get('voice_profile') or {})[:1200]}{et_summary}{autopilot_block}
@@ -2287,6 +2328,9 @@ UPCOMING SESSIONS (next 7 days):
 
 PROJECTS (this IS the full list — never search or "pull" for it):
 {chr(10).join(project_lines) if project_lines else '  (none yet)'}
+
+OPEN INVOICES (this IS the itemized list — answer "who owes what" from these rows; never search for them, never say you don't have the breakdown; to DISPLAY them as a table use show_view):
+{chr(10).join(invoice_lines) if invoice_lines else '  (none open)'}
 
 UNREAD INSIGHTS:
 {chr(10).join(insight_lines) if insight_lines else '  (none)'}
@@ -3314,6 +3358,231 @@ async def handle_show_revenue(client, biz, action) -> Dict:
         "result": "navigating",
         "label": "💰 Opening Revenue Analytics",
         "nav": _nav("grow", "revenue"),
+    }
+
+
+# ─── show_view — fetch rows and DISPLAY them in the transcript ───────
+#
+# Born from Kevin's 8/14 transcript: "Can you share the last amount of
+# invoices that I have?" → "I don't have the individual invoice
+# breakdown loaded here… let me take you to the actual screen." Chief's
+# only display tool was navigation. This verb is the middle ground the
+# practitioner actually asked for: fetch the rows server-side and render
+# them as a table card right in the chat, under Chief's words.
+#
+# Design constraints (each one is load-bearing):
+#   • TYPED VIEWS, not free-form markup. The model picks a view name and
+#     a filter; the SERVER decides the query, the columns and the cell
+#     values. Numbers reach the practitioner from the database, so Chief
+#     cannot hallucinate an amount into the table. (Free-form fragments
+#     need armor — see atelier_validator; typed rows need none.)
+#   • Reads run under the practitioner's OWN JWT (_sb forwards it), so
+#     RLS is the authority on what this account may see. The handler
+#     adds no gate of its own because the wire already has one.
+#   • The `speak` digest is how the SECOND-pass reply learns the actual
+#     row values — _format_action_results_for_reply forwards it, so
+#     Chief can say "Marcus owes the most at $520" instead of narrating
+#     around a card it can't read.
+#   • Honest empties: zero rows returns a "0 match" result the second
+#     pass can repeat — never a fabricated table, never a silent no-op.
+
+_SHOW_VIEW_LIMIT = 25
+
+_SHOW_VIEW_SPECS: Dict[str, Dict[str, Any]] = {
+    "invoices": {
+        "title": "Invoices",
+        "filters": {
+            "open":    "status=in.(sent,viewed,overdue)",
+            "overdue": "status=in.(sent,viewed,overdue)&due_date=lt.{today}",
+            "draft":   "status=eq.draft",
+            "paid":    "status=eq.paid",
+            "all":     "status=neq.void",
+        },
+        "default_filter": "open",
+        "select": "id,invoice_number,total,status,due_date,contact_id,contacts(name)",
+        "order": "due_date.asc.nullslast",
+        "columns": [
+            {"key": "number", "label": "Invoice", "kind": "text"},
+            {"key": "client", "label": "Client", "kind": "text"},
+            {"key": "amount", "label": "Amount", "kind": "money"},
+            {"key": "status", "label": "Status", "kind": "text"},
+            {"key": "due",    "label": "Due", "kind": "date"},
+        ],
+        "nav": ("operate", "invoices"),
+    },
+    "contacts": {
+        "title": "Contacts",
+        "filters": {
+            "leads":  "status=eq.lead",
+            "active": "status=eq.active",
+            "all":    "",
+        },
+        "default_filter": "all",
+        "select": "id,name,status,health_score,last_interaction",
+        "order": "health_score.desc.nullslast",
+        "columns": [
+            {"key": "name",   "label": "Name", "kind": "text"},
+            {"key": "status", "label": "Status", "kind": "text"},
+            {"key": "health", "label": "Health", "kind": "number"},
+            {"key": "last",   "label": "Last touch", "kind": "date"},
+        ],
+        "nav": ("operate", "contacts"),
+    },
+    "sessions": {
+        "title": "Sessions",
+        "filters": {
+            "upcoming": "status=eq.scheduled&scheduled_for=gte.{now}",
+            "all":      "",
+        },
+        "default_filter": "upcoming",
+        "select": "id,title,scheduled_for,status,contacts(name)",
+        "order": "scheduled_for.asc.nullslast",
+        "columns": [
+            {"key": "title",  "label": "Session", "kind": "text"},
+            {"key": "client", "label": "Client", "kind": "text"},
+            {"key": "when",   "label": "When", "kind": "date"},
+            {"key": "status", "label": "Status", "kind": "text"},
+        ],
+        "nav": ("operate", "calendar"),
+    },
+    "products": {
+        "title": "Products & Services",
+        "filters": {"all": "status=eq.active"},
+        "default_filter": "all",
+        "select": "id,name,type,price,pricing_type",
+        "order": "type.asc,name.asc",
+        "columns": [
+            {"key": "name",    "label": "Name", "kind": "text"},
+            {"key": "type",    "label": "Type", "kind": "text"},
+            {"key": "price",   "label": "Price", "kind": "money"},
+            {"key": "pricing", "label": "Billed", "kind": "text"},
+        ],
+        "nav": ("build", "products"),
+    },
+}
+
+
+def _show_view_row(view: str, r: Dict[str, Any]) -> Dict[str, Any]:
+    """One PostgREST row -> one display row keyed by the view's columns.
+    Server-shaped so the frontend renders generically and the model never
+    touches a cell value."""
+    contact = r.get("contacts") if isinstance(r.get("contacts"), dict) else {}
+    if view == "invoices":
+        return {
+            "id": r.get("id"),
+            "number": r.get("invoice_number") or "(no number)",
+            "client": contact.get("name") or "(no client)",
+            "amount": float(r.get("total") or 0),
+            "status": r.get("status") or "draft",
+            "due": (r.get("due_date") or "")[:10],
+        }
+    if view == "contacts":
+        return {
+            "id": r.get("id"),
+            "name": r.get("name") or "(unnamed)",
+            "status": r.get("status") or "",
+            "health": r.get("health_score"),
+            "last": (r.get("last_interaction") or "")[:10],
+        }
+    if view == "sessions":
+        return {
+            "id": r.get("id"),
+            "title": r.get("title") or "(untitled)",
+            "client": contact.get("name") or "",
+            "when": (r.get("scheduled_for") or "")[:16].replace("T", " "),
+            "status": r.get("status") or "",
+        }
+    return {  # products
+        "id": r.get("id"),
+        "name": r.get("name") or "(unnamed)",
+        "type": r.get("type") or "",
+        "price": float(r.get("price") or 0),
+        "pricing": r.get("pricing_type") or "",
+    }
+
+
+async def handle_show_view(client, biz, action) -> Dict:
+    biz_id = biz["id"]
+    view = (action.get("view") or "").strip().lower()
+    spec = _SHOW_VIEW_SPECS.get(view)
+    if not spec:
+        valid = ", ".join(sorted(_SHOW_VIEW_SPECS))
+        return _fail("show_view", f"unknown view '{view}' — valid views: {valid}")
+
+    filt = (action.get("filter") or spec["default_filter"]).strip().lower()
+    if filt not in spec["filters"]:
+        filt = spec["default_filter"]
+    now = datetime.now(timezone.utc)
+    clause = spec["filters"][filt].format(
+        today=now.date().isoformat(),
+        # PostgREST timestamp class: Z form ALWAYS in query strings.
+        now=now.isoformat().replace("+00:00", "Z"),
+    )
+
+    # Every view name doubles as its table name — a spec key IS the
+    # PostgREST path, so adding a view means adding a spec, nothing else.
+    q = (f"/{view}?business_id=eq.{biz_id}"
+         f"&select={spec['select']}&order={spec['order']}&limit={_SHOW_VIEW_LIMIT}")
+    if clause:
+        q += f"&{clause}"
+    try:
+        raw_rows = await _sb(client, "GET", q)
+    except Exception as e:
+        return _fail("show_view", f"fetch failed: {e}")
+    if raw_rows is None:
+        # _sb reports a refused read the same way as an empty body — but a
+        # refused read must not be presented as "you have no invoices".
+        return _fail("show_view", "couldn't load that list just now — try again in a moment")
+
+    rows = [_show_view_row(view, r) for r in raw_rows]
+    money_key = next((c["key"] for c in spec["columns"] if c["kind"] == "money"), None)
+    total = sum(r.get(money_key) or 0 for r in rows) if money_key else None
+
+    title = spec["title"]
+    filt_label = "" if filt == "all" else f" ({filt})"
+    if not rows:
+        result = (f"0 {view} match filter '{filt}' — the list is genuinely empty; "
+                  f"tell the practitioner that plainly and do NOT invent rows")
+    else:
+        result = f"showing {len(rows)} {view}{filt_label}"
+        if total is not None:
+            result += f", ${total:,.2f} total"
+
+    # The digest the second-pass reply reads — real values, capped so a
+    # 25-row table doesn't flood the composer prompt.
+    speak_lines = []
+    for r in rows[:8]:
+        if view == "invoices":
+            over = ""
+            try:
+                d = (now.date() - date.fromisoformat(r["due"])).days if r["due"] else 0
+                if d > 0 and r["status"] != "draft":
+                    over = f", {d}d overdue"
+            except (TypeError, ValueError):
+                pass
+            speak_lines.append(f"{r['number']}: {r['client']} ${r['amount']:,.2f} ({r['status']}{over})")
+        elif view == "contacts":
+            speak_lines.append(f"{r['name']} ({r['status']}, health {r['health']})")
+        elif view == "sessions":
+            speak_lines.append(f"{r['title']} — {r['client'] or 'no client'} at {r['when']}")
+        else:
+            speak_lines.append(f"{r['name']} (${r['price']:,.2f} {r['pricing']})".strip())
+    if len(rows) > 8:
+        speak_lines.append(f"…and {len(rows) - 8} more in the card")
+
+    return {
+        "type": "show_view",
+        "result": result,
+        "label": f"📋 {title}{filt_label} — {len(rows)} shown"
+                 + (f" · ${total:,.2f}" if total else ""),
+        "view": view,
+        "filter": filt,
+        "title": title,
+        "columns": spec["columns"],
+        "rows": rows,
+        "summary": {"count": len(rows), **({"total": total} if total is not None else {})},
+        "speak": "; ".join(speak_lines),
+        "nav": _nav(*spec["nav"]),
     }
 
 
@@ -11621,6 +11890,7 @@ ACTION_HANDLERS = {
     "open_documents":         handle_open_documents,
     "open_calendar":          handle_open_calendar,
     "show_revenue":           handle_show_revenue,
+    "show_view":              handle_show_view,
     "create_goal":            handle_create_goal,
     "add_reminder":           handle_add_reminder,
     "check_goals":            handle_check_goals,
@@ -12083,8 +12353,15 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
     if succeeded:
         parts.append("")
         parts.append("✓ SUCCEEDED ACTIONS (these actually happened):")
-        for atype, label, result, _ in succeeded:
+        for atype, label, result, t in succeeded:
             parts.append(f"  • {atype}: {label or result}")
+            # Read verbs (show_view) return a `speak` digest of the rows
+            # they fetched. Forwarding it is what lets the second pass
+            # SAY the values ("Marcus owes the most at $520") instead of
+            # narrating around a card it can't read.
+            speak = t.get("speak")
+            if isinstance(speak, str) and speak.strip():
+                parts.append(f"      data now shown to the practitioner: {speak.strip()}")
     return "\n".join(parts) if parts else "(no actions ran)"
 
 
@@ -14951,6 +15228,9 @@ ACTIONS — NAVIGATION + MEMORY:
     • "bring the chat back" / "show the window again" → visible:true.
     • When the practitioner wraps up while voice is active ("that's all for now", "we're done here") → say a short, warm goodbye in your reply FIRST, then emit visible:false + keep_talking:false — the window closes after your goodbye finishes playing.
   [ACTION:{{"type":"show_revenue"}}]     — opens GROW → Revenue (the canonical Revenue Analytics surface: Allocator, Expenses, planned-vs-actual, Export, Send to Accountant).
+  [ACTION:{{"type":"show_view","view":"invoices|contacts|sessions|products","filter":"..."}}]  — SHOW A LIST RIGHT HERE IN THE CHAT. Fetches the actual rows and renders them as a table card under your reply — the practitioner sees every line item without leaving the conversation. Filters: invoices → open (default) | overdue | draft | paid | all; contacts → all (default) | leads | active; sessions → upcoming (default) | all; products → all.
+    • WHEN: any time the practitioner asks to SEE, LIST, or BREAK DOWN their data — "share the invoices I have", "who owes what?", "show me my leads", "what sessions are coming up?". Emit the tag and speak naturally about what the card shows; the rows arrive from the database, so never retype them all into your prose.
+    • NEVER say "I don't have the itemized breakdown" or offer to merely open a tab when this action can show the rows here. Navigation (show_revenue, navigate) is for when they want the full working SCREEN; show_view is for when they want to SEE the data in the flow of the conversation.
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
   [ACTION:{{"type":"save_note","content":"..."}}]  — THE NOTES PAD: when they say "note this for later", "put this in a note", "save that thought", "write this down", or hand you anything they'll want to REVIEW later (an idea, a to-revisit, a reminder-to-self), file it as a NOTE — verbatim or lightly cleaned, never summarized away. Notes land on the Notes tab (under Workspace in the sidebar; navigate: tab:"grow", sub:"notes"). Use save_note for the practitioner's OWN parking lot; use remember for facts YOU should recall about them. After filing, confirm with the note's first words so they know it's captured.
   [ACTION:{{"type":"update_business_profile_field","field_path":"governing_state|produces_deliverables|sensitive_areas.health_advice|sensitive_areas.session_recording|sensitive_areas.physical_activity","value":"<their answer>"}}]
@@ -15003,6 +15283,9 @@ When the practitioner says...                       You should emit...
   "Show me my dashboard/queue/calendar..."      →   navigate (or open_documents/open_calendar/show_revenue)
   "Upload a file" / "Where are my files?"       →   open_documents
   "How much did I make this month?"             →   show_revenue (then narrate from CONTEXT)
+  "Show/list my invoices — who owes what?"      →   show_view (view:"invoices") — the rows render as a card in the chat; never answer "I don't have the breakdown"
+  "Show me my leads / list my contacts"         →   show_view (view:"contacts", filter:"leads")
+  "What sessions do I have coming up?"          →   show_view (view:"sessions") — or navigate if they want the working calendar
   "Remember/don't forget..."                    →   remember
   "Forget that / never mind that rule"          →   forget
   "Set a timer / alarm / give me X minutes"     →   set_timer
