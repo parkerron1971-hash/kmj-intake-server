@@ -599,7 +599,7 @@ def _audit(*, actor: str, tool: str, ok: bool, duration_ms: int,
         f" error={error}" if error else "")
     try:
         import sb_clients
-        sb_clients.sb_post_as_service("/agent_runs", {
+        row: Dict[str, Any] = {
             "business_id": business_id,
             "surface": "mcp",
             "tool": tool[:200],
@@ -612,13 +612,21 @@ def _audit(*, actor: str, tool: str, ok: bool, duration_ms: int,
             # routinely carries table names, ids and query fragments.
             "error": (error or None) and str(error)[:300],
             "arg_keys": sorted(arg_keys or []),
-            # A VERB NAME, never a value — the same posture arg_keys
-            # takes. This is what makes the funnel countable: how often
-            # agent reads surface real work, and how often that ends in
-            # someone opening Chief.
-            "detail": ({"handoff": handoff_verb[:200]}
-                       if handoff_verb else None),
-        }, prefer="return=minimal")
+        }
+        # A VERB NAME, never a value — the same posture arg_keys takes.
+        # This is what makes the funnel countable.
+        #
+        # OMITTED, not set to None, when nothing fired. `detail` is
+        # `jsonb NOT NULL DEFAULT '{}'`, and sb_post_as_service passes
+        # the body through untouched, so an explicit null is a 23502 that
+        # PostgREST rejects — taking the WHOLE row with it. The except
+        # below is deliberately non-fatal, so that failure is invisible:
+        # the tool call still succeeds and the audit row just never
+        # exists. Let the column default do its job.
+        if handoff_verb:
+            row["detail"] = {"handoff": handoff_verb[:200]}
+        sb_clients.sb_post_as_service("/agent_runs", row,
+                                      prefer="return=minimal")
     except Exception as e:
         logger.warning("[audit] agent_runs write failed (non-fatal): %s", e)
 

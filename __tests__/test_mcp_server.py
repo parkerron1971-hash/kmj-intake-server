@@ -739,11 +739,58 @@ def test_the_verb_is_recorded_but_never_sent(monkeypatch):
     assert rows[0][1]["detail"] == {"handoff": "create_invoice"}
 
 
-def test_audit_detail_is_absent_when_no_handoff_fired(monkeypatch):
+def test_audit_omits_detail_rather_than_sending_null(monkeypatch):
+    """`detail` is jsonb NOT NULL DEFAULT '{}'. Sending an explicit null
+    is a 23502 that PostgREST refuses, and it takes the WHOLE row with
+    it — so the tool call still succeeds and the audit row simply never
+    exists. Omit the key and let the column default do its job.
+
+    The first version of this test asserted `detail is None` and passed
+    while production wrote nothing at all for eight minutes."""
     rows = _capture_rows(monkeypatch)
     mcp._audit(actor="owner@x.com", tool="show_revenue", allowed=True,
                ok=True, duration_ms=5, business_id="biz-1")
-    assert rows[0][1]["detail"] is None
+    assert "detail" not in rows[0][1]
+
+
+def test_audit_never_sends_null_for_a_column_the_schema_declares_not_null():
+    """The general form of the bug above, read off the migration rather
+    than remembered. A NOT NULL column may be omitted or filled — never
+    explicitly nulled."""
+    sql = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+        "supabase/APPLY-2026-07-28-agent-runs.sql").read_text(encoding="utf-8")
+    ddl = sql.split("CREATE TABLE IF NOT EXISTS public.agent_runs")[1].split(");")[0]
+    not_null = {line.split()[0] for line in
+                (raw.split("--")[0].strip() for raw in ddl.splitlines())
+                if line and "NOT NULL" in line}
+    assert "detail" in not_null and "arg_keys" in not_null, "migration shape moved"
+
+    captured = {}
+
+    class _FakeSb:
+        @staticmethod
+        def sb_post_as_service(path, body, prefer=None):
+            captured.update(body)
+
+    sys.modules["sb_clients"], real = _FakeSb, sys.modules.get("sb_clients")
+    try:
+        # Both paths: a handoff fired, and one did not.
+        mcp._audit(actor="o@x.com", tool="show_revenue", allowed=True, ok=True,
+                   duration_ms=1)
+        offenders = [c for c in not_null if c in captured and captured[c] is None]
+        assert not offenders, f"explicit null on NOT NULL column(s): {offenders}"
+
+        captured.clear()
+        mcp._audit(actor="o@x.com", tool="unbilled_time", allowed=True, ok=True,
+                   duration_ms=1, handoff_verb="create_invoice")
+        offenders = [c for c in not_null if c in captured and captured[c] is None]
+        assert not offenders, f"explicit null on NOT NULL column(s): {offenders}"
+        assert captured["detail"] == {"handoff": "create_invoice"}
+    finally:
+        if real is not None:
+            sys.modules["sb_clients"] = real
+        else:
+            sys.modules.pop("sb_clients", None)
 
 
 def test_contact_name_in_a_handoff_is_defused(monkeypatch):
