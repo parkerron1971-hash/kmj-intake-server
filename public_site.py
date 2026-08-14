@@ -608,6 +608,83 @@ def _inject_concierge_widget(html: str, business_id: Optional[str]) -> str:
     return html + snippet
 
 
+TRAFFIC_API_BASE = os.environ.get(
+    "TRAFFIC_API_BASE", "https://kmj-intake-server-production.up.railway.app")
+
+
+def _traffic_beacon(business_id: str) -> str:
+    """The first-party page-view beacon for a published customer site.
+
+    WHY THIS EXISTS: every number on the practitioner's funnel — form
+    submissions, bookings, link clicks, downloads — is a CONVERSION.
+    There was no denominator anywhere, so "twelve leads" could not be
+    told apart from twelve-out-of-thirty or twelve-out-of-a-thousand.
+
+    WHY IT IS NOT navigator.sendBeacon. sendBeacon is the right tool for
+    this and it does not work here. A beacon carrying an
+    application/json body is not a CORS "simple request", so it needs a
+    preflight — and sendBeacon cannot preflight, so cross-origin the
+    browser drops it SILENTLY. A customer site on its own verified
+    domain is always cross-origin to the API. fetch with keepalive
+    survives page unload just as well and is allowed to preflight; the
+    app's CORS is already "*" because the booking and intake embeds run
+    on arbitrary practitioner origins.
+
+    PRIVACY, unchanged from site_analytics' stated contract: no cookie
+    (sessionStorage dies with the tab), no IP kept, no user-agent kept,
+    referrer reduced to a host server-side. DNT is honoured here as well
+    as on the server, so a visitor who has asked not to be tracked costs
+    nothing at all.
+    """
+    return (
+        "<script>(function(){try{"
+        "if(navigator.doNotTrack==='1'||window.doNotTrack==='1')return;"
+        "var B=" + json.dumps(TRAFFIC_API_BASE) + ";"
+        "var ID=" + json.dumps(str(business_id)) + ";"
+        "var K='sol_sid',sid;try{sid=sessionStorage.getItem(K);"
+        "if(!sid){sid=(Math.random().toString(36).slice(2)+Date.now()"
+        ".toString(36)).slice(0,24);sessionStorage.setItem(K,sid);}}"
+        "catch(e){return;}"
+        "var w=window.innerWidth||1024;"
+        "var d=w<700?'mobile':(w<1024?'tablet':'desktop');"
+        "function send(ev){try{fetch(B+'/api/track',{method:'POST',"
+        "headers:{'Content-Type':'application/json'},keepalive:true,"
+        "body:JSON.stringify({s:sid,p:location.pathname,"
+        "r:document.referrer||null,d:d,e:ev,b:ID})}).catch(function(){});"
+        "}catch(e){}}"
+        "send('view');"
+        "document.addEventListener('click',function(e){"
+        "var a=e.target&&e.target.closest?e.target.closest('a,button'):null;"
+        "if(!a)return;"
+        "var t=((a.textContent||'')+' '+(a.getAttribute('href')||''))"
+        ".toLowerCase();"
+        "if(/book|schedule|appoint|contact|get started|call|quote|buy|"
+        "enquir|inquir/.test(t))send('cta');},true);"
+        "document.addEventListener('submit',function(){send('submit');},true);"
+        "}catch(e){}})();</script>"
+    )
+
+
+def _inject_traffic_beacon(html: str, business_id: Optional[str]) -> str:
+    """Drop the beacon in before </body>. Never raises, never blocks a
+    page: a site that cannot be measured is a small problem, a site that
+    will not render is a large one. Kill switch: SITE_TRAFFIC=off."""
+    if not business_id or not html:
+        return html
+    if (os.environ.get("SITE_TRAFFIC") or "on").strip().lower() == "off":
+        return html
+    if "sol_sid" in html:                     # already stamped
+        return html
+    try:
+        tag = _traffic_beacon(business_id)
+    except Exception:
+        return html
+    for close in ("</body>", "</BODY>"):
+        if close in html:
+            return html.replace(close, tag + "\n" + close, 1)
+    return html + tag
+
+
 def _inject_brand_meta(html: str, business_id: Optional[str]) -> str:
     """Pass 3: wire `_brand_head_meta_tags` into legacy HTML before </head>.
     Activates the dormant Pass 2.5a helper for users who haven't opted into
@@ -617,6 +694,12 @@ def _inject_brand_meta(html: str, business_id: Optional[str]) -> str:
     Also the concierge widget's ride: every serve path that stamps brand
     meta is a served site page, so the widget hook runs here first."""
     html = _inject_concierge_widget(html, business_id)
+    # The page-view beacon rides here too, for the same reason and on
+    # the same evidence: every call site of this function is a page a
+    # real visitor sees. Previews render through other handlers, so a
+    # practitioner checking their own draft does not pollute their
+    # numbers.
+    html = _inject_traffic_beacon(html, business_id)
     if not business_id:
         return html
     try:

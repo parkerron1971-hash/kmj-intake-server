@@ -477,7 +477,8 @@ async def submit_intake(req: IntakeSubmission, request: Request):
         # site, so the Referer header IS that page — landing path and,
         # in its query string, the campaign that sent them.
         attribution = lead_attribution.capture(
-            request, source_detail=form_config.get("name") or "")
+            request, source_detail=form_config.get("name") or "",
+            submission=submission_data)
 
         # ── 3. Find or create the contact ─────────────────────────────
         # THE ONE DEDUPE RULE (lead_identity), shared with the other
