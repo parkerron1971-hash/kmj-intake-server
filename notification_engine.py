@@ -169,6 +169,21 @@ def _extract_json(text: str) -> Optional[Dict]:
         return None
 
 
+def _z(dt: datetime) -> str:
+    """Timestamp in the Z form PostgREST actually parses.
+
+    isoformat() on a tz-aware UTC datetime ends '+00:00', and '+' in a
+    query string decodes to a SPACE. The filter then matches nothing and
+    returns 200 with an empty list — a broken query that looks exactly
+    like a quiet day. The evening gather already did this by hand; the
+    morning gather, the mid-day gather, the dedup lookups and the urgent
+    cutoff did not, so several of these notifications have been reading
+    empty windows. One helper, used everywhere, so the next timestamp
+    added here cannot reintroduce it.
+    """
+    return dt.isoformat().replace("+00:00", "Z")
+
+
 def _normalize_priority(p: str) -> str:
     p = (p or "").strip().lower()
     return p if p in VALID_PRIORITIES else "normal"
@@ -177,7 +192,7 @@ def _normalize_priority(p: str) -> str:
 def _midnight_iso() -> str:
     now = datetime.now(timezone.utc)
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return midnight.isoformat()
+    return _z(midnight)
 
 
 async def _settings_allow(client, biz: Dict, key: str, default: bool = True) -> bool:
@@ -197,7 +212,7 @@ async def _existing_today(client, biz_id: str, type_name: str) -> bool:
 
 
 async def _existing_within(client, biz_id: str, type_name: str, hours: int) -> bool:
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    cutoff = _z(datetime.now(timezone.utc) - timedelta(hours=hours))
     rows = await _sb(client, "GET",
         f"/chief_notifications?business_id=eq.{biz_id}&type=eq.{type_name}"
         f"&created_at=gte.{cutoff}&select=id&limit=1")
@@ -207,7 +222,7 @@ async def _existing_within(client, biz_id: str, type_name: str, hours: int) -> b
 async def _dedup_key_exists(client, biz_id: str, dedup_key: str, hours: int = URGENT_DEDUP_HOURS) -> bool:
     if not dedup_key:
         return False
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    cutoff = _z(datetime.now(timezone.utc) - timedelta(hours=hours))
     rows = await _sb(client, "GET",
         f"/chief_notifications?business_id=eq.{biz_id}"
         f"&action_payload->>dedup_key=eq.{dedup_key}"
@@ -231,25 +246,35 @@ async def _insert_notification(client, biz_id: str, payload: Dict) -> Optional[D
 
 async def _gather_morning_data(client, biz_id: str) -> Dict:
     now = datetime.now(timezone.utc)
-    end_of_day = now.replace(hour=23, minute=59, second=59).isoformat()
-    morning = now.replace(hour=0, minute=0, second=0).isoformat()
+    end_of_day = _z(now.replace(hour=23, minute=59, second=59))
+    morning = _z(now.replace(hour=0, minute=0, second=0))
 
-    pending, sessions, at_risk, urgent = await asyncio.gather(
+    # Z form — '+00:00' reads as a space in a PostgREST query string.
+    day_ago = _z(now - timedelta(hours=24))
+
+    pending, sessions, at_risk, urgent, new_leads, hot_leads = await asyncio.gather(
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority,subject&limit=20"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled&scheduled_for=gte.{morning}&scheduled_for=lte.{end_of_day}&order=scheduled_for.asc&limit=10&select=id,title,scheduled_for,contacts(name)"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&health_score=lt.40&status=in.(active,lead,vip)&order=health_score.asc&limit=5&select=id,name,health_score"),
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&priority=eq.urgent&select=id,subject&limit=5"),
+        # Leads. A morning brief that reports drafts, invoices and
+        # sessions but never mentions the people who just asked to be
+        # customers is reporting the wrong day.
+        _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&status=eq.lead&created_at=gte.{day_ago}&order=created_at.desc&select=id,name,lead_score,source&limit=10"),
+        _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&status=eq.lead&lead_score=gte.70&order=lead_score.desc&select=id,name,lead_score,last_interaction&limit=5"),
     )
     return {
         "pending": pending or [],
         "sessions_today": sessions or [],
         "at_risk": at_risk or [],
         "urgent": urgent or [],
+        "new_leads_24h": new_leads or [],
+        "hot_leads": hot_leads or [],
     }
 
 
 async def _gather_midday_data(client, biz_id: str) -> Dict:
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=MIDDAY_LOOKBACK_HOURS)).isoformat()
+    cutoff = _z(datetime.now(timezone.utc) - timedelta(hours=MIDDAY_LOOKBACK_HOURS))
 
     new_drafts, urgent_drafts, no_shows, health_drops = await asyncio.gather(
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&created_at=gte.{cutoff}&status=eq.draft&select=id,agent,subject,priority&limit=20"),
@@ -267,15 +292,15 @@ async def _gather_midday_data(client, biz_id: str) -> Dict:
 
 async def _gather_evening_data(client, biz_id: str) -> Dict:
     # Z form — '+00:00' reads as a space in PostgREST query strings.
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=EVENING_LOOKBACK_HOURS)).isoformat().replace("+00:00", "Z")
-    tomorrow_end = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat().replace("+00:00", "Z")
+    cutoff = _z(datetime.now(timezone.utc) - timedelta(hours=EVENING_LOOKBACK_HOURS))
+    tomorrow_end = _z(datetime.now(timezone.utc) + timedelta(days=2))
 
     approved, completed, new_contacts, pending, upcoming = await asyncio.gather(
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.approved&reviewed_at=gte.{cutoff}&select=id,agent,subject&limit=20"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.completed&scheduled_for=gte.{cutoff}&select=id,title,contacts(name)&limit=10"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&created_at=gte.{cutoff}&select=id,name,status&limit=10"),
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority&limit=20"),
-        _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled&scheduled_for=gte.{datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}&scheduled_for=lte.{tomorrow_end}&order=scheduled_for.asc&select=id,title,scheduled_for,contacts(name)&limit=10"),
+        _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled&scheduled_for=gte.{_z(datetime.now(timezone.utc))}&scheduled_for=lte.{tomorrow_end}&order=scheduled_for.asc&select=id,title,scheduled_for,contacts(name)&limit=10"),
     )
     return {
         "approved_today": approved or [],
@@ -284,6 +309,19 @@ async def _gather_evening_data(client, biz_id: str) -> Dict:
         "pending_carryover": pending or [],
         "tomorrow_sessions": upcoming or [],
     }
+
+
+def has_anything_to_report(data: Dict) -> bool:
+    """True when at least one bucket the brief would talk about has a row.
+
+    These generators used to call the model unconditionally, which meant
+    a business with an empty day still paid for a Sonnet call to be told
+    it had a clear runway — and got a notification card saying nothing.
+    Once these run on a schedule for every active business that is the
+    bulk of the spend, and all of it on nothing. A brief about nothing
+    should not be written, never mind billed for.
+    """
+    return any(v for v in (data or {}).values() if isinstance(v, list))
 
 
 def _format_data_for_prompt(data: Dict) -> str:
@@ -349,6 +387,8 @@ async def _generate_morning_brief(client, biz_id: str) -> Dict:
         return {"skipped": "already_sent_today"}
 
     data = await _gather_morning_data(client, biz_id)
+    if not has_anything_to_report(data):
+        return {"skipped": "nothing_to_report"}
     biz_name = biz.get("name", "")
     practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
     voice = biz.get("voice_profile") or {}
@@ -384,6 +424,8 @@ async def _generate_midday_ping(client, biz_id: str) -> Dict:
         return {"skipped": "recent_ping_exists"}
 
     data = await _gather_midday_data(client, biz_id)
+    if not has_anything_to_report(data):
+        return {"skipped": "nothing_to_report"}
 
     # Significance threshold
     significant = (
@@ -428,6 +470,8 @@ async def _generate_evening_summary(client, biz_id: str) -> Dict:
         return {"skipped": "already_sent_today"}
 
     data = await _gather_evening_data(client, biz_id)
+    if not has_anything_to_report(data):
+        return {"skipped": "nothing_to_report"}
     biz_name = biz.get("name", "")
     practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
     voice = biz.get("voice_profile") or {}
@@ -501,8 +545,8 @@ async def _check_urgent(client, biz_id: str) -> Dict:
         return {"skipped": "disabled"}
 
     now = datetime.now(timezone.utc)
-    recent_cutoff = (now - timedelta(minutes=URGENT_LOOKBACK_MINUTES)).isoformat()
-    soon_cutoff = (now + timedelta(minutes=SESSION_IMMINENT_MINUTES)).isoformat().replace("+00:00", "Z")
+    recent_cutoff = _z(now - timedelta(minutes=URGENT_LOOKBACK_MINUTES))
+    soon_cutoff = _z(now + timedelta(minutes=SESSION_IMMINENT_MINUTES))
     created: List[Dict] = []
 
     # 1. Hot leads — EVERY inquiry door, not just the embeddable form.
@@ -548,7 +592,7 @@ async def _check_urgent(client, biz_id: str) -> Dict:
     # 2. Imminent sessions (start within 15 minutes, not yet alerted)
     imminent = await _sb(client, "GET",
         f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
-        f"&scheduled_for=gte.{now.isoformat().replace('+00:00', 'Z')}&scheduled_for=lte.{soon_cutoff}"
+        f"&scheduled_for=gte.{_z(now)}&scheduled_for=lte.{soon_cutoff}"
         f"&select=id,title,scheduled_for,contact_id,contacts(name)&limit=5") or []
     for s in imminent:
         dedup = f"session_imminent:{s['id']}"
@@ -577,6 +621,60 @@ async def _check_urgent(client, biz_id: str) -> Dict:
 async def _all_active_business_ids(client) -> List[str]:
     rows = await _sb(client, "GET", "/businesses?is_active=eq.true&select=id&limit=200") or []
     return [r["id"] for r in rows]
+
+
+async def urgent_candidates(client, now: Optional[datetime] = None) -> List[str]:
+    """Businesses with something in the urgent window RIGHT NOW.
+
+    _check_urgent is per-business and re-reads the business row twice
+    (once itself, once inside create_urgent_alert). Running it blindly
+    across every tenant every five minutes is hundreds of PostgREST
+    round trips a minute to discover that almost nothing happened.
+
+    Two platform-wide reads answer the same question instead, so a quiet
+    tick costs two queries total and the per-business work only happens
+    for tenants that actually have a new enquiry or an imminent session.
+    """
+    now = now or datetime.now(timezone.utc)
+    # Z form — '+00:00' reads as a space in a PostgREST query string.
+    recent = _z(now - timedelta(minutes=URGENT_LOOKBACK_MINUTES))
+    soon = _z(now + timedelta(minutes=SESSION_IMMINENT_MINUTES))
+    now_z = _z(now)
+
+    events, sessions = await asyncio.gather(
+        _sb(client, "GET",
+            f"/events?event_type=in.(form_submit,contact_form_submitted,"
+            f"concierge_lead_captured)&created_at=gte.{recent}"
+            f"&select=business_id&limit=500"),
+        _sb(client, "GET",
+            f"/sessions?status=eq.scheduled&scheduled_for=gte.{now_z}"
+            f"&scheduled_for=lte.{soon}&select=business_id&limit=500"),
+    )
+    seen = {str(r["business_id"]) for r in (events or []) if r.get("business_id")}
+    seen |= {str(r["business_id"]) for r in (sessions or []) if r.get("business_id")}
+    return sorted(seen)
+
+
+async def check_urgent_for_all() -> Dict:
+    """The tick behind the hot-lead alert and the 15-minute session
+    warning. Runs every URGENT_LOOKBACK_MINUTES so nothing ages out of
+    the window between passes."""
+    async with httpx.AsyncClient() as client:
+        candidates = await urgent_candidates(client)
+        if not candidates:
+            return {"candidates": 0, "checked": 0, "results": []}
+        active = set(await _all_active_business_ids(client))
+        results = []
+        for bid in candidates:
+            if bid not in active:
+                continue
+            try:
+                results.append({"business_id": bid,
+                                **await _check_urgent(client, bid)})
+            except Exception as e:
+                logger.exception(f"check_urgent failed for {bid}: {e}")
+        return {"candidates": len(candidates), "checked": len(results),
+                "results": results}
 
 
 async def generate_morning_brief_for_all() -> Dict:

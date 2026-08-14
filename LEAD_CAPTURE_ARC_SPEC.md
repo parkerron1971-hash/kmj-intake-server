@@ -41,7 +41,7 @@ One PR per change; never stacked.
 
 ---
 
-### PR 1 — Every door scores the lead  ← **in flight**
+### PR 1 — Every door scores the lead  ✅ **SHIPPED #574**
 
 The score becomes a property of *being a lead*, not a property of
 having arrived through one particular form.
@@ -66,7 +66,7 @@ having arrived through one particular form.
 Booking is deliberately **not** wired to the hot-lead alert — someone
 who already picked a time is not a lead to chase today.
 
-### PR 2 — The alarms actually ring
+### PR 2 — The alarms actually ring  ← **in flight**
 
 `notification_engine`'s `check_urgent` / `morning_brief` /
 `midday_ping` / `evening_summary` are imported as a **router only**
@@ -84,6 +84,20 @@ Switches for alarms that do not fire.
   a lead.
 - **Rehearse the alarm before shipping it.** A monitor that has never
   been seen to fire is indistinguishable from a broken one.
+
+**Found while rehearsing it:** several of these windows were built with
+`isoformat()`, which ends `+00:00`, and `+` decodes to a SPACE in a
+query string. `_gather_morning_data`'s sessions-today filter, the
+mid-day cutoff, the dedup lookups and the urgent cutoff were all
+matching nothing and returning 200 with an empty list — a broken query
+that reads exactly like a quiet day. The evening gather had been fixed
+by hand and the others had not. All of them now go through one `_z()`
+helper, with a sweep test over every window this module opens.
+
+Also here: the three briefs called the model unconditionally, so an
+empty day still bought a Sonnet call to be told the runway was clear.
+On a schedule across every active business that is the bulk of the
+spend, all of it on nothing. `has_anything_to_report()` gates it.
 
 ### PR 3 — Two defects
 
