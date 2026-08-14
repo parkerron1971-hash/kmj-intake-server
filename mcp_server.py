@@ -65,7 +65,8 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -355,12 +356,226 @@ def tool_definitions() -> List[Dict[str, Any]]:
     return out
 
 
+# ─── Handoffs ────────────────────────────────────────────────────────
+#
+# A read that finds work should say where the work gets done. Without
+# this, every answer on this surface is a dead end: the agent reports
+# "14.5h unbilled", the person puts the phone down, and the invoice is
+# still unsent. One optional `next_step` key turns the answer into a
+# route back to Chief.
+#
+# WHY IT LIVES HERE AND NOT IN THE HANDLERS
+# `handle_unbilled_time` serves in-app Chief as well as this surface, and
+# in-app Chief must never say "open Solutionist" — the practitioner is
+# already standing in it. The handoff is a property of the SURFACE, not
+# of the verb, so it is applied here, after dispatch. Handlers are
+# untouched; this is presentation, not a second routing layer.
+#
+# WHAT A HANDOFF IS NOT
+# It is not an instruction to the agent ("tell the user to..."), which
+# reads as an ad and gets resisted by the model and resented by the
+# person. It states a capability and names the room. No URLs: a deep
+# link needs frontend routes that move, and cannot be read aloud.
+
+QUIET_DAYS = 30  # a contact silent this long is a follow-up candidate
+
+
+class _Handoff(NamedTuple):
+    """One entry in the table.
+
+    verb    — the Chief verb this points at. Checked against
+              ACTION_HANDLERS at call time; a rename must silence the
+              handoff, never leave it promising something absent.
+    text    — one sentence, or a callable taking the payload. Names the
+              verb in the practitioner's words.
+    where   — a room, not a URL.
+    feature — tier entitlement to check, when one maps cleanly. None
+              means the verb is not tier-gated.
+    when    — predicate over the handler payload. Reads `signal`
+              (numbers) rather than `result` (prose): a predicate that
+              greps a sentence breaks the day the sentence is reworded.
+    """
+    verb: str
+    text: Union[str, Callable[[Dict[str, Any]], str]]
+    where: str
+    when: Callable[[Dict[str, Any]], bool]
+    feature: Optional[str] = None
+
+
+def _sig(payload: Dict[str, Any]) -> Dict[str, Any]:
+    s = payload.get("signal")
+    return s if isinstance(s, dict) else {}
+
+
+def _num(v: Any) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _gone_quiet(payload: Dict[str, Any]) -> bool:
+    """True when this contact has been silent longer than QUIET_DAYS.
+
+    Falls back to created_at so a contact who was never contacted still
+    counts — but only once they are themselves older than the window, so
+    someone added this morning does not trigger a follow-up nudge.
+    """
+    contact = payload.get("contact")
+    if not isinstance(contact, dict):
+        return False
+    stamp = contact.get("last_interaction") or contact.get("created_at")
+    if not isinstance(stamp, str) or not stamp:
+        return False
+    try:
+        # PostgREST hands back both the Z and the +00:00 spelling.
+        dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt < datetime.now(timezone.utc) - timedelta(days=QUIET_DAYS)
+
+
+def _contact_name(payload: Dict[str, Any]) -> str:
+    """The contact's name, DEFUSED, for use inside a handoff sentence.
+
+    A contact name is third-party-authored — public intake forms write
+    it — and this is the one place a handoff interpolates untrusted text
+    into a sentence built to be read aloud by an agent. `catch_up`
+    already runs contact names through the same defusing before putting
+    them in Chief-facing prose; a surface that hands text to somebody
+    else's agent has less excuse to skip it, not more.
+
+    Length-bounded for the same reason: the sentence is the product, and
+    a name is a name.
+    """
+    contact = payload.get("contact")
+    raw = (contact or {}).get("name") if isinstance(contact, dict) else None
+    if not raw:
+        return "this contact"
+    try:
+        import untrusted_text
+        clean, found = untrusted_text.strip_action_tags(raw)
+        if found:
+            logger.warning("[mcp] neutralised action-tag syntax in a contact "
+                           "name before putting it in a handoff sentence")
+    except Exception:
+        # The defuser is the reason this text is safe to interpolate. If
+        # it cannot run, drop the name rather than pass it through raw.
+        return "this contact"
+    clean = " ".join(str(clean).split())[:80].strip()
+    return clean or "this contact"
+
+
+# The table. Deliberately short. Boilerplate on every response teaches
+# the agent and the person alike to ignore the field, so a tool earns an
+# entry only when a read can genuinely end in work.
+#
+# Four tools were specced for this table and cut on the verb check:
+# site_health and check_goals have no repair/adjust verb in
+# ACTION_HANDLERS, catch_up names no single verb, and check_balance
+# needs a structured signal customer_balances.py does not yet expose.
+# A handoff to a verb that does not exist is a promise the app then
+# breaks — the dead-weight rule, at the wire.
+HANDOFFS: Dict[str, _Handoff] = {
+    "unbilled_time": _Handoff(
+        verb="create_invoice",
+        text="Chief can turn these hours into an invoice.",
+        where="Operate › Billing",
+        feature="invoicing",
+        when=lambda p: _num(_sig(p).get("entries")) > 0),
+
+    "list_bookkeeping_proposals": _Handoff(
+        verb="approve_bookkeeping_proposal",
+        text="Chief can post these to the books once you approve them.",
+        where="Operate › Books",
+        feature="bookkeeping_basic",
+        when=lambda p: (_sig(p).get("status") == "pending"
+                        and _num(_sig(p).get("total")) > 0)),
+
+    "campaign_status": _Handoff(
+        verb="launch_campaign",
+        text="Chief can finish and launch the campaigns still sitting unsent.",
+        where="Grow › Campaigns",
+        when=lambda p: _num(_sig(p).get("unsent")) > 0),
+
+    "offering_readiness": _Handoff(
+        verb="update_offering",
+        text="Chief can fill in what these offerings are missing.",
+        where="Operate › Offerings",
+        when=lambda p: _num(_sig(p).get("blocked")) > 0),
+
+    "contact_deep_dive": _Handoff(
+        verb="draft_nurture",
+        text=lambda p: f"Chief can draft a follow-up to {_contact_name(p)}.",
+        where="Operate › Contacts",
+        when=_gone_quiet),
+}
+
+
+def _handoff(tool: str, payload: Any, biz: Dict[str, Any],
+             caller: "Caller") -> Optional[Dict[str, Any]]:
+    """The next step for this result, or None.
+
+    Four conditions, ALL required, and every failure path returns None
+    rather than raising: a handoff is a courtesy, and a courtesy that can
+    take down the read it rides on is a bug. Silence is always the safe
+    answer here, which is why nothing below fails open.
+    """
+    entry = HANDOFFS.get(tool)
+    if not entry or not isinstance(payload, dict):
+        return None
+    try:
+        # 1. The read actually found work.
+        if not entry.when(payload):
+            return None
+
+        # 2. Chief really has the verb. Guards against a rename turning
+        #    every handoff into a promise with nothing behind it.
+        import chief_of_staff
+        if entry.verb not in chief_of_staff.ACTION_HANDLERS:
+            logger.warning("[mcp] handoff %s -> %s: verb absent from "
+                           "ACTION_HANDLERS", tool, entry.verb)
+            return None
+
+        # 3. Not sensitive. Read-ness says "can this break anything";
+        #    sensitivity says "may a third party be pointed at it".
+        if action_registry.is_sensitive(entry.verb):
+            return None
+
+        # 4. Permitted for THIS business, right now. prompted=True is the
+        #    truth being claimed: the sentence promises what happens when
+        #    the practitioner opens Chief and asks. surface="chat" for the
+        #    same reason — that is the path this points at, not this one.
+        import policy_engine
+        verdict = policy_engine.evaluate(
+            str(biz.get("id") or ""), verb=entry.verb, surface="chat",
+            prompted=True, user_id=caller.user_id, biz_row=biz)
+        if not verdict.allowed:
+            return None
+
+        # ...and their plan includes it. Dormant while BILLING_ENFORCE is
+        # off, which is exactly why it goes in now rather than later.
+        if entry.feature:
+            import feature_gates
+            if not feature_gates.has_feature(biz, entry.feature):
+                return None
+    except Exception as e:
+        logger.warning("[mcp] handoff for %s suppressed: %s", tool, e)
+        return None
+
+    text = entry.text(payload) if callable(entry.text) else entry.text
+    return {"text": text, "where": entry.where, "verb": entry.verb}
+
+
 # ─── Audit ───────────────────────────────────────────────────────────
 
 def _audit(*, actor: str, tool: str, ok: bool, duration_ms: int,
            business_id: Optional[str] = None, error: Optional[str] = None,
            arg_keys: Optional[List[str]] = None, allowed: bool = True,
-           actor_user_id: Optional[str] = None) -> None:
+           actor_user_id: Optional[str] = None,
+           handoff_verb: Optional[str] = None) -> None:
     """Record one MCP call — to the log AND to `agent_runs`.
 
     Argument NAMES are recorded, never values. An argument can carry a
@@ -397,6 +612,12 @@ def _audit(*, actor: str, tool: str, ok: bool, duration_ms: int,
             # routinely carries table names, ids and query fragments.
             "error": (error or None) and str(error)[:300],
             "arg_keys": sorted(arg_keys or []),
+            # A VERB NAME, never a value — the same posture arg_keys
+            # takes. This is what makes the funnel countable: how often
+            # agent reads surface real work, and how often that ends in
+            # someone opening Chief.
+            "detail": ({"handoff": handoff_verb[:200]}
+                       if handoff_verb else None),
         }, prefer="return=minimal")
     except Exception as e:
         logger.warning("[audit] agent_runs write failed (non-fatal): %s", e)
@@ -568,6 +789,13 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
             raise
         _ledger(business_id, name, caller, allowed=True, ok=True,
                 reason=getattr(verdict, "reason", None))
+
+        # The read succeeded. If it found work, say where the work gets
+        # done. Additive: a payload with no handoff is byte-identical to
+        # what this surface returned before.
+        step = _handoff(name, result, biz, caller)
+        if step:
+            result = {**result, "next_step": step}
     return True, True, result, business_id
 
 
@@ -590,7 +818,11 @@ async def _handle_rpc(message: Dict[str, Any], caller: Caller,
             "instructions": (
                 "Read-only view of one Solutionist business. Every tool here "
                 "reads; nothing writes, sends, or spends money. If you need an "
-                "action taken, tell the practitioner — you cannot do it here."),
+                "action taken, tell the practitioner — you cannot do it here. "
+                "When a result carries a `next_step`, it names something Chief "
+                "can do about what you just read and the room it happens in; "
+                "pass it along to the practitioner as an option, not an "
+                "instruction."),
         })
 
     if method in ("notifications/initialized", "initialized"):
@@ -623,11 +855,21 @@ async def _handle_rpc(message: Dict[str, Any], caller: Caller,
             # ids and query fragments, and this is an untrusted caller.
             return _error(req_id, INTERNAL_ERROR, "tool execution failed")
 
+        # The handoff's target verb is recorded but NOT sent. Naming a
+        # verb the agent cannot call invites an attempt, which earns a
+        # refusal and a misleading allowed=false row; the practitioner
+        # needs the sentence, not the identifier.
+        step = payload.get("next_step") if isinstance(payload, dict) else None
+        handoff_verb = (step or {}).get("verb") if isinstance(step, dict) else None
+        if handoff_verb:
+            payload = {**payload,
+                       "next_step": {k: v for k, v in step.items() if k != "verb"}}
+
         _audit(actor=actor, actor_user_id=caller.user_id,
                tool=name, allowed=allowed, ok=ok, business_id=biz_id,
                duration_ms=int(time.time() * 1000) - started,
                error=None if ok else str(payload)[:200],
-               arg_keys=sorted(arguments))
+               arg_keys=sorted(arguments), handoff_verb=handoff_verb)
 
         if not ok:
             return _error(req_id,

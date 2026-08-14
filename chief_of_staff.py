@@ -5870,6 +5870,7 @@ async def handle_check_goals(client, biz, action) -> Dict:
             "label": "🎯 No active goals yet — set one in GROW → Goals.",
             "summary": "(no goals)",
             "nav": _nav("grow", "goals"),
+            "signal": {"behind": 0, "on_track": 0, "hit": 0, "active": 0},
         }
 
     # Gather data once
@@ -5977,6 +5978,8 @@ async def handle_check_goals(client, biz, action) -> Dict:
         "summary": summary,
         "goals": active,
         "nav": _nav("grow", "goals"),
+        "signal": {"behind": behind_count, "on_track": on_track_count,
+                   "hit": hit_count, "active": len(active)},
     }
 
 
@@ -6701,13 +6704,15 @@ async def handle_site_health(client, biz, action) -> Dict:
     if not issues:
         return {"type": "site_health",
                 "result": "site healthy — " + "; ".join(healthy or ["no known issues"]),
-                "label": "✅ Site health: clean", "nav": _nav("build")}
+                "label": "✅ Site health: clean", "nav": _nav("build"),
+                "signal": {"issues": 0}}
     listing = " | ".join(issues[:6]) + (f" (+{len(issues) - 6} more)"
                                         if len(issues) > 6 else "")
     return {"type": "site_health",
             "result": f"{len(issues)} issue(s) found: {listing}",
             "label": f"🩺 Site health: {len(issues)} issue(s)",
-            "nav": _nav("build")}
+            "nav": _nav("build"),
+            "signal": {"issues": len(issues)}}
 
 
 async def handle_restore_previous_site(client, biz, action) -> Dict:
@@ -8893,6 +8898,7 @@ async def handle_offering_readiness(client, biz, action) -> Dict:
             "label": "🧭 No active offerings yet — nothing to check. "
                      "Create offerings first (bookable services or store products).",
             "nav": _nav("operate"),
+            "signal": {"blocked": 0, "total": 0},
         }
     problems = []
     for r in per:
@@ -8915,6 +8921,7 @@ async def handle_offering_readiness(client, biz, action) -> Dict:
         "business_state": state,
         "offerings": per,
         "nav": _nav("operate"),
+        "signal": {"blocked": len(problems), "total": summary.get("total", len(per))},
     }
 
 
@@ -9627,6 +9634,7 @@ async def handle_catch_up(client, biz, action) -> Dict:
         "label": f"📋 Catch-up · {len(summary_parts)} update{'s' if len(summary_parts) != 1 else ''}",
         "summary": summary,
         "since": since_iso,
+        "signal": {"updates": len(summary_parts), "urgent": len(urgent)},
     }
 
 
