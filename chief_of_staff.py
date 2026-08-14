@@ -5634,6 +5634,57 @@ async def _fetch_business_settings(client, biz_id: str) -> Tuple[Optional[Dict[s
     return biz, settings
 
 
+class _TurnClock:
+    """Stage timings for one Chief turn, emitted as a single log line.
+
+    "It feels slow" is not something you can aim at. Kevin reported the
+    wait before Chief speaks; the fix that followed (#584, gathering the
+    enrichment block) was measured in a test harness, not in production,
+    so nobody could actually say what a real turn costs or which stage
+    owns it. This is that instrument.
+
+    One line per turn, greppable:
+
+      [Chief timing] total=1420ms recurrence=8 sweeps=210 context=340
+                     enrich=15 prompt=4 model=843 warm=8 lane=chat streamed=1
+
+    Read it as: everything before `model` is the silence the practitioner
+    sits through. `warm` is how many context sources the mic-open prewarm
+    had ready — warm=8 with a low `enrich` is the prewarm working; warm=0
+    on a voice turn means the prewarm missed and is worth chasing.
+
+    Durations and counts only. Nothing here is message content, business
+    data, or identity — a timing log that needed redacting would be the
+    wrong shape for a log that has to stay on in production.
+    """
+
+    __slots__ = ("_t0", "_last", "stages", "warm")
+
+    def __init__(self) -> None:
+        now = time.perf_counter()
+        self._t0 = now
+        self._last = now
+        self.stages: List[Tuple[str, int]] = []
+        self.warm = 0
+
+    def mark(self, name: str) -> None:
+        now = time.perf_counter()
+        self.stages.append((name, int((now - self._last) * 1000)))
+        self._last = now
+
+    def log(self, **fields: Any) -> None:
+        try:
+            total = int((time.perf_counter() - self._t0) * 1000)
+            parts = " ".join(f"{n}={ms}" for n, ms in self.stages)
+            extra = " ".join(
+                f"{k}={int(v) if isinstance(v, bool) else v}"
+                for k, v in fields.items())
+            logger.info(
+                f"[Chief timing] total={total}ms {parts} warm={self.warm} {extra}")
+        except Exception:  # pragma: no cover - an instrument never breaks a turn
+            pass
+
+
 def _context_sources(client, biz: Dict[str, Any]) -> Dict[str, Tuple[Any, Any]]:
     """The message-INDEPENDENT half of a turn's context enrichment, as
     {name: (factory, fallback)}.
@@ -15654,6 +15705,12 @@ async def chief_chat(
         except Exception:
             pass
 
+        # Turn timing. "It feels slow" is not something you can aim at —
+        # these stamps say which STAGE was slow, so the next change goes
+        # where the time actually is instead of where it is suspected.
+        # Durations and counts only; nothing here is content.
+        _t = _TurnClock()
+
         async with httpx.AsyncClient() as client:
             # Recurrence "cron" — generate any due invoice instances
             # before we load context so they show up this turn. Cheap
@@ -15664,6 +15721,7 @@ async def chief_chat(
                     print(f"[Chief] auto-generated {created} recurring invoice(s)", flush=True)
             except Exception as e:  # pragma: no cover
                 print(f"[Chief] recurrence cron error: {e}", flush=True)
+            _t.mark("recurrence")
 
             # Autopilot + escalations — needs the business row first so
             # we can read settings.autopilot. Fetch a minimal copy.
@@ -15693,11 +15751,13 @@ async def chief_chat(
                         print(f"[Chief] surfaced {esc_count} escalation(s)", flush=True)
             except Exception as e:  # pragma: no cover
                 print(f"[Chief] autopilot/escalation sweep error: {e}", flush=True)
+            _t.mark("sweeps")
 
             # Gather global context + view-specific detail in parallel
             ctx_task = _gather_context(client, req.business_id, query_text=req.message)
             view_task = _fetch_view_detail(client, req.business_id, req.current_context)
             ctx, view_detail = await asyncio.gather(ctx_task, view_task)
+            _t.mark("context")
 
             if not ctx:
                 raise HTTPException(404, "Business not found")
@@ -15777,8 +15837,7 @@ async def chief_chat(
                 getattr(getattr(user_session, "user", None), "id", None),
                 req.business_id,
             )
-            if warm:
-                logger.info(f"[Chief] prewarm hit: {len(warm)} sources ready")
+            _t.warm = len(warm)
 
             sources = _context_sources(client, biz)
             _names = list(sources.keys())
@@ -15805,6 +15864,7 @@ async def chief_chat(
             forecast_block = _format_forecast_block(forecast)
             relationships_block = _format_relationships_block(relationship_insights)
             sentiment = _detect_sentiment(req.conversation_history or [], req.message or "")
+            _t.mark("enrich")
 
             # THE GROWTH DOCTRINE — marketing law, loaded only on turns
             # that are actually about growth (or when the practitioner is
@@ -15975,12 +16035,18 @@ async def chief_chat(
                 _plan = _fg.plan_of(biz) if isinstance(biz, dict) else None
             except Exception:
                 _plan = None
+            _t.mark("prompt")
             raw = await _call_claude(client, system, api_messages,
                                      max_tokens=turn_tokens,
                                      model=chief_models.model_for(lane, _plan),
                                      # Voice streaming arc — set only when
                                      # /chat/stream drives this turn.
                                      stream_sink=_STREAM_SINK.get())
+            _t.mark("model")
+            # Emitted BEFORE the action dispatch below, because the number
+            # the practitioner actually feels is how long Chief sat silent
+            # before the first word — not how long the whole turn took.
+            _t.log(lane=lane, streamed=_STREAM_SINK.get() is not None)
             if not raw:
                 return {
                     "response": "I'm having trouble connecting right now — give me a moment and try again.",

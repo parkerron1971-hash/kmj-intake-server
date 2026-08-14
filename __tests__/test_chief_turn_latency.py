@@ -76,6 +76,14 @@ def turn(monkeypatch):
     so the difference between two runs is enrichment and nothing else.
     """
     cost = {"delay": 0.0}
+
+    # The per-user rate limiter is real and in-process. A file that
+    # drives dozens of turns as the same practitioner trips it — the
+    # turns then 429 and the test fails for a reason that has nothing to
+    # do with what it is testing. Neutralised here, and only here.
+    import rate_limit
+    monkeypatch.setattr(rate_limit, "allow", lambda *a, **k: True)
+
     called: set[str] = set()
 
     def _async_source(name, value):
