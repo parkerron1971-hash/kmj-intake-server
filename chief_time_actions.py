@@ -141,7 +141,8 @@ async def handle_unbilled_time(client, biz, action) -> Dict[str, Any]:
     who = f" for {contact.get('name')}" if contact else ""
     if not summary["entries"]:
         return {"type": "unbilled_time", "result": f"nothing unbilled{who}",
-                "label": f"No unbilled time{who}", "nav": None}
+                "label": f"No unbilled time{who}", "nav": None,
+                "signal": {"entries": 0}}
 
     money = f" · ${summary['amount']:,.2f}" if summary["amount"] else ""
     unpriced = (f" ({summary['unpriced_entries']} with no rate set)"
@@ -152,6 +153,12 @@ async def handle_unbilled_time(client, biz, action) -> Dict[str, Any]:
                    f"{summary['entries']} entries{money}{unpriced}"),
         "label": f"{summary['hours']}h unbilled{money}",
         "nav": _nav_contact(contact) if contact else None,
+        # Machine-readable twin of `result`. The prose above is for a
+        # human; anything deciding on this (the MCP handoff table, a
+        # future card) reads numbers, because a predicate that greps a
+        # sentence breaks the day the sentence is reworded.
+        "signal": {"entries": summary["entries"], "hours": summary["hours"],
+                   "amount": summary["amount"], "contact": bool(contact)},
     }
 
 

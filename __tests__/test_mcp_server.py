@@ -517,3 +517,230 @@ def test_migration_revokes_the_table_grants():
     assert "REVOKE ALL ON public.agent_runs FROM anon, authenticated" in ddl
     # Found while verifying agent_runs: Feed 2's table had the same gap.
     assert "REVOKE ALL ON public.vertical_knowledge FROM anon, authenticated" in ddl
+
+
+# ─── Handoffs ────────────────────────────────────────────────────────
+#
+# The handoff turns a read into a route back to Chief. Its failure mode is
+# not "the sentence is missing" — it is "the sentence promises something
+# that will not happen", so these tests are weighted toward SILENCE.
+
+# Every exposed tool is listed here or in HANDOFFS. Stated by hand, not
+# derived: a newly exposed verb should make a human decide whether it can
+# end in work, and a derived list would quietly answer "no" forever.
+SILENT_TOOLS = {
+    "catch_up", "check_balance", "check_goals", "check_inventory",
+    "inspect_module", "list_availability", "list_expenses",
+    "list_module_entries", "list_offerings", "list_products",
+    "list_projects", "list_scheduled", "propose_brand_kit_from_context",
+    "propose_voice_rule", "recall_conversation", "show_revenue",
+    "site_health", "summarize_module", "what_undo",
+}
+
+
+def _iso_days_ago(n):
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(days=n)).isoformat()
+
+
+def _clean_payloads():
+    """What each handler returns when it found nothing to do.
+
+    The prose is left in deliberately: if a predicate ever regresses to
+    reading `result`, these are the sentences it would match on.
+    """
+    return {
+        "unbilled_time": {
+            "type": "unbilled_time", "result": "nothing unbilled",
+            "label": "No unbilled time", "signal": {"entries": 0}},
+        "list_bookkeeping_proposals": {
+            "type": "list_bookkeeping_proposals",
+            "result": "no pending proposals", "proposals": [],
+            "signal": {"status": "pending", "total": 0}},
+        "campaign_status": {
+            "type": "campaign_status", "result": "no campaigns yet",
+            "signal": {"campaigns": 0, "unsent": 0}},
+        "offering_readiness": {
+            "type": "offering_readiness", "result": "report",
+            "signal": {"blocked": 0, "total": 4}},
+        "contact_deep_dive": {
+            "type": "contact_deep_dive", "result": "data retrieved",
+            "contact": {"name": "Dana", "last_interaction": _iso_days_ago(2)}},
+    }
+
+
+def _biz():
+    return {"id": "biz-1", "subscription_plan": None}
+
+
+def _allow_everything(monkeypatch):
+    """Conditions 3 and 4 satisfied, so a test can isolate condition 1."""
+    import feature_gates
+    import policy_engine
+
+    class _V:
+        allowed = True
+        reason = "chat:A"
+
+    monkeypatch.setattr(policy_engine, "evaluate", lambda *a, **k: _V())
+    monkeypatch.setattr(feature_gates, "has_feature", lambda biz, feat: True)
+
+
+def test_handoff_table_is_a_subset_of_the_exposed_tools():
+    """Same derived-set discipline the tool list already keeps. A handoff
+    on a verb this surface does not expose is unreachable code pretending
+    to be a feature."""
+    assert set(mcp.HANDOFFS) <= set(mcp.exposed_tools())
+
+
+def test_every_exposed_tool_is_either_a_handoff_or_explicitly_silent():
+    """A verb added to this surface must not default into silence
+    unnoticed. Failing here is the prompt to decide, not a reason to
+    widen the set."""
+    exposed = set(mcp.exposed_tools())
+    accounted = set(mcp.HANDOFFS) | SILENT_TOOLS
+    assert not (exposed - accounted), (
+        f"newly exposed and undecided: {sorted(exposed - accounted)}")
+    assert not (accounted - exposed), (
+        f"listed but no longer exposed: {sorted(accounted - exposed)}")
+
+
+def test_every_handoff_names_a_verb_chief_actually_has():
+    """The promise this whole feature makes. A rename in ACTION_HANDLERS
+    must break this test rather than ship a sentence pointing at
+    nothing."""
+    import chief_of_staff
+    for tool, entry in mcp.HANDOFFS.items():
+        assert entry.verb in chief_of_staff.ACTION_HANDLERS, (
+            f"{tool} hands off to {entry.verb!r}, which Chief does not have")
+
+
+def test_no_handoff_points_at_a_sensitive_verb():
+    for tool, entry in mcp.HANDOFFS.items():
+        assert not action_registry.is_sensitive(entry.verb), (
+            f"{tool} points a third party at sensitive verb {entry.verb!r}")
+
+
+def test_handoff_targets_are_verbs_this_surface_itself_refuses():
+    """The handoff exists BECAUSE the agent cannot do the thing. If a
+    target ever became agent-callable the sentence would be pointless."""
+    for tool, entry in mcp.HANDOFFS.items():
+        assert not action_registry.may_expose_to_agent(entry.verb), (
+            f"{entry.verb!r} is callable here — {tool} needs no handoff")
+
+
+@pytest.mark.parametrize("tool", sorted(_clean_payloads()))
+def test_silence_when_the_read_found_nothing_to_do(tool, monkeypatch):
+    """THE test. A handoff on a clean result is the failure mode: it tells
+    a practitioner there is work waiting when there is none."""
+    _allow_everything(monkeypatch)
+    payload = _clean_payloads()[tool]
+    assert mcp._handoff(tool, payload, _biz(), _caller()) is None
+
+
+def test_handoff_fires_when_the_read_found_work(monkeypatch):
+    _allow_everything(monkeypatch)
+    payload = {"type": "unbilled_time", "result": "14.5h unbilled",
+               "signal": {"entries": 6, "hours": 14.5, "amount": 2175.0}}
+    step = mcp._handoff("unbilled_time", payload, _biz(), _caller())
+    assert step is not None
+    assert step["verb"] == "create_invoice"
+    assert step["where"] == "Operate › Billing"
+    assert "invoice" in step["text"].lower()
+
+
+def test_predicate_reads_the_signal_not_the_prose(monkeypatch):
+    """Reworded prose must not move the decision. The guard against
+    regressing to string-matching a sentence."""
+    _allow_everything(monkeypatch)
+    found = {"signal": {"entries": 3}, "result": "nothing unbilled at all"}
+    empty = {"signal": {"entries": 0}, "result": "14.5h unbilled, invoice now"}
+    assert mcp._handoff("unbilled_time", found, _biz(), _caller()) is not None
+    assert mcp._handoff("unbilled_time", empty, _biz(), _caller()) is None
+
+
+def test_a_payload_with_no_signal_stays_silent(monkeypatch):
+    """An older handler, or one that changed shape, must not be guessed
+    at."""
+    _allow_everything(monkeypatch)
+    assert mcp._handoff("unbilled_time", {"result": "14.5h unbilled"},
+                        _biz(), _caller()) is None
+
+
+def test_contact_handoff_needs_real_quiet_not_a_missing_timestamp(monkeypatch):
+    _allow_everything(monkeypatch)
+    fresh = {"contact": {"name": "Dana", "last_interaction": _iso_days_ago(2)}}
+    quiet = {"contact": {"name": "Dana",
+                         "last_interaction": _iso_days_ago(mcp.QUIET_DAYS + 5)}}
+    blank = {"contact": {"name": "Dana"}}
+    assert mcp._handoff("contact_deep_dive", fresh, _biz(), _caller()) is None
+    assert mcp._handoff("contact_deep_dive", blank, _biz(), _caller()) is None
+    step = mcp._handoff("contact_deep_dive", quiet, _biz(), _caller())
+    assert step and "Dana" in step["text"]
+
+
+def test_handoff_is_suppressed_when_the_policy_engine_refuses(monkeypatch):
+    """Fails CLOSED, both ways. A refusal silences it, and an
+    authorisation answer we cannot get at all is not a licence to promise
+    the action anyway."""
+    import feature_gates
+    import policy_engine
+    monkeypatch.setattr(feature_gates, "has_feature", lambda biz, feat: True)
+
+    class _No:
+        allowed = False
+        reason = "vertical:client_facing_disabled"
+
+    monkeypatch.setattr(policy_engine, "evaluate", lambda *a, **k: _No())
+    payload = {"signal": {"entries": 6}}
+    assert mcp._handoff("unbilled_time", payload, _biz(), _caller()) is None
+
+    def _boom(*a, **k):
+        raise RuntimeError("policy down")
+
+    monkeypatch.setattr(policy_engine, "evaluate", _boom)
+    assert mcp._handoff("unbilled_time", payload, _biz(), _caller()) is None
+
+
+def test_handoff_is_suppressed_when_the_plan_excludes_the_feature(monkeypatch):
+    import feature_gates
+    import policy_engine
+
+    class _V:
+        allowed = True
+        reason = "chat:A"
+
+    monkeypatch.setattr(policy_engine, "evaluate", lambda *a, **k: _V())
+    monkeypatch.setattr(feature_gates, "has_feature", lambda biz, feat: False)
+    assert mcp._handoff("unbilled_time", {"signal": {"entries": 6}},
+                        _biz(), _caller()) is None
+
+
+def test_the_verb_is_recorded_but_never_sent(monkeypatch):
+    """The practitioner needs the sentence. Naming the verb invites the
+    agent to call something it will only be refused for."""
+    rows = _capture_rows(monkeypatch)
+
+    async def _ok(name, arguments, caller):
+        return True, True, {
+            "type": "unbilled_time", "result": "14.5h",
+            "next_step": {"text": "Chief can turn these hours into an invoice.",
+                          "where": "Operate › Billing",
+                          "verb": "create_invoice"}}, "biz-1"
+
+    monkeypatch.setattr(mcp, "_call_tool", _ok)
+    resp = _run(mcp._handle_rpc(
+        _rpc("tools/call", {"name": "unbilled_time", "arguments": {}}),
+        _caller(), "owner@x.com"))
+
+    wire = json.loads(resp["result"]["content"][0]["text"])
+    assert wire["next_step"]["where"] == "Operate › Billing"
+    assert "verb" not in wire["next_step"], "the verb must not reach the agent"
+    assert rows[0][1]["detail"] == {"handoff": "create_invoice"}
+
+
+def test_audit_detail_is_absent_when_no_handoff_fired(monkeypatch):
+    rows = _capture_rows(monkeypatch)
+    mcp._audit(actor="owner@x.com", tool="show_revenue", allowed=True,
+               ok=True, duration_ms=5, business_id="biz-1")
+    assert rows[0][1]["detail"] is None

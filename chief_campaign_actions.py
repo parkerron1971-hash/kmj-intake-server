@@ -222,6 +222,8 @@ async def handle_campaign_status(client, biz, action) -> Dict[str, Any]:
             "label": (f"'{camp.get('name')}' — {camp.get('status')}, "
                       f"{results['people_reached']} people reached"),
             "nav": _nav_campaigns(),
+            "signal": {"campaigns": 1, "unsent": 1 if camp.get("status") in
+                       ("draft", "paused") else 0},
         }
     rows = await asyncio.to_thread(cr.list_campaigns_core, biz["id"])
     if not rows:
@@ -232,8 +234,10 @@ async def handle_campaign_status(client, biz, action) -> Dict[str, Any]:
                        "and I'll draft one for review."),
             "label": "No campaigns yet",
             "nav": _nav_campaigns(),
+            "signal": {"campaigns": 0, "unsent": 0},
         }
     running = sum(1 for r in rows if r.get("status") == "running")
+    unsent = sum(1 for r in rows if r.get("status") in ("draft", "paused"))
     lines = "; ".join(_one_line(r) for r in rows[:6])
     more = f" (+{len(rows) - 6} older)" if len(rows) > 6 else ""
     return {
@@ -242,4 +246,5 @@ async def handle_campaign_status(client, biz, action) -> Dict[str, Any]:
         "label": (f"{len(rows)} campaign{'s' if len(rows) != 1 else ''}, "
                   f"{running} running"),
         "nav": _nav_campaigns(),
+        "signal": {"campaigns": len(rows), "running": running, "unsent": unsent},
     }

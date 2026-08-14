@@ -162,6 +162,7 @@ def _list_proposals_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[st
             "label": "Bookkeeping",
             "proposals": [],
             "nav": _nav_books(),
+            "signal": {"status": status, "total": 0},
         }
 
     named = [{"id": r.get("id"), "summary": _describe(r),
@@ -175,6 +176,7 @@ def _list_proposals_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[st
         "proposals": named,
         "total": len(rows),
         "nav": _nav_books(),
+        "signal": {"status": status, "total": len(rows)},
     }
 
 
