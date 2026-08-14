@@ -2356,9 +2356,18 @@ def render_home() -> str:
       .trust-item b{display:block;font-size:13px;font-weight:600;color:var(--text-primary);
         letter-spacing:-.01em;margin-bottom:3px;}
       .trust-item span{font-size:12.5px;color:var(--text-muted);line-height:1.5;}
-      .trust-head{max-width:680px;margin:0 auto 30px;text-align:center;}
-      .trust-head h2{margin:12px 0 10px;font-size:clamp(24px,3vw,34px);letter-spacing:-.02em;}
+      /* the head carries two beats now — who Chief is, then how it
+         behaves — so it is a touch wider and the paragraphs are spaced
+         by the block rather than by their own margins */
+      .trust-head{max-width:720px;margin:0 auto 30px;text-align:center;
+        display:flex;flex-direction:column;gap:11px;}
+      /* a column flex stretches its children, which turned the eyebrow
+         pill into a 720px-wide bar; only it needs to shrink to content */
+      .trust-head > .eyebrow{align-self:center;}
+      .trust-head h2{margin:4px 0 0;font-size:clamp(24px,3vw,34px);letter-spacing:-.02em;
+        text-wrap:balance;}
       .trust-head p{font-size:14.5px;color:var(--text-muted);line-height:1.6;margin:0;}
+      .trust-head p b{color:var(--text-primary);font-weight:600;}
       .trust-kicker{max-width:600px;margin:30px auto 0;text-align:center;font-family:var(--font-heading);
         font-size:16.5px;line-height:1.55;letter-spacing:-.01em;color:var(--text-muted);}
       .trust-kicker span{color:var(--text-primary);font-weight:600;}
@@ -2523,7 +2532,12 @@ def render_home() -> str:
       </div>
 
       <div class="fold-stage reveal reveal-delay-2" id="foldStage">
-        <div class="fold-cap"><span class="dot"></span><b>Mission Control</b> &middot; the first thing you see every day, <span id="heroCap">for a barber</span></div>
+        <!-- This caption is the first time the visitor meets the word
+             "Chief" — the panel below it says the name four more times
+             (top bar, sidebar, briefing, Quick Actions) and the page did
+             not define it until word ~566. So the caption carries the
+             role, and the name is never naked on first sight. -->
+        <div class="fold-cap"><span class="dot"></span><b>Mission Control</b> &middot; what Chief, your chief of staff, has ready each morning &mdash; <span id="heroCap">for a barber</span></div>
         <div class="app">
           <div class="app-top">
             <span class="at-mark"></span>
@@ -2611,12 +2625,22 @@ def render_home() -> str:
 </section>
 
 
-<section class="trust">
+<!-- MEET CHIEF — this band already answered "will it do something
+     dumb?" before the page had said what Chief IS. The name appeared 8
+     times before the first definition, which arrived at word ~566 of
+     1,884 and led with a negation ("Chief isn't a chatbot bolted onto a
+     dashboard"). The answer was already on the page as an 11px eyebrow
+     three screens down: chief of staff. Introduce the ROLE, then the
+     NAME — nobody knows "Chief", everybody knows what a chief of staff
+     does. "Autonomous, not unsupervised." is not lost: it leads the
+     conduct paragraph, which is the job it was always doing. -->
+<section class="trust" id="chief">
   <div class="container-xl">
     <div class="trust-head reveal">
-      <span class="eyebrow">The part most people skip</span>
-      <h2>Autonomous, not unsupervised.</h2>
-      <p>Chief runs your week on its own. It also asks first on anything that touches money, messages a client, or can&rsquo;t be taken back. Every action it takes is written down, explained in plain language, and reversible.</p>
+      <span class="eyebrow">Meet Chief</span>
+      <h2>Every business runs on a chief of staff. <span class="gradient-text">Yours is called Chief.</span></h2>
+      <p>A chief of staff is the one who knows what is going on, keeps the day moving, and handles what you shouldn&rsquo;t have to. Chief is yours &mdash; and it reads your real contacts, invoices, calendar and goals every turn, so it is never guessing at your business.</p>
+      <p><b>Autonomous, not unsupervised.</b> Chief runs your week on its own. It also asks first on anything that touches money, messages a client, or can&rsquo;t be taken back. Every action it takes is written down, explained in plain language, and reversible.</p>
     </div>
     <div class="trust-grid reveal">
         <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg><span><b>Asks before it acts</b>Refunds, bulk messages, anything irreversible: your call, every time.</span></div>
