@@ -152,6 +152,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 # work on Haiku. Kevin's 2026-07-03 ruling (drafts ride the
 # conversational tier) is preserved as the draft-lane default.
 import chief_models
+import chief_prewarm
 import fallback_brain
 # The Business Track. Safe to import at module scope: everything it needs
 # from here is imported inside its functions, so there is no import cycle.
@@ -5631,6 +5632,62 @@ async def _fetch_business_settings(client, biz_id: str) -> Tuple[Optional[Dict[s
     if not isinstance(settings, dict):
         settings = {}
     return biz, settings
+
+
+def _context_sources(client, biz: Dict[str, Any]) -> Dict[str, Tuple[Any, Any]]:
+    """The message-INDEPENDENT half of a turn's context enrichment, as
+    {name: (factory, fallback)}.
+
+    Everything in here depends only on WHO is asking — never on WHAT they
+    said. That property is the whole reason /agents/chief/prewarm can run
+    it while the practitioner is still mid-sentence and hand the result
+    to the turn that follows.
+
+    This is deliberately ONE list used by both the prewarm endpoint and
+    chief_chat. Two copies would drift, and the way they would drift is
+    someone adding a message-dependent source to the prewarm side — at
+    which point Chief starts answering the previous question's context.
+    Anything that reads req.message (the vertical-learned block, semantic
+    memory recall) stays OUT and is built fresh in the turn.
+
+    Factories, not coroutines: a warmed source must never even construct
+    the call it isn't going to make.
+    """
+    biz_id = biz["id"]
+    biz_type = biz.get("type") if isinstance(biz, dict) else None
+
+    async def _bookkeeping():
+        # Phase G — live bank data so Chief can answer money questions.
+        # Sync module off-thread; "" when no bank is linked.
+        import chief_bookkeeping
+        return await asyncio.to_thread(
+            chief_bookkeeping.gather_and_format, biz_id, biz_type)
+
+    return {
+        "voice_examples":        (lambda: _get_voice_examples(client, biz_id), ""),
+        "session_context":       (lambda: _get_session_context(client, biz_id), ""),
+        "mentor_active":         (lambda: _should_show_mentor_tip(client, biz), False),
+        "forecast":              (lambda: _forecast_revenue(client, biz_id), None),
+        "relationship_insights": (lambda: _analyze_relationships(client, biz_id), []),
+        "time_block":            (lambda: _get_time_context(client, biz_id), ""),
+        "habit_block":           (lambda: _get_habit_insights(client, biz_id), ""),
+        "bookkeeping_block":     (_bookkeeping, ""),
+    }
+
+
+async def _resolve_source(warm: Dict[str, Any], name: str, factory, fallback):
+    """A warmed value if the prewarm left one, otherwise fetch it now.
+
+    Failure isolation is identical either way: a source that raises
+    degrades to its own fallback and never the turn.
+    """
+    if name in warm:
+        return warm[name]
+    try:
+        return await factory()
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"context source {name} failed: {e}")
+        return fallback
 
 
 def _planned_post_present(rows: Any, post_id: str) -> bool:
@@ -15688,16 +15745,6 @@ async def chief_chat(
                     logger.warning(f"{label} failed: {e}")
                     return fallback
 
-            async def _bookkeeping():
-                # Phase G — live bank data so Chief can answer money
-                # questions. Sync module off-thread; "" when no bank is
-                # linked. Never breaks the prompt.
-                import chief_bookkeeping
-                return await asyncio.to_thread(
-                    chief_bookkeeping.gather_and_format,
-                    req.business_id, (biz.get("type") if isinstance(biz, dict) else None),
-                )
-
             async def _learned():
                 # Feed 2 (LAYER_TWO_ARCHITECTURE §6) — what OTHER
                 # businesses in this vertical have taught the system,
@@ -15720,27 +15767,36 @@ async def chief_chat(
                 return await asyncio.to_thread(
                     _cps.maybe_emit_proactive_suggestions, biz)
 
-            (voice_examples, session_context, mentor_active, forecast,
-             relationship_insights, time_block, habit_block,
-             bookkeeping_block, learned_block, _) = await asyncio.gather(
-                _enrich("_get_voice_examples",
-                        _get_voice_examples(client, req.business_id), ""),
-                _enrich("_get_session_context",
-                        _get_session_context(client, req.business_id), ""),
-                _enrich("_should_show_mentor_tip",
-                        _should_show_mentor_tip(client, biz), False),
-                _enrich("_forecast_revenue",
-                        _forecast_revenue(client, req.business_id), None),
-                _enrich("_analyze_relationships",
-                        _analyze_relationships(client, req.business_id), []),
-                _enrich("_get_time_context",
-                        _get_time_context(client, req.business_id), ""),
-                _enrich("_get_habit_insights",
-                        _get_habit_insights(client, req.business_id), ""),
-                _enrich("bookkeeping context", _bookkeeping(), ""),
+            # Mic-open prewarm (Kevin, 8/14): if /agents/chief/prewarm ran
+            # while the practitioner was still talking, the eight
+            # message-independent sources are already sitting here and
+            # cost this turn nothing. A miss returns {} and every source
+            # is fetched exactly as before — the hit is an optimisation,
+            # never a correctness dependency.
+            warm = chief_prewarm.take(
+                getattr(getattr(user_session, "user", None), "id", None),
+                req.business_id,
+            )
+            if warm:
+                logger.info(f"[Chief] prewarm hit: {len(warm)} sources ready")
+
+            sources = _context_sources(client, biz)
+            _names = list(sources.keys())
+            _results = await asyncio.gather(
+                *[_resolve_source(warm, n, *sources[n]) for n in _names],
                 _enrich("vertical learned context", _learned(), ""),
                 _enrich("proactive emit (non-blocking)", _proactive(), None),
             )
+            _ctx_vals = dict(zip(_names, _results))
+            voice_examples = _ctx_vals["voice_examples"]
+            session_context = _ctx_vals["session_context"]
+            mentor_active = _ctx_vals["mentor_active"]
+            forecast = _ctx_vals["forecast"]
+            relationship_insights = _ctx_vals["relationship_insights"]
+            time_block = _ctx_vals["time_block"]
+            habit_block = _ctx_vals["habit_block"]
+            bookkeeping_block = _ctx_vals["bookkeeping_block"]
+            learned_block = _results[len(_names)]
 
             # Pure, no I/O — computed off what the gather returned.
             priorities = _build_daily_priorities(biz, ctx) if is_greeting else []
@@ -16312,6 +16368,69 @@ async def chief_chat_stream(
         # Disable proxy buffering so deltas reach the client immediately.
         "X-Accel-Buffering": "no",
     })
+
+
+class PrewarmRequest(BaseModel):
+    business_id: str
+
+
+@router.post("/agents/chief/prewarm")
+async def chief_prewarm_endpoint(
+    req: PrewarmRequest,
+    user_session: UserSession = Depends(require_user_session),
+):
+    """Start gathering a turn's context while the practitioner is still
+    talking. Called when the mic opens.
+
+    Fetches only the sources that depend on WHO is asking and not on what
+    they say (_context_sources — the same list chief_chat consumes), and
+    parks them for TTL_SECONDS keyed to this practitioner + business. The
+    next turn picks them up and skips the fetch.
+
+    What this deliberately does NOT do is call the model. Guessing a
+    reply from half a sentence spends tokens on words that get retracted
+    — people change direction mid-thought. Nothing here writes, spends,
+    or decides anything; it is the same reads the turn would have done,
+    moved earlier.
+
+    Always 200. A prewarm is an optimisation, and a failed optimisation
+    must look to the client exactly like one that wasn't worth doing —
+    never like an error the practitioner should see.
+    """
+    _jwt_token = sb_clients.set_user_jwt(user_session.token)
+    try:
+        user_id = getattr(getattr(user_session, "user", None), "id", None)
+
+        # Mic-tap throttle: four taps must not fan out four sweeps.
+        if not chief_prewarm.should_rewarm(user_id, req.business_id):
+            return {"ok": True, "warmed": 0, "reason": "already warm"}
+
+        async with httpx.AsyncClient() as client:
+            # Under the practitioner's OWN JWT, so RLS decides whether
+            # this business is theirs to read. A caller naming someone
+            # else's business_id gets no row and warms nothing — the
+            # cache can only ever be filled with rows RLS already
+            # allowed, and it is keyed by user besides.
+            rows = await _sb(client, "GET",
+                             f"/businesses?id=eq.{req.business_id}"
+                             f"&select=id,name,type,settings,owner_id&limit=1")
+            biz = (rows or [None])[0]
+            if not biz:
+                return {"ok": True, "warmed": 0, "reason": "no such business"}
+
+            sources = _context_sources(client, biz)
+            names = list(sources.keys())
+            results = await asyncio.gather(
+                *[_resolve_source({}, n, *sources[n]) for n in names])
+
+        payload = dict(zip(names, results))
+        chief_prewarm.store(user_id, req.business_id, payload)
+        return {"ok": True, "warmed": len(payload)}
+    except Exception as e:
+        logger.warning(f"chief prewarm failed (non-blocking): {e}")
+        return {"ok": True, "warmed": 0, "reason": "unavailable"}
+    finally:
+        sb_clients.reset_user_jwt(_jwt_token)
 
 
 @router.get("/agents/chief/activity")
