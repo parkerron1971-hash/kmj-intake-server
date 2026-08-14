@@ -438,9 +438,34 @@ def _gone_quiet(payload: Dict[str, Any]) -> bool:
 
 
 def _contact_name(payload: Dict[str, Any]) -> str:
+    """The contact's name, DEFUSED, for use inside a handoff sentence.
+
+    A contact name is third-party-authored — public intake forms write
+    it — and this is the one place a handoff interpolates untrusted text
+    into a sentence built to be read aloud by an agent. `catch_up`
+    already runs contact names through the same defusing before putting
+    them in Chief-facing prose; a surface that hands text to somebody
+    else's agent has less excuse to skip it, not more.
+
+    Length-bounded for the same reason: the sentence is the product, and
+    a name is a name.
+    """
     contact = payload.get("contact")
-    name = (contact or {}).get("name") if isinstance(contact, dict) else None
-    return str(name).strip() if name else "this contact"
+    raw = (contact or {}).get("name") if isinstance(contact, dict) else None
+    if not raw:
+        return "this contact"
+    try:
+        import untrusted_text
+        clean, found = untrusted_text.strip_action_tags(raw)
+        if found:
+            logger.warning("[mcp] neutralised action-tag syntax in a contact "
+                           "name before putting it in a handoff sentence")
+    except Exception:
+        # The defuser is the reason this text is safe to interpolate. If
+        # it cannot run, drop the name rather than pass it through raw.
+        return "this contact"
+    clean = " ".join(str(clean).split())[:80].strip()
+    return clean or "this contact"
 
 
 # The table. Deliberately short. Boilerplate on every response teaches
