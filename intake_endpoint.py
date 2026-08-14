@@ -46,11 +46,17 @@ Pipeline:
     1. Validate submission against form config
     2. Create contact in contacts table
     3. Log event in events table
-    4. AI scores the lead (0-100)
+    4. Score the lead 0-100 via lead_scoring — the SHARED rubric, the
+       same one the composed-site contact form, the site concierge and
+       the booking widget now run. This module used to be the only
+       writer of contacts.lead_score in the whole backend, which is why
+       every reader gated on that column went quiet for leads arriving
+       through any other door.
     5. AI drafts a personalized response
     6. Insert draft into agent_queue for approval
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -59,6 +65,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+import lead_scoring
 import llm_call
 import rate_limit
 from fastapi import APIRouter, HTTPException, Request
@@ -91,8 +98,8 @@ def _intake_rate_ok(ip: str) -> bool:
 
 ANTHROPIC_VERSION = "2023-06-01"
 
-# Models — same as ai_proxy.py
-SCORE_MODEL = "claude-sonnet-4-5-20250929"
+# Scoring moved to lead_scoring (one rubric, every door) and runs on a
+# cheap model there. What is left here is the draft.
 DRAFT_MODEL = "claude-sonnet-4-5-20250929"
 
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
@@ -487,54 +494,30 @@ async def submit_intake(req: IntakeSubmission, request: Request):
             except Exception as e:
                 logger.exception(f"field_routes rule failed: {e}")
 
-        # ── 5. AI: Score the lead ─────────────────────────────────────
-        lead_score = 50  # default if AI fails
-        score_reasoning = "Default score — AI scoring unavailable"
-        response_type = "general"
-        priority = "medium"
-
-        if get_anthropic_key():
-            score_system = f"""You are a lead scoring agent for {business_name}, a {business_type} business.
-
-Score this intake form submission from 0-100 based on:
-- Completeness: how many fields did they fill out vs leave blank?
-- Engagement signals: did they write detailed responses or minimal ones?
-- Match: does this person match the target audience? (Voice profile: {json.dumps(voice_profile)})
-- Intent: are they ready to engage or just browsing?
-
-Also determine:
-- response_type: "warm_welcome" (church/ministry visitor), "discovery_invite" (coaching/consulting prospect ready to talk), "info_send" (early-stage, send capabilities overview), "nurture" (low intent, add to drip)
-- priority: "high" (score 70+), "medium" (40-69), "low" (under 40)
-
-RESPOND ONLY WITH VALID JSON:
-{{
-  "score": 75,
-  "reasoning": "why you scored this way — be specific about the signals",
-  "response_type": "discovery_invite",
-  "priority": "high"
-}}"""
-
-            submission_summary = "\n".join(
-                f"- {k}: {v}" for k, v in submission_data.items() if v
-            )
-            score_msg = f"Form type: {form_config.get('form_type', 'general')}\nSubmission:\n{submission_summary}"
-
-            score_raw = await call_claude(client, score_system, score_msg, SCORE_MODEL, 500)
-            if score_raw:
-                score_json = parse_json_from_ai(score_raw)
-                lead_score = max(0, min(100, int(score_json.get("score", 50))))
-                score_reasoning = score_json.get("reasoning", score_reasoning)
-                response_type = score_json.get("response_type", response_type)
-                priority = score_json.get("priority", priority)
-
-            logger.info(f"Scored contact {contact_id}: {lead_score} ({priority})")
-
-        # ── 6. Update contact with score ──────────────────────────────
-        await supabase_request(
-            client, "PATCH",
-            f"/contacts?id=eq.{contact_id}",
-            {"lead_score": lead_score, "health_score": min(lead_score + 10, 100)},
+        # ── 5. Score the lead ─────────────────────────────────────────
+        # One rubric, shared with every other capture door (lead_scoring).
+        # This used to be a bespoke prompt here — the only place in the
+        # backend that ever wrote contacts.lead_score, which is why the
+        # hot-lead alert, the Hot Leads list, Chief's briefing and the
+        # proposal agent could only ever see intake-form leads.
+        #
+        # Awaited rather than backgrounded HERE, unlike the other doors:
+        # the draft below reads the score, and this endpoint is already
+        # blocking on an LLM call for that draft.
+        submission_summary = "\n".join(
+            f"- {k}: {v}" for k, v in submission_data.items() if v
         )
+        scored = await asyncio.to_thread(
+            lead_scoring.score_and_store,
+            req.business_id, contact_id, submission_data,
+            source="intake_form", email=email, phone=phone,
+            business_name=business_name, business_type=business_type,
+        )
+        lead_score = scored.score
+        score_reasoning = scored.reasoning
+        response_type = scored.response_type
+        priority = scored.priority
+        logger.info(f"Scored contact {contact_id}: {lead_score} ({priority})")
 
         # ── 7. AI: Draft response ─────────────────────────────────────
         draft_subject = f"Thanks for reaching out, {name}!"
@@ -553,11 +536,16 @@ Business voice: tone is "{tone}", personality is "{personality}", audience is "{
 Business type: {business_type}
 Response type: {response_type}
 
-Guidelines by response_type:
-- warm_welcome: Warm, inviting. Thank them for connecting. Mention next steps (visit, call, event).
-- discovery_invite: Professional, enthusiastic. Propose a brief discovery call. Mention specific value.
-- info_send: Informative, no pressure. Share what you do. Include a soft CTA.
-- nurture: Light touch. Acknowledge interest. No hard sell. Offer a resource.
+Guidelines by response_type — the shape of the reply, not the trade.
+A church visitor and a new gym member both want `welcome`; a consulting
+prospect and a roofing estimate both want `book_time`:
+- welcome: Warm, inviting. Thank them for connecting. Name the next step
+  (a visit, a call, an event) in their words, not in industry language.
+- book_time: Direct and glad to hear from them. Propose a specific time
+  to talk, and say what you will cover.
+- answer_then_offer: They asked something concrete. Answer that first,
+  in the first two lines. Only then offer the next step.
+- nurture: Light touch. Acknowledge interest. No hard sell.
 
 RESPOND ONLY WITH VALID JSON:
 {{
@@ -585,7 +573,7 @@ RESPOND ONLY WITH VALID JSON:
             "status": "draft",
             "priority": priority,
             "ai_reasoning": f"Lead score: {lead_score}/100. {score_reasoning}",
-            "ai_model": SCORE_MODEL,
+            "ai_model": DRAFT_MODEL,
         })
 
         logger.info(

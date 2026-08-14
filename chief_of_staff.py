@@ -13034,10 +13034,17 @@ def _build_daily_priorities(biz: Dict[str, Any], ctx: Dict[str, Any]) -> List[st
             f"${total:,.0f} in overdue invoices across {len(overdue)} client(s)."
         )
 
-    # Hot leads
+    # Hot leads — read lead_score, the field that now exists on every
+    # door. This tested health_score > 70, which worked only because
+    # intake_endpoint wrote health_score = lead_score + 10; no other
+    # capture path set either, so Chief's briefing could only ever see
+    # intake-form leads. health_score stays as the fallback for rows
+    # scored before lead_scoring landed.
     hot_leads = [
         c for c in (ctx.get("contacts") or [])
-        if c.get("status") == "lead" and (c.get("health_score") or 0) > 70
+        if c.get("status") == "lead"
+        and (c.get("lead_score") if c.get("lead_score") is not None
+             else (c.get("health_score") or 0)) > 70
     ]
     if hot_leads:
         out.append(

@@ -803,7 +803,8 @@ async def book_anon(
     # 1. Dedupe-on-email: find or create a contact for the business first.
     #    Per the ruling: walk-in flow MUST check for existing contact and
     #    link instead of creating a duplicate.
-    contact_id = _find_or_create_contact(business_id, body.name, email_norm)
+    contact_id = _find_or_create_contact(business_id, body.name, email_norm,
+                                         submission=body.data)
 
     # 2. Find or create a business_customers row (unique on biz + lower(email)).
     customer_id = _find_or_create_customer(business_id, contact_id, email_norm, body.name)
@@ -1054,7 +1055,8 @@ def _schedule_confirmation_sms(biz: Optional[Dict[str, Any]],
         logger.warning(f"confirmation sms scheduling failed: {e}")
 
 
-def _find_or_create_contact(business_id: str, name: str, email_lower: str) -> str:
+def _find_or_create_contact(business_id: str, name: str, email_lower: str,
+                            submission: Optional[Dict[str, Any]] = None) -> str:
     """Per ruling: walk-in flow MUST check for existing contact on the
     business with the same email and link instead of creating a duplicate.
     Returns contact_id.
@@ -1102,7 +1104,18 @@ def _find_or_create_contact(business_id: str, name: str, email_lower: str) -> st
             status_code=500,
             detail="Something went wrong on our end — please try again.",
         )
-    return created[0]["id"]
+    contact_id = created[0]["id"]
+
+    # Score it, on a worker thread. Only on CREATE: an existing contact
+    # booking again is a returning customer, not a fresh lead to
+    # qualify. `booking_widget` earns a rubric bonus — they committed to
+    # a time, which is a stronger signal than any form field.
+    import lead_scoring
+    lead_scoring.score_in_background(
+        business_id, contact_id,
+        dict(submission or {}, name=name, email=email_lower),
+        source="booking_widget", email=email_lower)
+    return contact_id
 
 
 def _find_or_create_customer(
