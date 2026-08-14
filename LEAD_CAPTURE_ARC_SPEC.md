@@ -99,7 +99,7 @@ empty day still bought a Sonnet call to be told the runway was clear.
 On a schedule across every active business that is the bulk of the
 spend, all of it on nothing. `has_anything_to_report()` gates it.
 
-### PR 3 — Two defects  ← **in flight**
+### PR 3 — Two defects  ✅ **SHIPPED #576**
 
 - **Cross-tenant write.** `intake_endpoint.py:382` fetches the form by
   id alone, then writes the contact under the caller-supplied
@@ -118,8 +118,15 @@ spend, all of it on nothing. `has_anything_to_report()` gates it.
 - Dead honeypot: `intake_endpoint.py:367` checks `_hp` / `website_url`
   / `company_url` / `fax`; `IntakeFormBuilder.getEmbedCode()` renders
   only the configured fields, so no honeypot input is ever emitted and
-  the guard cannot trip. Emit one. **This half is FRONTEND** — it ships
-  as its own PR on `solutionist-studio`, not here.
+  the guard cannot trip. **Worse than dead — actively dropping leads.**
+  `IntakeFormBuilder.tsx:542` derives a field's `name` from its label
+  (`lowercase`, `[^a-z0-9]+` → `_`, strip edge `_`), so "Fax" → `fax`,
+  "Website URL" → `website_url`, "Company URL" → `company_url` — three
+  of the four honeypot names. Any form carrying one of those fields
+  discarded 100% of its submissions and answered 200 to every one.
+  Names are collision-proof by construction now (`sol-hp`, `_hp`), and
+  the trip logs at WARNING with the form id. Shipped as **PR 3b** here
+  plus a frontend PR that emits the field.
 
 **Found fixing the limiter:** `site_concierge._visitor_key` hashed the
 same `request.client.host` into its per-VISITOR identity, which feeds

@@ -98,6 +98,28 @@ def _intake_rate_ok(ip: str) -> bool:
 
 ANTHROPIC_VERSION = "2023-06-01"
 
+# THE HONEYPOT NAMES, AND WHY THEY LOOK LIKE THIS.
+#
+# These have to be unreachable by a real field, and the previous list —
+# ("_hp", "website_url", "company_url", "fax") — was not.
+# IntakeFormBuilder derives a field's `name` from its label:
+#
+#     label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+#
+# So a practitioner who labelled a field "Fax" got name='fax'.
+# "Website URL" got 'website_url'. "Company URL" got 'company_url'.
+# Every one of those was on the list. Any form carrying such a field
+# silently discarded 100% of its submissions and answered 200 to every
+# single one — no error, no row, no log the practitioner could see. A
+# lead-loss bug that is invisible from the outside by design, because
+# silence is what a working honeypot is supposed to look like.
+#
+# A hyphen cannot survive that transform, and neither can a leading
+# underscore (it is stripped). Both names below are therefore
+# collision-proof by CONSTRUCTION rather than by luck. `_hp` is kept
+# because embeds already in the wild send it.
+HONEYPOT_FIELDS = ("sol-hp", "_hp")
+
 # Scoring moved to lead_scoring (one rubric, every door) and runs on a
 # cheap model there. What is left here is the draft.
 DRAFT_MODEL = "claude-sonnet-4-5-20250929"
@@ -367,15 +389,6 @@ async def submit_intake(req: IntakeSubmission, request: Request):
         raise HTTPException(status_code=429, detail="Too many submissions — please wait a minute and try again.")
 
     submission_data = req.data
-    # Honeypot: a hidden field bots fill and humans never see. Forms may
-    # include any of these names; if one arrives non-empty, drop silently
-    # (200 so the bot gets no signal) without creating a contact or
-    # spending an AI call.
-    for hp in ("_hp", "website_url", "company_url", "fax"):
-        if str(submission_data.get(hp) or "").strip():
-            logger.info(f"[intake] honeypot tripped ({hp}) ip={client_ip} — dropped")
-            return {"status": "ok", "contact_id": None, "queued": False}
-
     name = submission_data.get("name", "").strip()
     email = submission_data.get("email", "").strip()
     phone = submission_data.get("phone", "").strip()
@@ -411,6 +424,29 @@ async def submit_intake(req: IntakeSubmission, request: Request):
                 f"[intake] business_id mismatch — form {req.form_id} belongs to "
                 f"{form_config.get('business_id')}, caller claimed {req.business_id}")
             raise HTTPException(status_code=404, detail="Form not found")
+
+        # ── 1b. Honeypot ──────────────────────────────────────────────
+        # A hidden field bots fill and humans never see. A non-empty
+        # value drops the submission — 200, so the bot gets no signal —
+        # without creating a contact or spending an AI call.
+        #
+        # THIS RUNS AFTER THE FORM IS KNOWN, ON PURPOSE. A honeypot's
+        # whole job is to be silent, which means when it is WRONG it is
+        # also silent: the practitioner sees a form that eats
+        # submissions and returns success, with nothing anywhere to
+        # explain it. That has already happened once here — see
+        # HONEYPOT_FIELDS. Two cheap reads buy a log line that names the
+        # form and the field, so "my form loses leads" is one search
+        # away instead of unfalsifiable. WARNING, not INFO: a trip is
+        # either a bot worth knowing about or a human being thrown away.
+        for hp in HONEYPOT_FIELDS:
+            if str(submission_data.get(hp) or "").strip():
+                logger.warning(
+                    f"[intake] honeypot '{hp}' tripped — form={req.form_id} "
+                    f"business={req.business_id} ip={client_ip} — submission "
+                    f"DROPPED. If this fires for real people, a real field "
+                    f"is colliding with a honeypot name.")
+                return {"status": "ok", "contact_id": None, "queued": False}
 
         # Validate required fields
         fields = form_config.get("fields", [])
