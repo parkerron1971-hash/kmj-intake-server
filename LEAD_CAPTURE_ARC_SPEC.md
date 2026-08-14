@@ -66,7 +66,7 @@ having arrived through one particular form.
 Booking is deliberately **not** wired to the hot-lead alert — someone
 who already picked a time is not a lead to chase today.
 
-### PR 2 — The alarms actually ring  ← **in flight**
+### PR 2 — The alarms actually ring  ✅ **SHIPPED #575**
 
 `notification_engine`'s `check_urgent` / `morning_brief` /
 `midday_ping` / `evening_summary` are imported as a **router only**
@@ -99,7 +99,7 @@ empty day still bought a Sonnet call to be told the runway was clear.
 On a schedule across every active business that is the bulk of the
 spend, all of it on nothing. `has_anything_to_report()` gates it.
 
-### PR 3 — Two defects
+### PR 3 — Two defects  ← **in flight**
 
 - **Cross-tenant write.** `intake_endpoint.py:382` fetches the form by
   id alone, then writes the contact under the caller-supplied
@@ -118,7 +118,15 @@ spend, all of it on nothing. `has_anything_to_report()` gates it.
 - Dead honeypot: `intake_endpoint.py:367` checks `_hp` / `website_url`
   / `company_url` / `fax`; `IntakeFormBuilder.getEmbedCode()` renders
   only the configured fields, so no honeypot input is ever emitted and
-  the guard cannot trip. Emit one.
+  the guard cannot trip. Emit one. **This half is FRONTEND** — it ships
+  as its own PR on `solutionist-studio`, not here.
+
+**Found fixing the limiter:** `site_concierge._visitor_key` hashed the
+same `request.client.host` into its per-VISITOR identity, which feeds
+the daily message cap. Keyed on the proxy, two strangers running the
+same browser shared one identity and one person's conversation ate
+another's allowance. Same one-line cause, worse consequence than the
+rate limit.
 
 ### PR 4 — The first-response clock
 
