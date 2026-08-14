@@ -226,3 +226,105 @@ def test_every_source_failing_at_once_still_answers(turn, monkeypatch):
         monkeypatch.setattr(cos, name, _boom)
     _, out = turn()
     assert out["response"] == "All good."
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Mic-open prewarm — the turn spends nothing on what was already loaded
+# while the practitioner was still talking.
+#
+# Counted, not timed. Since the enrichment block became concurrent, a
+# COLD turn also costs about one delay — so wall clock can no longer
+# tell "eight sources were skipped" from "eight sources ran together".
+# The fetch count can, and it has no variance.
+# ─────────────────────────────────────────────────────────────────────
+
+WARMABLE = ["_get_voice_examples", "_get_session_context",
+            "_should_show_mentor_tip", "_forecast_revenue",
+            "_analyze_relationships", "_get_time_context",
+            "_get_habit_insights"]
+
+
+def _count_sources(monkeypatch):
+    """Replace every warmable source with a counter. Returns the dict."""
+    hits = {}
+
+    def _mk(name, value):
+        async def inner(*a, **k):
+            hits[name] = hits.get(name, 0) + 1
+            return value
+        return inner
+
+    for name, value in zip(WARMABLE, ["", "", False, None, [], "", ""]):
+        monkeypatch.setattr(cos, name, _mk(name, value))
+
+    import chief_bookkeeping
+
+    def _books(*a, **k):
+        hits["bookkeeping"] = hits.get("bookkeeping", 0) + 1
+        return ""
+    monkeypatch.setattr(chief_bookkeeping, "gather_and_format", _books)
+    return hits
+
+
+_WARM_PAYLOAD = {
+    "voice_examples": "", "session_context": "", "mentor_active": False,
+    "forecast": None, "relationship_insights": [], "time_block": "",
+    "habit_block": "", "bookkeeping_block": "",
+}
+
+
+def test_a_prewarmed_turn_refetches_nothing(turn, monkeypatch):
+    import chief_prewarm
+    chief_prewarm.clear()
+    hits = _count_sources(monkeypatch)
+    # Stand in for the prewarm the mic fired while Kevin was still talking.
+    chief_prewarm.store("user-1", "biz-1", dict(_WARM_PAYLOAD))
+    try:
+        _, out = turn(delay=0.0)
+        assert out["response"] == "All good."
+        assert hits == {}, (
+            f"the turn re-fetched {sorted(hits)} after the mic-open prewarm "
+            f"had already loaded it — the prewarm bought nothing"
+        )
+    finally:
+        chief_prewarm.clear()
+
+
+def test_a_cold_turn_fetches_everything_itself(turn, monkeypatch):
+    """The other half of the claim: with nothing warm, every source still
+    runs. A prewarm that 'worked' by dropping context is not a fix."""
+    import chief_prewarm
+    chief_prewarm.clear()
+    hits = _count_sources(monkeypatch)
+    _, out = turn(delay=0.0)
+    assert out["response"] == "All good."
+    assert len(hits) == 8 and all(v == 1 for v in hits.values()), hits
+
+
+def test_a_prewarm_for_another_practitioner_is_not_used(turn, monkeypatch):
+    """Isolation, proven through a real turn rather than the cache alone."""
+    import chief_prewarm
+    chief_prewarm.clear()
+    hits = _count_sources(monkeypatch)
+    chief_prewarm.store("someone-else", "biz-1", dict(_WARM_PAYLOAD))
+    try:
+        turn(delay=0.0)
+        assert len(hits) == 8, (
+            "this turn belongs to user-1 — it must fetch its own context, "
+            "never read what was warmed for another practitioner"
+        )
+    finally:
+        chief_prewarm.clear()
+
+
+def test_an_expired_prewarm_is_not_used(turn, monkeypatch):
+    import chief_prewarm
+    chief_prewarm.clear()
+    hits = _count_sources(monkeypatch)
+    chief_prewarm.store("user-1", "biz-1", dict(_WARM_PAYLOAD))
+    monkeypatch.setattr(chief_prewarm, "TTL_SECONDS", -1.0)
+    try:
+        turn(delay=0.0)
+        assert len(hits) == 8, "a stale prewarm must be refetched, not reused"
+    finally:
+        chief_prewarm.clear()
