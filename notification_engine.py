@@ -517,16 +517,26 @@ async def create_urgent_alert(
     related_contact_id: Optional[str] = None,
     related_module_id: Optional[str] = None,
     related_session_id: Optional[str] = None,
+    dedup_hours: Optional[int] = None,
 ) -> Optional[Dict]:
     """Create an urgent_alert notification. Other agents import + call this.
     Honors a per-business urgent_alerts_enabled setting and dedups on
-    dedup_key within URGENT_DEDUP_HOURS."""
+    dedup_key within URGENT_DEDUP_HOURS.
+
+    `dedup_hours` widens that window for alerts about a STANDING
+    condition rather than a moment. A hot lead arriving is an event and
+    an hour is right; a lead that has gone unanswered is a state that
+    persists, and re-raising it hourly is how a notification surface
+    teaches people to ignore it.
+    """
     biz_rows = await _sb(client, "GET", f"/businesses?id=eq.{business_id}&select=*&limit=1")
     if not biz_rows:
         return None
     if not await _settings_allow(client, biz_rows[0], "urgent_alerts"):
         return None
-    if dedup_key and await _dedup_key_exists(client, business_id, dedup_key):
+    if dedup_key and await _dedup_key_exists(
+            client, business_id, dedup_key,
+            hours=dedup_hours if dedup_hours is not None else URGENT_DEDUP_HOURS):
         return None
 
     payload_extra = dict(action_payload or {})
@@ -664,6 +674,142 @@ async def urgent_candidates(client, now: Optional[datetime] = None) -> List[str]
     seen = {str(r["business_id"]) for r in (events or []) if r.get("business_id")}
     seen |= {str(r["business_id"]) for r in (sessions or []) if r.get("business_id")}
     return sorted(seen)
+
+
+# ─── the lead nobody answered ────────────────────────────────────────
+
+# Hours a lead may wait before it is worth interrupting somebody about.
+# Per-business override: settings.notifications.lead_response_hours.
+LEAD_WAIT_HOURS = int(os.environ.get("LEAD_WAIT_ALERT_HOURS", "4"))
+
+# The floor the platform-wide query uses. Per-business thresholds are
+# applied in memory afterwards, so this only has to be lower than the
+# lowest one anybody could sensibly set.
+LEAD_WAIT_FLOOR_HOURS = 1
+
+# Re-raising a standing condition hourly is how a notification surface
+# gets muted. Once a day per business.
+LEAD_WAIT_DEDUP_HOURS = 24
+
+# Businesses do not store a timezone (see push_notifications), so the
+# same UTC compromise applies here: 13:00-23:00 UTC is roughly 9am-7pm
+# Eastern, 6am-4pm Pacific. Nobody needs to be told at three in the
+# morning that a lead came in at midnight and is still waiting — and an
+# alarm that goes off at 3am is an alarm that gets turned off.
+LEAD_WAIT_QUIET_BEFORE_UTC = 13
+LEAD_WAIT_QUIET_AFTER_UTC = 23
+
+
+def _within_waking_hours(now: Optional[datetime] = None) -> bool:
+    now = now or datetime.now(timezone.utc)
+    return LEAD_WAIT_QUIET_BEFORE_UTC <= now.hour < LEAD_WAIT_QUIET_AFTER_UTC
+
+
+def _hours_since(ts: Any, now: datetime) -> Optional[float]:
+    if not isinstance(ts, str):
+        return None
+    try:
+        at = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if not at.tzinfo:
+        at = at.replace(tzinfo=timezone.utc)
+    return (now - at).total_seconds() / 3600.0
+
+
+async def unanswered_lead_sweep(now: Optional[datetime] = None) -> Dict:
+    """Raise ONE alert per business for leads nobody has answered.
+
+    Reads contacts.first_response_at, which lead_response.reconcile_tick
+    materialises from the outbound record. Null means genuinely nobody
+    has replied — not merely that this module has not looked.
+
+    ONE ALERT PER BUSINESS, NOT ONE PER LEAD. A business with thirty
+    leads waiting does not need thirty notifications; it needs to be
+    told there are thirty and which one has waited longest. Per-lead
+    alerts are how a surface stops being read.
+    """
+    now = now or datetime.now(timezone.utc)
+    if not _within_waking_hours(now):
+        return {"skipped": "quiet_hours", "hour_utc": now.hour}
+
+    cutoff = _z(now - timedelta(hours=LEAD_WAIT_FLOOR_HOURS))
+    async with httpx.AsyncClient() as client:
+        waiting = await _sb(client, "GET",
+            f"/contacts?status=eq.lead&first_response_at=is.null"
+            f"&created_at=lte.{cutoff}"
+            f"&select=id,name,business_id,created_at,lead_score,source"
+            f"&order=created_at.asc&limit=1000") or []
+        if not waiting:
+            return {"businesses": 0, "alerts": 0}
+
+        by_biz: Dict[str, List[Dict]] = {}
+        for c in waiting:
+            bid = str(c.get("business_id") or "")
+            if bid:
+                by_biz.setdefault(bid, []).append(c)
+
+        active = set(await _all_active_business_ids(client))
+        alerts = 0
+        for bid, leads in by_biz.items():
+            if bid not in active:
+                continue
+            try:
+                biz_rows = await _sb(client, "GET",
+                    f"/businesses?id=eq.{bid}&select=settings&limit=1") or []
+                notif = ((biz_rows[0].get("settings") or {}).get("notifications")
+                         or {}) if biz_rows else {}
+                try:
+                    threshold = float(notif.get("lead_response_hours")
+                                      or LEAD_WAIT_HOURS)
+                except (TypeError, ValueError):
+                    threshold = float(LEAD_WAIT_HOURS)
+
+                overdue = []
+                for c in leads:
+                    waited = _hours_since(c.get("created_at"), now)
+                    if waited is not None and waited >= threshold:
+                        overdue.append((waited, c))
+                if not overdue:
+                    continue
+                overdue.sort(key=lambda x: -x[0])
+                worst_hours, worst = overdue[0]
+
+                name = worst.get("name") or "Someone"
+                waited_txt = (f"{int(worst_hours)} hours"
+                              if worst_hours < 48
+                              else f"{int(worst_hours // 24)} days")
+                if len(overdue) == 1:
+                    title = f"{name} is still waiting"
+                    body = (f"{name} came in {waited_txt} ago and nobody has "
+                            f"replied yet.")
+                else:
+                    title = f"{len(overdue)} leads are still waiting"
+                    body = (f"{len(overdue)} people have reached out and not "
+                            f"heard back. {name} has been waiting the "
+                            f"longest — {waited_txt}.")
+                score = worst.get("lead_score")
+                if isinstance(score, int) and score >= 70:
+                    body += f" Their lead score is {score}."
+
+                alert = await create_urgent_alert(
+                    client, bid, title=title, body=body,
+                    dedup_key=f"leads_waiting:{bid}",
+                    dedup_hours=LEAD_WAIT_DEDUP_HOURS,
+                    priority="high",
+                    suggested_action=f"Open {name}",
+                    action_payload={"type": "navigate", "tab": "operate",
+                                    "sub": "contacts",
+                                    "contact_id": worst.get("id")},
+                    related_contact_id=worst.get("id"),
+                )
+                if alert:
+                    alerts += 1
+            except Exception as e:
+                logger.exception(f"unanswered_lead_sweep failed for {bid}: {e}")
+
+        return {"businesses": len(by_biz), "alerts": alerts,
+                "waiting_total": len(waiting)}
 
 
 async def check_urgent_for_all() -> Dict:

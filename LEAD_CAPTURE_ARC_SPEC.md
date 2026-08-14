@@ -135,7 +135,7 @@ same browser shared one identity and one person's conversation ate
 another's allowance. Same one-line cause, worse consequence than the
 rate limit.
 
-### PR 4 — The first-response clock  ← **in flight**
+### PR 4 — The first-response clock  ✅ **SHIPPED #578**
 
 There is no `responded_at`, no SLA field, no first-response metric
 anywhere in either repo. The nearest thing is `growth_engine.py:1105`,
@@ -152,7 +152,9 @@ day.
   false alarm, which is the fastest way to teach someone to ignore a
   real one. All six already leave a durable record; `lead_response.py`
   reads those on a 15-minute tick.
-- Alert at N hours unanswered — **PR 5**, next.
+- Alert at N hours unanswered — **PR 5, SHIPPED**: one alert per
+  business per DAY (not one per lead), inside waking hours only,
+  threshold `settings.notifications.lead_response_hours`, default 4.
 - Median first-response on the funnel — the **frontend PR**.
 
 ### PR 5 — Attribution
