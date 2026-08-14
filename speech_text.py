@@ -54,22 +54,77 @@ _PERCENT_RE = re.compile(r"(\d)\s?%")
 _WS_RE = re.compile(r"\s+")
 
 
+_ONES = ("zero", "one", "two", "three", "four", "five", "six", "seven",
+         "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
+         "fifteen", "sixteen", "seventeen", "eighteen", "nineteen")
+_TENS = ("", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+         "eighty", "ninety")
+_SCALES = ((10 ** 12, "trillion"), (10 ** 9, "billion"),
+           (10 ** 6, "million"), (10 ** 3, "thousand"))
+
+# Past this the words stop helping and the digits are as good a guess as
+# any — no practitioner's books carry a quadrillion-dollar line.
+_WORDS_CEILING = 10 ** 15
+
+
+def _under_thousand(n: int) -> str:
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        tens, rest = divmod(n, 10)
+        return _TENS[tens] + (f"-{_ONES[rest]}" if rest else "")
+    hundreds, rest = divmod(n, 100)
+    return (_ONES[hundreds] + " hundred"
+            + (f" {_under_thousand(rest)}" if rest else ""))
+
+
+def number_words(n: int) -> str:
+    """2345 -> "two thousand three hundred forty-five".
+
+    Spelling the digits is the only reading every engine agrees on.
+    Handing a TTS voice a bare "2345" invites it to guess, and the guess
+    it makes is a YEAR — Kevin heard "$2,345" as "two three forty five
+    dollars". Neither keeping the thousands comma nor dropping it fixes
+    that: keeping it makes some voices pause mid-number ("one, two three
+    four"), which is the bug this function's predecessor was written to
+    avoid. Words have only one pronunciation.
+    """
+    if n < 0:
+        return f"negative {number_words(-n)}"
+    if n >= _WORDS_CEILING:
+        return str(n)
+    if n == 0:
+        return "zero"
+    parts = []
+    for value, name in _SCALES:
+        if n >= value:
+            count, n = divmod(n, value)
+            parts.append(f"{_under_thousand(count)} {name}")
+    if n:
+        parts.append(_under_thousand(n))
+    return " ".join(parts)
+
+
 def _spell_amount(whole: str, cents: Optional[str]) -> str:
-    """"$1,234.56" -> "1234 dollars and 56 cents", with the plural, the
-    zero-cents and the under-a-dollar cases said the way a person says
-    them. The thousands comma is dropped deliberately: some voices honour
-    it as a pause."""
-    w = whole.replace(",", "")
-    dollar_word = "dollar" if w == "1" else "dollars"
+    """"$1,234.56" -> "one thousand two hundred thirty-four dollars and
+    fifty-six cents", with the plural, the zero-cents and the
+    under-a-dollar cases said the way a person says them.
+
+    The amount is spelled into WORDS rather than left as digits — see
+    number_words for why the digits could never be made to work.
+    """
+    value = int(whole.replace(",", "") or "0")
+    dollar_word = "dollar" if value == 1 else "dollars"
     # ".5" is fifty cents, not five — pad before reading it as a number.
     cn = int(cents.ljust(2, "0")) if cents else 0
     if not cn:
-        return f"{w} {dollar_word}"
+        return f"{number_words(value)} {dollar_word}"
     cent_word = "cent" if cn == 1 else "cents"
     # "$0.99" is ninety-nine cents, not "zero dollars and ninety-nine".
-    if int(w) == 0:
-        return f"{cn} {cent_word}"
-    return f"{w} {dollar_word} and {cn} {cent_word}"
+    if value == 0:
+        return f"{number_words(cn)} {cent_word}"
+    return (f"{number_words(value)} {dollar_word} and "
+            f"{number_words(cn)} {cent_word}")
 
 
 def _magnitude_sub(m: "re.Match[str]") -> str:
