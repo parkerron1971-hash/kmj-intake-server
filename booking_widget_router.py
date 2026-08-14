@@ -803,8 +803,10 @@ async def book_anon(
     # 1. Dedupe-on-email: find or create a contact for the business first.
     #    Per the ruling: walk-in flow MUST check for existing contact and
     #    link instead of creating a duplicate.
-    contact_id = _find_or_create_contact(business_id, body.name, email_norm,
-                                         submission=body.data)
+    import lead_attribution
+    contact_id = _find_or_create_contact(
+        business_id, body.name, email_norm, submission=body.data,
+        attribution=lead_attribution.capture(request, source_detail="booking"))
 
     # 2. Find or create a business_customers row (unique on biz + lower(email)).
     customer_id = _find_or_create_customer(business_id, contact_id, email_norm, body.name)
@@ -1056,7 +1058,8 @@ def _schedule_confirmation_sms(biz: Optional[Dict[str, Any]],
 
 
 def _find_or_create_contact(business_id: str, name: str, email_lower: str,
-                            submission: Optional[Dict[str, Any]] = None) -> str:
+                            submission: Optional[Dict[str, Any]] = None,
+                            attribution: Optional[Dict[str, Any]] = None) -> str:
     """Per ruling: walk-in flow MUST check for existing contact on the
     business with the same email and link instead of creating a duplicate.
     Returns contact_id.
@@ -1083,12 +1086,15 @@ def _find_or_create_contact(business_id: str, name: str, email_lower: str,
     # status='lead' matches the in-tree convention (chief_of_staff.handle_create_contact,
     # public_site booking flow). 'lifecycle_stage' is NOT a real column on contacts —
     # the prior typo caused PGRST204 and a 500 on the widget submission.
+    import lead_attribution
     payload = {
         "business_id": business_id,
         "name": name,
         "email": email_lower,
         "status": "lead",
         "source": "booking_widget",
+        "source_detail": lead_attribution.detail_for(attribution, "booking"),
+        "attribution": attribution or None,
     }
     created = sb_clients.sb_post_as_service("/contacts", payload)
     if not isinstance(created, list) or not created:

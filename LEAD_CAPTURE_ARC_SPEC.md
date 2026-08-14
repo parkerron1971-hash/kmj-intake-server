@@ -157,7 +157,7 @@ day.
   threshold `settings.notifications.lead_response_hours`, default 4.
 - Median first-response on the funnel — the **frontend PR**.
 
-### PR 5 — Attribution
+### PR 6 — Attribution  ← **in flight**
 
 A lead currently carries name, email, phone, status, source, and the
 raw submission blob. It carries no idea where it came from.
@@ -167,21 +167,36 @@ raw submission blob. It carries no idea where it came from.
   || 'direct'`. **Nothing writes any of the three.** "Top source" is
   therefore hardcoded to `direct` for every form, forever — a UI that
   states a fact it cannot know.
-- `contacts.source_detail` is read by both analytics surfaces to group
-  leads per form, and written by nothing except one hardcoded
-  `'dashboard_quick_add'`. Every form shows avg lead score `—` and
-  conversion `—`.
+- `contacts.source_detail` **DID NOT EXIST IN THE DATABASE AT ALL**,
+  and three frontend files use it. PostgREST rejects an unknown column
+  outright (`booking_widget_router.py:1082` documents the same class:
+  PGRST204 → 500), so both analytics reads 400 — which is why every
+  form shows avg lead score `—` and conversion `—` — and
+  `OperationsDashboard.tsx:994`'s **quick-add-a-lead button has never
+  worked**, because it posts that column and gets a 400.
+  Added 2026-08-14 with `contacts.attribution`.
 - `how_heard` ships on the form templates and is read by nothing.
 - Published customer sites have **no page-view tracking at all**.
   `site_analytics.py` covers mysolutionist.app only and is gated to
   `PLATFORM_OWNER_EMAIL`, so there is no visitor→lead conversion rate
   to compute.
 
-Capture utm params, referrer host, landing path and device at every
-door; write `source_detail`; read `how_heard`; give composed sites
-their own page-view spine.
+**SHIPPED**: captured SERVER-SIDE off the `Referer` header at all four
+doors, because the contact form is emitted by four different renderers
+plus whatever the builder's LLM writes — a design needing every client
+to cooperate is partially deployed forever. Referrers reduced to a
+HOST, query strings dropped except a campaign whitelist
+(`utm_*`/`gclid`/`fbclid`/`ref`), because a query string on somebody
+else's page can hold an email address or a session token.
 
-### PR 6 — One dedupe rule
+Still open, and a separate arc rather than a PR: **page-view tracking
+for published customer sites.** `site_analytics.py` covers
+mysolutionist.app only, `site_events` has no `business_id`, and the
+read is gated to `PLATFORM_OWNER_EMAIL` — so there is no visitor→lead
+conversion rate to compute for a practitioner. `how_heard` is also
+still read by nothing.
+
+### PR 7 — One dedupe rule
 
 Four doors, four different answers to *is this the same person*:
 no dedupe at all (intake), email-ilike-or-phone (site form),
