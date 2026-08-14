@@ -1078,6 +1078,40 @@ async def startup():
                           "interval", hours=1, id="sms_reminder_sweep")
     except Exception as e:
         print(f"   [warn] sms reminder sweep not scheduled: {e}")
+    # THE LEAD ARC PR 2 (2026-08-14) — the notification engine, which
+    # until now was imported as a ROUTER ONLY.
+    #
+    # `check_urgent`, `morning_brief`, `midday_ping` and
+    # `evening_summary` existed, were reachable over HTTP, and nothing
+    # in the codebase ever called them: not a scheduled job, not the
+    # frontend. Meanwhile NotificationCenter.tsx shipped a settings
+    # toggle for each of the four. Switches for alarms that did not
+    # fire — and the hot-lead alert is one of them, so a lead could
+    # arrive scored 90 and the system stayed silent.
+    #
+    # Cadence: the urgent check runs at URGENT_LOOKBACK_MINUTES so a
+    # trigger cannot age out of the window between passes; it is cheap
+    # because check_urgent_for_all pre-filters platform-wide before
+    # touching any tenant. The three briefs are cron in UTC — 13:00 is
+    # 9am ET / 6am PT, the same compromise push_notifications already
+    # makes, and businesses do not store a timezone yet (Arc note in
+    # push_notifications). Per-business local time is the follow-on.
+    #
+    # Kill switch: NOTIF_JOBS=off.
+    if (os.environ.get("NOTIF_JOBS") or "on").strip().lower() != "off":
+        try:
+            import notification_engine as _notif
+            scheduler.add_job(g("notif_urgent_check", _notif.check_urgent_for_all),
+                              "interval", minutes=_notif.URGENT_LOOKBACK_MINUTES,
+                              id="notif_urgent_check")
+            scheduler.add_job(g("notif_morning_brief", _notif.generate_morning_brief_for_all),
+                              "cron", hour=13, minute=5, id="notif_morning_brief")
+            scheduler.add_job(g("notif_midday_ping", _notif.generate_midday_ping_for_all),
+                              "cron", hour=17, minute=5, id="notif_midday_ping")
+            scheduler.add_job(g("notif_evening_summary", _notif.generate_evening_summary_for_all),
+                              "cron", hour=23, minute=5, id="notif_evening_summary")
+        except Exception as e:
+            print(f"   [warn] notification engine jobs not scheduled: {e}")
     # Chief Layers arc (2026-07-09) — the weekly longitudinal insight
     # engine (Opus lane; eligibility + cadence + per-tick cap inside).
     # Kill switch: CHIEF_INSIGHTS=off.

@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -194,6 +194,9 @@ async def morning_brief_tick() -> None:
         ) or []
         biz_ids = sorted({str(r.get("business_id")) for r in subs if r.get("business_id")})
         today = datetime.now(timezone.utc).date().isoformat()
+        # Z form — '+00:00' reads as a space in a PostgREST query string.
+        yesterday = (datetime.now(timezone.utc)
+                     - timedelta(hours=24)).isoformat().replace("+00:00", "Z")
         for biz_id in biz_ids:
             try:
                 biz_rows = sb_clients.sb_get_as_service(
@@ -217,8 +220,27 @@ async def morning_brief_tick() -> None:
                 overdue = sb_clients.sb_get_as_service(
                     f"/invoices?business_id=eq.{biz_id}&status=eq.overdue&select=id&limit=50"
                 ) or []
+                # Leads. This brief reported sessions, invoices and
+                # drafts and never once mentioned the people who had
+                # just asked to become customers — the single most
+                # time-sensitive thing on a small business's morning.
+                new_leads = sb_clients.sb_get_as_service(
+                    f"/contacts?business_id=eq.{biz_id}&status=eq.lead"
+                    f"&created_at=gte.{yesterday}&select=id&limit=50"
+                ) or []
+                hot_leads = sb_clients.sb_get_as_service(
+                    f"/contacts?business_id=eq.{biz_id}&status=eq.lead"
+                    f"&lead_score=gte.70&select=id&limit=50"
+                ) or []
 
                 bits: List[str] = []
+                # Leads lead. A new enquiry outranks a draft that has
+                # been sitting there for a week.
+                if new_leads:
+                    bits.append(f"{len(new_leads)} new lead"
+                                f"{'s' if len(new_leads) != 1 else ''}")
+                if hot_leads:
+                    bits.append(f"{len(hot_leads)} worth calling first")
                 if sessions:
                     bits.append(f"{len(sessions)} session{'s' if len(sessions) != 1 else ''} today")
                 if overdue:
