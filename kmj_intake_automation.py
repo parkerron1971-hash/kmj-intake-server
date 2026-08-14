@@ -1110,6 +1110,13 @@ async def startup():
                               "cron", hour=17, minute=5, id="notif_midday_ping")
             scheduler.add_job(g("notif_evening_summary", _notif.generate_evening_summary_for_all),
                               "cron", hour=23, minute=5, id="notif_evening_summary")
+            # THE LEAD ARC PR 5 — the lead nobody answered. Hourly, but
+            # it raises at most ONE alert per business per DAY and only
+            # inside waking hours. The frequency is so the first alert
+            # lands soon after the threshold is crossed, not so the
+            # practitioner gets reminded twelve times.
+            scheduler.add_job(g("notif_unanswered_leads", _notif.unanswered_lead_sweep),
+                              "interval", hours=1, id="notif_unanswered_leads")
         except Exception as e:
             print(f"   [warn] notification engine jobs not scheduled: {e}")
     # THE LEAD ARC PR 4 (2026-08-14) — the first-response clock.
