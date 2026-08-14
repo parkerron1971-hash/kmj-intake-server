@@ -15646,16 +15646,6 @@ async def chief_chat(
                 raise HTTPException(404, "Business not found")
             biz = ctx["business"]
 
-            # NT8b — best-effort proactive suggestion emission on state
-            # change. Runs ONCE per chat turn; idempotent (the emitter
-            # checks for active dupes + has a cap). Failures never block
-            # the conversation.
-            try:
-                import chief_proactive_suggestions as _cps
-                await asyncio.to_thread(_cps.maybe_emit_proactive_suggestions, biz)
-            except Exception as _e:
-                logger.warning(f"proactive emit failed (non-blocking): {_e}")
-
             is_greeting = _is_greeting(req.message)
             tod = _parse_greeting_tod(req.message) if is_greeting else None
             is_coach_pause = _is_coach_pause(req.message)
@@ -15670,70 +15660,95 @@ async def chief_chat(
             is_coach_mode = (req.mode or "") in COACH_MODES
 
             # Intelligence enrichment — voice samples, session context,
-            # daily priorities, mentor cooldown, suggestion preference,
-            # plus revenue forecast / relationship insights / time-context
-            # blocks. All of these tolerate failure (return "" or None).
-            voice_examples = await _get_voice_examples(client, req.business_id)
-            session_context = await _get_session_context(client, req.business_id)
-            priorities = _build_daily_priorities(biz, ctx) if is_greeting else []
-            mentor_active = await _should_show_mentor_tip(client, biz)
-            prefs = (biz.get("settings") or {}).get("chief_preferences") or {}
-            suggestions_active = prefs.get("auto_suggestions") is not False
+            # mentor cooldown, revenue forecast, relationship insights,
+            # time context, habits, live bookkeeping, and cross-vertical
+            # learning. Plus the proactive-suggestion emit, which writes
+            # rather than reads but is nobody's dependency either.
+            #
+            # These are independent: not one of them consumes another's
+            # result. They used to run as ten sequential awaits — twelve
+            # PostgREST round-trips and two off-thread modules, each
+            # waiting on the last, with the model call queued behind the
+            # whole chain. That chain is the silence the practitioner
+            # sits through before Chief's first word, and it is paid on
+            # EVERY turn, including "how's the business doing?"
+            #
+            # _gather_context, two calls up, already fans its eighteen
+            # queries out with asyncio.gather. This block just never got
+            # the same treatment. Gathered, the cost is the slowest one
+            # rather than the sum of all of them.
+            #
+            # return_exceptions keeps the failure isolation the old
+            # per-call try/except blocks gave: a slow or broken source
+            # degrades its own block to ""/None/[] and never the turn.
+            async def _enrich(label: str, coro, fallback):
+                try:
+                    return await coro
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"{label} failed: {e}")
+                    return fallback
 
-            forecast = None
-            try:
-                forecast = await _forecast_revenue(client, req.business_id)
-            except Exception as e:  # pragma: no cover
-                logger.warning(f"_forecast_revenue failed: {e}")
-            forecast_block = _format_forecast_block(forecast)
-
-            try:
-                relationship_insights = await _analyze_relationships(client, req.business_id)
-            except Exception as e:  # pragma: no cover
-                logger.warning(f"_analyze_relationships failed: {e}")
-                relationship_insights = []
-            relationships_block = _format_relationships_block(relationship_insights)
-
-            try:
-                time_block = await _get_time_context(client, req.business_id)
-            except Exception as e:  # pragma: no cover
-                logger.warning(f"_get_time_context failed: {e}")
-                time_block = ""
-
-            try:
-                habit_block = await _get_habit_insights(client, req.business_id)
-            except Exception as e:  # pragma: no cover
-                logger.warning(f"_get_habit_insights failed: {e}")
-                habit_block = ""
-
-            sentiment = _detect_sentiment(req.conversation_history or [], req.message or "")
-
-            # Phase G — conditional bookkeeping context (live bank data) so
-            # Chief can answer money questions. Sync module run off-thread;
-            # returns "" when no bank is linked. Never breaks the prompt.
-            bookkeeping_block = ""
-            try:
+            async def _bookkeeping():
+                # Phase G — live bank data so Chief can answer money
+                # questions. Sync module off-thread; "" when no bank is
+                # linked. Never breaks the prompt.
                 import chief_bookkeeping
-                bookkeeping_block = await asyncio.to_thread(
+                return await asyncio.to_thread(
                     chief_bookkeeping.gather_and_format,
                     req.business_id, (biz.get("type") if isinstance(biz, dict) else None),
                 )
-            except Exception as e:  # pragma: no cover
-                logger.warning(f"bookkeeping context failed: {e}")
 
-            # Feed 2 (LAYER_TWO_ARCHITECTURE §6) — what OTHER businesses in
-            # this vertical have taught the system, retrieved for what the
-            # practitioner just said. Sync module run off-thread, "" when
-            # there is nothing learned yet. Lands in the DYNAMIC tail, not
-            # the cached region: it changes with every message, so caching
-            # it would break the 3-segment prompt cache.
-            learned_block = ""
-            try:
+            async def _learned():
+                # Feed 2 (LAYER_TWO_ARCHITECTURE §6) — what OTHER
+                # businesses in this vertical have taught the system,
+                # retrieved for what the practitioner just said. Lands in
+                # the DYNAMIC tail, not the cached region: it changes with
+                # every message, so caching it would break the 3-segment
+                # prompt cache.
                 import vertical_context as _vctx
-                learned_block = await asyncio.to_thread(
+                return await asyncio.to_thread(
                     _vctx.build_vertical_learned_block, biz, req.message or "")
-            except Exception as e:  # pragma: no cover
-                logger.warning(f"vertical learned context failed: {e}")
+
+            async def _proactive():
+                # NT8b — best-effort proactive suggestion emission on
+                # state change. Runs ONCE per chat turn; idempotent (the
+                # emitter checks for active dupes + has a cap). Nothing
+                # this turn reads what it writes — ctx was gathered above
+                # — so it rides along here instead of blocking ahead of
+                # the enrichment it never feeds.
+                import chief_proactive_suggestions as _cps
+                return await asyncio.to_thread(
+                    _cps.maybe_emit_proactive_suggestions, biz)
+
+            (voice_examples, session_context, mentor_active, forecast,
+             relationship_insights, time_block, habit_block,
+             bookkeeping_block, learned_block, _) = await asyncio.gather(
+                _enrich("_get_voice_examples",
+                        _get_voice_examples(client, req.business_id), ""),
+                _enrich("_get_session_context",
+                        _get_session_context(client, req.business_id), ""),
+                _enrich("_should_show_mentor_tip",
+                        _should_show_mentor_tip(client, biz), False),
+                _enrich("_forecast_revenue",
+                        _forecast_revenue(client, req.business_id), None),
+                _enrich("_analyze_relationships",
+                        _analyze_relationships(client, req.business_id), []),
+                _enrich("_get_time_context",
+                        _get_time_context(client, req.business_id), ""),
+                _enrich("_get_habit_insights",
+                        _get_habit_insights(client, req.business_id), ""),
+                _enrich("bookkeeping context", _bookkeeping(), ""),
+                _enrich("vertical learned context", _learned(), ""),
+                _enrich("proactive emit (non-blocking)", _proactive(), None),
+            )
+
+            # Pure, no I/O — computed off what the gather returned.
+            priorities = _build_daily_priorities(biz, ctx) if is_greeting else []
+            prefs = (biz.get("settings") or {}).get("chief_preferences") or {}
+            suggestions_active = prefs.get("auto_suggestions") is not False
+            forecast_block = _format_forecast_block(forecast)
+            relationships_block = _format_relationships_block(relationship_insights)
+            sentiment = _detect_sentiment(req.conversation_history or [], req.message or "")
 
             # THE GROWTH DOCTRINE — marketing law, loaded only on turns
             # that are actually about growth (or when the practitioner is
