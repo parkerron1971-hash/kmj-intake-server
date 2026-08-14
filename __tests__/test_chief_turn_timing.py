@@ -181,19 +181,23 @@ def test_slowing_a_stage_moves_only_that_stage(run_turn, caplog, stage):
     _, base_lines = run_turn(caplog)
     base = _fields(base_lines[0])
     caplog.clear()
-    _, slow_lines = run_turn(caplog, slow=stage, seconds=0.25)
+    # 0.4s injected / >=0.3 moved / <0.3 drift: margins sized for a CI
+    # box already running the 3900-test suite — the 0.25/0.2/0.15 first
+    # cut flaked under full-suite load (scheduler jitter alone crossed
+    # 150ms) while passing every solo run.
+    _, slow_lines = run_turn(caplog, slow=stage, seconds=0.4)
     slow = _fields(slow_lines[0])
 
     moved = int(slow[stage]) - int(base[stage])
-    assert moved >= 200, (
-        f"slowed {stage} by 250ms but its number moved {moved}ms | "
+    assert moved >= 300, (
+        f"slowed {stage} by 400ms but its number moved {moved}ms | "
         f"baseline: {base_lines[0]} | slowed: {slow_lines[0]}"
     )
     for other in ("recurrence", "sweeps", "context", "model"):
         if other == stage:
             continue
         drift = abs(int(slow[other]) - int(base[other]))
-        assert drift < 150, (
+        assert drift < 300, (
             f"slowing {stage} moved {other} by {drift}ms — the stages are "
             f"not separated | baseline: {base_lines[0]} | "
             f"slowed: {slow_lines[0]}"
