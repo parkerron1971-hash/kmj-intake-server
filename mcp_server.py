@@ -277,6 +277,26 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
     "show_revenue": (
         "Revenue figures for this business.",
         _NO_ARGS),
+    # Deliberately exposed (tripwire bump 24 -> 25, 8/14). show_view is a
+    # bounded read over tables whose data is ALREADY on this surface —
+    # invoices are the same financial class as list_expenses /
+    # unbilled_time / show_revenue, contacts are already readable through
+    # contact_deep_dive, sessions through list_scheduled, products
+    # through list_products. It returns typed rows for display; the nav /
+    # frontend_event fields it carries are meaningless off the app
+    # surface and inert in an agent's hands. Filters are advisory: an
+    # unknown filter falls back to the view's default server-side.
+    "show_view": (
+        "A bounded list (max 25 rows) of one view of this business's "
+        "records, as typed columns and rows. Read-only.",
+        _obj({"view": {"type": "string",
+                       "enum": ["invoices", "contacts", "sessions", "products"],
+                       "description": "Which list to fetch."},
+              "filter": {"type": "string",
+                         "description": "Optional. invoices: open|overdue|"
+                                        "draft|paid|all. contacts: all|leads|"
+                                        "active. sessions: upcoming|all."}},
+             ["view"])),
     "site_health": (
         "Whether the public website and booking page are live and wired "
         "up, and what is broken if not.",
