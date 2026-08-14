@@ -116,7 +116,8 @@ def _campaign_from_query(query: str) -> Dict[str, str]:
 
 
 def capture(request: Any = None, body: Optional[Dict[str, Any]] = None,
-            *, source_detail: Optional[str] = None) -> Dict[str, Any]:
+            *, source_detail: Optional[str] = None,
+            submission: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Build the attribution blob for one submission. Never raises.
 
     `request` is the FastAPI/Starlette request the form posted to; its
@@ -175,6 +176,13 @@ def capture(request: Any = None, body: Optional[Dict[str, Any]] = None,
         if source_detail:
             out["source_detail"] = _clip(source_detail, MAX_PATH)
 
+        # What they SAID sent them. Kept beside the measured signals
+        # rather than instead of them: "Friend" and utm_source=google
+        # are both true when somebody googles a name a friend gave them.
+        said = self_reported_source(submission)
+        if said:
+            out["self_reported"] = said
+
         if out:
             out["captured_at"] = (datetime.now(timezone.utc).isoformat()
                                   .replace("+00:00", "Z"))
@@ -182,6 +190,35 @@ def capture(request: Any = None, body: Optional[Dict[str, Any]] = None,
         logger.warning("[lead_attribution] capture failed: %s", e)
         return {}
     return out
+
+
+# Self-reported attribution. The form templates have shipped a "How did
+# you hear about us?" select since the beginning — Friend / Social Media
+# / Google / Drive-by / Event / Other — and NOTHING has ever read it. It
+# sat in metadata.submission where no report, no prompt and no analytics
+# surface looked at it.
+#
+# It is worth reading precisely because it answers what the Referer
+# header cannot: a walk-in, a word-of-mouth referral, a flyer, a van
+# with a phone number on it. Half of a small business's marketing leaves
+# no digital trace at all, and the visitor is the only witness.
+SELF_REPORT_KEYS = ("how_heard", "how_did_you_hear", "how_did_you_hear_about_us",
+                    "heard_about_us", "referral_source", "how_found_us",
+                    "where_did_you_hear")
+
+
+def self_reported_source(submission: Optional[Dict[str, Any]]) -> Optional[str]:
+    """What they SAID sent them, if the form asked. Free text and select
+    values both — a select is the common case, but a practitioner who
+    made it a text box gets the same treatment."""
+    for key, value in (submission or {}).items():
+        if str(key).strip().lower() in SELF_REPORT_KEYS:
+            text = _clip(value, MAX_VALUE)
+            # "Other" and the unselected placeholder say nothing.
+            if text and text.strip().lower() not in ("other", "n/a", "none",
+                                                     "select...", "-"):
+                return text
+    return None
 
 
 def event_fields(attribution: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -195,7 +232,7 @@ def event_fields(attribution: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     a = attribution or {}
     fields: Dict[str, Any] = {}
     for key in ("utm_source", "utm_medium", "utm_campaign",
-                "referrer_host", "landing_path", "device"):
+                "referrer_host", "landing_path", "device", "self_reported"):
         if a.get(key):
             fields[key] = a[key]
     return fields

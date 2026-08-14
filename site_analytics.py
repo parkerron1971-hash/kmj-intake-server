@@ -1,9 +1,20 @@
 """
-site_analytics.py — first-party, anonymous traffic analytics for the
-marketing site.
+site_analytics.py — first-party, anonymous traffic analytics.
 
-    POST /api/track          public, anonymous, no auth
-    GET  /admin/traffic      platform owner only
+    POST /api/track                    public, anonymous, no auth
+    GET  /admin/traffic                platform owner only (mysolutionist.app)
+    GET  /sites/{business_id}/traffic  that business's owner or seat
+
+TWO TENANTS OF ONE TABLE. A row with no business_id is the marketing
+site, which is every row written before 2026-08-14. A row WITH one is a
+published customer site.
+
+WHY THE SECOND ONE EXISTS: WebsiteTraffic.tsx counts form submissions,
+bookings, link clicks and downloads — every one of them a CONVERSION.
+The denominator did not exist anywhere, so a practitioner whose entire
+site was built by this system could not answer "how many people
+visited, and how many of them became a lead". That is the step before
+arrival, and the last hole in the lead arc.
 
 WHY FIRST-PARTY: Kevin wanted to "monitor the website traffic and flow"
 without a third party and without the cookie-consent banner that GA4 and
@@ -18,6 +29,11 @@ a person, which is what makes the no-banner position honest:
     URLs routinely carry search terms in their query strings
 
 If any of those change, the privacy policy has to change with them.
+
+Adding a business_id says WHOSE SITE was visited. It says nothing more
+about WHO visited, so every clause above still holds — which is what
+keeps the no-cookie-banner position honest for the practitioner as well
+as for Kevin.
 
 See supabase/APPLY-2026-07-28-site-events.sql for the table + RLS.
 """
@@ -107,9 +123,57 @@ class TrackEvent(BaseModel):
     r: Optional[str] = Field(None, max_length=500)   # referrer (reduced to host)
     d: Optional[str] = Field(None, max_length=16)    # device class
     e: str = Field("view", max_length=16)  # event
+    b: Optional[str] = Field(None, max_length=64)    # business id, or None
+                                                     # for the marketing site
 
 
 router = APIRouter(tags=["site-analytics"])
+
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                   r"[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+# Resolved business ids, cached. The beacon fires on every page view of
+# every published site, so this must not become a database round trip
+# per visitor. Both answers are cached — a junk id is far more likely to
+# repeat than a real one, since it would come from one broken page
+# hammering the endpoint.
+_biz_cache: Dict[str, tuple] = {}
+_BIZ_TTL_S = 600
+
+
+async def _known_business(client: httpx.AsyncClient,
+                          business_id: Optional[str]) -> Optional[str]:
+    """The id if it is a real business, else None.
+
+    Validated rather than trusted: this value is baked into a page
+    anyone can view-source, so a bored visitor could post someone else's
+    id. The worst that buys them is noise in another tenant's view
+    count — there is nothing to read back and nothing to spend — but
+    checking is cheap, and an UNCHECKED id would also let a typo in the
+    injector silently scatter rows under a business that does not exist.
+    """
+    if not business_id:
+        return None
+    bid = business_id.strip().lower()
+    if not _UUID.match(bid):
+        return None
+    hit = _biz_cache.get(bid)
+    now = time.time()
+    if hit and now - hit[1] < _BIZ_TTL_S:
+        return bid if hit[0] else None
+    ok = False
+    try:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/businesses",
+            headers=_service_headers(),
+            params={"select": "id", "id": f"eq.{bid}", "limit": "1"},
+        )
+        ok = r.status_code < 400 and bool(r.json())
+    except Exception as e:
+        logger.warning("business check failed for %s: %s", bid[:8], e)
+        return None            # unknown, so store nothing rather than a guess
+    _biz_cache[bid] = (ok, now)
+    return bid if ok else None
 
 
 @router.post("/api/track", include_in_schema=False)
@@ -139,11 +203,20 @@ async def track(ev: TrackEvent, request: Request,
             return _no_content()
 
         # HOST ONLY. Full referrer URLs leak search terms.
+        #
+        # A page-to-page click inside the same site is not a referral,
+        # and counting it as one makes every site its own top traffic
+        # source. That used to be hardcoded to mysolutionist.app; a
+        # customer site's "self" is its OWN host, which the Origin header
+        # gives us, so the rule now works for both tenants.
         ref_host = None
         if ev.r:
             try:
-                h = urlparse(ev.r).hostname or ""
-                if h and "mysolutionist.app" not in h:
+                h = (urlparse(ev.r).hostname or "").lower()
+                own = (urlparse(request.headers.get("origin") or "").hostname
+                       or "").lower()
+                internal = (h == own) if own else False
+                if h and not internal and "mysolutionist.app" not in h:
                     ref_host = h[:120]
             except Exception:
                 ref_host = None
@@ -151,11 +224,13 @@ async def track(ev: TrackEvent, request: Request,
         device = ev.d if ev.d in {"mobile", "tablet", "desktop"} else None
 
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            business_id = await _known_business(client, ev.b)
             r = await client.post(
                 f"{SUPABASE_URL}/rest/v1/site_events",
                 headers=_service_headers({"Prefer": "return=minimal"}),
                 json={"session_id": session, "path": path, "referrer_host": ref_host,
-                      "device": device, "event": event},
+                      "device": device, "event": event,
+                      "business_id": business_id},
             )
             if r.status_code >= 400:
                 logger.warning("track insert failed %s: %s", r.status_code, r.text[:200])
@@ -190,8 +265,12 @@ async def traffic_summary(days: int = Query(30, ge=1, le=365),
         r = await client.get(
             f"{SUPABASE_URL}/rest/v1/site_events",
             headers=_service_headers(),
+            # business_id IS NULL — this endpoint is mysolutionist.app.
+            # Without the filter it would silently start reporting every
+            # customer site's traffic as Kevin's own.
             params={"select": "ts,session_id,path,referrer_host,device,event",
-                    "ts": f"gte.{since}", "order": "ts.desc", "limit": str(MAX_ROWS)},
+                    "ts": f"gte.{since}", "business_id": "is.null",
+                    "order": "ts.desc", "limit": str(MAX_ROWS)},
         )
     if r.status_code >= 400:
         raise HTTPException(502, f"traffic read failed: {r.text[:200]}")
@@ -237,4 +316,108 @@ async def traffic_summary(days: int = Query(30, ge=1, le=365),
         "devices": [{"device": d or "unknown", "views": n} for d, n in Counter(
             x.get("device") for x in views).most_common()],
         "funnel": funnel,
+    }
+
+
+# ── the practitioner's own traffic ────────────────────────────────────
+
+def _require_business_access(business_id: str, user: AuthedUser) -> Dict[str, Any]:
+    """Owner passes; an active seat passes by rank through the one
+    ladder. NOT the PLATFORM_OWNER_EMAIL gate /admin/traffic uses — this
+    is the practitioner's own site, and Kevin is not the audience for it.
+    """
+    import sb_clients
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=id,owner_id&limit=1") or []
+    if not rows:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Business not found")
+    row = rows[0]
+    if str(row.get("owner_id")) == str(user.id):
+        return row
+    from business_users_router import require_role
+    require_role(str(business_id), str(user.id), "viewer")
+    return row
+
+
+@router.get("/sites/{business_id}/traffic", include_in_schema=False)
+async def business_traffic(business_id: str,
+                           days: int = Query(30, ge=1, le=365),
+                           user: AuthedUser = Depends(require_user)):
+    """Visits, and how many of them turned into a lead.
+
+    THE CONVERSION RATE IS THE POINT. Every other number on the funnel —
+    form submissions, bookings, link clicks, downloads — is a
+    conversion, and until this endpoint existed there was no
+    denominator: no way to tell twelve leads from a thousand visitors
+    apart from twelve leads from thirty.
+
+    Aggregated in Python, same trade as /admin/traffic: no database view
+    to keep in sync, and a bounded read that says `truncated` out loud
+    rather than quietly reporting a wrong number.
+    """
+    _require_business_access(business_id, user)
+
+    since_dt = datetime.now(timezone.utc) - timedelta(days=days)
+    since = since_dt.isoformat().replace("+00:00", "Z")
+
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/site_events",
+            headers=_service_headers(),
+            params={"select": "ts,session_id,path,referrer_host,device,event",
+                    "business_id": f"eq.{business_id}", "ts": f"gte.{since}",
+                    "order": "ts.desc", "limit": str(MAX_ROWS)},
+        )
+        if r.status_code >= 400:
+            raise HTTPException(502, f"traffic read failed: {r.text[:200]}")
+        rows: List[Dict[str, Any]] = r.json() or []
+
+        # The numerator. Leads created in the same window, whichever of
+        # the five doors they came through — the whole finding of the
+        # lead arc was surfaces that only ever counted one of them.
+        lr = await client.get(
+            f"{SUPABASE_URL}/rest/v1/contacts",
+            headers=_service_headers(),
+            params={"select": "id,created_at,source",
+                    "business_id": f"eq.{business_id}",
+                    "created_at": f"gte.{since}", "limit": "1000"},
+        )
+        leads: List[Dict[str, Any]] = lr.json() if lr.status_code < 400 else []
+
+    views = [x for x in rows if x.get("event") == "view"]
+    sessions = {x.get("session_id") for x in rows if x.get("session_id")}
+
+    by_day: Counter = Counter()
+    for x in views:
+        d = (x.get("ts") or "")[:10]
+        if d:
+            by_day[d] += 1
+
+    # Sessions, not views: one person reading four pages is one chance
+    # to convert, not four. A per-VIEW rate would fall every time the
+    # site got more engaging, which is exactly backwards.
+    denominator = len(sessions)
+    conversion = (round(100.0 * len(leads) / denominator, 1)
+                  if denominator else None)
+
+    return {
+        "days": days,
+        "views": len(views),
+        "sessions": denominator,
+        "leads": len(leads),
+        # None, never 0, when nobody visited — 0% would read as "the site
+        # converts nothing", which is a claim. No visitors is not a
+        # conversion rate of zero, it is the absence of one.
+        "conversion_pct": conversion,
+        "truncated": len(rows) >= MAX_ROWS,
+        "by_day": [{"date": d, "views": n} for d, n in sorted(by_day.items())],
+        "top_paths": [{"path": p, "views": n} for p, n in Counter(
+            x.get("path") for x in views).most_common(12)],
+        "referrers": [{"host": h, "views": n} for h, n in Counter(
+            x.get("referrer_host") for x in views if x.get("referrer_host")
+        ).most_common(12)],
+        "devices": [{"device": d or "unknown", "views": n} for d, n in Counter(
+            x.get("device") for x in views).most_common()],
+        "lead_sources": [{"source": s or "unknown", "leads": n} for s, n in Counter(
+            x.get("source") for x in leads).most_common()],
     }
