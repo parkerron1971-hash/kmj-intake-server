@@ -123,6 +123,15 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "source": "public_site contact_submit_endpoint (composed-site contact form)",
         "payload": ["name", "email", "message_preview", "new_contact"],
     },
+    "lead_scored": {
+        "source": ("lead_scoring.store — every capture door (intake form, "
+                   "composed-site contact form, site concierge, booking "
+                   "widget) scores through one rubric and drops the "
+                   "reasoning here rather than into contacts.metadata, "
+                   "which the capture path is still assembling"),
+        "payload": ["score", "priority", "signals", "response_type",
+                    "reasoning", "refined", "model", "source"],
+    },
     "contact_status_changed": {
         "source": "chief_of_staff",
         "payload": ["from_status", "to_status"],

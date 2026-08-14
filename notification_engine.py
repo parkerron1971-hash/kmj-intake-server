@@ -505,9 +505,21 @@ async def _check_urgent(client, biz_id: str) -> Dict:
     soon_cutoff = (now + timedelta(minutes=SESSION_IMMINENT_MINUTES)).isoformat().replace("+00:00", "Z")
     created: List[Dict] = []
 
-    # 1. Hot intake leads (form_submit events with high lead_score)
+    # 1. Hot leads — EVERY inquiry door, not just the embeddable form.
+    #
+    # This filtered `event_type=eq.form_submit`, which only
+    # intake_endpoint emits. A lead arriving through the composed site's
+    # contact form or the site concierge could never trigger the alert,
+    # and since lead_score was also only ever written by that same door,
+    # the score test below excluded them a second time. Both halves are
+    # fixed: lead_scoring now runs on all four doors, and this reads all
+    # three inquiry event types.
+    #
+    # Booking is deliberately absent. Someone who already picked a time
+    # is not a lead to chase today.
     hot_leads = await _sb(client, "GET",
-        f"/events?business_id=eq.{biz_id}&event_type=eq.form_submit"
+        f"/events?business_id=eq.{biz_id}"
+        f"&event_type=in.(form_submit,contact_form_submitted,concierge_lead_captured)"
         f"&created_at=gte.{recent_cutoff}&select=*,contacts(name,lead_score)&limit=10") or []
     for ev in hot_leads:
         contact = ev.get("contacts") or {}
@@ -516,10 +528,15 @@ async def _check_urgent(client, biz_id: str) -> Dict:
             continue
         cid = ev.get("contact_id")
         dedup = f"hot_lead:{cid}"
+        arrived = {
+            "form_submit": "submitted an intake form",
+            "contact_form_submitted": "used the contact form on your site",
+            "concierge_lead_captured": "left their details with the site concierge",
+        }.get(ev.get("event_type") or "", "reached out")
         alert = await create_urgent_alert(
             client, biz_id,
             title=f"Hot lead: {contact.get('name', 'unknown')}",
-            body=f"{contact.get('name', 'New contact')} just submitted an intake form with a lead score of {score}. Worth a same-day reply.",
+            body=f"{contact.get('name', 'New contact')} just {arrived} — lead score {score}. Worth a same-day reply.",
             dedup_key=dedup,
             suggested_action=f"Open {contact.get('name', 'this contact')}",
             action_payload={"type": "navigate", "tab": "operate", "sub": "contacts", "contact_id": cid},

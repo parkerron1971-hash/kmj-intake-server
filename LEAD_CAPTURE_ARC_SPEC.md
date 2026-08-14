@@ -1,0 +1,165 @@
+# THE LEAD ARC — capture, enrich, watch
+
+**Opened:** 2026-08-13 · **Repos:** `kmj-intake-server` (trunk `main`),
+`solutionist-studio` (trunk `module-system`)
+
+## The finding
+
+The system has **four public lead doors**. Almost every piece of lead
+intelligence is bolted to one of them — the embeddable intake form,
+which is the door a practitioner is *least* likely to use, because the
+Solutionist-composed site ships its own contact form on a different
+door entirely.
+
+| door | dedupe | `source` | scored | in-app alert | spine event |
+|---|---|---|---|---|---|
+| `POST /intake/submit` (embed) | **none** | `intake_form` | yes | no | `form_submit` (legacy) |
+| `POST /sites/{id}/contact-submit` | email + phone | `website_contact_form` | no | no (email only) | `contact_form_submitted` |
+| `POST /public/concierge/{slug}/lead` | email | `site_concierge` | no | yes | `concierge_lead_captured` |
+| booking widget | email (exact) | `booking_widget` | no | yes | — |
+
+RSVP (`events_rsvp_router`) and giving (`giving_router`) open two more
+doors that also write `status='lead'`.
+
+`contacts.lead_score` is written in exactly one place in the whole
+backend — `intake_endpoint.py:536`. Everything gated on it therefore
+only ever sees intake-form leads:
+
+- `notification_engine.py:509` — hot-lead urgent alert
+  (`event_type=eq.form_submit` **and** `lead_score >= 70`)
+- `contract_agent.py:406` — the proposal agent (`lead_score=gte.60`)
+- `ContactsList.tsx:103` — the "Hot Leads" smart list (`>= 80`)
+- `chief_of_staff.py:13040` — Chief's briefing (a *fourth* threshold,
+  on `health_score > 70`, itself only ever set as `lead_score + 10`)
+
+Four definitions of "hot", one feeder.
+
+## The arc
+
+Six PRs. Each is independently shippable and independently useful.
+One PR per change; never stacked.
+
+---
+
+### PR 1 — Every door scores the lead  ← **in flight**
+
+The score becomes a property of *being a lead*, not a property of
+having arrived through one particular form.
+
+- New `lead_scoring.py`: one scorer, called by every capture path.
+  - A **deterministic rubric** runs synchronously and always — so
+    `lead_score` is never null and the downstream readers work with
+    zero AI spend.
+  - An **optional Haiku refinement** runs in the background, behind
+    `spend_guard`, and only when there is free text worth reading.
+    It never blocks the visitor's form submit.
+- The rubric is **vertical-neutral**. Today's intake prompt enumerates
+  `warm_welcome (church/ministry visitor)` and
+  `discovery_invite (coaching/consulting prospect)` — a lookup table
+  for two of seven verticals. A barber, attorney or contractor has no
+  bucket. Replaced with named, weighted signals that mean the same
+  thing in every trade (reason from a rubric, not a lookup table).
+- Readers widened to match: the hot-lead trigger reads every inquiry
+  event type, and Chief's briefing reads `lead_score` (falling back to
+  `health_score` for legacy rows).
+
+Booking is deliberately **not** wired to the hot-lead alert — someone
+who already picked a time is not a lead to chase today.
+
+### PR 2 — The alarms actually ring
+
+`notification_engine`'s `check_urgent` / `morning_brief` /
+`midday_ping` / `evening_summary` are imported as a **router only**
+(`kmj_intake_automation.py:34`). None of the 22 scheduled jobs is a
+notification tick, and nothing in `src/` calls the endpoints. Meanwhile
+`NotificationCenter.tsx` ships user toggles for all four.
+
+Switches for alarms that do not fire.
+
+- Put the ticks on the worker scheduler (`PROCESS_ROLE=worker`), with
+  `next_run_time` set explicitly — an APScheduler interval job's first
+  run is `now + interval` and resets on every deploy.
+- Teach `push_notifications.morning_brief_tick` to count leads. Today
+  it reports sessions, overdue invoices and drafts, and never mentions
+  a lead.
+- **Rehearse the alarm before shipping it.** A monitor that has never
+  been seen to fire is indistinguishable from a broken one.
+
+### PR 3 — Two defects
+
+- **Cross-tenant write.** `intake_endpoint.py:382` fetches the form by
+  id alone, then writes the contact under the caller-supplied
+  `req.business_id`; the two are never compared. `form_id` is public —
+  it sits in the embed snippet on the practitioner's own site — so a
+  submission can be written into any business. Reject when
+  `form_config["business_id"] != req.business_id`.
+- **Rate limiter keyed on the proxy.** `public_site.py:2071` and
+  `site_concierge.py:234/748/887` use `request.client.host`.
+  `rate_limit.py` already documents that this is not the visitor behind
+  Railway — that is why `trusted_client_ip()` exists and why
+  `intake_endpoint` uses it. As written every visitor to every
+  published site likely shares one bucket, so the 6th contact-form
+  submission platform-wide in a minute gets a 429. Measure it first,
+  then switch all four call sites.
+- Dead honeypot: `intake_endpoint.py:367` checks `_hp` / `website_url`
+  / `company_url` / `fax`; `IntakeFormBuilder.getEmbedCode()` renders
+  only the configured fields, so no honeypot input is ever emitted and
+  the guard cannot trip. Emit one.
+
+### PR 4 — The first-response clock
+
+There is no `responded_at`, no SLA field, no first-response metric
+anywhere in either repo. The nearest thing is `growth_engine.py:1105`,
+which flags a stale lead at **30 days old plus 14 days silent** — a
+monthly insight, not an alarm. Nothing catches a lead unanswered for a
+day.
+
+- Migration: `contacts.first_response_at`, plus a captured-at that is
+  distinct from `created_at` for imported rows.
+- Stamp it on the first outbound touch of any channel (email send, SMS
+  send, session booked, status moved off `lead`).
+- Alert at N hours unanswered, N configurable per business.
+- Surface median first-response time on the funnel — the number that
+  actually predicts conversion.
+
+### PR 5 — Attribution
+
+A lead currently carries name, email, phone, status, source, and the
+raw submission blob. It carries no idea where it came from.
+
+- `WebsiteTraffic.tsx:188` reads
+  `ev.data?.utm_source || ev.data?.referrer_host || ev.data?.referrer
+  || 'direct'`. **Nothing writes any of the three.** "Top source" is
+  therefore hardcoded to `direct` for every form, forever — a UI that
+  states a fact it cannot know.
+- `contacts.source_detail` is read by both analytics surfaces to group
+  leads per form, and written by nothing except one hardcoded
+  `'dashboard_quick_add'`. Every form shows avg lead score `—` and
+  conversion `—`.
+- `how_heard` ships on the form templates and is read by nothing.
+- Published customer sites have **no page-view tracking at all**.
+  `site_analytics.py` covers mysolutionist.app only and is gated to
+  `PLATFORM_OWNER_EMAIL`, so there is no visitor→lead conversion rate
+  to compute.
+
+Capture utm params, referrer host, landing path and device at every
+door; write `source_detail`; read `how_heard`; give composed sites
+their own page-view spine.
+
+### PR 6 — One dedupe rule
+
+Four doors, four different answers to *is this the same person*:
+no dedupe at all (intake), email-ilike-or-phone (site form),
+email-ilike (concierge), email-eq (booking). `contacts` has no unique
+index on `(business_id, lower(email))` —
+`booking_widget_router.py:1062` already flags the resulting race.
+
+One `resolve_contact()` used by every door, plus the index.
+
+## Also true, not scheduled
+
+- `/intake/submit` requires only a name; email and phone are both
+  optional. It can create a lead with no way to reach them.
+- SMS consent is captured on booking and the site contact form. The
+  intake door captures none — and it is the door that then drafts the
+  visitor an email. No email/marketing consent is captured anywhere.

@@ -12,3 +12,10 @@ os.environ.setdefault("CANVAS_VISION_LOOP", "off")
 # Same rule for builder v2's vision loop (the eyes): screenshots + a
 # vision call belong to real builds, never to unit tests.
 os.environ.setdefault("SITE_V2_VISION_LOOP", "off")
+
+# Lead scoring fires on a worker thread from four capture paths. A
+# detached thread outliving a test's mock.patch block would reach the
+# real network, and would do it non-deterministically. "off" here; the
+# wiring tests flip it to "sync" via mock.patch.dict, which is also the
+# only mode in which they can assert anything.
+os.environ.setdefault("LEAD_SCORING_MODE", "off")

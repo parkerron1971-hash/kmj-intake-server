@@ -863,19 +863,30 @@ def _find_or_create_contact(business_id: str, name: str, email: str,
             sb_clients.sb_patch_as_service(
                 f"/contacts?id=eq.{contact_id}&business_id=eq.{business_id}",
                 {"last_interaction": now_iso, "metadata": meta})
-            return contact_id
-        created = sb_clients.sb_post_as_service("/contacts", {
-            "business_id": business_id,
-            "name": name,
-            "email": email_clean or None,
-            "status": "lead",
-            "source": "site_concierge",
-            "metadata": {"concierge_messages": [entry]},
-            "last_interaction": now_iso,
-        })
-        if not isinstance(created, list) or not created:
-            return None
-        return created[0]["id"]
+        else:
+            created = sb_clients.sb_post_as_service("/contacts", {
+                "business_id": business_id,
+                "name": name,
+                "email": email_clean or None,
+                "status": "lead",
+                "source": "site_concierge",
+                "metadata": {"concierge_messages": [entry]},
+                "last_interaction": now_iso,
+            })
+            if not isinstance(created, list) or not created:
+                return None
+            contact_id = created[0]["id"]
+
+        # Score it, on a worker thread — this lead used to carry a null
+        # lead_score forever, which hid it from every reader gated on
+        # that column. `site_concierge` earns a rubric bonus: they held
+        # a conversation before leaving their details.
+        import lead_scoring
+        lead_scoring.score_in_background(
+            business_id, contact_id,
+            {"name": name, "email": email_clean, "message": message},
+            source="site_concierge", email=email_clean)
+        return contact_id
     except Exception as e:
         logger.warning(f"[concierge] contact capture failed: {e}")
         return None

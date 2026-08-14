@@ -2043,6 +2043,19 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
              "message_preview": (message or "")[:160],
              "new_contact": existing is None},
             contact_id=contact_id, source="website_contact_form")
+
+        # Score it, on a worker thread. Until this landed, a lead from
+        # the composed site's own contact form carried a null lead_score
+        # forever, which made it invisible to the hot-lead alert, the
+        # Hot Leads list, Chief's briefing and the proposal agent — all
+        # four gate on that column. Backgrounded because a visitor is
+        # waiting on this request and nothing in it reads the score.
+        import lead_scoring
+        lead_scoring.score_in_background(
+            business_id, contact_id,
+            {"name": name, "email": email_clean, "phone": phone,
+             "message": message},
+            source="website_contact_form", email=email_clean, phone=phone)
         return contact_id
     except Exception as e:
         logger.warning(f"[contact-submit] contact capture failed: {e}")
