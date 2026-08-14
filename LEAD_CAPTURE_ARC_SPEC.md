@@ -157,7 +157,7 @@ day.
   threshold `settings.notifications.lead_response_hours`, default 4.
 - Median first-response on the funnel — the **frontend PR**.
 
-### PR 6 — Attribution  ← **in flight**
+### PR 6 — Attribution  ✅ **SHIPPED #580**
 
 A lead currently carries name, email, phone, status, source, and the
 raw submission blob. It carries no idea where it came from.
@@ -196,15 +196,32 @@ read is gated to `PLATFORM_OWNER_EMAIL` — so there is no visitor→lead
 conversion rate to compute for a practitioner. `how_heard` is also
 still read by nothing.
 
-### PR 7 — One dedupe rule
+### PR 7 — One dedupe rule  ← **in flight**
 
-Four doors, four different answers to *is this the same person*:
+**FIVE** doors, five different answers to *is this the same person*:
 no dedupe at all (intake), email-ilike-or-phone (site form),
-email-ilike (concierge), email-eq (booking). `contacts` has no unique
-index on `(business_id, lower(email))` —
-`booking_widget_router.py:1062` already flags the resulting race.
+email-ilike (concierge), email-eq/case-sensitive (booking widget), and
+email-eq/case-sensitive-and-unnormalized (`/public/booking/{slug}
+/submit`, which lives in `public_site` rather than with the booking
+code — which is also why PRs 1 and 6 both went past it).
 
-One `resolve_contact()` used by every door, plus the index.
+`lead_identity.resolve()` is the one rule now, and a sweep test keeps
+any door from growing its own again.
+
+**NO UNIQUE INDEX, and that is a change from this spec's original
+plan.** Production holds `Rev. Marcus Williams` and `Sister Williams`
+at one address in one church's list — two different people sharing a
+household email, which is legitimate for a church, a family business
+or a couple. A constraint would make the second person unable to exist
+and would surface as a 500 on a public form. Application-level
+resolution can weigh a name; an index cannot weigh anything. The guard
+errs toward SPLITTING: a false merge interleaves two histories across
+seventeen foreign keys, a false split is a visible duplicate.
+
+No `lower(email)` index either — the resolver matches with `ilike`,
+which the planner will not serve from a btree on `lower(email)`, and an
+index the query cannot use implies a coverage that is not there. The
+phone lookup is plain equality, so that index is real and applied.
 
 ## Also true, not scheduled
 

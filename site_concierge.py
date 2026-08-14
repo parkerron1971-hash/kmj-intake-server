@@ -853,15 +853,13 @@ def _find_or_create_contact(business_id: str, name: str, email: str,
     try:
         email_clean = (email or "").strip().lower()
         now_iso = _now_iso()
-        existing = None
-        if email_clean:
-            pattern = (email_clean.replace("\\", "\\\\")
-                       .replace("%", "\\%").replace("_", "\\_"))
-            rows = sb_clients.sb_get_as_service(
-                f"/contacts?business_id=eq.{business_id}"
-                f"&email=ilike.{urllib.parse.quote(pattern, safe='')}"
-                f"&select=id,metadata&limit=1") or []
-            existing = rows[0] if rows else None
+        # THE ONE DEDUPE RULE (lead_identity). This matched on email
+        # ALONE, so a visitor who left a phone number and no email
+        # became a new row every time they came back.
+        import lead_identity
+        existing = lead_identity.find(
+            business_id, email=email_clean, name=name,
+            select="id,name,metadata")
 
         entry = {"at": now_iso, "message": (message or "")[:1000]}
         if existing:

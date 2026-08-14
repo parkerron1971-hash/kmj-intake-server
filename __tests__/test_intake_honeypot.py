@@ -135,8 +135,14 @@ def _submit(data, form_business_id="biz-1"):
     body = intake_endpoint.IntakeSubmission(
         form_id="form-1", business_id="biz-1", data=data)
 
+    import lead_identity
     import lead_scoring
+    # The contact write goes through lead_identity now (one dedupe
+    # rule, shared by all five doors), which uses sb_clients rather
+    # than this module's supabase_request helper.
+    resolution = lead_identity.Resolution(contact_id="c-1", created=True)
     with mock.patch.object(intake_endpoint, "supabase_request", side_effect=fake_sb), \
+         mock.patch("lead_identity.resolve", return_value=resolution), \
          mock.patch.object(intake_endpoint, "get_supabase_url", return_value="https://x"), \
          mock.patch.object(intake_endpoint, "get_supabase_anon", return_value="k"), \
          mock.patch.object(intake_endpoint, "get_anthropic_key", return_value=""), \
@@ -170,4 +176,6 @@ def test_an_empty_trap_lets_a_real_person_through():
     out, calls, _ = _submit({"name": "Real Person", "email": "r@example.com",
                              "sol-hp": ""})
     assert out["success"] is True
-    assert [c for c in calls if c == ("POST", "/contacts")]
+    # lead_identity did the write; what this test cares about is
+    # that the trap let them through at all.
+    assert out["contact_id"] == "c-1"

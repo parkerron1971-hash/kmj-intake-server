@@ -240,4 +240,7 @@ def test_all_four_doors_write_source_detail():
     for filename in DOORS:
         src = (root / filename).read_text(encoding="utf-8")
         assert "lead_attribution.detail_for(" in src, filename
-        assert '"source_detail"' in src, filename
+        # A dict key on the doors that build their own insert, a
+        # keyword on the ones that go through lead_identity.resolve.
+        assert ('"source_detail"' in src
+                or "source_detail=" in src), filename

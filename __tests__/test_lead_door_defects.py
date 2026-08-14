@@ -62,7 +62,15 @@ def _submit(form_business_id, claimed_business_id):
         form_id="form-1", business_id=claimed_business_id,
         data={"name": "Attacker", "email": "a@example.com"})
 
-    with mock.patch.object(intake_endpoint, "supabase_request", side_effect=fake_sb), \
+    import lead_identity
+    # The contact write goes through lead_identity now — one dedupe
+    # rule shared by all five doors — which uses sb_clients, not
+    # this module's supabase_request helper. Patched so the
+    # ownership check below is what the test is measuring.
+    with mock.patch("lead_identity.resolve",
+                    return_value=lead_identity.Resolution(
+                        contact_id="c-1", created=True)), \
+         mock.patch.object(intake_endpoint, "supabase_request", side_effect=fake_sb), \
          mock.patch.object(intake_endpoint, "get_supabase_url", return_value="https://x"), \
          mock.patch.object(intake_endpoint, "get_supabase_anon", return_value="k"), \
          mock.patch.object(intake_endpoint, "get_anthropic_key", return_value=""), \
@@ -103,7 +111,9 @@ def test_the_honest_submission_still_goes_through():
                                  claimed_business_id="biz-1")
     assert err is None, err
     assert result["success"] is True
-    assert [c for c in calls if c[0] == "POST" and c[1] == "/contacts"]
+    # lead_identity performs the insert; the point here is that the
+    # honest submission was not rejected by the ownership check.
+    assert result["contact_id"] == "c-1"
 
 
 # ═══════════════════════════════════════════════════════════════════════
