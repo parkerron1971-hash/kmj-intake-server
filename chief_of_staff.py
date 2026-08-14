@@ -5633,6 +5633,32 @@ async def _fetch_business_settings(client, biz_id: str) -> Tuple[Optional[Dict[s
     return biz, settings
 
 
+def _planned_post_present(rows: Any, post_id: str) -> bool:
+    """True when `rows` — a PostgREST business payload — carries a planned
+    post with this id.
+
+    Exists because `_sb` reports a rejected write the same way it reports
+    a successful one that returned no body: it returns None. Any handler
+    that wants to tell the practitioner "saved" honestly has to look at
+    the row rather than at the absence of an exception.
+    """
+    if not isinstance(rows, list) or not rows:
+        return False
+    row = rows[0]
+    if not isinstance(row, dict):
+        return False
+    settings = row.get("settings")
+    if not isinstance(settings, dict):
+        return False
+    cal = settings.get("content_calendar")
+    if not isinstance(cal, dict):
+        return False
+    return any(
+        isinstance(p, dict) and p.get("id") == post_id
+        for p in (cal.get("planned_posts") or [])
+    )
+
+
 async def handle_create_goal(client, biz, action) -> Dict:
     """Create a strategic goal stored at settings.goals.active_goals.
     Auto-tracked goals don't carry a current value — the UI computes
@@ -6072,7 +6098,47 @@ async def handle_plan_content(client, biz, action) -> Dict:
 
     planned = list(cal.get("planned_posts") or [])
     posted = list(cal.get("posted") or [])
-    planned.append(new_post)
+
+    # Idempotency. Planning the same post twice appends a twin: the
+    # calendar ends up carrying two "The Power of Pausing Before You
+    # Respond" on LinkedIn for Wed May 27, and the practitioner deletes
+    # one by hand. It happens more than you'd think — a re-asked
+    # question, or a dropped stream that makes the client replay the
+    # turn (chiefStream returns null when a stream ends without a
+    # 'final' event, and ChiefOfStaff then re-POSTs the whole turn,
+    # re-executing its actions server-side). Same title + platform +
+    # date is the same post, so update it in place.
+    #
+    # Update rather than skip: the second pass is usually the one
+    # carrying the drafted body ("plan it" ... "now write it").
+    # Returning the bare existing post would throw that draft away.
+    existing_idx = next(
+        (i for i, p in enumerate(planned)
+         if isinstance(p, dict)
+         and (p.get("title") or "").strip().lower() == title.lower()
+         and (p.get("platform") or "") == platform
+         and (p.get("scheduled_date") or "")[:10] == scheduled_date),
+        None,
+    )
+    was_update = existing_idx is not None
+    if was_update:
+        merged = dict(planned[existing_idx])
+        # Only overwrite with something — a re-plan that omits the body
+        # must not blank a draft that is already there.
+        if body:
+            merged["body"] = body
+        if pillar_id:
+            merged["pillar_id"] = pillar_id
+        if reminders:
+            merged["reminders"] = reminders
+        merged["status"] = status_v
+        merged.setdefault("id", new_post["id"])
+        merged.setdefault("created_at", new_post["created_at"])
+        planned[existing_idx] = merged
+        new_post = merged
+    else:
+        planned.append(new_post)
+
     next_settings = {
         **settings,
         "content_calendar": {
@@ -6082,16 +6148,34 @@ async def handle_plan_content(client, biz, action) -> Dict:
         },
     }
     try:
-        await _sb(client, "PATCH", f"/businesses?id=eq.{biz_id}", {"settings": next_settings})
+        saved = await _sb(client, "PATCH", f"/businesses?id=eq.{biz_id}", {"settings": next_settings})
     except Exception as e:
         return _fail("plan_content", f"save failed: {e}")
 
+    # _sb does not raise on a rejected write — sb_clients._async_request
+    # logs the 4xx/5xx (or the transport timeout) and returns None. The
+    # try/except above could therefore never fire, and a write PostgREST
+    # refused still reported "📱 Planned linkedin post ..." to the
+    # practitioner as done. Confirm the post is in the row we wrote.
+    if not _planned_post_present(saved, new_post["id"]):
+        # PATCH echoes the updated row back (Prefer: return=representation),
+        # so the check above is normally free. If it came back empty or
+        # shaped differently, read it back before claiming either way — a
+        # false "that failed" over a write that landed is its own lie.
+        _, after = await _fetch_business_settings(client, biz_id)
+        if not _planned_post_present([{"settings": after}], new_post["id"]):
+            return _fail(
+                "plan_content",
+                "the post was not written to the content calendar — nothing was saved",
+            )
+
     pillar_label = f" · {resolved_pillar_name}" if resolved_pillar_name else ""
     body_label = " (drafted)" if body and len(body) > 30 else ""
+    verb = "Updated" if was_update else "Planned"
     return {
         "type": "plan_content",
         "result": f"scheduled for {scheduled_date}{pillar_label}",
-        "label": f"📱 Planned {platform} post: {title}{body_label} — {scheduled_date}{pillar_label}",
+        "label": f"📱 {verb} {platform} post: {title}{body_label} — {scheduled_date}{pillar_label}",
         "post_id": new_post["id"],
         "nav": _nav("grow", "content"),
         # Refetch business settings so the new post + any reminders
