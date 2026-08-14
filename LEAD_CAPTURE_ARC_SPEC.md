@@ -135,7 +135,7 @@ same browser shared one identity and one person's conversation ate
 another's allowance. Same one-line cause, worse consequence than the
 rate limit.
 
-### PR 4 — The first-response clock
+### PR 4 — The first-response clock  ← **in flight**
 
 There is no `responded_at`, no SLA field, no first-response metric
 anywhere in either repo. The nearest thing is `growth_engine.py:1105`,
@@ -143,13 +143,17 @@ which flags a stale lead at **30 days old plus 14 days silent** — a
 monthly insight, not an alarm. Nothing catches a lead unanswered for a
 day.
 
-- Migration: `contacts.first_response_at`, plus a captured-at that is
-  distinct from `created_at` for imported rows.
-- Stamp it on the first outbound touch of any channel (email send, SMS
-  send, session booked, status moved off `lead`).
-- Alert at N hours unanswered, N configurable per business.
-- Surface median first-response time on the funnel — the number that
-  actually predicts conversion.
+- Migration: `contacts.first_response_at` + two partial indexes.
+  **APPLIED 2026-08-14** (`APPLY-2026_08_14_first_response_clock.sql`).
+- **DERIVED, not stamped.** There are at least six outbound paths and
+  one of them is the frontend, which PATCHes `agent_queue` to `sent`
+  straight from `ContactDetail.tsx`. Six call sites is six chances to
+  miss one, and a missed one reads as a lead nobody ever answered — a
+  false alarm, which is the fastest way to teach someone to ignore a
+  real one. All six already leave a durable record; `lead_response.py`
+  reads those on a 15-minute tick.
+- Alert at N hours unanswered — **PR 5**, next.
+- Median first-response on the funnel — the **frontend PR**.
 
 ### PR 5 — Attribution
 
