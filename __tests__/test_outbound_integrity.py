@@ -265,7 +265,7 @@ def test_endpoint_captures_contact_even_when_email_is_unconfigured():
     captured = []
     with mock.patch.object(public_site, "_check_contact_rate", return_value=True), \
          mock.patch.object(public_site, "_capture_contact_from_form",
-                           side_effect=lambda *a: captured.append(a) or "c-1"), \
+                           side_effect=lambda *a, **k: captured.append((a, k)) or "c-1"), \
          mock.patch.object(brand_engine, "get_bundle",
                            return_value={"footer": {"contact_email": "op@x.com"}}), \
          mock.patch.object(brand_engine, "_sb_get", return_value=[]), \
@@ -273,7 +273,10 @@ def test_endpoint_captures_contact_even_when_email_is_unconfigured():
         res = asyncio.run(public_site.contact_submit_endpoint(
             "biz-1", {"name": "V", "email": "v@x.com", "message": "hi"},
             _fake_request()))
-    assert captured and captured[0][0] == "biz-1"
+    assert captured and captured[0][0][0] == "biz-1"
+    # THE LEAD ARC PR 6: the endpoint also hands over where they came
+    # from. Positional args unchanged; attribution rides as a keyword.
+    assert "attribution" in captured[0][1]
     assert res["ok"] is False       # email leg unconfigured, capture done
 
 

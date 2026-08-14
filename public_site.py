@@ -1959,7 +1959,9 @@ def _record_website_sms_consent(business_id: str, phone_raw: str,
 
 
 def _capture_contact_from_form(business_id: str, name: str, email: str,
-                               phone_raw: str, message: str) -> Optional[str]:
+                               phone_raw: str, message: str,
+                               attribution: Optional[Dict[str, Any]] = None
+                               ) -> Optional[str]:
     """Find-or-create the contact for a website contact-form submission
     (outbound-integrity, 2026-07-31). Before this, a visitor who filled
     the composed site's contact form ONLY produced a notification email —
@@ -1980,6 +1982,7 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
     try:
         import urllib.parse
 
+        import lead_attribution
         import sb_clients
         from sms_service import normalize_phone
 
@@ -2026,6 +2029,8 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
                 "phone": phone or None,
                 "status": "lead",
                 "source": "website_contact_form",
+                "source_detail": lead_attribution.detail_for(attribution),
+                "attribution": attribution or None,
                 "metadata": {"website_form_messages": [msg_entry]},
                 "last_interaction": now_iso,
             })
@@ -2039,9 +2044,10 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
         import event_spine
         event_spine.emit(
             "contact_form_submitted", business_id,
-            {"name": name, "email": email_clean,
-             "message_preview": (message or "")[:160],
-             "new_contact": existing is None},
+            dict({"name": name, "email": email_clean,
+                  "message_preview": (message or "")[:160],
+                  "new_contact": existing is None},
+                 **lead_attribution.event_fields(attribution)),
             contact_id=contact_id, source="website_contact_form")
 
         # Score it, on a worker thread. Until this landed, a lead from
@@ -2111,8 +2117,15 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     # becomes/updates a contact + a timeline event BEFORE the email leg,
     # so the visitor exists in /contacts even if Resend hiccups. The rate
     # limit above already gated this write; best-effort by contract.
+    # Where they came from. Read SERVER-SIDE off the Referer header —
+    # this form is emitted by four different renderers plus whatever the
+    # builder's LLM writes, so anything requiring the client to
+    # cooperate would be partially deployed forever.
+    import lead_attribution
+    attribution = lead_attribution.capture(request, body)
     _capture_contact_from_form(
-        business_id, name, email, str(body.get("phone") or ""), message)
+        business_id, name, email, str(body.get("phone") or ""), message,
+        attribution=attribution)
 
     try:
         from brand_engine import get_bundle, _sb_get as be_get

@@ -65,6 +65,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+import lead_attribution
 import lead_scoring
 import llm_call
 import rate_limit
@@ -471,6 +472,12 @@ async def submit_intake(req: IntakeSubmission, request: Request):
         business_name = business.get("name", "")
 
         # ── 3. Create contact ─────────────────────────────────────────
+        # Where they came from. The embed sits on the practitioner's own
+        # site, so the Referer header IS that page — landing path and,
+        # in its query string, the campaign that sent them.
+        attribution = lead_attribution.capture(
+            request, source_detail=form_config.get("name") or "")
+
         contact_payload = {
             "business_id": req.business_id,
             "name": name,
@@ -479,6 +486,12 @@ async def submit_intake(req: IntakeSubmission, request: Request):
             "role": submission_data.get("role") or submission_data.get("organization") or None,
             "status": "lead",
             "source": "intake_form",
+            # source_detail is the FORM NAME. WebsiteTraffic.tsx groups
+            # per-form conversion and average lead score by this, which
+            # is why every form on that page shows "—" today.
+            "source_detail": lead_attribution.detail_for(
+                attribution, form_config.get("name") or ""),
+            "attribution": attribution or None,
             "metadata": {
                 "form_id": req.form_id,
                 "form_type": form_config.get("form_type", "general"),
@@ -502,12 +515,12 @@ async def submit_intake(req: IntakeSubmission, request: Request):
             "business_id": req.business_id,
             "contact_id": contact_id,
             "event_type": "form_submit",
-            "data": {
+            "data": dict({
                 "form_id": req.form_id,
                 "form_name": form_config.get("name", ""),
                 "form_type": form_config.get("form_type", ""),
                 "submission": submission_data,
-            },
+            }, **lead_attribution.event_fields(attribution)),
             "source": "intake_form",
         })
 

@@ -60,6 +60,7 @@ from pydantic import BaseModel
 import event_spine
 import feature_gates
 import llm_call
+import lead_attribution
 import rate_limit
 import sb_clients
 from auth_supabase import AuthedUser, require_user
@@ -842,7 +843,9 @@ class PublicLeadBody(BaseModel):
 
 
 def _find_or_create_contact(business_id: str, name: str, email: str,
-                            message: str) -> Optional[str]:
+                            message: str,
+                            attribution: Optional[Dict[str, Any]] = None
+                            ) -> Optional[str]:
     """Find-or-create with the outbound-integrity dedup pattern (PR #344,
     public_site._capture_contact_from_form): email ilike with LIKE
     wildcards escaped, always WITHIN business_id. Best-effort: never
@@ -877,6 +880,9 @@ def _find_or_create_contact(business_id: str, name: str, email: str,
                 "email": email_clean or None,
                 "status": "lead",
                 "source": "site_concierge",
+                "source_detail": lead_attribution.detail_for(
+                    attribution, "site concierge"),
+                "attribution": attribution or None,
                 "metadata": {"concierge_messages": [entry]},
                 "last_interaction": now_iso,
             })
@@ -924,7 +930,11 @@ async def public_lead(slug: str, body: PublicLeadBody,
     if "@" not in email or "." not in email:
         raise HTTPException(400, "invalid email")
 
-    contact_id = _find_or_create_contact(business_id, name, email, message)
+    contact_id = _find_or_create_contact(
+        business_id, name, email, message,
+        attribution=lead_attribution.capture(
+            request, body.model_dump() if hasattr(body, "model_dump") else None,
+            source_detail="site concierge"))
 
     conversation = _get_conversation(body.conversation_id or "", business_id)
     if conversation and contact_id:
