@@ -121,7 +121,11 @@ def test_the_exposed_read_verbs_and_nothing_else():
     Bump this ONLY together with a TOOL_SCHEMAS entry and a reason.
     """
     tools = mcp.exposed_tools()
-    assert len(tools) == 24, (
+    # 25 (8/14): show_view joined — a bounded typed-rows read over tables
+    # every one of which was already individually readable here (invoices ~
+    # list_expenses' financial class; contacts ~ contact_deep_dive;
+    # sessions ~ list_scheduled; products ~ list_products).
+    assert len(tools) == 25, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -534,7 +538,7 @@ SILENT_TOOLS = {
     "list_module_entries", "list_offerings", "list_products",
     "list_projects", "list_scheduled", "propose_brand_kit_from_context",
     "propose_voice_rule", "recall_conversation", "show_revenue",
-    "site_health", "summarize_module", "what_undo",
+    "show_view", "site_health", "summarize_module", "what_undo",
 }
 
 
