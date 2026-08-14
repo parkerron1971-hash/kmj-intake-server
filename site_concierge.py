@@ -60,6 +60,7 @@ from pydantic import BaseModel
 import event_spine
 import feature_gates
 import llm_call
+import rate_limit
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -231,7 +232,13 @@ def _check_ip_rate(ip: str) -> bool:
 
 
 def _visitor_key(request: Request) -> str:
-    ip = request.client.host if request.client else "unknown"
+    # trusted_client_ip, not request.client.host. Behind Railway the
+    # socket peer is the PROXY, identical for every visitor on the
+    # planet — so this key collapsed to sha256(proxy|user-agent) and
+    # two strangers running the same browser shared one identity. The
+    # daily per-visitor message cap was therefore counting other
+    # people's conversations against them.
+    ip = rate_limit.trusted_client_ip(request)
     ua = request.headers.get("user-agent", "")
     return hashlib.sha256(f"{ip}|{ua}".encode("utf-8")).hexdigest()[:32]
 
@@ -745,7 +752,7 @@ async def public_message(slug: str, body: PublicMessageBody,
                          request: Request) -> Dict[str, Any]:
     # Rate limit BEFORE any work (the contact-form discipline). A tripped
     # IP bucket degrades rather than 429s — customer-facing surface.
-    ip = request.client.host if request.client else "unknown"
+    ip = rate_limit.trusted_client_ip(request)
     if not _check_ip_rate(ip):
         return _degraded(body.conversation_id, "rate_limited")
 
@@ -895,7 +902,7 @@ def _find_or_create_contact(business_id: str, name: str, email: str,
 @router.post("/public/concierge/{slug}/lead")
 async def public_lead(slug: str, body: PublicLeadBody,
                       request: Request) -> Dict[str, Any]:
-    ip = request.client.host if request.client else "unknown"
+    ip = rate_limit.trusted_client_ip(request)
     if not _check_ip_rate(ip):
         raise HTTPException(429, "Too many submissions. Please try again later.")
 

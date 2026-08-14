@@ -49,7 +49,18 @@ from chief_of_staff import ACTION_HANDLERS
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════
 
-NOTIF_MODEL = "claude-sonnet-4-5-20250929"
+# Sonnet by default: the morning brief is the notification people
+# actually read, it is written in the practitioner's own voice, and
+# picking "ONE specific thing to prioritize today" is the only real
+# judgment call in this module. ~$0.01 a brief, and skip-when-empty
+# means only a business that had a day pays for one.
+#
+# An ENV VAR rather than a constant so the decision can be revisited
+# without a deploy: at roughly $1 per active business per month, this
+# stops being noise somewhere north of a couple of hundred tenants, and
+# claude-haiku-4-5-20251001 is about a tenth the cost for what is
+# mostly summarization.
+NOTIF_MODEL = os.environ.get("NOTIF_MODEL", "claude-sonnet-4-5-20250929")
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
 MIDDAY_LOOKBACK_HOURS = 4

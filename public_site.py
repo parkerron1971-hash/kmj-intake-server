@@ -2081,7 +2081,14 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     is SMS-capable; a checked box with a usable phone is recorded in
     sms_consents (source='website_contact') — the A2P audit trail.
     """
-    client_ip = request.client.host if request.client else "unknown"
+    # trusted_client_ip, not request.client.host: behind Railway the
+    # socket peer is the PROXY, so every visitor to every published site
+    # shared ONE bucket and the sixth contact-form submission
+    # platform-wide in a minute was refused. A limiter that drops real
+    # leads is worse than no limiter. rate_limit exists for exactly this
+    # and intake_endpoint already uses it.
+    import rate_limit
+    client_ip = rate_limit.trusted_client_ip(request)
     if not _check_contact_rate(client_ip):
         raise HTTPException(429, "Too many submissions. Please try again later.")
 

@@ -394,6 +394,24 @@ async def submit_intake(req: IntakeSubmission, request: Request):
         if not form_config:
             raise HTTPException(status_code=404, detail="Form not found")
 
+        # The form's OWN business, not the one the caller claimed.
+        #
+        # This endpoint is anonymous and took business_id from the
+        # request body, then never compared it to the form it had just
+        # loaded by id. form_id is public — it sits in the embed snippet
+        # on the practitioner's own website — so anyone who viewed a
+        # source could post a submission with a real form_id and any
+        # business_id they liked, and it was written into that other
+        # tenant's contacts, events, agent_queue and custom modules.
+        #
+        # 404, not 403: a mismatch must not confirm that either id
+        # exists.
+        if str(form_config.get("business_id") or "") != str(req.business_id):
+            logger.warning(
+                f"[intake] business_id mismatch — form {req.form_id} belongs to "
+                f"{form_config.get('business_id')}, caller claimed {req.business_id}")
+            raise HTTPException(status_code=404, detail="Form not found")
+
         # Validate required fields
         fields = form_config.get("fields", [])
         for field in fields:
