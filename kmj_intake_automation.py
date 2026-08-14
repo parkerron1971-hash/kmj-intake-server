@@ -1112,6 +1112,28 @@ async def startup():
                               "cron", hour=23, minute=5, id="notif_evening_summary")
         except Exception as e:
             print(f"   [warn] notification engine jobs not scheduled: {e}")
+    # THE LEAD ARC PR 4 (2026-08-14) — the first-response clock.
+    #
+    # Nothing measured how long a lead waited before anyone answered.
+    # This derives it from the records the outbound paths already leave
+    # — an outbound SMS, an agent_queue row marked sent, a spine event,
+    # a session, a status moved off 'lead' — rather than stamping it at
+    # six send sites, one of which is the FRONTEND. A missed call site
+    # would read as a lead nobody ever answered, and a false alarm is
+    # the fastest way to teach someone to ignore a real one.
+    #
+    # Every 15 minutes: fresh enough for an alarm measured in hours, and
+    # unanswered leads are re-scanned every pass on purpose, because a
+    # response can still arrive. Kill switch: LEAD_RESPONSE_JOB=off.
+    if (os.environ.get("LEAD_RESPONSE_JOB") or "on").strip().lower() != "off":
+        try:
+            import lead_response as _lead_response
+            scheduler.add_job(g("lead_response_reconcile",
+                                _lead_response.reconcile_tick),
+                              "interval", minutes=15,
+                              id="lead_response_reconcile")
+        except Exception as e:
+            print(f"   [warn] lead response reconcile not scheduled: {e}")
     # Chief Layers arc (2026-07-09) — the weekly longitudinal insight
     # engine (Opus lane; eligibility + cadence + per-tick cap inside).
     # Kill switch: CHIEF_INSIGHTS=off.
