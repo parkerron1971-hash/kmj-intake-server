@@ -66,6 +66,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 import lead_attribution
+import lead_identity
 import lead_scoring
 import llm_call
 import rate_limit
@@ -478,37 +479,57 @@ async def submit_intake(req: IntakeSubmission, request: Request):
         attribution = lead_attribution.capture(
             request, source_detail=form_config.get("name") or "")
 
-        contact_payload = {
-            "business_id": req.business_id,
-            "name": name,
-            "email": email or None,
-            "phone": phone or None,
-            "role": submission_data.get("role") or submission_data.get("organization") or None,
-            "status": "lead",
-            "source": "intake_form",
-            # source_detail is the FORM NAME. WebsiteTraffic.tsx groups
-            # per-form conversion and average lead score by this, which
-            # is why every form on that page shows "—" today.
-            "source_detail": lead_attribution.detail_for(
-                attribution, form_config.get("name") or ""),
-            "attribution": attribution or None,
-            "metadata": {
-                "form_id": req.form_id,
-                "form_type": form_config.get("form_type", "general"),
-                "submission": submission_data,
-            },
-            "last_interaction": "now()",
+        # ── 3. Find or create the contact ─────────────────────────────
+        # THE ONE DEDUPE RULE (lead_identity), shared with the other
+        # three doors. This endpoint used to POST unconditionally, so
+        # the same person enquiring twice became two contacts, two AI
+        # scoring calls and two drafted replies — the only door in the
+        # system with no dedupe at all.
+        submission_entry = {
+            "form_id": req.form_id,
+            "form_type": form_config.get("form_type", "general"),
+            "submission": submission_data,
         }
-        # Remove the now() hack — Supabase REST doesn't support SQL functions in values
-        contact_payload.pop("last_interaction")
-
-        contacts = await supabase_request(client, "POST", "/contacts", contact_payload)
-        contact = contacts[0] if contacts else None
-        if not contact:
+        resolution = await asyncio.to_thread(
+            lead_identity.resolve,
+            req.business_id, name=name, email=email, phone=phone,
+            source="intake_form",
+            # source_detail is the FORM NAME. WebsiteTraffic.tsx groups
+            # per-form conversion and average lead score by this.
+            source_detail=lead_attribution.detail_for(
+                attribution, form_config.get("name") or ""),
+            attribution=attribution or None,
+            extra={
+                "role": (submission_data.get("role")
+                         or submission_data.get("organization") or None),
+                "metadata": dict(submission_entry, intake_submissions=[submission_entry]),
+            },
+        )
+        if not resolution.ok:
             raise HTTPException(status_code=500, detail="Failed to create contact")
+        contact_id = resolution.contact_id
 
-        contact_id = contact["id"]
-        logger.info(f"Created contact {contact_id}: {name} ({email})")
+        if not resolution.created:
+            # A returning enquirer. Append rather than overwrite: their
+            # earlier submissions are the history that makes the new one
+            # legible, and the stored name/email are theirs, not
+            # whatever the latest form happened to collect.
+            try:
+                meta = dict((resolution.existing or {}).get("metadata") or {})
+                history = list(meta.get("intake_submissions") or [])
+                history.append(submission_entry)
+                meta["intake_submissions"] = history[-10:]
+                await supabase_request(
+                    client, "PATCH",
+                    f"/contacts?id=eq.{contact_id}&business_id=eq.{req.business_id}",
+                    {"metadata": meta})
+            except Exception as e:
+                logger.warning(f"[intake] could not append submission history: {e}")
+
+        logger.info(
+            f"{'Created' if resolution.created else 'Matched'} contact "
+            f"{contact_id}: {name} ({email})"
+            + ("" if resolution.created else f" on {resolution.matched_on}"))
 
         # ── 4. Log event ──────────────────────────────────────────────
         await supabase_request(client, "POST", "/events", {

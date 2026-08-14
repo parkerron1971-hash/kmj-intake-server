@@ -1990,24 +1990,15 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
         phone = normalize_phone(str(phone_raw or ""))
         now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-        existing = None
-        if email_clean:
-            # ilike with no wildcards = case-insensitive exact match, but
-            # emails legally contain '_' (a LIKE single-char wildcard) —
-            # escape pattern chars so jo_n@x.com can't match joan@x.com.
-            pattern = (email_clean.replace("\\", "\\\\")
-                       .replace("%", "\\%").replace("_", "\\_"))
-            rows = sb_clients.sb_get_as_service(
-                f"/contacts?business_id=eq.{business_id}"
-                f"&email=ilike.{urllib.parse.quote(pattern, safe='')}"
-                f"&select=id,phone,metadata&limit=1") or []
-            existing = rows[0] if rows else None
-        if existing is None and phone:
-            rows = sb_clients.sb_get_as_service(
-                f"/contacts?business_id=eq.{business_id}"
-                f"&phone=eq.{urllib.parse.quote(phone, safe='')}"
-                f"&select=id,phone,metadata&limit=1") or []
-            existing = rows[0] if rows else None
+        # THE ONE DEDUPE RULE (lead_identity). This block used to be
+        # the best of four different implementations; it is the only
+        # one now, and every door shares it — including the name guard
+        # that keeps two people at one household address out of a
+        # single record.
+        import lead_identity
+        existing = lead_identity.find(
+            business_id, email=email_clean, phone=phone, name=name,
+            select="id,name,phone,metadata")
 
         msg_entry = {"at": now_iso, "message": (message or "")[:1000]}
         if existing:
@@ -4102,7 +4093,8 @@ class BookingSubmission(BaseModel):
 
 
 @router.post("/public/booking/{slug}/submit")
-async def booking_submit(slug: str, req: BookingSubmission):
+async def booking_submit(slug: str, req: BookingSubmission,
+                         request: Request = None):
     """Process a booking: create contact + session."""
     if not _check_rate(f"booking-{slug}"):
         raise HTTPException(429, "Rate limit exceeded")
@@ -4144,25 +4136,42 @@ async def booking_submit(slug: str, req: BookingSubmission):
         if conflicts:
             raise HTTPException(409, "Time slot no longer available")
 
-        # Find or create contact
-        contact_id = None
-        if req.email:
-            existing = await _sb(client,
-                f"/contacts?business_id=eq.{biz_id}&email=eq.{req.email}&limit=1&select=id")
-            if existing:
-                contact_id = existing[0]["id"]
+        # ── Find or create the contact ────────────────────────────
+        # THE FIFTH LEAD DOOR, and the one that was easiest to miss:
+        # it lives here in public_site rather than with the rest of
+        # the booking code, so PR #574 (scoring) and PR #580
+        # (attribution) both went past it. Its lookup was
+        # `email=eq.{req.email}` — case sensitive AND unnormalized,
+        # so a booking from Dana@X.com created a second contact
+        # beside the existing dana@x.com and the two halves of that
+        # person's history never met.
+        import lead_attribution
+        import lead_identity
+        attribution = lead_attribution.capture(request,
+                                               source_detail="booking page")
+        resolution = await asyncio.to_thread(
+            lead_identity.resolve, biz_id,
+            name=req.name, email=req.email, phone=req.phone,
+            source="booking_page",
+            source_detail=lead_attribution.detail_for(attribution,
+                                                      "booking page"),
+            attribution=attribution or None)
+        contact_id = resolution.contact_id
 
-        if not contact_id:
-            new_contact = await _sb_post(client, "/contacts", {
-                "business_id": biz_id,
-                "name": req.name.strip(),
-                "email": req.email or None,
-                "phone": req.phone or None,
-                "status": "lead",
-                "source": "booking_page",
-            })
-            if new_contact and isinstance(new_contact, list):
-                contact_id = new_contact[0]["id"]
+        if resolution.created and contact_id:
+            # Score it, like every other door. Backgrounded: the
+            # visitor is waiting on this request and nothing in it
+            # reads the score.
+            import lead_scoring
+            lead_scoring.score_in_background(
+                biz_id, contact_id,
+                {"name": req.name, "email": req.email or "",
+                 "phone": req.phone or "",
+                 "session_type": req.session_type,
+                 "date": req.date, "time": req.time,
+                 "message": req.message or ""},
+                source="booking_widget",
+                email=req.email or "", phone=req.phone or "")
 
         # Create session
         session_title = f"{req.session_type.replace('_', ' ').title()} with {req.name}"

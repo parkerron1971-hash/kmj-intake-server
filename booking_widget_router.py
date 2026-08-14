@@ -1077,12 +1077,15 @@ def _find_or_create_contact(business_id: str, name: str, email_lower: str,
     natively cover multi-statement transactions; needs a Postgres RPC.
     Same hardening sweep.
     """
-    existing = sb_clients.sb_get_as_service(
-        f"/contacts?business_id=eq.{business_id}&email=eq.{email_lower}"
-        f"&limit=1&select=id"
-    ) or []
-    if existing:
-        return existing[0]["id"]
+    # THE ONE DEDUPE RULE (lead_identity). This was `email=eq.` —
+    # CASE SENSITIVE at the database. A contact stored as Dana@x.com
+    # was invisible to a booking for dana@x.com, so the booking made
+    # a second contact and the two halves of their history never met.
+    import lead_identity
+    existing_row = lead_identity.find(
+        business_id, email=email_lower, name=name, select="id,name")
+    if existing_row:
+        return str(existing_row["id"])
     # status='lead' matches the in-tree convention (chief_of_staff.handle_create_contact,
     # public_site booking flow). 'lifecycle_stage' is NOT a real column on contacts —
     # the prior typo caused PGRST204 and a 500 on the widget submission.
