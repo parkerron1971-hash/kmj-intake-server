@@ -156,6 +156,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                               "ledger and points at the rows. Returns counts, "
                               "never row contents", sensitive=True),
     "show_revenue":        _r("reads revenue figures"),
+    "close_view":          _ui("dismisses the on-screen data view the practitioner asked to close"),
     "show_view":           _r("fetches a bounded read-only list (invoices / contacts / "
                               "sessions / products) under the caller's own JWT and returns "
                               "it as typed rows for an in-chat table card; RLS is the gate, "

@@ -682,97 +682,121 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # (action parsing, retries, two-pass replies) is unchanged.
     if stream_sink is not None:
         payload["stream"] = True
-        full_parts: List[str] = []
-        in_tok = out_tok = 0
-        cache_read_tok = cache_write_tok = 0
-        try:
-            async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key,
-                                        extra_headers=_beta_headers(_extended)) as resp:
-                if resp.status_code >= 400:
-                    body = await resp.aread()
-                    # If the API is rejecting the extended-ttl beta, stop
-                    # asking for it PROCESS-WIDE and retry this turn on the
-                    # 5-minute default. Without this a bad beta name is not
-                    # a costlier cache, it is Chief being down.
-                    if _extended and _looks_like_beta_rejection(
-                            resp.status_code, body.decode("utf-8", "replace")):
-                        globals()["_extended_cache_ok"] = False
+        # Transient-failure retry, STREAMING edition (2026-08-14, Kevin's
+        # live repro: "it had trouble connecting"). The non-streaming
+        # branch below has retried 408/429/5xx with backoff since the
+        # 2026-07-17 fix for this exact symptom — but the streaming
+        # branch was built later for the voice arc and never inherited
+        # it, and the app rides THIS path on every turn. One 529 while
+        # Anthropic is busy went straight to the fallback brain, and a
+        # fallback stumble became "I'm having trouble connecting".
+        #
+        # The retry is gated on nothing having reached the sink yet:
+        # once deltas have streamed to the client, a retry would speak
+        # the reply twice — a partial stream returns the partial instead.
+        fb_reason = ""
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(1.5 * attempt)
+            full_parts: List[str] = []
+            in_tok = out_tok = 0
+            cache_read_tok = cache_write_tok = 0
+            try:
+                async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key,
+                                            extra_headers=_beta_headers(_extended)) as resp:
+                    if resp.status_code >= 400:
+                        body = await resp.aread()
+                        # If the API is rejecting the extended-ttl beta, stop
+                        # asking for it PROCESS-WIDE and retry this turn on the
+                        # 5-minute default. Without this a bad beta name is not
+                        # a costlier cache, it is Chief being down.
+                        if _extended and _looks_like_beta_rejection(
+                                resp.status_code, body.decode("utf-8", "replace")):
+                            globals()["_extended_cache_ok"] = False
+                            logger.warning(
+                                "[chief] extended cache ttl rejected (%s) — falling back "
+                                "to the 5-minute default for this process", resp.status_code)
+                            return await _call_claude(
+                                client, system, messages, max_tokens=max_tokens,
+                                enable_web_search=enable_web_search,
+                                business_id=business_id, model=model,
+                                stream_sink=stream_sink)
                         logger.warning(
-                            "[chief] extended cache ttl rejected (%s) — falling back "
-                            "to the 5-minute default for this process", resp.status_code)
-                        return await _call_claude(
-                            client, system, messages, max_tokens=max_tokens,
-                            enable_web_search=enable_web_search,
-                            business_id=business_id, model=model,
-                            stream_sink=stream_sink)
-                    logger.warning(f"Claude stream error: {resp.status_code} {body[:300]}")
-                    await log_api_usage(endpoint="/chief/backend", model=model,
-                        input_tokens=0, output_tokens=0, business_id=business_id,
-                        duration_ms=int(time.time() * 1000) - started_ms, ok=False,
-                        error=f"{resp.status_code}")
-                    # Backup brain (2026-07-12): no text reached the sink
-                    # yet, so the fallback reply can be delivered whole.
-                    fb = await fallback_brain.call_fallback(
-                        client, system, messages, max_tokens, business_id,
-                        reason=f"stream {resp.status_code}")
-                    if fb and stream_sink is not None:
+                            f"Claude stream error (attempt {attempt + 1}/3): "
+                            f"{resp.status_code} {body[:300]}")
+                        await log_api_usage(endpoint="/chief/backend", model=model,
+                            input_tokens=0, output_tokens=0, business_id=business_id,
+                            duration_ms=int(time.time() * 1000) - started_ms, ok=False,
+                            error=f"{resp.status_code}")
+                        fb_reason = f"stream {resp.status_code}"
+                        if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
+                            continue          # transient — retry with backoff
+                        break                 # our bug / key problem — fail fast
+                    async for line in resp.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
                         try:
-                            stream_sink(fb)
-                        except Exception:
-                            pass
-                    return fb
-                async for line in resp.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    try:
-                        evt = json.loads(line[5:].strip())
-                    except ValueError:
-                        continue
-                    et = evt.get("type")
-                    if et == "content_block_delta":
-                        d = evt.get("delta") or {}
-                        piece = d.get("text") if d.get("type") == "text_delta" else None
-                        if piece:
-                            full_parts.append(piece)
-                            try:
-                                stream_sink(piece)
-                            except Exception:  # sink must never kill the turn
-                                pass
-                    elif et == "message_start":
-                        u = ((evt.get("message") or {}).get("usage")) or {}
-                        in_tok = int(u.get("input_tokens") or 0)
-                        cache_read_tok = int(u.get("cache_read_input_tokens") or 0)
-                        cache_write_tok = int(u.get("cache_creation_input_tokens") or 0)
-                    elif et == "message_delta":
-                        u = evt.get("usage") or {}
-                        out_tok = int(u.get("output_tokens") or out_tok)
-        except httpx.HTTPError as e:
-            # Mid-stream drop: whatever text arrived is still a usable
-            # reply — return it rather than blanking the turn.
-            logger.warning(f"Claude stream failed: {e}")
-            await log_api_usage(endpoint="/chief/backend", model=model,
-                input_tokens=in_tok, output_tokens=out_tok, business_id=business_id,
-                duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=str(e))
-            partial = "".join(full_parts).strip()
-            if partial:
-                return partial
-            # Nothing arrived at all — try the backup brain.
-            fb = await fallback_brain.call_fallback(
-                client, system, messages, max_tokens, business_id,
-                reason=f"stream drop: {e}")
-            if fb and stream_sink is not None:
-                try:
-                    stream_sink(fb)
-                except Exception:
-                    pass
-            return fb
-        await log_api_usage(
-            endpoint="/chief/backend", model=model,
-            input_tokens=in_tok, output_tokens=out_tok,
-            cache_read_tokens=cache_read_tok, cache_creation_tokens=cache_write_tok,
-            business_id=business_id, task_type=prompt_shape,
-            duration_ms=int(time.time() * 1000) - started_ms)
-        return "".join(full_parts).strip()
+                            evt = json.loads(line[5:].strip())
+                        except ValueError:
+                            continue
+                        et = evt.get("type")
+                        if et == "content_block_delta":
+                            d = evt.get("delta") or {}
+                            piece = d.get("text") if d.get("type") == "text_delta" else None
+                            if piece:
+                                full_parts.append(piece)
+                                try:
+                                    stream_sink(piece)
+                                except Exception:  # sink must never kill the turn
+                                    pass
+                        elif et == "message_start":
+                            u = ((evt.get("message") or {}).get("usage")) or {}
+                            in_tok = int(u.get("input_tokens") or 0)
+                            cache_read_tok = int(u.get("cache_read_input_tokens") or 0)
+                            cache_write_tok = int(u.get("cache_creation_input_tokens") or 0)
+                        elif et == "message_delta":
+                            u = evt.get("usage") or {}
+                            out_tok = int(u.get("output_tokens") or out_tok)
+            except httpx.HTTPError as e:
+                logger.warning(f"Claude stream failed (attempt {attempt + 1}/3): {e}")
+                await log_api_usage(endpoint="/chief/backend", model=model,
+                    input_tokens=in_tok, output_tokens=out_tok, business_id=business_id,
+                    duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=str(e))
+                partial = "".join(full_parts).strip()
+                if partial:
+                    # Mid-stream drop AFTER text reached the client: the
+                    # partial is a usable reply, and a retry here would
+                    # speak it twice.
+                    return partial
+                fb_reason = f"stream drop: {e}"
+                continue                      # nothing arrived — retry
+            else:
+                text = "".join(full_parts).strip()
+                if text:
+                    await log_api_usage(
+                        endpoint="/chief/backend", model=model,
+                        input_tokens=in_tok, output_tokens=out_tok,
+                        cache_read_tokens=cache_read_tok, cache_creation_tokens=cache_write_tok,
+                        business_id=business_id, task_type=prompt_shape,
+                        duration_ms=int(time.time() * 1000) - started_ms)
+                    return text
+                # A 200 that streamed no text at all — treat as transient.
+                logger.warning(f"Claude stream returned empty (attempt {attempt + 1}/3)")
+                fb_reason = fb_reason or "stream empty"
+                continue
+
+        # Three attempts with backoff have failed — this is an outage, a
+        # rate-limit wall, or a bad key. One shot on the backup brain
+        # before conceding the turn, exactly like the non-streaming path.
+        fb = await fallback_brain.call_fallback(
+            client, system, messages, max_tokens, business_id,
+            reason=fb_reason or "stream exhausted retries")
+        if fb and stream_sink is not None:
+            try:
+                stream_sink(fb)
+            except Exception:
+                pass
+        return fb
 
     # Transient-failure retry (2026-07-17, Kevin's live repro: back-to-back
     # "trouble connecting" turns). Rate limits (429), overload (529), and
@@ -3498,6 +3522,23 @@ def _show_view_row(view: str, r: Dict[str, Any]) -> Dict[str, Any]:
         "type": r.get("type") or "",
         "price": float(r.get("price") or 0),
         "pricing": r.get("pricing_type") or "",
+    }
+
+
+async def handle_close_view(client, biz, action) -> Dict:
+    """Take the data stage down. Pure UI directive — the client closes
+    the stage when it sees the action; nothing here touches data.
+
+    Exists because the practitioner WILL say "close that" to the thing
+    Chief just put on their screen (Kevin, 8/14: "if I ask it to close
+    anything out, make sure it has that ability"), and a Chief that can
+    raise a surface but not lower it fails the dead-weight rule in
+    conversational form. Idempotent: closing with nothing open is a
+    no-op on the client, and the reply stays honest either way."""
+    return {
+        "type": "close_view",
+        "result": "closed the view",
+        "label": "✖ Closed the view",
     }
 
 
@@ -11891,6 +11932,7 @@ ACTION_HANDLERS = {
     "open_calendar":          handle_open_calendar,
     "show_revenue":           handle_show_revenue,
     "show_view":              handle_show_view,
+    "close_view":             handle_close_view,
     "create_goal":            handle_create_goal,
     "add_reminder":           handle_add_reminder,
     "check_goals":            handle_check_goals,
@@ -15231,6 +15273,7 @@ ACTIONS — NAVIGATION + MEMORY:
   [ACTION:{{"type":"show_view","view":"invoices|contacts|sessions|products","filter":"..."}}]  — SHOW A LIST RIGHT HERE IN THE CHAT. Fetches the actual rows and renders them as a table card under your reply — the practitioner sees every line item without leaving the conversation. Filters: invoices → open (default) | overdue | draft | paid | all; contacts → all (default) | leads | active; sessions → upcoming (default) | all; products → all.
     • WHEN: any time the practitioner asks to SEE, LIST, or BREAK DOWN their data — "share the invoices I have", "who owes what?", "show me my leads", "what sessions are coming up?". Emit the tag and speak naturally about what the card shows; the rows arrive from the database, so never retype them all into your prose.
     • NEVER say "I don't have the itemized breakdown" or offer to merely open a tab when this action can show the rows here. Navigation (show_revenue, navigate) is for when they want the full working SCREEN; show_view is for when they want to SEE the data in the flow of the conversation.
+  [ACTION:{{"type":"close_view"}}]  — TAKE THE VIEW OFF THE SCREEN. When the practitioner asks to close/dismiss/clear what you just showed ("close that", "close it out", "take that down", "you can close the invoices"), emit this and acknowledge briefly. Safe when nothing is open. This closes the DATA VIEW only — closing the chat window itself is set_chat_window.
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
   [ACTION:{{"type":"save_note","content":"..."}}]  — THE NOTES PAD: when they say "note this for later", "put this in a note", "save that thought", "write this down", or hand you anything they'll want to REVIEW later (an idea, a to-revisit, a reminder-to-self), file it as a NOTE — verbatim or lightly cleaned, never summarized away. Notes land on the Notes tab (under Workspace in the sidebar; navigate: tab:"grow", sub:"notes"). Use save_note for the practitioner's OWN parking lot; use remember for facts YOU should recall about them. After filing, confirm with the note's first words so they know it's captured.
   [ACTION:{{"type":"update_business_profile_field","field_path":"governing_state|produces_deliverables|sensitive_areas.health_advice|sensitive_areas.session_recording|sensitive_areas.physical_activity","value":"<their answer>"}}]
