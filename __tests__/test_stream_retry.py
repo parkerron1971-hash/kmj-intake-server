@@ -198,3 +198,16 @@ def test_close_view_is_documented_in_the_prompt():
     src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
     assert '"type":"close_view"' in src.replace(" ", "").replace("{{", "{")
     assert "close it out" in src, "Kevin's own phrasing should route to it"
+
+
+def test_goodbyes_close_the_room_in_any_mode():
+    """Kevin, 8/14: "when it gives the goodbyes, it closes the chat
+    behind itself as well." The rule existed but was gated on 'while
+    voice is active' — a TYPED goodbye left the window up. The prompt
+    is the capability surface; the words must say any-mode."""
+    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    assert "GOODBYES CLOSE THE ROOM BEHIND YOU" in src
+    assert "voice OR text" in src
+    assert "wraps up while voice is active" not in src, (
+        "the voice-only gate is the bug — it must not survive"
+    )
