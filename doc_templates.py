@@ -1150,3 +1150,297 @@ TEMPLATE_INDEX[_CREATIVE_TEMPLATE["id"]] = _CREATIVE_TEMPLATE
 for _t in TEMPLATES:
     if _t["id"] == "service_agreement" and "creative" in _t["suggested_for"]:
         _t["suggested_for"].remove("creative")
+
+
+# ─── Nonprofit governance paper ──────────────────────────────────────
+#
+# The documents a funder asks for BEFORE it asks anything about the
+# project. A grant application's standing attachments split cleanly in
+# two, and the split is the important part:
+#
+#   ISSUED TO THE ORGANISATION — the IRS determination letter, a filed
+#   Form 990, audited financials. These are NOT here and must never be.
+#   The IRS issues a determination letter; an independent auditor issues
+#   an audit; a 990 is a return that was filed. Generating any of them
+#   would be manufacturing an official record, and a funder receiving one
+#   would be receiving a forgery. Those slots take an UPLOAD of the real
+#   document and a pointer to where it comes from.
+#
+#   WRITTEN BY THE ORGANISATION — everything below. A board list, three
+#   governance policies, a nondiscrimination statement, a mission
+#   narrative. The organisation authors these, so drafting one is help
+#   rather than fabrication.
+#
+# The three policies earn their place on a fact rather than a hunch:
+# Form 990 Part VI asks whether the filer HAS a conflict-of-interest
+# policy, a whistleblower policy and a document-retention policy. A
+# nonprofit without them answers "no" three times on a public filing
+# every prospective funder can read.
+#
+# Every drafted section carries a fallback, and each fallback is the
+# conservative standard wording rather than a placeholder — a governance
+# policy containing "[describe your procedure]" is worse than one with a
+# plain procedure the board can amend.
+
+_BOARD_LIST = {
+    "id": "board_list",
+    "title": "Board of Directors",
+    "subtitle": "Names, Roles & Affiliations",
+    "description": "The board roster funders ask for, with roles and affiliations.",
+    "category": "protect",
+    "numbered": False,
+    "suggested_for": ["nonprofit", "ministry"],
+    "fields": [
+        field("org_name", "Organization name", required=True, sticky=True),
+        field("as_of", "Current as of", placeholder="e.g. August 2026"),
+        list_field("members", "Board members", required=True,
+                   placeholder="One per line: Name - Role - Affiliation"),
+        field("meeting_cadence", "How often the board meets",
+              placeholder="e.g. quarterly", sticky=True),
+    ],
+    "sections": [
+        fixed(None, "{org_name}\nBoard of Directors\n{as_of}"),
+        fixed("Members", "{members}"),
+        fixed("Governance", "The Board of Directors meets {meeting_cadence}.",
+              requires="meeting_cadence"),
+        drafted(
+            "Board composition",
+            "Two or three plain sentences describing the board's composition "
+            "and the independence of its members, using ONLY the roster "
+            "given. Do not invent expertise, employers or demographics that "
+            "are not in the list.",
+            "The Board of Directors is responsible for the governance and "
+            "fiduciary oversight of the organization."),
+    ],
+}
+
+_CONFLICT_POLICY = {
+    "id": "conflict_of_interest_policy",
+    "title": "Conflict of Interest Policy",
+    "subtitle": "Disclosure, Recusal & Review",
+    "description": "The governance policy Form 990 Part VI asks whether you have.",
+    "category": "protect",
+    "numbered": True,
+    "suggested_for": ["nonprofit", "ministry"],
+    "fields": [
+        field("org_name", "Organization name", required=True, sticky=True),
+        field("adopted_on", "Date adopted by the board"),
+    ],
+    "sections": [
+        fixed(None, "{org_name}\nCONFLICT OF INTEREST POLICY"),
+        fixed("Purpose",
+              "The purpose of this policy is to protect the interests of "
+              "{org_name} when it contemplates entering into a transaction or "
+              "arrangement that might benefit the private interest of an "
+              "officer or director, or might result in a possible excess "
+              "benefit transaction."),
+        fixed("Who this covers",
+              "This policy applies to every director, officer, and member of "
+              "a committee with board-delegated powers, and to any employee "
+              "who can influence a transaction on the organization's behalf."),
+        fixed("What must be disclosed",
+              "An interested person must disclose the existence and nature of "
+              "any financial interest, and all material facts, to the "
+              "directors considering the proposed transaction."),
+        fixed("How a conflict is handled",
+              "After disclosure, the interested person leaves the meeting "
+              "while the transaction is discussed and voted upon. The "
+              "remaining board members decide whether a conflict exists and, "
+              "if so, whether the transaction is in the organization's best "
+              "interest and is fair and reasonable. The minutes record the "
+              "disclosure, the discussion, and the vote."),
+        fixed("Annual statement",
+              "Each person covered by this policy signs a statement annually "
+              "affirming that they have received, read, and understood the "
+              "policy, and agree to comply with it."),
+        fixed("Violations",
+              "If the board has reasonable cause to believe a covered person "
+              "has failed to disclose an actual or possible conflict, it "
+              "informs that person of the basis for the belief and gives them "
+              "an opportunity to explain before taking corrective action."),
+        fixed("Adoption", "Adopted by the Board of Directors on {adopted_on}.",
+              requires="adopted_on"),
+    ],
+}
+
+_WHISTLEBLOWER_POLICY = {
+    "id": "whistleblower_policy",
+    "title": "Whistleblower Policy",
+    "subtitle": "Reporting Without Retaliation",
+    "description": "How concerns get reported, and the protection for reporting them.",
+    "category": "protect",
+    "numbered": True,
+    "suggested_for": ["nonprofit", "ministry"],
+    "fields": [
+        field("org_name", "Organization name", required=True, sticky=True),
+        field("report_to", "Who concerns are reported to",
+              placeholder="e.g. the Board Chair", sticky=True),
+        field("adopted_on", "Date adopted by the board"),
+    ],
+    "sections": [
+        fixed(None, "{org_name}\nWHISTLEBLOWER POLICY"),
+        fixed("Purpose",
+              "{org_name} requires directors, officers, staff and volunteers "
+              "to observe high standards of business and personal ethics. This "
+              "policy exists so that anyone who in good faith reports a "
+              "suspected violation can do so without fear of retaliation."),
+        fixed("Reporting a concern",
+              "Concerns about suspected illegal, unethical or fraudulent "
+              "conduct, or about the accuracy of the organization's financial "
+              "records, should be reported to {report_to}.",
+              requires="report_to"),
+        fixed("No retaliation",
+              "No director, officer, employee or volunteer who in good faith "
+              "reports a concern shall suffer harassment, retaliation, or "
+              "adverse employment consequence. Anyone who retaliates against "
+              "a good-faith reporter is subject to discipline up to and "
+              "including termination."),
+        fixed("Good faith",
+              "A person filing a report must be acting in good faith and have "
+              "reasonable grounds for believing the information indicates a "
+              "violation. An allegation made maliciously or known to be false "
+              "is itself a serious disciplinary matter."),
+        fixed("Confidentiality",
+              "Reports are treated as confidential to the extent possible, "
+              "consistent with the need to conduct an adequate investigation."),
+        fixed("Handling",
+              "Reports are investigated promptly, and corrective action is "
+              "taken where warranted. The person receiving the report advises "
+              "the Board of Directors of the report and of the outcome."),
+        fixed("Adoption", "Adopted by the Board of Directors on {adopted_on}.",
+              requires="adopted_on"),
+    ],
+}
+
+_RETENTION_POLICY = {
+    "id": "document_retention_policy",
+    "title": "Document Retention Policy",
+    "subtitle": "What To Keep, And For How Long",
+    "description": "Retention schedules plus the litigation hold that overrides them.",
+    "category": "protect",
+    "numbered": True,
+    "suggested_for": ["nonprofit", "ministry"],
+    "fields": [
+        field("org_name", "Organization name", required=True, sticky=True),
+        field("adopted_on", "Date adopted by the board"),
+    ],
+    "sections": [
+        fixed(None, "{org_name}\nDOCUMENT RETENTION AND DESTRUCTION POLICY"),
+        fixed("Purpose",
+              "This policy governs how {org_name} retains and disposes of its "
+              "records, so that documents are kept as long as they are needed "
+              "and no longer, and so that nothing is destroyed while it may "
+              "be relevant to an investigation or legal proceeding."),
+        fixed("Permanent records",
+              "Articles of incorporation, bylaws, the IRS determination "
+              "letter, board minutes, annual financial statements and filed "
+              "Forms 990 are retained permanently."),
+        fixed("Records kept seven years",
+              "Accounting records, bank statements, invoices, contracts after "
+              "expiration, grant records after the final report, and "
+              "employment and payroll records after termination are retained "
+              "for seven years."),
+        fixed("Records kept three years",
+              "Correspondence of general significance, insurance policies "
+              "after expiration, and unsuccessful job applications are "
+              "retained for three years."),
+        fixed("Litigation hold",
+              "If an official investigation, audit or legal action is under "
+              "way or reasonably anticipated, destruction of any related "
+              "record stops immediately and does not resume until the matter "
+              "is concluded. This overrides every schedule above."),
+        fixed("Electronic records",
+              "Electronic records are subject to the same schedules as their "
+              "paper equivalents, and backups are maintained so that records "
+              "within a retention period can be produced."),
+        fixed("Adoption", "Adopted by the Board of Directors on {adopted_on}.",
+              requires="adopted_on"),
+    ],
+}
+
+_NONDISCRIMINATION = {
+    "id": "nondiscrimination_statement",
+    "title": "Nondiscrimination Statement",
+    "subtitle": "Programs, Services & Employment",
+    "description": "The statement commonly required with federal civil-rights assurances.",
+    "category": "protect",
+    "numbered": False,
+    "suggested_for": ["nonprofit", "ministry"],
+    "fields": [
+        field("org_name", "Organization name", required=True, sticky=True),
+        field("programs", "What this covers",
+              default="all programs, services, and employment"),
+    ],
+    "sections": [
+        fixed(None, "{org_name}\nNONDISCRIMINATION STATEMENT"),
+        fixed(None,
+              "{org_name} does not discriminate on the basis of race, color, "
+              "national origin, religion, sex, gender identity, sexual "
+              "orientation, age, disability, veteran status, or any other "
+              "characteristic protected by applicable federal, state or local "
+              "law, in {programs}."),
+        drafted(
+            None,
+            "One sentence naming who to contact about the policy and how, "
+            "using only the organization name. Do not invent an email "
+            "address, a phone number or a staff member's name.",
+            "Questions about this policy may be directed to the "
+            "organization's administrative office."),
+    ],
+}
+
+_MISSION_NARRATIVE = {
+    "id": "mission_history",
+    "title": "Mission and History",
+    "subtitle": "Organizational Background",
+    "description": "The organizational background you paste into every application.",
+    "category": "client",
+    "numbered": False,
+    "suggested_for": ["nonprofit", "ministry"],
+    "fields": [
+        field("org_name", "Organization name", required=True, sticky=True),
+        field("founded", "Year founded", sticky=True),
+        field("mission", "Mission statement", type_="textarea", required=True,
+              sticky=True),
+        list_field("programs", "Main programs", placeholder="One per line"),
+        field("served", "Who you serve", sticky=True,
+              placeholder="e.g. families in Dane County"),
+        field("proof", "Something you can evidence", type_="textarea",
+              placeholder="A number you can stand behind - leave blank if unsure"),
+    ],
+    "sections": [
+        fixed(None, "{org_name}\nMission and History"),
+        fixed("Mission", "{mission}"),
+        drafted(
+            "History",
+            "Two or three sentences of organizational history using ONLY the "
+            "founding year, mission and programs given. Invent NOTHING - no "
+            "milestones, no award names, no growth figures, no partner "
+            "organizations. If the founding year is blank, do not guess it.",
+            "The organization was established to advance the mission stated "
+            "above and continues to deliver its programs today."),
+        fixed("Programs", "{programs}", requires="programs"),
+        fixed("Who we serve", "{served}", requires="served"),
+        # NOT drafted, deliberately. An impact paragraph is exactly where
+        # a grant application acquires a number nobody can evidence, and a
+        # fabricated outcome there is a legal exposure rather than a
+        # formatting problem. This renders only what the practitioner
+        # typed, and disappears when they typed nothing.
+        fixed("Impact", "{proof}", requires="proof"),
+    ],
+}
+
+for _npt in (_BOARD_LIST, _CONFLICT_POLICY, _WHISTLEBLOWER_POLICY,
+             _RETENTION_POLICY, _NONDISCRIMINATION, _MISSION_NARRATIVE):
+    TEMPLATES.append(_npt)
+    TEMPLATE_INDEX[_npt["id"]] = _npt
+
+# Nonprofit language for the shared clause pools, so a generated document
+# says "the Organization" rather than "the Firm".
+VERTICAL_LANGUAGE["nonprofit"] = dict(VERTICAL_LANGUAGE.get("_default") or {})
+VERTICAL_LANGUAGE["nonprofit"].update({
+    "self": "the Organization",
+    "client": "the participant",
+    "engagement": "the program",
+})
+VERTICAL_LANGUAGE["ministry"] = dict(VERTICAL_LANGUAGE["nonprofit"])
