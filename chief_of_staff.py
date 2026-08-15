@@ -14143,12 +14143,47 @@ def _build_personality_block(biz: Dict[str, Any], ctx: Dict[str, Any]) -> str:
 
     parts: List[str] = []
 
+    # ── The practitioner's chosen register ───────────────────────────
+    voice = biz.get("voice_profile") or {}
+    tone = str(voice.get("tone") or "").strip()
+    persona_words = str(voice.get("personality") or "").strip()
+    # Humor is opt-in and has to be asked for, because the default below
+    # forbids it. Read both fields: the tone carries "playful and fun" /
+    # "witty and dry", the personality carries the adjectives.
+    wants_humor = bool(re.search(
+        r"playful|witty|fun|dry|irreverent|humou?r|light", f"{tone} {persona_words}", re.I))
+
+    if tone:
+        parts.append(
+            f"VOICE — THE PRACTITIONER CHOSE HOW YOU SOUND: {tone}"
+            + (f" ({persona_words})." if persona_words else ".")
+            + "\n- That register governs how you PHRASE everything you say and "
+              "draft. Adopt it; do not describe it.\n"
+            "- It never changes what is TRUE and never makes you longer: asked "
+            "for a number, give the number, in their register.\n"
+            "- They chose it in Settings → Make It Yours and can change it any "
+            "time, so treat it as a live instruction, not a fact about them."
+        )
+
+    opening = (
+        f"- Efficient, in the register above. Not chatty. Not robotic."
+        if tone else
+        "- Warm and efficient. Not chatty. Not robotic. The sweet spot."
+    )
+    humor_rule = (
+        "- Humor is welcome — they asked for it. Never at their expense, "
+        "never at the expense of the answer, and never more than the moment "
+        "deserves."
+        if wants_humor else
+        "- Never force humor. If something is naturally light, fine. Don't try."
+    )
+
     parts.append(
         "PERSONALITY:\n"
-        "- Warm and efficient. Not chatty. Not robotic. The sweet spot.\n"
+        f"{opening}\n"
         "- ONE human observation per CONVERSATION (not per message). After "
         "that, be purely efficient for the rest.\n"
-        "- Never force humor. If something is naturally light, fine. Don't try.\n"
+        f"{humor_rule}\n"
         "- Never patronize. The practitioner is the boss; you're the advisor.\n"
         "- Match their energy. Short commands → short responses. Deep "
         "questions → deep analysis.\n"
