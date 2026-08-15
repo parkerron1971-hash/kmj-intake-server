@@ -914,7 +914,18 @@ def assemble(template: Dict[str, Any], variables: Dict[str, str],
         if req and not (variables.get(req) or "").strip():
             continue
         rv = s.get("requires_value")
-        if rv and (variables.get(rv["field"]) or "").strip().lower() != rv["value"]:
+        # Case-folded on BOTH sides. It used to lower() only the value
+        # read from the form, so a template declaring requires_value with
+        # any capital letter got a section that silently never rendered —
+        # and "silently" is the whole problem: nothing raises, nothing
+        # logs, the clause is simply absent from the finished document.
+        # Every template written so far happened to use lowercase keys,
+        # so the trap sat unarmed until a select whose options are real
+        # sentences walked into it. On a donation receipt it removed the
+        # amount and the §170(f)(8) goods-and-services statement, which
+        # is the difference between a receipt and a thank-you note.
+        if rv and ((variables.get(rv["field"]) or "").strip().lower()
+                   != str(rv["value"]).strip().lower()):
             continue
         if s["kind"] == "drafted":
             text = (drafted_texts.get(i) or "").strip() or s["fallback"]
@@ -1507,8 +1518,135 @@ _MISSION_NARRATIVE = {
     ],
 }
 
+# ── Donation Acknowledgment ──────────────────────────────────────────
+#
+# The document a nonprofit issues more often than all six governance
+# policies put together, and the only one with a statutory text
+# requirement. IRC §170(f)(8): a donor cannot deduct a single gift of
+# $250 or more without a contemporaneous written acknowledgment from
+# the organisation, and the acknowledgment must state
+#
+#   (i)   the amount of cash, or a DESCRIPTION of any property given,
+#   (ii)  whether the organisation provided goods or services in
+#         return, and
+#   (iii) a description and good-faith estimate of the value of any
+#         such goods or services — or, where that is all the donor
+#         received, a statement that it was intangible religious
+#         benefits.
+#
+# Clause (ii) is the one that gets left out, and leaving it out is not
+# a formatting slip: a receipt that omits it does not substantiate the
+# gift, and the donor loses the deduction on audit for a letter the
+# organisation thought it had sent correctly. So the choice is a
+# REQUIRED select with no blank option — silence is the failure mode
+# this template exists to remove.
+#
+# NOTHING here is drafted. A receipt is an amount, a date and a
+# statutory sentence; there is no paragraph in it whose wording is
+# improved by a model, and a fabricated number on a tax document is a
+# different order of problem from a fabricated one in a bio.
+
+_DONATION_ACK = {
+    "id": "donation_acknowledgment",
+    "title": "Donation Acknowledgment",
+    "subtitle": "Contemporaneous Written Acknowledgment",
+    "description": "The receipt a donor needs to deduct a gift of $250 or more.",
+    "category": "client",
+    "numbered": False,
+    "suggested_for": ["nonprofit", "ministry"],
+    "fields": [
+        field("org_name", "Organization name", required=True, sticky=True),
+        # The one document where the EIN belongs on the page — a donor's
+        # accountant looks for it, which is why the letterhead leaves it
+        # out and this states it.
+        field("ein", "Organization EIN", sticky=True,
+              placeholder="e.g. 84-1234567"),
+        field("donor_name", "Donor name", required=True),
+        field("gift_date", "Date the gift was received", required=True,
+              placeholder="e.g. August 12, 2026"),
+        select_field("gift_type", "What was given",
+                     ["cash", "property"],
+                     required=True, default="cash"),
+        field("amount", "Amount", placeholder="e.g. $500.00"),
+        # Deliberately no value field beside this one. Valuing a non-cash
+        # gift is the DONOR's job; an organisation that writes "$500 in
+        # donated books" on the receipt has performed the donor's
+        # appraisal for them, and over $5,000 a qualified appraisal is
+        # required. Not offering the field is the guardrail.
+        field("property_description", "Description of the property",
+              type_="textarea",
+              placeholder="Describe what was given - not what it was worth"),
+        select_field("benefits", "Did the donor receive anything in return?",
+                     ["nothing in return",
+                      "goods or services",
+                      "religious benefits only"],
+                     required=True, default="nothing in return"),
+        field("benefit_description", "What the donor received",
+              type_="textarea", placeholder="e.g. dinner at the annual gala"),
+        field("benefit_value", "Good-faith estimate of its value",
+              placeholder="e.g. $45.00"),
+        field("signer_name", "Signed by", sticky=True),
+        field("signer_title", "Title", sticky=True,
+              placeholder="e.g. Executive Director"),
+    ],
+    "sections": [
+        fixed(None, "{org_name}"),
+        fixed(None, "EIN: {ein}", requires="ein"),
+        fixed(None, "{date}"),
+        fixed(None, "Dear {donor_name},"),
+
+        fixed("Your gift",
+              "Thank you for your contribution of {amount}, received on "
+              "{gift_date}.",
+              requires_value=("gift_type", "cash")),
+        fixed("Your gift",
+              "Thank you for your contribution of the following property, "
+              "received on {gift_date}:\n\n{property_description}\n\n"
+              "This acknowledgment describes the property you gave; it does "
+              "not state a value. Determining the value of a non-cash "
+              "contribution is the donor's responsibility, and a gift of "
+              "more than $5,000 generally requires a qualified appraisal.",
+              requires_value=("gift_type", "property")),
+
+        # The §170(f)(8) statement. One of these three always renders,
+        # because the field is required and has no blank option.
+        fixed("Goods and services",
+              "No goods or services were provided to you by {org_name} in "
+              "return for this contribution.",
+              requires_value=("benefits", "nothing in return")),
+        fixed("Goods and services",
+              "In return for this contribution, {org_name} provided you with "
+              "the following goods or services:\n\n{benefit_description}\n\n"
+              "The good-faith estimate of the value of what you received is "
+              "{benefit_value}. The amount you may deduct is limited to the "
+              "portion of your contribution that exceeds that value.",
+              requires_value=("benefits", "goods or services")),
+        # The church case. §170(f)(8)(B) names intangible religious
+        # benefits specifically, and a congregation that writes the plain
+        # "no goods or services" sentence over a gift that came with
+        # sacraments or worship access has stated something inaccurate on
+        # a tax document.
+        fixed("Goods and services",
+              "No goods or services were provided to you by {org_name} in "
+              "return for this contribution other than intangible religious "
+              "benefits.",
+              requires_value=("benefits", "religious benefits only")),
+
+        fixed("Please keep this letter",
+              "Retain this acknowledgment with your tax records. The IRS "
+              "requires a contemporaneous written acknowledgment from the "
+              "organization to substantiate a charitable deduction for any "
+              "single contribution of $250 or more."),
+
+        fixed(None,
+              "With gratitude,\n\n{signer_name}\n{signer_title}\n{org_name}"),
+    ],
+}
+
+
 for _npt in (_BOARD_LIST, _CONFLICT_POLICY, _WHISTLEBLOWER_POLICY,
-             _RETENTION_POLICY, _NONDISCRIMINATION, _MISSION_NARRATIVE):
+             _RETENTION_POLICY, _NONDISCRIMINATION, _MISSION_NARRATIVE,
+             _DONATION_ACK):
     TEMPLATES.append(_npt)
     TEMPLATE_INDEX[_npt["id"]] = _npt
 
@@ -1664,6 +1802,22 @@ for _gov in ("board_list", "conflict_of_interest_policy", "whistleblower_policy"
                   "financial_educator", "fitness_wellness", "lawyer",
                   "personal_services", "service_provider", "therapist")
     }
+
+# The donation acknowledgment gets its own reason rather than joining the
+# block above, because it is not governance paper and the distinction
+# matters: a coach hidden from it is not missing a policy they don't need,
+# they are being kept from issuing a receipt that says a gift is
+# deductible when it is not. Still not a hard gate — a consultant
+# producing one for a client organisation is legitimate, and org_name is
+# a field rather than the business.
+IRRELEVANT_FOR["donation_acknowledgment"] = {
+    v: ("gifts to a business are not tax-deductible contributions — this "
+        "receipt states a deduction only a 501(c)(3) can substantiate, "
+        "reachable under Show all for anyone producing it for a client")
+    for v in ("coach", "consultant", "contractor", "course_creator", "creative",
+              "financial_educator", "fitness_wellness", "lawyer",
+              "personal_services", "service_provider", "therapist")
+}
 
 # And one correction to yesterday's work, which is a content problem
 # rather than a relevance one.
