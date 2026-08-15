@@ -181,6 +181,18 @@ async def doctemplates_list(biz: str,
             "sections": sections,
             "page_estimate": f"≈{pages} page{'s' if pages != 1 else ''}",
             "suggested": is_custom or btype in t.get("suggested_for", []),
+            # Whether this paper belongs in THIS vertical's list at all.
+            # The library returned all sixteen to everyone, so a nonprofit
+            # was shown a demand letter and a barber an engagement letter.
+            # Hidden, never gated: the frontend shows the relevant set and
+            # keeps the rest behind "Show all", so an over-hide costs one
+            # click while an under-hide can cost a professional-ethics
+            # violation. A business's own learned templates are always
+            # relevant — they made them.
+            "relevant": is_custom or not doc_templates.is_irrelevant(t["id"], btype),
+            "irrelevance_reason": (
+                None if is_custom
+                else doc_templates.irrelevance_reason(t["id"], btype)),
             "custom": is_custom,
             # the live preview numbers headed sections exactly like
             # assemble() does, so what you watch is what you sign
@@ -188,7 +200,10 @@ async def doctemplates_list(biz: str,
         })
     # A business's own templates first, then suggested, then the rest
     # in curated library order.
-    out.sort(key=lambda t: 0 if t.get("custom") else (1 if t["suggested"] else 2))
+    # Own paper, then this vertical's suggested paper, then the rest of
+    # what belongs here, then everything else.
+    out.sort(key=lambda t: (
+        0 if t.get("custom") else 1 if t["suggested"] else 2 if t["relevant"] else 3))
     return {"ok": True, "templates": out}
 
 
