@@ -143,6 +143,17 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "intake_forms",
     "custom_modules",
     "module_records",
+    # Children of a module ENTRY, listed before it so the export carries
+    # them and the delete never trips an FK. Both cascade at the DB level
+    # too; the list is what makes them EXPORTABLE, which is the half a
+    # cascade cannot do.
+    #
+    # deadlines was missing entirely — a pre-existing gap found while
+    # adding grant_budget_lines. Its business_id cascades, so erasure was
+    # never leaking rows, but "what we delete is what we export" was
+    # quietly untrue for every lawyer's docket.
+    "grant_budget_lines",
+    "deadlines",
     "module_entries",
     "module_specs",
     # Restricted (clinical/giving) class — entries + their access trail.
