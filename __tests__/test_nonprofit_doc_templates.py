@@ -91,8 +91,20 @@ def test_template_is_registered_and_well_formed(tid):
     assert t["category"] in ("client", "protect", "money", "close")
     assert t["sections"], "a template with no sections renders nothing"
     assert "nonprofit" in t["suggested_for"]
-    assert "ministry" in t["suggested_for"], (
-        "a ministry needs the same governance paper a nonprofit does")
+    if tid == "nondiscrimination_statement":
+        # THE ONE EXCEPTION, and it is a correction to this file's own
+        # first pass. As written the statement commits the organisation
+        # to non-discrimination on religion, sex, gender identity and
+        # sexual orientation IN EMPLOYMENT — which many congregations
+        # contradict via the ministerial exception and Title VII's
+        # religious-organisation exemption. Generating it for a church
+        # can create a written policy contradicting actual practice,
+        # which is worse than having none. A ministry variant scoped to
+        # programs and services is the fix; until then it is not offered.
+        assert "ministry" not in t["suggested_for"]
+    else:
+        assert "ministry" in t["suggested_for"], (
+            "a ministry needs the same governance paper a nonprofit does")
 
 
 @pytest.mark.parametrize("tid", NEW_IDS)
@@ -203,8 +215,10 @@ def test_suggested_lookup_is_canonicalized():
 
     canon = vertical_registry.resolve("church")
     assert canon == "ministry"
+    # Five, not six: the nondiscrimination statement is deliberately not
+    # offered to a congregation (see above).
     for_church = [t for t in dt.TEMPLATES if canon in t.get("suggested_for", [])]
-    assert len(for_church) >= 6, [t["id"] for t in for_church]
+    assert len(for_church) >= 5, [t["id"] for t in for_church]
 
 
 def test_every_suggested_for_entry_is_a_real_vertical():

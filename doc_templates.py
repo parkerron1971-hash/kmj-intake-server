@@ -1020,7 +1020,11 @@ _CREATIVE_TEMPLATE: Dict[str, Any] = {
                    "revisions, acceptance, IP on payment, and a defined "
                    "finish line.",
     "category": "client",
-    "suggested_for": ["creative", "personal_services"],
+    # NOT personal_services — see IRRELEVANT_FOR. A barber, nail tech,
+    # cleaner or groomer has no deliverables list, revision rounds,
+    # deemed acceptance, source files or IP transfer. It was suggested
+    # to them since it shipped.
+    "suggested_for": ["creative"],
     "fields": [
         field("scope", "The project", type_="textarea", required=True,
               placeholder="e.g. Design and build a five-page marketing site for Walton Wellness"),
@@ -1365,7 +1369,12 @@ _NONDISCRIMINATION = {
     "description": "The statement commonly required with federal civil-rights assurances.",
     "category": "protect",
     "numbered": False,
-    "suggested_for": ["nonprofit", "ministry"],
+    # NOT ministry — see IRRELEVANT_FOR below. As written this commits the
+    # organisation to non-discrimination on religion, sex, gender identity
+    # and sexual orientation IN EMPLOYMENT, which many congregations
+    # contradict via the ministerial exception and Title VII's
+    # religious-organisation exemption.
+    "suggested_for": ["nonprofit"],
     "fields": [
         field("org_name", "Organization name", required=True, sticky=True),
         field("programs", "What this covers",
@@ -1444,3 +1453,176 @@ VERTICAL_LANGUAGE["nonprofit"].update({
     "engagement": "the program",
 })
 VERTICAL_LANGUAGE["ministry"] = dict(VERTICAL_LANGUAGE["nonprofit"])
+
+
+# ─── Which paper belongs in which room ───────────────────────────────
+#
+# /doctemplates/list returned all sixteen templates to every business.
+# suggested_for only SORTED them, so a nonprofit was shown a demand
+# letter and a coaching agreement, a barber was shown an engagement
+# letter, and six of the fourteen verticals got a completely flat list
+# because their type appeared in no suggested_for at all.
+#
+# HIDDEN, NOT GATED. The library's standing rule is that nothing is ever
+# withheld — a business's needs are its own, and the one time we guess
+# wrong we would be blocking real work. So an irrelevant template is
+# hidden behind "Show all templates", never removed. That asymmetry is
+# what makes the table below safe to be opinionated in: an over-hide
+# costs one click, an under-hide can cost a professional-ethics
+# violation.
+#
+# EVERY HIDE CARRIES ITS REASON. A hide with no reason is someone's
+# taste, and taste drifts. A test asserts the reasons exist.
+
+IRRELEVANT_FOR: Dict[str, Dict[str, str]] = {
+
+    "engagement_letter": {
+        "coach": "duplicates the coaching agreement while DROPPING the 'coaching "
+                 "is not therapy' clause — the one clause protecting an unlicensed coach",
+        "contractor": "trades work is a quoted contract with a deposit and a draw "
+                      "schedule, not an engagement opened with a retainer",
+        "course_creator": "one product sold to many students; this is bilateral "
+                          "per-client paper with a named counterparty",
+        "creative": "trust-drawdown and law-office language on a design job — the "
+                    "exact leak creative_services_agreement was built to replace",
+        "fitness_wellness": "no professional-engagement shape",
+        "ministry": "a congregation has no billable engagements to open",
+        "nonprofit": "counterparties are donors, grantors, volunteers and vendors",
+        "personal_services": "a chair is not an engagement",
+        "therapist": "no fit; the practice's paper is policies and fees, not a matter",
+    },
+
+    "retainer_agreement": {
+        "course_creator": "bilateral per-client paper; the product is sold, not retained",
+        # Not merely irrelevant — actively wrong paper.
+        "fitness_wellness": "DANGEROUS: a membership is an auto-renewing consumer "
+                            "contract under state health-club and automatic-renewal "
+                            "statutes. This template's 'fees for the current term are "
+                            "earned and non-refundable' would produce a non-compliant "
+                            "membership agreement",
+        "ministry": "a congregation retains nobody monthly",
+        "nonprofit": "not the shape of donor or grantor money",
+        "therapist": "practice policies cover the standing relationship",
+    },
+
+    "service_agreement": {
+        "coach": "deliverables, IP transfer and acceptance describe nothing in a "
+                 "twelve-week coaching engagement",
+        "financial_educator": "curriculum delivery has no deliverables list",
+        # The sharpest finding in the audit.
+        "lawyer": "IT CAPS LIABILITY. engagement_letter and retainer_agreement omit "
+                  "a cap on purpose, because prospectively limiting professional "
+                  "liability is ethically prohibited for lawyers in most states — and "
+                  "then this was shown to every lawyer with a cap in it",
+    },
+
+    "consulting_agreement": {
+        "contractor": "trades work is quoted and built, never advised on retainer",
+        "course_creator": "bilateral per-client paper",
+        "fitness_wellness": "training is delivered in sessions, not advised on",
+        "lawyer": "carries _LIABILITY_CAP, for the same ethics reason as "
+                  "service_agreement above. A lawyer doing genuine non-legal "
+                  "advisory work can still reach it under Show all",
+        "ministry": "no billable advisory engagements",
+        "personal_services": "a chair has no advisory engagement to paper",
+    },
+
+    "coaching_agreement": {
+        "consultant": "the cancellation-window and 'not therapy' framing reads as "
+                      "unserious to a corporate buyer",
+        "contractor": "a job is scheduled and completed, not run as sessions",
+        "creative": "a project runs to deliverables, not to a session count",
+        "lawyer": "a firm does not coach; this carries no legal-engagement terms",
+        "nonprofit": "programs are not coaching engagements",
+        # The important one.
+        "therapist": "HAZARD: its 'COACHING, NOT THERAPY' clause asserts the exact "
+                     "opposite of what a therapist does, and its confidentiality "
+                     "section is a generic exceptions list, NOT a HIPAA- or "
+                     "state-accurate privacy disclosure. Sending it tells a client "
+                     "something untrue about their own privacy rights",
+    },
+
+    "disengagement_letter": {
+        "contractor": "a job closes with a punch list, a final invoice and a lien "
+                      "waiver, not a file-retention letter",
+        "course_creator": "no per-client matter to close",
+        "creative": "creative closes with delivery and a final invoice",
+        "fitness_wellness": "a membership lapses or cancels; nothing is closed out",
+        "ministry": "no engagements to close",
+        "nonprofit": "no engagements to close",
+        "personal_services": "a client simply stops booking; there is no matter to close",
+        # Scope boundary, not taste.
+        "therapist": "HAZARD: the therapist analogue of closing a matter is "
+                     "TERMINATION OF TREATMENT — a clinical event carrying referral, "
+                     "continuity-of-care and abandonment exposure. Its 'we retain our "
+                     "file' language also invites treating this platform as custodian "
+                     "of the clinical record, which is what vertical_scope.py exists "
+                     "to prevent",
+    },
+
+    "creative_services_agreement": {
+        "coach": "no deliverables or revision rounds",
+        "consultant": "revision rounds and portfolio permission are not advisory terms",
+        "contractor": "no source files or IP transfer on a job site",
+        "course_creator": "bilateral per-client paper",
+        "financial_educator": "no deliverables shape",
+        "fitness_wellness": "no deliverables shape",
+        "lawyer": "a firm does not coach; this carries no legal-engagement terms",
+        "ministry": "no client deliverables",
+        "nonprofit": "no client deliverables",
+        # Was in its suggested_for, and plainly wrong.
+        "personal_services": "a barber, nail tech, cleaner or groomer has no "
+                             "deliverables list, revision rounds, deemed acceptance, "
+                             "source files or IP transfer",
+        "therapist": "no deliverables shape",
+    },
+}
+
+# The six nonprofit governance documents are irrelevant to every vertical
+# that has no board and files no 990. Listed as one block because the
+# reason is identical, and kept OUT of a hard gate because these take
+# org_name as a FIELD rather than binding to the business — so a lawyer
+# or consultant serving nonprofit clients can legitimately produce them
+# for a client organisation, under Show all.
+_NO_BOARD_NO_990 = (
+    "no board and no Form 990 — this is a nonprofit's governance paper, "
+    "reachable under Show all for anyone producing it for a client")
+for _gov in ("board_list", "conflict_of_interest_policy", "whistleblower_policy",
+             "document_retention_policy", "nondiscrimination_statement",
+             "mission_history"):
+    IRRELEVANT_FOR[_gov] = {
+        v: _NO_BOARD_NO_990
+        for v in ("coach", "consultant", "contractor", "course_creator", "creative",
+                  "financial_educator", "fitness_wellness", "lawyer",
+                  "personal_services", "service_provider", "therapist")
+    }
+
+# And one correction to yesterday's work, which is a content problem
+# rather than a relevance one.
+IRRELEVANT_FOR["nondiscrimination_statement"]["ministry"] = (
+    "As written this commits the organisation to non-discrimination on "
+    "religion, sex, gender identity and sexual orientation IN EMPLOYMENT. "
+    "Many churches rely on the ministerial exception and Title VII's "
+    "religious-organisation exemption and hold doctrinal hiring positions "
+    "this contradicts. Generating it for a congregation can create a "
+    "written policy contradicting actual practice, which is worse than "
+    "having none. A ministry variant scoped to programs and services — "
+    "preserving the religious-employment exemption — is the fix; until "
+    "that exists this is not offered to ministry")
+
+# mutual_nda, independent_contractor and demand_letter appear in NO list
+# above, deliberately. Every business signs an NDA eventually, every
+# business hires 1099 help eventually, and every business eventually
+# invoices someone who does not pay. Gating those would be the guess this
+# table is careful not to make.
+
+
+def is_irrelevant(template_id: str, canonical_vertical: str) -> bool:
+    """True when this template would be noise in this vertical's list.
+
+    Never a refusal — the caller hides it behind Show all."""
+    return canonical_vertical in IRRELEVANT_FOR.get(template_id, {})
+
+
+def irrelevance_reason(template_id: str, canonical_vertical: str) -> Optional[str]:
+    return IRRELEVANT_FOR.get(template_id, {}).get(canonical_vertical)
