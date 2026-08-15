@@ -54,8 +54,14 @@ def test_every_placeholder_resolves():
 
 
 def test_library_shape_and_uniqueness():
+    # PINNED COUNT. 10 -> 16 on 2026-08-15: six nonprofit governance
+    # templates (board list, the three Form 990 Part VI policies, a
+    # nondiscrimination statement, a mission narrative). Raising this is
+    # meant to be a deliberate act — see
+    # __tests__/test_nonprofit_doc_templates.py for what may NOT be
+    # added: nothing the IRS or an auditor issues.
     ids = [t["id"] for t in dt.TEMPLATES]
-    assert len(ids) == len(set(ids)) == 10
+    assert len(ids) == len(set(ids)) == 16
     for t in dt.TEMPLATES:
         assert t["title"] and t["description"] and t["category"]
         assert t["suggested_for"], f"{t['id']} suggests nothing"
@@ -171,7 +177,7 @@ def test_routes_exist_and_are_authed():
 def test_list_ranks_suggested_first(fake):
     out = asyncio.run(dtr.doctemplates_list(BIZ, _User()))
     ts = out["templates"]
-    assert len(ts) == 10
+    assert len(ts) == 16
     # lawyer templates lead; once a non-suggested appears, no suggested follows
     seen_unsuggested = False
     for t in ts:
