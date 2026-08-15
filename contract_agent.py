@@ -43,7 +43,9 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+import business_identity
 import llm_call
+import storage_links
 from fastapi import APIRouter, HTTPException, Depends
 from auth_supabase import require_user, AuthedUser
 from business_users_router import require_business_admin
@@ -504,6 +506,42 @@ def brand_from_business(business: Dict[str, Any]) -> Dict[str, Any]:
     return {"accent": accent, "serif": serif, "logo_url": logo_url or None}
 
 
+def letterhead_lines(business: Dict[str, Any],
+                     identity: Optional[Dict[str, Any]] = None) -> List[str]:
+    """The contact block for the top-right of the letterhead.
+
+    Reads the filed identity first (business_profiles — the legal record
+    a practitioner fills in during Foundation) and falls back to the
+    business row's settings. Returns [] when a business has told us
+    nothing, so the header simply keeps its old shape rather than
+    printing an empty box or the word "None".
+
+    A suite or unit keeps its own line. Joined onto the street it reads
+    as part of the road name ("412 Grand River Avenue Suite 3"), and in
+    a two-inch column it is also the thing that pushes the street into
+    an ugly wrap.
+    """
+    ident = identity or {}
+    settings = (business or {}).get("settings") or {}
+
+    street = ident.get("address_line1") or ""
+    unit = ident.get("address_line2") or ""
+    city = ident.get("address_city") or ""
+    state = ident.get("address_state") or ""
+    zip_ = ident.get("address_zip") or ""
+    locality = ", ".join(x for x in (city, " ".join(y for y in (state, zip_) if y)) if x)
+
+    phone = ident.get("phone") or settings.get("phone") or ""
+    email = settings.get("contact_email") or (business or {}).get("email") or ""
+    site = settings.get("site_url") or settings.get("website") or ""
+    # A bare domain reads as part of an address block; the scheme reads
+    # as a URL someone pasted.
+    site = re.sub(r"^https?://", "", str(site)).rstrip("/")
+
+    return [str(x).strip() for x in (street, unit, locality, phone, email, site)
+            if x and str(x).strip()]
+
+
 async def fetch_logo_bytes(client: httpx.AsyncClient,
                            logo_url: Optional[str]) -> Optional[bytes]:
     """Best-effort logo download for the letterhead. SVG is skipped
@@ -563,8 +601,14 @@ def _build_pdf(
     accent_hex: str = PDF_ACCENT,
     serif: bool = False,
     logo_bytes: Optional[bytes] = None,
+    letterhead: Optional[List[str]] = None,
 ) -> bytes:
-    """Generate a professional PDF proposal. Returns bytes."""
+    """Generate a professional PDF proposal. Returns bytes.
+
+    `letterhead` is the pre-formatted right-hand contact block — address,
+    phone, email, site — one entry per line. Build it with
+    `letterhead_lines()` rather than assembling it at each call site.
+    """
     # Lazy import so the module loads even if reportlab isn't installed yet
     from reportlab.lib.pagesizes import LETTER
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -575,7 +619,8 @@ def _build_pdf(
         SimpleDocTemplate, Paragraph, Spacer, HRFlowable, ListFlowable, ListItem,
         Image, Table, TableStyle,
     )
-    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.enums import TA_LEFT, TA_RIGHT
+    from reportlab.pdfgen import canvas
 
     accent = HexColor(accent_hex)
     dark = HexColor("#1A1A22")
@@ -629,6 +674,11 @@ def _build_pdf(
         fontSize=9, leading=11, textColor=muted, alignment=TA_LEFT,
         fontName=f_regular,
     )
+    h_letterhead = ParagraphStyle(
+        "Letterhead", parent=styles["Normal"],
+        fontSize=8.5, leading=11.5, textColor=muted, alignment=TA_RIGHT,
+        fontName=f_regular,
+    )
 
     def _xml(s: str) -> str:
         # Names travel through Paragraph's inline-markup parser too — an
@@ -660,17 +710,50 @@ def _build_pdf(
                                       width=logo_w, height=target_h)
         except Exception:
             logo_flowable = None  # a bad image never breaks the paper
-    if logo_flowable is not None:
-        head = Table([[logo_flowable, name_block]],
-                     colWidths=[logo_w + 14, None])
-        head.setStyle(TableStyle([
+    # Where the business can be reached, right-aligned opposite the name
+    # — the half of a letterhead that was missing. A document that a
+    # board files, a client signs, or a funder keeps on record needs to
+    # carry the sender's address and phone; without them the paper looks
+    # generated rather than issued, and a printed copy has no way back
+    # to the business at all.
+    #
+    # Deliberately NOT the EIN. It belongs on the documents that need it
+    # (a §170(f)(8) donation acknowledgment states it in the body, where
+    # a donor's accountant looks for it) and nowhere near a proposal
+    # emailed to a prospect.
+    lh_lines = [_xml(x) for x in (letterhead or []) if x and str(x).strip()]
+    contact_block = ([Paragraph("<br/>".join(lh_lines), h_letterhead)]
+                     if lh_lines else None)
+
+    if logo_flowable is not None or contact_block is not None:
+        row: List[Any] = []
+        widths: List[Any] = []
+        if logo_flowable is not None:
+            row.append(logo_flowable)
+            widths.append(logo_w + 14)
+        row.append(name_block)
+        widths.append(None)
+        if contact_block is not None:
+            row.append(contact_block)
+            # A fixed right column: the name is the flexible one, so a
+            # long business name wraps instead of squeezing the address
+            # into one word per line.
+            widths.append(2.0 * inch)
+        name_col = len(row) - (2 if contact_block is not None else 1)
+        head = Table([row], colWidths=widths)
+        style = [
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("LEFTPADDING", (0, 0), (-1, -1), 0),
-            ("RIGHTPADDING", (0, 0), (0, 0), 14),
-            ("RIGHTPADDING", (1, 0), (1, 0), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
             ("TOPPADDING", (0, 0), (-1, -1), 0),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-        ]))
+        ]
+        if logo_flowable is not None:
+            style.append(("RIGHTPADDING", (0, 0), (0, 0), 14))
+        if contact_block is not None:
+            style.append(("RIGHTPADDING", (name_col, 0), (name_col, 0), 14))
+            style.append(("VALIGN", (name_col + 1, 0), (name_col + 1, 0), "TOP"))
+        head.setStyle(TableStyle(style))
         story.append(head)
     else:
         story.extend(name_block)
@@ -739,7 +822,34 @@ def _build_pdf(
     story.append(HRFlowable(width="100%", thickness=0.5, color=muted, spaceBefore=0, spaceAfter=8))
     story.append(Paragraph(f"{_xml(business_name)}  ·  {_xml(practitioner_name)}", h_footer))
 
-    doc.build(story)
+    # "Page 2 of 6" on every page. A conflict-of-interest policy or a
+    # retention schedule runs to several pages, gets printed, signed and
+    # filed — and a stack with no pagination has no way to show a page
+    # went missing. multiBuild runs the story twice so the total is
+    # known; the first pass only counts pages.
+    class _Paginated(canvas.Canvas):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self._pages = []
+
+        def showPage(self):
+            self._pages.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total = len(self._pages)
+            for state in self._pages:
+                self.__dict__.update(state)
+                if total > 1:
+                    self.setFont(f_regular, 8.5)
+                    self.setFillColor(muted)
+                    self.drawRightString(
+                        LETTER[0] - 0.75 * inch, 0.5 * inch,
+                        f"Page {self._pageNumber} of {total}")
+                super().showPage()
+            super().save()
+
+    doc.multiBuild(story, canvasmaker=_Paginated)
     return buf.getvalue()
 
 
@@ -754,15 +864,19 @@ def build_document_pdf(
     accent_hex: str = PDF_ACCENT,
     serif: bool = False,
     logo_bytes: Optional[bytes] = None,
+    letterhead: Optional[List[str]] = None,
 ) -> bytes:
     """Public seam over _build_pdf for documents that are not client proposals.
 
     Foundation Track's Operating Agreement, Privacy Policy and Terms of Service
-    are governance documents about the business itself. There is no counterparty
-    contact, so they cannot go through /agents/contract/pdf, which requires one
-    and 404s without it. They still want the same paper: the Brand Studio accent,
-    the font lean, the logo, and the clause classifier that keeps numbered
-    sections from rendering as bullets.
+    are governance documents about the business itself. They want the same
+    paper as a proposal: the Brand Studio accent, the font lean, the logo, the
+    contact block, and the clause classifier that keeps numbered sections from
+    rendering as bullets.
+
+    (/agents/contract/pdf now takes an optional contact and reaches the same
+    renderer, so this is a convenience over that door rather than a way round
+    a restriction — it was the latter until 2026-08-15.)
 
     `prepared_for` is the party the document is FOR. For a governance document
     that is the business's own legal name, which reads correctly in the
@@ -780,6 +894,7 @@ def build_document_pdf(
         accent_hex=accent_hex,
         serif=serif,
         logo_bytes=logo_bytes,
+        letterhead=letterhead,
     )
 
 
@@ -788,30 +903,59 @@ async def _upload_pdf_to_supabase(
     pdf_bytes: bytes,
     business_id: str,
     contact_id: str,
+    download_as: Optional[str] = None,
 ) -> Optional[str]:
-    """Upload PDF to Supabase Storage. Returns public URL."""
+    """Upload the PDF to the private `proposals` bucket and return a
+    signed URL for it.
+
+    Both halves of this used to be wrong, and had been since the vault
+    migration closed the bucket on 2026-08-10:
+
+      * the upload went out under the ANON key, which the bucket's
+        insert policy (`authenticated` + business scope) refuses —
+        "new row violates row-level security policy", so nothing was
+        ever stored; and
+      * the returned URL was `/object/public/...`, which a private
+        bucket answers with "Bucket not found".
+
+    Every Download PDF button in the app went through here, so all of
+    them had been dead for five days without anything logging louder
+    than a 500.
+    """
     timestamp = int(datetime.now(timezone.utc).timestamp())
     path = f"{business_id}/{contact_id}/proposal-{timestamp}.pdf"
     url = f"{_supabase_url()}/storage/v1/object/{PDF_BUCKET}/{path}"
-    headers = {
-        "apikey": _supabase_anon(),
-        "Authorization": f"Bearer {_supabase_anon()}",
-        "Content-Type": "application/pdf",
-    }
+    headers = {**storage_links.service_headers(), "Content-Type": "application/pdf"}
     resp = await client.post(url, headers=headers, content=pdf_bytes, timeout=HTTP_TIMEOUT)
     if resp.status_code >= 400:
         logger.error(f"Supabase Storage upload failed: {resp.status_code} {resp.text}")
         if "Bucket not found" in resp.text:
-            raise HTTPException(500, f"Storage bucket '{PDF_BUCKET}' does not exist. Create it in Supabase Dashboard → Storage → New Bucket → name: {PDF_BUCKET} → Public: ON.")
+            raise HTTPException(500, f"Storage bucket '{PDF_BUCKET}' does not exist. Create it in Supabase Dashboard → Storage → New Bucket → name: {PDF_BUCKET} → Public: OFF (it holds client records).")
         if "row-level security" in resp.text.lower() or resp.status_code == 403:
-            raise HTTPException(500, f"Storage upload blocked by RLS. Add INSERT policy on storage.objects for bucket '{PDF_BUCKET}'.")
+            raise HTTPException(500, f"Storage upload blocked by RLS on bucket '{PDF_BUCKET}'. Check SUPABASE_SERVICE_ROLE_KEY is set on this service.")
         raise HTTPException(500, f"PDF upload failed: {resp.text}")
-    return f"{_supabase_url()}/storage/v1/object/public/{PDF_BUCKET}/{path}"
+
+    signed = await storage_links.signed_url(
+        client, PDF_BUCKET, path, download_as=download_as)
+    if not signed:
+        # The bytes are filed; only the link failed. Say which, so this
+        # never again reads as "the document was never generated".
+        raise HTTPException(
+            500, "The PDF was saved but the download link couldn't be signed. "
+                 "Try again in a moment.")
+    return signed
 
 
 class PdfRequest(BaseModel):
     business_id: str
-    contact_id: str
+    # OPTIONAL. A proposal has a counterparty; a governance document does
+    # not. A board list, a whistleblower policy, a mission narrative and
+    # an operating agreement are all about the business itself — and
+    # while this was required, none of them could be downloaded at all.
+    # The button was hidden on the queue row AND the endpoint 404'd, so a
+    # practitioner could generate one of those documents, approve it, and
+    # have no way to get the file.
+    contact_id: Optional[str] = None
     proposal_body: str
     subject: str
 
@@ -831,19 +975,37 @@ async def contract_pdf(req: PdfRequest, user: AuthedUser = Depends(require_user)
             raise HTTPException(404, "Business not found")
         biz = businesses[0]
 
-        contacts = await _sb(client, "GET", f"/contacts?id=eq.{req.contact_id}&select=*&limit=1")
-        if not contacts:
-            raise HTTPException(404, "Contact not found")
-        contact = contacts[0]
+        contact = None
+        if req.contact_id:
+            contacts = await _sb(
+                client, "GET",
+                f"/contacts?id=eq.{req.contact_id}&select=*&limit=1")
+            if not contacts:
+                raise HTTPException(404, "Contact not found")
+            contact = contacts[0]
 
         biz_name = biz.get("name", "")
         practitioner = biz.get("settings", {}).get("practitioner_name", "")
         practitioner_line = practitioner if practitioner else biz_name
 
-        contact_name = contact.get("name", "Recipient")
-        contact_org = (contact.get("metadata") or {}).get("submission", {}).get("organization") \
-            or (contact.get("metadata") or {}).get("organization") \
-            or contact.get("role")
+        # The filed identity feeds both the letterhead's contact block and,
+        # when there is no counterparty, the "Prepared for" line.
+        try:
+            ident = business_identity.get_identity(req.business_id, biz)
+        except Exception as e:  # noqa: BLE001 — identity must not 500 a download
+            logger.warning(f"identity lookup failed for {req.business_id}: {e}")
+            ident = {}
+
+        if contact:
+            contact_name = contact.get("name", "Recipient")
+            contact_org = (contact.get("metadata") or {}).get("submission", {}).get("organization") \
+                or (contact.get("metadata") or {}).get("organization") \
+                or contact.get("role")
+        else:
+            # No counterparty: the document is FOR the business, so its own
+            # legal name reads correctly on the "Prepared for" line.
+            contact_name = (ident.get("legal_name") or "").strip() or biz_name or "Prepared internally"
+            contact_org = None
 
         # Build PDF — dressed by the Brand Studio kit (accent, font
         # lean, logo) when one exists.
@@ -860,6 +1022,7 @@ async def contract_pdf(req: PdfRequest, user: AuthedUser = Depends(require_user)
                 accent_hex=brand["accent"],
                 serif=brand["serif"],
                 logo_bytes=logo,
+                letterhead=letterhead_lines(biz, ident),
             )
         except ImportError:
             raise HTTPException(500, "reportlab is not installed. Add reportlab>=4.0.0 to requirements.txt and redeploy.")
@@ -868,7 +1031,13 @@ async def contract_pdf(req: PdfRequest, user: AuthedUser = Depends(require_user)
             raise HTTPException(500, f"PDF build failed: {e}")
 
         # Upload
-        pdf_url = await _upload_pdf_to_supabase(client, pdf_bytes, req.business_id, req.contact_id)
+        # "general" rather than a contact folder, so a governance document
+        # still lands under the business prefix the storage policies key on
+        # — the same segment foundation_agent already uses for its own.
+        safe = re.sub(r"[^\w\- ]+", "", (req.subject or "Document")).strip() or "Document"
+        pdf_url = await _upload_pdf_to_supabase(
+            client, pdf_bytes, req.business_id, req.contact_id or "general",
+            download_as=f"{safe}.pdf")
 
         logger.info(f"PDF generated for {contact_name}: {pdf_url}")
         return {"pdf_url": pdf_url, "size_bytes": len(pdf_bytes)}

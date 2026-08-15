@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import os
 import llm_call
+import storage_links
 import json
 import logging
 import re
@@ -739,6 +740,7 @@ async def render_document_pdf(document_id: str) -> Dict[str, Any]:
 
         # The party the document is FOR is the business itself. Prefer the
         # filed legal name from the identity store (PR 1) over the display name.
+        identity: Dict[str, Any] = {}
         try:
             import business_identity
             identity = await asyncio.to_thread(
@@ -763,6 +765,7 @@ async def render_document_pdf(document_id: str) -> Dict[str, Any]:
                     accent_hex=brand.get("accent") or contract_agent.PDF_ACCENT,
                     serif=bool(brand.get("serif")),
                     logo_bytes=logo,
+                    letterhead=contract_agent.letterhead_lines(biz, identity),
                 ))
         except ImportError:
             return {"ok": False, "business_id": business_id, "status": 500,
@@ -774,11 +777,9 @@ async def render_document_pdf(document_id: str) -> Dict[str, Any]:
 
         stamp = int(datetime.now(timezone.utc).timestamp())
         path = f"{business_id}/general/{stamp}-{_slugify(title)}.pdf"
-        service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
         up = await client.post(
             f"{_sb_url()}/storage/v1/object/{DOCS_BUCKET}/{path}",
-            headers={"Authorization": f"Bearer {service_key}",
-                     "apikey": service_key,
+            headers={**storage_links.service_headers(),
                      "Content-Type": "application/pdf"},
             content=pdf_bytes,
             timeout=HTTP_TIMEOUT,
@@ -793,11 +794,24 @@ async def render_document_pdf(document_id: str) -> Dict[str, Any]:
         await _sb_patch(client, f"/foundation_documents?id=eq.{document_id}",
                         {"storage_path": path})
 
+        # business-documents is PRIVATE (the 2026-08-10 vault migration —
+        # it holds client records). A `/object/public/` URL on it answers
+        # "Bucket not found", so "Open PDF" led to a JSON error page for
+        # every governance document the Foundation Track filed. Sign it.
+        signed = await storage_links.signed_url(
+            client, DOCS_BUCKET, path, download_as=f"{_slugify(title)}.pdf")
+        if not signed:
+            return {"ok": False, "business_id": business_id, "status": 502,
+                    "storage_path": path,
+                    "error": "The PDF is filed in your Documents, but the "
+                             "download link couldn't be signed. Open it from "
+                             "Documents, or try again."}
+
         return {
             "ok": True,
             "business_id": business_id,
             "storage_path": path,
-            "pdf_url": f"{_sb_url()}/storage/v1/object/public/{DOCS_BUCKET}/{path}",
+            "pdf_url": signed,
             "size_bytes": len(pdf_bytes),
         }
 
