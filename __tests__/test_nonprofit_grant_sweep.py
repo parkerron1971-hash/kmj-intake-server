@@ -23,6 +23,8 @@ from datetime import date, timedelta
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+import asyncio
+
 import pytest
 
 import briefing_verticals as bv
@@ -107,52 +109,47 @@ async def _run(sb):
     return await bv._community(sb, None, {"id": BIZ, "type": "nonprofit"})
 
 
-@pytest.mark.asyncio
-async def test_the_briefing_reads_the_grants_pipeline():
+def test_the_briefing_reads_the_grants_pipeline():
     sb = FakeSB(_routes([GRANTS_MODULE], ENTRIES))
-    sections = await _run(sb)
+    sections = asyncio.run(_run(sb))
     keys = [s.get("key") for s in sections]
     assert "pipeline" in keys, f"no pipeline section: {keys}"
 
 
-@pytest.mark.asyncio
-async def test_it_names_the_approaching_deadline():
+def test_it_names_the_approaching_deadline():
     sb = FakeSB(_routes([GRANTS_MODULE], ENTRIES))
-    sections = await _run(sb)
+    sections = asyncio.run(_run(sb))
     blob = " ".join(
         " ".join(s.get("lines") or []) for s in sections if s.get("key") == "pipeline")
     assert "Hearth Foundation" in blob, blob
     assert "deadline" in blob.lower(), blob
 
 
-@pytest.mark.asyncio
-async def test_an_overdue_report_is_reported_as_past_due():
+def test_an_overdue_report_is_reported_as_past_due():
     """The award is IN, and the report is nine days late. This is the case
     the whole sweep exists for — and the one a terminal `reporting` stage
     would have hidden."""
     sb = FakeSB(_routes([GRANTS_MODULE], ENTRIES))
-    sections = await _run(sb)
+    sections = asyncio.run(_run(sb))
     blob = " ".join(
         " ".join(s.get("lines") or []) for s in sections if s.get("key") == "pipeline")
     assert "City Arts Council" in blob, blob
     assert "past due" in blob.lower(), blob
 
 
-@pytest.mark.asyncio
-async def test_no_pipeline_means_no_invented_section():
+def test_no_pipeline_means_no_invented_section():
     """A nonprofit that tracks no grants must not get an empty heading."""
     sb = FakeSB(_routes([], []))
-    sections = await _run(sb)
+    sections = asyncio.run(_run(sb))
     assert "pipeline" not in [s.get("key") for s in sections]
 
 
-@pytest.mark.asyncio
-async def test_giving_is_still_never_read():
+def test_giving_is_still_never_read():
     """The branch's standing rule: restricted giving data is owner-only
     and audited, and the briefing never touches it. Adding a pipeline
     scan must not have widened what this reads."""
     sb = FakeSB(_routes([GRANTS_MODULE], ENTRIES))
-    await _run(sb)
+    asyncio.run(_run(sb))
     touched = sb.tables_touched()
     assert bv.RESTRICTED_TABLE not in touched, touched
     assert not any("giving" in t for t in touched), touched
