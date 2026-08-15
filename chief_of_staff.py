@@ -86,6 +86,8 @@ from chief_bookkeeping_actions import (
     handle_reject_bookkeeping_proposal,
     handle_review_books,
 )
+# Canonical vertical list + alias resolution — team personas key on it.
+import vertical_registry
 # P0.3 — contract verbs over the existing contract_agent drafting + PDF path.
 from chief_contract_actions import (
     handle_compose_template,
@@ -376,9 +378,25 @@ PLATFORM_OWNER_ID = "d820593c-9cf8-45b7-a703-89fe49efb6a4"
 # ─── Team personas (mirror of src/core/lib/teamPersonas.ts) ──────────
 # Keep the labels/descriptions in sync with the TS file so the Chief
 # uses the same words the practitioner sees in the UI.
+#
+# KEYED ON CANONICAL VERTICALS (vertical_registry.CANONICAL). This map
+# used to be keyed on a taxonomy of its own — church / coaching /
+# consulting / freelance — none of which are values businesses.type ever
+# holds. The lookup was a raw .get(), so ONLY "nonprofit" ever matched:
+# every coach, consultant and ministry in the system silently received
+# the "default" personas, and the coach set written for them sat
+# unreachable under the key "coaching".
+#
+# Lookup now resolves aliases through the registry first (_persona_set),
+# so both "coaching" and "coach" find the coach personas. Parity with
+# the canonical list is enforced by __tests__/test_team_persona_keys.py.
+#
+# real_estate and health_wellness are pre-registry business types that
+# resolve to "custom"; they keep raw keys so those rows keep personas
+# better than the default set rather than being silently downgraded.
 
 TEAM_PERSONAS = {
-    "church": {
+    "ministry": {
         "nurture": {"label": "Congregational Care", "description": "follows up with your members and visitors"},
         "session_prep": {"label": "Meeting Prep", "description": "prepares you for counseling and ministry meetings"},
         "contract": {"label": "Ministry Proposals", "description": "drafts partnership and program proposals"},
@@ -386,7 +404,7 @@ TEAM_PERSONAS = {
         "module": {"label": "Ministry Tracker", "description": "manages prayer requests, events, and follow-ups"},
         "growth": {"label": "Ministry Insights", "description": "spots trends in attendance, engagement, and growth"},
     },
-    "coaching": {
+    "coach": {
         "nurture": {"label": "Client Care", "description": "nurtures your client relationships"},
         "session_prep": {"label": "Session Prep", "description": "gets you ready for coaching sessions"},
         "contract": {"label": "Proposals", "description": "drafts coaching packages and agreements"},
@@ -394,7 +412,7 @@ TEAM_PERSONAS = {
         "module": {"label": "Progress Tracker", "description": "manages client milestones and goals"},
         "growth": {"label": "Growth Advisor", "description": "analyzes your practice and spots opportunities"},
     },
-    "consulting": {
+    "consultant": {
         "nurture": {"label": "Client Relations", "description": "maintains engagement with prospects and clients"},
         "session_prep": {"label": "Engagement Prep", "description": "prepares briefs for client meetings"},
         "contract": {"label": "Proposals & Contracts", "description": "drafts SOWs and project proposals"},
@@ -405,12 +423,16 @@ TEAM_PERSONAS = {
     "nonprofit": {
         "nurture": {"label": "Donor Relations", "description": "nurtures relationships with donors and supporters"},
         "session_prep": {"label": "Meeting Prep", "description": "prepares for board meetings and donor calls"},
-        "contract": {"label": "Grant Writer", "description": "drafts proposals and funding applications"},
+        # NOT "Grant Writer" — that named a capability nothing implements.
+        # The contract agent drafts general proposals; it knows nothing about
+        # funders, LOIs, budget narratives or reporting deadlines. Named for
+        # what it does until a grant surface exists to back the word.
+        "contract": {"label": "Proposals & Sponsorships", "description": "drafts partnership, sponsor and program proposals"},
         "payment": {"label": "Donations & Pledges", "description": "tracks contributions and pledge follow-ups"},
         "module": {"label": "Program Tracker", "description": "manages programs, volunteers, and impact metrics"},
         "growth": {"label": "Impact Advisor", "description": "analyzes outcomes and growth opportunities"},
     },
-    "freelance": {
+    "service_provider": {
         "nurture": {"label": "Client Outreach", "description": "keeps in touch with clients and prospects"},
         "session_prep": {"label": "Project Prep", "description": "briefs you before client calls and reviews"},
         "contract": {"label": "Estimates & Contracts", "description": "drafts quotes and service agreements"},
@@ -418,6 +440,71 @@ TEAM_PERSONAS = {
         "module": {"label": "Work Tracker", "description": "manages projects, deadlines, and deliverables"},
         "growth": {"label": "Business Coach", "description": "analyzes your freelance business and spots growth"},
     },
+    "lawyer": {
+        "nurture": {"label": "Client Follow-up", "description": "keeps in touch with clients and referral sources"},
+        "session_prep": {"label": "Matter Prep", "description": "prepares you for client meetings and hearings"},
+        "contract": {"label": "Engagement Letters", "description": "drafts engagement letters and fee agreements"},
+        "payment": {"label": "Billing & Trust", "description": "tracks invoices, unbilled time, and trust balances"},
+        "module": {"label": "Matter Tracker", "description": "manages matters, deadlines, and documents"},
+        "growth": {"label": "Practice Advisor", "description": "analyzes matter flow and realization"},
+    },
+    "therapist": {
+        "nurture": {"label": "Client Reminders", "description": "handles scheduling reminders and no-show follow-ups"},
+        "session_prep": {"label": "Schedule Prep", "description": "gets the day's appointments and paperwork in order"},
+        "contract": {"label": "Intake & Consent", "description": "drafts intake paperwork and consent forms"},
+        "payment": {"label": "Billing", "description": "tracks client balances and superbills"},
+        "module": {"label": "Practice Tracker", "description": "manages caseload, consents, and notes owed"},
+        "growth": {"label": "Practice Advisor", "description": "analyzes caseload and schedule health"},
+    },
+    "contractor": {
+        "nurture": {"label": "Customer Follow-up", "description": "follows up on estimates and finished jobs"},
+        "session_prep": {"label": "Job Prep", "description": "gets you ready for walkthroughs and site visits"},
+        "contract": {"label": "Estimates & Change Orders", "description": "drafts quotes, contracts, and change orders"},
+        "payment": {"label": "Invoicing", "description": "tracks deposits, progress billing, and final payments"},
+        "module": {"label": "Job Tracker", "description": "manages jobs, crews, and schedules"},
+        "growth": {"label": "Business Advisor", "description": "analyzes job margins and repeat customers"},
+    },
+    "personal_services": {
+        "nurture": {"label": "Rebooking", "description": "brings regulars back and fills gaps in the day"},
+        "session_prep": {"label": "Day Prep", "description": "gets the chair and the day's appointments ready"},
+        "contract": {"label": "Service Agreements", "description": "drafts service terms and package agreements"},
+        "payment": {"label": "Payments", "description": "tracks takings, tips, and outstanding balances"},
+        "module": {"label": "Client Tracker", "description": "manages regulars, preferences, and visit history"},
+        "growth": {"label": "Chair Advisor", "description": "analyzes rebooking rate and gaps in the day"},
+    },
+    "creative": {
+        "nurture": {"label": "Client Outreach", "description": "keeps in touch with clients and past projects"},
+        "session_prep": {"label": "Brief Prep", "description": "prepares you for kickoffs and review calls"},
+        "contract": {"label": "Scope & Contracts", "description": "drafts scopes, deposits, and revision terms"},
+        "payment": {"label": "Invoicing", "description": "tracks deposits, milestones, and final payments"},
+        "module": {"label": "Project Tracker", "description": "manages projects, revisions, and deliverables"},
+        "growth": {"label": "Studio Advisor", "description": "analyzes project profitability and scope creep"},
+    },
+    "course_creator": {
+        "nurture": {"label": "Student Outreach", "description": "follows up with students and interested leads"},
+        "session_prep": {"label": "Cohort Prep", "description": "gets you ready for live sessions and launches"},
+        "contract": {"label": "Enrollment Terms", "description": "drafts enrollment terms and licensing agreements"},
+        "payment": {"label": "Enrollments", "description": "tracks enrollments, plans, and failed payments"},
+        "module": {"label": "Learner Tracker", "description": "manages cohorts, progress, and completion"},
+        "growth": {"label": "Curriculum Advisor", "description": "analyzes completion rates and where learners drop"},
+    },
+    "fitness_wellness": {
+        "nurture": {"label": "Member Check-ins", "description": "follows up with members between sessions"},
+        "session_prep": {"label": "Session Prep", "description": "prepares programming for the day's clients"},
+        "contract": {"label": "Waivers & Plans", "description": "drafts waivers, packages, and membership terms"},
+        "payment": {"label": "Memberships", "description": "tracks memberships, packs, and expiring sessions"},
+        "module": {"label": "Progress Tracker", "description": "manages client programs and attendance"},
+        "growth": {"label": "Retention Advisor", "description": "analyzes attendance and where members lapse"},
+    },
+    "financial_educator": {
+        "nurture": {"label": "Student Outreach", "description": "follows up with students and workshop attendees"},
+        "session_prep": {"label": "Workshop Prep", "description": "gets you ready for classes and webinars"},
+        "contract": {"label": "Program Terms", "description": "drafts program terms and educational disclaimers"},
+        "payment": {"label": "Enrollments", "description": "tracks course payments and plans"},
+        "module": {"label": "Student Tracker", "description": "manages cohorts, attendance, and materials"},
+        "growth": {"label": "Program Advisor", "description": "analyzes enrollment and completion trends"},
+    },
+    # ── Pre-registry business types (resolve to "custom"; raw-key only) ──
     "real_estate": {
         "nurture": {"label": "Client Nurture", "description": "follows up with buyers, sellers, and leads"},
         "session_prep": {"label": "Showing Prep", "description": "prepares you for showings and client meetings"},
@@ -445,17 +532,31 @@ TEAM_PERSONAS = {
 }
 
 
+def _persona_set(biz_type: Optional[str]) -> dict:
+    """Resolve a stored businesses.type to its persona set.
+
+    Canonical first (so "coaching" and "coach" both find the coach set),
+    then the raw value (so pre-registry types like real_estate, which
+    resolve to "custom", keep their own personas), then default.
+    """
+    raw = (biz_type or "").strip().lower()
+    if not raw:
+        return TEAM_PERSONAS["default"]
+    canonical = vertical_registry.resolve(raw)
+    if canonical in TEAM_PERSONAS:
+        return TEAM_PERSONAS[canonical]
+    return TEAM_PERSONAS.get(raw, TEAM_PERSONAS["default"])
+
+
 def get_team_label(biz_type: Optional[str], agent_key: str) -> str:
-    bt = (biz_type or "default").lower()
-    persona = TEAM_PERSONAS.get(bt, TEAM_PERSONAS["default"]).get(agent_key)
+    persona = _persona_set(biz_type).get(agent_key)
     if persona:
         return persona["label"]
     return agent_key.replace("_", " ").title()
 
 
 def get_team_description(biz_type: Optional[str], agent_key: str) -> str:
-    bt = (biz_type or "default").lower()
-    persona = TEAM_PERSONAS.get(bt, TEAM_PERSONAS["default"]).get(agent_key)
+    persona = _persona_set(biz_type).get(agent_key)
     return persona["description"] if persona else ""
 
 VALID_CONTACT_STATUSES = {"active", "lead", "vip", "inactive", "churned"}
