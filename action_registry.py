@@ -157,6 +157,21 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                               "never row contents", sensitive=True),
     "show_revenue":        _r("reads revenue figures"),
     "close_view":          _ui("dismisses the on-screen data view the practitioner asked to close"),
+    "propose_mission":        _w("A", "drafts a multi-step plan row; executes NOTHING — "
+                                 "start_mission is the practitioner's yes, and deleting "
+                                 "the draft undoes it completely"),
+    "start_mission":          _w("C", "releases execution of an approved plan. Each step "
+                                 "still dispatches through _execute_actions (the class-C "
+                                 "gate applies per step) and class-C steps pause for "
+                                 "explicit approval — but the verb that sets other verbs "
+                                 "in motion is classified by what it can set in motion"),
+    "advance_mission":        _w("C", "lifts the gate on a paused consequential step — this "
+                                 "IS the practitioner's approval of that step, so it "
+                                 "carries the step's own class"),
+    "abandon_mission":        _w("A", "flips an open mission to abandoned; steps already "
+                                 "run stay run, nothing new executes"),
+    "mission_status":      _r("reads open missions with per-step status — operational "
+                              "state, same class as list_scheduled"),
     "show_view":           _r("fetches a bounded read-only list (invoices / contacts / "
                               "sessions / products) under the caller's own JWT and returns "
                               "it as typed rows for an in-chat table card; RLS is the gate, "

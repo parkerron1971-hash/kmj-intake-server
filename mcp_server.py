@@ -286,6 +286,15 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
     # frontend_event fields it carries are meaningless off the app
     # surface and inert in an agent's hands. Filters are advisory: an
     # unknown filter falls back to the view's default server-side.
+    # Deliberately exposed (tripwire bump 25 -> 26, 8/15). mission_status
+    # is operational plan state — the same class as list_scheduled and
+    # campaign_status, both already here. Reads per-step status only;
+    # starting/advancing/abandoning are writes and stay OFF this surface.
+    "mission_status": (
+        "Chief's open multi-step missions and their per-step progress. "
+        "Read-only; a mission waiting on approval can only be advanced by "
+        "the practitioner in the app.",
+        _NO_ARGS),
     "show_view": (
         "A bounded list (max 25 rows) of one view of this business's "
         "records, as typed columns and rows. Read-only.",
