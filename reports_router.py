@@ -1245,3 +1245,47 @@ def _render_pdf(biz_name: str, title: str, data: Dict[str, Any], rows: list) -> 
     story.append(Paragraph("Reviewed by / date", styles["Normal"]))
     doc.build(story)
     return buf.getvalue()
+
+
+# ─── The W-9, prefilled from the identity we already hold ────────────
+#
+# A W-9 never goes to the IRS — it goes to the funder or payer who asked
+# for it. So "fill it in, download it, hand it over" is the real workflow
+# rather than a workaround, and it is the one IRS form where a download
+# is the correct product.
+#
+# Form 990 and 1023 are deliberately NOT here: both are e-file only
+# (Taxpayer First Act; Pay.gov), so a filled PDF would not be filable and
+# offering one would teach a wrong workflow. Those get a link instead.
+#
+# irs_forms fetches the OFFICIAL blank and verifies every value landed
+# before returning it. On any doubt it raises, and this returns 503 with
+# a plain reason so the frontend can hand over the blank form instead of
+# a PDF that might look answered and be empty.
+
+@router.get("/w9")
+def w9_prefilled(biz: str, user: AuthedUser = Depends(require_user)):
+    """The official W-9 with this organisation's own facts written in.
+
+    Unsigned, and fillable — the practitioner still reviews and signs it.
+    """
+    from fastapi.responses import Response
+    import business_identity
+    import irs_forms
+
+    b = _owner(biz, user)
+    identity = business_identity.get_identity(biz, b)
+    try:
+        pdf = irs_forms.fill_w9(identity, business_name=b.get("name") or "")
+    except irs_forms.FormUnavailable as e:
+        # 503, not 500: the form is fine, we could not prepare it right
+        # now. The message is shown to the practitioner verbatim.
+        raise HTTPException(503, str(e))
+
+    safe = "".join(ch for ch in (identity.get("legal_name") or "w9")
+                   if ch.isalnum() or ch in " -_").strip() or "w9"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="W-9 {safe}.pdf"'},
+    )
