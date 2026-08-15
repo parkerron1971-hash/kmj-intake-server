@@ -162,6 +162,12 @@ import fallback_brain
 import business_track_actions
 CHIEF_MODEL = chief_models.model_for("chat")
 DRAFT_MODEL = chief_models.model_for("draft")
+
+# The default ceiling for a short draft — an email, a nudge, a note.
+# NOT big enough for a document: a contract body runs several
+# thousand tokens, and rewrite_draft used to send one through this
+# cap and PATCH the truncated result back over the original.
+DRAFT_MAX_TOKENS = 500
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
 # Loopback base for run_agent actions. Prefer localhost + PORT (no TLS, no DNS);
@@ -1177,6 +1183,7 @@ async def _draft_short(
     system: str,
     user_msg: str,
     voice_payload: str = "",
+    max_tokens: Optional[int] = None,
 ) -> str:
     """Embedded draft generation inside action handlers
     (draft_nurture / draft_email / etc.).
@@ -1198,7 +1205,8 @@ async def _draft_short(
         resp = await client.post(ANTHROPIC_API_URL, headers={
             "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json",
         }, json={
-            "model": DRAFT_MODEL, "max_tokens": 500, "system": full_system,
+            "model": DRAFT_MODEL, "max_tokens": max_tokens or DRAFT_MAX_TOKENS,
+            "system": full_system,
             "messages": [{"role": "user", "content": user_msg}],
         }, timeout=HTTP_TIMEOUT)
     except httpx.HTTPError:
@@ -5542,6 +5550,52 @@ async def handle_edit_draft(client, biz, action) -> Dict:
     }
 
 
+async def handle_save_draft(client, biz, action) -> Dict:
+    """Write a draft's body and LEAVE IT A DRAFT.
+
+    The product had no such path. edit_draft writes and immediately
+    approves — sending, when the row has a recipient — and rewrite_draft
+    was the only body write that left a draft alone, which meant the one
+    way to save an edit without sending it was to ask a model to rewrite
+    the whole thing.
+
+    So "read this back to me with the deposit changed to $2,000, but do
+    not send it" had no honest answer. Now it does.
+    """
+    qid = action.get("queue_id")
+    new_body = (action.get("new_body") or "").strip()
+    if not qid:
+        return _fail("save_draft", "queue_id required")
+    if not new_body:
+        return _fail("save_draft", "new_body required")
+    rows = await _sb(client, "GET",
+        f"/agent_queue?id=eq.{qid}&business_id=eq.{biz['id']}&limit=1&select=*")
+    if not rows:
+        return _fail("save_draft", f"Draft {qid} not found")
+    item = rows[0]
+
+    # Same guard as rewrite_draft, for the same reason: the original is
+    # overwritten and there is no version history, so a body that arrives
+    # far shorter than what it replaces is refused rather than written.
+    old_body = item.get("body") or ""
+    if len(old_body) > 1200 and len(new_body) < len(old_body) * 0.55:
+        return _fail(
+            "save_draft",
+            "That is much shorter than the draft it would replace, so I "
+            "left it alone. Send the whole document if you meant to "
+            "replace it, or edit it in Approvals.")
+
+    await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {"body": new_body})
+    return {
+        "type": "save_draft",
+        "result": "saved (still a draft, not sent)",
+        "label": f"Saved: {item.get('subject') or 'draft'}",
+        "nav": _nav("operate", "queue"),
+        "draft_preview": new_body[:300],
+        "queue_id": qid,
+    }
+
+
 async def handle_rewrite_draft(client, biz, action) -> Dict:
     qid = action.get("queue_id")
     instruction = (action.get("instruction") or "").strip()
@@ -5571,9 +5625,43 @@ async def handle_rewrite_draft(client, biz, action) -> Dict:
               f"Return ONLY the rewritten text — no commentary, no preamble.")
     user_msg = f"CURRENT DRAFT:\n{old_body}\n\nINSTRUCTION: {instruction}"
 
-    rewritten = await _draft_short(client, biz, system, user_msg, voice_payload=voice_payload)
+    # SIZE THE CEILING TO THE DOCUMENT.
+    #
+    # This used to run every body through _draft_short's 500-token
+    # default and PATCH whatever came back over the original. A contract
+    # body runs several thousand tokens, so the rewrite came back cut off
+    # mid-clause and silently replaced the whole agreement — and the
+    # result string said "rewritten (not yet approved)" while
+    # draft_preview showed the first 600 characters, which looked
+    # perfect, because the truncation is at the END.
+    #
+    # ~4 chars per token, doubled for headroom, floored at the short
+    # default and capped so a runaway body cannot buy an enormous call.
+    budget = max(DRAFT_MAX_TOKENS, min(8000, (len(old_body) // 4) * 2))
+    rewritten = await _draft_short(client, biz, system, user_msg,
+                                   voice_payload=voice_payload,
+                                   max_tokens=budget)
     if not rewritten:
         return _fail("rewrite_draft", "AI rewrite failed")
+
+    # AND VERIFY IT CAME BACK WHOLE.
+    #
+    # A ceiling makes truncation unlikely, not impossible — a longer
+    # document, a chattier model, a future cap change. Losing most of a
+    # contract is unrecoverable (the original is overwritten and there is
+    # no version history), so a rewrite that comes back materially
+    # shorter is refused rather than written. The threshold is generous:
+    # a genuine "make this shorter" instruction survives, a truncation
+    # does not.
+    if len(old_body) > 1200 and len(rewritten) < len(old_body) * 0.55:
+        logger.warning(
+            "[rewrite_draft] refused: %d chars in, %d out (qid=%s)",
+            len(old_body), len(rewritten), qid)
+        return _fail(
+            "rewrite_draft",
+            "That rewrite came back much shorter than the original, so I "
+            "left the draft untouched rather than risk cutting it off. Ask "
+            "for a change to one section, or edit it in Approvals.")
 
     await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {"body": rewritten})
 
@@ -12197,6 +12285,7 @@ ACTION_HANDLERS = {
     "dismiss_draft":         handle_dismiss_draft,
     "edit_draft":            handle_edit_draft,
     "rewrite_draft":         handle_rewrite_draft,
+    "save_draft":         handle_save_draft,
     "bulk_approve":          handle_bulk_approve,
     "bulk_dismiss":          handle_bulk_dismiss,
     "contact_deep_dive":     handle_contact_deep_dive,
@@ -15070,7 +15159,8 @@ ACTIONS — QUEUE MANAGEMENT:
   [ACTION:{{"type":"approve_draft","queue_id":"<uuid from QUEUE>"}}]
   [ACTION:{{"type":"approve_draft","queue_id":"latest"}}]  — approves the most recent draft for this business; use when they say "approve it"/"send it" right after you drafted something
   [ACTION:{{"type":"dismiss_draft","queue_id":"<uuid>"}}]
-  [ACTION:{{"type":"edit_draft","queue_id":"<uuid>","new_body":"rewritten text"}}]  — edit + approve in one step
+  [ACTION:{{"type":"edit_draft","queue_id":"<uuid>","new_body":"rewritten text"}}]  — edit + approve in one step. This SENDS when the row has a recipient — use save_draft when they only want it changed.
+  [ACTION:{{"type":"save_draft","queue_id":"<uuid>","new_body":"the full new text"}}]  — change a draft and LEAVE it a draft. Nothing is approved, nothing is sent. Pass the WHOLE body, not a fragment; it replaces what is there.
   [ACTION:{{"type":"rewrite_draft","queue_id":"<uuid>","instruction":"make it warmer"}}]  — AI rewrites, does NOT auto-approve
   [ACTION:{{"type":"bulk_approve","filter":"all|agent:nurture|priority:low"}}]  — cap 20
   [ACTION:{{"type":"bulk_dismiss","filter":"priority:low"}}]  — cap 20

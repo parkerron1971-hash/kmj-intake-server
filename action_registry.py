@@ -267,7 +267,16 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "archive_offering":       _w("A", "SOFT delete — is_active=false + archived_at, and existing "
                                       "references keep working off denormalized fields"),
     "dismiss_draft":          _w("A", "flips a queued draft's status to dismissed; the row survives"),
-    "edit_draft":             _w("A", "edits a queued draft in place — still a draft, still unsent"),
+    # DESCRIPTION CORRECTED. This said "still a draft, still unsent" and
+    # the handler approves AND SENDS in the same turn (_do_approve_one).
+    # The prompt was honest about it; this file, which is the default-deny
+    # classification surface, was the drifted artifact — and a verb whose
+    # registry entry understates its blast radius is the wrong one to be
+    # wrong about. save_draft below is the one that genuinely does not send.
+    "edit_draft":             _w("A", "replaces a queued draft's body and then APPROVES it — "
+                                      "sends when the row has a recipient"),
+    "save_draft":             _w("A", "replaces a queued draft's body and leaves it a draft; "
+                                      "nothing is approved and nothing leaves the system"),
     "rewrite_draft":          _w("A", "regenerates a queued draft's body; still unsent"),
     "bulk_dismiss":           _w("A", "flips status to dismissed across a filtered set; each row "
                                       "survives, but forty at once is not one undo", bulk=True),
