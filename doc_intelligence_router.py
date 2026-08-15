@@ -19,6 +19,13 @@ Surface (all owner-gated, all metered as AI actions):
               "dates"    → every date/deadline with its consequence
               "ask"      → answer a practitioner question, with the
                            exact supporting quotes
+              "grant_requirements"
+                         → a NOFO/RFP read as a compliance checklist:
+                           deadlines, eligibility gates, required forms
+                           and attachments, page/font limits, narrative
+                           sections with their review weights, budget
+                           rules, submission registrations, post-award
+                           reporting, and what the document does NOT say
   POST /docintel/compare   {business_id, path_a, path_b}
        → verdict + per-topic differences with significance, plus
          clauses present in only one document.
@@ -74,10 +81,17 @@ MAX_FILE_BYTES = 20 * 1024 * 1024
 
 DEFAULT_MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 2000
+# A grant checklist is a much bigger answer than a summary: eleven
+# arrays, one of them a section-by-section breakdown of a NOFO. At 2000
+# the JSON truncates mid-array and _parse_json raises, which the caller
+# sees as "came back malformed" and retries — paying twice for the same
+# truncation. Sized per mode rather than raising the ceiling for every
+# call, since a summary genuinely does not need it.
+MODE_MAX_TOKENS = {"grant_requirements": 8000}
 
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)
 
-_MODES = ("summary", "dates", "ask")
+_MODES = ("summary", "dates", "ask", "grant_requirements")
 
 # Extension → how the file rides in the message. Anthropic accepts
 # jpeg/png/gif/webp image blocks and PDF document blocks; everything
@@ -231,6 +245,52 @@ _MODE_INSTRUCTIONS: Dict[str, str] = {
         '"not_in_document": false — set true (with your best reading in '
         '"answer") if the document does not actually address the question}'
     ),
+    # Grant NOFO / RFP / foundation guidelines → a compliance checklist.
+    #
+    # WHY THIS AND NOT A DRAFTING MODE. A federal application passes an
+    # ADMINISTRATIVE screen before any reviewer reads it on merit: late,
+    # ineligible, missing form, over the page limit, wrong font — and the
+    # proposal is never scored at all. Extracting the requirements is
+    # worth more than help with the prose, because the prose is not what
+    # kills most applications.
+    #
+    # It reads and quotes; it never drafts and never infers. A guessed
+    # page limit is worse than a missing one, so anything the document
+    # does not state comes back null and lands in `not_stated` — which
+    # doubles as the list of questions worth a call to the program
+    # officer.
+    "grant_requirements": (
+        'This is a grant funding opportunity — a NOFO, RFP, RFA, or a '
+        "foundation's application guidelines. Extract what an applicant "
+        'must DO and PROVIDE, quoting the document. NEVER infer a value '
+        'that is not stated: use null and list it under not_stated.\n'
+        'Return JSON: {'
+        '"opportunity": {"funder": "as written or null", '
+        '"title": "as written or null", '
+        '"award_ceiling": "as written or null", '
+        '"award_floor": "as written or null", '
+        '"match_required": "as written, or null if none stated"}, '
+        '"deadlines": [{"date": "as written", "label": "what is due", '
+        '"consequence": "what happens if missed, or null"}], '
+        '"eligibility": [{"requirement": "one criterion", '
+        '"is_hard_gate": true}], '
+        '"required_attachments": ["each document the applicant must attach"], '
+        '"required_forms": ["each named form, e.g. SF-424"], '
+        '"format_rules": [{"rule": "page limit, font, margins, spacing, file '
+        'type", "value": "as written"}], '
+        '"narrative_sections": [{"section": "the section name", '
+        '"limit": "page or word limit as written, or null", '
+        '"weight": "review points or percentage as written, or null"}], '
+        '"budget_rules": ["indirect-cost caps, unallowable costs, budget '
+        'narrative requirements — as written"], '
+        '"submission": {"portal": "where it is submitted, or null", '
+        '"registrations": ["registrations required before submitting, e.g. '
+        'SAM.gov, UEI, Grants.gov AOR"]}, '
+        '"reporting": ["reports required after an award, with their cadence"], '
+        '"not_stated": ["anything an applicant would normally need that this '
+        'document does NOT specify — these are the questions to ask the '
+        'program officer"]}'
+    ),
 }
 
 _COMPARE_INSTRUCTION = (
@@ -265,12 +325,12 @@ def _parse_json(raw: str) -> Dict[str, Any]:
 
 async def _call_claude(system: str, content: List[Dict[str, Any]],
                        *, business_id: str, user_id: str,
-                       task_type: str) -> Dict[str, Any]:
+                       task_type: str, max_tokens: Optional[int] = None) -> Dict[str, Any]:
     if not llm_call.api_key():
         raise HTTPException(503, "Document analysis isn't configured (no API key).")
     payload = {
         "model": _model(),
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens or MAX_TOKENS,
         "system": system,
         "messages": [{"role": "user", "content": content}],
     }
@@ -360,7 +420,8 @@ async def docintel_analyze(body: AnalyzeBody,
 
     result = await _call_claude(
         _system(biz, contact_name), content,
-        business_id=body.business_id, user_id=user.id, task_type=f"docintel_{mode}")
+        business_id=body.business_id, user_id=user.id, task_type=f"docintel_{mode}",
+        max_tokens=MODE_MAX_TOKENS.get(mode))
 
     _log_event(body.business_id, contact_id, "document_analyzed", {
         "filename": _filename(path), "path": path, "mode": mode,
