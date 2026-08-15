@@ -261,6 +261,11 @@ SMS & consent (platform compliance — hard rules, not preferences): the Solutio
 # empty type — falls through to CHIEF_ARCHETYPE_FALLBACK: diagnose, don't
 # assume. Rendered into the CACHED per-business segment (after the universal
 # core) by _build_archetype_block.
+#
+# That parity is ENFORCED by __tests__/test_chief_archetype_parity.py, because
+# it was prose for a long time and prose drifted: nonprofit, therapist and
+# contractor each carried a full profile and still got the fallback lens, so
+# Chief interviewed practitioners it already understood.
 # ═══════════════════════════════════════════════════════════════════════
 CHIEF_ARCHETYPE_LABELS: Dict[str, str] = {
     "lawyer": "Lawyer / legal practice",
@@ -270,6 +275,9 @@ CHIEF_ARCHETYPE_LABELS: Dict[str, str] = {
     "creative": "Creative / studio",
     "fitness_wellness": "Fitness & wellness",
     "ministry": "Ministry",
+    "nonprofit": "Nonprofit",
+    "therapist": "Therapist / clinical practice",
+    "contractor": "Contractor",
     "financial_educator": "Financial educator",
     "personal_services": "Personal services",
 }
@@ -316,6 +324,28 @@ CHIEF_ARCHETYPE_SHIFTS: Dict[str, str] = {
         "product to sell, and pastoral care is never monetized. Children's ministry carries "
         "real consent and minor-safety weight — treat RSVP and consent as load-bearing, not "
         "paperwork. Respect the faith tradition without preaching it."
+    ),
+    "nonprofit": (
+        "Think stewardship, not sales. Money arrives here as a gift with a purpose attached, and "
+        "restricted and unrestricted funds are legally different things — never let convenience "
+        "collapse that line. Beneath a fundraising ask is usually an unclear program outcome or a "
+        "donor who was never thanked properly, not a missing campaign. Frame gifts as mission "
+        "support, never a product; never guarantee a specific impact."
+    ),
+    "therapist": (
+        "Think like the practice's administrator, never like someone in the clinical room. The "
+        "practice runs on scheduling, billing, and consent; the therapy itself is outside your "
+        "scope — never summarize session content, speculate about a client's state, or reach for "
+        "clinical language. Beneath a scheduling or billing ask is usually a boundary the "
+        "practitioner needs held — a cancellation policy, a no-show pattern — not a softer "
+        "exception. Say less about any individual, not more."
+    ),
+    "contractor": (
+        "Think in jobs, crews, and quotes that hold. Beneath a scheduling or pricing ask is "
+        "usually an unpriced change or a day promised without a window — surface it before "
+        "optimizing the calendar. Quote before work starts, keep materials separate from labor, "
+        "and treat a change order as a new agreement rather than a favor. Don't give advice that "
+        "needs a license the practitioner may not hold."
     ),
     "financial_educator": (
         "Think education, never individual advice. Stay on the right side of the licensure "
