@@ -507,6 +507,12 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
             "offerings": "No offerings yet. Common: Membership + Program Enrollment + Event Ticket + Sponsorship.",
         },
         "module_suggestions": [
+            # Grants first. It is a CORE blueprint module for this vertical
+            # and the onboarding card names it, yet it was the one
+            # suggestion missing — so the surface that offers modules never
+            # offered the one already being provisioned.
+            {"slug": "grants", "archetype": "work_pipeline",
+             "headline": "Track every grant from research to report, with its deadlines."},
             {"slug": "programs", "archetype": "fallback_generic",
              "headline": "Track your programs and who's enrolled in each."},
             {"slug": "event-rsvp", "archetype": "event_roster",

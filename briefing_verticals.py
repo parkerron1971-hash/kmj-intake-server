@@ -616,6 +616,29 @@ async def _community(sb, client, biz: Dict[str, Any]) -> List[Dict[str, Any]]:
              f"next {ROSTER_WINDOW_DAYS} days with unfilled roles:"] + gaps[:8],
             ["custom_modules", "module_entries"],
             {"count": len(gaps), "occasions": gap_data}))
+
+    # Pipelines — the Grants board, and anything else pipeline-shaped this
+    # organisation runs.
+    #
+    # This branch read contacts and event rosters only, so the nonprofit
+    # autopilot job "Grant and deadline sweep" would have found nothing
+    # every weekday forever and looked like working autopilot — the exact
+    # failure vertical_autopilot.py documents for the chair-business job
+    # it deleted rather than ship. A grant's whole risk is its date, so a
+    # briefing claiming to sweep deadlines has to actually read them.
+    #
+    # Deliberately AFTER the community sections, and through the shared
+    # _deadline_lines: a submission date and a filing date are the same
+    # kind of fact, and should read the same way.
+    for scan in await _scan_pipelines(sb, client, biz_id):
+        lines = _deadline_lines(scan, "application")
+        stage = _stage_line(scan, "application")
+        if stage:
+            lines.insert(0, stage)
+        if lines:
+            sections.append(_section(
+                "pipeline", f"Deadlines — {scan['module']}", lines,
+                ["custom_modules", "module_entries"], scan))
     return sections
 
 

@@ -133,7 +133,23 @@ DEFAULT_AUTOPILOT: Dict[str, List[Dict[str, Any]]] = {
              "Drafts a warm follow-up for people who visited recently."),
     ],
 
+    # A grant deadline is an obligation, not a reminder — the same
+    # reasoning the lawyer's sweep is built on, and weekdays for the same
+    # reason: a Friday-to-Monday gap is where a submission date goes
+    # missing. It matters after the award too, because federal reporting
+    # runs on its own clocks (interim commonly within 30 days of a period
+    # end, final within 120) and a missed report is how the next grant is
+    # lost.
+    #
+    # The briefing agent reads pipelines through
+    # briefing_verticals._scan_pipelines, which only walks modules whose
+    # archetype is work_pipeline — so the Grants module had to become a
+    # real pipeline (FE#521) before this job could see anything at all.
     "nonprofit": [
+        _job("grant_deadlines", "Grant and deadline sweep", "briefing",
+             "weekdays", 11,
+             "Surfaces grants approaching their submission or report date, "
+             "and applications that have gone past one."),
         _job("donor_followup", "Donor follow-up", "nurture", "weekly", 12,
              "Drafts thank-yous and re-engagement for lapsing donors."),
     ],
