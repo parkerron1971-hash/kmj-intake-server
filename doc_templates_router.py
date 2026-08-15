@@ -440,12 +440,26 @@ async def generate_document_core(business: Dict[str, Any],
     state_notes = await _state_notes(business, template, variables,
                                      user_id=user_id)
 
+    # Read the finished text before the client does.
+    #
+    # Deterministic only: no model call, no network, no metering, and no
+    # veto — audit_document never raises, so a fault here yields no
+    # findings rather than blocking a document that is otherwise ready.
+    # Every guarantee above this line is an AUTHORING guarantee; this is
+    # the first thing that looks at what actually came out.
+    import doc_audit
+    audit = doc_audit.audit_document(
+        doc_body,
+        sections=[{"text": s.get("text") or ""} for s in template["sections"]],
+        numbered=bool(template.get("numbered")))
+
     return {"ok": True, "queue_id": queue_id, "subject": subject,
             "title": template["title"], "body": doc_body,
             "drafted_sections_used": bool(drafted),
             "used_defaults": used_defaults,
             "saved_defaults": saved_defaults,
             "state_notes": state_notes,
+            "audit": audit,
             "review_note": None if is_lawyer else doc_templates._REVIEW_NOTE}
 
 
