@@ -15527,7 +15527,7 @@ ACTIONS — RECURRING BOOKINGS (weekly standing appointments):
   [ACTION:{{"type":"create_recurring_booking","contact_name":"...","weekday":"tuesday","time":"14:00","weeks":12,"from_date":"YYYY-MM-DD","until_date":"YYYY-MM-DD"}}]  — book a weekly series (default 12 occurrences, max 26) onto the calendar in one verb. "Book Marcus every Tuesday at 2" → this. weeks OR sessions OR until_date bound the series.
   [ACTION:{{"type":"cancel_recurring_booking","contact_name":"...","reason":"..."}}]  — cancel every FUTURE occurrence of a series (past ones stand). series_id wins when known; otherwise the client's name resolves it.
 
-ACTIONS — GIVING (church vertical — donor statements; this data is confidential, never volunteer another donor's numbers):
+ACTIONS — GIVING (any nonprofit or ministry — donor statements; this data is confidential, never volunteer another donor's numbers):
   [ACTION:{{"type":"giving_statement","contact_id":"..."}}]  — one donor's annual contribution statement (IRS Pub 1771 wording). Optional goods_and_services note.
   [ACTION:{{"type":"giving_statements_run"}}]  — every donor's totals for a tax year: the January mailing run.
 
