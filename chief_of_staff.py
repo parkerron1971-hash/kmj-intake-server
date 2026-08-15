@@ -14150,8 +14150,15 @@ def _build_personality_block(biz: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     # Humor is opt-in and has to be asked for, because the default below
     # forbids it. Read both fields: the tone carries "playful and fun" /
     # "witty and dry", the personality carries the adjectives.
+    #
+    # Anchored on word boundaries deliberately. `tone` is free text — Chief
+    # writes it, onboarding writes it, the practitioner writes it — so a
+    # substring match would read "fundraising" as fun and "laundry" as dry,
+    # and hand a nonprofit a joking assistant it never asked for.
     wants_humor = bool(re.search(
-        r"playful|witty|fun|dry|irreverent|humou?r|light", f"{tone} {persona_words}", re.I))
+        r"\b(playful|witty|funny|fun|wry|dry|irreverent|humou?rous|humou?r|"
+        r"light-?hearted)\b",
+        f"{tone} {persona_words}", re.I))
 
     if tone:
         parts.append(
