@@ -205,6 +205,18 @@ def provision_modules(
         arch = row.get("archetype")
         if arch:
             payload["archetype"] = arch
+        # ...and the archetype's CONFIGURATION, which is not optional in
+        # practice. work_pipeline resolves its field names from
+        # archetype_params and otherwise falls back to DEFAULT_FIELDS —
+        # title / due_date / value. A blueprint whose schema uses different
+        # names (nonprofit/grants uses funder / deadline / amount) renders
+        # every card with no title, no date and no value unless the params
+        # ride along. Naming the archetype without configuring it ships a
+        # board that looks broken, which is a worse failure than the plain
+        # list it replaced.
+        arch_params = row.get("archetype_params")
+        if arch_params:
+            payload["archetype_params"] = arch_params
         pub = row.get("public_display")
         if pub:
             payload["public_display"] = pub
