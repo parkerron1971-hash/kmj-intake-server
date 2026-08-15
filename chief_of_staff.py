@@ -16169,6 +16169,51 @@ def _is_coach_pause(msg: str) -> bool:
             or s.startswith(BUSINESS_COACH_PAUSE_SENTINEL))
 
 
+# A farewell is a WHOLE message, not a word in one. "goodnight chief,
+# thanks for everything" ends the session; "when I did the goodbyes
+# Chief never closed out the chat" is a bug report that happens to
+# contain the word. The detector strips one recognized farewell core,
+# then requires everything left over to be pleasantries — so a sentence
+# with any other content never matches. Questions never match at all.
+_FAREWELL_CORES = (
+    "that's all for now", "thats all for now", "that is all for now",
+    "that's all", "thats all", "that is all",
+    "we're done here", "were done here", "we are done here",
+    "we're done", "were done", "i'm done for now", "im done for now",
+    "that'll do it", "thatll do it", "that will do it",
+    "talk to you tomorrow", "talk to you later",
+    "talk tomorrow", "talk later", "talk soon",
+    "see you tomorrow", "see you later", "see you", "catch you later",
+    "have a good night", "have a goodnight", "have a good one",
+    "i'm heading out", "im heading out", "heading out",
+    "signing off", "logging off",
+    "goodbye", "good bye", "bye bye", "bye",
+    "goodnight", "good night", "gn",
+)
+_FAREWELL_FILLER = {
+    "ok", "okay", "alright", "well", "great", "perfect", "cool", "awesome",
+    "thanks", "thank", "you", "so", "much", "a", "lot", "chief", "man",
+    "for", "everything", "today", "tonight", "now", "all", "the", "help",
+    "good", "work", "appreciate", "it", "really", "and", "again", "buddy",
+}
+
+
+def _is_farewell(msg: str) -> bool:
+    text = (msg or "").strip().lower()
+    if not text or len(text) > 80 or "?" in text:
+        return False
+    text = re.sub(r"[^a-z\s']", " ", text).replace("'", "'")
+    text = re.sub(r"\s+", " ", text).strip()
+    for core in _FAREWELL_CORES:
+        stripped, n = re.subn(r"\b" + re.escape(core) + r"\b", " ", text, count=1)
+        if not n:
+            continue
+        leftover = [w for w in re.split(r"[\s']+", stripped) if w]
+        if all(w in _FAREWELL_FILLER for w in leftover):
+            return True
+    return False
+
+
 # Phrases that suggest a prior assistant turn described an action. When we
 # see these in cleaned history (action tags already stripped), we annotate
 # the turn so the model knows actions WERE emitted and not to mimic an
@@ -16844,6 +16889,30 @@ async def chief_chat(
 
             taken = await _execute_actions(
                 client, biz, actions, user_id=str(user_session.user.id)) if actions else []
+
+            # Deterministic goodbye enforcement (8/15). The GOODBYES CLOSE
+            # THE ROOM prompt rule (#592) is real but advisory, and Kevin's
+            # live repro the next morning was the model saying a warm
+            # goodbye WITHOUT the tag -- the same class as the propose-
+            # framing rule, which this file already enforces
+            # deterministically because prompt compliance is empirically
+            # unreliable. A clear farewell closes the room whether or not
+            # the model remembered; the narrow detector keeps sentences
+            # that merely mention goodbyes (bug reports, "say goodbye in
+            # Spanish") from ending the session.
+            if (_is_farewell(req.message) and not is_coach_mode
+                    and not is_coach_pause
+                    and not any(isinstance(t, dict)
+                                and t.get("type") == "set_chat_window"
+                                for t in taken)):
+                try:
+                    taken.append(await handle_set_chat_window(
+                        client, biz, {"type": "set_chat_window",
+                                      "visible": False,
+                                      "keep_talking": False}))
+                    logger.info("[Chief] farewell enforced: chat window closed")
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"farewell enforcement failed: {e}")
 
             # Phase C.1.2 — Option D two-pass reply. Only fires when actions
             # actually executed. Re-asks the LLM with structured success/
