@@ -70,6 +70,7 @@ TRUST-LAYER DISCIPLINE (feedback_chief_trust_layer_discipline):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
@@ -270,6 +271,16 @@ async def handle_contract_pdf(client, biz, action) -> Dict[str, Any]:
 
     brand = ca.brand_from_business(biz)
     logo = await ca.fetch_logo_bytes(client, brand["logo_url"])
+    # Same letterhead as the queue's Download button. Chief rendering a
+    # PDF with a different header from the one the practitioner gets by
+    # clicking is the kind of drift nobody reports and everyone notices.
+    try:
+        import business_identity
+        identity = await asyncio.to_thread(
+            lambda: business_identity.get_identity(biz.get("id") or "", biz))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"contract_pdf identity lookup failed: {e}")
+        identity = {}
     try:
         pdf_bytes = ca._build_pdf(
             business_name=biz.get("name", ""),
@@ -281,6 +292,7 @@ async def handle_contract_pdf(client, biz, action) -> Dict[str, Any]:
             accent_hex=brand["accent"],
             serif=brand["serif"],
             logo_bytes=logo,
+            letterhead=ca.letterhead_lines(biz, identity),
         )
     except ImportError:
         # reportlab ships in requirements.txt; if it is genuinely missing the

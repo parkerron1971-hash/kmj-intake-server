@@ -64,8 +64,11 @@ def test_build_document_pdf_carries_the_brand_kit():
 def test_a_governance_document_needs_no_counterparty():
     """The reason this seam exists.
 
-    /agents/contract/pdf 404s without a contact_id, but an Operating Agreement
-    has no counterparty — the party it is FOR is the business itself.
+    An Operating Agreement has no counterparty — the party it is FOR is the
+    business itself. /agents/contract/pdf used to REQUIRE a contact_id and
+    404 without one, which is why this door was cut; since 2026-08-15 that
+    endpoint takes an optional contact and reaches the same renderer, so
+    both roads now work. See test_pdf_delivery.py.
     """
     pdf = ca.build_document_pdf(
         business_name="Reyes Law",
