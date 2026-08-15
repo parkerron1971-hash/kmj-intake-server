@@ -181,3 +181,38 @@ def test_nonprofit_language_keeps_the_default_keys():
     lang = dt.VERTICAL_LANGUAGE["nonprofit"]
     for k in default:
         assert k in lang, f"nonprofit language dropped {k!r}"
+
+
+# ── The picker's vertical lookup ─────────────────────────────────────
+
+def test_suggested_lookup_is_canonicalized():
+    """A business stamped 'church' must reach the ministry templates.
+
+    suggested_for lists CANONICAL verticals, businesses.type legitimately
+    holds aliases, and the picker compared them raw — so a church saw a
+    library with no suggestions at all, including the six governance
+    templates written for it.
+    """
+    import inspect
+    import vertical_registry
+    import doc_templates_router as r
+
+    src = inspect.getsource(r.doctemplates_list)
+    assert "vertical_registry.resolve" in src, (
+        "the picker compares businesses.type raw against canonical keys")
+
+    canon = vertical_registry.resolve("church")
+    assert canon == "ministry"
+    for_church = [t for t in dt.TEMPLATES if canon in t.get("suggested_for", [])]
+    assert len(for_church) >= 6, [t["id"] for t in for_church]
+
+
+def test_every_suggested_for_entry_is_a_real_vertical():
+    """A typo'd vertical in suggested_for is invisible: it simply never
+    matches, and the template quietly suggests itself to nobody."""
+    import vertical_registry
+    canonical = set(vertical_registry.CANONICAL)
+    for t in dt.TEMPLATES:
+        for v in t.get("suggested_for", []):
+            assert v in canonical or vertical_registry.resolve(v) in canonical, (
+                f"{t['id']} suggests {v!r}, which is not a vertical")

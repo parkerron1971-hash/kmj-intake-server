@@ -140,7 +140,13 @@ def save_sticky_terms(business: Dict[str, Any], template: Dict[str, Any],
 async def doctemplates_list(biz: str,
                             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     b = _owner(biz, user)
-    btype = (b.get("type") or "").lower()
+    # CANONICALIZED. suggested_for lists canonical verticals, and
+    # businesses.type legitimately holds aliases — a business stamped
+    # "church" resolves to ministry, and without this it matched nothing
+    # and was shown a library with no suggestions at all, including the
+    # six governance templates written for it.
+    import vertical_registry
+    btype = vertical_registry.resolve((b.get("type") or "").lower())
     saved = get_doc_defaults(b)
     out = []
     # Learned templates lead — a business's own paper outranks the
