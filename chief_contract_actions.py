@@ -500,3 +500,84 @@ async def handle_compose_template(client, biz, action) -> Dict[str, Any]:
         "required_fields": required,
         "nav": None,
     }
+
+
+async def handle_adjust_template(client, biz, action) -> Dict[str, Any]:
+    """Add, remove or reword one clause of a template the business owns.
+
+    The verb behind "add an IP clause to our design agreement" — which
+    had no answer at all before. business_doc_templates was insert /
+    select / delete, so the only way to change a template was to
+    recompose it, which inserts a SECOND near-identical row that then
+    competes with the first in the picker.
+
+    TRUST-LAYER DISCIPLINE:
+      • What changes? One clause of ONE business_doc_templates row. A
+        TEMPLATE — no document, no draft, nothing client-facing, nothing
+        sent. Documents already generated from it are untouched.
+      • Seen first? The template previews in New Document exactly as
+        before, and generating from it still lands an Approval Queue
+        draft that nothing sends without a human.
+      • Reversible? Yes — the opposite operation restores it, and the
+        row stays deletable in the picker.
+      • NO MODEL CALL. Sections are an addressable list; add and remove
+        are list surgery, and a reword uses the practitioner's own words.
+        A deterministic edit to paper they own should not cost a credit.
+
+    The built-in sixteen are refused here on purpose: TEMPLATE_INDEX is
+    shared by every business, so editing one in place would change one
+    practitioner's paper for all of them. Fork it first.
+    """
+    import doc_templates_router as dtr
+    from fastapi import HTTPException
+
+    template_id = (action.get("template") or action.get("template_id") or "").strip()
+    op = (action.get("operation") or "").strip().lower()
+    heading = (action.get("heading") or "").strip()
+    text = (action.get("text") or "").strip()
+
+    if not template_id:
+        return _fail("adjust_template", "which template?")
+    if not template_id.startswith("custom:"):
+        return _fail(
+            "adjust_template",
+            "That is one of the built-in templates, which every business "
+            "shares — I can make you your own copy to change, and the "
+            "original stays as it is. Say the word and I will fork it.")
+    if op not in ("add", "remove", "replace"):
+        return _fail("adjust_template", "operation must be add, remove or replace")
+
+    row_id = template_id.split(":", 1)[1]
+    body = dtr.AdjustBody(
+        business_id=biz["id"], operation=op, heading=heading,
+        text=text or None, after=(action.get("after") or None))
+    try:
+        out = await dtr.doctemplates_adjust_custom(
+            row_id, body, _AsUser(biz.get("owner_id")))
+    except HTTPException as e:
+        # The endpoint's refusals are already written for a person —
+        # "that is the signature block", "there is already a clause
+        # headed X" — so they are relayed rather than flattened.
+        return _fail("adjust_template", str(e.detail))
+
+    verb = {"add": "added", "remove": "removed", "replace": "reworded"}[op]
+    return {
+        "type": "adjust_template",
+        "result": f"{verb} “{out['heading']}” — {out['title']} now has "
+                  f"{out['sections']} clauses",
+        "label": f"{verb.capitalize()} a clause — {out['title']}",
+        "template_id": template_id,
+        "nav": None,
+    }
+
+
+class _AsUser:
+    """The owner, for the endpoint's own permission check.
+
+    Chief already resolved the business before dispatch, and the handler
+    passes the business's OWNER rather than whoever is chatting — the
+    endpoint re-verifies ownership either way, so this cannot widen
+    access, only satisfy the signature."""
+
+    def __init__(self, owner_id):
+        self.id = owner_id

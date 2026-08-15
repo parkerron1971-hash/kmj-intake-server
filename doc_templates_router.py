@@ -948,3 +948,157 @@ async def doctemplates_compose(body: ComposeBody,
                 "requires_value": s.get("requires_value"),
             } for s in template["sections"]],
             "numbered": True}
+
+
+# ─── Adjusting a template you own ────────────────────────────────────
+#
+# business_doc_templates had no update path at all — insert, select,
+# delete. So "add an IP clause to that agreement" had exactly one honest
+# answer: recompose the whole thing, which INSERTS a second near-identical
+# row that then competes with the first in the picker and in
+# resolve_template.
+#
+# Sections are already an addressable list of {heading, text}, so adding
+# and removing one is list surgery on JSON. NO MODEL CALL, and none is
+# wanted: a deterministic edit to a document the practitioner owns should
+# not cost a credit or acquire a failure mode.
+#
+# The 16 built-ins are NOT adjustable this way. TEMPLATE_INDEX is a
+# module-level dict shared by every business; a per-business edit to it
+# would change one practitioner's paper for all of them. Customising a
+# library template means forking it into business_doc_templates first,
+# which is what /custom/fork below is for.
+
+_ADJUST_OPS = ("add", "remove", "replace")
+
+
+class AdjustBody(BaseModel):
+    business_id: str
+    operation: str
+    heading: str
+    text: Optional[str] = None
+    # Where to put a new section. A heading that no longer exists puts it
+    # at the end rather than failing — the practitioner asked for a
+    # clause, and refusing over placement would be pedantry.
+    after: Optional[str] = None
+
+
+@router.patch("/custom/{row_id}")
+async def doctemplates_adjust_custom(row_id: str, body: AdjustBody,
+                                     user: AuthedUser = Depends(require_user)
+                                     ) -> Dict[str, Any]:
+    b = _owner(body.business_id, user)
+    op = (body.operation or "").strip().lower()
+    if op not in _ADJUST_OPS:
+        raise HTTPException(400, f"operation must be one of {', '.join(_ADJUST_OPS)}")
+    heading = (body.heading or "").strip()
+    if not heading:
+        raise HTTPException(400, "heading required")
+    if op in ("add", "replace") and not (body.text or "").strip():
+        raise HTTPException(400, f"{op} needs the clause text")
+
+    rows = sb_clients.sb_get_as_service(
+        f"/business_doc_templates?id=eq.{row_id}"
+        f"&business_id=eq.{body.business_id}&select=id,template&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "template not found")
+    template = dict(rows[0].get("template") or {})
+    sections = list(template.get("sections") or [])
+    if not sections:
+        raise HTTPException(409, "that template has no sections to adjust")
+
+    def _find(h: str) -> int:
+        want = h.strip().lower()
+        for i, s in enumerate(sections):
+            if (s.get("heading") or "").strip().lower() == want:
+                return i
+        return -1
+
+    at = _find(heading)
+    if op == "remove":
+        if at < 0:
+            raise HTTPException(404, f"no clause headed “{heading}”")
+        # The signature block is what makes the paper signable. Removing
+        # it turns an agreement into a memo, silently.
+        if "ACCEPTED AND AGREED" in (sections[at].get("text") or "").upper():
+            raise HTTPException(
+                409, "that is the signature block — removing it would leave "
+                     "nothing to sign")
+        removed = sections.pop(at)
+        changed = removed.get("heading")
+    elif op == "replace":
+        if at < 0:
+            raise HTTPException(404, f"no clause headed “{heading}”")
+        sections[at] = {**sections[at], "kind": "fixed", "text": body.text.strip()}
+        changed = heading
+    else:  # add
+        if at >= 0:
+            raise HTTPException(
+                409, f"there is already a clause headed “{heading}” — replace it "
+                     "instead of adding a second")
+        new = {"kind": "fixed", "heading": heading, "text": body.text.strip()}
+        anchor = _find(body.after) if body.after else -1
+        # Default to just before the signature block, which is where a
+        # clause belongs — appending after it would put terms below the
+        # signatures.
+        if anchor >= 0:
+            sections.insert(anchor + 1, new)
+        else:
+            sig = next((i for i, s in enumerate(sections)
+                        if "ACCEPTED AND AGREED" in (s.get("text") or "").upper()), -1)
+            sections.insert(sig if sig >= 0 else len(sections), new)
+        changed = heading
+
+    template["sections"] = sections
+    # Back through the SAME sanitizer a learned or composed template goes
+    # through, so an added clause cannot introduce an undeclared
+    # placeholder or blow the section cap.
+    template = normalize_custom(template)
+
+    sb_clients.sb_patch_as_service(
+        f"/business_doc_templates?id=eq.{row_id}&business_id=eq.{body.business_id}",
+        {"template": template})
+
+    return {"ok": True, "operation": op, "heading": changed,
+            "sections": len(template.get("sections") or []),
+            "title": template.get("title")}
+
+
+@router.post("/custom/fork")
+async def doctemplates_fork_library(biz: str, template_id: str,
+                                    user: AuthedUser = Depends(require_user)
+                                    ) -> Dict[str, Any]:
+    """Copy a library template into this business's own so it can be edited.
+
+    TEMPLATE_INDEX is a module-level dict shared by every business, so a
+    per-business edit to a built-in would change one practitioner's paper
+    for all of them. Forking is the honest way to say yes to "change this
+    one" without that.
+    """
+    _owner(biz, user)
+    src = doc_templates.TEMPLATE_INDEX.get(template_id)
+    if not src:
+        raise HTTPException(404, f"no template {template_id!r}")
+    copy = {
+        "title": src["title"], "subtitle": src.get("subtitle") or "",
+        "description": src.get("description") or "",
+        "category": "custom",
+        "suggested_for": [],
+        "fields": [dict(f) for f in src.get("fields") or []],
+        # Drafted sections are flattened to their fallback, matching what
+        # learn and compose already do: a business's own template is
+        # deterministic paper, not a model call waiting to happen.
+        "sections": [
+            {"kind": "fixed", "heading": s.get("heading"),
+             "text": s["text"] if s["kind"] == "fixed" else s.get("fallback", ""),
+             **({"requires": s["requires"]} if s.get("requires") else {})}
+            for s in src["sections"]],
+        "numbered": bool(src.get("numbered")),
+    }
+    copy = normalize_custom(copy)
+    created = sb_clients.sb_post_as_service("/business_doc_templates", {
+        "business_id": biz, "template": copy, "source_path": None})
+    row = created[0] if isinstance(created, list) and created else None
+    if not row:
+        raise HTTPException(502, "couldn't save your copy — try again")
+    return {"ok": True, "id": f"custom:{row['id']}", "title": copy["title"]}
