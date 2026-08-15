@@ -41,6 +41,15 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # (site_concierge.py) — an AI
                                            # surface, so it rides the hero
                                            # tier with chief_unlimited
+    "agent_connector": "professional",     # connect the business to the AI
+                                           # the practitioner already carries
+                                           # (mcp_server.py + mcp_oauth.py).
+                                           # Same rule as site_concierge: an
+                                           # AI surface rides the hero tier.
+                                           # NOT Practice — that tier is
+                                           # collaboration and compliance
+                                           # deliverables, and this is
+                                           # neither.
     # Practice — collaboration + compliance deliverables + scale
     "accountant_collaborator": "practice",
     "audit_trail": "practice",

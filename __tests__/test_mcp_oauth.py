@@ -442,3 +442,60 @@ def test_a_refresh_token_from_another_client_is_refused(client):
     r = refresh(client, other, issued["refresh_token"])
     assert r.status_code == 400
     assert r.json()["error"] == "invalid_grant"
+
+
+# ─── The grant is gated too ──────────────────────────────────────────
+#
+# mcp_server refuses the CALL; that is the load-bearing check. This
+# refuses the CREDENTIAL, so a below-tier business never ends up holding
+# a connector that answers "not on your plan" to every request — which
+# is a worse experience, and a worse support ticket, than never having
+# connected at all.
+
+def test_a_below_tier_business_is_refused_the_grant(client, db, monkeypatch):
+    monkeypatch.setenv("BILLING_ENFORCE", "on")
+    db.tables["businesses"] = [{"id": "biz-1", "comp_tier": "starter"}]
+    cid = register(client)
+
+    r = client.post("/oauth/authorize", data={
+        "client_id": cid, "redirect_uri": REDIRECT, "state": "xyz",
+        "code_challenge": CHALLENGE, "code_challenge_method": "S256",
+        "scope": "read", "agent_key": a_live_key(), "decision": "approve",
+    }, follow_redirects=False)
+
+    assert r.status_code == 200, "answered on the consent page, not redirected"
+    assert "Professional" in r.text
+    assert db.tables.get("mcp_oauth_codes", []) == [], "a code was issued anyway"
+
+
+def test_a_professional_business_still_gets_the_grant(client, db, monkeypatch):
+    monkeypatch.setenv("BILLING_ENFORCE", "on")
+    db.tables["businesses"] = [{"id": "biz-1", "comp_tier": "professional"}]
+    cid = register(client)
+    assert get_code(client, cid, a_live_key()) is not None
+
+
+def test_the_grant_gate_is_dormant_until_billing_enforce_is_on(client, db,
+                                                               monkeypatch):
+    monkeypatch.setenv("BILLING_ENFORCE", "off")
+    db.tables["businesses"] = [{"id": "biz-1", "comp_tier": "starter"}]
+    cid = register(client)
+    assert get_code(client, cid, a_live_key()) is not None
+
+
+def test_the_grant_gate_fails_OPEN(client, db, monkeypatch):
+    """An entitlement gate. The refusals on this path that protect data —
+    unknown client, unregistered redirect, revoked key, missing PKCE —
+    all fail closed and must keep doing so. This one must not: a lookup
+    blip locking a paying owner out of connecting is the worse outcome."""
+    monkeypatch.setenv("BILLING_ENFORCE", "on")
+    import sb_clients
+
+    def _boom(path):
+        if path.startswith("/businesses"):
+            raise RuntimeError("db down")
+        return db.get(path)
+
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", _boom)
+    cid = register(client)
+    assert get_code(client, cid, a_live_key()) is not None

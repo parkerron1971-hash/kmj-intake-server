@@ -835,3 +835,122 @@ def test_a_caller_cannot_forge_a_signal_through_arguments():
     import chief_time_actions
     src = inspect.getsource(chief_time_actions.handle_unbilled_time)
     assert "**action" not in src, "handler must not splat caller args into its result"
+
+
+# ─── The connector is a Professional feature ─────────────────────────
+#
+# Gated at the WIRE, not in the UI: a token that already exists reaches
+# straight past a button Mission Control stopped rendering. So the check
+# is asserted here on _call_tool itself, and separately on the OAuth
+# grant in test_mcp_oauth.py.
+#
+# Every test below turns BILLING_ENFORCE on by hand. With it off,
+# has_feature answers True for everyone and a gate test would pass
+# without exercising a single line of the gate.
+
+def _enforce(monkeypatch, on=True):
+    monkeypatch.setenv("BILLING_ENFORCE", "on" if on else "off")
+
+
+def _plan_row(plan):
+    """A business row whose tier resolves without touching Stripe env —
+    comp_tier is the owner-set override and wins over subscription."""
+    return {"id": "biz-1", "comp_tier": plan}
+
+
+def test_agent_connector_is_declared_professional():
+    import feature_gates
+    assert feature_gates.FEATURE_MIN_PLAN["agent_connector"] == "professional"
+
+
+def test_starter_is_refused_when_enforcement_is_on(monkeypatch):
+    _enforce(monkeypatch)
+    assert mcp._tier_allows(_plan_row("starter")) is False
+
+
+def test_professional_and_practice_are_allowed(monkeypatch):
+    _enforce(monkeypatch)
+    assert mcp._tier_allows(_plan_row("professional")) is True
+    assert mcp._tier_allows(_plan_row("practice")) is True
+
+
+def test_the_gate_is_dormant_until_billing_enforce_is_on(monkeypatch):
+    """Today's behaviour: nobody is locked out. This is the assertion
+    that keeps the gate from quietly going live before Kevin flips it."""
+    _enforce(monkeypatch, on=False)
+    assert mcp._tier_allows(_plan_row("starter")) is True
+
+
+def test_the_tier_gate_fails_OPEN(monkeypatch):
+    """An entitlement gate, not a security gate. Every other refusal on
+    this surface fails closed; this one must not, because a lookup blip
+    would take a paying practitioner's connector dark for a reason they
+    cannot see or fix."""
+    _enforce(monkeypatch)
+    import feature_gates
+
+    def _boom(*a, **k):
+        raise RuntimeError("gates down")
+
+    monkeypatch.setattr(feature_gates, "has_feature", _boom)
+    assert mcp._tier_allows(_plan_row("starter")) is True
+
+
+def test_a_below_tier_call_is_REFUSED_not_failed(monkeypatch):
+    """allowed=False and ok=False are different events. A refusal is this
+    surface doing its job, and it is the row an auditor reads."""
+    _enforce(monkeypatch)
+    monkeypatch.setattr(mcp, "_tier_allows", lambda biz: False)
+
+    async def _biz(client, caller):
+        return {"id": "biz-1", "comp_tier": "starter"}
+
+    monkeypatch.setattr(mcp, "_resolve_business", _biz)
+    allowed, ok, msg, biz_id = _run(mcp._call_tool("catch_up", {}, _caller()))
+    assert allowed is False and ok is False
+    assert biz_id == "biz-1", "the refusal is still attributed to a business"
+    assert "Professional" in msg
+    assert "inside Solutionist" in msg, "say what they still have, not just what they lack"
+
+
+def test_a_below_tier_call_never_reaches_the_handler(monkeypatch):
+    """The point of gating at the wire. If the handler runs, the data has
+    already been read and the gate is decorative."""
+    _enforce(monkeypatch)
+    monkeypatch.setattr(mcp, "_tier_allows", lambda biz: False)
+
+    async def _biz(client, caller):
+        return {"id": "biz-1", "comp_tier": "starter"}
+
+    monkeypatch.setattr(mcp, "_resolve_business", _biz)
+
+    ran = []
+    import chief_of_staff
+
+    async def _spy(client, biz, action):
+        ran.append(action)
+        return {"type": "catch_up", "result": "x", "label": "x"}
+
+    monkeypatch.setitem(chief_of_staff.ACTION_HANDLERS, "catch_up", _spy)
+    _run(mcp._call_tool("catch_up", {}, _caller()))
+    assert ran == [], "the handler ran despite the tier refusal"
+
+
+def test_the_refusal_is_written_to_the_ledger(monkeypatch):
+    """A refused agent call must leave a trace in the trust artifact, not
+    only in the surface's own log."""
+    _enforce(monkeypatch)
+    monkeypatch.setattr(mcp, "_tier_allows", lambda biz: False)
+
+    async def _biz(client, caller):
+        return {"id": "biz-1", "comp_tier": "starter"}
+
+    monkeypatch.setattr(mcp, "_resolve_business", _biz)
+
+    seen = []
+    monkeypatch.setattr(mcp, "_ledger",
+                        lambda *a, **k: seen.append((a, k)))
+    _run(mcp._call_tool("catch_up", {}, _caller()))
+    assert seen, "a tier refusal left no ledger row"
+    assert seen[-1][1].get("allowed") is False
+    assert seen[-1][1].get("reason") == "plan:agent_connector"
