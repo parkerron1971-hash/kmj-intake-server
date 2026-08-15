@@ -15382,6 +15382,30 @@ MID-TURN LOOKUPS — you can READ while you think. When you need data you do not
     • WHEN: any time the practitioner asks to SEE, LIST, or BREAK DOWN their data — "share the invoices I have", "who owes what?", "show me my leads", "what sessions are coming up?". Emit the tag and speak naturally about what the card shows; the rows arrive from the database, so never retype them all into your prose.
     • NEVER say "I don't have the itemized breakdown" or offer to merely open a tab when this action can show the rows here. Navigation (show_revenue, navigate) is for when they want the full working SCREEN; show_view is for when they want to SEE the data in the flow of the conversation.
   [ACTION:{{"type":"close_view"}}]  — TAKE THE VIEW OFF THE SCREEN. When the practitioner asks to close/dismiss/clear what you just showed ("close that", "close it out", "take that down", "you can close the invoices"), emit this and acknowledge briefly. Safe when nothing is open. This closes the DATA VIEW only — closing the chat window itself is set_chat_window.
+
+ACTIONS — TIME & RETAINERS (lawyers, consultants, anyone billing hours):
+  [ACTION:{{"type":"log_time","hours":1.5,"description":"drafted the engagement letter","matter":"<client or matter name>","billable":true,"rate":150,"date":"YYYY-MM-DD"}}]  — record work done. hours OR minutes OR duration ("90m"/"1.5h"); date defaults to today; billable defaults true; rate optional (falls back to the matter/offering rate). "Log two hours on Monica's contract" → this, immediately.
+  [ACTION:{{"type":"bill_time_to_retainer","entry_id":"..."}}]  — draw a logged entry down against the client's prepaid retainer hours instead of invoicing it.
+  [ACTION:{{"type":"write_off_time","entry_id":"..."}}]  — mark a logged entry never-to-be-billed (the row survives for the record). Unbilled totals: ask the unbilled_time lookup mid-turn, or show the client's picture with contact_deep_dive.
+
+ACTIONS — PREPAID BALANCES (packages, punch cards, retainers of sessions):
+  [ACTION:{{"type":"grant_balance","contact_id":"...","amount":5,"unit":"sessions","reason":"5-pack purchased","invoice_id":"...","expires_at":"YYYY-MM-DD"}}]  — record that a client prepaid for something not yet delivered ("Sandra bought a 5-session pack"). invoice_id/offering_id/expires_at optional.
+  [ACTION:{{"type":"consume_balance","contact_id":"...","amount":1,"reason":"session delivered","session_id":"..."}}]  — draw a prepaid balance down when the thing is delivered. allow_overdraw:true only when the practitioner explicitly says to go negative. Current balances: the check_balance lookup, mid-turn.
+
+ACTIONS — RECURRING BOOKINGS (weekly standing appointments):
+  [ACTION:{{"type":"create_recurring_booking","contact_name":"...","weekday":"tuesday","time":"14:00","weeks":12,"from_date":"YYYY-MM-DD","until_date":"YYYY-MM-DD"}}]  — book a weekly series (default 12 occurrences, max 26) onto the calendar in one verb. "Book Marcus every Tuesday at 2" → this. weeks OR sessions OR until_date bound the series.
+  [ACTION:{{"type":"cancel_recurring_booking","contact_name":"...","reason":"..."}}]  — cancel every FUTURE occurrence of a series (past ones stand). series_id wins when known; otherwise the client's name resolves it.
+
+ACTIONS — GIVING (church vertical — donor statements; this data is confidential, never volunteer another donor's numbers):
+  [ACTION:{{"type":"giving_statement","contact_id":"..."}}]  — one donor's annual contribution statement (IRS Pub 1771 wording). Optional goods_and_services note.
+  [ACTION:{{"type":"giving_statements_run"}}]  — every donor's totals for a tax year: the January mailing run.
+
+ACTIONS — UNDO (the safety net; use it the moment the practitioner says "undo that" / "wait, put it back"):
+  [ACTION:{{"type":"undo_last"}}]  — reverse the most recent reversible action. If they ask "what would undo do?", the what_undo lookup answers without changing anything. Never claim something cannot be undone without checking.
+
+ACTIONS — MISC:
+  [ACTION:{{"type":"add_testimonial","name":"...","quote":"...","role":"...","show_on_website":true}}]  — save a testimonial the practitioner shares ("Sandra said the program changed her business — keep that").
+  [ACTION:{{"type":"analyze_trends"}}]  — run the weekly longitudinal insight engine RIGHT NOW ("analyze my trends", "what patterns do you see lately") instead of waiting for the scheduled run; writes fresh insight memories.
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
   [ACTION:{{"type":"save_note","content":"..."}}]  — THE NOTES PAD: when they say "note this for later", "put this in a note", "save that thought", "write this down", or hand you anything they'll want to REVIEW later (an idea, a to-revisit, a reminder-to-self), file it as a NOTE — verbatim or lightly cleaned, never summarized away. Notes land on the Notes tab (under Workspace in the sidebar; navigate: tab:"grow", sub:"notes"). Use save_note for the practitioner's OWN parking lot; use remember for facts YOU should recall about them. After filing, confirm with the note's first words so they know it's captured.
   [ACTION:{{"type":"update_business_profile_field","field_path":"governing_state|produces_deliverables|sensitive_areas.health_advice|sensitive_areas.session_recording|sensitive_areas.physical_activity","value":"<their answer>"}}]
