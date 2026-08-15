@@ -737,6 +737,39 @@ async def _resolve_business(client: httpx.AsyncClient,
     return data[0] if data else None
 
 
+# ─── Entitlement ─────────────────────────────────────────────────────
+
+AGENT_CONNECTOR_FEATURE = "agent_connector"
+
+
+def _tier_allows(biz: Optional[Dict[str, Any]]) -> bool:
+    """May this business be reached by an outside agent at all?
+
+    FAILS OPEN, deliberately, and against the grain of everything else on
+    this surface. The scope check, the token check and the policy engine
+    all fail CLOSED because they answer "is this caller allowed to see
+    this data" — get that wrong and the cost is somebody else's records.
+
+    This one answers "has this business paid for the connector", and the
+    costs are not symmetric. Fail closed on a transient import error and
+    a paying practitioner's connector goes dark for a reason they cannot
+    see, diagnose, or fix. Fail open and somebody briefly uses a feature
+    they have not bought, which is recoverable and shows up in billing.
+    `feature_gates.has_feature` takes the same posture on its own
+    (unknown features default to allowed), as does `rate_limit.allow`
+    for practitioners.
+
+    An entitlement gate is not a security gate. Do not "fix" this to
+    match its neighbours.
+    """
+    try:
+        import feature_gates
+        return bool(feature_gates.has_feature(biz, AGENT_CONNECTOR_FEATURE))
+    except Exception as e:
+        logger.warning("[mcp] tier check unavailable, allowing: %s", e)
+        return True
+
+
 # ─── Dispatch ────────────────────────────────────────────────────────
 
 async def _call_tool(name: str, arguments: Dict[str, Any],
@@ -779,6 +812,28 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
         if not biz:
             return True, False, "no business resolved for this account", None
         business_id = str(biz.get("id") or "") or None
+
+        # THE TIER GATE, AT THE WIRE.
+        #
+        # Reaching the business from an outside agent is a Professional
+        # feature — the same ruling site_concierge got, for the same
+        # reason: an AI surface rides the hero tier. Hiding the connector
+        # in Mission Control would be decorative, because a token that
+        # already exists reaches straight past the UI that stopped
+        # showing the button. So the check lives here, on the call, and
+        # again on the OAuth grant in mcp_oauth.py.
+        #
+        # Refused, not failed: `allowed=False` is the row an auditor
+        # wants, and it is a different event from "we tried and it broke".
+        # Dormant until BILLING_ENFORCE=on — has_feature answers True for
+        # everyone today, which is exactly why it goes in now.
+        if not _tier_allows(biz):
+            _ledger(business_id, name, caller, allowed=False, ok=False,
+                    reason="plan:agent_connector")
+            return (False, False,
+                    "Connecting an outside agent to this business needs the "
+                    "Professional plan. Everything here stays available "
+                    "inside Solutionist.", business_id)
 
         # THE POLICY ENGINE, on this surface too.
         #

@@ -145,6 +145,30 @@ def _redirect_uri_is_registered(uri: str, registered: List[str]) -> bool:
 # Every reader returns None on failure rather than raising, and every
 # caller treats None as refusal. A database blip must not authorise.
 
+def _tier_allows_connector(business_id: str) -> bool:
+    """Has this business paid for the agent connector?
+
+    FAILS OPEN — an entitlement gate, not a security gate. The refusals
+    on this path that protect data (bad client, unregistered redirect,
+    revoked key, PKCE) all fail closed and must keep doing so. This one
+    only answers "did they buy it", where a lookup blip locking a paying
+    owner out of connecting is the worse outcome. Same posture as
+    `feature_gates.has_feature` itself. See mcp_server._tier_allows.
+    """
+    if not business_id:
+        return True
+    try:
+        import feature_gates
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}&select=id,subscription_plan&limit=1")
+        if not rows:
+            return True
+        return bool(feature_gates.has_feature(rows[0], "agent_connector"))
+    except Exception as e:
+        logger.warning("[mcp_oauth] tier check unavailable, allowing: %s", e)
+        return True
+
+
 def _get_client(client_id: str) -> Optional[Dict[str, Any]]:
     if not client_id:
         return None
@@ -624,6 +648,28 @@ async def authorize_post(
     if not business_id:
         return _redirect_error(redirect_uri, state, "server_error",
                                "that key names no business")
+
+    # THE TIER GATE, on the GRANT as well as on the call.
+    #
+    # mcp_server refuses the tool call, which is the load-bearing check.
+    # This one refuses to mint the credential in the first place, so a
+    # below-tier business never ends up holding a connector that
+    # silently answers "not on your plan" to everything — a connection
+    # that exists and refuses every request is a worse experience than
+    # one that never connected, and a worse support ticket.
+    #
+    # Answered on the consent page rather than as a redirect error: the
+    # owner is standing right here, and this is the one refusal on this
+    # path they can actually do something about.
+    if not _tier_allows_connector(business_id):
+        return _consent_page(
+            client_name=str(client.get("client_name") or "An application"),
+            params={"client_id": client_id, "redirect_uri": redirect_uri,
+                    "state": state, "code_challenge": code_challenge,
+                    "code_challenge_method": code_challenge_method,
+                    "scope": scope},
+            error="Connecting an outside agent needs the Professional plan. "
+                  "Everything here stays available inside Solutionist.")
 
     code = secrets.token_urlsafe(32)
     if not _store_code(code=code, client_id=client_id, redirect_uri=redirect_uri,
