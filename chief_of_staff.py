@@ -155,6 +155,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 # work on Haiku. Kevin's 2026-07-03 ruling (drafts ride the
 # conversational tier) is preserved as the draft-lane default.
 import chief_models
+import chief_missions
 import chief_prewarm
 import chief_tool_loop
 import fallback_brain
@@ -170,6 +171,13 @@ DRAFT_MODEL = chief_models.model_for("draft")
 # cap and PATCH the truncated result back over the original.
 DRAFT_MAX_TOKENS = 500
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
+
+# Who is driving THIS turn. Bound in chief_chat beside the JWT bind; read
+# by nested executors (chief_missions) that re-enter _execute_actions and
+# need the policy engine to see the real caller, not a blank. Same
+# contextvars-per-async-task isolation argument as sb_clients.
+_TURN_USER_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "chief.turn_user_id", default="")
 
 # Loopback base for run_agent actions. Prefer localhost + PORT (no TLS, no DNS);
 # fall back to the public URL if PORT isn't set.
@@ -1405,6 +1413,14 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&custom_modules.slug=eq.projects"
             f"&select=id,data,created_at,custom_modules!inner(slug)"
             f"&order=created_at.desc&limit=50"),
+        # Open missions — Chief must never forget a plan in flight, and a
+        # mission waiting on the practitioner should be raised, not
+        # discovered. Bounded and tiny.
+        _sb(client, "GET",
+            f"/chief_missions?business_id=eq.{biz_id}"
+            f"&status=in.(active,awaiting_approval,paused,draft)"
+            f"&select=id,title,status,steps,current_step,updated_at"
+            f"&order=updated_at.desc&limit=5"),
         # Open invoices, ITEMIZED (8/14 — same class as the projects fix
         # above). Chief knew only the aggregate ("$1,865 outstanding" via
         # the forecast block), so "who owes what?" was answered with "I
@@ -1416,7 +1432,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&select=id,invoice_number,total,status,due_date,contact_id,contacts(name)"
             f"&order=due_date.asc.nullslast&limit=40"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_invoices = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -1594,6 +1610,13 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
                 "target_date": (r.get("data") or {}).get("target_date") or "",
             }
             for r in (project_rows or [])
+        ],
+        "open_missions": [
+            {"id": m.get("id"), "title": m.get("title"),
+             "status": m.get("status"),
+             "current_step": m.get("current_step") or 0,
+             "steps": m.get("steps") or []}
+            for m in (open_missions or [])
         ],
         "open_invoices": [
             {
@@ -2560,6 +2583,20 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         line += f" [id={p.get('id')}]"
         project_lines.append(line)
 
+    mission_lines = []
+    for m in (ctx.get("open_missions") or [])[:5]:
+        steps = m.get("steps") or []
+        done = sum(1 for st in steps if st.get("status") == "done")
+        line = f"  - {m.get('title')} [{m.get('status')}] {done}/{len(steps)}"
+        i = m.get("current_step") or 0
+        if m.get("status") == "awaiting_approval" and i < len(steps):
+            line += f" — WAITING ON THE PRACTITIONER: '{steps[i].get('title')}' (advance_mission continues it)"
+        elif m.get("status") == "paused" and i < len(steps):
+            line += f" — paused on '{steps[i].get('title')}' (advance_mission retries it)"
+        elif m.get("status") == "draft":
+            line += " — drafted, waiting for their word (start_mission)"
+        mission_lines.append(line)
+
     # Open invoices, itemized (8/14). Same contract as PROJECTS above:
     # this IS the list, so "who owes what?" is answered from these rows
     # — never with "I don't have the breakdown" and never via search.
@@ -2597,6 +2634,9 @@ UPCOMING SESSIONS (next 7 days):
 
 PROJECTS (this IS the full list — never search or "pull" for it):
 {chr(10).join(project_lines) if project_lines else '  (none yet)'}
+
+ACTIVE MISSIONS (plans in flight — raise the ones waiting on the practitioner; never re-propose one that already exists):
+{chr(10).join(mission_lines) if mission_lines else '  (none)'}
 
 OPEN INVOICES (this IS the itemized list — answer "who owes what" from these rows; never search for them, never say you don't have the breakdown; to DISPLAY them as a table use show_view):
 {chr(10).join(invoice_lines) if invoice_lines else '  (none open)'}
@@ -12258,6 +12298,11 @@ ACTION_HANDLERS = {
     "open_calendar":          handle_open_calendar,
     "show_revenue":           handle_show_revenue,
     "show_view":              handle_show_view,
+    "propose_mission":        chief_missions.handle_propose_mission,
+    "start_mission":          chief_missions.handle_start_mission,
+    "advance_mission":        chief_missions.handle_advance_mission,
+    "abandon_mission":        chief_missions.handle_abandon_mission,
+    "mission_status":         chief_missions.handle_mission_status,
     "close_view":             handle_close_view,
     "create_goal":            handle_create_goal,
     "add_reminder":           handle_add_reminder,
@@ -15607,6 +15652,15 @@ MID-TURN LOOKUPS — you can READ while you think. When you need data you do not
     • NEVER say "I don't have the itemized breakdown" or offer to merely open a tab when this action can show the rows here. Navigation (show_revenue, navigate) is for when they want the full working SCREEN; show_view is for when they want to SEE the data in the flow of the conversation.
   [ACTION:{{"type":"close_view"}}]  — TAKE THE VIEW OFF THE SCREEN. When the practitioner asks to close/dismiss/clear what you just showed ("close that", "close it out", "take that down", "you can close the invoices"), emit this and acknowledge briefly. Safe when nothing is open. This closes the DATA VIEW only — closing the chat window itself is set_chat_window.
 
+MISSIONS — MULTI-STEP PLANS THAT SURVIVE ACROSS TURNS. When the practitioner asks for an OUTCOME that takes several moves ("get my unpaid invoices collected", "onboard Sandra properly", "run the January giving mailing"), do not do one move and stop — propose a MISSION:
+  [ACTION:{{"type":"propose_mission","title":"Collect the overdue invoices","goal":"<their ask, verbatim>","steps":[{{"title":"Draft reminder for Marcus","action":{{"type":"draft_email","contact_id":"..."}}}},{{"title":"Send the reminders","approval":true,"action":{{"type":"approve_draft","draft_id":"..."}}}}]}}]
+    • Each step is one normal action. Steps run IN ORDER through the same machinery as everything else. Irreversible steps (sends, deletes, money) automatically PAUSE the mission for the practitioner's OK — you can also force a pause on any step with "approval":true. Reads are welcome as steps. Max 12 steps; no missions inside missions.
+    • Propose first, ALWAYS — a draft executes nothing. Present the plan in one short list and ask for the word.
+  [ACTION:{{"type":"start_mission"}}]  — their yes ("go ahead", "run it", "start the plan"). Runs steps up to the first gate, then reports where it stopped.
+  [ACTION:{{"type":"advance_mission"}}]  — they approved the paused step ("go ahead and send them", "approved, continue"). Lifts the gate, keeps going. Also how a PAUSED (failed-step) mission retries.
+  [ACTION:{{"type":"abandon_mission"}}]  — "drop the plan", "never mind the mission".
+  [ACTION:{{"type":"mission_status"}}]  — "where are we on the collections?" — per-step truth for every open mission. ACTIVE MISSIONS also appear in your context each turn: when one is waiting on the practitioner, RAISE IT rather than waiting to be asked.
+
 ACTIONS — TIME & RETAINERS (lawyers, consultants, anyone billing hours):
   [ACTION:{{"type":"log_time","hours":1.5,"description":"drafted the engagement letter","matter":"<client or matter name>","billable":true,"rate":150,"date":"YYYY-MM-DD"}}]  — record work done. hours OR minutes OR duration ("90m"/"1.5h"); date defaults to today; billable defaults true; rate optional (falls back to the matter/offering rate). "Log two hours on Monica's contract" → this, immediately.
   [ACTION:{{"type":"bill_time_to_retainer","entry_id":"..."}}]  — draw a logged entry down against the client's prepaid retainer hours instead of invoicing it.
@@ -16398,6 +16452,7 @@ async def chief_chat(
     # (owner_id = auth.uid()) evaluates honestly. Anonymous callers get
     # rejected upstream by require_user_session with 401.
     _jwt_token = sb_clients.set_user_jwt(user_session.token)
+    _uid_token = _TURN_USER_ID.set(str(user_session.user.id))
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -17035,6 +17090,10 @@ async def chief_chat(
         # even if set_user_jwt's prior call raised after binding (token
         # captured before the try block).
         sb_clients.reset_user_jwt(_jwt_token)
+        try:
+            _TURN_USER_ID.reset(_uid_token)
+        except ValueError:
+            _TURN_USER_ID.set("")
 
 
 class _ActionTagFilter:
