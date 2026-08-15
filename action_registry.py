@@ -387,6 +387,12 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "model writes only deal-specific clauses; the server splices "
                                       "the spine (dispute, general terms, signatures), so a composed "
                                       "contract cannot omit severability or invent a signature block"),
+    "adjust_template":        _w("A", "adds, removes or rewords ONE clause of a template the "
+                                      "business OWNS — no document is created, nothing client-facing "
+                                      "changes, and documents already generated from it are "
+                                      "untouched. No model call: sections are addressable, so add "
+                                      "and remove are list surgery. The built-in library is refused, "
+                                      "because those rows are shared by every business"),
     "plan_campaign":          _w("A", "inserts a campaigns row with status='draft' — the same "
                                       "shape as draft_email: a reviewable artifact, and nothing "
                                       "sends until launch_campaign (which is class C). The drafting "

@@ -90,6 +90,7 @@ from chief_bookkeeping_actions import (
 import vertical_registry
 # P0.3 — contract verbs over the existing contract_agent drafting + PDF path.
 from chief_contract_actions import (
+    handle_adjust_template,
     handle_compose_template,
     handle_contract_pdf,
     handle_draft_contract,
@@ -12371,6 +12372,7 @@ ACTION_HANDLERS = {
     # A contract that doesn't exist yet — composed as a reusable
     # template; generating from it stays approve-first.
     "compose_template":                handle_compose_template,
+    "adjust_template":    handle_adjust_template,
     # Drawdown ledger. Bookkeeping ABOUT money, not movement OF it — these
     # reach no Stripe object and post no GL entry, which is why they are
     # class A while create_invoice is C.
@@ -15225,6 +15227,7 @@ ACTIONS — CONTRACTS & PROPOSALS (the engagement letter, in their voice):
     — STATE-LAW AWARENESS: mechanical state differences (Michigan spelled out, Louisiana venue in Parishes) adjust on the paper automatically. When a governing state is set, the result may carry state_notes — short advisory bullets on where THAT state's law commonly differs (late-fee caps, notices, cancellation rights). Relay them to the practitioner verbatim-ish and plainly; they are for the OWNER, never printed on the document, and never a reason for you to rewrite clauses yourself — the practitioner edits in Approvals if they want changes.
     — Templates the practitioner SAVED FROM THEIR OWN UPLOADS also resolve, by title, and they WIN over library ones on an exact title match — their proven paper beats our generic. If the action's reply asks which template and lists names you don't recognize, those are theirs; just pass the title back.
   [ACTION:{{"type":"compose_template","description":"equipment rental agreement with a $200 damage deposit, 48-hour pickup and return windows, and a late-return fee"}}]  — draft a contract that DOESN'T EXIST in any library: a new reusable template, saved under Yours.
+  [ACTION:{{"type":"adjust_template","template":"custom:<id>","operation":"add|remove|replace","heading":"CLAUSE HEADING","text":"the clause wording","after":"HEADING TO PUT IT AFTER"}}]  — change ONE clause of a template they own. No model call, no credit. Built-in templates cannot be edited (they are shared by every business) — offer to fork one into theirs instead.
     — Use it when no library or saved template fits what they're describing — never force the wrong template. Put everything they told you into the description: what's provided, the money, the risks they care about. The system adds the boilerplate spine (dispute resolution, general terms, signatures) itself — describe only the deal.
     — It creates a TEMPLATE, not a document. The result lists the required fields — collect them (walkthrough style, one or two at a time) and chain generate_document with the new template's title to actually draft one for a client. Composing is model spend; say so.
     — Fill params from what they SAID and what the records show. If a required param is missing, the action asks — and so should you. NEVER invent a fee, an amount, a scope, or a deadline: a made-up number in a contract is not a recoverable mistake.
