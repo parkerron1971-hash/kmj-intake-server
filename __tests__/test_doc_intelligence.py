@@ -226,3 +226,88 @@ def test_analyze_503_without_api_key(fake, wired, monkeypatch):
     with pytest.raises(HTTPException) as e:
         asyncio.run(di.docintel_analyze(body, _User()))
     assert e.value.status_code == 503
+
+
+# ─── Grant requirements (NOFO → compliance checklist) ────────────────
+#
+# A federal application passes an ADMINISTRATIVE screen before any
+# reviewer scores it on merit — late, ineligible, missing form, over the
+# page limit — so extracting the requirements is worth more than help
+# with the prose. This mode reads and quotes; it never drafts.
+
+def test_grant_requirements_is_a_real_mode(fake, wired):
+    body = di.AnalyzeBody(business_id=BIZ,
+                          path=f"{BIZ}/general/1-nofo.pdf",
+                          mode="grant_requirements")
+    out = asyncio.run(di.docintel_analyze(body, _User()))
+    assert out["ok"] and out["mode"] == "grant_requirements"
+    assert wired["usage"][0]["task_type"] == "docintel_grant_requirements"
+    # metered like every other analyze call
+    assert wired["units"] == [BIZ]
+
+
+def test_grant_requirements_gets_room_to_answer():
+    """Eleven arrays, one of them a section-by-section NOFO breakdown.
+
+    At the shared 2000 ceiling the JSON truncates mid-array, _parse_json
+    raises, and the caller sees "came back malformed" and retries —
+    paying twice for the same truncation."""
+    assert di.MODE_MAX_TOKENS["grant_requirements"] > di.MAX_TOKENS
+    assert di.MODE_MAX_TOKENS["grant_requirements"] >= 8000
+
+
+def test_the_other_modes_keep_the_smaller_ceiling():
+    """Sized per mode, not raised for everyone — a summary does not need it."""
+    for mode in ("summary", "dates", "ask"):
+        assert mode not in di.MODE_MAX_TOKENS
+
+
+def test_grant_requirements_ceiling_reaches_the_payload(fake, wired):
+    body = di.AnalyzeBody(business_id=BIZ, path=f"{BIZ}/general/1-nofo.pdf",
+                          mode="grant_requirements")
+    asyncio.run(di.docintel_analyze(body, _User()))
+    assert wired["payloads"][0]["max_tokens"] == di.MODE_MAX_TOKENS["grant_requirements"]
+
+    wired["payloads"].clear()
+    plain = di.AnalyzeBody(business_id=BIZ, path=f"{BIZ}/general/1-a.pdf")
+    asyncio.run(di.docintel_analyze(plain, _User()))
+    assert wired["payloads"][0]["max_tokens"] == di.MAX_TOKENS
+
+
+def test_the_instruction_refuses_to_infer():
+    """A guessed page limit is worse than a missing one: an applicant
+    formats to it and gets screened out before merit review."""
+    ins = di._MODE_INSTRUCTIONS["grant_requirements"]
+    assert "NEVER infer" in ins
+    assert "not_stated" in ins
+
+
+def test_the_instruction_covers_what_actually_disqualifies():
+    """The administrative screen, item by item."""
+    ins = di._MODE_INSTRUCTIONS["grant_requirements"].lower()
+    for needed in ("deadline", "eligibility", "required_forms",
+                   "required_attachments", "format_rules", "budget_rules",
+                   "reporting", "registrations"):
+        assert needed in ins, needed
+    # page limit and font are named explicitly — the two format rules that
+    # most often end an application before it is read.
+    assert "page limit" in ins and "font" in ins
+
+
+def test_it_asks_for_review_weights_not_invented_ones():
+    """Section weights live in each solicitation and are never generic —
+    the model must quote them or return null, never supply a rubric."""
+    ins = di._MODE_INSTRUCTIONS["grant_requirements"]
+    assert '"weight"' in ins
+    assert "as written" in ins
+
+
+def test_grant_mode_does_not_draft():
+    """Nothing in this mode may produce narrative text for the applicant.
+
+    Funders increasingly restrict AI-generated application content and
+    several require disclosure, so the extraction surface must not quietly
+    become a drafting one."""
+    ins = di._MODE_INSTRUCTIONS["grant_requirements"].lower()
+    for banned in ("draft", "write the", "compose", "generate a narrative"):
+        assert banned not in ins, banned
