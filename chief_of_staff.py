@@ -153,6 +153,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 # conversational tier) is preserved as the draft-lane default.
 import chief_models
 import chief_prewarm
+import chief_tool_loop
 import fallback_brain
 # The Business Track. Safe to import at module scope: everything it needs
 # from here is imported inside its functions, so there is no import cycle.
@@ -562,7 +563,9 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                        enable_web_search: bool = True,
                        business_id: Optional[str] = None,
                        model: Optional[str] = None,
-                       stream_sink=None) -> str:
+                       stream_sink=None,
+                       read_tools: Optional[List[Dict[str, Any]]] = None,
+                       tool_biz: Optional[Dict[str, Any]] = None) -> str:
     # Spend circuit breaker (beta-readiness audit): soft-block new AI
     # turns once this business crosses its daily-dollar ceiling, or the
     # platform crosses its own. Fail-open — a bookkeeping hiccup must
@@ -667,12 +670,25 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                 "[chief] a cache_control segment is below the ~1024-token "
                 "minimum and will NOT cache: segments=%s shape=%s", segs,
                 prompt_shape)
+    # Mid-turn reads (the Jarvis arc, 8/14): when the caller hands over
+    # read_tools + tool_biz, the model can pause mid-thought, call a read
+    # from the audited MCP surface, see the rows, and keep going -- the
+    # end of "I don't have that loaded". Tool rounds mutate the message
+    # list, so it is copied; writes still travel as [ACTION:] tags only.
+    tool_rounds_on = bool(read_tools) and tool_biz is not None
+    if tool_rounds_on:
+        messages = list(messages)
     payload: Dict[str, Any] = {
         "model": model, "max_tokens": max_tokens, "system": sys_payload,
         "messages": messages,
     }
+    _tools_arr: List[Dict[str, Any]] = []
     if enable_web_search and CHIEF_WEB_SEARCH_ENABLED:
-        payload["tools"] = [WEB_SEARCH_TOOL]
+        _tools_arr.append(WEB_SEARCH_TOOL)
+    if tool_rounds_on:
+        _tools_arr.extend(read_tools or [])
+    if _tools_arr:
+        payload["tools"] = _tools_arr
     started_ms = int(time.time() * 1000)
 
     # Voice streaming arc — SSE from Anthropic, text deltas forwarded to
@@ -695,99 +711,172 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         # once deltas have streamed to the client, a retry would speak
         # the reply twice — a partial stream returns the partial instead.
         fb_reason = ""
-        for attempt in range(3):
-            if attempt:
-                await asyncio.sleep(1.5 * attempt)
-            full_parts: List[str] = []
-            in_tok = out_tok = 0
-            cache_read_tok = cache_write_tok = 0
-            try:
-                async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key,
-                                            extra_headers=_beta_headers(_extended)) as resp:
-                    if resp.status_code >= 400:
-                        body = await resp.aread()
-                        # If the API is rejecting the extended-ttl beta, stop
-                        # asking for it PROCESS-WIDE and retry this turn on the
-                        # 5-minute default. Without this a bad beta name is not
-                        # a costlier cache, it is Chief being down.
-                        if _extended and _looks_like_beta_rejection(
-                                resp.status_code, body.decode("utf-8", "replace")):
-                            globals()["_extended_cache_ok"] = False
-                            logger.warning(
-                                "[chief] extended cache ttl rejected (%s) — falling back "
-                                "to the 5-minute default for this process", resp.status_code)
-                            return await _call_claude(
-                                client, system, messages, max_tokens=max_tokens,
-                                enable_web_search=enable_web_search,
-                                business_id=business_id, model=model,
-                                stream_sink=stream_sink)
-                        logger.warning(
-                            f"Claude stream error (attempt {attempt + 1}/3): "
-                            f"{resp.status_code} {body[:300]}")
-                        await log_api_usage(endpoint="/chief/backend", model=model,
-                            input_tokens=0, output_tokens=0, business_id=business_id,
-                            duration_ms=int(time.time() * 1000) - started_ms, ok=False,
-                            error=f"{resp.status_code}")
-                        fb_reason = f"stream {resp.status_code}"
-                        if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
-                            continue          # transient — retry with backoff
-                        break                 # our bug / key problem — fail fast
-                    async for line in resp.aiter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        try:
-                            evt = json.loads(line[5:].strip())
-                        except ValueError:
-                            continue
-                        et = evt.get("type")
-                        if et == "content_block_delta":
-                            d = evt.get("delta") or {}
-                            piece = d.get("text") if d.get("type") == "text_delta" else None
-                            if piece:
-                                full_parts.append(piece)
-                                try:
-                                    stream_sink(piece)
-                                except Exception:  # sink must never kill the turn
-                                    pass
-                        elif et == "message_start":
-                            u = ((evt.get("message") or {}).get("usage")) or {}
-                            in_tok = int(u.get("input_tokens") or 0)
-                            cache_read_tok = int(u.get("cache_read_input_tokens") or 0)
-                            cache_write_tok = int(u.get("cache_creation_input_tokens") or 0)
-                        elif et == "message_delta":
-                            u = evt.get("usage") or {}
-                            out_tok = int(u.get("output_tokens") or out_tok)
-            except httpx.HTTPError as e:
-                logger.warning(f"Claude stream failed (attempt {attempt + 1}/3): {e}")
-                await log_api_usage(endpoint="/chief/backend", model=model,
-                    input_tokens=in_tok, output_tokens=out_tok, business_id=business_id,
-                    duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=str(e))
-                partial = "".join(full_parts).strip()
-                if partial:
-                    # Mid-stream drop AFTER text reached the client: the
-                    # partial is a usable reply, and a retry here would
-                    # speak it twice.
-                    return partial
-                fb_reason = f"stream drop: {e}"
-                continue                      # nothing arrived — retry
-            else:
-                text = "".join(full_parts).strip()
-                if text:
-                    await log_api_usage(
-                        endpoint="/chief/backend", model=model,
-                        input_tokens=in_tok, output_tokens=out_tok,
-                        cache_read_tokens=cache_read_tok, cache_creation_tokens=cache_write_tok,
-                        business_id=business_id, task_type=prompt_shape,
-                        duration_ms=int(time.time() * 1000) - started_ms)
-                    return text
-                # A 200 that streamed no text at all — treat as transient.
-                logger.warning(f"Claude stream returned empty (attempt {attempt + 1}/3)")
-                fb_reason = fb_reason or "stream empty"
-                continue
+        # Tool rounds (Jarvis arc): each round is one model request with
+        # its own 3-attempt retry. Text streams to the sink continuously
+        # across rounds; a round that ends in tool_use executes the reads
+        # and continues instead of returning.
+        turn_parts: List[str] = []
+        turn_streamed = False
+        rounds_cap = chief_tool_loop.MAX_TOOL_ROUNDS if tool_rounds_on else 1
+        tool_calls_done = 0
+        for _round in range(rounds_cap):
+          round_done = False
+          for attempt in range(3):
+              if attempt:
+                  await asyncio.sleep(1.5 * attempt)
+              full_parts: List[str] = []
+              blocks: Dict[int, Dict[str, Any]] = {}
+              stop_reason = ""
+              in_tok = out_tok = 0
+              cache_read_tok = cache_write_tok = 0
+              try:
+                  async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key,
+                                              extra_headers=_beta_headers(_extended)) as resp:
+                      if resp.status_code >= 400:
+                          body = await resp.aread()
+                          # If the API is rejecting the extended-ttl beta, stop
+                          # asking for it PROCESS-WIDE and retry this turn on the
+                          # 5-minute default. Without this a bad beta name is not
+                          # a costlier cache, it is Chief being down.
+                          if _extended and _looks_like_beta_rejection(
+                                  resp.status_code, body.decode("utf-8", "replace")):
+                              globals()["_extended_cache_ok"] = False
+                              logger.warning(
+                                  "[chief] extended cache ttl rejected (%s) — falling back "
+                                  "to the 5-minute default for this process", resp.status_code)
+                              return await _call_claude(
+                                  client, system, messages, max_tokens=max_tokens,
+                                  enable_web_search=enable_web_search,
+                                  business_id=business_id, model=model,
+                                  stream_sink=stream_sink)
+                          logger.warning(
+                              f"Claude stream error (attempt {attempt + 1}/3): "
+                              f"{resp.status_code} {body[:300]}")
+                          await log_api_usage(endpoint="/chief/backend", model=model,
+                              input_tokens=0, output_tokens=0, business_id=business_id,
+                              duration_ms=int(time.time() * 1000) - started_ms, ok=False,
+                              error=f"{resp.status_code}")
+                          fb_reason = f"stream {resp.status_code}"
+                          if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
+                              continue          # transient — retry with backoff
+                          break                 # our bug / key problem — fail fast
+                      async for line in resp.aiter_lines():
+                          if not line or not line.startswith("data:"):
+                              continue
+                          try:
+                              evt = json.loads(line[5:].strip())
+                          except ValueError:
+                              continue
+                          et = evt.get("type")
+                          if et == "content_block_start":
+                              idx = int(evt.get("index") or 0)
+                              cb = evt.get("content_block") or {}
+                              if cb.get("type") == "tool_use":
+                                  blocks[idx] = {"type": "tool_use", "id": cb.get("id"),
+                                                 "name": cb.get("name"), "_json": []}
+                              elif cb.get("type") == "text":
+                                  blocks[idx] = {"type": "text", "_text": []}
+                          elif et == "content_block_delta":
+                              idx = int(evt.get("index") or 0)
+                              d = evt.get("delta") or {}
+                              if d.get("type") == "text_delta" and d.get("text"):
+                                  piece = d["text"]
+                                  full_parts.append(piece)
+                                  b = blocks.get(idx)
+                                  if b is not None and b.get("type") == "text":
+                                      b["_text"].append(piece)
+                                  try:
+                                      stream_sink(piece)
+                                  except Exception:  # sink must never kill the turn
+                                      pass
+                              elif d.get("type") == "input_json_delta":
+                                  b = blocks.get(idx)
+                                  if b is not None and b.get("type") == "tool_use":
+                                      b["_json"].append(d.get("partial_json") or "")
+                          elif et == "message_start":
+                              u = ((evt.get("message") or {}).get("usage")) or {}
+                              in_tok = int(u.get("input_tokens") or 0)
+                              cache_read_tok = int(u.get("cache_read_input_tokens") or 0)
+                              cache_write_tok = int(u.get("cache_creation_input_tokens") or 0)
+                          elif et == "message_delta":
+                              d = evt.get("delta") or {}
+                              if d.get("stop_reason"):
+                                  stop_reason = d["stop_reason"]
+                              u = evt.get("usage") or {}
+                              out_tok = int(u.get("output_tokens") or out_tok)
+              except httpx.HTTPError as e:
+                  logger.warning(f"Claude stream failed (attempt {attempt + 1}/3): {e}")
+                  await log_api_usage(endpoint="/chief/backend", model=model,
+                      input_tokens=in_tok, output_tokens=out_tok, business_id=business_id,
+                      duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=str(e))
+                  partial = "".join(full_parts).strip()
+                  if partial or turn_streamed:
+                      # Mid-stream drop AFTER text reached the client (this
+                      # round or an earlier one): what streamed is the
+                      # reply -- a retry would speak it twice.
+                      return "".join(turn_parts + [partial]).strip()
+                  fb_reason = f"stream drop: {e}"
+                  continue                      # nothing arrived — retry
+              else:
+                  text = "".join(full_parts).strip()
+                  await log_api_usage(
+                      endpoint="/chief/backend", model=model,
+                      input_tokens=in_tok, output_tokens=out_tok,
+                      cache_read_tokens=cache_read_tok, cache_creation_tokens=cache_write_tok,
+                      business_id=business_id, task_type=prompt_shape,
+                      duration_ms=int(time.time() * 1000) - started_ms)
+                  if (tool_rounds_on and stop_reason == "tool_use"
+                          and _round < rounds_cap - 1):
+                      content: List[Dict[str, Any]] = []
+                      for bi in sorted(blocks):
+                          b = blocks[bi]
+                          if b.get("type") == "text":
+                              t = "".join(b.get("_text") or [])
+                              if t:
+                                  content.append({"type": "text", "text": t})
+                          elif b.get("type") == "tool_use":
+                              try:
+                                  args = json.loads("".join(b.get("_json") or []) or "{}")
+                              except ValueError:
+                                  args = {}
+                              content.append({"type": "tool_use", "id": b.get("id"),
+                                              "name": b.get("name"), "input": args})
+                      step = await chief_tool_loop.run_tool_round(
+                          client, tool_biz, content, tool_calls_done)
+                      if step is not None:
+                          assistant_msg, results_msg, n_calls = step
+                          tool_calls_done += n_calls
+                          messages.append(assistant_msg)
+                          messages.append(results_msg)
+                          if text:
+                              turn_parts.append(text + "\n\n")
+                              turn_streamed = True
+                              # Keep the client view identical to the
+                              # return value: a real paragraph break in both.
+                              try:
+                                  stream_sink("\n\n")
+                              except Exception:
+                                  pass
+                          round_done = True
+                          break                  # next ROUND, fresh attempts
+                  if text or turn_streamed:
+                      return "".join(turn_parts + [text]).strip()
+                  # A 200 that streamed no text at all — treat as transient.
+                  logger.warning(f"Claude stream returned empty (attempt {attempt + 1}/3)")
+                  fb_reason = fb_reason or "stream empty"
+                  continue
+
+          if round_done:
+              continue
+          break
 
         # Three attempts with backoff have failed — this is an outage, a
         # rate-limit wall, or a bad key. One shot on the backup brain
         # before conceding the turn, exactly like the non-streaming path.
+        # (If earlier ROUNDS already streamed text, return that instead --
+        # the practitioner heard it; a fallback would contradict it.)
+        if turn_streamed:
+            return "".join(turn_parts).strip()
         fb = await fallback_brain.call_fallback(
             client, system, messages, max_tokens, business_id,
             reason=fb_reason or "stream exhausted retries")
@@ -804,97 +893,113 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # going straight to the user-facing fallback. Retry up to twice with
     # backoff. Hard client errors (400/401/403/404) are OUR bugs or key
     # problems — never retried, fail fast and loud in the logs.
-    resp = None
-    last_err = ""
-    for attempt in range(3):
-        if attempt:
-            await asyncio.sleep(1.5 * attempt)
-        try:
-            resp = await llm_call.apost(client, payload, timeout=HTTP_TIMEOUT, key=key,
-                                        extra_headers=_beta_headers(_extended))
-        except httpx.HTTPError as e:
-            last_err = str(e)
-            logger.warning(f"Claude request failed (attempt {attempt + 1}/3): {e}")
-            resp = None
-            continue
-        if resp.status_code >= 400:
-            last_err = f"{resp.status_code}"
-            logger.warning(f"Claude error (attempt {attempt + 1}/3): {resp.status_code} {resp.text[:300]}")
-            # Same downgrade as the streaming path: a rejected beta must
-            # cost us a cheaper cache, never the turn. 400 is otherwise
-            # treated as our bug and never retried.
-            if _extended and _looks_like_beta_rejection(resp.status_code, resp.text):
-                globals()["_extended_cache_ok"] = False
-                logger.warning(
-                    "[chief] extended cache ttl rejected (%s) — falling back to "
-                    "the 5-minute default for this process", resp.status_code)
-                return await _call_claude(
-                    client, system, messages, max_tokens=max_tokens,
-                    enable_web_search=enable_web_search,
-                    business_id=business_id, model=model, stream_sink=stream_sink)
-            if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
-                resp = None
-                continue
-            resp = None
-            break
-        break
-    if resp is None:
-        await log_api_usage(endpoint="/chief/backend", model=model,
-            input_tokens=0, output_tokens=0, business_id=business_id,
-            duration_ms=int(time.time() * 1000) - started_ms, ok=False,
-            error=last_err or "exhausted retries")
-        # Backup Brain (#103, 2026-07-12). Anthropic has now failed three
-        # times with backoff, so this is not a hiccup — it is an outage, a
-        # rate-limit wall, or a bad key. One shot on the fallback provider
-        # before conceding the turn.
-        #
-        # Note this composes BETTER than the original PR, which failed over
-        # on the very first error. The retry loop landed separately on
-        # 2026-07-17 and handles the transient case, so the fallback now
-        # fires only when Anthropic is genuinely unavailable — fewer
-        # cross-provider turns, and each one actually justified.
-        #
-        # call_fallback documents itself as returning "" on any failure,
-        # and mostly does — but it catches httpx.HTTPError and
-        # (ValueError, AttributeError, IndexError) specifically, so a
-        # KeyError or TypeError on an unexpected OpenAI response shape
-        # would escape. This runs on a turn Anthropic has ALREADY failed,
-        # where the established behaviour is a graceful mute; letting an
-        # exception through here would upgrade that to a 500. Belt and
-        # braces, so the backup brain can never be worse than no backup
-        # brain.
-        try:
-            return await fallback_brain.call_fallback(
-                client, system, messages, max_tokens, business_id,
-                reason=last_err or "exhausted retries")
-        except Exception as e:  # pragma: no cover — defensive
-            logger.warning(f"fallback brain raised, conceding turn: {e}")
-            return ""
-    data = resp.json()
-    usage = data.get("usage", {}) if isinstance(data, dict) else {}
-    # Arc 20B quality gate — observe the cache working in prod logs:
-    # cache_read >> input after the first call of a session = win confirmed.
-    try:
-        logger.info(
-            "chief cache: read=%s write=%s fresh_in=%s out=%s",
-            usage.get("cache_read_input_tokens"),
-            usage.get("cache_creation_input_tokens"),
-            usage.get("input_tokens"), usage.get("output_tokens"))
-    except Exception:
-        pass
-    await log_api_usage(
-        endpoint="/chief/backend",
-        model=data.get("model") if isinstance(data, dict) else model,
-        input_tokens=int(usage.get("input_tokens") or 0),
-        output_tokens=int(usage.get("output_tokens") or 0),
-        # Metering fix (beta-readiness audit): cache tokens were dropped,
-        # understating every cached turn. Fold them into the cost.
-        cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
-        cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
-        business_id=business_id, task_type=prompt_shape,
-        duration_ms=int(time.time() * 1000) - started_ms,
-    )
-    return _text_from_content(data.get("content", []))
+    _tool_calls_done = 0
+    for _round in range(chief_tool_loop.MAX_TOOL_ROUNDS if tool_rounds_on else 1):
+      resp = None
+      last_err = ""
+      for attempt in range(3):
+          if attempt:
+              await asyncio.sleep(1.5 * attempt)
+          try:
+              resp = await llm_call.apost(client, payload, timeout=HTTP_TIMEOUT, key=key,
+                                          extra_headers=_beta_headers(_extended))
+          except httpx.HTTPError as e:
+              last_err = str(e)
+              logger.warning(f"Claude request failed (attempt {attempt + 1}/3): {e}")
+              resp = None
+              continue
+          if resp.status_code >= 400:
+              last_err = f"{resp.status_code}"
+              logger.warning(f"Claude error (attempt {attempt + 1}/3): {resp.status_code} {resp.text[:300]}")
+              # Same downgrade as the streaming path: a rejected beta must
+              # cost us a cheaper cache, never the turn. 400 is otherwise
+              # treated as our bug and never retried.
+              if _extended and _looks_like_beta_rejection(resp.status_code, resp.text):
+                  globals()["_extended_cache_ok"] = False
+                  logger.warning(
+                      "[chief] extended cache ttl rejected (%s) — falling back to "
+                      "the 5-minute default for this process", resp.status_code)
+                  return await _call_claude(
+                      client, system, messages, max_tokens=max_tokens,
+                      enable_web_search=enable_web_search,
+                      business_id=business_id, model=model, stream_sink=stream_sink,
+                      read_tools=read_tools, tool_biz=tool_biz)
+              if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
+                  resp = None
+                  continue
+              resp = None
+              break
+          break
+      if resp is None:
+          await log_api_usage(endpoint="/chief/backend", model=model,
+              input_tokens=0, output_tokens=0, business_id=business_id,
+              duration_ms=int(time.time() * 1000) - started_ms, ok=False,
+              error=last_err or "exhausted retries")
+          # Backup Brain (#103, 2026-07-12). Anthropic has now failed three
+          # times with backoff, so this is not a hiccup — it is an outage, a
+          # rate-limit wall, or a bad key. One shot on the fallback provider
+          # before conceding the turn.
+          #
+          # Note this composes BETTER than the original PR, which failed over
+          # on the very first error. The retry loop landed separately on
+          # 2026-07-17 and handles the transient case, so the fallback now
+          # fires only when Anthropic is genuinely unavailable — fewer
+          # cross-provider turns, and each one actually justified.
+          #
+          # call_fallback documents itself as returning "" on any failure,
+          # and mostly does — but it catches httpx.HTTPError and
+          # (ValueError, AttributeError, IndexError) specifically, so a
+          # KeyError or TypeError on an unexpected OpenAI response shape
+          # would escape. This runs on a turn Anthropic has ALREADY failed,
+          # where the established behaviour is a graceful mute; letting an
+          # exception through here would upgrade that to a 500. Belt and
+          # braces, so the backup brain can never be worse than no backup
+          # brain.
+          try:
+              return await fallback_brain.call_fallback(
+                  client, system, messages, max_tokens, business_id,
+                  reason=last_err or "exhausted retries")
+          except Exception as e:  # pragma: no cover — defensive
+              logger.warning(f"fallback brain raised, conceding turn: {e}")
+              return ""
+      data = resp.json()
+      usage = data.get("usage", {}) if isinstance(data, dict) else {}
+      # Arc 20B quality gate — observe the cache working in prod logs:
+      # cache_read >> input after the first call of a session = win confirmed.
+      try:
+          logger.info(
+              "chief cache: read=%s write=%s fresh_in=%s out=%s",
+              usage.get("cache_read_input_tokens"),
+              usage.get("cache_creation_input_tokens"),
+              usage.get("input_tokens"), usage.get("output_tokens"))
+      except Exception:
+          pass
+      await log_api_usage(
+          endpoint="/chief/backend",
+          model=data.get("model") if isinstance(data, dict) else model,
+          input_tokens=int(usage.get("input_tokens") or 0),
+          output_tokens=int(usage.get("output_tokens") or 0),
+          # Metering fix (beta-readiness audit): cache tokens were dropped,
+          # understating every cached turn. Fold them into the cost.
+          cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
+          cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+          business_id=business_id, task_type=prompt_shape,
+          duration_ms=int(time.time() * 1000) - started_ms,
+      )
+      content = data.get("content", []) if isinstance(data, dict) else []
+      if (tool_rounds_on and isinstance(data, dict)
+              and data.get("stop_reason") == "tool_use"
+              and _round < chief_tool_loop.MAX_TOOL_ROUNDS - 1):
+          step = await chief_tool_loop.run_tool_round(
+              client, tool_biz, content, _tool_calls_done)
+          if step is not None:
+              assistant_msg, results_msg, n_calls = step
+              _tool_calls_done += n_calls
+              messages.append(assistant_msg)
+              messages.append(results_msg)
+              continue
+      return _text_from_content(content)
+    return _text_from_content([])
 
 
 def _text_from_content(content: Any) -> str:
@@ -5968,7 +6073,7 @@ class _TurnClock:
     wrong shape for a log that has to stay on in production.
     """
 
-    __slots__ = ("_t0", "_last", "stages", "warm")
+    __slots__ = ("_t0", "_last", "stages", "warm", "tools")
 
     def __init__(self) -> None:
         now = time.perf_counter()
@@ -5986,6 +6091,7 @@ class _TurnClock:
         try:
             total = int((time.perf_counter() - self._t0) * 1000)
             parts = " ".join(f"{n}={ms}" for n, ms in self.stages)
+            parts += f" tools={getattr(self, 'tools', 0)}"
             extra = " ".join(
                 f"{k}={int(v) if isinstance(v, bool) else v}"
                 for k, v in fields.items())
@@ -15270,6 +15376,8 @@ ACTIONS — NAVIGATION + MEMORY:
     • "bring the chat back" / "show the window again" → visible:true.
     • GOODBYES CLOSE THE ROOM BEHIND YOU — voice OR text. When the practitioner wraps up ("that's all for now", "we're done here", "goodnight", "talk tomorrow", "that'll do it") → say a short, warm goodbye in your reply FIRST, then emit visible:false + keep_talking:false. The window closes after your goodbye (spoken goodbyes finish playing first), and anything on the data stage comes down with it — a clean exit, nothing left hanging. Only on a clear ending: a pause or a thank-you mid-session is NOT a goodbye.
   [ACTION:{{"type":"show_revenue"}}]     — opens GROW → Revenue (the canonical Revenue Analytics surface: Allocator, Expenses, planned-vs-actual, Export, Send to Accountant).
+MID-TURN LOOKUPS — you can READ while you think. When you need data you do not see in this context (a list, a balance, a contact's history, module entries, campaign state), CALL the matching tool mid-reply instead of saying you don't have it loaded — the result arrives and you keep writing with real numbers. These tools are READS ONLY and invisible to the practitioner; anything that changes state still goes through [ACTION:] tags. Look up first, then speak; never guess a figure you could have read, and never claim data is unavailable before trying the tool.
+
   [ACTION:{{"type":"show_view","view":"invoices|contacts|sessions|products","filter":"..."}}]  — SHOW A LIST RIGHT HERE IN THE CHAT. Fetches the actual rows and renders them as a table card under your reply — the practitioner sees every line item without leaving the conversation. Filters: invoices → open (default) | overdue | draft | paid | all; contacts → all (default) | leads | active; sessions → upcoming (default) | all; products → all.
     • WHEN: any time the practitioner asks to SEE, LIST, or BREAK DOWN their data — "share the invoices I have", "who owes what?", "show me my leads", "what sessions are coming up?". Emit the tag and speak naturally about what the card shows; the rows arrive from the database, so never retype them all into your prose.
     • NEVER say "I don't have the itemized breakdown" or offer to merely open a tab when this action can show the rows here. Navigation (show_revenue, navigate) is for when they want the full working SCREEN; show_view is for when they want to SEE the data in the flow of the conversation.
@@ -16362,13 +16470,23 @@ async def chief_chat(
             except Exception:
                 _plan = None
             _t.mark("prompt")
+            # Mid-turn reads (Jarvis arc): the operational Chief gets the
+            # audited MCP read surface as tools for THIS turn — it can
+            # look up what it does not see instead of saying so. Coaches
+            # keep their clean context (same isolation reasoning as the
+            # injector gates above).
+            chief_tool_loop.reset_turn()
+            _read_tools = None if is_coach_mode else chief_tool_loop.read_tool_definitions()
             raw = await _call_claude(client, system, api_messages,
                                      max_tokens=turn_tokens,
                                      model=chief_models.model_for(lane, _plan),
                                      # Voice streaming arc — set only when
                                      # /chat/stream drives this turn.
-                                     stream_sink=_STREAM_SINK.get())
+                                     stream_sink=_STREAM_SINK.get(),
+                                     read_tools=_read_tools,
+                                     tool_biz=biz)
             _t.mark("model")
+            _t.tools = chief_tool_loop.calls_this_turn()
             # Emitted BEFORE the action dispatch below, because the number
             # the practitioner actually feels is how long Chief sat silent
             # before the first word — not how long the whole turn took.
