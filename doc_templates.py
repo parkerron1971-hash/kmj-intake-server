@@ -80,9 +80,34 @@ def fixed(heading: Optional[str], text: str,
     return d
 
 
+# Appended to EVERY drafted brief, here rather than in each one.
+#
+# The six nonprofit templates written most recently each carried their own
+# version of this sentence — "do not invent expertise, employers or
+# demographics", "invent NOTHING, no milestones, no award names" — and the
+# seven original agreements and letters carried none. So the newest paper
+# was armoured against fabrication and the oldest, most-used paper was not.
+#
+# Putting it in the constructor makes it structural instead of editorial:
+# a drafted section cannot ship without it, and the next person to add one
+# does not have to remember. The system prompt already forbids invented
+# facts; this is the per-section belt to that braces, and it is the class
+# of defect with the worst consequences — a closing letter that claims an
+# outcome, a welcome that promises a result, a demand letter that invents
+# a collection history.
+_NO_INVENTION = (
+    " Invent nothing. No outcomes, results, dates, amounts, names, "
+    "credentials or history beyond what this brief and the fields give "
+    "you. If something would round out the paragraph and you were not "
+    "given it, leave it out.")
+
+
 def drafted(heading: Optional[str], brief: str, fallback: str) -> Dict[str, Any]:
+    # Idempotent: a brief that already says it keeps its own wording and
+    # does not get the sentence twice.
+    armoured = brief if "nvent" in brief else brief.rstrip() + _NO_INVENTION
     return {"kind": "drafted", "heading": heading,
-            "brief": brief, "fallback": fallback}
+            "brief": armoured, "fallback": fallback}
 
 
 def field(key: str, label: str, *, type_: str = "text", required: bool = False,
@@ -405,10 +430,13 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "The consultant will bring professional skill and judgment to "
                   "the engagement. Business outcomes depend on factors outside "
                   "either party's control, and no particular result is promised."),
-            fixed("TERM AND TERMINATION",
-                  "Term: {term}. Either party may terminate earlier with 14 days' "
-                  "written notice; the client pays for work performed through the "
-                  "termination date.",
+            # The termination RIGHT moved to the shared _TERMINATION clause,
+            # which every agreement now gets unconditionally. This section
+            # kept requires="term", so a consulting agreement with the
+            # optional Term field left blank shipped with no termination
+            # clause at all — the exit disappeared with the start date.
+            fixed("TERM",
+                  "Term: {term}.",
                   requires="term"),
             fixed("GOVERNING LAW",
                   "This agreement is governed by the laws of {state_full}.{venue_clause}",
@@ -468,10 +496,17 @@ TEMPLATES: List[Dict[str, Any]] = [
                   "a licensed professional, you agree to seek one. Results depend "
                   "on your own decisions and actions; no specific outcome is "
                   "guaranteed."),
+            # These two clauses used to fight. INVESTMENT said payment was
+            # due "regardless of session usage"; this one said undelivered
+            # sessions are refunded. Read together they say a client both
+            # does and does not get money back for sessions they did not
+            # take. Now INVESTMENT governs the program while it runs, and
+            # this governs what happens when it ends.
             fixed("ENDING THE PROGRAM",
                   "You may end the program with 14 days' written notice. Sessions "
-                  "already delivered and the current billing period are earned; "
-                  "remaining prepaid, undelivered sessions are refunded."),
+                  "already delivered and the current billing period are earned and "
+                  "not refundable. Any amount you have prepaid for billing periods "
+                  "beyond the notice period is refunded within 30 days."),
             sig(_SIGNATURE_BLOCK),
         ],
     },
@@ -611,6 +646,8 @@ TEMPLATES: List[Dict[str, Any]] = [
             field("owed_for", "What it's owed for", type_="textarea", required=True,
                   placeholder="e.g. Invoice #2041 for the March brand design work, delivered March 18"),
             field("deadline_days", "Days to pay", sticky=True, default="14", placeholder="14"),
+            select_field("prior_requests", "Have you asked for this before?",
+                         ["", "yes"], default=""),
         ],
         "sections": [
             drafted(None,
@@ -620,9 +657,16 @@ TEMPLATES: List[Dict[str, Any]] = [
                     "no apology — measured and direct.",
                     "This letter is a formal demand for payment of the unpaid "
                     "balance described below."),
+            # "Despite prior requests" was printed UNCONDITIONALLY, in
+            # fixed text. If no prior request was made, the letter opened
+            # by asserting something untrue - in the one document most
+            # likely to be read by a lawyer.
             fixed("THE BALANCE",
-                  "Amount due: {amount}\nFor: {owed_for}\n\nDespite prior "
-                  "requests, this balance remains unpaid as of {date}."),
+                  "Amount due: {amount}\nFor: {owed_for}\n\nThis balance "
+                  "remains unpaid as of {date}."),
+            fixed(None,
+                  "This is not the first request for payment on this account.",
+                  requires="prior_requests"),
             fixed("DEMAND",
                   "Payment of {amount} in full is required within "
                   "{deadline_days} days of the date of this letter. Payment may "
@@ -966,14 +1010,45 @@ _LIABILITY_CAP = fixed("LIMITATION OF LIABILITY",
     "party's total liability under this agreement is limited to the fees "
     "paid or payable for the engagement.")
 
+_CONFIDENTIALITY_MUTUAL = fixed("CONFIDENTIALITY",
+    "Each party will protect the other's non-public business information "
+    "with at least the care it uses for its own, use it only for this "
+    "project, and disclose it only to those who need it for the work or "
+    "as required by law. This obligation survives the end of the project "
+    "for two years, and indefinitely for trade secrets. Nothing in this agreement prevents either party from reporting suspected unlawful conduct to a government agency or from making disclosures protected by law.")
+
+# A shared TERMINATION clause. Every agreement's exit was a bare mutual
+# notice with no cure period and no for-cause route — and the consulting
+# agreement's was gated on an OPTIONAL field, so leaving Term blank
+# removed the termination right from the contract entirely.
+_TERMINATION = fixed("ENDING THIS AGREEMENT",
+    "Either party may end this agreement with 14 days' written notice. "
+    "Either party may end it immediately if the other materially breaches "
+    "and has not fixed the breach within 10 days of being told about it in "
+    "writing. On termination the client pays for work performed through "
+    "the termination date, each party returns the other's property and "
+    "confidential material, and the confidentiality, ownership and "
+    "responsibility-for-claims terms of this agreement continue to apply.")
+
 _BACK_PAGE: Dict[str, List[Dict[str, Any]]] = {
-    "engagement_letter":      [_NO_GUARANTEE_PRO, _OVERDUE, _DISPUTE, _GENERAL_TERMS],
-    "retainer_agreement":     [_NO_GUARANTEE_PRO, _OVERDUE, _DISPUTE, _GENERAL_TERMS],
-    "service_agreement":      [_RELATIONSHIP, _INDEMNITY, _DISPUTE, _GENERAL_TERMS],
-    "consulting_agreement":   [_LIABILITY_CAP, _DISPUTE, _GENERAL_TERMS],
-    "coaching_agreement":     [_DISPUTE, _GENERAL_TERMS],
-    "mutual_nda":             [_GENERAL_TERMS],
-    "independent_contractor": [_INDEMNITY, _DISPUTE, _GENERAL_TERMS],
+    # CONFIDENTIALITY was missing from three of these entirely. A monthly
+    # retainer, a project contract and a 1099 engagement all hand over the
+    # business's clients, pricing and work, and said nothing about it.
+    #
+    # TERMINATION is spliced onto every agreement for the same reason: each
+    # one's exit was a bare notice with no cure period and no for-cause
+    # route, and the consulting agreement's vanished entirely when its
+    # optional Term field was left blank.
+    #
+    # mutual_nda gets _DISPUTE, which it never had — an NDA whose whole
+    # value is enforceability shipped with no forum and no fees clause.
+    "engagement_letter":      [_NO_GUARANTEE_PRO, _OVERDUE, _TERMINATION, _DISPUTE, _GENERAL_TERMS],
+    "retainer_agreement":     [_NO_GUARANTEE_PRO, _CONFIDENTIALITY_MUTUAL, _OVERDUE, _TERMINATION, _DISPUTE, _GENERAL_TERMS],
+    "service_agreement":      [_RELATIONSHIP, _CONFIDENTIALITY_MUTUAL, _INDEMNITY, _TERMINATION, _DISPUTE, _GENERAL_TERMS],
+    "consulting_agreement":   [_LIABILITY_CAP, _OVERDUE, _TERMINATION, _DISPUTE, _GENERAL_TERMS],
+    "coaching_agreement":     [_TERMINATION, _DISPUTE, _GENERAL_TERMS],
+    "mutual_nda":             [_DISPUTE, _GENERAL_TERMS],
+    "independent_contractor": [_CONFIDENTIALITY_MUTUAL, _INDEMNITY, _TERMINATION, _DISPUTE, _GENERAL_TERMS],
 }
 
 for _t in TEMPLATES:
@@ -1003,13 +1078,6 @@ _DISPUTE_IP = fixed("DISPUTE RESOLUTION",
     "may go straight to court to protect confidential information or "
     "intellectual property. Where the law allows, the prevailing party in "
     "any proceeding may recover its reasonable costs.")
-
-_CONFIDENTIALITY_MUTUAL = fixed("CONFIDENTIALITY",
-    "Each party will protect the other's non-public business information "
-    "with at least the care it uses for its own, use it only for this "
-    "project, and disclose it only to those who need it for the work or "
-    "as required by law. This obligation survives the end of the project "
-    "for two years, and indefinitely for trade secrets. Nothing in this agreement prevents either party from reporting suspected unlawful conduct to a government agency or from making disclosures protected by law.")
 
 _CREATIVE_TEMPLATE: Dict[str, Any] = {
     "id": "creative_services_agreement",
