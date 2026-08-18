@@ -15203,6 +15203,114 @@ async def _get_time_context(client: httpx.AsyncClient, biz_id: str) -> str:
     return "TIME CONTEXT:\n" + "\n".join(f"- {p}" for p in parts)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# FIRST-RUN CONCIERGE — the setup snapshot
+# ═══════════════════════════════════════════════════════════════════════
+# Chief's first-run job is to WALK the practitioner through setup, not
+# describe it. The plug-in list (business_track_router.resolve_plugins)
+# is the itinerary the coached session and the BUILD checklist already
+# share; these helpers put the same list — with live done/undone state
+# and real nav targets — in front of Chief so its advice, the checklist,
+# and the coach can never disagree about what to set up next.
+#
+# The probes cost ~a dozen PostgREST reads, so the snapshot is fetched
+# only while setup is plausibly still in progress (_setup_snapshot_wanted)
+# and always off-thread inside the enrichment gather.
+
+SETUP_SNAPSHOT_MAX_AGE_DAYS = 60
+FIRST_RUN_MAX_AGE_DAYS = 21
+FIRST_RUN_MAX_DONE = 2
+
+
+def _business_age_days(biz: Dict[str, Any]) -> Optional[float]:
+    """Days since businesses.created_at; None when unparseable."""
+    raw = str(biz.get("created_at") or "")
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds() / 86400)
+    except Exception:
+        return None
+
+
+def _setup_snapshot_wanted(biz: Dict[str, Any],
+                           track: Optional[Dict[str, Any]]) -> bool:
+    """Spend the plug-in probes on this turn?
+
+    Yes while the coached track is unfinished (that IS the setup phase),
+    or while the business is young enough that setup talk is plausible.
+    A dismissed checklist is the practitioner saying stop — honored here
+    the same way the BUILD banner honors it."""
+    settings = biz.get("settings") or {}
+    if settings.get("checklist_dismissed"):
+        return False
+    if track is not None and (track.get("status") or "in_progress") != "completed":
+        return True
+    age = _business_age_days(biz)
+    return age is not None and age <= SETUP_SNAPSHOT_MAX_AGE_DAYS
+
+
+def _fetch_setup_snapshot(biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Resolve the live plug-in list. Sync (httpx probes) — call via
+    asyncio.to_thread. Returns None on any failure: no snapshot beats a
+    wrong one."""
+    try:
+        import business_track_router as btr
+        items = btr.resolve_plugins(biz)
+        if not items:
+            return None
+        return {
+            "items": items,
+            "done": sum(1 for p in items if p.get("done")),
+            "total": len(items),
+        }
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"setup snapshot failed (non-fatal): {e}")
+        return None
+
+
+def _format_setup_block(snapshot: Optional[Dict[str, Any]]) -> str:
+    """The SETUP STATUS prompt block. Empty string when there is no
+    snapshot, so nothing changes for businesses past their setup phase."""
+    if not snapshot:
+        return ""
+    items = snapshot["items"]
+    undone = [p for p in items if not p.get("done")]
+    lines = [
+        "SETUP STATUS — the day-one plug-in list (server-verified this turn):",
+        f"  Connected: {snapshot['done']} of {snapshot['total']}.",
+    ]
+    if undone:
+        lines.append("  Still to plug in, in payoff order:")
+        for i, p in enumerate(undone, 1):
+            nav = json.dumps(p.get("nav") or {})
+            blocked = p.get("blocked_by") or []
+            tail = f" [best after: {', '.join(blocked)}]" if blocked else ""
+            lines.append(f"    {i}. {p['title']} — {str(p['why'])[:140]}"
+                         f" — nav {nav}{tail}")
+        lines.append(
+            "  HOW TO USE THIS:\n"
+            "  - When they ask where to start, what's next, or what's missing, "
+            "name the FIRST unblocked item above, give the why in their "
+            "vertical's own words, and OFFER to take them there.\n"
+            "  - On a yes, emit [ACTION:{\"type\":\"navigate\",...}] using that "
+            "item's nav EXACTLY as printed — never invent a destination.\n"
+            "  - Walk, don't dump: one stop per turn, celebrate each completion, "
+            "then offer the next.\n"
+            "  - This list is measured from their real data this turn. Never "
+            "contradict it — do not tell them to set up something marked done, "
+            "or claim something undone is connected."
+        )
+    else:
+        lines.append(
+            "  Everything on the list is connected. If setup comes up, "
+            "congratulate them — do not invent further setup chores.")
+    return "\n".join(lines)
+
+
 def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          view: Optional[CurrentContext] = None,
                          view_detail: Optional[Dict] = None,
@@ -15221,7 +15329,9 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          habit_block: str = "",
                          bookkeeping_block: str = "",
                          learned_block: str = "",
-                         growth_block: str = "") -> str:
+                         growth_block: str = "",
+                         setup_block: str = "",
+                         first_run: bool = False) -> str:
     # Coach modes are different personas entirely — neither shares the
     # operational Chief's prompt.
     if mode == "strategy_coach":
@@ -15313,6 +15423,30 @@ Pick up naturally — don't re-introduce yourself. If they reference something f
     else:
         greeting_style_guidance = "Lead with up to 3 priorities (use the TODAY'S PRIORITIES list above). Be specific — name names, cite numbers, reference dates. End with ONE question."
 
+    # First-run launch greeting. When the server has MEASURED that this
+    # business is brand new (setup snapshot: nearly nothing connected,
+    # account days old), the launch plan is fact, not a judgement call —
+    # so the model is told plainly instead of being asked to infer it
+    # from context. The model-judged fallback below stays for businesses
+    # with no snapshot (older accounts, probe failure).
+    launch_clause = ""
+    if is_greeting and first_run:
+        launch_clause = f"""
+
+LAUNCH GREETING — THIS BUSINESS IS BRAND NEW (server-verified: almost nothing is connected yet — see SETUP STATUS above for the exact list). Your greeting IS their launch plan, not a day-read. Shape:
+1. Welcome them warmly and NAME their business type back to them: "I see you run a salon — here's what I'd set up first."
+2. List the top 3 undone plug-ins from SETUP STATUS, in that order, each translated into THEIR vertical's language — never system jargon ("bring your client list over" for a salon is "your regulars"; a ministry gathers "members"; a lawyer's intake form is "the questionnaire new clients fill out").
+3. Close by offering to take them to the first stop: "Want me to take you there right now?" On their YES in the NEXT turn, emit that item's navigate exactly as SETUP STATUS prints it — one stop per turn, celebrating each completion.
+Keep it warm, specific, under 6 short sentences plus the list. Do NOT emit actions in the greeting itself."""
+    elif is_greeting:
+        launch_clause = """
+
+LAUNCH GREETING — when the business is clearly BRAND NEW (context shows zero or near-zero contacts, no sessions, no invoices), the greeting becomes their launch plan instead of a day-read. Shape:
+1. Thank them for being here and NAME their business type back to them: "I see you run a salon — here's what I'd set up first."
+2. List the 3-4 highest-leverage launch steps FOR THEIR TYPE, in THEIR language, never system jargon. If a SETUP STATUS block is present above, its undone items ARE the list — use its order. Otherwise derive the steps from what their kind of business needs to take money and serve people: (a) the way customers book or reach them, (b) what they sell with prices, (c) their web presence check, (d) their first few real contacts imported.
+3. Close by offering to take them to the first step: "Want me to take you to your booking setup right now?" On their YES in the NEXT turn, emit the navigate — walk them step by step, one step per turn, celebrating each completion.
+This launch greeting outranks the day-read whenever the newness condition holds. Keep it warm, specific, and under 6 short sentences plus the list."""
+
     greeting_clause = ""
     if is_greeting:
         greeting_clause = f"""
@@ -15329,13 +15463,7 @@ RULES:
 - Conversational, not a data dump
 - End with a clear next step or question
 - Keep it under 4 sentences
-Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate).
-
-LAUNCH GREETING — when the business is clearly BRAND NEW (context shows zero or near-zero contacts, no sessions, no invoices), the greeting becomes their launch plan instead of a day-read. Shape:
-1. Thank them for being here and NAME their business type back to them: "I see you run a salon — here's what I'd set up first."
-2. List the 3-4 highest-leverage launch steps FOR THEIR TYPE, in THEIR language, never system jargon. Derive the steps from what their kind of business needs to take money and serve people — do not recite a fixed list. The rubric: (a) the way customers book or reach them, (b) what they sell with prices, (c) their web presence check, (d) their first few real contacts imported. Examples of translation: a salon books "appointments" not "sessions"; a lawyer offers "consultations" and needs an "intake form" described as "the questionnaire new clients fill out"; a ministry gathers "members" not "leads"; a course creator opens their "academy".
-3. Close by offering to take them to the first step: "Want me to take you to your booking setup right now?" On their YES in the NEXT turn, emit the navigate — walk them step by step, one step per turn, celebrating each completion.
-This launch greeting outranks the day-read whenever the newness condition holds. Keep it warm, specific, and under 6 short sentences plus the list."""
+Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate).{launch_clause}"""
 
     return f"""{CHIEF_IDENTITY}
 
@@ -15805,7 +15933,8 @@ ACTIONS — NAVIGATION + MEMORY:
     • tab:"grow" subs: dashboard | briefing | insights | goals | revenue | retention | reviews | content | campaigns | funnel | timeline | ideas | notes
       — notes = the Notes tab (their parking lot of saved notes — everything filed via save_note plus notes they typed themselves). It DISPLAYS under the WORKSPACE sidebar group even though the route is grow/notes, so when they ask "where are my notes?" say "the Notes tab under Workspace" and take them there with [ACTION:{{"type":"navigate","tab":"grow","sub":"notes"}}].
       — ideas = the Observatory's Board (vision + pinned ideas).
-    • tab:"build" pages (use "page", not "sub"): strategy-track | course-studio | business-profile | about-me | foundation-track | brand | media-library | print-materials | my-site | link-page | booking | intake-forms | custom-modules | module-builder | social-media | email-templates | resources | products | analytics | integrations | settings | module:<uuid>
+    • tab:"build" pages (use "page", not "sub"): strategy-track | business-track | course-studio | business-profile | about-me | foundation-track | brand | media-library | print-materials | my-site | link-page | booking | intake-forms | custom-modules | module-builder | social-media | email-templates | resources | products | analytics | integrations | settings | module:<uuid>
+      — business-track = the Business Coach session (the guided sit-down from their first day). Offer it when they want to go deep on business shape, pricing, or their plan.
   — Pick the closest destination even for indirect asks ("where do I change my colors?" → build/brand; "I want to text a client" → operate/sms; "show me my website" → build/my-site).
   — SURFACE NAMES (terminology arc): the ids above never change, but when you TALK about these surfaces use their on-screen names: operate/dashboard = "Today" (the working deck — NOT a second dashboard; Home is "Dashboard") · queue = "Approvals" · funnel = "Lead Flow" · intake-forms = "Client Forms" · custom-modules = "Custom Solutions" · module-builder = "Build a Solution" · link-page = "My Links" · offerings-manager = "Services & Products" (verticals may show Programs/Packages instead). Never say "funnel tab", "queue", "intake forms", or "modules" as surface names to the practitioner.
   — CUSTOM SOLUTIONS, explained: that tab holds the custom tools YOU build for this practitioner — trackers, registries, request boards, order logs, anything their workflow needs that the system doesn't ship with. If they ask what it is (or seem unsure), explain it in their business's language ("your prayer-request board lives there", "your alteration tracker lives there") and remind them they can just ask you to build a new one — you design it, it appears in their sidebar.
@@ -16103,6 +16232,7 @@ manual):
 {view_block}
 {strategy_block}
 {business_track_block}
+{setup_block}
 
 {learned_block}
 
@@ -16802,12 +16932,26 @@ async def chief_chat(
             )
             _t.warm = len(warm)
 
+            # First-run concierge — the live plug-in snapshot. Probes are
+            # a dozen sync PostgREST reads, so they ride the same gather
+            # (off-thread) and only while setup is plausibly in progress.
+            # Coach modes never see operational setup nudges (2026-07-16
+            # isolation rule), so they never pay for the probes either.
+            want_setup = (not is_coach_mode) and _setup_snapshot_wanted(
+                biz, ctx.get("business_track"))
+
+            async def _setup_probe():
+                if not want_setup:
+                    return None
+                return await asyncio.to_thread(_fetch_setup_snapshot, biz)
+
             sources = _context_sources(client, biz)
             _names = list(sources.keys())
             _results = await asyncio.gather(
                 *[_resolve_source(warm, n, *sources[n]) for n in _names],
                 _enrich("vertical learned context", _learned(), ""),
                 _enrich("proactive emit (non-blocking)", _proactive(), None),
+                _enrich("setup snapshot", _setup_probe(), None),
             )
             _ctx_vals = dict(zip(_names, _results))
             voice_examples = _ctx_vals["voice_examples"]
@@ -16819,6 +16963,16 @@ async def chief_chat(
             habit_block = _ctx_vals["habit_block"]
             bookkeeping_block = _ctx_vals["bookkeeping_block"]
             learned_block = _results[len(_names)]
+            setup_snapshot = _results[len(_names) + 2]
+            setup_block = _format_setup_block(setup_snapshot)
+            # First-run = the account is days old and nearly nothing is
+            # connected — measured, not model-guessed.
+            _age_days = _business_age_days(biz)
+            first_run = bool(
+                setup_snapshot
+                and setup_snapshot["done"] <= FIRST_RUN_MAX_DONE
+                and _age_days is not None
+                and _age_days <= FIRST_RUN_MAX_AGE_DAYS)
 
             # Pure, no I/O — computed off what the gather returned.
             priorities = _build_daily_priorities(biz, ctx) if is_greeting else []
@@ -16867,6 +17021,8 @@ async def chief_chat(
                 bookkeeping_block=bookkeeping_block,
                 learned_block=learned_block,
                 growth_block=growth_block,
+                setup_block=setup_block,
+                first_run=first_run,
             )
 
             # JIT capture: prepend a directive at the very top of the prompt
