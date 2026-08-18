@@ -74,3 +74,14 @@ def test_voice_block_keeps_its_spoken_delivery_rules():
     assert "110 words" in block
     assert "No markdown" in block
     assert "[ACTION:{...}] tags still work" in block
+
+
+def test_the_voice_block_explains_the_confirmation_hold():
+    """The hold is only safe if Chief knows to ASK. A model that meets an
+    unexplained "HELD" is as likely to report success as to ask for a
+    yes — and reporting success over a held send is the single worst
+    outcome on this surface."""
+    block = chief_models.VOICE_DELIVERY_BLOCK
+    assert "HELD FOR A SPOKEN YES" in block
+    assert '"send it"' in block
+    assert "NEVER say it is done" in block
