@@ -3951,6 +3951,90 @@ _PLAN_MAX_STEPS = 8
 _PLAN_FIELD_MAX = 220
 
 
+_READOUT_MAX_BLOCKS = 4
+
+
+async def handle_show_readout(client, biz, action) -> Dict:
+    """Several blocks in one artifact — the composed readout.
+
+    show_view answers one question with one shape. "How is the month
+    going" is not one question: it wants the headline, the shape over
+    time, and the rows behind it, and asking three times gets three
+    cards the practitioner has to hold in their head at once.
+
+    Deliberately a CONTAINER over handle_show_view rather than a second
+    resolver. Every block is literally a show_view call, so a block can
+    only ever contain what that verb would have returned on its own —
+    the server still authors every cell, the same filters apply, and a
+    view added to _SHOW_VIEW_SPECS is available here the same day. A
+    parallel resolver would be a second place for the rules to drift.
+
+    A block that fails STAYS IN THE PAYLOAD, marked. Dropping it would
+    leave a readout that looks complete and is not, which is the exact
+    failure this codebase keeps having to relearn.
+    """
+    title = str(action.get("title") or "Readout").strip()[:_PLAN_FIELD_MAX]
+    raw = action.get("blocks")
+    if not isinstance(raw, list) or not raw:
+        return _fail("show_readout",
+                     "a readout needs blocks — pass blocks:[{view, filter, form}]")
+
+    blocks: List[Dict[str, Any]] = []
+    digest: List[str] = []
+    failed_any = False
+    for spec in raw[:_READOUT_MAX_BLOCKS]:
+        if not isinstance(spec, dict):
+            continue
+        sub = {
+            "type": "show_view",
+            "view": spec.get("view"),
+            "filter": spec.get("filter"),
+            "form": spec.get("form") or "list",
+        }
+        if spec.get("group_by"):
+            sub["group_by"] = spec["group_by"]
+        res = await handle_show_view(client, biz, sub)
+        if res.get("failed"):
+            failed_any = True
+            # Named, not swallowed: the reader sees which part is
+            # missing and Chief is told to say so.
+            blocks.append({
+                "kind": "failed",
+                "view": str(spec.get("view") or "?"),
+                "reason": str(res.get("result") or "couldn't load"),
+            })
+            digest.append(f"{spec.get('view')}: COULD NOT LOAD")
+            continue
+        blocks.append(res)
+        digest.append(str(res.get("speak") or res.get("result") or ""))
+
+    if not blocks:
+        return _fail("show_readout", "no block named a view I know")
+
+    # Optional prose from the model, held to the same standard as a
+    # plan: it is Chief's words, marked as such, and it may only lean on
+    # figures the blocks above actually carry.
+    note = str(action.get("note") or "").strip()[:_PLAN_FIELD_MAX]
+
+    drawn = sum(1 for b in blocks if b.get("kind") != "failed")
+    result = f"readout '{title}' on screen — {drawn} block" + ("s" if drawn != 1 else "")
+    if failed_any:
+        result += (" · ONE OR MORE BLOCKS COULD NOT LOAD — say which part is "
+                   "missing rather than describing the readout as complete")
+    return {
+        "type": "show_readout",
+        "result": result,
+        "label": f"📊 {title} — {drawn} block" + ("s" if drawn != 1 else ""),
+        "title": title,
+        "blocks": blocks,
+        "note": note or None,
+        "authored_note": "chief" if note else None,
+        # The one digest the spoken reply reads, so what Chief SAYS and
+        # what the practitioner SEES come from the same numbers.
+        "speak": " · ".join(d for d in digest if d)[:1200],
+    }
+
+
 async def handle_show_plan(client, biz, action) -> Dict:
     """Put an action plan on the screen.
 
@@ -12542,6 +12626,7 @@ ACTION_HANDLERS = {
     "show_revenue":           handle_show_revenue,
     "show_view":              handle_show_view,
     "show_plan":              handle_show_plan,
+    "show_readout":           handle_show_readout,
     "propose_mission":        chief_missions.handle_propose_mission,
     "start_mission":          chief_missions.handle_start_mission,
     "advance_mission":        chief_missions.handle_advance_mission,
@@ -16059,6 +16144,9 @@ MID-TURN LOOKUPS — you can READ while you think. When you need data you do not
   If someone asks for a shape this cannot draw (a pie, a map, a spreadsheet export), say what you CAN draw and offer the closest one — never silently substitute.
 
   [ACTION:{{"type":"show_plan","title":"...","steps":[{{"step":"...","why":"...","when":"..."}}]}}]  — PUT AN ACTION PLAN ON THE SCREEN. "Give me an action plan", "what should I do about this", "walk me through fixing it", "steps to get there" → draw it, do not narrate a numbered list into the reply. Up to 8 steps; each needs "step" (what to do, in the imperative), and takes optional "why" (what it moves) and "when" (today / this week / before the 30th).
+  [ACTION:{{"type":"show_readout","title":"...","blocks":[{{"view":"invoices","filter":"open","form":"chart","group_by":"status"}},{{"view":"invoices","filter":"overdue","form":"list"}}],"note":"..."}}]  — SEVERAL BLOCKS AS ONE ARTIFACT. When the question is not one question — "how is the month going", "give me the picture on my money" — draw the headline, the shape and the rows together instead of making them ask three times. Up to 4 blocks; each block takes the same view / filter / form / group_by as show_view, so anything show_view can draw a block can be. "note" is your own sentence about what it means, and it is marked as yours on screen — the same rule as a plan: no figure that the blocks do not carry.
+  If a block cannot load, the readout still comes back with that block marked failed. SAY WHICH PART IS MISSING. A readout described as complete when one block is empty is worse than no readout.
+
   A plan is YOUR thinking, not a table — there is no database behind it, and the screen labels it as yours. So: no invented figures. If a step leans on a number, it must be one you actually have from context or a read you just did, said plainly ("chase the $2,020 that is genuinely late"). Steps are things the practitioner can DO, in the order they should do them — not a restatement of the problem in bullet form.
     • WHEN: any time the practitioner asks to SEE, LIST, or BREAK DOWN their data — "share the invoices I have", "who owes what?", "show me my leads", "what sessions are coming up?". Emit the tag and speak naturally about what the card shows; the rows arrive from the database, so never retype them all into your prose.
     • NEVER say "I don't have the itemized breakdown" or offer to merely open a tab when this action can show the rows here. Navigation (show_revenue, navigate) is for when they want the full working SCREEN; show_view is for when they want to SEE the data in the flow of the conversation.

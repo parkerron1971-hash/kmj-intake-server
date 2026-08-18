@@ -182,6 +182,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                               "agent calling it would be pushing a card at someone "
                               "rather than reading anything. Stamped authored:'chief' "
                               "so the surface can say whose words they are"),
+    "show_readout":       _ui("draws several show_view blocks as one artifact. UI, "
+                              "not read: every block IS a show_view call, so it can "
+                              "expose nothing that verb would not, and the composed "
+                              "card is a drawing instruction for the app's own screen"),
     "site_health":         _r("reads site + booking config and reports"),
     "what_undo":           _r("reports what undo_last WOULD reverse. Pure read — undo is "
                               "frightening in proportion to how vague it is"),
