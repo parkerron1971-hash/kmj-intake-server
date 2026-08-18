@@ -84,9 +84,13 @@ def test_invoices_return_typed_columns_and_rows(db):
     assert r.get("result") and r.get("label"), "the house contract"
     assert [c["key"] for c in r["columns"]] == ["number", "client", "amount", "status", "due"]
     assert len(r["rows"]) == 3
-    assert r["rows"][0] == {"id": "inv-1", "number": "INV-2026-005",
+    assert r["rows"][0] == {"id": "inv-1", "contact_id": "c-1",
+                            "number": "INV-2026-005",
                             "client": "Marcus Webb", "amount": 520.0,
-                            "status": "overdue", "due": "2026-06-23"}
+                            "status": "overdue", "due": "2026-06-23"}, (
+        "contact_id rides along un-displayed so a mission step repeating "
+        "over these rows can reach the person the invoice belongs to"
+    )
 
 
 def test_the_total_is_summed_from_the_rows_not_the_model(db):

@@ -25,6 +25,7 @@ House rules: sync tests + asyncio.run (no pytest-asyncio in CI).
 from __future__ import annotations
 
 import asyncio
+import json
 import pathlib
 import sys
 
@@ -89,22 +90,28 @@ def executed(monkeypatch):
     scripts per-verb results."""
     log = []
     fail_verbs = set()
+    returns = {}          # verb -> extra keys the handler "returned"
 
-    async def fake_execute(client, biz, actions, user_id=None):
+    async def fake_execute(client, biz, actions, user_id=None, prior_results=None):
         out = []
         for a in actions:
-            log.append({"verb": a.get("type"), "user_id": user_id, "action": a})
+            pool = list(prior_results or []) + out
+            a = cos._resolve_action_references(a, pool)
+            log.append({"verb": a.get("type"), "user_id": user_id, "action": a,
+                        "prior": pool})
             if a.get("type") in fail_verbs:
                 out.append({"type": a.get("type"), "result": "Failed: nope",
                             "label": "✗ nope", "failed": True})
             else:
                 out.append({"type": a.get("type"), "result": "ok",
-                            "label": f"did {a.get('type')}"})
+                            "label": f"did {a.get('type')}",
+                            **dict(returns.get(a.get("type")) or {})})
         return out
 
     monkeypatch.setattr(cos, "_execute_actions", fake_execute)
     fake_execute.log = log
     fake_execute.fail_verbs = fail_verbs
+    fake_execute.returns = returns
     return fake_execute
 
 
@@ -348,3 +355,223 @@ def test_mission_verbs_are_registered_and_classified():
     assert ar.reversibility("advance_mission") == "C"
     assert ar.reversibility("propose_mission") == "A"
     assert ar.reversibility("abandon_mission") == "A"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 7. A step uses what the earlier steps found
+#
+# Before this, _run_until_gate dispatched each step with an EMPTY prior
+# list, so "@show_view.rows" resolved to the literal string and a plan
+# could not use its own findings. Which meant the plan Kevin actually
+# asked for — "get my unpaid invoices collected" — could only be written
+# by a proposer that already knew every contact id, i.e. not written.
+# ─────────────────────────────────────────────────────────────────────
+
+def _step(verb, title=None, for_each=None, approval=False, **action):
+    st = {"title": title or f"do {verb}", "action": {"type": verb, **action}}
+    if for_each:
+        st["for_each"] = for_each
+    if approval:
+        st["approval"] = True
+    return st
+
+
+def _roundtrip(db):
+    """Force the mission through JSON, the way a real turn does: the next
+    turn re-reads the row from Postgres, it does not inherit Python
+    objects. Also proves result_ref is JSONB-serializable."""
+    db.rows = json.loads(json.dumps(db.rows))
+
+
+def test_a_step_uses_what_an_earlier_step_found(db, executed):
+    # draft_email is class A, so both steps run without a gate and the
+    # reference is the only thing under test.
+    executed.returns["draft_email"] = {"draft_id": "d-9"}
+    _propose(db, [_step("draft_email"),
+                  _step("check_goals", draft_id="@draft_email.draft_id")])
+    _start(db)
+    assert any(p.get("draft_id") == "d-9" for p in executed.log[1]["prior"]), (
+        "step 2 must be DISPATCHED with step 1's result in its reference pool"
+    )
+    assert executed.log[1]["action"]["draft_id"] == "d-9", (
+        "and the pool must actually resolve to the id step 1 minted"
+    )
+
+
+def test_a_reference_survives_the_pause(db, executed):
+    """The load-bearing one. The reference is written in step 3 and the
+    value is produced in step 1, with an approval gate — and a whole
+    turn — in between."""
+    executed.returns["show_view"] = {"rows": [{"contact_id": "c-1"}]}
+    _propose(db, [_step("show_view"),
+                  _step("send_invoice"),                       # class C: gate
+                  _step("draft_email", contact_id="@show_view.rows")])
+    _start(db)
+    assert [e["verb"] for e in executed.log] == ["show_view"]
+    _roundtrip(db)          # a different turn, days later
+    executed.log.clear()
+    r = _advance(db)
+    assert r["status"] == "completed"
+    assert executed.log[-1]["action"]["contact_id"] == [{"contact_id": "c-1"}], (
+        "a reference must resolve off the PERSISTED row, not memory"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 8. A step repeats over a list — and only when that is safe
+# ─────────────────────────────────────────────────────────────────────
+
+def test_a_step_repeats_over_an_earlier_list(db, executed):
+    executed.returns["show_view"] = {"rows": [
+        {"contact_id": "c-1", "number": "INV-1"},
+        {"contact_id": "c-2", "number": "INV-2"},
+        {"contact_id": "c-3", "number": "INV-3"},
+    ]}
+    _propose(db, [
+        _step("show_view"),
+        _step("draft_email", for_each="@show_view.rows",
+              contact_id="{{item.contact_id}}",
+              reason="invoice {{item.number}} is past due"),
+    ])
+    r = _start(db)
+    assert r["status"] == "completed"
+    drafts = [e for e in executed.log if e["verb"] == "draft_email"]
+    assert len(drafts) == 3, "one draft per row"
+    assert [d["action"]["contact_id"] for d in drafts] == ["c-1", "c-2", "c-3"]
+    assert drafts[1]["action"]["reason"] == "invoice INV-2 is past due", (
+        "a placeholder inside a sentence interpolates"
+    )
+    assert r["steps"][1]["result_label"] == "3 of 3 done"
+
+
+def test_a_whole_placeholder_keeps_the_row_type(db, executed):
+    executed.returns["show_view"] = {"rows": [{"contact_id": "c-1", "amount": 250.0}]}
+    _propose(db, [_step("show_view"),
+                  _step("draft_email", for_each="@show_view.rows",
+                        contact_id="{{item.contact_id}}", amount="{{item.amount}}")])
+    _start(db)
+    draft = [e for e in executed.log if e["verb"] == "draft_email"][0]
+    assert draft["action"]["amount"] == 250.0, "not the string '250.0'"
+
+
+def test_a_repeated_send_is_refused_at_proposal(db, executed):
+    """The trust boundary. Fanning out an irreversible verb is Chief
+    multiplying a send by rows the practitioner has not seen."""
+    import action_registry as ar
+    assert ar.reversibility("send_sms") == "C", "premise"
+    r = _propose(db, [_step("show_view"),
+                      _step("send_sms", for_each="@show_view.rows")])
+    assert cos._action_failed(r)
+    assert "cleanly undoable" in r["result"]
+    assert not db.rows, "refused BEFORE a row exists"
+
+
+def test_a_repeated_bulk_verb_is_refused(db, executed):
+    r = _propose(db, [_step("show_view"),
+                      _step("bulk_approve", for_each="@show_view.rows")])
+    assert cos._action_failed(r)
+    assert "whole set" in r["result"]
+
+
+def test_for_each_must_point_at_an_earlier_step(db, executed):
+    r = _propose(db, [_step("draft_email", for_each=["c-1", "c-2"])])
+    assert cos._action_failed(r)
+    assert "earlier step" in r["result"]
+
+
+def test_a_repeated_read_is_fine(db, executed):
+    r = _propose(db, [_step("show_view"),
+                      _step("check_goals", for_each="@show_view.rows")])
+    assert not cos._action_failed(r), "reads carry no irreversibility"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 9. Fan-out edges: empty, oversized, unresolvable, partly failed —
+#    none of which may be reported as work done.
+# ─────────────────────────────────────────────────────────────────────
+
+def test_repeating_over_nothing_is_zero_work_not_work_done(db, executed):
+    executed.returns["show_view"] = {"rows": []}
+    _propose(db, [_step("show_view"),
+                  _step("draft_email", for_each="@show_view.rows")])
+    r = _start(db)
+    assert r["status"] == "completed"
+    assert not [e for e in executed.log if e["verb"] == "draft_email"], (
+        "nothing matched, so nothing may run"
+    )
+    assert "0 items" in r["steps"][1]["result_label"], (
+        "an empty fan-out states its emptiness — it never reads as done work"
+    )
+
+
+def test_an_oversized_fan_out_pauses_rather_than_running(db, executed):
+    executed.returns["show_view"] = {
+        "rows": [{"contact_id": f"c-{i}"} for i in range(cm.FANOUT_MAX + 1)]}
+    _propose(db, [_step("show_view"),
+                  _step("draft_email", for_each="@show_view.rows")])
+    r = _start(db)
+    assert r["status"] == "paused"
+    assert not [e for e in executed.log if e["verb"] == "draft_email"], (
+        "the cap holds BEFORE any of them run — not after 25"
+    )
+    assert str(cm.FANOUT_MAX) in r["result"]
+
+
+def test_an_unresolvable_reference_pauses_instead_of_iterating_a_string(db, executed):
+    """Guards a specific bug: an unresolved "@x.y" comes back as the
+    reference STRING, and a list-shaped loop over a string would fan out
+    once per character."""
+    _propose(db, [_step("check_goals"),
+                  _step("draft_email", for_each="@show_view.rows")])
+    r = _start(db)
+    assert r["status"] == "paused"
+    assert not [e for e in executed.log if e["verb"] == "draft_email"]
+    assert "didn't return it" in r["result"]
+
+
+def test_a_partly_failed_fan_out_pauses_with_the_count(db, executed):
+    executed.returns["show_view"] = {"rows": [{"contact_id": "c-1"},
+                                              {"contact_id": "c-2"}]}
+    executed.fail_verbs.add("draft_email")
+    _propose(db, [_step("show_view"),
+                  _step("draft_email", for_each="@show_view.rows"),
+                  _step("check_goals")])
+    r = _start(db)
+    assert r["status"] == "paused"
+    assert "2 of 2 failed" in list(db.rows.values())[0]["report"]
+    assert not [e for e in executed.log if e["verb"] == "check_goals"], (
+        "a failed step never lets the plan run on"
+    )
+
+
+def test_a_fan_out_result_is_referenceable_in_turn(db, executed):
+    executed.returns["show_view"] = {"rows": [{"contact_id": "c-1"}]}
+    executed.returns["draft_email"] = {"draft_id": "d-1"}
+    _propose(db, [_step("show_view"),
+                  _step("draft_email", for_each="@show_view.rows",
+                        contact_id="{{item.contact_id}}"),
+                  _step("check_goals", took="@draft_email.count")])
+    _start(db)
+    assert executed.log[-1]["action"]["took"] == 1
+
+
+def test_a_result_ref_stays_small(db, executed):
+    """The row rides _gather_context into every turn — a step that
+    returned a novel must not travel with it."""
+    executed.returns["show_view"] = {"rows": [{"blob": "x" * 5000}]}
+    _propose(db, [_step("show_view"), _step("check_goals")])
+    _start(db)
+    ref = list(db.rows.values())[0]["steps"][0]["result_ref"]
+    assert len(json.dumps(ref)) <= cm.MAX_REF_CHARS
+    assert ref.get("type") == "show_view", "the id-shaped keys survive the trim"
+
+
+def test_the_prompt_documents_references_and_fan_out():
+    """Parity ratchet: a capability the prompt does not describe ships
+    nothing (the-prompt-is-the-capability-surface class)."""
+    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    flat = src.replace("{{", "{").replace(" ", "")
+    assert '"for_each":"@show_view.rows"' in flat, "fan-out undocumented"
+    assert "@create_invoice.invoice_id" in src, "reference syntax undocumented"
+    assert "{{item.contact_id}}" in flat, "the row placeholder undocumented"
+    assert "chief_missions.FANOUT_MAX" in src, "the cap is stated, not guessed"

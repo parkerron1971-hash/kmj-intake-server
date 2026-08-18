@@ -28,6 +28,25 @@ The trust story, which is the design:
     verbs themselves (no recursion) minus pure window dressing
     (set_chat_window / navigate / close_view). Reads are welcome —
     a step can look before the next step leaps.
+  * A step USES WHAT THE EARLIER STEPS FOUND. Every completed step
+    persists a trimmed `result_ref` into the row, and later steps
+    resolve "@show_view.rows" against them through
+    chief_of_staff's own resolver — the same syntax a same-turn chain
+    uses, one implementation, no drift. Persisted rather than held in
+    memory because a plan that pauses overnight must resume knowing
+    what it learned yesterday.
+  * A step may REPEAT OVER a list an earlier step returned:
+    "for_each": "@show_view.rows" runs the step once per row,
+    with {{item.contact_id}} filled in from that row. This is what
+    turns "get my unpaid invoices collected" from a plan Chief could
+    describe into one it can run — the proposer no longer has to know
+    every contact id before the practitioner has said yes.
+    Fan-out is deliberately narrow: class A only (cleanly undoable),
+    never a bulk verb, capped at FANOUT_MAX, refused AT PROPOSAL TIME.
+    A batch of sends stays what it already was — one bulk verb behind
+    its own gate (bulk_approve), reviewed as one decision. Multiplying
+    an irreversible step by data the practitioner has not seen is
+    exactly the thing this engine must not invent.
   * A failed step pauses the mission and says so. It never silently
     skips, and it never claims the plan finished (empty states that
     lie, mission edition).
@@ -42,6 +61,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -50,6 +70,13 @@ import action_registry
 logger = logging.getLogger("chief")
 
 MAX_STEPS = 12
+# How many rows one for_each step may repeat over. A plan that quietly
+# becomes 400 actions is not a plan, and the practitioner approved a
+# STEP LIST — the size of what each step turns into has to stay legible.
+FANOUT_MAX = 25
+# Ceiling on one step's persisted result_ref. The row must stay small
+# enough to ride _gather_context into every turn.
+MAX_REF_CHARS = 20000
 # How many missions may be in flight (non-terminal) per business — a
 # planner that queues 40 plans is noise wearing ambition.
 MAX_OPEN_MISSIONS = 5
@@ -88,6 +115,139 @@ def _step_gate(action: Dict[str, Any], explicit: bool) -> bool:
     return action_registry.reversibility(verb) == "C"
 
 
+# ─── References: what a step may know about the steps before it ──────
+
+_ITEM_RE = re.compile(r"\{\{item(?:\.([A-Za-z0-9_]+))?\}\}")
+
+
+def _referenceable(result: Any) -> Dict[str, Any]:
+    """The part of a step's result that LATER steps may reference.
+
+    Persisted into the mission row, so a plan that pauses overnight can
+    still resolve "@show_view.rows" when it resumes days later.
+    Deliberately small: ids, counts, and the row lists a for_each
+    iterates — never the whole handler payload, which carries rendered
+    UI and can be enormous.
+    """
+    if not isinstance(result, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for k, v in result.items():
+        if k in ("frontend_event", "nav", "toast", "speak", "proposals"):
+            continue
+        if v is None or isinstance(v, (int, float, bool)):
+            out[k] = v
+        elif isinstance(v, str):
+            if len(v) <= 300:
+                out[k] = v
+        elif isinstance(v, list):
+            # One PAST the cap on purpose: _expand_step has to be able to
+            # SEE that a list is too long. Trimming to exactly FANOUT_MAX
+            # here would turn "26 overdue invoices" into 25 silent drafts
+            # and a mission that reported success.
+            rows: List[Any] = []
+            for item in v[:FANOUT_MAX + 1]:
+                if isinstance(item, dict):
+                    rows.append({ik: iv for ik, iv in item.items()
+                                 if isinstance(iv, (int, float, bool))
+                                 or (isinstance(iv, str) and len(iv) <= 300)})
+                elif isinstance(item, (str, int, float, bool)):
+                    rows.append(item)
+            out[k] = rows
+    nav = result.get("nav")
+    if isinstance(nav, dict):
+        # _resolve_action_references falls back to nav.* — older handlers
+        # stash ids there, so a reference to one must still resolve.
+        out["nav"] = {k: v for k, v in nav.items()
+                      if isinstance(v, (str, int, float, bool))}
+    # Last guard: a result_ref that would bloat the row loses its lists
+    # rather than the ids, which are the part a later step needs most.
+    try:
+        if len(json.dumps(out, default=str)) > MAX_REF_CHARS:
+            out = {k: v for k, v in out.items() if not isinstance(v, list)}
+            out["_trimmed"] = True
+    except (TypeError, ValueError):
+        out = {"type": result.get("type")}
+    return out
+
+
+def _prior_results(steps: List[Dict[str, Any]], upto: int) -> List[Dict[str, Any]]:
+    """What the steps before `upto` returned, oldest first — read off the
+    PERSISTED row, not from memory, so a resumed mission still knows what
+    it found before it paused."""
+    out: List[Dict[str, Any]] = []
+    for s in steps[:upto]:
+        ref = s.get("result_ref")
+        if isinstance(ref, dict) and ref:
+            out.append(ref)
+    return out
+
+
+def _resolve_ref(ref: str, prior: List[Dict[str, Any]]) -> Any:
+    """Resolve one "@type.field" through chief_of_staff's OWN resolver.
+
+    One implementation of the reference syntax: a mission step and a
+    same-turn action chain can never disagree about what
+    "@create_invoice.invoice_id" means. An unresolved reference comes
+    back as the reference string itself — the caller checks for that.
+    """
+    probe = _cos()._resolve_action_references(
+        {"type": "_mission_ref_probe", "value": ref}, prior)
+    return probe.get("value")
+
+
+def _fill_template(node: Any, item: Any) -> Any:
+    """Substitute {{item}} / {{item.field}} through an action template.
+
+    A placeholder that IS the whole string yields the raw value, so a
+    number stays a number and a missing field stays None (which the
+    handler's own validation then reports) rather than the text "None".
+    """
+    if isinstance(node, dict):
+        return {k: _fill_template(v, item) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_fill_template(v, item) for v in node]
+    if not isinstance(node, str):
+        return node
+    whole = _ITEM_RE.fullmatch(node.strip())
+    if whole:
+        field = whole.group(1)
+        if field is None:
+            return item
+        return item.get(field) if isinstance(item, dict) else None
+
+    def _sub(m):
+        field = m.group(1)
+        v = item if field is None else (
+            item.get(field) if isinstance(item, dict) else None)
+        return "" if v is None else str(v)
+
+    return _ITEM_RE.sub(_sub, node)
+
+
+def _expand_step(step: Dict[str, Any],
+                 prior: List[Dict[str, Any]]) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """(error, actions) for one step: one action normally, N for a
+    for_each step. An empty list is NOT an error — it is zero actions,
+    which the caller reports as zero work rather than as work done."""
+    ref = step.get("for_each")
+    if not ref:
+        return None, [dict(step["action"])]
+    rows = _resolve_ref(str(ref), prior)
+    if rows is None or rows == ref:
+        return (f"couldn't read {ref} — the earlier step didn't return it"), []
+    if not isinstance(rows, list):
+        return (f"{ref} isn't a list, so there's nothing to repeat over"), []
+    if len(rows) > FANOUT_MAX:
+        # "more than" rather than a count: the stored list is capped just
+        # past FANOUT_MAX, so the exact number is not knowable here — and
+        # a made-up count would be worse than an honest bound.
+        return (f"{ref} has more than {FANOUT_MAX} rows, and one step repeats "
+                f"at most {FANOUT_MAX} times — narrow the step that produced "
+                f"it (a tighter filter) or split the plan"), []
+    return None, [_fill_template(step["action"], row) for row in rows]
+
+
 def validate_steps(raw_steps: Any) -> Tuple[Optional[str], List[Dict[str, Any]]]:
     """Normalize the proposed steps; return (error, steps). Every verb
     must exist, be permitted, and carry its gate flag resolved here so
@@ -114,13 +274,37 @@ def validate_steps(raw_steps: Any) -> Tuple[Optional[str], List[Dict[str, Any]]]
             # Fail closed — an unregistered verb has no classification
             # and therefore no place in a semi-autonomous plan.
             return f"step {i + 1}: '{verb}' is not classified — refused", []
+
+        # A repeated step is Chief multiplying one action by data the
+        # practitioner has not seen yet. That is only safe while each
+        # repetition is cleanly undoable, so the class is checked HERE,
+        # at proposal time, and a plan that wants a batch of sends is
+        # refused before a row exists rather than caught mid-run.
+        for_each = s.get("for_each")
+        if for_each is not None:
+            if (not isinstance(for_each, str) or not for_each.startswith("@")
+                    or "." not in for_each):
+                return (f"step {i + 1}: for_each must point at an earlier step's "
+                        f"list, like '@show_view.rows'"), []
+            entry = action_registry.classification(verb) or {}
+            if entry.get("bulk"):
+                return (f"step {i + 1}: '{verb}' already acts on a whole set — "
+                        f"repeating it is not what you want"), []
+            if eff == action_registry.WRITE and entry.get("reversibility") != "A":
+                return (f"step {i + 1}: '{verb}' is class "
+                        f"{entry.get('reversibility')}, and a repeated step has to "
+                        f"be cleanly undoable. Send a batch with a bulk verb so the "
+                        f"practitioner approves it as one decision"), []
+
         out.append({
             "id": f"step-{i + 1}",
             "title": (s.get("title") or verb.replace("_", " ")).strip()[:120],
             "action": action,
+            "for_each": for_each,
             "gate": _step_gate(action, bool(s.get("approval"))),
             "status": "pending",
             "result_label": "",
+            "result_ref": None,
         })
     return None, out
 
@@ -156,6 +340,20 @@ def _speak(mission: Dict[str, Any]) -> str:
     return "; ".join(lines[:12])
 
 
+async def _pause_failed(client, mission: Dict[str, Any], step: Dict[str, Any],
+                        i: int, detail: str) -> Dict[str, Any]:
+    """Stop the plan and SAY WHY. Never a silent skip, never a claimed
+    completion — the report names the step and what went wrong."""
+    step["status"] = "failed"
+    step["result_label"] = str(detail)[:200]
+    mission["status"] = "paused"
+    mission["current_step"] = i
+    mission["report"] = (f"Paused at step {i + 1} ({step['title']}): "
+                         f"{step['result_label'] or 'the action failed'}")
+    await _save(client, mission)
+    return mission
+
+
 async def _run_until_gate(client, biz: Dict[str, Any],
                           mission: Dict[str, Any]) -> Dict[str, Any]:
     """Execute pending steps in order until a gate, a failure, or the
@@ -175,20 +373,59 @@ async def _run_until_gate(client, biz: Dict[str, Any],
             await _save(client, mission)
             return mission
         # awaiting steps reach here only via advance (gate lifted).
-        taken = await cos._execute_actions(
-            client, biz, [dict(step["action"])],
-            user_id=cos._TURN_USER_ID.get() or None)
-        result = taken[0] if taken else None
-        label = (result or {}).get("label") or (result or {}).get("result") or ""
-        step["result_label"] = str(label)[:200]
-        if result is None or cos._action_failed(result):
-            step["status"] = "failed"
-            mission["status"] = "paused"
+
+        # What the earlier steps found, off the persisted row — so a
+        # mission resumed days later still resolves its own references.
+        prior = _prior_results(steps, i)
+        err, actions = _expand_step(step, prior)
+        if err:
+            return await _pause_failed(client, mission, step, i, err)
+
+        if not actions:
+            # A for_each over an empty list. Nothing to do is not a
+            # failure — but it is never reported as work done either.
+            step["status"] = "done"
+            step["result_label"] = "nothing matched — 0 items"
+            step["result_ref"] = {"type": step["action"].get("type"),
+                                  "count": 0, "results": []}
+            i += 1
             mission["current_step"] = i
-            mission["report"] = (f"Paused at step {i + 1} ({step['title']}): "
-                                 f"{step['result_label'] or 'the action failed'}")
             await _save(client, mission)
-            return mission
+            continue
+
+        taken = await cos._execute_actions(
+            client, biz, actions,
+            user_id=cos._TURN_USER_ID.get() or None,
+            prior_results=prior)
+        results = [r for r in (taken or []) if isinstance(r, dict)]
+        failed = [r for r in results if cos._action_failed(r)]
+        # A handler that returned nothing at all is a failure too — the
+        # count has to match what we dispatched.
+        dropped = len(actions) - len(results)
+        fanned = bool(step.get("for_each"))
+
+        if fanned:
+            ok = [r for r in results if not cos._action_failed(r)]
+            step["result_label"] = f"{len(ok)} of {len(actions)} done"
+            step["result_ref"] = {
+                "type": step["action"].get("type"),
+                "count": len(ok),
+                # Referenceable in turn: a later step can repeat over
+                # what this one produced.
+                "results": [_referenceable(r) for r in ok],
+            }
+        else:
+            first = results[0] if results else None
+            label = (first or {}).get("label") or (first or {}).get("result") or ""
+            step["result_label"] = str(label)[:200]
+            step["result_ref"] = _referenceable(first)
+
+        if failed or dropped:
+            detail = (f"{len(failed) + dropped} of {len(actions)} failed"
+                      if fanned else
+                      (step["result_label"] or "the action failed"))
+            return await _pause_failed(client, mission, step, i, detail)
+
         step["status"] = "done"
         i += 1
         mission["current_step"] = i
