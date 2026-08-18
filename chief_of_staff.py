@@ -3697,6 +3697,25 @@ async def handle_show_revenue(client, biz, action) -> Dict:
 
 _SHOW_VIEW_LIMIT = 25
 
+# The FORMS a view can be drawn in. Until 2026-08-18 there was only one
+# — a table — so a practitioner asking for "a timeline of my invoices"
+# got a list. That was not Chief hesitating between options; a list was
+# the only thing this handler could produce, so every named form
+# collapsed into it. The rows are unchanged and still authored here:
+# `form` only chooses how the client draws them, which keeps the
+# guarantee that the model never touches a cell.
+_SHOW_VIEW_FORMS = {"list", "timeline"}
+
+# The DB column behind each view's date column — what a timeline is laid
+# along. Kept beside the specs so a new view declares its axis in the
+# same place it declares its columns; a view with no entry simply cannot
+# be drawn as a timeline, and says so.
+_SHOW_VIEW_DATE_COLUMNS = {
+    "invoices": "due_date",
+    "contacts": "last_interaction",
+    "sessions": "scheduled_for",
+}
+
 _SHOW_VIEW_SPECS: Dict[str, Dict[str, Any]] = {
     "invoices": {
         "title": "Invoices",
@@ -3838,6 +3857,26 @@ async def handle_show_view(client, biz, action) -> Dict:
     filt = (action.get("filter") or spec["default_filter"]).strip().lower()
     if filt not in spec["filters"]:
         filt = spec["default_filter"]
+
+    # THE FORM the practitioner asked for. Until now this handler had
+    # exactly one shape — a table — so "show me a timeline of my
+    # invoices" came back as a list. Not Chief being unsure: a list was
+    # the only thing it could build, so every named form degraded to it.
+    # The rows are identical and still authored here; `form` chooses how
+    # the client draws them.
+    form = (action.get("form") or "list").strip().lower()
+    if form not in _SHOW_VIEW_FORMS:
+        return _fail("show_view",
+                     f"unknown form '{form}' — valid forms: "
+                     + ", ".join(sorted(_SHOW_VIEW_FORMS)))
+    # A timeline is drawn along a date axis, so it needs one. Say so
+    # rather than quietly serving a list the practitioner did not ask
+    # for — a silent substitution is what this whole change is fixing.
+    date_key = next((c["key"] for c in spec["columns"] if c["kind"] == "date"), None)
+    if form == "timeline" and (not date_key or view not in _SHOW_VIEW_DATE_COLUMNS):
+        return _fail("show_view",
+                     f"'{view}' has no date to lay a timeline along — "
+                     f"offer the list instead and say why")
     now = datetime.now(timezone.utc)
     clause = spec["filters"][filt].format(
         today=now.date().isoformat(),
@@ -3847,8 +3886,13 @@ async def handle_show_view(client, biz, action) -> Dict:
 
     # Every view name doubles as its table name — a spec key IS the
     # PostgREST path, so adding a view means adding a spec, nothing else.
+    # "from my first invoice to my most recent" is a chronological
+    # question. The list default (invoices order by due date) is a
+    # different sort and would draw the timeline out of sequence.
+    order = (f"{_SHOW_VIEW_DATE_COLUMNS[view]}.asc.nullslast"
+             if form == "timeline" and view in _SHOW_VIEW_DATE_COLUMNS else spec["order"])
     q = (f"/{view}?business_id=eq.{biz_id}"
-         f"&select={spec['select']}&order={spec['order']}&limit={_SHOW_VIEW_LIMIT}")
+         f"&select={spec['select']}&order={order}&limit={_SHOW_VIEW_LIMIT}")
     if clause:
         q += f"&{clause}"
     try:
@@ -3904,6 +3948,8 @@ async def handle_show_view(client, biz, action) -> Dict:
         "view": view,
         "filter": filt,
         "title": title,
+        "form": form,
+        "date_key": date_key,
         "columns": spec["columns"],
         "rows": rows,
         "summary": {"count": len(rows), **({"total": total} if total is not None else {})},
@@ -15647,7 +15693,8 @@ ACTIONS — NAVIGATION + MEMORY:
   [ACTION:{{"type":"show_revenue"}}]     — opens GROW → Revenue (the canonical Revenue Analytics surface: Allocator, Expenses, planned-vs-actual, Export, Send to Accountant).
 MID-TURN LOOKUPS — you can READ while you think. When you need data you do not see in this context (a list, a balance, a contact's history, module entries, campaign state), CALL the matching tool mid-reply instead of saying you don't have it loaded — the result arrives and you keep writing with real numbers. These tools are READS ONLY and invisible to the practitioner; anything that changes state still goes through [ACTION:] tags. Look up first, then speak; never guess a figure you could have read, and never claim data is unavailable before trying the tool.
 
-  [ACTION:{{"type":"show_view","view":"invoices|contacts|sessions|products","filter":"..."}}]  — SHOW A LIST RIGHT HERE IN THE CHAT. Fetches the actual rows and renders them as a table card under your reply — the practitioner sees every line item without leaving the conversation. Filters: invoices → open (default) | overdue | draft | paid | all; contacts → all (default) | leads | active; sessions → upcoming (default) | all; products → all.
+  [ACTION:{{"type":"show_view","view":"invoices|contacts|sessions|products","filter":"...","form":"list|timeline"}}]  — SHOW A LIST RIGHT HERE IN THE CHAT. Fetches the actual rows and renders them as a table card under your reply — the practitioner sees every line item without leaving the conversation. Filters: invoices → open (default) | overdue | draft | paid | all; contacts → all (default) | leads | active; sessions → upcoming (default) | all; products → all.
+  FORM — "form" chooses how it is DRAWN: "list" (default, a table) or "timeline" (the rows laid along their dates, oldest first). WHEN THE PRACTITIONER NAMES A FORM, USE THAT FORM. "Show me a timeline of my invoices", "chart it", "lay it out over time" → form:"timeline". Never answer a named form with the default one and never describe the shape in words instead — if they asked to SEE it a certain way, that is the request, not a preference to weigh. Timeline needs a date, so it is available for invoices, contacts and sessions; products have none, and if they ask for one there, say so plainly and offer the list.
     • WHEN: any time the practitioner asks to SEE, LIST, or BREAK DOWN their data — "share the invoices I have", "who owes what?", "show me my leads", "what sessions are coming up?". Emit the tag and speak naturally about what the card shows; the rows arrive from the database, so never retype them all into your prose.
     • NEVER say "I don't have the itemized breakdown" or offer to merely open a tab when this action can show the rows here. Navigation (show_revenue, navigate) is for when they want the full working SCREEN; show_view is for when they want to SEE the data in the flow of the conversation.
   [ACTION:{{"type":"close_view"}}]  — TAKE THE VIEW OFF THE SCREEN. When the practitioner asks to close/dismiss/clear what you just showed ("close that", "close it out", "take that down", "you can close the invoices"), emit this and acknowledge briefly. Safe when nothing is open. This closes the DATA VIEW only — closing the chat window itself is set_chat_window.

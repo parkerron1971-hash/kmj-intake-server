@@ -259,3 +259,81 @@ def test_the_prompt_documents_the_verb():
         "show_view is not documented in the system prompt"
     assert "never answer \"I don't have the breakdown\"" in src or \
            "NEVER say \"I don't have the itemized breakdown\"" in src
+
+
+# ─────────────────────────────────────────────────────────────────────
+# The FORM the practitioner asked for (2026-08-18)
+#
+# Kevin: "I specifically asked, can you create a timeline from my first
+# invoice to my most recent invoice ... it brought it back in a list
+# which wasn't bad but it just didn't do the web form that I asked."
+#
+# That was not Chief weighing options and picking the safe one. A table
+# was the only shape this handler could produce, so every named form
+# collapsed into it. `form` gives the request somewhere to land.
+# ─────────────────────────────────────────────────────────────────────
+
+def test_a_list_is_still_the_default(db):
+    r = _show({"type": "show_view", "view": "invoices"}, db)
+    assert r["form"] == "list", "no form named = the table everyone already gets"
+
+
+def test_a_requested_timeline_comes_back_as_a_timeline(db):
+    r = _show({"type": "show_view", "view": "invoices", "form": "timeline"}, db)
+    assert r["form"] == "timeline"
+    # The client needs to know which column is the axis, and it must be
+    # a column the reader can actually see — no hidden sort key.
+    assert r["date_key"] == "due"
+    assert any(c["key"] == r["date_key"] and c["kind"] == "date" for c in r["columns"])
+
+
+def test_a_timeline_is_ordered_chronologically_not_by_the_list_default(db):
+    """"From my first to my most recent" is a chronological question, and
+    a list's default order is usually something else entirely.
+
+    Deliberately tested on CONTACTS, not invoices: the invoices list is
+    already ordered by due_date.asc, so asserting the timeline order
+    there would pass whether or not the override existed — a test that
+    cannot fail is not a test."""
+    db.queries.clear()
+    _show({"type": "show_view", "view": "contacts"}, db)
+    assert "order=health_score.desc" in db.queries[-1][1], "the list default"
+
+    db.queries.clear()
+    _show({"type": "show_view", "view": "contacts", "form": "timeline"}, db)
+    q = db.queries[-1][1]
+    assert "order=last_interaction.asc" in q, q
+    assert "health_score" not in q.split("order=")[1], "the list order must be replaced, not appended"
+
+
+def test_the_rows_are_identical_whatever_the_form(db):
+    """The form is a drawing instruction. It must never change what the
+    server authored, or the shape becomes a second source of truth."""
+    as_list = _show({"type": "show_view", "view": "invoices"}, db)
+    as_time = _show({"type": "show_view", "view": "invoices", "form": "timeline"}, db)
+    assert as_list["columns"] == as_time["columns"]
+    assert sorted(r["id"] for r in as_list["rows"]) == sorted(r["id"] for r in as_time["rows"])
+    assert as_list["summary"] == as_time["summary"]
+
+
+def test_an_unknown_form_fails_naming_the_valid_ones(db):
+    r = _show({"type": "show_view", "view": "invoices", "form": "hologram"}, db)
+    assert r.get("success") is False or "error" in r or "failed" in str(r).lower()
+    assert "timeline" in str(r) and "list" in str(r)
+
+
+def test_a_view_with_no_date_refuses_the_timeline_instead_of_serving_a_list(db):
+    """Products have no date to lay a timeline along. Silently serving a
+    table is exactly the substitution this change exists to stop."""
+    r = _show({"type": "show_view", "view": "products", "form": "timeline"}, db)
+    assert r.get("form") != "timeline"
+    assert "timeline" in str(r).lower()
+
+
+def test_the_prompt_documents_the_form_and_forbids_substituting(db):
+    """The prompt is the capability surface: a parameter the prompt never
+    mentions is a parameter the model never sends."""
+    import inspect
+    src = inspect.getsource(cos)
+    assert '"form":"list|timeline"' in src
+    assert "WHEN THE PRACTITIONER NAMES A FORM, USE THAT FORM" in src
