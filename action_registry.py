@@ -176,6 +176,12 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                               "sessions / products) under the caller's own JWT and returns "
                               "it as typed rows for an in-chat table card; RLS is the gate, "
                               "the handler adds no reach of its own"),
+    "show_plan":          _ui("draws an action plan Chief itself authored onto the "
+                              "practitioner's screen. UI, not read: it fetches nothing "
+                              "and returns only what the model supplied, so an outside "
+                              "agent calling it would be pushing a card at someone "
+                              "rather than reading anything. Stamped authored:'chief' "
+                              "so the surface can say whose words they are"),
     "site_health":         _r("reads site + booking config and reports"),
     "what_undo":           _r("reports what undo_last WOULD reverse. Pure read — undo is "
                               "frightening in proportion to how vague it is"),
