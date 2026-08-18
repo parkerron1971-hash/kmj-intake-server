@@ -339,5 +339,102 @@ def test_the_prompt_documents_the_form_and_forbids_substituting(db):
     mentions is a parameter the model never sends."""
     import inspect
     src = inspect.getsource(cos)
-    assert '"form":"list|timeline"' in src
+    # The exact option list is owned by the ratchet below, which derives
+    # it from _SHOW_VIEW_FORMS — hardcoding it here just breaks every
+    # time a form is added, which is the opposite of what we want.
+    assert '"form":"' in src
     assert "WHEN THE PRACTITIONER NAMES A FORM, USE THAT FORM" in src
+    # And the honest-refusal rule for shapes we cannot draw at all.
+    assert "never silently substitute" in src
+
+
+# ─────────────────────────────────────────────────────────────────────
+# THE RATCHET (2026-08-18)
+#
+# Kevin: "if a request comes in to build a web look timeline or any type
+# of form ... how can we make sure Chief can produce that with no
+# problems?"
+#
+# Adding forms one at a time is how the first gap happened. The answer
+# is not "add chart next" — it is that a form the handler accepts but
+# the prompt never mentions is a form the model never sends, and a form
+# the prompt names but the handler rejects is a promise Chief cannot
+# keep. Neither can ship again without this failing.
+# ─────────────────────────────────────────────────────────────────────
+
+def test_every_form_the_handler_accepts_is_documented_in_the_prompt():
+    """The prompt IS the capability surface. A form missing from it is
+    dead code the model will never reach for."""
+    import inspect
+    src = inspect.getsource(cos)
+    prompt_start = src.index('"type":"show_view"')
+    prompt = src[prompt_start:prompt_start + 4000]
+    for form in cos._SHOW_VIEW_FORMS:
+        assert f'"{form}"' in prompt, (
+            f"form '{form}' is accepted by handle_show_view but never named in the "
+            f"prompt — the model cannot ask for what it has not been told exists"
+        )
+
+
+def test_every_form_the_prompt_promises_is_actually_accepted():
+    """The reverse drift: a shape named in the prompt that the handler
+    rejects is Chief promising something it cannot draw."""
+    import inspect, re
+    src = inspect.getsource(cos)
+    m = re.search(r'"form":"([a-z|]+)"', src)
+    assert m, "the action example must spell out the form options"
+    promised = set(m.group(1).split("|"))
+    assert promised <= cos._SHOW_VIEW_FORMS, (
+        f"prompt promises {promised - cos._SHOW_VIEW_FORMS} which handle_show_view refuses"
+    )
+    assert promised == cos._SHOW_VIEW_FORMS, (
+        f"handler accepts {cos._SHOW_VIEW_FORMS - promised} that the example never offers"
+    )
+
+
+def test_every_view_can_be_charted():
+    """A grouping default per view, so "chart my X" always has an answer
+    instead of depending on which columns a spec happens to have."""
+    for view in cos._SHOW_VIEW_SPECS:
+        assert view in cos._SHOW_VIEW_GROUP_DEFAULTS, f"{view} has no chart grouping"
+        default = cos._SHOW_VIEW_GROUP_DEFAULTS[view]
+        text_cols = [c["key"] for c in cos._SHOW_VIEW_SPECS[view]["columns"] if c["kind"] == "text"]
+        assert default in text_cols, f"{view} groups by '{default}', not one of its own columns"
+
+
+def test_a_chart_groups_the_same_rows_it_would_have_listed(db):
+    r = _show({"type": "show_view", "view": "invoices", "form": "chart"}, db)
+    assert r["form"] == "chart"
+    assert r["group_by"] == "status"
+    assert r["measure"] == "amount"
+    labels = {b["label"] for b in r["series"]}
+    assert labels == {"overdue", "sent", "viewed"}
+    # Derived from the authored rows, not a second query — so the bars
+    # and the table can never disagree.
+    assert sum(b["value"] for b in r["series"]) == r["summary"]["total"]
+    assert sum(b["count"] for b in r["series"]) == r["summary"]["count"]
+
+
+def test_a_chart_can_be_grouped_by_a_named_column(db):
+    r = _show({"type": "show_view", "view": "invoices", "form": "chart", "group_by": "client"}, db)
+    assert r["group_by"] == "client"
+    assert {b["label"] for b in r["series"]} == {"Marcus Webb", "Sandra Ellis", "Dana Cole"}
+
+
+def test_charting_by_a_column_the_view_does_not_have_fails_naming_the_options(db):
+    r = _show({"type": "show_view", "view": "invoices", "form": "chart", "group_by": "mood"}, db)
+    assert "mood" in str(r)
+    assert "client" in str(r) and "status" in str(r)
+
+
+def test_bars_are_ordered_biggest_first(db):
+    r = _show({"type": "show_view", "view": "invoices", "form": "chart", "group_by": "client"}, db)
+    values = [b["value"] for b in r["series"]]
+    assert values == sorted(values, reverse=True), values
+
+
+def test_a_list_carries_no_chart_payload(db):
+    """The form decides what is sent. A table dragging a series along
+    invites a client to draw something nobody asked for."""
+    r = _show({"type": "show_view", "view": "invoices"}, db)
+    assert "series" not in r and "group_by" not in r

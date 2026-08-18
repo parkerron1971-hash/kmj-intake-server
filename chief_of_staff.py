@@ -3704,7 +3704,18 @@ _SHOW_VIEW_LIMIT = 25
 # collapsed into it. The rows are unchanged and still authored here:
 # `form` only chooses how the client draws them, which keeps the
 # guarantee that the model never touches a cell.
-_SHOW_VIEW_FORMS = {"list", "timeline"}
+_SHOW_VIEW_FORMS = {"list", "timeline", "chart"}
+
+# Which column each view is grouped by when drawn as a chart. Declared
+# per spec rather than guessed, so "chart my invoices" has an obvious
+# answer instead of the handler picking a column by heuristic and being
+# subtly wrong about what the practitioner meant.
+_SHOW_VIEW_GROUP_DEFAULTS = {
+    "invoices": "status",
+    "contacts": "status",
+    "sessions": "status",
+    "products": "type",
+}
 
 # The DB column behind each view's date column — what a timeline is laid
 # along. Kept beside the specs so a new view declares its axis in the
@@ -3884,6 +3895,18 @@ async def handle_show_view(client, biz, action) -> Dict:
         return _fail("show_view",
                      f"'{view}' has no date to lay a timeline along — "
                      f"offer the list instead and say why")
+
+    # A chart groups the rows by one column. The practitioner may name
+    # it ("chart my invoices by client"); otherwise the spec's default
+    # applies. Validated against the view's own columns, so a chart can
+    # only ever be grouped by something the table also shows.
+    group_by = (action.get("group_by") or _SHOW_VIEW_GROUP_DEFAULTS.get(view) or "").strip().lower()
+    if form == "chart":
+        groupable = [c["key"] for c in spec["columns"] if c["kind"] == "text"]
+        if group_by not in groupable:
+            return _fail("show_view",
+                         f"can't group '{view}' by '{group_by}' — "
+                         f"groupable columns: {', '.join(groupable)}")
     now = datetime.now(timezone.utc)
     clause = spec["filters"][filt].format(
         today=now.date().isoformat(),
@@ -3914,6 +3937,22 @@ async def handle_show_view(client, biz, action) -> Dict:
     rows = [_show_view_row(view, r) for r in raw_rows]
     money_key = next((c["key"] for c in spec["columns"] if c["kind"] == "money"), None)
     total = sum(r.get(money_key) or 0 for r in rows) if money_key else None
+
+    # The chart is derived from the rows THIS handler just authored, not
+    # from a second query. That is the point: a bar and the table under
+    # it can never disagree about the same numbers, because they are the
+    # same numbers. Money if the view has any, otherwise a count.
+    series = None
+    measure = None
+    if form == "chart":
+        measure = "amount" if money_key else "count"
+        buckets: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            label = str(r.get(group_by) or "—")
+            b = buckets.setdefault(label, {"label": label, "value": 0.0, "count": 0})
+            b["count"] += 1
+            b["value"] += float(r.get(money_key) or 0) if money_key else 1
+        series = sorted(buckets.values(), key=lambda b: b["value"], reverse=True)
 
     title = spec["title"]
     filt_label = "" if filt == "all" else f" ({filt})"
@@ -3957,6 +3996,8 @@ async def handle_show_view(client, biz, action) -> Dict:
         "title": title,
         "form": form,
         "date_key": date_key,
+        **({"group_by": group_by, "measure": measure, "series": series}
+           if form == "chart" else {}),
         "columns": spec["columns"],
         "rows": rows,
         "summary": {"count": len(rows), **({"total": total} if total is not None else {})},
@@ -15710,8 +15751,12 @@ ACTIONS — NAVIGATION + MEMORY:
   [ACTION:{{"type":"show_revenue"}}]     — opens GROW → Revenue (the canonical Revenue Analytics surface: Allocator, Expenses, planned-vs-actual, Export, Send to Accountant).
 MID-TURN LOOKUPS — you can READ while you think. When you need data you do not see in this context (a list, a balance, a contact's history, module entries, campaign state), CALL the matching tool mid-reply instead of saying you don't have it loaded — the result arrives and you keep writing with real numbers. These tools are READS ONLY and invisible to the practitioner; anything that changes state still goes through [ACTION:] tags. Look up first, then speak; never guess a figure you could have read, and never claim data is unavailable before trying the tool.
 
-  [ACTION:{{"type":"show_view","view":"invoices|contacts|sessions|products","filter":"...","form":"list|timeline"}}]  — SHOW A LIST RIGHT HERE IN THE CHAT. Fetches the actual rows and renders them as a table card under your reply — the practitioner sees every line item without leaving the conversation. Filters: invoices → open (default) | overdue | draft | paid | all; contacts → all (default) | leads | active; sessions → upcoming (default) | all; products → all.
-  FORM — "form" chooses how it is DRAWN: "list" (default, a table) or "timeline" (the rows laid along their dates, oldest first). WHEN THE PRACTITIONER NAMES A FORM, USE THAT FORM. "Show me a timeline of my invoices", "chart it", "lay it out over time" → form:"timeline". Never answer a named form with the default one and never describe the shape in words instead — if they asked to SEE it a certain way, that is the request, not a preference to weigh. Timeline needs a date, so it is available for invoices, contacts and sessions; products have none, and if they ask for one there, say so plainly and offer the list.
+  [ACTION:{{"type":"show_view","view":"invoices|contacts|sessions|products","filter":"...","form":"list|timeline|chart","group_by":"..."}}]  — SHOW A LIST RIGHT HERE IN THE CHAT. Fetches the actual rows and renders them as a table card under your reply — the practitioner sees every line item without leaving the conversation. Filters: invoices → open (default) | overdue | draft | paid | all; contacts → all (default) | leads | active; sessions → upcoming (default) | all; products → all.
+  FORM — "form" chooses how it is DRAWN. WHEN THE PRACTITIONER NAMES A FORM, USE THAT FORM. If they asked to SEE it a certain way that IS the request, not a preference to weigh: never answer a named form with the default one, and never describe the shape in words instead of drawing it.
+    · "list" (default) — a table. "show me", "list", "who owes what".
+    · "timeline" — the rows laid along their dates, oldest first, with the gaps between them. "timeline", "over time", "from my first to my most recent", "history of". Needs a date column: invoices, contacts and sessions have one; products do not, so say so plainly there and offer the list.
+    · "chart" — the rows grouped into bars. "chart", "graph", "break it down", "by status", "compare", "which client is biggest". Add "group_by" to choose the grouping column (any text column of that view — invoices/contacts/sessions: client, status; products: type); leave it off for the sensible default. Bars are summed money where the view has money, otherwise a count.
+  If someone asks for a shape this cannot draw (a pie, a map, a spreadsheet export), say what you CAN draw and offer the closest one — never silently substitute.
     • WHEN: any time the practitioner asks to SEE, LIST, or BREAK DOWN their data — "share the invoices I have", "who owes what?", "show me my leads", "what sessions are coming up?". Emit the tag and speak naturally about what the card shows; the rows arrive from the database, so never retype them all into your prose.
     • NEVER say "I don't have the itemized breakdown" or offer to merely open a tab when this action can show the rows here. Navigation (show_revenue, navigate) is for when they want the full working SCREEN; show_view is for when they want to SEE the data in the flow of the conversation.
   [ACTION:{{"type":"close_view"}}]  — TAKE THE VIEW OFF THE SCREEN. When the practitioner asks to close/dismiss/clear what you just showed ("close that", "close it out", "take that down", "you can close the invoices"), emit this and acknowledge briefly. Safe when nothing is open. This closes the DATA VIEW only — closing the chat window itself is set_chat_window.
