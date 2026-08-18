@@ -17,6 +17,20 @@ Surface (all owner-gated):
                                 contract_signed on the event spine
                                 (the catalog entry that waited a month
                                 for a real emitter).
+  POST /esign/webhook         — BoldSign calls this when a document is
+                                signed, declined, or expires. PUBLIC by
+                                necessity (the provider has no login),
+                                so it authenticates by shared secret and
+                                by looking the document up on OUR side —
+                                a payload naming an unknown document is
+                                ignored, never inserted.
+
+WHY A WEBHOOK AND NOT JUST REFRESH. Refresh only tells the truth when
+somebody is looking at the panel. A signature that lands on a Sunday
+sat invisible until the next visit, and the confirmation email that
+depends on it never went. The webhook makes completion an event that
+happens TO the system rather than one it has to go and check for; the
+refresh endpoint stays as the manual fallback for a missed delivery.
 
 Env: BOLDSIGN_API_KEY (Railway, validated live 7/30). Trial now,
 free-sandbox later — the key is the only coupling.
@@ -178,46 +192,274 @@ def esign_list(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, 
     return {"ok": True, "documents": rows}
 
 
+# ══════════════════════════════════════════════════════════════════
+# Completion — one path, two callers
+#
+# A signature finishes exactly once, and everything that follows from
+# it (the status, the spine event, the audit row, the two emails) has
+# to happen exactly once too. Refresh and the webhook are two ways of
+# NOTICING the same fact, so they share the code below instead of each
+# carrying half of it. The guard is the stored status: a row that
+# already says completed returns without re-emitting, which makes the
+# duplicate webhook delivery every provider eventually sends harmless.
+# ══════════════════════════════════════════════════════════════════
+
+APP_URL = "https://system.mysolutionist.app"
+
+
+def _esc(v: Optional[str]) -> str:
+    import html as _h
+    return _h.escape(str(v or ""))
+
+
+async def _owner_email(owner_id: str) -> Optional[str]:
+    """The practitioner's login email, via auth.users. None if unknown."""
+    base = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not base or not service_key or not owner_id:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            r = await c.get(f"{base}/auth/v1/admin/users/{owner_id}",
+                            headers={"apikey": service_key,
+                                     "Authorization": f"Bearer {service_key}"})
+        if r.status_code >= 400:
+            return None
+        return (r.json() or {}).get("email") or None
+    except Exception as e:
+        logger.warning(f"[esign] owner email lookup failed: {e}")
+        return None
+
+
+async def _signed_pdf_b64(document_id: str) -> Optional[str]:
+    """The executed copy, base64 for a Resend attachment.
+
+    Best-effort: a confirmation that arrives without the PDF still tells
+    both sides the thing is done, so a download failure downgrades the
+    email rather than cancelling it."""
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            r = await c.get(f"{BOLDSIGN_BASE}/v1/document/download",
+                            headers={"X-API-KEY": _api_key()},
+                            params={"documentId": document_id})
+        if r.status_code >= 400 or not r.content:
+            logger.warning(f"[esign] download failed {r.status_code} for {document_id}")
+            return None
+        import base64
+        return base64.b64encode(r.content).decode()
+    except Exception as e:
+        logger.warning(f"[esign] download raised for {document_id}: {e}")
+        return None
+
+
+def _completion_html(*, title: str, biz_name: str, signer_name: str,
+                     signer_email: str, for_signer: bool) -> str:
+    """Short and plain. Nobody reads a confirmation twice."""
+    who = signer_name or signer_email
+    if for_signer:
+        lead = (f"Thank you — your signed copy of <strong>{_esc(title)}</strong> "
+                f"is attached for your records.")
+        tail = (f'<p style="margin:18px 0 0;color:#555">Sent by {_esc(biz_name)}. '
+                f"Keep this email; the attachment is the executed agreement.</p>")
+    else:
+        lead = (f"<strong>{_esc(who)}</strong> signed "
+                f"<strong>{_esc(title)}</strong>.")
+        tail = (f'<p style="margin:18px 0 0;color:#555">The executed copy is '
+                f"attached, and the document now shows as signed in your "
+                f'<a href="{APP_URL}" style="color:#2E7DFF">Documents</a> panel.</p>')
+    return ('<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;'
+            'font-size:15px;line-height:1.6;color:#14161a;max-width:560px">'
+            f'<p style="margin:0 0 14px">{lead}</p>'
+            f"{tail}</div>")
+
+
+async def _send_completion_emails(biz: Dict[str, Any], doc: Dict[str, Any]) -> None:
+    """Tell both sides it is done, with the executed copy attached.
+
+    Best-effort in the strongest sense: the signature is a real event
+    that already happened and is already recorded. An email provider
+    having a bad afternoon must never turn that into a failed request or
+    a status left stale, so every path here swallows."""
+    try:
+        from email_sender import send_via_resend
+    except Exception as e:
+        logger.warning(f"[esign] email_sender unavailable: {e}")
+        return
+
+    title = doc.get("title") or "Agreement"
+    biz_name = biz.get("name") or "Your business"
+    signer_email = (doc.get("signer_email") or "").strip()
+    signer_name = doc.get("signer_name") or ""
+    from_email = os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app"
+
+    pdf_b64 = await _signed_pdf_b64(doc.get("document_id") or "")
+    attachments = ([{"filename": f"{title[:60]}.pdf", "content": pdf_b64,
+                     "content_type": "application/pdf"}] if pdf_b64 else None)
+
+    owner_email = await _owner_email(str(biz.get("owner_id") or ""))
+
+    # The practitioner first — they are the one waiting on it. The signer
+    # is skipped when they ARE the practitioner (Kevin signing his own
+    # paperwork), so nobody gets the same mail twice.
+    targets = []
+    if owner_email:
+        targets.append((owner_email, biz_name, False))
+    if (signer_email and "@" in signer_email
+            and signer_email.lower() != (owner_email or "").lower()):
+        targets.append((signer_email, signer_name, True))
+
+    for to_email, to_name, for_signer in targets:
+        try:
+            await send_via_resend(
+                to_email=to_email,
+                to_name=to_name or None,
+                from_email=from_email,
+                from_name=biz_name,
+                subject=(f"Signed: {title}" if for_signer
+                         else f"{signer_name or signer_email} signed {title}"),
+                body=_completion_html(title=title, biz_name=biz_name,
+                                      signer_name=signer_name,
+                                      signer_email=signer_email,
+                                      for_signer=for_signer),
+                reply_to=None,
+                attachments=attachments,
+                business_id=str(biz.get("id") or "") or None,
+            )
+            logger.info(f"[esign] confirmation sent to {to_email} for {title!r}")
+        except Exception as e:
+            logger.warning(f"[esign] confirmation to {to_email} failed: {e}")
+
+
+async def _apply_status(doc: Dict[str, Any], biz: Dict[str, Any],
+                        new_status: Optional[str]) -> Dict[str, Any]:
+    """Persist a provider status and fire everything a completion owes.
+
+    Idempotent: an unchanged status is a no-op, so a redelivery costs
+    one comparison and nothing else."""
+    biz_id = str(biz.get("id") or "")
+    if not new_status or new_status == doc.get("status"):
+        return {"status": doc.get("status"), "changed": False}
+
+    patch: Dict[str, Any] = {"status": new_status, "updated_at": _now_iso()}
+    if new_status == "completed":
+        patch["completed_at"] = _now_iso()
+    sb_clients.sb_patch_as_service(f"/esign_documents?id=eq.{doc['id']}", patch)
+
+    if new_status == "completed":
+        import event_spine
+        event_spine.emit("contract_signed", biz_id, {
+            "contract_ref": doc["document_id"],
+            "title": doc.get("title"),
+            "signer_email": doc.get("signer_email"),
+        }, source="esign")
+        import audit_log
+        audit_log.record(biz_id, actor_type="system", verb="esign_completed",
+                         summary=f"Signed: {doc.get('title')}",
+                         target_type="esign_document", target_id=doc["document_id"],
+                         source="esign")
+        await _send_completion_emails(biz, doc)
+
+    return {"status": new_status, "changed": True}
+
+
+async def _live_status(document_id: str) -> Optional[str]:
+    """Ask BoldSign what the document's status actually is."""
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.get(f"{BOLDSIGN_BASE}/v1/document/properties",
+                        headers={"X-API-KEY": _api_key()},
+                        params={"documentId": document_id})
+    if r.status_code >= 400:
+        logger.warning(f"[esign] properties failed {r.status_code}: {r.text[:200]}")
+        return None
+    return map_provider_status((r.json() or {}).get("status"))
+
+
 @router.post("/{esign_id}/refresh")
 async def esign_refresh(esign_id: str, biz: str,
                         user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    """Pull live status. A newly-completed document emits
-    contract_signed — the spine event that finally has its emitter."""
-    _owner(biz, user)
+    """Pull live status on demand — the manual fallback for a webhook
+    that never arrived. The work of a completion lives in _apply_status
+    so this and the webhook can never drift apart."""
+    biz_row = _owner(biz, user)
     rows = sb_clients.sb_get_as_service(
         f"/esign_documents?id=eq.{esign_id}&business_id=eq.{biz}&select=*&limit=1") or []
     if not rows:
         raise HTTPException(404, "document not found")
     doc = rows[0]
 
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        r = await c.get(f"{BOLDSIGN_BASE}/v1/document/properties",
-                        headers={"X-API-KEY": _api_key()},
-                        params={"documentId": doc["document_id"]})
-    if r.status_code >= 400:
-        logger.warning(f"[esign] refresh failed {r.status_code}: {r.text[:200]}")
+    new_status = await _live_status(doc["document_id"])
+    if new_status is None:
         raise HTTPException(502, "couldn't reach the e-sign provider")
 
-    new_status = map_provider_status((r.json() or {}).get("status"))
-    if not new_status or new_status == doc["status"]:
-        return {"ok": True, "status": doc["status"], "changed": False}
+    result = await _apply_status(doc, biz_row, new_status)
+    return {"ok": True, **result}
 
-    patch: Dict[str, Any] = {"status": new_status, "updated_at": _now_iso()}
-    if new_status == "completed":
-        patch["completed_at"] = _now_iso()
-    sb_clients.sb_patch_as_service(f"/esign_documents?id=eq.{esign_id}", patch)
 
-    if new_status == "completed":
-        import event_spine
-        event_spine.emit("contract_signed", biz, {
-            "contract_ref": doc["document_id"],
-            "title": doc.get("title"),
-            "signer_email": doc.get("signer_email"),
-        }, source="esign")
-        import audit_log
-        audit_log.record(biz, actor_type="system", verb="esign_completed",
-                         summary=f"Signed: {doc.get('title')}",
-                         target_type="esign_document", target_id=doc["document_id"],
-                         source="esign")
+@router.post("/webhook")
+async def esign_webhook(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """BoldSign tells us a document moved. PUBLIC by necessity.
 
-    return {"ok": True, "status": new_status, "changed": True}
+    THE PAYLOAD IS NEVER TRUSTED. It names a document id and nothing
+    else is read from it — we look that id up in OUR table, and then ask
+    BoldSign directly what the status is. So the webhook is a NUDGE TO
+    GO CHECK, not a source of truth, and the worst an unauthenticated
+    caller achieves is making us re-poll a document we already own. That
+    is a rate-limit question, not a security one, which is why this
+    endpoint does not depend on a shared secret being configured
+    correctly before signatures start working.
+
+    BOLDSIGN_WEBHOOK_SECRET is honoured when set — as a cheap filter
+    against noise, not as the thing standing between an attacker and a
+    forged completion. Nothing here can forge a completion.
+
+    Always 200. A webhook endpoint that returns errors gets retried,
+    then throttled, then disabled by the provider; an unknown document
+    is a fact to log, not a failure to advertise."""
+    secret = (os.environ.get("BOLDSIGN_WEBHOOK_SECRET") or "").strip()
+    if secret:
+        got = str(payload.get("secret") or "").strip()
+        if got != secret:
+            logger.warning("[esign] webhook rejected: secret mismatch")
+            return {"ok": True, "ignored": "auth"}
+
+    # BoldSign nests the id differently across event shapes; take the
+    # first one that looks like an id rather than pinning one path.
+    data = payload.get("data") or {}
+    doc_obj = data.get("documentId") or data.get("document") or {}
+    document_id = (
+        payload.get("documentId")
+        or data.get("documentId")
+        or (doc_obj.get("documentId") if isinstance(doc_obj, dict) else None)
+        or ""
+    )
+    document_id = str(document_id).strip()
+    if not document_id:
+        logger.info("[esign] webhook with no document id — ignored")
+        return {"ok": True, "ignored": "no_document_id"}
+
+    rows = sb_clients.sb_get_as_service(
+        f"/esign_documents?document_id=eq.{document_id}&select=*&limit=1") or []
+    if not rows:
+        logger.info(f"[esign] webhook for unknown document {document_id} — ignored")
+        return {"ok": True, "ignored": "unknown_document"}
+    doc = rows[0]
+
+    biz_rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{doc['business_id']}&select=id,name,owner_id&limit=1") or []
+    if not biz_rows:
+        logger.warning(f"[esign] webhook: business missing for {document_id}")
+        return {"ok": True, "ignored": "business_missing"}
+
+    try:
+        new_status = await _live_status(document_id)
+    except HTTPException:
+        # Provider unreachable or key unset. Refresh remains the fallback.
+        logger.warning(f"[esign] webhook could not verify {document_id}")
+        return {"ok": True, "ignored": "unverified"}
+    if new_status is None:
+        return {"ok": True, "ignored": "unverified"}
+
+    result = await _apply_status(doc, biz_rows[0], new_status)
+    if result.get("changed"):
+        logger.info(f"[esign] webhook applied {result['status']} to {document_id}")
+    return {"ok": True, **result}
