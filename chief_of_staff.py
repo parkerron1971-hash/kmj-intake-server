@@ -2134,6 +2134,89 @@ def _neutralize_untrusted(text: Any) -> str:
     return out
 
 
+# ── The voice confirmation grammar ───────────────────────────────────
+# Class C doctrine is "never UNPROMPTED, not never": on a typed turn the
+# practitioner asking IS the approval, because they wrote the words and
+# can see the draft.
+#
+# A voice turn is weaker evidence for the same claim, and for reasons
+# that have nothing to do with trust in the practitioner:
+#   · speech recognition mishears, and "send it to Marcus" is one bad
+#     transcription away from a different name;
+#   · a room can speak — a client across the desk, a phone on speaker;
+#   · there is no draft on screen to glance at before it goes.
+#
+# So a spoken class-C action holds ONCE and asks for a specific spoken
+# confirmation. The same shape as the untrusted-taint hold below: the
+# action is not refused, it is deferred to a second, deliberate breath.
+_TURN_IS_VOICE: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "chief.turn_is_voice", default=False)
+_TURN_CONFIRMED: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "chief.turn_confirmed", default=False)
+
+# Deliberately NOT "yes" / "yeah" / "ok" / "sure". Those are what a
+# person says to someone else in the room while the mic is open, and a
+# confirmation that a passing conversation can satisfy is not one.
+_VOICE_CONFIRM_PHRASES = (
+    "send it", "send them", "send that", "send all",
+    "do it", "go ahead", "confirm", "confirmed",
+    "yes send it", "yes do it", "yes go ahead",
+    "approve it", "approve that", "that's approved", "thats approved",
+)
+
+
+def _is_voice_confirmation(message: str) -> bool:
+    """Is this utterance a deliberate go-ahead, and nothing else?
+
+    Whole-message, like _is_farewell: "send it" confirms, and "send it
+    to Marcus and then check my calendar" is a fresh instruction that
+    should hold on its own merits rather than approving whatever was
+    pending. A question never confirms.
+    """
+    raw = (message or "").strip()
+    if not raw or "?" in raw or len(raw) > 40:
+        return False
+    t = re.sub(r"[.,!?;:\"'`]+", " ", raw.lower())
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t:
+        return False
+    fillers = {"ok", "okay", "alright", "yes", "yeah", "yep", "please",
+               "now", "then", "chief", "sure", "just", "and"}
+    for phrase in _VOICE_CONFIRM_PHRASES:
+        if phrase not in t:
+            continue
+        rest = (t[:t.index(phrase)] + " " + t[t.index(phrase) + len(phrase):]).strip()
+        if not rest or all(w in fillers for w in rest.split()):
+            return True
+    return False
+
+
+def _confirmation_subject(action: Dict[str, Any]) -> str:
+    """The who/how-much a spoken confirmation must name back.
+
+    Pulled from the action itself rather than left to the model to
+    remember, so the sentence the practitioner hears is grounded in what
+    is actually about to run."""
+    a = action or {}
+    bits = []
+    for key in ("to", "recipient", "contact_name", "client_name", "name", "email"):
+        val = str(a.get(key) or "").strip()
+        if val:
+            bits.append(val)
+            break
+    for key in ("amount", "total", "price"):
+        val = a.get(key)
+        if isinstance(val, (int, float)) and val:
+            bits.append(f"${float(val):,.2f}")
+            break
+    return " · ".join(bits)
+
+
+def turn_needs_spoken_confirmation() -> bool:
+    """A spoken turn that has not been confirmed out loud."""
+    return _TURN_IS_VOICE.get() and not _TURN_CONFIRMED.get()
+
+
 def untrusted_taint() -> int:
     """How many third-party spans were defused while building this turn."""
     return _UNTRUSTED_TAINT.get()
@@ -13245,6 +13328,27 @@ async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
         # tried to smuggle an action tag. Then "the practitioner asked"
         # is precisely what is in doubt, and the doctrine's premise does
         # not hold. Hold for confirmation instead of sending.
+        # A spoken turn that has not been confirmed out loud holds once
+        # and asks. The value goes in the message so Chief reads it back
+        # — on a voice surface the practitioner may not be looking at
+        # the screen, so hearing WHO and HOW MUCH is the whole review.
+        if turn_needs_spoken_confirmation():
+            what = _humanize_action_type(atype)
+            target = _confirmation_subject(action)
+            logger.info(f"[gate] holding spoken class-C {atype} for confirmation")
+            return "handled", {
+                "type": atype,
+                "result": (
+                    f"Failed: HELD FOR A SPOKEN YES — this arrived by voice and "
+                    f"{what.lower()} is not reversible. Say back exactly what you are "
+                    f"about to do, including who it goes to and any amount"
+                    + (f" ({target})" if target else "")
+                    + ", then ask them to say \"send it\" (or \"go ahead\"). "
+                    f"When they do, emit this same action again and it will run. "
+                    f"Do NOT tell them it is done — nothing has happened yet."),
+                "label": f"Held for your spoken yes — {what}",
+                "nav": None, "failed": True,
+            }
         if untrusted_taint():
             logger.warning(
                 f"[gate] holding single-target class-C {atype}: this turn's "
@@ -17146,6 +17250,15 @@ async def chief_chat(
             lane = chief_models.lane_for_chat(req.mode or "", req.client_surface or "")
             if lane == "voice":
                 system = system + chief_models.VOICE_DELIVERY_BLOCK
+            # The voice confirmation grammar. Set from the SURFACE, not
+            # the lane, so a coach turn spoken aloud is still treated as
+            # spoken (coaches ride the deep lane and would otherwise slip
+            # the check). Whether this turn is itself the go-ahead is
+            # judged from the practitioner's own words.
+            _is_voice_turn = (req.client_surface or "") == "voice"
+            _voice_token = _TURN_IS_VOICE.set(_is_voice_turn)
+            _confirm_token = _TURN_CONFIRMED.set(
+                _is_voice_turn and _is_voice_confirmation(req.message or ""))
             turn_tokens = chief_models.max_tokens_for(lane, default=1600)
             # Pricing v2 model ladder: heavy lanes scale with the plan
             # tier (Starter=Sonnet 5, Pro=Opus 4.8, Practice=Fable 5).
@@ -17429,6 +17542,12 @@ async def chief_chat(
         sb_clients.reset_user_jwt(_jwt_token)
         try:
             _TURN_USER_ID.reset(_uid_token)
+            try:
+                _TURN_IS_VOICE.reset(_voice_token)
+                _TURN_CONFIRMED.reset(_confirm_token)
+            except Exception:
+                _TURN_IS_VOICE.set(False)
+                _TURN_CONFIRMED.set(False)
         except ValueError:
             _TURN_USER_ID.set("")
 
