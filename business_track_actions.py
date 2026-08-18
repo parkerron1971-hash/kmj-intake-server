@@ -190,7 +190,11 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "title": "Bring your client list over",
         "why": "Everything else — history, campaigns, invoices, the daily "
                "briefing — reads from your contacts. This is the first domino.",
-        "nav": {"tab": "operate", "page": "contacts"},
+        # OPERATE destinations travel as "sub" — the solutionist-nav
+        # listener's operate branch reads detail.sub only, so a "page"
+        # here landed on the default operate tab (found 8/18 when Chief
+        # started walking these).
+        "nav": {"tab": "operate", "sub": "contacts"},
         "verticals": "*",
         "needs": [],
         "weight": 100,
@@ -199,7 +203,10 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "title": "Load what you sell",
         "why": "Your prices drive booking, invoices, your site, and every "
                "quote Chief writes for you.",
-        "nav": {"tab": "build", "page": "offerings"},
+        # The catalog lives at operate/offerings-manager ("Services &
+        # Products"). build/offerings was never a BuildPage — the card
+        # switched tabs and dead-ended (found 8/18).
+        "nav": {"tab": "operate", "sub": "offerings-manager"},
         "verticals": "*",
         "needs": [],
         "weight": 95,
@@ -500,6 +507,9 @@ def format_business_track_block(biz: Dict[str, Any],
     aud = track.get("audience") or {}
     money = track.get("money_map") or {}
     growth = track.get("growth_plan") or {}
+    offerings = track.get("offerings_captured") or []
+    ops = track.get("operations_map") or {}
+    plan = track.get("first_30_days") or {}
 
     lines = ["BUSINESS TRACK:"]
     lines.append(f"  Status: {status}. Covered so far: "
@@ -512,10 +522,52 @@ def format_business_track_block(biz: Dict[str, Any],
         facts.append(f"serves: {str(aud['who'])[:120]}")
     if money.get("how_they_bill"):
         facts.append(f"bills by: {str(money['how_they_bill'])[:80]}")
+    if money.get("how_they_get_paid"):
+        facts.append(f"gets paid via: {str(money['how_they_get_paid'])[:80]}")
     if growth.get("target"):
         facts.append(f"wants: {str(growth['target'])[:120]}")
+    if growth.get("constraint"):
+        facts.append(f"biggest constraint: {str(growth['constraint'])[:100]}")
+    # The rest of what the coach captured — each one a fact Chief can act
+    # on (and must never re-ask for) when deciding what to set up next.
+    if offerings:
+        first = offerings[0] if isinstance(offerings[0], dict) else {}
+        eg = ""
+        if first.get("name"):
+            eg = f" (e.g. {first['name']}"
+            eg += f" at {first['price']})" if first.get("price") else ")"
+        facts.append(f"sells: {len(offerings)} captured offering(s){eg}")
+    tools = [str(t) for t in (ops.get("tools_in_use") or []) if t]
+    if tools:
+        facts.append("already runs on: " + ", ".join(tools[:5])[:120])
+    manual = [str(m) for m in (ops.get("still_manual") or []) if m]
+    if manual:
+        facts.append("still manual: " + ", ".join(manual[:3])[:100])
+    if ops.get("has_website") and ops.get("website_url"):
+        facts.append(f"existing site: {str(ops['website_url'])[:80]}")
     if facts:
         lines.append("  Already told you: " + "; ".join(facts))
+
+    # The plan phase's plug-in agreement — the coach and the practitioner
+    # chose this order together, so setup advice starts HERE, not from a
+    # generic list. (The SETUP STATUS block, when present, carries the
+    # live done/undone state for the same keys.)
+    plan_plugins = []
+    for entry in (plan.get("plugins") or []):
+        key = entry if isinstance(entry, str) else (entry or {}).get("key")
+        if key:
+            plan_plugins.append(str(key))
+    if plan_plugins:
+        lines.append("  Agreed day-one plug-ins (their order): "
+                     + ", ".join(plan_plugins[:8]))
+
+    # The most recent session summary — mid-thought context for "where
+    # did we leave off?" without replaying the whole log.
+    log = (track.get("phases") or {}).get("session_log") or []
+    if log and isinstance(log[-1], dict) and log[-1].get("summary"):
+        last = log[-1]
+        lines.append(f"  Last coach session ({last.get('date', 'recently')}): "
+                     f"{str(last['summary'])[:200]}")
 
     if status != "completed":
         remaining = [p for p in BUSINESS_PHASES if p not in done]

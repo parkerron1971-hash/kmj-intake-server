@@ -72,12 +72,41 @@ def test_a_populated_phase_counts():
 
 # ─── the plug-in catalog ─────────────────────────────────────────────
 
+# The real route tables, mirrored from the frontend nav listener and the
+# prompt's destination map (chief_of_staff.py ACTIONS — NAVIGATION).
+# The old shape test only asserted "tab and page are non-empty", which is
+# how two dead destinations survived for months: build/offerings (never a
+# BuildPage) and operate/page=contacts (the operate branch of the
+# solutionist-nav listener reads detail.sub ONLY, so `page` was dropped).
+BUILD_PAGES = {
+    "strategy-track", "business-track", "course-studio", "business-profile",
+    "about-me", "foundation-track", "brand", "media-library",
+    "print-materials", "my-site", "link-page", "booking", "intake-forms",
+    "custom-modules", "module-builder", "social-media", "email-templates",
+    "resources", "products", "analytics", "integrations", "settings",
+}
+OPERATE_SUBS = {
+    "dashboard", "queue", "contacts", "email", "sms", "projects", "calendar",
+    "invoices", "payments", "bookkeeping", "tasks", "documents", "agents",
+    "history", "offerings-manager",
+}
+
+
 def test_every_catalog_entry_is_shaped_and_reachable():
     for key, spec in bta.PLUGIN_CATALOG.items():
         for field in ("title", "why", "nav", "verticals", "needs", "weight"):
             assert field in spec, f"{key} is missing {field}"
-        assert spec["nav"].get("tab"), f"{key} has no destination — it would dead-end"
-        assert spec["nav"].get("page"), f"{key} has no page — it would dead-end"
+        nav = spec["nav"]
+        tab = nav.get("tab")
+        assert tab in ("build", "operate", "grow"), \
+            f"{key} has no destination — it would dead-end"
+        if tab == "build":
+            assert nav.get("page") in BUILD_PAGES, \
+                f"{key} -> build/{nav.get('page')!r} is not a real BuildPage"
+        elif tab == "operate":
+            assert nav.get("sub") in OPERATE_SUBS, \
+                f"{key} -> operate needs a real 'sub' (got {nav!r}); the " \
+                "operate nav listener drops 'page'"
         assert spec["title"].strip() and spec["why"].strip()
         assert isinstance(spec["needs"], list)
 
