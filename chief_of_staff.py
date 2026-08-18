@@ -3864,6 +3864,72 @@ async def handle_close_view(client, biz, action) -> Dict:
     }
 
 
+_PLAN_MAX_STEPS = 8
+_PLAN_FIELD_MAX = 220
+
+
+async def handle_show_plan(client, biz, action) -> Dict:
+    """Put an action plan on the screen.
+
+    Every other display verb draws rows this server fetched, and the
+    guarantee is that the model never touches a cell. A PLAN is the one
+    thing that inverts: it has no table behind it because it is Chief's
+    own thinking — advice, not data.
+
+    So the guarantee changes shape rather than being dropped. The plan
+    is bounded and stamped `authored: "chief"`, and the client renders
+    it as visibly Chief's words. What this handler must NOT do is let a
+    plan smuggle figures in as though they were fetched: if a step
+    quotes a number, it is Chief saying it, and the surface says so.
+    """
+    title = str(action.get("title") or "Action plan").strip()[:_PLAN_FIELD_MAX]
+    raw_steps = action.get("steps")
+    if not isinstance(raw_steps, list) or not raw_steps:
+        return _fail("show_plan", "a plan needs steps — pass steps:[{step, why, when}]")
+
+    steps: List[Dict[str, Any]] = []
+    for item in raw_steps[:_PLAN_MAX_STEPS]:
+        # Tolerate a bare string: "steps":["call Marcus", ...] is the
+        # shape a model reaches for first, and refusing it would just
+        # cost a turn to say so.
+        if isinstance(item, str):
+            text = item.strip()
+            entry = {"step": text[:_PLAN_FIELD_MAX]} if text else None
+        elif isinstance(item, dict):
+            text = str(item.get("step") or item.get("title") or "").strip()
+            entry = {"step": text[:_PLAN_FIELD_MAX]} if text else None
+            if entry:
+                for key in ("why", "when", "owner"):
+                    val = str(item.get(key) or "").strip()
+                    if val:
+                        entry[key] = val[:_PLAN_FIELD_MAX]
+        else:
+            entry = None
+        if entry:
+            steps.append(entry)
+
+    if not steps:
+        return _fail("show_plan", "every step was empty — a plan with no steps is not a plan")
+
+    dropped = max(0, len(raw_steps) - len(steps))
+    label = f"🗺️ {title} — {len(steps)} step" + ("s" if len(steps) != 1 else "")
+    result = (f"plan '{title}' on screen with {len(steps)} steps"
+              + (f" ({dropped} beyond the {_PLAN_MAX_STEPS}-step cap were dropped — "
+                 f"say so rather than pretending the plan is complete)" if dropped else ""))
+    return {
+        "type": "show_plan",
+        "result": result,
+        "label": label,
+        "title": title,
+        "steps": steps,
+        # The honesty marker. Rows from show_view are the server's;
+        # these sentences are the model's, and the client draws them
+        # differently because of this field.
+        "authored": "chief",
+        "speak": "; ".join(st["step"] for st in steps[:4]),
+    }
+
+
 async def handle_show_view(client, biz, action) -> Dict:
     biz_id = biz["id"]
     view = (action.get("view") or "").strip().lower()
@@ -12392,6 +12458,7 @@ ACTION_HANDLERS = {
     "open_calendar":          handle_open_calendar,
     "show_revenue":           handle_show_revenue,
     "show_view":              handle_show_view,
+    "show_plan":              handle_show_plan,
     "propose_mission":        chief_missions.handle_propose_mission,
     "start_mission":          chief_missions.handle_start_mission,
     "advance_mission":        chief_missions.handle_advance_mission,
@@ -15757,6 +15824,9 @@ MID-TURN LOOKUPS — you can READ while you think. When you need data you do not
     · "timeline" — the rows laid along their dates, oldest first, with the gaps between them. "timeline", "over time", "from my first to my most recent", "history of". Needs a date column: invoices, contacts and sessions have one; products do not, so say so plainly there and offer the list.
     · "chart" — the rows grouped into bars. "chart", "graph", "break it down", "by status", "compare", "which client is biggest". Add "group_by" to choose the grouping column (any text column of that view — invoices/contacts/sessions: client, status; products: type); leave it off for the sensible default. Bars are summed money where the view has money, otherwise a count.
   If someone asks for a shape this cannot draw (a pie, a map, a spreadsheet export), say what you CAN draw and offer the closest one — never silently substitute.
+
+  [ACTION:{{"type":"show_plan","title":"...","steps":[{{"step":"...","why":"...","when":"..."}}]}}]  — PUT AN ACTION PLAN ON THE SCREEN. "Give me an action plan", "what should I do about this", "walk me through fixing it", "steps to get there" → draw it, do not narrate a numbered list into the reply. Up to 8 steps; each needs "step" (what to do, in the imperative), and takes optional "why" (what it moves) and "when" (today / this week / before the 30th).
+  A plan is YOUR thinking, not a table — there is no database behind it, and the screen labels it as yours. So: no invented figures. If a step leans on a number, it must be one you actually have from context or a read you just did, said plainly ("chase the $2,020 that is genuinely late"). Steps are things the practitioner can DO, in the order they should do them — not a restatement of the problem in bullet form.
     • WHEN: any time the practitioner asks to SEE, LIST, or BREAK DOWN their data — "share the invoices I have", "who owes what?", "show me my leads", "what sessions are coming up?". Emit the tag and speak naturally about what the card shows; the rows arrive from the database, so never retype them all into your prose.
     • NEVER say "I don't have the itemized breakdown" or offer to merely open a tab when this action can show the rows here. Navigation (show_revenue, navigate) is for when they want the full working SCREEN; show_view is for when they want to SEE the data in the flow of the conversation.
   [ACTION:{{"type":"close_view"}}]  — TAKE THE VIEW OFF THE SCREEN. When the practitioner asks to close/dismiss/clear what you just showed ("close that", "close it out", "take that down", "you can close the invoices"), emit this and acknowledge briefly. Safe when nothing is open. This closes the DATA VIEW only — closing the chat window itself is set_chat_window.
