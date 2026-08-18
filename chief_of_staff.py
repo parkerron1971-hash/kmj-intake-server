@@ -3798,6 +3798,13 @@ def _show_view_row(view: str, r: Dict[str, Any]) -> Dict[str, Any]:
     if view == "invoices":
         return {
             "id": r.get("id"),
+            # Not a column — the display ignores it. It is here because a
+            # MISSION step repeating over these rows has to reach the
+            # person the invoice belongs to (draft_email takes a
+            # contact_id, not an invoice id). The select already fetched
+            # it; dropping it was what made "draft a reminder for each
+            # overdue invoice" unplannable.
+            "contact_id": r.get("contact_id"),
             "number": r.get("invoice_number") or "(no number)",
             "client": contact.get("name") or "(no client)",
             "amount": float(r.get("total") or 0),
@@ -13199,9 +13206,19 @@ async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
 
 
 async def _execute_actions(client, biz, actions: List[Dict],
-                           user_id: Optional[str] = None) -> List[Dict]:
+                           user_id: Optional[str] = None,
+                           prior_results: Optional[List[Dict]] = None) -> List[Dict]:
     results: List[Dict[str, Any]] = []
     class_c_executed = 0
+
+    # The reference pool = what EARLIER work returned, then what this call
+    # has produced so far. `prior_results` is seeded, never re-executed and
+    # never returned — it exists so a MISSION step can say
+    # "@list_invoices.invoices" about a step that ran in a different turn,
+    # possibly days ago. Without it every step resolved against an empty
+    # list and a plan could not use its own findings.
+    def _reference_pool() -> List[Dict[str, Any]]:
+        return (prior_results or []) + results
     for action in actions:
         atype = action.get("type")
         handler = ACTION_HANDLERS.get(atype)
@@ -13225,7 +13242,7 @@ async def _execute_actions(client, biz, actions: List[Dict],
                     mh = ACTION_HANDLERS.get(mapped.get("type"))
                     if not mh:   # defensive — reasoner already allowlisted
                         continue
-                    resolved = _resolve_action_references(mapped, results)
+                    resolved = _resolve_action_references(mapped, _reference_pool())
                     try:
                         r = await mh(client, biz, resolved)
                         if isinstance(r, dict):
@@ -13240,7 +13257,7 @@ async def _execute_actions(client, biz, actions: List[Dict],
         # Substitute references from earlier results. Lets the Chief do
         # create_invoice → send_invoice in one turn without knowing the
         # freshly-minted UUID.
-        resolved = _resolve_action_references(action, results)
+        resolved = _resolve_action_references(action, _reference_pool())
         # ── Class-C trust gate (see _gate_class_c above) ──
         try:
             verdict, gate_res = await _gate_class_c(client, biz, atype, resolved,
@@ -15700,8 +15717,10 @@ MID-TURN LOOKUPS — you can READ while you think. When you need data you do not
   [ACTION:{{"type":"close_view"}}]  — TAKE THE VIEW OFF THE SCREEN. When the practitioner asks to close/dismiss/clear what you just showed ("close that", "close it out", "take that down", "you can close the invoices"), emit this and acknowledge briefly. Safe when nothing is open. This closes the DATA VIEW only — closing the chat window itself is set_chat_window.
 
 MISSIONS — MULTI-STEP PLANS THAT SURVIVE ACROSS TURNS. When the practitioner asks for an OUTCOME that takes several moves ("get my unpaid invoices collected", "onboard Sandra properly", "run the January giving mailing"), do not do one move and stop — propose a MISSION:
-  [ACTION:{{"type":"propose_mission","title":"Collect the overdue invoices","goal":"<their ask, verbatim>","steps":[{{"title":"Draft reminder for Marcus","action":{{"type":"draft_email","contact_id":"..."}}}},{{"title":"Send the reminders","approval":true,"action":{{"type":"approve_draft","draft_id":"..."}}}}]}}]
+  [ACTION:{{"type":"propose_mission","title":"Collect the overdue invoices","goal":"<their ask, verbatim>","steps":[{{"title":"Find what's overdue","action":{{"type":"show_view","view":"invoices","filter":"overdue"}}}},{{"title":"Draft a reminder for each","for_each":"@show_view.rows","action":{{"type":"draft_email","contact_id":"{{{{item.contact_id}}}}","reason":"invoice {{{{item.number}}}} for ${{{{item.amount}}}} is past due"}}}},{{"title":"Send the reminders","approval":true,"action":{{"type":"bulk_approve","filter":"all"}}}}]}}]
     • Each step is one normal action. Steps run IN ORDER through the same machinery as everything else. Irreversible steps (sends, deletes, money) automatically PAUSE the mission for the practitioner's OK — you can also force a pause on any step with "approval":true. Reads are welcome as steps. Max 12 steps; no missions inside missions.
+    • A STEP CAN USE WHAT THE EARLIER STEPS FOUND. Reference an earlier step's result as "@<action_type>.<field>" — "@create_invoice.invoice_id", "@show_view.rows". It resolves even when the mission sat paused for days between the two steps. So you do NOT need to know an id when you propose: reference it. Never invent a placeholder uuid, and never decline to plan something because the id isn't known yet.
+    • A STEP CAN REPEAT OVER A LIST. Add "for_each":"@show_view.rows" and the step runs once per row, with {{{{item.<field>}}}} filled from that row — the example above drafts one reminder per overdue invoice without knowing a single contact in advance. Repeated steps must be CLEANLY UNDOABLE (drafts, records, reads): that is enforced, and proposing a repeated send is refused. A batch that LEAVES the system is not a for_each — use the single bulk verb (bulk_approve, batch_email) so the practitioner approves the whole batch as one reviewable decision. Caps at {chief_missions.FANOUT_MAX} rows.
     • Propose first, ALWAYS — a draft executes nothing. Present the plan in one short list and ask for the word.
   [ACTION:{{"type":"start_mission"}}]  — their yes ("go ahead", "run it", "start the plan"). Runs steps up to the first gate, then reports where it stopped.
   [ACTION:{{"type":"advance_mission"}}]  — they approved the paused step ("go ahead and send them", "approved, continue"). Lifts the gate, keeps going. Also how a PAUSED (failed-step) mission retries.
