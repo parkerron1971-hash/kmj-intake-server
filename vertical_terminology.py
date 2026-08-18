@@ -213,16 +213,16 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
     "personal_services": {
         # Barbers, salons, lash/brow, esthetics, massage, tattoo.
         #
-        # This block was empty for a year on the reasoning that personal
-        # services is "closest to generic". Sitting in the chair says
-        # otherwise: nobody in this trade calls the person in front of them
-        # a Customer. They are a GUEST, and that word is the whole posture
-        # of the vertical — hospitality, not transaction.
-        "customer":     "Guest",
-        "customers":    "Guests",
-        "contact":      "Guest",
-        "contacts":     "Guests",
-        # The menu on the wall is a list of Services, and what a guest picks
+        # The person in the chair is a CLIENT. A previous pass tried
+        # "Guest" on a hospitality argument; Kevin overruled it (8/18) —
+        # barbers and stylists say "my clients" out loud, "Guest" is hotel
+        # language. A shop that wants Guests can rename it per-business in
+        # Settings → Terminology.
+        "customer":     "Client",
+        "customers":    "Clients",
+        "contact":      "Client",
+        "contacts":     "Clients",
+        # The menu on the wall is a list of Services, and what a client picks
         # from it is a Service — not an "Offering", which is retail language
         # this trade does not use.
         "offering":     "Service",
