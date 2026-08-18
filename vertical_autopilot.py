@@ -81,13 +81,13 @@ def _job(key: str, label: str, agent: str, recurrence: str, hour: int,
 
 DEFAULT_AUTOPILOT: Dict[str, List[Dict[str, Any]]] = {
 
-    # Rebooking is the barber's entire business model. A guest who does not
+    # Rebooking is the barber's entire business model. A client who does not
     # rebook is not a lost sale, it is a lost RELATIONSHIP, and the industry
     # answer is a standing cadence. This is the single most load-bearing
     # default in the file.
     "personal_services": [
         _job("rebooking", "Rebooking check-ins", "nurture", "weekly", 11,
-             "Drafts a check-in for guests who haven't rebooked. The chair "
+             "Drafts a check-in for clients who haven't rebooked. The chair "
              "only earns when it's full."),
         # NOT seeded: a no-show follow-up. The obvious second job here, and
         # it was written before being checked — session_agent's no-show pass

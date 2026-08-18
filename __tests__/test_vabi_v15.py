@@ -49,13 +49,13 @@ def test_ministry_contact_maps_to_member():
     assert get_term("ministry", "contacts") == "Members"
 
 
-def test_personal_services_contact_maps_to_guest():
+def test_personal_services_contact_maps_to_client():
     # Was: "personal_services intentionally has NO contact override", which
     # meant a barbershop called the person in the chair a Contact/Customer.
-    # The vertical readiness audit called that what it was, and the block is
-    # no longer empty. See test_personal_services_terminology.py.
-    assert get_term("personal_services", "contact") == "Guest"
-    assert get_term("personal_services", "contacts") == "Guests"
+    # A later pass tried "Guest"; Kevin ruled Client (8/18). See
+    # test_personal_services_terminology.py.
+    assert get_term("personal_services", "contact") == "Client"
+    assert get_term("personal_services", "contacts") == "Clients"
 
 
 def test_service_provider_contact_falls_back_to_generic():
@@ -74,7 +74,7 @@ def test_vertical_terms_contact_consistent_with_customer():
         if "customer" not in overrides:
             continue
         # personal_services was exempted here while its block was empty.
-        # It now overrides both nouns and they agree (Guest/Guest), so it is
+        # It now overrides both nouns and they agree (Client/Client), so it is
         # held to the same rule as every other vertical — the exemption list
         # is only for the genuinely-generic baselines.
         if vertical in ("service_provider", "custom"):

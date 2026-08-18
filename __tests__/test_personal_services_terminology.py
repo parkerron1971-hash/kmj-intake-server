@@ -1,23 +1,22 @@
 """
-test_personal_services_terminology.py — barbers and salons say Guest.
+test_personal_services_terminology.py — barbers and salons say Client.
 
 WHY THIS EXISTS
-  personal_services carried an EMPTY override block for a year, on the
-  reasoning that it is the "closest-to-generic" vertical. The vertical
-  readiness audit found the consequence: a barbershop's whole UI called the
-  person in the chair a "Customer". Nobody in that trade does.
-
-  The empty block was a deliberate decision, so a test rather than a comment
-  is what keeps the new one from being quietly undone.
+  personal_services carried an EMPTY override block for a year ("closest to
+  generic"), so a barbershop's whole UI called the person in the chair a
+  "Customer". The first fix chose "Guest" on a hospitality argument; Kevin
+  overruled it (8/18) — barbers and stylists say "my clients" out loud,
+  "Guest" is hotel language. Both the empty block and the Guest pass were
+  deliberate decisions, so a test rather than a comment is what keeps the
+  current ruling from being quietly undone.
 
 THE LOCKSTEP THIS GUARDS
   vertical_context.build_vertical_context_block puts the VOCABULARY (from
   VERTICAL_TERMS) and the VOICE HALLMARKS (from VERTICAL_INTELLIGENCE) into
-  the SAME Chief system prompt. Before this change the hallmark literally
-  read "uses 'Customer' and 'Service'". Had only the dictionary moved, Chief
-  would have been handed a prompt telling it to say Guest and Customer at
-  once. test_hallmarks_do_not_contradict_vocabulary is the guard for that
-  class of bug, not just this instance of it.
+  the SAME Chief system prompt. If only the dictionary moves, Chief is
+  handed a prompt that contradicts itself about what to call the person.
+  test_hallmarks_do_not_contradict_vocabulary is the guard for that class
+  of bug, not just this instance of it.
 """
 from __future__ import annotations
 
@@ -34,14 +33,14 @@ PS = "personal_services"
 # ── the vocabulary ───────────────────────────────────────────────────
 
 @pytest.mark.parametrize("key,expected", [
-    ("customer",  "Guest"),
-    ("customers", "Guests"),
-    ("contact",   "Guest"),
-    ("contacts",  "Guests"),
+    ("customer",  "Client"),
+    ("customers", "Clients"),
+    ("contact",   "Client"),
+    ("contacts",  "Clients"),
     ("offering",  "Service"),
     ("offerings", "Services"),
 ])
-def test_barber_says_guest(key, expected):
+def test_barber_says_client(key, expected):
     assert vt.get_term(PS, key) == expected
 
 
@@ -56,7 +55,7 @@ def test_appointment_language_stays_generic(key):
 
 def test_the_override_block_is_not_empty():
     """The regression itself: an empty block is how this vertical spent a
-    year calling guests customers."""
+    year calling clients customers."""
     assert vt.VERTICAL_TERMS.get(PS), (
         "personal_services override block is empty again — barbers will "
         "render 'Customer' throughout the UI.")
@@ -76,10 +75,10 @@ def test_hallmarks_do_not_contradict_vocabulary():
         f"resolves for this vertical: {hallmarks!r}")
 
 
-def test_context_block_carries_guest_not_customer():
+def test_context_block_carries_client_not_customer():
     """End to end: what Chief actually receives in its system prompt."""
     block = vertical_context.build_vertical_context_block({"type": PS})
-    assert "Guest" in block
+    assert "Client" in block
     # The prompt should not be telling Chief to say Customer for this
     # vertical anywhere — vocabulary line or hallmark line.
     assert "customer=Customer" not in block

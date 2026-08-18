@@ -572,7 +572,7 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
             "register": "friendly, practical, neighborhood-aware",
             "formality": "casual",
             "hallmarks": [
-                "uses 'Guest' and 'Service' — never 'Customer'",
+                "uses 'Client' and 'Service' — never 'Customer'",
                 "respects regulars + walk-ins both",
                 "speaks plainly about price + time",
             ],
@@ -583,7 +583,7 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
              "options": ["solo", "small_shop", "multi_chair_shop"]},
             {"id": "booking_model", "prompt": "Appointment-only, walk-ins, or both?", "kind": "select",
              "options": ["appointment_only", "walk_ins", "both"]},
-            {"id": "payment_methods", "prompt": "How do customers pay?", "kind": "multiselect",
+            {"id": "payment_methods", "prompt": "How do clients pay?", "kind": "multiselect",
              "options": ["cash", "card", "venmo_cashapp", "online_only"]},
         ],
         "offering_suggestions": [
@@ -606,13 +606,13 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
         },
         "empty_state_nudges": {
             "bookings": "No bookings yet. Want to enable walk-in scheduling alongside appointments?",
-            "customers": "No guests yet. Share your booking link to get the first one in the chair.",
+            "customers": "No clients yet. Share your booking link to get the first one in the chair.",
             "invoices": "No invoices yet. Set up your service prices first.",
             "offerings": "No services yet. Common: 2-3 main services + a popular add-on.",
         },
         "module_suggestions": [
             {"slug": "bookings", "archetype": "booking_calendar",
-             "headline": "Start with a Booking Calendar so guests can schedule their visit."},
+             "headline": "Start with a Booking Calendar so clients can schedule their visit."},
         ],
     }),
     "contractor": VerticalProfile({
