@@ -17712,6 +17712,62 @@ async def chief_chat_stream(
     })
 
 
+@router.get("/agents/chief/missions")
+async def chief_missions_endpoint(
+    business_id: str,
+    user_session: UserSession = Depends(require_user_session),
+):
+    """The missions this business has in flight, for the app to draw.
+
+    chief_missions has run headless since it shipped: the engine plans,
+    executes, pauses for approval and resumes across days, and the only
+    way to see any of it was to ask Chief in words. A practitioner
+    cannot supervise work they cannot see, so autonomy without a face is
+    a promise nobody can check.
+
+    Deliberately a thin door on handle_mission_status rather than a
+    second query: that handler already reads exactly this — every
+    non-terminal mission with per-step truth — and a panel drawing from
+    its own copy is how a UI starts disagreeing with the verb the
+    practitioner hears.
+
+    Read-only, under the caller's own JWT, so RLS is the gate. Starting,
+    advancing and abandoning stay actions with their own class-C gates;
+    nothing here can move a mission.
+    """
+    _jwt_token = sb_clients.set_user_jwt(user_session.token)
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            rows = await _sb(client, "GET",
+                             f"/businesses?id=eq.{business_id}"
+                             f"&select=id,name,type,settings,owner_id&limit=1")
+            biz = (rows or [None])[0]
+            if not biz:
+                # RLS filtered it out or it does not exist — the same
+                # answer either way, and neither is an error worth
+                # showing: the panel simply has nothing to draw.
+                return {"missions": [], "open": 0, "awaiting": 0}
+            res = await chief_missions.handle_mission_status(client, biz, {})
+        if res.get("failed"):
+            raise HTTPException(status_code=503, detail="missions unavailable")
+        signal = res.get("signal") or {}
+        return {
+            "missions": res.get("missions") or [],
+            "open": signal.get("open", len(res.get("missions") or [])),
+            "awaiting": signal.get("awaiting", 0),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        # A panel that cannot load must say so rather than render an
+        # empty list — "no missions" and "I could not check" are
+        # different facts and the second must never wear the first.
+        logger.warning(f"chief missions endpoint failed: {e}")
+        raise HTTPException(status_code=503, detail="missions unavailable")
+    finally:
+        sb_clients.reset_user_jwt(_jwt_token)
+
+
 class PrewarmRequest(BaseModel):
     business_id: str
 
