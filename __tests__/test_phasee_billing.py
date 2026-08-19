@@ -41,8 +41,11 @@ def test_enforced_rank_logic(monkeypatch):
     lapsed = {"subscription_status": "past_due", "subscription_plan": "price_practice"}
     # Tier ladder.
     assert fg.has_feature(starter, "bookkeeping_basic") is True
-    assert fg.has_feature(starter, "general_ledger") is False
-    assert fg.has_feature(pro, "general_ledger") is True
+    # 2026-08-19 ruling: the ledger is the RECORD — every tier sees its
+    # own authoritative books. The advanced layer stays professional.
+    assert fg.has_feature(starter, "general_ledger") is True
+    assert fg.has_feature(starter, "reports_full") is False
+    assert fg.has_feature(pro, "reports_full") is True
     assert fg.has_feature(pro, "accountant_package") is True    # pricing review: pro
     assert fg.has_feature(pro, "multi_seat") is False
     assert fg.has_feature(practice, "multi_seat") is True
@@ -138,7 +141,11 @@ def test_plans_payload_carries_the_offer_numbers(monkeypatch):
     assert details["practice"]["bank_connections"] is None        # unlimited
     assert details["professional"]["bank_connections"] == 5
     assert details["starter"]["max_seats"] == 1
-    # The model ladder reaches the payload as display names.
+    # Customer wording is vendor-neutral (2026-08-19 ruling); the real
+    # model names ride alongside for owner surfaces only.
+    assert details["starter"]["deep_analysis"] == "Standard"
+    assert details["professional"]["deep_analysis"] == "Advanced"
+    assert details["practice"]["deep_analysis"] == "Maximum"
     assert details["starter"]["deep_model"] == "Claude Sonnet 5"
     assert details["professional"]["deep_model"] == "Claude Opus 4.8"
     assert details["practice"]["deep_model"] == "Claude Fable 5"
@@ -151,6 +158,8 @@ def test_deep_model_label_honest_under_kill_switch(monkeypatch):
     import chief_models
     monkeypatch.delenv("CHIEF_MODEL_DEEP", raising=False)
     assert chief_models.tier_deep_model_label("practice") == "Claude Fable 5"
+    assert chief_models.deep_analysis_label("practice") == "Maximum"
     monkeypatch.setenv("CHIEF_MODEL_DEEP", "claude-sonnet-5")
     assert chief_models.tier_deep_model_label("practice") is None
     assert chief_models.tier_deep_model_label("starter") is None
+    assert chief_models.deep_analysis_label("practice") is None

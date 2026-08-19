@@ -360,9 +360,12 @@ async def billing_plans():
 
     # The offer numbers per tier, for the plan cards. plan_limits() is
     # the single source of truth (env-dialed credits included); None on
-    # a limit = unlimited. deep_model is None while a CHIEF_MODEL_DEEP
-    # override has the tier ladder switched off — the card must not
-    # promise a model the override is currently denying.
+    # a limit = unlimited. deep_analysis is the CUSTOMER wording
+    # (Standard/Advanced/Maximum — vendor-neutral, 2026-08-19 ruling);
+    # deep_model keeps the real model name for owner surfaces (Mission
+    # Control). Both go None while a CHIEF_MODEL_DEEP override has the
+    # tier ladder switched off — no surface may promise a difference
+    # the override is currently denying.
     import chief_models
     limits = fg.plan_limits()
     plan_details = {p: {
@@ -370,6 +373,7 @@ async def billing_plans():
         "max_seats": limits.get(p, {}).get("max_seats"),
         "max_businesses": limits.get(p, {}).get("max_businesses"),
         "bank_connections": limits.get(p, {}).get("plaid_connections"),
+        "deep_analysis": chief_models.deep_analysis_label(p),
         "deep_model": chief_models.tier_deep_model_label(p),
     } for p in fg.PLANS}
 

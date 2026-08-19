@@ -27,8 +27,15 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
     "bookkeeping_basic": "starter",        # transactions + cash flow + reconciliation
     "reports_basic": "starter",            # P&L, AR aging, balance sheet lite
     "invoicing": "starter",
+    "general_ledger": "starter",           # GL, trial balance, journal.
+                                           # Kevin's ruling 2026-08-19: the ledger
+                                           # is the RECORD — every business gets to
+                                           # see its own authoritative books
+                                           # ("that's for safety"). The upgrade is
+                                           # the advanced layer (reports_full,
+                                           # period_close, accountant_package),
+                                           # never the ledger itself.
     # Professional — the real accounting system (the hero tier)
-    "general_ledger": "professional",      # GL, trial balance, journal
     "period_close": "professional",
     "contractor_payments": "professional", # F.1 pay + 1099
     "reports_full": "professional",        # GL-authoritative + comparison

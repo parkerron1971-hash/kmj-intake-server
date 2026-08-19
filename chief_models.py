@@ -90,8 +90,33 @@ _TIER_LADDER_LABELS = {
 }
 
 
+# Customer-facing wording for the same ladder. Kevin's ruling
+# 2026-08-19: public surfaces never name vendor models — other
+# providers are coming, and the promise is the CAPABILITY tier, not
+# whose model happens to power it today. Owner surfaces (Mission
+# Control) keep tier_deep_model_label for the real model names.
+_TIER_ANALYSIS_LABELS = {
+    "starter": "Standard",
+    "professional": "Advanced",
+    "practice": "Maximum",
+}
+
+
+def deep_analysis_label(plan: str | None) -> str | None:
+    """Vendor-neutral deep-analysis tier for customer-facing surfaces.
+
+    None while a CHIEF_MODEL_DEEP env override is set — with the ladder
+    off every tier runs the same model, so a Standard/Advanced/Maximum
+    claim would be false and the surfaces drop the line instead."""
+    if (os.environ.get("CHIEF_MODEL_DEEP") or "").strip():
+        return None
+    return _TIER_ANALYSIS_LABELS.get((plan or "").strip().lower())
+
+
 def tier_deep_model_label(plan: str | None) -> str | None:
-    """The deep-lane model this tier's ladder grants, as a display name.
+    """The deep-lane model this tier's ladder grants, as a display name
+    — for OWNER surfaces (Mission Control) only; customer surfaces use
+    deep_analysis_label so vendor models are never marketed.
 
     None while a CHIEF_MODEL_DEEP env override is set: the override is
     the platform kill switch and wins over the ladder in model_for(), so
