@@ -81,6 +81,26 @@ _TIER_LADDER = {
 }
 _LADDER_LANES = ("deep", "insight")
 
+# Display names for the ladder, used by billing surfaces (/billing/plans
+# plan_details). Keyed by model id so a ladder change flows through.
+_TIER_LADDER_LABELS = {
+    "claude-sonnet-5": "Claude Sonnet 5",
+    "claude-opus-4-8": "Claude Opus 4.8",
+    "claude-fable-5": "Claude Fable 5",
+}
+
+
+def tier_deep_model_label(plan: str | None) -> str | None:
+    """The deep-lane model this tier's ladder grants, as a display name.
+
+    None while a CHIEF_MODEL_DEEP env override is set: the override is
+    the platform kill switch and wins over the ladder in model_for(), so
+    a plan card must not advertise a per-tier model nobody would get."""
+    if (os.environ.get("CHIEF_MODEL_DEEP") or "").strip():
+        return None
+    model = _TIER_LADDER.get((plan or "").strip().lower())
+    return _TIER_LADDER_LABELS.get(model or "")
+
 
 def model_for(lane: str, plan: str | None = None) -> str:
     """Model ID for a lane; unknown lanes fall back to chat. Pass the

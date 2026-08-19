@@ -3,8 +3,9 @@
 Kevin's pricing ruling: **Starter $79 · Professional $199 · Practice $399**,
 annual = 2 months free, **Founding Member = Professional at $149/mo locked
 for the life of the subscription, first 50 seats**. Nonprofit/ministry =
-20% coupon code. Credit packs unchanged ($10/100 · $25/275 · $50/600 —
-already live, no dashboard products needed).
+20% coupon code. Credit packs (rescaled 2026-08-10): $12/740 · $25/1,555 ·
+$50/3,120 — checkout builds price_data dynamically, no dashboard products
+needed; pricing_config.credit_packs() is the source of truth.
 
 ---
 

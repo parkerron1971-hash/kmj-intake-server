@@ -506,7 +506,8 @@ def tier_cents_per_credit() -> Dict[str, float]:
 # tier, which is the number that decides whether topping up beats
 # upgrading.
 #
-# Cents are unchanged: the packs stay $10 / $25 / $50.
+# Cents after the move: $12 / $25 / $50 — the small pack's price is the
+# only one that changed.
 #
 # Safe to change today: zero credit packs have ever been sold (verified
 # against credit_ledger — no purchase rows exist), so no customer is

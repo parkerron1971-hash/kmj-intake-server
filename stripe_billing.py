@@ -357,9 +357,26 @@ async def billing_plans():
     features_by_plan = {p: [f for f, mp in fg.FEATURE_MIN_PLAN.items()
                             if fg._PLAN_RANK[p] >= fg._PLAN_RANK[mp]]
                         for p in fg.PLANS}
+
+    # The offer numbers per tier, for the plan cards. plan_limits() is
+    # the single source of truth (env-dialed credits included); None on
+    # a limit = unlimited. deep_model is None while a CHIEF_MODEL_DEEP
+    # override has the tier ladder switched off — the card must not
+    # promise a model the override is currently denying.
+    import chief_models
+    limits = fg.plan_limits()
+    plan_details = {p: {
+        "credits_monthly": limits.get(p, {}).get("chief_messages_monthly"),
+        "max_seats": limits.get(p, {}).get("max_seats"),
+        "max_businesses": limits.get(p, {}).get("max_businesses"),
+        "bank_connections": limits.get(p, {}).get("plaid_connections"),
+        "deep_model": chief_models.tier_deep_model_label(p),
+    } for p in fg.PLANS}
+
     any_configured = any(e["configured"] for e in out)
     return {"ok": True, "plans": out, "founder": founder,
             "features_by_plan": features_by_plan,
+            "plan_details": plan_details,
             "enforce": fg.enforcement_on(),
             "note": (None if any_configured else
                      "All features are free for every practitioner until pricing is locked.")}
