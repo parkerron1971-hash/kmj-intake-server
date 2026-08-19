@@ -2092,6 +2092,138 @@ FOLD_SCRIPT = """
 """
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Live plan dials for site copy
+# ══════════════════════════════════════════════════════════════════════
+
+def _tier_dials() -> dict:
+    """The live plan numbers, from the same dials the app's Billing
+    cards read (feature_gates.plan_limits + chief_models). This page
+    carried hand-typed numbers through two rescales; rendering the
+    dials at request time means the site cannot drift from the product
+    again. model is "" while a CHIEF_MODEL_DEEP override has the tier
+    ladder switched off — the page drops the line rather than promise
+    a model nobody would get."""
+    import chief_models
+    import feature_gates
+    import pricing_config
+    prices = pricing_config.tier_price_cents()
+    out = {}
+    for plan, lim in feature_gates.plan_limits().items():
+        banks = lim.get("plaid_connections")
+        out[plan] = {
+            "price": f"${prices.get(plan, 0) // 100}",
+            "credits": f"{lim['chief_messages_monthly']:,}",
+            "seats": lim["max_seats"],
+            "businesses": lim["max_businesses"],
+            "banks": "Unlimited" if banks is None else str(banks),
+            "model": chief_models.tier_deep_model_label(plan) or "",
+        }
+    return out
+
+
+def _price_cards_html() -> str:
+    """The home page's three price cards, numbers from the dials."""
+    d = _tier_dials()
+
+    def card(plan: str, name: str, blurb: str, mid: bool = False) -> str:
+        t = d[plan]
+        seats = "1 seat" if t["seats"] == 1 else f"{t['seats']} team seats"
+        biz = "1 business" if t["businesses"] == 1 else f"{t['businesses']} businesses"
+        banks = ("Unlimited bank connections" if t["banks"] == "Unlimited"
+                 else f"{t['banks']} bank connections")
+        model_li = f"<li>Deep analysis by {t['model']}</li>" if t["model"] else ""
+        return f"""
+      <div class="price-card{' is-mid' if mid else ''}">
+        <div class="price-name">{name}</div>
+        <div class="price-fig"><b>{t['price']}</b><span>/month</span></div>
+        <p>{blurb}</p>
+        <ul class="price-facts">
+          <li>{t['credits']} AI actions a month</li>
+          {model_li}
+          <li>{seats} &middot; {biz}</li>
+          <li>{banks}</li>
+        </ul>
+      </div>"""
+
+    return (
+        card("starter", "Starter",
+             "The full workspace. Contacts, invoicing, scheduling, content, goals, your site, and Chief.")
+        + card("professional", "Professional",
+               "Everything in Starter, plus Autopilot running overnight and deeper Chief automation.",
+               mid=True)
+        + card("practice", "Practice",
+               "Everything in Professional, plus room for a team and more than one business.")
+    )
+
+
+# Feature rows for the tier table on /compare — keys are
+# feature_gates.FEATURE_MIN_PLAN entries; only labeled features render,
+# so an unlabeled future gate never leaks a raw key onto the site.
+_SITE_FEATURE_LABELS = (
+    ("general_ledger", "General Ledger &amp; Trial Balance"),
+    ("reports_full", "Full financial reports"),
+    ("period_close", "Period closing"),
+    ("contractor_payments", "Contractor payments + 1099"),
+    ("accountant_package", "Year-end accountant package"),
+    ("vertical_ledgers", "Trust accounting check (IOLTA)"),
+    ("vertical_reports", "Compliance reports (trust reconciliation, 990 prep)"),
+    ("accountant_collaborator", "Accountant collaborator seat"),
+    ("audit_trail", "Audit trail"),
+)
+
+
+def _plan_compare_section_html() -> str:
+    """Tier-vs-tier table for /compare — the same rows the in-app
+    comparison shows, driven by the same feature map and dials."""
+    import feature_gates
+    d = _tier_dials()
+    plans = ("starter", "professional", "practice")
+
+    def num_row(label, value):
+        cells = "".join(f"<td>{value(d[p])}</td>" for p in plans)
+        return f"<tr><td>{label}</td>{cells}</tr>"
+
+    rows = [
+        num_row("AI actions / month", lambda t: t["credits"]),
+        num_row("Team seats", lambda t: t["seats"]),
+        num_row("Businesses", lambda t: t["businesses"]),
+        num_row("Bank connections", lambda t: t["banks"]),
+    ]
+    if all(d[p]["model"] for p in plans):
+        rows.insert(1, num_row("Deep analysis", lambda t: t["model"]))
+    rank = feature_gates._PLAN_RANK
+    for key, label in _SITE_FEATURE_LABELS:
+        min_plan = feature_gates.FEATURE_MIN_PLAN.get(key)
+        if not min_plan:
+            continue
+        cells = "".join(
+            '<td class="sol">✓</td>' if rank.get(p, 0) >= rank.get(min_plan, 99)
+            else '<td class="alt">&mdash;</td>'
+            for p in plans)
+        rows.append(f"<tr><td>{label}</td>{cells}</tr>")
+    header = "".join(
+        f'<th class="sol-col">{name} {d[p]["price"]}/mo</th>'
+        for p, name in zip(plans, ("Starter", "Professional", "Practice")))
+    return f"""
+<section>
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">Which plan</span>
+      <h2>Every plan is the whole product.</h2>
+      <p>Bigger plans add AI headroom, deeper analysis, seats for a team, and room for more than one business. Annual plans are two months free.</p>
+    </div>
+    <div class="table-wrap reveal reveal-delay-1">
+      <table class="compare plans">
+        <thead><tr><th>What you get</th>{header}</tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
+    </div>
+  </div>
+</section>
+"""
+
+
 def render_home() -> str:
     #      1. blue leads (see :root) — the ember/brass pass read purple-
     #         adjacent to him and he asked to flip the original palette
@@ -2324,6 +2456,9 @@ def render_home() -> str:
         color:var(--text-primary);letter-spacing:-.03em;line-height:1;}
       .price-fig span{font-size:13.5px;color:var(--text-muted);}
       .price-card p{margin:0;font-size:13.5px;line-height:1.65;color:var(--text-secondary);}
+      .price-facts{list-style:none;margin:14px 0 0;padding:14px 0 0;border-top:1px solid var(--border);
+        display:flex;flex-direction:column;gap:7px;font-size:12.5px;color:var(--text-secondary);}
+      .price-facts li{font-variant-numeric:tabular-nums;}
       .price-note{max-width:620px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--text-muted);}
 
       /* ── the chameleon section ───────────────────────────────────── */
@@ -2962,7 +3097,7 @@ def render_home() -> str:
       <div class="card why-card reveal"><div class="check">03</div>
         <div><h3>Real-time, not weekly reports</h3><p>Every metric updates as data changes. No CSV exports, no waiting for someone to refresh.</p></div></div>
       <div class="card why-card reveal reveal-delay-1"><div class="check">04</div>
-        <div><h3>Built for solo, not enterprise</h3><p>No teams, no seat math, no Slack-integration sprawl. Designed for one operator running their whole business.</p></div></div>
+        <div><h3>Built solo-first, not enterprise</h3><p>Designed for one operator running the whole business. When you grow, the Practice plan adds team seats &mdash; without the enterprise sprawl.</p></div></div>
     </div>
   </div>
 </section>
@@ -2975,24 +3110,9 @@ def render_home() -> str:
       <span class="eyebrow">What it costs</span>
       <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Priced for one person running the whole thing.</h2>
     </div>
-    <div class="price-grid reveal reveal-delay-2">
-      <div class="price-card">
-        <div class="price-name">Starter</div>
-        <div class="price-fig"><b>$79</b><span>/month</span></div>
-        <p>The full workspace. Contacts, invoicing, scheduling, content, goals, your site, and Chief.</p>
-      </div>
-      <div class="price-card is-mid">
-        <div class="price-name">Professional</div>
-        <div class="price-fig"><b>$199</b><span>/month</span></div>
-        <p>Everything in Starter, plus Autopilot running overnight and deeper Chief automation.</p>
-      </div>
-      <div class="price-card">
-        <div class="price-name">Practice</div>
-        <div class="price-fig"><b>$399</b><span>/month</span></div>
-        <p>Everything in Professional, plus higher limits and priority onboarding.</p>
-      </div>
+    <div class="price-grid reveal reveal-delay-2">""" + _price_cards_html() + """
     </div>
-    <p class="price-note reveal">Annual plans save about 17%. Running more than one business, or a whole network? That tier is custom &mdash; <a href="/get-started" style="color:var(--accent);">talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
+    <p class="price-note reveal">Annual plans are two months free (about 17% off). Running a team or more than one business? That is what Practice is for; bigger networks are custom &mdash; <a href="/get-started" style="color:var(--accent);">talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
   </div>
 </section>
 
@@ -3430,6 +3550,9 @@ def render_compare() -> str:
       .compare td.sol{color:var(--success);}
       .compare td.alt{color:var(--text-muted);font-style:italic;}
       @media (max-width: 720px){.compare th,.compare td{padding:10px 12px;font-size:12.5px;}}
+      .table-wrap{overflow-x:auto;}
+      .compare.plans{min-width:600px;}
+      .compare.plans td{font-variant-numeric:tabular-nums;}
       .switch-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:18px;margin-top:14px;}
       @media (max-width: 860px){.switch-grid{grid-template-columns:1fr;}}
       .switch-card{padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:14px;}
@@ -3483,7 +3606,7 @@ def render_compare() -> str:
           <li><span>Chief of Staff (AI)</span><span>✓</span></li>
         </ul>
         <div class="cost-total"><span class="label">From</span><span class="price">$79 /mo</span></div>
-        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Practice $399, about 17% off on annual. Currently in private beta: apply for access, and beta pricing is grandfathered for good.</p>
+        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Practice $399, two months free on annual. Currently in private beta: apply for access, and beta pricing is grandfathered for good.</p>
       </div>
     </div>
   </div>
@@ -3516,7 +3639,7 @@ def render_compare() -> str:
     </div>
   </div>
 </section>
-
+""" + _plan_compare_section_html() + """
 <section>
   <div class="container">
     <div class="section-head reveal">
@@ -3594,11 +3717,11 @@ def render_faq() -> str:
       </details>
       <details class="faq-item">
         <summary>Do I need a team to use this?</summary>
-        <div class="faq-body"><p>No. The whole product assumes one operator. No seat math, no "add a teammate" friction, no admin role management. If you grow to a team later, the data model supports it, but it's not the default.</p></div>
+        <div class="faq-body"><p>No. Solo-first is the default: one operator, everything in one workspace. When you do bring people in, the Practice plan includes team seats with roles and an accountant collaborator seat &mdash; invite by email, they see the business, no enterprise admin sprawl.</p></div>
       </details>
       <details class="faq-item">
         <summary>What about pricing?</summary>
-        <div class="faq-body"><p>We're in private beta right now. Pricing is coming when we open public access. Apply for access. If you're a fit, we'll get you in early and grandfather you on whatever pricing launches.</p></div>
+        <div class="faq-body"><p>Starter is $79/month, Professional $199, and Practice $399 &mdash; every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. Annual plans are two months free. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. We're in private beta: apply for access, and your beta pricing is grandfathered for good &mdash; if prices rise later, yours does not move.</p></div>
       </details>
       <details class="faq-item">
         <summary>How is this different from Notion, HubSpot, or just using ChatGPT?</summary>
@@ -3624,7 +3747,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item">
         <summary>Does it work for churches and ministries?</summary>
-        <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry: pastors, ministry leaders, faith-based coaches. The product is single-operator: one person, one workspace. If you need multi-staff role management or church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
+        <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry: pastors, ministry leaders, faith-based coaches. The product is solo-first &mdash; one person runs the workspace &mdash; and the Practice plan adds staff seats when you need them. If you need full church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
       </details>
       <details class="faq-item">
         <summary>Can the AI publish to my social accounts?</summary>
@@ -4011,7 +4134,7 @@ def render_get_started() -> str:
           </li>
           <li>
             <span class="num">4</span>
-            <span class="text"><strong>You start running your business from one place,</strong> and grandfather in on whatever pricing we launch publicly.</span>
+            <span class="text"><strong>You start running your business from one place,</strong> and lock in your beta pricing for good.</span>
           </li>
         </ul>
       </aside>
