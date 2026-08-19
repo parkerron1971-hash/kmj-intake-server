@@ -427,6 +427,12 @@ app.include_router(lead_admin_diag_router)
 # Tauri app.
 from platform_console import router as platform_console_router
 app.include_router(platform_console_router)
+# Dev Bridge (2026-08-19) — Mission Control's Dev Desk dispatches dev
+# tasks: the cloud lane fires @claude build issues, the local lane is
+# polled by Solution Space on Kevin's machine. /platform/dev-desk/*
+# (owner JWT) + /dev-bridge/* (device token / per-task report key).
+from dev_bridge import router as dev_bridge_router
+app.include_router(dev_bridge_router)
 # Phase 5b of BILLING_PLAN — Stripe subscription billing.
 # /billing/checkout (authed), /billing/portal (authed),
 # /billing/webhook (Stripe signature-verified), /billing/status (open).

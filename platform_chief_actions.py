@@ -463,6 +463,45 @@ async def _handler_queue_build(action: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "label": f"Logged (dispatch unavailable — check GITHUB_TOKEN): {title[:60]}"}
 
 
+async def _handler_send_to_solution_space(action: Dict[str, Any]) -> Dict[str, Any]:
+    """Dev Bridge, local lane (2026-08-19): file a dev task on the local
+    queue. Solution Space on Kevin's desktop polls this queue and handles
+    the rest; progress lands back in the Dev Desk. See dev_bridge.py."""
+    title = (action.get("title") or "").strip()
+    if not title:
+        return {"ok": False, "label": "send_to_solution_space: title required"}
+    details = (action.get("details") or "").strip() or title
+    repo_key = (action.get("repo") or "frontend").strip().lower()
+    try:
+        import secrets as _secrets
+        from dev_bridge import LOCAL_PROJECTS
+        project_path = (action.get("project_path") or "").strip() \
+            or LOCAL_PROJECTS.get(repo_key, "")
+        headers = _service_headers()
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            r = await c.post(
+                f"{SUPABASE_URL}/rest/v1/dev_tasks",
+                headers=headers,
+                json={
+                    "lane": "local",
+                    "status": "queued",
+                    "title": title[:300],
+                    "details": details[:4000],
+                    "repo": repo_key,
+                    "project_path": project_path,
+                    "report_key": _secrets.token_hex(16),
+                },
+            )
+            if r.status_code >= 400:
+                return {"ok": False,
+                        "label": "Queue failed — is the dev-bridge migration applied?",
+                        "error": r.text[:200]}
+    except Exception as e:
+        return {"ok": False, "label": f"Solution Space queue failed: {e}"}
+    return {"ok": True,
+            "label": f"Queued for Solution Space: {title[:70]}"}
+
+
 # ─── Dispatcher ────────────────────────────────────────────────────────
 
 HANDLERS = {
@@ -473,6 +512,7 @@ HANDLERS = {
     "log_platform_note":       _handler_log_platform_note,
     "resolve_platform_note":   _handler_resolve_platform_note,
     "queue_build":             _handler_queue_build,
+    "send_to_solution_space":  _handler_send_to_solution_space,
 }
 
 
