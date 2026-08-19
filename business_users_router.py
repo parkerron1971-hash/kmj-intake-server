@@ -191,6 +191,35 @@ def list_team(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, A
             "seats": billing_limits.can_add_seat(biz, biz_row)}
 
 
+@router.get("/validate")
+def validate_invite(token: str) -> Dict[str, Any]:
+    """Front-door check for an invite link, mirroring
+    /access/invites/validate: the auth screen calls this BEFORE a session
+    exists, so a brand-new invitee can unlock sign-up (instead of the
+    waitlist) and get their email prefilled. No auth on purpose — the
+    token is the secret, and the response reveals only what the invite
+    email already told its holder. Acceptance still requires a session
+    (POST /team/accept)."""
+    from urllib.parse import quote
+    tok = (token or "").strip()
+    if not tok:
+        return {"ok": True, "valid": False}
+    rows = sb_clients.sb_get_as_service(
+        f"/business_users?token=eq.{quote(tok, safe='')}"
+        f"&status=in.(invited,active)"
+        f"&select=invited_email,role,status,business_id&limit=1") or []
+    if not rows:
+        return {"ok": True, "valid": False}
+    inv = rows[0]
+    biz = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{inv.get('business_id')}&select=name&limit=1") or []
+    return {"ok": True, "valid": True,
+            "email": inv.get("invited_email"),
+            "role": inv.get("role"),
+            "business_name": (biz[0].get("name") if biz else None),
+            "already_active": inv.get("status") == "active"}
+
+
 class AcceptBody(BaseModel):
     token: str
 

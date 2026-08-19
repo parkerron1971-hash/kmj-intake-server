@@ -226,6 +226,30 @@ def test_seat_cap_and_invite_flow(fake, monkeypatch):
     assert bl.can_add_seat("b1")["allowed"] is True
 
 
+def test_validate_is_the_prelogin_front_door(fake, monkeypatch):
+    """A brand-new invitee has no session, so the auth screen needs a
+    no-auth validate (like /access/invites/validate) to unlock sign-up
+    and prefill the email. Without it the waitlist swallowed every
+    invite sent to someone who didn't already have an account."""
+    fb = fake
+    _biz(fb, "b1")
+    out = asyncio.run(bu.invite("b1", bu.InviteBody(email="new@x.com", role="member"),
+                                _stepup(_User().id), _User()))
+    token = out["member"].get("token") or "tok1"
+    fb.rows("business_users")[0]["token"] = token
+    v = bu.validate_invite(token)
+    assert v["valid"] is True
+    assert v["email"] == "new@x.com"
+    assert v["role"] == "member"
+    assert v["already_active"] is False
+    # Junk tokens and blanks stay at the waitlist — valid=False, no 500s.
+    assert bu.validate_invite("no-such-token")["valid"] is False
+    assert bu.validate_invite("")["valid"] is False
+    # A revoked invite must not unlock sign-up.
+    fb.rows("business_users")[0]["status"] = "revoked"
+    assert bu.validate_invite(token)["valid"] is False
+
+
 def test_invite_requires_owner_and_valid_role(fake):
     fb = fake
     _biz(fb, "b1")
