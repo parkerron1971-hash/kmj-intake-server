@@ -1141,6 +1141,20 @@ async def startup():
                               id="lead_response_reconcile")
         except Exception as e:
             print(f"   [warn] lead response reconcile not scheduled: {e}")
+    # THE REORDER BRAIN (2026-08-18) — stock at/below its per-offering
+    # reorder point raises ONE Chief notification per business whose tap
+    # drafts the purchase order. Hourly so the alert lands soon after the
+    # crossing, but a 72h dedup + the reorder_pending_at stamp mean a
+    # standing condition never nags. Waking-hours guard inside.
+    # Kill switch: REORDER_SWEEP=off.
+    if (os.environ.get("REORDER_SWEEP") or "on").strip().lower() != "off":
+        try:
+            import reorder_engine as _reorder
+            scheduler.add_job(g("reorder_sweep",
+                                _reorder.low_stock_reorder_sweep),
+                              "interval", hours=1, id="reorder_sweep")
+        except Exception as e:
+            print(f"   [warn] reorder sweep not scheduled: {e}")
     # Chief Layers arc (2026-07-09) — the weekly longitudinal insight
     # engine (Opus lane; eligibility + cadence + per-tick cap inside).
     # Kill switch: CHIEF_INSIGHTS=off.

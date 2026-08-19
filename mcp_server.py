@@ -356,6 +356,24 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "low-stock and out-of-stock lists. Read-only — adjusting stock "
         "is not available here.",
         _NO_ARGS),
+    # Deliberately exposed (tripwire bump 26 → 27). draft_purchase_order
+    # COMPOSES a reorder email preview and writes nothing — the supplier
+    # name/email it reveals is the business's own reorder plan, the same
+    # operational class as check_inventory's stock counts. SENDING the PO
+    # (send_purchase_order, class C, client-facing) stays OFF this
+    # surface: an outside agent may see what would go out, never send it.
+    "draft_purchase_order": (
+        "Preview the purchase-order email Chief would send to a "
+        "product's supplier (quantity defaults to the product's reorder "
+        "plan). Pure preview — nothing is sent, and sending is not "
+        "available here; the practitioner approves sends in the app.",
+        _obj({"offering_id": {"type": "string",
+                              "description": "The offering (product) id."},
+              "name": {"type": "string",
+                       "description": "Product name, if the id is unknown."},
+              "qty": {"type": "integer",
+                      "description": "Optional. Override the plan's "
+                                     "reorder quantity."}})),
 }
 
 
@@ -540,6 +558,13 @@ HANDOFFS: Dict[str, _Handoff] = {
         text=lambda p: f"Chief can draft a follow-up to {_contact_name(p)}.",
         where="Operate › Contacts",
         when=_gone_quiet),
+
+    "draft_purchase_order": _Handoff(
+        verb="send_purchase_order",
+        text="Chief can send this purchase order to the supplier once "
+             "you approve it.",
+        where="Operate › Catalog",
+        when=lambda p: _num(_sig(p).get("po_ready")) > 0),
 }
 
 

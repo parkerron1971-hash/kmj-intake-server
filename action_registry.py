@@ -529,6 +529,21 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                     "switch, unattended downstream money effect). Chief inventing "
                                     "a stock count unprompted is exactly the failure mode; the "
                                     "practitioner saying 'add 10 tees' is the approval"),
+    # THE REORDER BRAIN (2026-08-18) — Chief notices low stock, drafts
+    # the PO, the practitioner's word sends it. Three verbs, three classes.
+    "set_reorder_plan":     _w("A", "sets reorder_at/reorder_qty/supplier on ONE offering. Arms "
+                                    "only a notification and a draft — the send stays behind its "
+                                    "own class-C verb — and one PATCH reverses it completely. Not "
+                                    "the setup_store shape: nothing downstream executes unattended"),
+    "draft_purchase_order": _r("composes the PO email preview from the offering's reorder plan. "
+                               "Writes nothing; the same composer renders the real send, so what "
+                               "the practitioner approves is exactly what goes out"),
+    "send_purchase_order":  _w("C", "emails a purchase order to the SUPPLIER under the business "
+                                    "identity — leaves the app, commits the business to an order "
+                                    "in a counterparty's inbox, no recall. Also stamps "
+                                    "reorder_pending_at (the duplicate-order guard); refuses a "
+                                    "second send while one is outstanding unless forced. The "
+                                    "practitioner's 'send it' is the approval — never unprompted"),
     "setup_store":          _w("C", "sets storefront tax rate and flat shipping. The Stripe leg "
                                     "turned out to be a READ (select=stripe_account_id, to warn "
                                     "when checkout would refuse) — it creates no Stripe objects, "
