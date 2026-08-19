@@ -116,3 +116,41 @@ def test_plan_limits_unenforced_then_enforced(monkeypatch):
     # Ranking must hold whatever the dials say.
     assert (pc.tier_credits()["starter"] < pc.tier_credits()["professional"]
             < pc.tier_credits()["practice"])
+
+
+def test_plans_payload_carries_the_offer_numbers(monkeypatch):
+    """The pricing review found the actual tier deltas (credits, seats,
+    businesses, banks, model) lived only in Mission Control — the plan
+    card showed none of them. /billing/plans now carries plan_details so
+    the card can say what the money buys."""
+    import asyncio
+    import pricing_config as pc
+    for k in ("STRIPE_SECRET_KEY", "STRIPE_PRICE_ID_FOUNDER",
+              "STRIPE_PRICE_ID_FOUNDER_ANNUAL", "CHIEF_MODEL_DEEP"):
+        monkeypatch.delenv(k, raising=False)
+    payload = asyncio.run(sb.billing_plans())
+    details = payload["plan_details"]
+    assert set(details) == set(fg.PLANS)
+    # Numbers come from the dials, not literals a tuning pass would break.
+    assert details["practice"]["credits_monthly"] == pc.tier_credits()["practice"]
+    assert details["practice"]["max_seats"] == 5
+    assert details["practice"]["max_businesses"] == 3
+    assert details["practice"]["bank_connections"] is None        # unlimited
+    assert details["professional"]["bank_connections"] == 5
+    assert details["starter"]["max_seats"] == 1
+    # The model ladder reaches the payload as display names.
+    assert details["starter"]["deep_model"] == "Claude Sonnet 5"
+    assert details["professional"]["deep_model"] == "Claude Opus 4.8"
+    assert details["practice"]["deep_model"] == "Claude Fable 5"
+
+
+def test_deep_model_label_honest_under_kill_switch(monkeypatch):
+    """A CHIEF_MODEL_DEEP override disables the tier ladder in
+    model_for(), so the plans payload must stop advertising per-tier
+    models while it is set."""
+    import chief_models
+    monkeypatch.delenv("CHIEF_MODEL_DEEP", raising=False)
+    assert chief_models.tier_deep_model_label("practice") == "Claude Fable 5"
+    monkeypatch.setenv("CHIEF_MODEL_DEEP", "claude-sonnet-5")
+    assert chief_models.tier_deep_model_label("practice") is None
+    assert chief_models.tier_deep_model_label("starter") is None
