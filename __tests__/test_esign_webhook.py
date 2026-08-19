@@ -20,6 +20,7 @@ twice, write a second audit row, or send the confirmation emails again.
 from __future__ import annotations
 
 import asyncio
+import json
 import pathlib
 import sys
 
@@ -28,6 +29,21 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import pytest
 
 import boldsign_router as br
+
+
+class _Req:
+    """The handler reads raw bytes and headers; that is all this needs.
+
+    The signature check is covered in test_esign_webhook_signature.py —
+    these tests run with no secret configured, so they exercise the
+    second and more important door: the handler does not believe the
+    payload regardless of who sent it."""
+    def __init__(self, payload: dict, headers: dict | None = None):
+        self._body = json.dumps(payload).encode()
+        self.headers = headers or {}
+
+    async def body(self) -> bytes:
+        return self._body
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────
@@ -58,6 +74,8 @@ class _Spy:
 @pytest.fixture
 def spy(monkeypatch):
     s = _Spy()
+    # These tests are about the second door, not the signature.
+    monkeypatch.delenv("BOLDSIGN_WEBHOOK_SECRET", raising=False)
 
     monkeypatch.setattr(br.sb_clients, "sb_patch_as_service",
                         lambda path, body: s.patched.append((path, body)))
@@ -126,7 +144,7 @@ def test_webhook_ignores_unknown_document(spy, monkeypatch):
     never inserted, never acted on."""
     monkeypatch.setattr(br.sb_clients, "sb_get_as_service", lambda path: [])
 
-    out = asyncio.run(br.esign_webhook({"documentId": "not-ours"}))
+    out = asyncio.run(br.esign_webhook(_Req({"documentId": "not-ours"})))
 
     assert out["ok"] is True
     assert out["ignored"] == "unknown_document"
@@ -153,11 +171,11 @@ def test_webhook_does_not_believe_the_payload(spy, monkeypatch):
         return "sent"
     monkeypatch.setattr(br, "_live_status", _still_out)
 
-    out = asyncio.run(br.esign_webhook({
+    out = asyncio.run(br.esign_webhook(_Req({
         "documentId": "bs-doc-1",
         "status": "completed",          # the lie
         "data": {"status": "completed"},
-    }))
+    })))
 
     assert out["changed"] is False
     assert spy.emitted == []
@@ -176,7 +194,7 @@ def test_webhook_applies_the_providers_truth(spy, monkeypatch):
         return "completed"
     monkeypatch.setattr(br, "_live_status", _completed)
 
-    out = asyncio.run(br.esign_webhook({"documentId": "bs-doc-1"}))
+    out = asyncio.run(br.esign_webhook(_Req({"documentId": "bs-doc-1"})))
 
     assert out["changed"] is True
     assert out["status"] == "completed"
@@ -200,7 +218,7 @@ def test_webhook_reads_the_nested_id_shape(spy, monkeypatch):
         return "completed"
     monkeypatch.setattr(br, "_live_status", _completed)
 
-    asyncio.run(br.esign_webhook({"data": {"documentId": "bs-doc-1"}}))
+    asyncio.run(br.esign_webhook(_Req({"data": {"documentId": "bs-doc-1"}})))
     assert "bs-doc-1" in seen["path"]
 
 
@@ -210,13 +228,15 @@ def test_webhook_always_returns_200(spy, monkeypatch):
     monkeypatch.setattr(br.sb_clients, "sb_get_as_service", lambda path: [])
 
     for payload in ({}, {"documentId": ""}, {"data": {}}, {"documentId": "x"}):
-        out = asyncio.run(br.esign_webhook(payload))
+        out = asyncio.run(br.esign_webhook(_Req(payload)))
         assert out["ok"] is True
 
 
-def test_secret_filters_noise_when_configured(spy, monkeypatch):
-    """The secret is a noise filter, not the security boundary — but
-    when it is set, a mismatch is dropped before any lookup."""
+def test_unsigned_delivery_is_dropped_before_any_lookup(spy, monkeypatch):
+    """With a secret configured, an unsigned delivery never reaches the
+    database. Full signature coverage lives in
+    test_esign_webhook_signature.py — this pins that the check happens
+    FIRST, so an anonymous flood cannot make us do lookups."""
     monkeypatch.setenv("BOLDSIGN_WEBHOOK_SECRET", "s3cret")
     called = {"n": 0}
     def _get(path):
@@ -224,9 +244,9 @@ def test_secret_filters_noise_when_configured(spy, monkeypatch):
         return []
     monkeypatch.setattr(br.sb_clients, "sb_get_as_service", _get)
 
-    out = asyncio.run(br.esign_webhook({"documentId": "bs-doc-1", "secret": "wrong"}))
+    out = asyncio.run(br.esign_webhook(_Req({"documentId": "bs-doc-1"})))
 
-    assert out["ignored"] == "auth"
+    assert out["ignored"] == "bad_signature"
     assert called["n"] == 0
 
 

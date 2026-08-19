@@ -20,10 +20,11 @@ Surface (all owner-gated):
   POST /esign/webhook         — BoldSign calls this when a document is
                                 signed, declined, or expires. PUBLIC by
                                 necessity (the provider has no login),
-                                so it authenticates by shared secret and
-                                by looking the document up on OUR side —
-                                a payload naming an unknown document is
-                                ignored, never inserted.
+                                so it authenticates two ways: the
+                                X-BoldSign-Signature HMAC, and looking
+                                the document up on OUR side — a payload
+                                naming an unknown document is ignored,
+                                never inserted.
 
 WHY A WEBHOOK AND NOT JUST REFRESH. Refresh only tells the truth when
 somebody is looking at the panel. A signature that lands on a Sunday
@@ -42,13 +43,17 @@ per-template placement is the day-two refinement.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import sb_clients
@@ -395,40 +400,137 @@ async def esign_refresh(esign_id: str, biz: str,
     return {"ok": True, **result}
 
 
+# ── Webhook signature ────────────────────────────────────────────────
+#
+# BoldSign signs each delivery:
+#
+#   X-BoldSign-Signature: t=1668693823, s0=<hex>, s1=<hex>
+#
+# where each signature is HMAC-SHA256 over the literal string
+# "{t}.{raw body bytes}" keyed by the signing secret from the webhook's
+# dashboard page. s1 appears only while a rotated key is still valid, so
+# a match against EITHER is a pass.
+#
+# THE RAW BODY IS THE MESSAGE. Re-serialising the parsed JSON changes
+# whitespace and key order and the signature stops matching, which is
+# why the handler below takes a Request and reads bytes rather than
+# letting FastAPI hand it a dict.
+#
+# ON THE TIMESTAMP. The documented advice is to reject deliveries older
+# than five minutes, to stop replay. We log a stale timestamp and carry
+# on instead, deliberately: a replay here is already inert. The handler
+# does not believe the payload — it re-reads the real status from
+# BoldSign and _apply_status is idempotent — so replaying a genuine
+# "Signed" delivery either re-applies a status the row already has (a
+# no-op) or is contradicted by the provider. Rejecting on age would buy
+# nothing and would silently drop a legitimate late retry, which is the
+# failure that actually costs a confirmation email.
+
+SIGNATURE_HEADER = "X-BoldSign-Signature"
+STALE_AFTER_SECONDS = 300
+
+
+def _parse_signature_header(raw_header: str) -> tuple:
+    """-> (timestamp:str|None, [signatures]) from 't=..., s0=..., s1=...'"""
+    ts = None
+    sigs = []
+    for part in (raw_header or "").split(","):
+        piece = part.strip()
+        if not piece or "=" not in piece:
+            continue
+        k, _, v = piece.partition("=")
+        k = k.strip().lower()
+        v = v.strip()
+        if k == "t":
+            ts = v
+        elif k.startswith("s") and v:
+            sigs.append(v)
+    return ts, sigs
+
+
+def verify_webhook_signature(raw_body: bytes, header: str, secret: str) -> bool:
+    """True when the delivery really came from BoldSign.
+
+    Constant-time throughout: a comparison that returns early leaks the
+    signature one byte at a time."""
+    if not secret:
+        return True                      # unconfigured — see the handler
+    ts, sigs = _parse_signature_header(header)
+    if not ts or not sigs:
+        return False
+
+    signed = ts.encode() + b"." + raw_body
+    expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+
+    ok = False
+    for candidate in sigs:               # every one, no early return
+        if hmac.compare_digest(expected, candidate.strip().lower()):
+            ok = True
+    return ok
+
+
+def _timestamp_age(header: str) -> Optional[int]:
+    ts, _ = _parse_signature_header(header)
+    try:
+        return int(time.time()) - int(ts)
+    except (TypeError, ValueError):
+        return None
+
+
 @router.post("/webhook")
-async def esign_webhook(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def esign_webhook(request: Request) -> Dict[str, Any]:
     """BoldSign tells us a document moved. PUBLIC by necessity.
 
-    THE PAYLOAD IS NEVER TRUSTED. It names a document id and nothing
-    else is read from it — we look that id up in OUR table, and then ask
-    BoldSign directly what the status is. So the webhook is a NUDGE TO
-    GO CHECK, not a source of truth, and the worst an unauthenticated
-    caller achieves is making us re-poll a document we already own. That
-    is a rate-limit question, not a security one, which is why this
-    endpoint does not depend on a shared secret being configured
-    correctly before signatures start working.
+    TWO INDEPENDENT CHECKS, and the second is the one that matters.
 
-    BOLDSIGN_WEBHOOK_SECRET is honoured when set — as a cheap filter
-    against noise, not as the thing standing between an attacker and a
-    forged completion. Nothing here can forge a completion.
+    First, the X-BoldSign-Signature HMAC, when BOLDSIGN_WEBHOOK_SECRET
+    is configured. That proves the delivery came from BoldSign.
+
+    Second, and regardless of the first: THE PAYLOAD IS NEVER BELIEVED.
+    The only field read from it is a document id, which is looked up in
+    OUR table, and the status comes from asking BoldSign directly. So
+    the webhook is a NUDGE TO GO CHECK, not a source of truth. Even with
+    no secret set, the worst an anonymous caller achieves is making us
+    re-poll a document we already own — a rate-limit question, not a
+    security one. That is why signatures still work before the secret is
+    configured, rather than the feature appearing broken until someone
+    finds the right dashboard page.
 
     Always 200. A webhook endpoint that returns errors gets retried,
     then throttled, then disabled by the provider; an unknown document
     is a fact to log, not a failure to advertise."""
+    raw_body = await request.body()
+    sig_header = request.headers.get(SIGNATURE_HEADER, "")
     secret = (os.environ.get("BOLDSIGN_WEBHOOK_SECRET") or "").strip()
+
     if secret:
-        got = str(payload.get("secret") or "").strip()
-        if got != secret:
-            logger.warning("[esign] webhook rejected: secret mismatch")
-            return {"ok": True, "ignored": "auth"}
+        if not verify_webhook_signature(raw_body, sig_header, secret):
+            logger.warning("[esign] webhook rejected: bad signature")
+            return {"ok": True, "ignored": "bad_signature"}
+        age = _timestamp_age(sig_header)
+        if age is not None and age > STALE_AFTER_SECONDS:
+            # Logged, not rejected — see the note above the verifier.
+            logger.info(f"[esign] webhook signature is {age}s old (replay is inert here)")
+    else:
+        logger.info("[esign] webhook unsigned — BOLDSIGN_WEBHOOK_SECRET not set")
+
+    try:
+        payload = json.loads(raw_body or b"{}")
+        if not isinstance(payload, dict):
+            payload = {}
+    except ValueError:
+        logger.info("[esign] webhook body was not JSON — ignored")
+        return {"ok": True, "ignored": "bad_json"}
 
     # BoldSign nests the id differently across event shapes; take the
     # first one that looks like an id rather than pinning one path.
     data = payload.get("data") or {}
+    document = payload.get("document") or {}
     doc_obj = data.get("documentId") or data.get("document") or {}
     document_id = (
         payload.get("documentId")
         or data.get("documentId")
+        or (document.get("documentId") if isinstance(document, dict) else None)
         or (doc_obj.get("documentId") if isinstance(doc_obj, dict) else None)
         or ""
     )
