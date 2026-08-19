@@ -37,7 +37,7 @@ def test_home_price_cards_read_the_dials():
     assert f"{limits['practice']['max_seats']} team seats" in html
     assert f"{limits['practice']['max_businesses']} businesses" in html
     assert "Unlimited bank connections" in html
-    assert "Claude Fable 5" in html            # the ladder reaches the page
+    assert "Maximum deep analysis" in html     # the ladder reaches the page
     # Claims the product cannot back stay off the page.
     assert "priority onboarding" not in html
     assert "no seat math" not in html.lower()
@@ -47,7 +47,7 @@ def test_compare_page_has_the_tier_table():
     html = marketing_pages.render_compare()
     credits = pricing_config.tier_credits()
     assert f"{credits['practice']:,}" in html
-    for label in ("Claude Sonnet 5", "Claude Opus 4.8", "Claude Fable 5"):
+    for label in ("Standard", "Advanced", "Maximum"):
         assert label in html
     assert "Team seats" in html
     assert "Bank connections" in html
@@ -57,12 +57,23 @@ def test_compare_page_has_the_tier_table():
     assert "accountant_collaborator" not in html
 
 
-def test_model_kill_switch_drops_the_model_lines(monkeypatch):
-    """A CHIEF_MODEL_DEEP override disables the tier ladder, so the
-    site must stop advertising per-tier models while it is set."""
+def test_public_pages_never_name_vendor_models():
+    """Kevin's ruling 2026-08-19: the deep-analysis ladder is sold as a
+    capability (Standard/Advanced/Maximum), never as vendor model names
+    — providers will diversify beyond one vendor."""
+    for html in (marketing_pages.render_home(), marketing_pages.render_compare(),
+                 marketing_pages.render_faq()):
+        for name in ("Claude", "Sonnet", "Opus", "Fable", "GPT-", "Gemini"):
+            assert name not in html
+
+
+def test_model_kill_switch_drops_the_analysis_lines(monkeypatch):
+    """A CHIEF_MODEL_DEEP override disables the tier ladder — every
+    tier runs the same model — so the site must stop advertising a
+    per-tier analysis difference while it is set."""
     monkeypatch.setenv("CHIEF_MODEL_DEEP", "claude-sonnet-5")
-    assert "Deep analysis by" not in marketing_pages.render_home()
-    assert "Claude Fable 5" not in marketing_pages.render_compare()
+    assert "deep analysis</li>" not in marketing_pages.render_home()
+    assert "Maximum" not in marketing_pages.render_compare()
 
 
 def test_faq_publishes_the_ladder_and_drops_the_contradictions():

@@ -2101,9 +2101,11 @@ def _tier_dials() -> dict:
     cards read (feature_gates.plan_limits + chief_models). This page
     carried hand-typed numbers through two rescales; rendering the
     dials at request time means the site cannot drift from the product
-    again. model is "" while a CHIEF_MODEL_DEEP override has the tier
-    ladder switched off — the page drops the line rather than promise
-    a model nobody would get."""
+    again. analysis is the vendor-neutral wording (2026-08-19 ruling:
+    the public site never names AI models — providers will diversify);
+    it is "" while a CHIEF_MODEL_DEEP override has the tier ladder
+    switched off, and the page drops the line rather than promise a
+    difference nobody would get."""
     import chief_models
     import feature_gates
     import pricing_config
@@ -2117,7 +2119,7 @@ def _tier_dials() -> dict:
             "seats": lim["max_seats"],
             "businesses": lim["max_businesses"],
             "banks": "Unlimited" if banks is None else str(banks),
-            "model": chief_models.tier_deep_model_label(plan) or "",
+            "analysis": chief_models.deep_analysis_label(plan) or "",
         }
     return out
 
@@ -2132,7 +2134,7 @@ def _price_cards_html() -> str:
         biz = "1 business" if t["businesses"] == 1 else f"{t['businesses']} businesses"
         banks = ("Unlimited bank connections" if t["banks"] == "Unlimited"
                  else f"{t['banks']} bank connections")
-        model_li = f"<li>Deep analysis by {t['model']}</li>" if t["model"] else ""
+        model_li = f"<li>{t['analysis']} deep analysis</li>" if t["analysis"] else ""
         return f"""
       <div class="price-card{' is-mid' if mid else ''}">
         <div class="price-name">{name}</div>
@@ -2190,8 +2192,8 @@ def _plan_compare_section_html() -> str:
         num_row("Businesses", lambda t: t["businesses"]),
         num_row("Bank connections", lambda t: t["banks"]),
     ]
-    if all(d[p]["model"] for p in plans):
-        rows.insert(1, num_row("Deep analysis", lambda t: t["model"]))
+    if all(d[p]["analysis"] for p in plans):
+        rows.insert(1, num_row("Deep analysis", lambda t: t["analysis"]))
     rank = feature_gates._PLAN_RANK
     for key, label in _SITE_FEATURE_LABELS:
         min_plan = feature_gates.FEATURE_MIN_PLAN.get(key)
