@@ -2149,6 +2149,19 @@ def _neutralize_untrusted(text: Any) -> str:
 # So a spoken class-C action holds ONCE and asks for a specific spoken
 # confirmation. The same shape as the untrusted-taint hold below: the
 # action is not refused, it is deferred to a second, deliberate breath.
+# How many action tags were dropped this turn because generation was cut
+# off mid-JSON. Read after extraction so a turn can tell the difference
+# between "the model chose not to act" and "the model tried and we lost
+# it" — which look identical in `actions_taken`.
+_TRUNCATED_TAGS: "contextvars.ContextVar[int]" = contextvars.ContextVar(
+    "chief.truncated_tags", default=0)
+
+
+def truncated_tags() -> int:
+    """Action tags lost to the output ceiling on this turn."""
+    return _TRUNCATED_TAGS.get()
+
+
 _TURN_IS_VOICE: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
     "chief.turn_is_voice", default=False)
 _TURN_CONFIRMED: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
@@ -2896,7 +2909,17 @@ def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
             # INSIDE the JSON, leaking the body into user-visible
             # text. A tag that opens [ACTION:{ is never meant to be
             # seen: drop the fragment through end-of-text. (2026-07-17)
-            print(f"[Chief Parser] Truncated tag at {start} — dropping fragment", flush=True)
+            # LOUD, because this is the one failure that looks like
+            # success from every other angle: the reply reads fine, the
+            # turn returns 200, and the thing the practitioner was told
+            # to look at never existed. A silent print into stdout is
+            # how it went unnoticed for a day.
+            _TRUNCATED_TAGS.set(_TRUNCATED_TAGS.get() + 1)
+            logger.warning(
+                "[Chief Parser] TRUNCATED ACTION TAG dropped at %s — the model "
+                "ran out of output budget mid-JSON, so whatever it promised to "
+                "show was never executed. Raise the lane's max_tokens if this "
+                "recurs on one surface.", start)
             i = n
             continue
 
@@ -17344,6 +17367,7 @@ async def chief_chat(
             # the check). Whether this turn is itself the go-ahead is
             # judged from the practitioner's own words.
             _is_voice_turn = (req.client_surface or "") == "voice"
+            _trunc_token = _TRUNCATED_TAGS.set(0)
             _voice_token = _TURN_IS_VOICE.set(_is_voice_turn)
             _confirm_token = _TURN_CONFIRMED.set(
                 _is_voice_turn and _is_voice_confirmation(req.message or ""))
@@ -17633,6 +17657,7 @@ async def chief_chat(
             try:
                 _TURN_IS_VOICE.reset(_voice_token)
                 _TURN_CONFIRMED.reset(_confirm_token)
+                _TRUNCATED_TAGS.reset(_trunc_token)
             except Exception:
                 _TURN_IS_VOICE.set(False)
                 _TURN_CONFIRMED.set(False)

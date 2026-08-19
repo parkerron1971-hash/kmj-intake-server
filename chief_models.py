@@ -53,7 +53,17 @@ _LANE_DEFAULTS = {
 # (save_packages / save_launch_plan) can be large, hence 2400.
 _LANE_MAX_TOKENS = {
     "deep":  2400,
-    "voice": 700,
+    # 700 was set when a voice reply was ONLY spoken words, and ~110 of
+    # them fit with room to spare. It stopped being true the day Chief
+    # could put things on screen: an [ACTION:] tag is emitted in the
+    # same completion as the reply and usually AFTER it, so a rich one
+    # — an 8-step show_plan, a 4-block show_readout — ran the budget out
+    # mid-JSON. The parser drops a truncated tag, so the practitioner
+    # heard "here, look at this" and nothing appeared.
+    #
+    # This ceiling does not make replies longer; the prompt still asks
+    # for under ~110 words. It only stops the tag being cut off.
+    "voice": 1400,
 }
 
 
