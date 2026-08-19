@@ -608,9 +608,10 @@ def get_inventory(business_id: str,
         raise HTTPException(404, "business not found")
     thresholds = low_stock_thresholds(biz)
 
+    from reorder_engine import REORDER_FIELDS
     rows = sb_clients.sb_get_as_service(
         f"/offerings?business_id=eq.{business_id}&is_active=eq.true"
-        "&select=id,name,sku,category,current_price,inventory_qty"
+        f"&select=id,name,sku,category,current_price,inventory_qty,{REORDER_FIELDS}"
         "&order=created_at.asc&limit=200") or []
     items = []
     for o in rows:
@@ -625,7 +626,13 @@ def get_inventory(business_id: str,
                       "sku": o.get("sku"), "category": o.get("category"),
                       "inventory_qty": (int(inv) if tracked else None),
                       "tracked": tracked, "threshold": threshold,
-                      "low_stock": low})
+                      "low_stock": low,
+                      # THE REORDER BRAIN — plan + outstanding-PO marker.
+                      "reorder_at": o.get("reorder_at"),
+                      "reorder_qty": o.get("reorder_qty"),
+                      "supplier_name": o.get("supplier_name"),
+                      "supplier_email": o.get("supplier_email"),
+                      "reorder_pending_at": o.get("reorder_pending_at")})
 
     # Movement history — the spine's stock_adjusted rows, newest first.
     events = sb_clients.sb_get_as_service(
@@ -681,6 +688,12 @@ def adjust_inventory(business_id: str, offering_id: str,
         else (new_qty if new_qty is not None and old_qty is None else None)
     _emit_stock_event(business_id, str(offering_id), off.get("name") or "",
                       delta=delta, new_qty=new_qty, reason=reason, actor=actor)
+    # A restock past the reorder point closes the outstanding-PO marker.
+    try:
+        from reorder_engine import clear_reorder_pending_if_restocked
+        clear_reorder_pending_if_restocked(business_id, str(offering_id), new_qty)
+    except Exception as e:
+        logger.warning(f"[store] reorder pending-clear failed (non-fatal): {e}")
     return {"ok": True, "offering_id": offering_id,
             "inventory_qty": new_qty, "tracked": new_qty is not None}
 
@@ -717,6 +730,60 @@ def set_inventory_threshold(business_id: str, offering_id: str,
                                    {"settings": settings})
     return {"ok": True, "offering_id": offering_id,
             "threshold": low.get(str(offering_id))}
+
+
+class InventoryReorderBody(BaseModel):
+    """All fields optional; an explicitly-null field clears. Absent
+    fields are left alone — this is a per-field edit, not a wholesale
+    replace (the form may hold a stale sibling)."""
+    reorder_at: Optional[int] = None
+    reorder_qty: Optional[int] = None
+    supplier_name: Optional[str] = None
+    supplier_email: Optional[str] = None
+    clear: Optional[List[str]] = None   # names of fields to null out
+
+
+@router.post("/store/inventory/{business_id}/{offering_id}/reorder")
+def set_reorder_plan(business_id: str, offering_id: str,
+                     body: InventoryReorderBody,
+                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """THE REORDER BRAIN — the per-offering reorder plan: when stock
+    falls to reorder_at, the hourly sweep raises a Chief notification
+    whose one tap drafts a purchase order for reorder_qty to the
+    supplier. Manager+ — same role ladder as stock adjustments."""
+    from business_users_router import require_role
+    require_role(business_id, str(user.id), "manager")
+    _inventory_offering_or_404(business_id, offering_id)
+
+    allowed = ("reorder_at", "reorder_qty", "supplier_name", "supplier_email")
+    patch: Dict[str, Any] = {}
+    for f in (body.clear or []):
+        if f in allowed:
+            patch[f] = None
+    if body.reorder_at is not None:
+        patch["reorder_at"] = max(0, int(body.reorder_at))
+    if body.reorder_qty is not None:
+        patch["reorder_qty"] = max(0, int(body.reorder_qty))
+    if body.supplier_name is not None:
+        patch["supplier_name"] = body.supplier_name.strip() or None
+    if body.supplier_email is not None:
+        email = body.supplier_email.strip()
+        if email and "@" not in email:
+            raise HTTPException(400, "supplier_email doesn't look like an address")
+        patch["supplier_email"] = email or None
+    if not patch:
+        raise HTTPException(400, "nothing to change")
+    # No reorder point, no outstanding order to guard.
+    if patch.get("reorder_at", "keep") is None:
+        patch["reorder_pending_at"] = None
+
+    sb_clients.sb_patch_as_service(
+        f"/offerings?id=eq.{offering_id}&business_id=eq.{business_id}", patch)
+    rows = sb_clients.sb_get_as_service(
+        f"/offerings?id=eq.{offering_id}&business_id=eq.{business_id}"
+        "&select=id,reorder_at,reorder_qty,supplier_name,supplier_email,"
+        "reorder_pending_at&limit=1") or []
+    return {"ok": True, **(rows[0] if rows else {"id": offering_id})}
 
 
 # ─── Customer: hosted store page (renderers in store_page.py) ─────────

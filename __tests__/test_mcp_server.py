@@ -127,7 +127,10 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # sessions ~ list_scheduled; products ~ list_products).
     # 26 (8/15): mission_status joined — operational plan state, the same
     # class as list_scheduled / campaign_status.
-    assert len(tools) == 26, (
+    # 27 (8/18): draft_purchase_order joined — composes the reorder-email
+    # preview from the business's own reorder plan; writes nothing, sends
+    # nothing. send_purchase_order (class C, client-facing) stays off.
+    assert len(tools) == 27, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -573,6 +576,12 @@ def _clean_payloads():
         "contact_deep_dive": {
             "type": "contact_deep_dive", "result": "data retrieved",
             "contact": {"name": "Dana", "last_interaction": _iso_days_ago(2)}},
+        # A draft that could not be composed (no supplier on file) must
+        # not promise a send.
+        "draft_purchase_order": {
+            "type": "draft_purchase_order",
+            "result": "failed: no supplier on file for Blueprint Tee",
+            "failed": True},
     }
 
 

@@ -77,6 +77,7 @@ CLIENT_FACING = frozenset({
     "cancel_recurring_booking",   # removes appointments a client is holding
     "publish_post",               # public, via Meta
     "launch_campaign",            # arms sends to a whole audience
+    "send_purchase_order",        # emails the supplier — leaves the app
 })
 
 _REGULATED_HINTS = ("law", "therap", "counsel")
