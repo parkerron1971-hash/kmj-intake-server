@@ -38,6 +38,11 @@ def test_home_price_cards_read_the_dials():
     assert f"{limits['practice']['max_businesses']} businesses" in html
     assert "Unlimited bank connections" in html
     assert "Maximum deep analysis" in html     # the ladder reaches the page
+    # 2026-08-19 rename ruling: the top tier is the brand's namesake,
+    # with Kevin's tagline under it so the name explains itself.
+    assert '<div class="price-name">Solutionist</div>' in html
+    assert '<div class="price-name">Practice</div>' not in html
+    assert "operator running everything through the system" in html
     # Claims the product cannot back stay off the page.
     assert "priority onboarding" not in html
     assert "no seat math" not in html.lower()

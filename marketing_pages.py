@@ -2154,8 +2154,9 @@ def _price_cards_html() -> str:
         + card("professional", "Professional",
                "Everything in Starter, plus Autopilot running overnight and deeper Chief automation.",
                mid=True)
-        + card("practice", "Practice",
-               "Everything in Professional, plus room for a team and more than one business.")
+        + card("practice", "Solutionist",
+               "For the operator running everything through the system &mdash; "
+               "everything in Professional, plus room for a team and more than one business.")
     )
 
 
@@ -2206,7 +2207,7 @@ def _plan_compare_section_html() -> str:
         rows.append(f"<tr><td>{label}</td>{cells}</tr>")
     header = "".join(
         f'<th class="sol-col">{name} {d[p]["price"]}/mo</th>'
-        for p, name in zip(plans, ("Starter", "Professional", "Practice")))
+        for p, name in zip(plans, ("Starter", "Professional", "Solutionist")))
     return f"""
 <section>
   <div class="container">
@@ -3099,7 +3100,7 @@ def render_home() -> str:
       <div class="card why-card reveal"><div class="check">03</div>
         <div><h3>Real-time, not weekly reports</h3><p>Every metric updates as data changes. No CSV exports, no waiting for someone to refresh.</p></div></div>
       <div class="card why-card reveal reveal-delay-1"><div class="check">04</div>
-        <div><h3>Built solo-first, not enterprise</h3><p>Designed for one operator running the whole business. When you grow, the Practice plan adds team seats &mdash; without the enterprise sprawl.</p></div></div>
+        <div><h3>Built solo-first, not enterprise</h3><p>Designed for one operator running the whole business. When you grow, the Solutionist plan adds team seats &mdash; without the enterprise sprawl.</p></div></div>
     </div>
   </div>
 </section>
@@ -3114,7 +3115,7 @@ def render_home() -> str:
     </div>
     <div class="price-grid reveal reveal-delay-2">""" + _price_cards_html() + """
     </div>
-    <p class="price-note reveal">Annual plans are two months free (about 17% off). Running a team or more than one business? That is what Practice is for; bigger networks are custom &mdash; <a href="/get-started" style="color:var(--accent);">talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
+    <p class="price-note reveal">Annual plans are two months free (about 17% off). Running a team or more than one business? That is what the Solutionist plan is for; bigger networks are custom &mdash; <a href="/get-started" style="color:var(--accent);">talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
   </div>
 </section>
 
@@ -3608,7 +3609,7 @@ def render_compare() -> str:
           <li><span>Chief of Staff (AI)</span><span>✓</span></li>
         </ul>
         <div class="cost-total"><span class="label">From</span><span class="price">$79 /mo</span></div>
-        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Practice $399, two months free on annual. Currently in private beta: apply for access, and beta pricing is grandfathered for good.</p>
+        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Solutionist $399, two months free on annual. Currently in private beta: apply for access, and beta pricing is grandfathered for good.</p>
       </div>
     </div>
   </div>
@@ -3719,11 +3720,11 @@ def render_faq() -> str:
       </details>
       <details class="faq-item">
         <summary>Do I need a team to use this?</summary>
-        <div class="faq-body"><p>No. Solo-first is the default: one operator, everything in one workspace. When you do bring people in, the Practice plan includes team seats with roles and an accountant collaborator seat &mdash; invite by email, they see the business, no enterprise admin sprawl.</p></div>
+        <div class="faq-body"><p>No. Solo-first is the default: one operator, everything in one workspace. When you do bring people in, the Solutionist plan includes team seats with roles and an accountant collaborator seat &mdash; invite by email, they see the business, no enterprise admin sprawl.</p></div>
       </details>
       <details class="faq-item">
         <summary>What about pricing?</summary>
-        <div class="faq-body"><p>Starter is $79/month, Professional $199, and Practice $399 &mdash; every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. Annual plans are two months free. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. We're in private beta: apply for access, and your beta pricing is grandfathered for good &mdash; if prices rise later, yours does not move.</p></div>
+        <div class="faq-body"><p>Starter is $79/month, Professional $199, and Solutionist $399 &mdash; every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. Annual plans are two months free. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. We're in private beta: apply for access, and your beta pricing is grandfathered for good &mdash; if prices rise later, yours does not move.</p></div>
       </details>
       <details class="faq-item">
         <summary>How is this different from Notion, HubSpot, or just using ChatGPT?</summary>
@@ -3749,7 +3750,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item">
         <summary>Does it work for churches and ministries?</summary>
-        <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry: pastors, ministry leaders, faith-based coaches. The product is solo-first &mdash; one person runs the workspace &mdash; and the Practice plan adds staff seats when you need them. If you need full church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
+        <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry: pastors, ministry leaders, faith-based coaches. The product is solo-first &mdash; one person runs the workspace &mdash; and the Solutionist plan adds staff seats when you need them. If you need full church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
       </details>
       <details class="faq-item">
         <summary>Can the AI publish to my social accounts?</summary>

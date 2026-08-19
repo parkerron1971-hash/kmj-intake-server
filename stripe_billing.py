@@ -840,8 +840,11 @@ BOOTSTRAP_CATALOG = [
     ("STRIPE_PRICE_ID_STARTER_ANNUAL",      "solutionist_starter_annual",       "Solutionist Starter",       79000,  "year"),
     ("STRIPE_PRICE_ID_PROFESSIONAL",        "solutionist_professional_monthly", "Solutionist Professional",  19900,  "month"),
     ("STRIPE_PRICE_ID_PROFESSIONAL_ANNUAL", "solutionist_professional_annual",  "Solutionist Professional",  199000, "year"),
-    ("STRIPE_PRICE_ID_PRACTICE",            "solutionist_practice_monthly",     "Solutionist Practice",      39900,  "month"),
-    ("STRIPE_PRICE_ID_PRACTICE_ANNUAL",     "solutionist_practice_annual",      "Solutionist Practice",      399000, "year"),
+    # Display name "The Solutionist" (Kevin's 2026-08-19 rename ruling:
+    # the top tier is the brand's namesake) — plan key + lookup_key stay
+    # `practice`; only what the checkout page shows changed.
+    ("STRIPE_PRICE_ID_PRACTICE",            "solutionist_practice_monthly",     "The Solutionist",           39900,  "month"),
+    ("STRIPE_PRICE_ID_PRACTICE_ANNUAL",     "solutionist_practice_annual",      "The Solutionist",           399000, "year"),
     ("STRIPE_PRICE_ID_FOUNDER",             "solutionist_founder_monthly",      "Solutionist Professional — Founding Member", 14900,  "month"),
     ("STRIPE_PRICE_ID_FOUNDER_ANNUAL",      "solutionist_founder_annual",       "Solutionist Professional — Founding Member", 149000, "year"),
 ]
@@ -878,18 +881,29 @@ async def bootstrap_prices(_owner=Depends(require_owner)):
     # 2. Existing products by exact name, so a partial earlier run (or a
     #    hand-made product) is reused rather than duplicated.
     products_by_name: Dict[str, str] = {}
+    products_name_by_id: Dict[str, str] = {}
     prods = await _stripe_get("/products", [("active", "true"), ("limit", "100")])
     for prod in prods.get("data", []):
         products_by_name.setdefault(prod.get("name") or "", prod["id"])
+        products_name_by_id[prod["id"]] = prod.get("name") or ""
 
     env: Dict[str, str] = {}
     created: list = []
     reused: list = []
+    renamed: list = []
     for env_key, lookup_key, product_name, amount, interval in BOOTSTRAP_CATALOG:
         price = existing.get(lookup_key)
         if price:
             env[env_key] = price["id"]
             reused.append(lookup_key)
+            # A catalog rename must reach the LIVE product on re-run —
+            # the checkout page shows this name. Price ids never change,
+            # so reused prices would otherwise pin the old name forever.
+            prod_id = str(price.get("product") or "")
+            if prod_id and products_name_by_id.get(prod_id, product_name) != product_name:
+                await _stripe_post(f"/products/{prod_id}", {"name": product_name})
+                products_name_by_id[prod_id] = product_name
+                renamed.append(product_name)
             continue
         product_id = products_by_name.get(product_name)
         if not product_id:
@@ -949,7 +963,7 @@ async def bootstrap_prices(_owner=Depends(require_owner)):
     env_pending = [k for k, v in env.items()
                    if v and (os.environ.get(k) or "").strip() != v]
     return {"ok": True, "env": env, "railway_block": railway_block,
-            "created": created, "reused": reused,
+            "created": created, "reused": reused, "renamed": renamed,
             "ministry_promo": promo_state, "env_pending": env_pending}
 
 

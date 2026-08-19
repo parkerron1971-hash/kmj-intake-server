@@ -1,6 +1,8 @@
 # Billing Go-Live Runbook — locked pricing (2026-07-21)
 
-Kevin's pricing ruling: **Starter $79 · Professional $199 · Practice $399**,
+Kevin's pricing ruling: **Starter $79 · Professional $199 · Solutionist $399**
+(renamed from "Practice" 2026-08-19 — display only, the plan key and env
+vars stay `PRACTICE`),
 annual = 2 months free, **Founding Member = Professional at $149/mo locked
 for the life of the subscription, first 50 seats**. Nonprofit/ministry =
 20% coupon code. Credit packs (rescaled 2026-08-10): $12/740 · $25/1,555 ·
@@ -35,7 +37,7 @@ products, each with a monthly and a yearly recurring price:
 |---|---|---|
 | Solutionist Starter | $79.00 / month | $790.00 / year |
 | Solutionist Professional | $199.00 / month | $1,990.00 / year |
-| Solutionist Practice | $399.00 / month | $3,990.00 / year |
+| The Solutionist | $399.00 / month | $3,990.00 / year |
 
 Then ONE more product for the founder cohort (its own product so the
 invoice line reads right):
