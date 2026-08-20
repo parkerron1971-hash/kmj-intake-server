@@ -108,12 +108,37 @@ class FakeSB:
 
     def post(self, path, body, prefer="rep"):
         table = path.split("?", 1)[0].lstrip("/")
+        if table.startswith("rpc/"):
+            return self.rpc(table[4:], body)
         row = dict(body)
         if "id" not in row:
             self.n += 1
             row["id"] = f"{table[:3]}_{self.n}"
         self.rows(table).append(row)
         return [dict(row)]
+
+    def rpc(self, fn, body):
+        """Postgres functions the service calls through PostgREST.
+
+        Modelled rather than stubbed: `decrement_offering_stock` is the
+        one place stock leaves the shelf on a sale, so the fake has to
+        reproduce its CONTRACT (clamp at zero, null inventory_qty means
+        untracked, a wrong business_id touches nothing) or the tests
+        that guard selling would pass against a fake that cannot fail
+        the way production can. The row lock has no analogue in a
+        single-threaded fake and needs none.
+        """
+        if fn != "decrement_offering_stock":
+            raise AssertionError(f"FakeSB has no model for rpc/{fn}")
+        rows = [r for r in self.rows("offerings")
+                if r.get("id") == body["p_offering_id"]
+                and r.get("business_id") == body["p_business_id"]]
+        if not rows or rows[0].get("inventory_qty") is None:
+            return [{"old_qty": None, "new_qty": None, "tracked": False}]
+        old = int(rows[0]["inventory_qty"])
+        new = max(0, old - max(0, int(body.get("p_qty") or 0)))
+        rows[0]["inventory_qty"] = new
+        return [{"old_qty": old, "new_qty": new, "tracked": True}]
 
     def patch(self, path, body):
         table, cons = _parse(path)

@@ -51,9 +51,25 @@ THE WRONG-ITEM GUARD (expect_offering_id)
   It is free: both sides are already known, so the check is a string
   compare and never costs a model call.
 
-Endpoints (both manager+, the same ladder as every other stock write):
+THE STOCK-ONLY PRODUCT (why a manager can create one)
+  POST /offerings is owner-gated, and rightly: it publishes a PRICED
+  item to the practitioner's public storefront. That is a pricing and
+  publishing decision, not a stock one. But a manager unpacking a box
+  and finding something the catalog has never seen was dead-ended by
+  that gate, in the exact flow this arc exists to make fast.
+
+  So the split is by CONSEQUENCE rather than by table: a manager can
+  create a product with NO PRICE. It is fully countable, scannable and
+  receivable, and it is invisible to customers — _sellable_offerings in
+  store_router already skips anything priced at or below zero, so a
+  price-less product cannot appear in the store or be checked out. The
+  owner sets a price when they want to sell it, and that one act is the
+  publishing decision, made by the person whose decision it is.
+
+Endpoints (all manager+, the same ladder as every other stock write):
   POST /store/inventory/{business_id}/scan             — identify (read-only)
   POST /store/inventory/{business_id}/{offering_id}/barcode — teach the code
+  POST /store/inventory/{business_id}/product          — stock-only create
 
 Env: PRODUCT_SCAN_MODEL (default claude-haiku-4-5-20251001 — reading a
 label is not a design review).
@@ -69,7 +85,7 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import llm_call
 import sb_clients
@@ -436,3 +452,108 @@ def set_barcode(business_id: str, offering_id: str, body: BarcodeBody,
         f"/offerings?id=eq.{offering_id}&business_id=eq.{business_id}",
         {"barcode": code})
     return {"ok": True, "offering_id": offering_id, "barcode": code}
+
+
+# ─── The stock-only product ──────────────────────────────────────────
+
+
+class StockProductBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    inventory_qty: Optional[int] = Field(default=0, ge=0)
+    sku: Optional[str] = Field(default=None, max_length=80)
+    barcode: Optional[str] = Field(default=None, max_length=48)
+    description: Optional[str] = Field(default=None, max_length=500)
+    image_url: Optional[str] = Field(default=None, max_length=600)
+
+
+def slugify(name: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return s[:60] or "product"
+
+
+def free_slug(business_id: str, base: str) -> str:
+    """A slug nobody is using. The catalog has a UNIQUE index on
+    (business_id, lower(slug)), and a manager naming their second
+    supplier's pomade "Pomade" should not have to think about that."""
+    taken = {(r.get("slug") or "").lower() for r in (sb_clients.sb_get_as_service(
+        f"/offerings?business_id=eq.{business_id}&slug=like.{base}*"
+        "&select=slug&limit=50") or [])}
+    if base not in taken:
+        return base
+    for n in range(2, 60):
+        cand = f"{base}-{n}"
+        if cand not in taken:
+            return cand
+    return f"{base}-{uuid.uuid4().hex[:6]}"
+
+
+@router.post("/store/inventory/{business_id}/product")
+def create_stock_product(business_id: str, body: StockProductBody,
+                         user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Add a product for STOCK purposes. Manager+, and deliberately
+    price-less — see the module docstring. The owner turns it into
+    something customers can buy by giving it a price.
+    """
+    from business_users_router import require_role
+    require_role(business_id, str(user.id), "manager")
+
+    code = clean_barcode(body.barcode) if body.barcode else None
+    if body.barcode and not code:
+        raise HTTPException(400, "that doesn't look like a barcode")
+    if code:
+        clash = sb_clients.sb_get_as_service(
+            f"/offerings?business_id=eq.{business_id}&barcode=eq.{code}"
+            "&select=id,name&limit=1") or []
+        if clash:
+            raise HTTPException(
+                409, f"that barcode already belongs to "
+                     f"'{clash[0].get('name') or 'another product'}'")
+
+    row = {
+        "business_id": business_id,
+        "name": body.name.strip(),
+        "slug": free_slug(business_id, slugify(body.name)),
+        "category": "product",
+        "is_active": True,
+        # No price ON PURPOSE. This is the whole gate: price-less means
+        # the storefront filter skips it, so a manager cannot publish
+        # something for sale — they can only make it countable.
+        "current_price": None,
+        "inventory_qty": int(body.inventory_qty or 0),
+    }
+    if body.sku:
+        row["sku"] = body.sku.strip()[:80]
+    if code:
+        row["barcode"] = code
+    if body.description:
+        row["description"] = body.description.strip()[:500]
+    if body.image_url:
+        row["image_url"] = body.image_url.strip()[:600]
+
+    created = sb_clients.sb_post_as_service("/offerings", row)
+    if not (isinstance(created, list) and created):
+        logger.warning(f"[scan] stock-product create failed biz={business_id[:8]}")
+        raise HTTPException(500, "Something went wrong on our end — please try again.")
+
+    off = created[0]
+    _emit_created_stock_event(business_id, off, user)
+    return {"ok": True, "offering": _shape(off),
+            "sellable": False,
+            "note": "Added for stock. Give it a price to sell it."}
+
+
+def _emit_created_stock_event(business_id: str, off: Dict[str, Any],
+                              user: AuthedUser) -> None:
+    """The starting count is a stock movement like any other — without
+    this, a product's history would begin with an unexplained number."""
+    qty = off.get("inventory_qty")
+    if qty is None:
+        return
+    try:
+        from store_router import _emit_stock_event
+        _emit_stock_event(business_id, str(off.get("id")), off.get("name") or "",
+                          delta=int(qty), new_qty=int(qty),
+                          reason="added by scan",
+                          actor=(getattr(user, "email", None) or str(user.id)))
+    except Exception as e:
+        logger.warning(f"[scan] create stock event failed (non-fatal): {e}")
