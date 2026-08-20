@@ -373,6 +373,11 @@ app.include_router(site_composer_router)
 # Arc 27 - e-commerce store (catalog page + multi-item Stripe checkout + orders)
 from store_router import router as store_router
 app.include_router(store_router)
+# SCAN THE SHELF (2026-08-20) - identify a product from its barcode or a
+# photo of its label. Read-only proposals + the barcode learning loop;
+# registered after store_router because it imports its inventory helper.
+from inventory_scan import router as inventory_scan_router
+app.include_router(inventory_scan_router)
 # Digital delivery (2026-07-31) - hosted product files + validated downloads
 from store_files import router as store_files_router
 app.include_router(store_files_router)
