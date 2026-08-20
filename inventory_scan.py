@@ -51,6 +51,32 @@ THE WRONG-ITEM GUARD (expect_offering_id)
   It is free: both sides are already known, so the check is a string
   compare and never costs a model call.
 
+THE PUBLIC DATABASES (product_lookup)
+  A barcode is a global id, so when a public database already knows it,
+  a scan fills the name, brand, size and photo for free. Coverage is
+  good for food and drink and thin for everything else, so it is an
+  ENRICHMENT that runs before the vision read, never a replacement for
+  it. A miss costs a fraction of a second and then the camera reads the
+  actual label, which works on anything.
+
+REPLACEMENT, NOT JUST RECOGNITION
+  The question a scan can answer is "have I seen this exact thing
+  before?" The question a shop actually asks is bigger: "is this the
+  thing that goes in that spot on the shelf?" A shop that switches from
+  Layrite pomade to Suavecito pomade has not gained a product; it has
+  replaced one. Treated as a brand-new item, the reorder point, the
+  supplier and the alert threshold all have to be typed again, and the
+  discontinued one sits in the catalog forever looking in stock.
+
+  So a scan that finds nothing ALSO looks for a predecessor: something
+  already carried that fills the same role. The test is deliberately a
+  rubric rather than a table of product types — shared meaning-carrying
+  words, minus brand, minus size — because a table of categories is
+  wrong the first time somebody sells something nobody thought of.
+
+  It is a QUESTION, never an action. Replacing carries the shelf logic
+  across and offers to retire the old one; the practitioner decides.
+
 THE STOCK-ONLY PRODUCT (why a manager can create one)
   POST /offerings is owner-gated, and rightly: it publishes a PRICED
   item to the practitioner's public storefront. That is a pricing and
@@ -76,6 +102,7 @@ label is not a design review).
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -229,6 +256,146 @@ def best_match(extracted: Dict[str, Any],
     return {"offering": best, "score": round(best_s, 3)}
 
 
+# Words that carry no meaning about what a product IS. Kept tiny on
+# purpose: a long stopword list is a lookup table wearing a disguise,
+# and it will delete the one word that mattered for somebody's vertical.
+_NOISE = {"the", "and", "for", "with", "size", "new", "pack", "of"}
+
+# A size token tells you how much, not what. "4oz" must not be the thing
+# two products have in common, or every 4oz item on the shelf becomes a
+# candidate to replace every other one.
+_SIZE_RE = re.compile(r"^\d+(\.\d+)?(oz|ml|g|kg|l|lb|ct|pk|ea|x)?$")
+
+# The same units standing alone, because "4 oz" tokenizes to "4" and
+# "oz" and the unit would otherwise survive as if it described the
+# product. Without this, every 4 oz item on the shelf shares a word
+# with every other one.
+_UNITS = {"oz", "ml", "kg", "lb", "ct", "pk", "ea", "fl", "gal", "qt", "pt"}
+
+# A shared word only means something if the word does. Two products
+# matching on "oil" alone are not obviously the same role — beard oil
+# does not replace coconut oil — while "pomade" or "shampoo" carries
+# real meaning. Length is a blunt proxy for specificity, and a blunt
+# proxy is the right instrument here: the alternative is a category
+# table, which is wrong the first time somebody stocks something nobody
+# thought of.
+_SPECIFIC_LEN = 4
+
+def role_tokens(name: Optional[str], brand: Optional[str] = None) -> List[str]:
+    """What a product IS, with the brand and the size stripped out.
+
+    "Layrite Superhold Pomade 4oz" → ["superhold", "pomade"]
+
+    Brand goes because a replacement is BY DEFINITION a different brand.
+    Size goes because it says how much, not what.
+    """
+    brand_words = set(_tokens(brand)) if brand else set()
+    out: List[str] = []
+    for t in _tokens(name):
+        if (t in brand_words or t in _NOISE or t in _UNITS
+                or _SIZE_RE.match(t)):
+            continue
+        out.append(t)
+    return out
+
+
+def _leading_word(name: Optional[str]) -> Optional[str]:
+    """The first meaning-carrying word of a product name — which, for
+    most of retail, is the brand."""
+    t = _tokens(name)
+    return t[0] if t else None
+
+
+def shared_role_words(a_tokens: List[str], b_tokens: List[str]) -> List[str]:
+    """The meaning-carrying words two products have in common.
+
+    Only words of real length count. Two products matching on "oil"
+    alone are not the same role — beard oil does not replace coconut
+    oil — while "pomade" or "shampoo" carries actual meaning. Length is
+    a blunt proxy for specificity, and blunt is right here: the
+    alternative is a table of product categories, which is wrong the
+    first time somebody stocks something nobody thought of.
+    """
+    return sorted(
+        {t for t in (set(a_tokens) & set(b_tokens)) if len(t) >= _SPECIFIC_LEN},
+        key=len, reverse=True)
+
+
+def replacement_candidates(extracted: Dict[str, Any],
+                           offerings: List[Dict[str, Any]],
+                           limit: int = 3) -> List[Dict[str, Any]]:
+    """Products already carried that this new one plausibly replaces.
+
+    The test is: do they share a specific, meaning-carrying word once
+    brand and size are stripped out? Deliberately NOT a ratio over token
+    counts — a catalog name carries its brand and we cannot always tell
+    which word that is, so a verbose brand would sink a real match
+    ("Layrite Superhold Pomade" vs "Firme Hold Pomade" share the only
+    word that matters and almost nothing else).
+
+    Anything scoring as the SAME product is excluded: that is a match,
+    and offering to replace a thing with itself is how somebody archives
+    the row they just scanned.
+
+    Ranked by emptiness first — a product sitting at zero is far likelier
+    to be the one being replaced than a full shelf, and it is the most
+    useful signal available without asking — then by how specific the
+    shared word is.
+    """
+    cand_name = f"{extracted.get('brand') or ''} {extracted.get('name') or ''}".strip()
+    if not cand_name:
+        return []
+    brand = extracted.get("brand")
+    mine = role_tokens(extracted.get("name"), brand)
+    if not mine:
+        return []
+
+    scored: List[Dict[str, Any]] = []
+    for o in offerings:
+        if name_score(cand_name, o.get("name")) >= _MATCH_FLOOR:
+            continue
+        # The scanned brand comes off the shelf name too, for the rare
+        # case where it survived in `mine` (a brand written differently
+        # in the name than in the brand field). The brand-only match is
+        # caught properly by the leading-word guard just below — this
+        # alone does NOT prevent it.
+        theirs = role_tokens(o.get("name"), brand)
+        shared = shared_role_words(mine, theirs)
+        if not shared:
+            continue
+        # A single shared word that LEADS both names is a brand, not a
+        # role. "Suave Body Wash" is not a replacement for "Suave
+        # Conditioner" — they share a maker, not a job. This bites when
+        # no brand field came back at all (the databases missed and the
+        # label gave none), so the brand is still sitting in the name
+        # where nothing has stripped it.
+        #
+        # Two or more shared words survive: that is a real signal
+        # whatever the first one happens to be.
+        if (len(shared) == 1
+                and shared[0] == _leading_word(extracted.get("name"))
+                and shared[0] == _leading_word(o.get("name"))):
+            continue
+        inv = o.get("inventory_qty")
+        empty = inv is not None and int(inv) == 0
+        scored.append({"offering": o, "shared": shared,
+                       "because": shared[0], "empty": empty})
+
+    scored.sort(key=lambda c: (c["empty"], len(c["because"]), len(c["shared"])),
+                reverse=True)
+    return scored[:limit]
+
+
+def _shape_candidates(cands: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Replacement candidates, with the REASON attached. A suggestion
+    that cannot say why it is suggesting something is a guess wearing a
+    confident face — "both of these are a pomade" is checkable by the
+    person holding the bottle."""
+    return [{"offering": _shape(c["offering"]),
+             "because": c["because"],
+             "out_of_stock": c["empty"]} for c in cands]
+
+
 def _shape(o: Dict[str, Any]) -> Dict[str, Any]:
     """The offering fields the scan drawer renders."""
     inv = o.get("inventory_qty")
@@ -312,6 +479,39 @@ def apply_expectation(result: Dict[str, Any],
     return out
 
 
+def merge_known(extracted: Optional[Dict[str, Any]],
+                known: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """A public database's record + what the camera read off the label.
+
+    The database wins on identity — name, brand, size, photo — because
+    it is a catalog entry somebody curated, not an inference from a
+    photograph of a curved bottle in shop lighting. The label wins on
+    everything the database does not carry: the printed price, an item
+    number, whatever the packaging says about the thing.
+
+    Either side may be missing. Both missing returns None, and the
+    practitioner types it themselves.
+    """
+    if not known and not extracted:
+        return None
+    if not known:
+        return extracted
+    out = dict(extracted or {})
+    out["not_a_product"] = False
+    out["name"] = known.get("name") or out.get("name") or ""
+    out["brand"] = known.get("brand") or out.get("brand")
+    out["barcode"] = known.get("barcode") or out.get("barcode")
+    if known.get("image_url"):
+        out["image_url"] = known["image_url"]
+    if not (out.get("description") or "").strip():
+        out["description"] = known.get("description") or ""
+    out.setdefault("sku", None)
+    out.setdefault("price", None)
+    out["category"] = "product"
+    out["found_in"] = known.get("source")
+    return out
+
+
 @router.post("/store/inventory/{business_id}/scan")
 async def scan_product(
     business_id: str,
@@ -362,12 +562,19 @@ async def scan_product(
                 return answer({"ok": True, "result": "exact", "barcode": code,
                                "offering": _shape(o), "extracted": None})
 
-    # 2) No photo to fall back on — say so plainly rather than guessing.
+    # 2) No photo. The code alone is still worth something: a public
+    #    database may already know what it is, for free.
     if file is None:
         if not code:
             raise HTTPException(400, "send a barcode, a photo, or both")
+        import product_lookup
+        known = await product_lookup.lookup(code)
+        merged = merge_known(None, known)
         return answer({"ok": True, "result": "new", "barcode": code,
-                       "extracted": None, "offering": None})
+                       "extracted": merged, "offering": None,
+                       "found_in": (known or {}).get("source"),
+                       "replaces": _shape_candidates(
+                           replacement_candidates(merged or {}, offerings))})
 
     media_type = (file.content_type or "").lower().split(";")[0]
     if media_type not in _MEDIA_TYPES:
@@ -378,15 +585,31 @@ async def scan_product(
     if len(blob) > _MAX_BYTES:
         raise HTTPException(413, "photo is over 8 MB — retake at a lower resolution")
 
-    extracted = await _read_label(blob, media_type)
-    if extracted.get("not_a_product"):
+    # The camera read and the database lookup are independent, so they
+    # run at once — asking the world about a barcode must not add a
+    # second to a scan that was going to read the label anyway.
+    import product_lookup
+    extracted, known = await asyncio.gather(
+        _read_label(blob, media_type),
+        product_lookup.lookup(code or ""),
+    )
+    if extracted.get("not_a_product") or extracted.get("read_failed"):
+        # The label was no help — but if the barcode is in a public
+        # database we still know exactly what this is.
+        merged = merge_known(None, known)
+        if merged:
+            return answer({"ok": True, "result": "new", "barcode": code,
+                           "extracted": merged, "offering": None,
+                           "found_in": (known or {}).get("source"),
+                           "replaces": _shape_candidates(
+                               replacement_candidates(merged, offerings))})
         return answer({"ok": True, "result": "unreadable", "barcode": code,
                        "extracted": None, "offering": None,
-                       "note": "That photo doesn't look like a product."})
-    if extracted.get("read_failed"):
-        return answer({"ok": True, "result": "unreadable", "barcode": code,
-                       "extracted": None, "offering": None,
-                       "note": "Couldn't read the label — fill it in yourself."})
+                       "note": ("That photo doesn't look like a product."
+                                if extracted.get("not_a_product")
+                                else "Couldn't read the label — fill it in yourself.")})
+
+    extracted = merge_known(extracted, known) or extracted
 
     # 3) A barcode the MODEL read is still exact if it hits a row.
     seen = code or extracted.get("barcode")
@@ -408,7 +631,10 @@ async def scan_product(
 
     logger.info(f"[scan] new biz={business_id[:8]} name={extracted.get('name')!r}")
     return answer({"ok": True, "result": "new", "barcode": seen,
-                   "offering": None, "extracted": extracted})
+                   "offering": None, "extracted": extracted,
+                   "found_in": (known or {}).get("source"),
+                   "replaces": _shape_candidates(
+                       replacement_candidates(extracted, offerings))})
 
 
 # ─── The learning loop ───────────────────────────────────────────────
@@ -557,3 +783,115 @@ def _emit_created_stock_event(business_id: str, off: Dict[str, Any],
                           actor=(getattr(user, "email", None) or str(user.id)))
     except Exception as e:
         logger.warning(f"[scan] create stock event failed (non-fatal): {e}")
+
+
+# ─── Replacement ─────────────────────────────────────────────────────
+
+
+class ReplacesBody(BaseModel):
+    predecessor_id: str
+    # None = decide from the shelf: a product sitting at zero is
+    # discontinued, one with units left is still being sold through.
+    archive_predecessor: Optional[bool] = None
+
+
+@router.post("/store/inventory/{business_id}/{offering_id}/replaces")
+def mark_replacement(business_id: str, offering_id: str, body: ReplacesBody,
+                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """This product takes over from that one.
+
+    What carries is the SHELF LOGIC and nothing else: the reorder point,
+    the order quantity, the supplier, the low-stock threshold. Those are
+    facts about a slot on a shelf — how fast it empties, who fills it —
+    and they survive a change of brand. That is the whole reason this
+    exists: a shop that switches pomade should not have to re-derive how
+    fast pomade sells.
+
+    What does NOT carry:
+      • price — a different product costs a different amount, and
+        inheriting a price is how a wrong one reaches a storefront.
+      • the outstanding-order stamp — an order placed for the old
+        product is still an order for the OLD product.
+      • stock — the new one starts at what actually arrived.
+
+    Manager+, and reversible: archiving is a flag, so a predecessor
+    retired by mistake comes back.
+    """
+    from business_users_router import require_role
+    require_role(business_id, str(user.id), "manager")
+
+    predecessor_guard(offering_id, body.predecessor_id)
+    new = _inventory_offering_or_404_local(business_id, offering_id)
+    old = _inventory_offering_or_404_local(business_id, body.predecessor_id)
+
+    carried: Dict[str, Any] = {}
+    for f in ("reorder_at", "reorder_qty", "supplier_name", "supplier_email"):
+        if old.get(f) is not None:
+            carried[f] = old[f]
+    if carried:
+        sb_clients.sb_patch_as_service(
+            f"/offerings?id=eq.{offering_id}&business_id=eq.{business_id}", carried)
+
+    # The alert threshold lives in the settings blob, keyed by offering.
+    threshold = None
+    biz_rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
+    if biz_rows:
+        settings = dict(biz_rows[0].get("settings") or {})
+        store = dict(settings.get("store") or {})
+        low = dict(store.get("low_stock") or {})
+        if str(body.predecessor_id) in low:
+            threshold = low[str(body.predecessor_id)]
+            low[str(offering_id)] = threshold
+            store["low_stock"] = low
+            settings["store"] = store
+            sb_clients.sb_patch_as_service(
+                f"/businesses?id=eq.{business_id}", {"settings": settings})
+
+    old_qty = old.get("inventory_qty")
+    archive = body.archive_predecessor
+    if archive is None:
+        # Nothing left of it = discontinued. Units left = they are still
+        # selling it through, and hiding it would strand real stock.
+        archive = (old_qty is not None and int(old_qty) == 0)
+    if archive:
+        sb_clients.sb_patch_as_service(
+            f"/offerings?id=eq.{body.predecessor_id}&business_id=eq.{business_id}",
+            {"is_active": False, "archived_at": _now_iso()})
+
+    try:
+        import event_spine
+        event_spine.emit("product_replaced", business_id, {
+            "offering_id": str(offering_id),
+            "offering_name": new.get("name") or "",
+            "predecessor_id": str(body.predecessor_id),
+            "predecessor_name": old.get("name") or "",
+            "carried": sorted(carried.keys()) + (["threshold"] if threshold is not None else []),
+            "archived_predecessor": bool(archive),
+            "actor": (getattr(user, "email", None) or str(user.id))[:120],
+        }, source="store")
+    except Exception as e:
+        logger.warning(f"[scan] replacement event failed (non-fatal): {e}")
+
+    return {"ok": True,
+            "carried": {**carried, **({"threshold": threshold} if threshold is not None else {})},
+            "archived_predecessor": bool(archive),
+            "predecessor_name": old.get("name") or ""}
+
+
+def predecessor_guard(new_id: str, old_id: str) -> bool:
+    """A product cannot replace itself — that would archive the row the
+    practitioner just created and leave the shelf empty."""
+    if str(new_id) == str(old_id):
+        raise HTTPException(400, "a product can't replace itself")
+    return True
+
+
+def _inventory_offering_or_404_local(business_id: str, offering_id: str) -> Dict[str, Any]:
+    from store_router import _inventory_offering_or_404
+    return _inventory_offering_or_404(business_id, offering_id)
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
