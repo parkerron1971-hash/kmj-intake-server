@@ -2141,13 +2141,16 @@ DEVICE_BAND_CSS = """
       /* Slot widths are variables so one media query re-sizes the whole
          scene — a wide monitor needs BIGGER screens, not the same ones
          adrift in more ground. */
-      .dv{position:relative;overflow:hidden;isolation:isolate;padding:104px 0 90px;
+      .dv{position:relative;overflow:hidden;isolation:isolate;padding:104px 0 64px;
         --dv-a:868px;--dv-c:790px;--dv-b:254px;--dv-scale:1;--dv-stage:1680px;
         min-height:calc(368px + 452px * var(--dv-scale));}
-      /* the screens hang below the section and used to end on a hard cut
-         line where overflow clipped them; this is where they go dark */
-      .dv::after{content:'';position:absolute;left:0;right:0;bottom:0;height:150px;z-index:5;
-        pointer-events:none;background:linear-gradient(180deg, rgba(8,9,12,0), var(--bg) 92%);}
+      /* NO bottom fade here. There was one — 150px ramping to solid --bg —
+         from when the screens hung past the section and ended on a hard
+         cut line. Once they were raised to sit inside the band it had
+         nothing left to soften, and stacked with the scene's own bottom
+         stop it painted a flat black bar across the foot of the page.
+         Both are gone; the screens simply end, on the section's own
+         ground. (Kevin, 2026-08-19: "looks like a black strip".) */
 
       /* ── the bloom behind the scene ──────────────────────────────
          Four blurred colour fields: accent blue carries it, cyan on the
@@ -2198,9 +2201,9 @@ DEVICE_BAND_CSS = """
         filter:blur(58px);border-radius:50%;}
       .dv-a{left:-150px;bottom:-48px;width:var(--dv-a);}
       .dv-a::before{background:radial-gradient(50% 50% at 50% 50%, rgba(46,125,255,.30), rgba(46,125,255,0) 70%);}
-      .dv-c{right:-150px;bottom:28px;width:var(--dv-c);}
+      .dv-c{right:-150px;bottom:10px;width:var(--dv-c);}
       .dv-c::before{background:radial-gradient(50% 50% at 50% 50%, rgba(124,58,237,.30), rgba(124,58,237,0) 70%);}
-      .dv-b{left:50%;margin-left:calc(var(--dv-b) / -2);bottom:-26px;width:var(--dv-b);z-index:4;}
+      .dv-b{left:50%;margin-left:calc(var(--dv-b) / -2);bottom:-40px;width:var(--dv-b);z-index:4;}
       .dv-b::before{background:radial-gradient(50% 50% at 50% 50%, rgba(34,211,238,.30), rgba(34,211,238,0) 68%);}
       .dv-a .app,.dv-c .app{aspect-ratio:16/10;height:auto;}
       .dv-a .app{box-shadow:0 60px 120px -34px rgba(0,0,0,.86),0 24px 50px -18px rgba(0,0,0,.6),
@@ -2213,8 +2216,7 @@ DEVICE_BAND_CSS = """
         border-radius:inherit;background:linear-gradient(147deg, rgba(255,255,255,.055), rgba(255,255,255,0) 34%);}
       /* the scene dissolves into the ground instead of ending on an edge */
       .dv-scene::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:6;
-        background:linear-gradient(180deg, var(--bg) 0%, rgba(8,9,12,0) 15%,
-                                            rgba(8,9,12,0) 72%, rgba(8,9,12,.9) 100%);}
+        background:linear-gradient(180deg, var(--bg) 0%, rgba(8,9,12,0) 15%);}
       .dv-shade{position:absolute;left:50%;top:-140px;width:1040px;height:440px;margin-left:-520px;z-index:3;
         pointer-events:none;background:radial-gradient(50% 50% at 50% 50%, rgba(8,9,12,.82), rgba(8,9,12,0) 72%);}
 
@@ -2264,8 +2266,13 @@ DEVICE_BAND_CSS = """
       .dv-fone-home{width:78px;height:3px;border-radius:99px;background:rgba(255,255,255,.22);margin:0 auto 7px;}
 
       /* ── inventory + the drafted PO (slot C) ── */
+      /* The table sits BESIDE the drawer, not under it. Under it, the only
+         part of the list that cleared the drawer was the on-hand column,
+         which read as a black panel with loose digits in it rather than as
+         an inventory. It also runs full height with enough rows to fill —
+         a stretched panel with seven rows in it is the same black box. */
       .dv-inv{border-radius:9px;border:1px solid var(--line);background:var(--pane);overflow:hidden;
-        flex:1;min-height:0;}
+        flex:1;min-height:0;margin-left:262px;}
       .dv-inv .h,.dv-inv .t{display:grid;grid-template-columns:1fr 62px 44px 78px;gap:8px;align-items:center;
         padding:6px 11px;border-bottom:1px solid var(--line);}
       .dv-inv .h{font-size:7px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);
@@ -2388,8 +2395,8 @@ DEVICE_BAND_CSS = """
            scene and sat on top of the two buttons. */
         .dv-scene{height:462px;}
         .dv-stage{height:508px;}
-        .dv-c{right:-168px;--dv-c:528px;bottom:70px;}
-        .dv-b{left:50%;--dv-b:240px;margin-left:calc(var(--dv-b) / -2);bottom:-12px;}
+        .dv-c{right:-168px;--dv-c:528px;bottom:52px;}
+        .dv-b{left:50%;--dv-b:240px;margin-left:calc(var(--dv-b) / -2);bottom:-26px;}
         .dv-shade{width:560px;margin-left:-280px;}
         .dv-g1{width:620px;margin-left:-310px;height:420px;}
         .dv-g2,.dv-g3{width:460px;height:340px;}
@@ -2398,7 +2405,7 @@ DEVICE_BAND_CSS = """
         .dv-scene{height:496px;}
         .dv-stage{height:542px;}
         .dv-c{display:none;}                            /* the phone stands alone */
-        .dv-b{--dv-b:256px;bottom:-12px;}
+        .dv-b{--dv-b:256px;bottom:-26px;}
       }
 
       /* rest on the poster state: everything still composed, nothing moving */
@@ -3613,6 +3620,18 @@ def render_home() -> str:
                   <span class="n">12</span><span class="n">8</span><span class="pill ok">OK</span></div>
                 <div class="t"><span class="nm">Talc brush refill</span>
                   <span class="n">9</span><span class="n">6</span><span class="pill ok">OK</span></div>
+                <div class="t"><span class="nm">Shave cream 12oz</span>
+                  <span class="n">14</span><span class="n">8</span><span class="pill ok">OK</span></div>
+                <div class="t"><span class="nm">Aftershave &mdash; cedar</span>
+                  <span class="n">21</span><span class="n">12</span><span class="pill ok">OK</span></div>
+                <div class="t"><span class="nm">Disposable razors</span>
+                  <span class="n">140</span><span class="n">100</span><span class="pill ok">OK</span></div>
+                <div class="t"><span class="nm">Beard oil 2oz</span>
+                  <span class="n">16</span><span class="n">10</span><span class="pill ok">OK</span></div>
+                <div class="t"><span class="nm">Clipper blades &mdash; #1</span>
+                  <span class="n">7</span><span class="n">6</span><span class="pill ok">OK</span></div>
+                <div class="t"><span class="nm">Sanitizing jar refill</span>
+                  <span class="n">5</span><span class="n">4</span><span class="pill ok">OK</span></div>
               </div>
               <div class="dv-po">
                 <span class="k">Chief drafted this</span>
