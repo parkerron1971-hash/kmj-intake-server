@@ -329,6 +329,23 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
     # named. list_expenses is business financials of the same class as
     # show_revenue and unbilled_time, both already here. Launching,
     # pausing, logging and deleting stay writes and stay OFF this surface.
+    # Deliberately exposed (tripwire bump 27 → 28). follow_through
+    # reports the business's OWN operational state: the invoices,
+    # purchase orders, campaigns and emails Chief sent, and whether
+    # each one landed. Every figure in it is derived from data already
+    # readable here — invoices via show_view, campaigns via
+    # campaign_status, contacts via contact_deep_dive — so it reveals
+    # no field this surface did not already return. What it adds is the
+    # LOOP: which of those things is still waiting on an answer, which
+    # is precisely what an outside agent needs to be useful about them.
+    # The writes that close a loop (send_invoice, mark_invoice_paid,
+    # send_purchase_order) stay writes and stay OFF this surface.
+    "follow_through": (
+        "What Chief is still waiting on and how recent actions landed — "
+        "invoices sent and not yet paid, purchase orders whose restock "
+        "hasn't been recorded, campaigns judged on replies, and emails "
+        "nobody answered. Takes no arguments.",
+        _NO_ARGS),
     "campaign_status": (
         "Marketing campaigns and their honest send progress — drafts, "
         "running, paused, completed, with sends/replies/bookings counts. "
@@ -540,6 +557,12 @@ HANDOFFS: Dict[str, _Handoff] = {
         feature="bookkeeping_basic",
         when=lambda p: (_sig(p).get("status") == "pending"
                         and _num(_sig(p).get("total")) > 0)),
+
+    "follow_through": _Handoff(
+        verb="draft_email",
+        text="Chief can draft the nudges for the ones that have gone quiet.",
+        where="Home",
+        when=lambda p: _num(_sig(p).get("follow_through_overdue")) > 0),
 
     "campaign_status": _Handoff(
         verb="launch_campaign",

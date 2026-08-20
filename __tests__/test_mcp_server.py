@@ -118,6 +118,17 @@ def test_the_exposed_read_verbs_and_nothing_else():
     never reach here at all, which is the mechanism to reach for when the
     answer is no.
 
+    `follow_through` (28) is THE FOLLOW-THROUGH's read: which invoices,
+    purchase orders, campaigns and emails Chief sent are still waiting on
+    an outcome, and how the recently-closed ones landed. Every field in
+    it is derived from data this surface already returns — invoice rows
+    via show_view, campaign results via campaign_status, contact names
+    via contact_deep_dive — so it discloses nothing new about the
+    business or its customers. What it adds is which of those things is
+    unresolved, which is the fact an outside agent needs in order to be
+    useful about any of them. The verbs that CLOSE a loop (send_invoice,
+    mark_invoice_paid, send_purchase_order) are writes and stay off.
+
     Bump this ONLY together with a TOOL_SCHEMAS entry and a reason.
     """
     tools = mcp.exposed_tools()
@@ -130,7 +141,7 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # 27 (8/18): draft_purchase_order joined — composes the reorder-email
     # preview from the business's own reorder plan; writes nothing, sends
     # nothing. send_purchase_order (class C, client-facing) stays off.
-    assert len(tools) == 27, (
+    assert len(tools) == 28, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")

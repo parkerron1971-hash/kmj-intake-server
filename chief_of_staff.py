@@ -146,6 +146,10 @@ from chief_inventory_actions import (
     handle_send_purchase_order,
     handle_set_reorder_plan,
 )
+# THE FOLLOW-THROUGH — the loops Chief opened and has not closed. The
+# module is imported whole rather than by name because the send paths
+# above also call open_watch() on it; one import, one owner.
+from outcome_watch import handle_follow_through
 
 # ═══════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -1434,8 +1438,18 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&status=in.(draft,sent,viewed,overdue)"
             f"&select=id,invoice_number,total,status,due_date,contact_id,contacts(name)"
             f"&order=due_date.asc.nullslast&limit=40"),
+        # THE FOLLOW-THROUGH (8/20) — the loops Chief opened and has not
+        # closed. In context every turn for the same reason missions are:
+        # a practitioner should never have to ASK whether the thing they
+        # told Chief to send ever landed. Rides this gather, so the extra
+        # read costs no wall-clock.
+        _sb(client, "GET",
+            f"/chief_outcome_watches?business_id=eq.{biz_id}"
+            f"&status=eq.open"
+            f"&select=id,kind,label,opened_at,due_at,outcome"
+            f"&order=due_at.asc&limit=10"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_watch_rows = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -1614,6 +1628,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             }
             for r in (project_rows or [])
         ],
+        "open_watches": open_watch_rows or [],
         "open_missions": [
             {"id": m.get("id"), "title": m.get("title"),
              "status": m.get("status"),
@@ -2696,6 +2711,26 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
             line += " — drafted, waiting for their word (start_mission)"
         mission_lines.append(line)
 
+    # THE FOLLOW-THROUGH — what Chief is still waiting on. `overdue`
+    # is computed here rather than stored, because "past due" is a fact
+    # about NOW and a flag written by the last sweep would be stale by
+    # up to an hour.
+    follow_lines = []
+    _fnow = datetime.now(timezone.utc)
+    for w in (ctx.get("open_watches") or [])[:10]:
+        line = f"  - {w.get('label') or w.get('kind')}"
+        try:
+            _due = datetime.fromisoformat(
+                str(w.get("due_at")).replace("Z", "+00:00"))
+            _over = (_fnow - _due).days
+            if _over >= 0:
+                line += f" — PAST DUE by {_over}d, no outcome yet"
+            else:
+                line += f" — still waiting, {abs(_over)}d of room left"
+        except (TypeError, ValueError):
+            pass
+        follow_lines.append(line)
+
     # Open invoices, itemized (8/14). Same contract as PROJECTS above:
     # this IS the list, so "who owes what?" is answered from these rows
     # — never with "I don't have the breakdown" and never via search.
@@ -2736,6 +2771,9 @@ PROJECTS (this IS the full list — never search or "pull" for it):
 
 ACTIVE MISSIONS (plans in flight — raise the ones waiting on the practitioner; never re-propose one that already exists):
 {chr(10).join(mission_lines) if mission_lines else '  (none)'}
+
+WAITING ON (loops you opened that have not closed — you sent these, and nobody has told the practitioner how they landed. Raise a PAST DUE one proactively, name what you did and when, and offer the next move; never claim an outcome that is not in these rows):
+{chr(10).join(follow_lines) if follow_lines else '  (nothing outstanding)'}
 
 OPEN INVOICES (this IS the itemized list — answer "who owes what" from these rows; never search for them, never say you don't have the breakdown; to DISPLAY them as a table use show_view):
 {chr(10).join(invoice_lines) if invoice_lines else '  (none open)'}
@@ -5829,6 +5867,32 @@ async def _do_approve_one(client, biz: Dict[str, Any], item: Dict) -> Dict[str, 
                 "health_score": score,
                 "last_interaction": now_iso,
             })
+
+    # THE FOLLOW-THROUGH — Step 6. One site covers every door that sends
+    # a queued draft: approve_draft, edit_draft, bulk_approve,
+    # draft_and_send and autopilot's auto-approval all funnel through
+    # here, so there is one place that knows an email actually left and
+    # one loop opened per send.
+    #
+    # Autopilot's sends are watched too, deliberately. A message the
+    # practitioner never saw go out is the one whose silence they are
+    # least likely to notice on their own.
+    #
+    # Only on a real delivery: an approved-but-undeliverable draft
+    # (no_email, no_api_key) opened no loop with anybody, and watching
+    # for a reply to a message that never sent would report the
+    # practitioner's own missing config as the client ignoring them.
+    if contact_id and delivery.get("sent"):
+        try:
+            import outcome_watch
+            await outcome_watch.open_watch_async(
+                biz_id, "email_reply", contact_id,
+                label=f"Email: {item.get('subject') or 'message'}",
+                facts={"subject": item.get("subject"),
+                       "queue_id": qid,
+                       "to_email": delivery.get("to_email")})
+        except Exception as _e:
+            logger.warning(f"[follow-through] reply watch not opened: {_e}")
     return result
 
 
@@ -9523,6 +9587,20 @@ async def handle_send_invoice(client, biz, action) -> Dict:
         },
         "source": "chief_of_staff",
     })
+    # THE FOLLOW-THROUGH — hold the loop open until it is paid. The
+    # invoice's own due_date sets the deadline, so a net-30 invoice gets
+    # thirty days and a due-on-receipt does not.
+    try:
+        import outcome_watch
+        await outcome_watch.open_watch_async(
+            biz["id"], "invoice_paid", invoice_id,
+            label=(f"Invoice {invoice.get('invoice_number')} to "
+                   f"{contact.get('name')}"),
+            subject=invoice,
+            facts={"invoice_number": invoice.get("invoice_number"),
+                   "total": invoice.get("total")})
+    except Exception as _e:
+        logger.warning(f"[follow-through] invoice watch not opened: {_e}")
     return {
         "type": "send_invoice",
         "result": "sent",
@@ -12794,6 +12872,7 @@ ACTION_HANDLERS = {
     "launch_campaign":                 handle_launch_campaign,
     "pause_campaign":                  handle_pause_campaign,
     "campaign_status":                 handle_campaign_status,
+    "follow_through":                  handle_follow_through,
     # Manual expenses (S10). Rows only — the gl_sync_queue triggers carry
     # them to the ledger exactly as they do UI-created ones.
     "log_expense":                     handle_log_expense,
@@ -16202,6 +16281,13 @@ MISSIONS — MULTI-STEP PLANS THAT SURVIVE ACROSS TURNS. When the practitioner a
   [ACTION:{{"type":"advance_mission"}}]  — they approved the paused step ("go ahead and send them", "approved, continue"). Lifts the gate, keeps going. Also how a PAUSED (failed-step) mission retries.
   [ACTION:{{"type":"abandon_mission"}}]  — "drop the plan", "never mind the mission".
   [ACTION:{{"type":"mission_status"}}]  — "where are we on the collections?" — per-step truth for every open mission. ACTIVE MISSIONS also appear in your context each turn: when one is waiting on the practitioner, RAISE IT rather than waiting to be asked.
+
+ACTIONS — FOLLOW-THROUGH (you close the loops you open):
+  [ACTION:{{"type":"follow_through"}}]  — "did that invoice ever get paid?", "how did last week land?", "what are you still waiting on?" — every loop you opened and have not closed, plus the ones that closed in the last fortnight. Four loops are watched automatically the moment you act: an invoice you send (until it is paid), a purchase order you mail (until the restock is recorded), a campaign you launch (judged on replies a week out), and an email that actually left (until they write back).
+  • YOU OPENED THESE, so speak about them in the first person and name the date: "you had me send Maria's invoice on the 4th — nine days past due now, and she has opened it twice." Not "invoice INV-0042 is overdue."
+  • WAITING ON is in your context every turn. When one is PAST DUE, raise it WITHOUT being asked and offer the next move — that is the whole point of watching. Do not raise the same one twice in a conversation.
+  • NEVER claim an outcome that is not in those rows. "It hasn't been opened" and "no reply yet" are facts read from the record; "they're probably busy" is not, and neither is any outcome for a loop that is still inside its window.
+  • A loop closes on the evidence, not on a hunch: paid_at, the restock stamp, a reply event. If the practitioner tells you something landed that the record does not show — the cheque arrived, the stock came in — record it the normal way (mark_invoice_paid, adjust_stock) and the watch closes itself on the next pass.
 
 ACTIONS — TIME & RETAINERS (lawyers, consultants, anyone billing hours):
   [ACTION:{{"type":"log_time","hours":1.5,"description":"drafted the engagement letter","matter":"<client or matter name>","billable":true,"rate":150,"date":"YYYY-MM-DD"}}]  — record work done. hours OR minutes OR duration ("90m"/"1.5h"); date defaults to today; billable defaults true; rate optional (falls back to the matter/offering rate). "Log two hours on Monica's contract" → this, immediately.
