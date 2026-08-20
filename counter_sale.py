@@ -280,6 +280,21 @@ def counter_sale(business_id: str, body: CounterSaleBody,
                              and int(had) < p["quantity"]),
         })
 
+    # A receipt, but only if they asked for one. Most counter sales have
+    # no email at all, and _send_receipt returns early without one — the
+    # explicit check here is so the response can honestly say whether
+    # anything was sent, rather than implying it.
+    emailed = False
+    if (body.customer_email or "").strip():
+        try:
+            from store_router import _send_receipt_async
+            _send_receipt_async(order_id)
+            emailed = True
+        except Exception as e:
+            # The sale is recorded and the stock is off the shelf. A
+            # mail problem must never be allowed to undo that.
+            logger.warning(f"[counter] receipt send failed (non-fatal): {e}")
+
     logger.info(f"[counter] biz={business_id[:8]} order={order_id[:8]} "
                 f"lines={len(priced)} total={t['total_cents']} method={method}")
 
@@ -287,6 +302,8 @@ def counter_sale(business_id: str, body: CounterSaleBody,
             "lines": results, "totals": t,
             "payment_method": method,
             "payment_label": _METHODS[method],
+            "receipt_emailed": emailed,
+            "receipt_to": (body.customer_email or "").strip() or None,
             "currency": currency,
             "warnings": stock_warnings(results)}
 

@@ -534,16 +534,12 @@ async def _send_receipt(order_id: str) -> None:
         f"/order_items?order_id=eq.{order_id}"
         "&select=name_at_purchase,unit_amount_cents,quantity&limit=100") or []
     biz = _business(order["business_id"]) or {}
-    lines = "\n".join(
-        f"  {it['quantity']} × {it['name_at_purchase']} — "
-        f"${it['unit_amount_cents'] * it['quantity'] / 100:,.2f}" for it in items)
-    extras = ""
-    if order.get("tax_cents"):
-        extras += f"\n  Sales tax — ${order['tax_cents'] / 100:,.2f}"
-    if order.get("shipping_cents"):
-        extras += f"\n  Shipping — ${order['shipping_cents'] / 100:,.2f}"
+    import receipts
+    counter = receipts.is_counter(order)
     # Per-item fulfillment notes (pickup instructions, legacy links).
-    notes = []
+    # A counter sale skips them: they are about getting the item TO the
+    # customer, and the customer already walked out with it.
+    notes: List[str] = []
     offering_ids = [it.get("offering_id") for it in
                     sb_clients.sb_get_as_service(
                         f"/order_items?order_id=eq.{order_id}&select=offering_id&limit=100") or []
@@ -553,9 +549,10 @@ async def _send_receipt(order_id: str) -> None:
         offs = sb_clients.sb_get_as_service(
             "/offerings?id=in.(" + ",".join(offering_ids) + ")"
             "&select=id,name,fulfillment_note&limit=100") or []
-        notes = [f"{o['name']}: {o['fulfillment_note']}"
-                 for o in offs if (o.get("fulfillment_note") or "").strip()]
-    notes_block = ("\n\n" + "\n".join(notes)) if notes else ""
+        if not counter:
+            notes = [f"{o['name']}: {o['fulfillment_note']}"
+                     for o in offs
+                     if (o.get("fulfillment_note") or "").strip()]
 
     # Digital delivery — a validated instant-download link for every
     # item with a hosted file. Composes WITH fulfillment_note, not
@@ -572,23 +569,23 @@ async def _send_receipt(order_id: str) -> None:
                 downloads.append(f"  {o['name']} — {link}")
     except Exception as e:
         logger.warning(f"[store] download links skipped for {order_id}: {e}")
-    downloads_block = ("\n\nYour downloads (these links are yours — "
-                       "keep this email):\n" + "\n".join(downloads)) if downloads else ""
+
+    rendered = receipts.render(order, items,
+                               business_name=biz.get("name") or "",
+                               notes=notes, downloads=downloads)
 
     from email_sender import send_via_resend
     await send_via_resend(
         to_email=email, to_name=order.get("customer_name"),
         from_email="receipts@mysolutionist.app",
-        from_name=biz.get("name") or "Your order",
+        from_name=biz.get("name") or ("Your receipt" if counter else "Your order"),
         reply_to=None,
-        subject=f"Receipt — order {str(order['id'])[:8].upper()}",
-        body=(f"Thank you for your order from {biz.get('name') or 'us'}!\n\n"
-              f"{lines}{extras}\n\n"
-              f"Total — ${order['total_cents'] / 100:,.2f}"
-              f"{downloads_block}{notes_block}\n\n"
-              f"Questions? Just reply to this email.\n"
-              f"— {biz.get('name') or ''}"),
+        subject=rendered["subject"],
+        body=rendered["body"],
         business_id=order.get("business_id"))
+    logger.info(
+        f"[store] receipt sent for "
+        f"{'counter sale' if counter else 'order'} {order_id[:8]}")
 
 
 # ─── Practitioner: orders ─────────────────────────────────────────────
