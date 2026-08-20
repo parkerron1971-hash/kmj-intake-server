@@ -2186,7 +2186,7 @@ DEVICE_BAND_CSS = """
       .dv-note{margin-top:16px;font-size:12.5px;color:var(--text-dim);}
 
       /* ── the oversized scene ── */
-      .dv-scene{position:relative;z-index:2;height:calc(452px * var(--dv-scale));margin-top:46px;}
+      .dv-scene{position:relative;z-index:2;height:calc(452px * var(--dv-scale));margin-top:86px;}
       /* The stage is composed ONCE at 1680 and then scaled as a whole on a
          wide monitor. Widening it instead (tried first) left the replica's
          fixed 11px type marooned in a much bigger box — the screens read
@@ -2215,10 +2215,17 @@ DEVICE_BAND_CSS = """
       .dv-slot .app::after,.dv-fone::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:9;
         border-radius:inherit;background:linear-gradient(147deg, rgba(255,255,255,.055), rgba(255,255,255,0) 34%);}
       /* the scene dissolves into the ground instead of ending on an edge */
-      .dv-scene::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:6;
-        background:linear-gradient(180deg, var(--bg) 0%, rgba(8,9,12,0) 15%);}
-      .dv-shade{position:absolute;left:50%;top:-140px;width:1040px;height:440px;margin-left:-520px;z-index:3;
-        pointer-events:none;background:radial-gradient(50% 50% at 50% 50%, rgba(8,9,12,.82), rgba(8,9,12,0) 72%);}
+      /* NO scrim on the scene. There was one — solid --bg at the top of
+         the scene box, out by 15% — meant to seat the art under the copy.
+         But the stage is taller than the scene and overflows upward, so
+         the screens START ABOVE the scene box: measured, that scrim's
+         solid line landed 137-156px INSIDE the tops of all three screens
+         and its end drew a hard horizontal edge across them. That edge is
+         what Kevin circled. Legibility is handled where it belongs — the
+         copy gets clear air below it (.dv-scene margin) and a soft radial
+         behind it (.dv-shade), neither of which has an edge to see. */
+      .dv-shade{position:absolute;left:50%;top:-470px;width:1180px;height:480px;margin-left:-590px;z-index:3;
+        pointer-events:none;background:radial-gradient(50% 50% at 50% 50%, rgba(8,9,12,.72), rgba(8,9,12,0) 74%);}
 
       /* ── the phone (the kit has no word for one) ── */
       .dv-fone{--ink:#F2F4F8;--ink-2:#A9B0BD;--ink-3:#6E7684;--pane:#101319;
@@ -2293,7 +2300,7 @@ DEVICE_BAND_CSS = """
          right-anchored first and measured — at 2560 only 21px of the
          drafted order survived, which is the one thing this screen exists
          to show. It clears the header rather than covering it. */
-      .dv-po{position:absolute;top:52px;left:9px;bottom:9px;width:252px;border-radius:11px;padding:11px;
+      .dv-po{position:absolute;top:70px;left:9px;bottom:9px;width:252px;border-radius:11px;padding:11px;
         background:linear-gradient(165deg,#151821,#0F1218);
         border:1px solid color-mix(in srgb, var(--gold) 36%, transparent);
         box-shadow:30px 0 60px rgba(0,0,0,.66), 0 0 26px rgba(201,168,76,.10) inset;
@@ -2397,7 +2404,7 @@ DEVICE_BAND_CSS = """
         .dv-stage{height:508px;}
         .dv-c{right:-168px;--dv-c:528px;bottom:52px;}
         .dv-b{left:50%;--dv-b:240px;margin-left:calc(var(--dv-b) / -2);bottom:-26px;}
-        .dv-shade{width:560px;margin-left:-280px;}
+        .dv-shade{width:640px;margin-left:-320px;top:-400px;height:400px;}
         .dv-g1{width:620px;margin-left:-310px;height:420px;}
         .dv-g2,.dv-g3{width:460px;height:340px;}
       }
