@@ -351,6 +351,21 @@ SHARED_CSS = """
     .card:hover, .btn-primary:hover, .nav-cta:hover{transform:none !important;}
   }
 
+  /* ─── closing CTA (features / compare / about) ───
+     This rule lived in render_home's extra_css until 2026-08-19, when
+     the device band replaced home's closer and took the CSS with it.
+     Three other pages had been printing the class the whole time and
+     never carried the rule — a per-page stylesheet cannot reach them.
+     It sits in the shell now, which is the only place shared chrome
+     actually is shared. */
+  .final-cta{padding:112px 0;text-align:center;position:relative;overflow:hidden;}
+  .final-cta::before{content:'';position:absolute;inset:0;pointer-events:none;opacity:.55;
+    background:radial-gradient(52% 100% at 50% 50%, var(--glow), transparent 68%);}
+  .final-cta .container{position:relative;z-index:1;}
+  .final-cta h2{margin-bottom:0;}
+  .final-cta p{max-width:520px;margin:0 auto 34px;color:var(--text-muted);}
+  .final-cta .btn-primary{margin-top:22px;}
+
   /* ─── page-hero (for non-home pages) ─── */
   .page-hero{position:relative;padding:80px 0 60px;text-align:center;overflow:hidden;border-bottom:1px solid var(--border);}
   .page-hero::before{content:'';position:absolute;inset:-40px 0 auto;height:280px;background:radial-gradient(60% 80% at 50% 0%, var(--glow), transparent 70%);pointer-events:none;opacity:0.6;}
@@ -2944,6 +2959,16 @@ def render_home() -> str:
         background:color-mix(in srgb, var(--accent) 8%, transparent);}
       .audience-pill .emoji{font-size:17px;}
 
+      .audience-ask{text-align:center;margin-top:14px;font-size:14.5px;color:var(--text-muted);}
+      .audience-ask a{color:var(--accent);font-weight:600;border-bottom:1px solid
+        color-mix(in srgb, var(--accent) 40%, transparent);padding-bottom:1px;}
+      .audience-ask a:hover{border-bottom-color:var(--accent);}
+
+      .rooms-cta{display:flex;justify-content:center;align-items:center;gap:12px;
+        flex-wrap:wrap;margin-top:36px;}
+      @media (max-width:520px){.rooms-cta{flex-direction:column;align-items:stretch;}
+        .rooms-cta a{justify-content:center;}}
+
       /* `.why-grid` / `.why-card` lived here until 2026-08-20, styling the
          "Why Solutionist" four-up. That section was a recap of the page —
          two of its four cards restated the rooms headline and the Chief
@@ -3189,6 +3214,8 @@ def render_home() -> str:
       <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 14h6zM19 7l-3 7h6z"/></svg> Attorneys</span>
       <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 22h18"/><path d="M6 18v-7M10 18v-7M14 18v-7M18 18v-7"/><path d="M12 2 3 8h18Z"/></svg> Ministries &amp; churches</span></div>
     <p class="audience-note reveal reveal-delay-2">Each one gets its own version of the system, not a generic one with your logo dropped in.</p>
+    <p class="audience-ask reveal reveal-delay-2">Don&rsquo;t see yours?
+      <a href="/get-started">Tell us what you do &rarr;</a></p>
     <p class="audience-note reveal reveal-delay-2" style="margin-top:10px;">Two of those come with the scope stated up front. For therapists, the system runs the practice &mdash; scheduling, billing, reminders &mdash; and deliberately keeps clinical notes and records out; those stay in your EHR. For attorneys, it runs the office &mdash; clients, matters, invoicing &mdash; and reconciles your trust account three ways: book, client ledgers, bank; IOLTA report formats vary by jurisdiction, so filing in your state&rsquo;s format stays with you.</p>
   </div>
 </section>
@@ -3370,7 +3397,8 @@ def render_home() -> str:
     </div>
     <p class="room-caption" id="roomCaption">Invoices, payments and bookkeeping that reconcile themselves. Chief chases what's late so you don't have to write another awkward email.</p>
 
-    <div style="text-align:center;margin-top:36px;" class="reveal">
+    <div class="rooms-cta reveal">
+      <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
       <a class="btn-secondary" href="/features">Explore every feature in depth &rarr;</a>
     </div>
   </div>
