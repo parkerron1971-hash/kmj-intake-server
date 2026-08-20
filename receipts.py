@@ -28,6 +28,7 @@ CURRENCY
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 _CURRENCY_SYMBOLS = {
@@ -133,4 +134,75 @@ def render(order: Dict[str, Any], items: List[Dict[str, Any]], *,
                  f"{downloads_block}{notes_block}\n\n"
                  f"Questions? Just reply to this email.\n"
                  f"— {business_name}"),
+    }
+
+
+# ─── "It's on its way" ───────────────────────────────────────────────
+
+# Carrier tracking-URL formats. This IS a lookup table, and it earns the
+# exception: these are fixed external facts published by four companies,
+# not a judgement about somebody's business. An unknown carrier simply
+# gets no link — the number is still in the email, and a wrong link is
+# worse than none.
+_TRACKING_URLS = {
+    "usps": "https://tools.usps.com/go/TrackConfirmAction?tLabels={n}",
+    "ups": "https://www.ups.com/track?tracknum={n}",
+    "fedex": "https://www.fedex.com/fedextrack/?trknbr={n}",
+    "dhl": "https://www.dhl.com/en/express/tracking.html?AWB={n}",
+}
+
+CARRIERS = ["usps", "ups", "fedex", "dhl", "other"]
+
+
+def tracking_url(carrier: Optional[str], number: Optional[str]) -> Optional[str]:
+    """A link the customer can actually click, or None."""
+    key = (carrier or "").strip().lower()
+    num = (number or "").strip()
+    if not num or key not in _TRACKING_URLS:
+        return None
+    # A tracking number is somebody's data going into a URL. Anything
+    # that is not a plain code is not a tracking number.
+    if not re.fullmatch(r"[A-Za-z0-9]{6,40}", num):
+        return None
+    return _TRACKING_URLS[key].format(n=num)
+
+
+def carrier_label(carrier: Optional[str]) -> str:
+    key = (carrier or "").strip().lower()
+    return {"usps": "USPS", "ups": "UPS", "fedex": "FedEx",
+            "dhl": "DHL"}.get(key, "the carrier")
+
+
+def render_shipped(order: Dict[str, Any], items: List[Dict[str, Any]], *,
+                   business_name: str = "") -> Dict[str, str]:
+    """The email a customer actually wants: it left, and here is where
+    it is.
+
+    Deliberately short. A receipt already told them what they bought and
+    what it cost; repeating all of that buries the one new fact, which
+    is the tracking number.
+    """
+    what = ", ".join(
+        f"{it.get('quantity')} × {it.get('name_at_purchase')}" for it in items)
+    carrier = order.get("tracking_carrier")
+    number = (order.get("tracking_number") or "").strip()
+    link = tracking_url(carrier, number)
+
+    track = ""
+    if number:
+        track = f"\n\n{carrier_label(carrier)} tracking: {number}"
+        if link:
+            track += f"\n{link}"
+    else:
+        # Marked shipped with no number — say so plainly rather than
+        # leaving a gap where a tracking number should be.
+        track = "\n\nThere's no tracking number for this one."
+
+    return {
+        "subject": f"Your order from {business_name or 'us'} is on its way",
+        "body": (f"Good news — your order has shipped."
+                 + (f"\n\n{what}" if what else "")
+                 + track
+                 + "\n\nQuestions? Just reply to this email."
+                 + f"\n— {business_name}"),
     }

@@ -689,6 +689,107 @@ def fulfill_order(order_id: str,
     return {"ok": True}
 
 
+class ShipOrderBody(BaseModel):
+    carrier: Optional[str] = Field(default=None, max_length=20)
+    tracking_number: Optional[str] = Field(default=None, max_length=60)
+    # Default TRUE: the whole reason to record a tracking number is so
+    # the customer stops wondering. Making them opt in every time would
+    # mean the email that matters is the one people forget to send.
+    notify: bool = True
+
+
+@router.post("/store/orders/{order_id}/ship")
+def ship_order(order_id: str, body: ShipOrderBody,
+               session: UserSession = Depends(sb_clients.authed_request)) -> Dict[str, Any]:
+    """It went in the post. Records the carrier and tracking number and
+    tells the customer.
+
+    Separate from /fulfill on purpose. "Fulfilled" has meant "the
+    practitioner dealt with it" since Arc 27 — it covers a pickup, a
+    hand-off, a digital download. Shipping is a narrower claim with a
+    date and a number attached, so it gets its own stamp rather than
+    quietly redefining what every past fulfilled order meant.
+    """
+    import receipts
+    rows = sb_clients.sb_get_as_service(
+        f"/orders?id=eq.{order_id}&select=id,business_id,status,customer_email"
+        "&limit=1") or []
+    if not rows:
+        raise HTTPException(404, "order not found")
+    order = rows[0]
+    _require_owner(str(order["business_id"]), session)
+    if (order.get("status") or "") not in ("paid", "fulfilled"):
+        raise HTTPException(409, "only a paid order can be shipped")
+
+    carrier = (body.carrier or "").strip().lower() or None
+    if carrier and carrier not in receipts.CARRIERS:
+        raise HTTPException(400, f"carrier must be one of {receipts.CARRIERS}")
+    number = (body.tracking_number or "").strip() or None
+
+    now = _now_iso()
+    sb_clients.sb_patch_as_service(f"/orders?id=eq.{order_id}", {
+        "tracking_carrier": carrier,
+        "tracking_number": number,
+        "shipped_at": now,
+        "status": "fulfilled",
+        "fulfilled_at": now,
+        "updated_at": now,
+    })
+
+    emailed = False
+    if body.notify and order.get("customer_email"):
+        try:
+            _send_shipped_async(order_id)
+            emailed = True
+        except Exception as e:
+            # It IS shipped. A mail problem must not make it look
+            # otherwise, or somebody re-sends a parcel.
+            logger.warning(f"[store] shipped email failed (non-fatal): {e}")
+
+    logger.info(f"[store] order {order_id[:8]} shipped "
+                f"carrier={carrier or '-'} notified={emailed}")
+    return {"ok": True, "shipped_at": now, "notified": emailed,
+            "tracking_url": receipts.tracking_url(carrier, number)}
+
+
+def _send_shipped_async(order_id: str) -> None:
+    """Off-thread, best-effort — same shape as the receipt."""
+    def _run() -> None:
+        import asyncio
+        try:
+            asyncio.run(_send_shipped(order_id))
+        except Exception as e:
+            logger.warning(f"[store] shipped email failed for {order_id}: {e}")
+    threading.Thread(target=_run, daemon=True).start()
+
+
+async def _send_shipped(order_id: str) -> None:
+    import receipts
+    rows = sb_clients.sb_get_as_service(
+        f"/orders?id=eq.{order_id}&select=*&limit=1") or []
+    if not rows:
+        return
+    order = rows[0]
+    email = order.get("customer_email")
+    if not email:
+        return
+    items = sb_clients.sb_get_as_service(
+        f"/order_items?order_id=eq.{order_id}"
+        "&select=name_at_purchase,quantity&limit=100") or []
+    biz = _business(order["business_id"]) or {}
+    rendered = receipts.render_shipped(order, items,
+                                       business_name=biz.get("name") or "")
+    from email_sender import send_via_resend
+    await send_via_resend(
+        to_email=email, to_name=order.get("customer_name"),
+        from_email="receipts@mysolutionist.app",
+        from_name=biz.get("name") or "Your order",
+        reply_to=None,
+        subject=rendered["subject"], body=rendered["body"],
+        business_id=order.get("business_id"))
+    logger.info(f"[store] shipped email sent for {order_id[:8]}")
+
+
 # ─── Practitioner: inventory management ───────────────────────────────
 # Authed via the shared require_role ladder (seat-access arc): reads are
 # member+, stock writes are manager+. Movement history is the event
