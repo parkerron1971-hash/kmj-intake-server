@@ -1874,7 +1874,7 @@ SPINE_CSS = """
 SPINE_SCRIPT = """
 <script>
 (function () {
-  var marks = [].slice.call(document.querySelectorAll('.sec-num'));
+  var marks = [].slice.call(document.querySelectorAll('[data-spine]'));
   if (marks.length < 2) return;   /* nothing to thread */
 
   var host = document.createElement('div');
@@ -2478,6 +2478,7 @@ def _price_cards_html() -> str:
           <li>{seats} &middot; {biz}</li>
           <li>{banks}</li>
         </ul>
+        <a class="price-cta{' is-mid' if mid else ''}" href="/get-started">Start with {name} &rarr;</a>
       </div>"""
 
     return (
@@ -2781,7 +2782,8 @@ def render_home() -> str:
       .pricing{padding:96px 0;border-top:1px solid var(--border);}
       .price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;max-width:1000px;margin:0 auto;}
       @media (max-width:860px){.price-grid{grid-template-columns:1fr;}}
-      .price-card{padding:26px 24px;border:1px solid var(--border);border-radius:16px;background:var(--surface);}
+      .price-card{padding:26px 24px;border:1px solid var(--border);border-radius:16px;background:var(--surface);
+        display:flex;flex-direction:column;}
       .price-card.is-mid{border-color:color-mix(in srgb, var(--accent) 42%, transparent);
         background:color-mix(in srgb, var(--accent) 6%, var(--surface));}
       .price-name{font-size:11px;letter-spacing:.14em;text-transform:uppercase;
@@ -2791,9 +2793,22 @@ def render_home() -> str:
         color:var(--text-primary);letter-spacing:-.03em;line-height:1;}
       .price-fig span{font-size:13.5px;color:var(--text-muted);}
       .price-card p{margin:0;font-size:13.5px;line-height:1.65;color:var(--text-secondary);}
-      .price-facts{list-style:none;margin:14px 0 0;padding:14px 0 0;border-top:1px solid var(--border);
+      .price-facts{list-style:none;margin:14px 0 18px;padding:14px 0 0;border-top:1px solid var(--border);
         display:flex;flex-direction:column;gap:7px;font-size:12.5px;color:var(--text-secondary);}
       .price-facts li{font-variant-numeric:tabular-nums;}
+      /* The table published three prices and gave you nothing to press —
+         the only link in the whole section was "talk to us" in the fine
+         print. Measured 2026-08-20: 3 cards, 0 doors. */
+      .price-cta{display:flex;align-items:center;justify-content:center;gap:7px;margin-top:auto;
+        padding:11px 16px;border-radius:10px;font-size:13.5px;font-weight:700;font-family:inherit;
+        background:var(--surface-2);color:var(--text-primary);border:1px solid var(--border-strong);
+        transition:background .15s,border-color .15s,transform .15s;}
+      .price-cta:hover{background:var(--surface);border-color:color-mix(in srgb, var(--accent) 55%, transparent);
+        transform:translateY(-1px);}
+      .price-cta.is-mid{background:var(--accent);color:var(--ink-on-accent);border-color:transparent;
+        box-shadow:0 6px 22px color-mix(in srgb, var(--accent) 30%, transparent);}
+      .price-cta.is-mid:hover{background:var(--accent-2);}
+      @media (prefers-reduced-motion: reduce){.price-cta:hover{transform:none;}}
       .price-note{max-width:620px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--text-muted);}
 
       /* ── the chameleon section ───────────────────────────────────── */
@@ -2920,9 +2935,6 @@ def render_home() -> str:
       .demo-video{width:100%;display:block;aspect-ratio:16/9;background:#000;}
       .demo-caption{text-align:center;margin-top:18px;font-size:13px;color:var(--text-dim);}
 
-      .sec-num{font-family:var(--font-heading);font-size:12px;font-weight:700;line-height:1;
-        letter-spacing:.28em;color:var(--accent);display:block;margin-bottom:14px;}
-
       .audience{padding:80px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
       .audience-grid{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;}
       .audience-pill{display:inline-flex;align-items:center;gap:9px;padding:11px 20px;background:var(--surface);
@@ -2932,14 +2944,10 @@ def render_home() -> str:
         background:color-mix(in srgb, var(--accent) 8%, transparent);}
       .audience-pill .emoji{font-size:17px;}
 
-      .why-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;}
-      @media (max-width:760px){.why-grid{grid-template-columns:1fr;}}
-      .why-card{display:flex;gap:16px;border-radius:14px;}
-      .why-card .check{flex-shrink:0;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;
-        font-family:var(--font-heading);font-size:12px;font-weight:700;color:var(--accent);
-        background:color-mix(in srgb, var(--accent) 13%, transparent);
-        border:1px solid color-mix(in srgb, var(--accent) 32%, transparent);}
-      .why-card p{font-size:14px;color:var(--text-muted);}
+      /* `.why-grid` / `.why-card` lived here until 2026-08-20, styling the
+         "Why Solutionist" four-up. That section was a recap of the page —
+         two of its four cards restated the rooms headline and the Chief
+         claim — so it went, and its styling with it. */
 
       /* `.final-cta` lived here until 2026-08-19 — the device band is the
          closer now, and home is the only page that styled it. /features,
@@ -3106,10 +3114,10 @@ def render_home() -> str:
 <section class="trust" id="chief">
   <div class="container-xl">
     <div class="trust-head reveal">
-      <span class="eyebrow">Meet Chief</span>
+      <span data-spine class="eyebrow">Meet Chief</span>
       <h2>Every business runs on a chief of staff. <span class="gradient-text">Yours is called Chief.</span></h2>
-      <p>A chief of staff is the one who knows what is going on, keeps the day moving, and handles what you shouldn&rsquo;t have to. Chief is yours &mdash; and it reads your real contacts, invoices, calendar and goals every turn, so it is never guessing at your business.</p>
-      <p><b>Autonomous, not unsupervised.</b> Chief runs your week on its own. It also asks first on anything that touches money, messages a client, or can&rsquo;t be taken back. Every action it takes is written down, explained in plain language, and reversible.</p>
+      <p>The one who knows what is going on, keeps the day moving, and handles what you shouldn&rsquo;t have to.</p>
+      <p><b>Autonomous, not unsupervised.</b> Chief runs your week on its own &mdash; and asks first on anything that touches money, messages a client, or can&rsquo;t be taken back. Every action it takes is written down, explained in plain language, and reversible.</p>
     </div>
     <div class="trust-grid reveal">
         <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg><span><b>Asks before it acts</b>Refunds, bulk messages, anything irreversible: your call, every time.</span></div>
@@ -3123,27 +3131,11 @@ def render_home() -> str:
   </div>
 </section>
 
-<section class="shape">
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="sec-num">01</span>
-      <span class="eyebrow">The engine</span>
-      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">The AI world moves fast.<br><span class="gradient-text">You don&rsquo;t have to.</span></h2>
-    </div>
-    <div class="shape-body reveal reveal-delay-2">
-      <p>Every few months someone announces a smarter model. For most businesses that&rsquo;s another thing to learn, another tool to evaluate, another migration nobody has time for.</p>
-      <p>Here it&rsquo;s just a better engine dropped into the same car. Your workflows don&rsquo;t change. Your data doesn&rsquo;t move. You don&rsquo;t retrain. The system you opened this morning quietly got sharper overnight, and you find out because the work got easier, not because you got an email about it.</p>
-    </div>
-    <p class="shape-close reveal">We are not in the AI business. We&rsquo;re in the <b style="color:var(--text-primary);">how-your-business-actually-runs business.</b> The AI is just the engine, and engines are supposed to get better.</p>
-  </div>
-</section>
-
 <section class="ask">
   <div class="container-xl">
     <div class="ask-grid">
       <div class="ask-copy">
-        <span class="sec-num reveal">02</span>
-        <span class="eyebrow reveal">The Chief of Staff</span>
+                <span data-spine class="eyebrow reveal">The Chief of Staff</span>
         <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Ask once. The whole system <span class="gradient-text">moves.</span></h2>
         <p class="lead reveal reveal-delay-2">Chief isn&rsquo;t a chatbot bolted onto a dashboard. It reads your real contacts, invoices, calendar and goals every turn, then acts on them.</p>
         <ul class="ask-list reveal reveal-delay-3">
@@ -3169,11 +3161,10 @@ def render_home() -> str:
 </section>
 
 
-<section class="shape">
+<section class="shape" id="audience">
   <div class="container">
     <div class="section-head reveal">
-      <span class="sec-num">03</span>
-      <span class="eyebrow">The shape of it</span>
+      <span data-spine class="eyebrow">Who it&rsquo;s for</span>
       <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Why it already speaks <span class="gradient-text">your language.</span></h2>
     </div>
 
@@ -3188,17 +3179,26 @@ def render_home() -> str:
       <div class="shape-step"><span class="n">3</span><b>Chief works inside it.</b><span>It is not guessing at your business. It is standing in it.</span></div>
     </div>
 
-    <p class="shape-close reveal">One system instead of eight subscriptions, and unlike the eight, this one actually knows what your business is.</p>
+    <p class="shape-close reveal">One system instead of eight subscriptions, and unlike the eight, this one actually knows what your business is. Seven of those languages it already speaks:</p>
+
+    <div class="audience-grid reveal reveal-delay-2"><span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> Coaches</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="7" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> Consultants</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7a4 4 0 0 1 8 0v7"/><path d="M8 10V3"/><path d="M14 21V8l6-3v16"/></svg> Barbers &amp; salons</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l8.8 8.8 8.8-8.8a5.5 5.5 0 0 0 0-7.8z"/></svg> Therapists</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> Contractors</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 14h6zM19 7l-3 7h6z"/></svg> Attorneys</span>
+      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 22h18"/><path d="M6 18v-7M10 18v-7M14 18v-7M18 18v-7"/><path d="M12 2 3 8h18Z"/></svg> Ministries &amp; churches</span></div>
+    <p class="audience-note reveal reveal-delay-2">Each one gets its own version of the system, not a generic one with your logo dropped in.</p>
+    <p class="audience-note reveal reveal-delay-2" style="margin-top:10px;">Two of those come with the scope stated up front. For therapists, the system runs the practice &mdash; scheduling, billing, reminders &mdash; and deliberately keeps clinical notes and records out; those stay in your EHR. For attorneys, it runs the office &mdash; clients, matters, invoicing &mdash; and reconciles your trust account three ways: book, client ledgers, bank; IOLTA report formats vary by jurisdiction, so filing in your state&rsquo;s format stays with you.</p>
   </div>
 </section>
 
 <section class="rooms" id="rooms">
   <div class="container-xl">
     <div class="section-head reveal">
-      <span class="sec-num">04</span>
-      <span class="eyebrow">Look inside</span>
+            <span data-spine class="eyebrow">Look inside</span>
       <h2>Six rooms. <span class="gradient-text">One brain.</span></h2>
-      <p>Each room is built for what happens in it, and they all share your contacts, your brand, and your Chief.</p>
+      <p>Each room is built for what happens in it, and they all share your contacts, your brand, and your Chief. Every number updates as the data changes &mdash; no CSV exports, no waiting on a weekly report.</p>
     </div>
 
     <div class="rooms-tabs reveal" role="tablist" aria-label="Rooms">
@@ -3376,11 +3376,23 @@ def render_home() -> str:
   </div>
 </section>
 
+
+<section class="pricing">
+  <div class="container">
+    <div class="section-head reveal">
+            <span data-spine class="eyebrow">What it costs</span>
+      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Priced for one person running the whole thing.</h2>
+    </div>
+    <div class="price-grid reveal reveal-delay-2">""" + _price_cards_html() + """
+    </div>
+    <p class="price-note reveal">Annual plans are two months free (about 17% off). Running a team or more than one business? That is what the Solutionist plan is for; bigger networks are custom &mdash; <a href="/get-started" style="color:var(--accent);">talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
+  </div>
+</section>
+
 <section id="demo" class="demo-section">
   <div class="container">
     <div class="section-head reveal">
-      <span class="sec-num">05</span>
-      <span class="eyebrow">See it move</span>
+            <span data-spine class="eyebrow">See it move</span>
       <h2>Fifty-five seconds, <span class="gradient-text">end to end.</span></h2>
       <p>The real system, scene by scene: Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</p>
     </div>
@@ -3394,61 +3406,6 @@ def render_home() -> str:
   </div>
 </section>
 
-<section id="audience" class="audience">
-  <div class="container">
-    <div class="section-head" style="margin-bottom:34px;">
-      <span class="sec-num reveal">06</span>
-      <span class="eyebrow reveal">Who it&rsquo;s for</span>
-      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Built for people who serve people.</h2>
-    </div>
-    <div class="audience-grid reveal reveal-delay-2">
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> Coaches</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="7" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> Consultants</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7a4 4 0 0 1 8 0v7"/><path d="M8 10V3"/><path d="M14 21V8l6-3v16"/></svg> Barbers &amp; salons</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l8.8 8.8 8.8-8.8a5.5 5.5 0 0 0 0-7.8z"/></svg> Therapists</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> Contractors</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 14h6zM19 7l-3 7h6z"/></svg> Attorneys</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 22h18"/><path d="M6 18v-7M10 18v-7M14 18v-7M18 18v-7"/><path d="M12 2 3 8h18Z"/></svg> Ministries &amp; churches</span>
-    </div>
-    <p class="audience-note reveal reveal-delay-2">Each one gets its own version of the system, not a generic one with your logo dropped in.</p>
-    <p class="audience-note reveal reveal-delay-2" style="margin-top:10px;">Two of those come with the scope stated up front. For therapists, the system runs the practice &mdash; scheduling, billing, reminders &mdash; and deliberately keeps clinical notes and records out; those stay in your EHR. For attorneys, it runs the office &mdash; clients, matters, invoicing &mdash; and reconciles your trust account three ways: book, client ledgers, bank; IOLTA report formats vary by jurisdiction, so filing in your state&rsquo;s format stays with you.</p>
-
-  </div>
-</section>
-
-<section>
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="sec-num">07</span>
-      <span class="eyebrow">Why Solutionist</span>
-      <h2>One workspace replacing the chaos of eight.</h2>
-    </div>
-    <div class="why-grid">
-      <div class="card why-card reveal"><div class="check">01</div>
-        <div><h3>One brain, not eight</h3><p>Your CRM, invoicing, calendar, content and analytics all talk to each other. Update a contact once; every tool sees it.</p></div></div>
-      <div class="card why-card reveal reveal-delay-1"><div class="check">02</div>
-        <div><h3>AI that knows your business</h3><p>Chief reads your real data every turn, not a generic LLM. Asks for context once, then uses it forever.</p></div></div>
-      <div class="card why-card reveal"><div class="check">03</div>
-        <div><h3>Real-time, not weekly reports</h3><p>Every metric updates as data changes. No CSV exports, no waiting for someone to refresh.</p></div></div>
-      <div class="card why-card reveal reveal-delay-1"><div class="check">04</div>
-        <div><h3>Built solo-first, not enterprise</h3><p>Designed for one operator running the whole business. When you grow, the Solutionist plan adds team seats &mdash; without the enterprise sprawl.</p></div></div>
-    </div>
-  </div>
-</section>
-
-
-<section class="pricing">
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="sec-num">08</span>
-      <span class="eyebrow">What it costs</span>
-      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Priced for one person running the whole thing.</h2>
-    </div>
-    <div class="price-grid reveal reveal-delay-2">""" + _price_cards_html() + """
-    </div>
-    <p class="price-note reveal">Annual plans are two months free (about 17% off). Running a team or more than one business? That is what the Solutionist plan is for; bigger networks are custom &mdash; <a href="/get-started" style="color:var(--accent);">talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
-  </div>
-</section>
 
 <!-- ══ THE DEVICE BAND — the closer ══════════════════════════════════
      This REPLACED the old `.final-cta` (Kevin, 2026-08-19). That block
@@ -4355,6 +4312,13 @@ def render_about() -> str:
       @media (max-width: 720px){.company-row{grid-template-columns:1fr;}}
       .company-card{padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:14px;}
       .company-card h3{font-family:var(--font-heading);font-size:14px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.4px;margin-bottom:10px;}
+      /* Moved off the home page 2026-08-20 — it answers "will you fall
+         behind?", which is an about-us question, not a first-fold one. */
+      .about-engine p{font-size:15.5px;line-height:1.7;color:var(--text-secondary);margin-bottom:14px;}
+      .about-engine p:last-child{margin-bottom:0;}
+      .about-engine-close{padding:18px 20px;border-radius:14px;background:var(--surface);
+        border:1px solid var(--border);color:var(--text-muted);font-size:14.5px;margin-top:6px;}
+      .about-engine-close b{color:var(--text-primary);}
       .company-card p{font-size:14px;color:var(--text-secondary);}
     """
     body = """
@@ -4436,6 +4400,20 @@ def render_about() -> str:
         <h3>Contact</h3>
         <p><a href="mailto:kmjcreativesolution@gmail.com" style="color:var(--accent);">kmjcreativesolution@gmail.com</a>. Replies usually within a day.</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container-narrow">
+    <div class="section-head reveal" style="text-align:left;margin-bottom:22px;">
+      <span class="eyebrow">The engine</span>
+      <h2 style="margin-top:12px;">The AI world moves fast. <span class="gradient-text">You don&rsquo;t have to.</span></h2>
+    </div>
+    <div class="about-engine reveal">
+      <p>Every few months someone announces a smarter model. For most businesses that&rsquo;s another thing to learn, another tool to evaluate, another migration nobody has time for.</p>
+      <p>Here it&rsquo;s just a better engine dropped into the same car. Your workflows don&rsquo;t change. Your data doesn&rsquo;t move. You don&rsquo;t retrain. The system you opened this morning quietly got sharper overnight, and you find out because the work got easier, not because you got an email about it.</p>
+      <p class="about-engine-close">We are not in the AI business. We&rsquo;re in the <b>how-your-business-actually-runs business.</b> The AI is just the engine, and engines are supposed to get better.</p>
     </div>
   </div>
 </section>
