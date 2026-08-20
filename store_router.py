@@ -205,6 +205,52 @@ def _emit_stock_event(business_id: str, offering_id: str, offering_name: str,
         logger.warning(f"[store] stock event emit failed (non-fatal): {e}")
 
 
+def sell_units(business_id: str, offering_id: str, qty: int, *,
+               reason: str, actor: str,
+               offering_name: str = "",
+               thresholds: Optional[Dict[str, int]] = None
+               ) -> Optional[Dict[str, Any]]:
+    """Take units off the shelf because something SOLD. The one place
+    that happens, so a sale through any door leaves the same trail.
+
+    Atomic: decrement_offering_stock() locks the row before computing
+    the new value, so two simultaneous sales of the last unit cannot
+    both succeed. It also clamps at zero — stock never goes negative,
+    and an oversell shows up as 0 rather than as -1.
+
+    Returns None when the offering is UNTRACKED (inventory_qty is null)
+    or gone. Neither is an error: most offerings are services, and a
+    business that does not count a product has said so by leaving it
+    untracked. Returning None rather than raising is what lets every
+    caller loop over mixed line items without special-casing.
+    """
+    if qty <= 0:
+        return None
+    try:
+        rows = sb_clients.sb_post_as_service("/rpc/decrement_offering_stock", {
+            "p_offering_id": str(offering_id),
+            "p_business_id": str(business_id),
+            "p_qty": int(qty),
+        })
+    except Exception as e:
+        logger.error(f"[store] atomic decrement failed for {offering_id}: {e}")
+        return None
+    row = rows[0] if isinstance(rows, list) and rows else rows
+    if not isinstance(row, dict) or not row.get("tracked"):
+        return None
+    old_qty = row.get("old_qty")
+    new_qty = row.get("new_qty")
+    if old_qty is None or new_qty is None:
+        return None
+    _emit_stock_event(business_id, str(offering_id), offering_name,
+                      delta=int(new_qty) - int(old_qty), new_qty=int(new_qty),
+                      reason=reason, actor=actor)
+    if thresholds is not None:
+        _maybe_low_stock_alert(business_id, str(offering_id), offering_name,
+                               int(old_qty), int(new_qty), thresholds)
+    return {"old_qty": int(old_qty), "new_qty": int(new_qty)}
+
+
 # ─── Customer: store data ─────────────────────────────────────────────
 
 @router.get("/public/store/{slug}")
@@ -374,12 +420,15 @@ def mark_order_paid(order_id: str, *, payment_intent_id: Optional[str],
 
     # Inventory decrement for tracked items.
     #
-    # KNOWN RACE (documented, not fixed this arc): this is read-then-write.
-    # Two simultaneous paid orders on the last unit can both read qty=1 and
-    # both write qty=0 — an oversell of one. Acceptable at current volume;
-    # the future fix is a SECURITY DEFINER Postgres function doing the
-    # decrement atomically (UPDATE ... SET inventory_qty = GREATEST(0,
-    # inventory_qty - n) RETURNING inventory_qty) called via RPC.
+    # THE OVERSELL RACE IS CLOSED (2026-08-20). This used to be
+    # read-then-write: two simultaneous paid orders on the last unit
+    # could both read qty=1 and both write qty=0, selling one unit
+    # twice. It now goes through decrement_offering_stock(), a Postgres
+    # function that takes a row lock (SELECT ... FOR UPDATE) before
+    # computing the new value, so concurrent callers serialize and the
+    # second one sees the first one's write. The clamp at zero lives in
+    # the same function, which is also why an oversell can no longer
+    # produce a negative count.
     biz = _business(str(order.get("business_id"))) or {}
     thresholds = low_stock_thresholds(biz)
     items = sb_clients.sb_get_as_service(
@@ -388,20 +437,19 @@ def mark_order_paid(order_id: str, *, payment_intent_id: Optional[str],
         oid = it.get("offering_id")
         if not oid:
             continue
+        sold = int(it.get("quantity") or 0)
+        if sold <= 0:
+            continue
         off = sb_clients.sb_get_as_service(
-            f"/offerings?id=eq.{oid}&select=inventory_qty,name&limit=1") or []
-        if off and off[0].get("inventory_qty") is not None:
-            old_qty = int(off[0]["inventory_qty"])
-            sold = int(it.get("quantity") or 0)
-            new_qty = max(0, old_qty - sold)
-            sb_clients.sb_patch_as_service(f"/offerings?id=eq.{oid}",
-                                           {"inventory_qty": new_qty})
-            name = off[0].get("name") or ""
-            _emit_stock_event(str(order["business_id"]), str(oid), name,
-                              delta=new_qty - old_qty, new_qty=new_qty,
-                              reason=f"order {order_id[:8]}", actor="sale")
-            _maybe_low_stock_alert(str(order["business_id"]), str(oid), name,
-                                   old_qty, new_qty, thresholds)
+            f"/offerings?id=eq.{oid}&select=name&limit=1") or []
+        name = (off[0].get("name") or "") if off else ""
+        moved = sell_units(str(order["business_id"]), str(oid), sold,
+                           reason=f"order {order_id[:8]}", actor="sale",
+                           offering_name=name, thresholds=thresholds)
+        if moved is None:
+            # Untracked stock, or the product moved out from under us.
+            # Neither is an error — most offerings are not counted.
+            continue
 
     _send_receipt_async(order_id)
 
