@@ -383,6 +383,10 @@ app.include_router(inventory_scan_router)
 # and answers with the variance.
 from inventory_count import router as inventory_count_router
 app.include_router(inventory_count_router)
+# SCAN THE SHELF rung three (2026-08-20) - receiving: the tally that books
+# in a delivery and closes the purchase order the reorder brain opened.
+from inventory_receive import router as inventory_receive_router
+app.include_router(inventory_receive_router)
 # Digital delivery (2026-07-31) - hosted product files + validated downloads
 from store_files import router as store_files_router
 app.include_router(store_files_router)

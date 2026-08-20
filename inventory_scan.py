@@ -40,6 +40,17 @@ WHAT IT REFUSES TO DO
     carry — a scanner that silently creates a second "Fade Pomade 4oz"
     is a shadow catalog with a camera on it.
 
+THE WRONG-ITEM GUARD (expect_offering_id)
+  During a tally the practitioner is often adding to ONE named product —
+  "six of these" — and the failure that costs them is grabbing the wrong
+  bottle off the shelf. Pass the product they think they are scanning as
+  `expect_offering_id` and a scan that resolves to something else comes
+  back as result="mismatch", naming BOTH products, instead of quietly
+  tallying onto the wrong row.
+
+  It is free: both sides are already known, so the check is a string
+  compare and never costs a model call.
+
 Endpoints (both manager+, the same ladder as every other stock write):
   POST /store/inventory/{business_id}/scan             — identify (read-only)
   POST /store/inventory/{business_id}/{offering_id}/barcode — teach the code
@@ -252,10 +263,44 @@ async def _read_label(blob: bytes, media_type: str) -> Dict[str, Any]:
                 "description": "", "category": "product", "read_failed": True}
 
 
+def apply_expectation(result: Dict[str, Any],
+                      expected: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """THE WRONG-ITEM GUARD. Pure.
+
+    `expected` is the product the practitioner believes they are
+    scanning (they pinned it, or they are adding "six of these"). When
+    the scan resolves to a DIFFERENT known product, the answer stops
+    being "here is what you scanned" and becomes "that is not the one" —
+    naming both, because "wrong item" without saying which is a dead end
+    at the exact moment somebody is holding two similar bottles.
+
+    Three deliberate non-behaviours:
+      • No expectation set → the result passes through untouched, so the
+        one-off scan path is unaffected.
+      • The expected product itself → passes through as the normal
+        exact/likely answer. Confirming your own pin is the happy path.
+      • An UNRECOGNISED scan (new/unreadable) is NOT relabelled a
+        mismatch. We genuinely do not know what it is, and claiming "not
+        the one" implies we identified it. `matches_expected: false`
+        carries the fact without the false certainty.
+    """
+    if not expected:
+        return result
+    out = dict(result)
+    out["expected_offering"] = expected
+    got = (result.get("offering") or {}).get("id")
+    same = got is not None and str(got) == str(expected.get("id"))
+    out["matches_expected"] = same
+    if got is not None and not same:
+        out["result"] = "mismatch"
+    return out
+
+
 @router.post("/store/inventory/{business_id}/scan")
 async def scan_product(
     business_id: str,
     barcode: Optional[str] = Form(default=None),
+    expect_offering_id: Optional[str] = Form(default=None),
     file: Optional[UploadFile] = File(default=None),
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
@@ -269,35 +314,44 @@ async def scan_product(
                Confirming stamps the barcode (the learning loop).
       new    — nothing matched; here is a prefilled create form.
       unreadable — we could not read it; the form opens anyway.
+      mismatch — expect_offering_id was set and this is a DIFFERENT
+               known product. Both are named. See apply_expectation.
     """
     from business_users_router import require_role
     require_role(business_id, str(user.id), "manager")
 
     code = clean_barcode(barcode)
     offerings = _sellable_offerings(business_id)
+    expected = None
+    if expect_offering_id:
+        expected = next((_shape(o) for o in offerings
+                         if str(o.get("id")) == str(expect_offering_id)), None)
+
+    def answer(payload: Dict[str, Any]) -> Dict[str, Any]:
+        return apply_expectation(payload, expected)
 
     # 1) The free path. An exact barcode is not a guess.
     if code:
         for o in offerings:
             if clean_barcode(o.get("barcode")) == code:
                 logger.info(f"[scan] exact biz={business_id[:8]} code={code}")
-                return {"ok": True, "result": "exact", "barcode": code,
-                        "offering": _shape(o), "extracted": None}
+                return answer({"ok": True, "result": "exact", "barcode": code,
+                               "offering": _shape(o), "extracted": None})
         # People type the UPC into the SKU box before this feature
         # existed — honour that as an exact hit and let the confirm
         # stamp the real column.
         for o in offerings:
             if (o.get("sku") or "").strip().upper() == code:
                 logger.info(f"[scan] sku-hit biz={business_id[:8]} code={code}")
-                return {"ok": True, "result": "exact", "barcode": code,
-                        "offering": _shape(o), "extracted": None}
+                return answer({"ok": True, "result": "exact", "barcode": code,
+                               "offering": _shape(o), "extracted": None})
 
     # 2) No photo to fall back on — say so plainly rather than guessing.
     if file is None:
         if not code:
             raise HTTPException(400, "send a barcode, a photo, or both")
-        return {"ok": True, "result": "new", "barcode": code,
-                "extracted": None, "offering": None}
+        return answer({"ok": True, "result": "new", "barcode": code,
+                       "extracted": None, "offering": None})
 
     media_type = (file.content_type or "").lower().split(";")[0]
     if media_type not in _MEDIA_TYPES:
@@ -310,35 +364,35 @@ async def scan_product(
 
     extracted = await _read_label(blob, media_type)
     if extracted.get("not_a_product"):
-        return {"ok": True, "result": "unreadable", "barcode": code,
-                "extracted": None, "offering": None,
-                "note": "That photo doesn't look like a product."}
+        return answer({"ok": True, "result": "unreadable", "barcode": code,
+                       "extracted": None, "offering": None,
+                       "note": "That photo doesn't look like a product."})
     if extracted.get("read_failed"):
-        return {"ok": True, "result": "unreadable", "barcode": code,
-                "extracted": None, "offering": None,
-                "note": "Couldn't read the label — fill it in yourself."}
+        return answer({"ok": True, "result": "unreadable", "barcode": code,
+                       "extracted": None, "offering": None,
+                       "note": "Couldn't read the label — fill it in yourself."})
 
     # 3) A barcode the MODEL read is still exact if it hits a row.
     seen = code or extracted.get("barcode")
     if not code and extracted.get("barcode"):
         for o in offerings:
             if clean_barcode(o.get("barcode")) == extracted["barcode"]:
-                return {"ok": True, "result": "exact",
-                        "barcode": extracted["barcode"],
-                        "offering": _shape(o), "extracted": extracted}
+                return answer({"ok": True, "result": "exact",
+                               "barcode": extracted["barcode"],
+                               "offering": _shape(o), "extracted": extracted})
 
     # 4) Fuzzy — a proposal, never a certainty.
     hit = best_match(extracted, offerings)
     if hit:
         logger.info(f"[scan] likely biz={business_id[:8]} "
                     f"score={hit['score']} name={extracted.get('name')!r}")
-        return {"ok": True, "result": "likely", "barcode": seen,
-                "offering": _shape(hit["offering"]),
-                "score": hit["score"], "extracted": extracted}
+        return answer({"ok": True, "result": "likely", "barcode": seen,
+                       "offering": _shape(hit["offering"]),
+                       "score": hit["score"], "extracted": extracted})
 
     logger.info(f"[scan] new biz={business_id[:8]} name={extracted.get('name')!r}")
-    return {"ok": True, "result": "new", "barcode": seen,
-            "offering": None, "extracted": extracted}
+    return answer({"ok": True, "result": "new", "barcode": seen,
+                   "offering": None, "extracted": extracted})
 
 
 # ─── The learning loop ───────────────────────────────────────────────

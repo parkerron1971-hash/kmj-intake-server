@@ -74,6 +74,17 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "payload": ["counted", "off", "units_short", "units_over",
                     "value_short", "note", "actor", "finished_at", "items"],
     },
+    "stock_received": {
+        "source": ("inventory_receive receive_stock — ONE row per booked-in "
+                   "delivery. Distinct from stock_counted on purpose: a "
+                   "count SETS (the shelf was right, the book was wrong), a "
+                   "receive ADDS (the shelf was right and more arrived), and "
+                   "the history has to be able to tell a delivery from a "
+                   "stocktake forever after. Each line also gets its own "
+                   "stock_adjusted row"),
+        "payload": ["lines", "units", "orders_closed", "note", "actor",
+                    "received_at"],
+    },
     "payment_received": {
         "source": "chief_of_staff manual marks",
         "payload": ["invoice_id", "amount"],

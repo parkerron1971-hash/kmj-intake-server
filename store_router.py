@@ -611,7 +611,8 @@ def get_inventory(business_id: str,
     from reorder_engine import REORDER_FIELDS
     rows = sb_clients.sb_get_as_service(
         f"/offerings?business_id=eq.{business_id}&is_active=eq.true"
-        f"&select=id,name,sku,category,current_price,inventory_qty,{REORDER_FIELDS}"
+        f"&select=id,name,sku,barcode,category,current_price,inventory_qty,"
+        f"{REORDER_FIELDS}"
         "&order=created_at.asc&limit=200") or []
     items = []
     for o in rows:
@@ -623,7 +624,12 @@ def get_inventory(business_id: str,
         low = bool(tracked and int(inv) <= (
             threshold if threshold is not None else DEFAULT_LOW_STOCK_THRESHOLD))
         items.append({"id": o["id"], "name": o.get("name"),
-                      "sku": o.get("sku"), "category": o.get("category"),
+                      "sku": o.get("sku"),
+                      # SCAN THE SHELF — shipped so the client can build
+                      # a local barcode->product map and resolve a known
+                      # code with no network call at all.
+                      "barcode": o.get("barcode"),
+                      "category": o.get("category"),
                       "inventory_qty": (int(inv) if tracked else None),
                       "tracked": tracked, "threshold": threshold,
                       "low_stock": low,
