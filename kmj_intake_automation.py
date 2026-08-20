@@ -387,6 +387,10 @@ app.include_router(inventory_count_router)
 # in a delivery and closes the purchase order the reorder brain opened.
 from inventory_receive import router as inventory_receive_router
 app.include_router(inventory_receive_router)
+# THE TILL (2026-08-20) - a counter sale IS an order (source='counter'),
+# so it inherits the GL mapping, refunds, reports and audit triggers.
+from counter_sale import router as counter_sale_router
+app.include_router(counter_sale_router)
 # Digital delivery (2026-07-31) - hosted product files + validated downloads
 from store_files import router as store_files_router
 app.include_router(store_files_router)

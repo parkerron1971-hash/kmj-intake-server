@@ -344,13 +344,42 @@ def desired_for_plaid(t: Dict[str, Any],
     return []
 
 
+def _order_cash_account(o: Dict[str, Any]) -> str:
+    """Which account the money landed in.
+
+    Store checkout is Stripe, so it lands in Stripe Clearing (1150) and
+    the payout flow clears it later. A COUNTER SALE usually is not: cash
+    handed over the counter, or a card run on the shop's own reader,
+    never passes through our Stripe account, so there is no payout
+    coming to clear 1150 — booking it there would leave the clearing
+    account permanently out by the value of every counter sale.
+
+    Same rule and the same hints as invoices already use, so both money
+    doors agree about what "paid in cash" means.
+    """
+    pm = (o.get("payment_method") or "").lower()
+    if not pm:
+        # No method recorded = the store flow, which is always Stripe.
+        return "1150"
+    if "stripe" in pm:
+        return "1150"
+    if any(h in pm for h in _NON_STRIPE_PAYMENT_HINTS):
+        return "1000"
+    # An explicitly recorded method we do not recognise is still money
+    # that did not come through our Stripe account.
+    return "1000"
+
+
 def desired_for_order(o: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Arc 27 — store orders. Paid via Stripe Checkout, always: Dr Stripe
-    Clearing (1150) for the charge total; Cr Product Revenue (4100) for
-    the goods, Cr Sales Tax Payable (2100) for collected tax, Cr Other
-    Income (4900) for shipping charged. Refunds reverse revenue against
-    the clearing account (same pattern as invoice_refund). Bank deposit
-    of the Stripe payout clears 1150 via the existing payout flow."""
+    """Arc 27 — store orders, and counter sales on the same rails.
+
+    Dr the account the money actually landed in (Stripe Clearing 1150
+    for checkout, Cash 1000 for a counter sale — see
+    _order_cash_account); Cr Product Revenue (4100) for the goods, Cr
+    Sales Tax Payable (2100) for collected tax, Cr Other Income (4900)
+    for shipping charged. Refunds reverse revenue against the SAME
+    account the payment used, or a refunded counter sale would credit
+    a clearing account that never held the money."""
     out: List[Dict[str, Any]] = []
     total = round(float(o.get("total_cents") or 0) / 100.0, 2)
     if total <= 0:
@@ -359,7 +388,7 @@ def desired_for_order(o: Dict[str, Any]) -> List[Dict[str, Any]]:
         tax = round(float(o.get("tax_cents") or 0) / 100.0, 2)
         shipping = round(float(o.get("shipping_cents") or 0) / 100.0, 2)
         goods = round(total - tax - shipping, 2)
-        lines = [_line("1150", debit=total)]
+        lines = [_line(_order_cash_account(o), debit=total)]
         if goods > 0:
             lines.append(_line("4100", credit=goods))
         if tax > 0:
@@ -373,7 +402,8 @@ def desired_for_order(o: Dict[str, Any]) -> List[Dict[str, Any]]:
         amt = round(float(rc) / 100.0, 2)
         out.append(_entry(_d(o.get("refunded_at")) or _d(o.get("paid_at")),
                           "order_refund", o["id"], "Store order refunded",
-                          [_line("4100", debit=amt), _line("1150", credit=amt)]))
+                          [_line("4100", debit=amt),
+                           _line(_order_cash_account(o), credit=amt)]))
     return out
 
 
