@@ -103,7 +103,8 @@ def _sellable_offerings(business_id: str) -> List[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/offerings?business_id=eq.{business_id}&is_active=eq.true"
         "&select=id,name,slug,description,category,current_price,currency,"
-        "image_url,sku,inventory_qty,requires_shipping,fulfillment_note"
+        "image_url,sku,inventory_qty,requires_shipping,fulfillment_note,"
+        "ship_surcharge_cents,weight_oz"
         "&order=created_at.asc&limit=100") or []
     out = []
     for o in rows:
@@ -276,6 +277,48 @@ def store_data(slug: str) -> Dict[str, Any]:
             "flat_shipping_cents": ss["flat_shipping_cents"]}
 
 
+class ShippingQuoteBody(BaseModel):
+    slug: str
+    items: List["CartItem"] = Field(min_length=1, max_length=_MAX_LINE_ITEMS)
+
+
+@router.post("/public/store/{slug}/shipping-quote")
+def shipping_quote(slug: str, body: ShippingQuoteBody) -> Dict[str, Any]:
+    """What this basket can be shipped for, before anybody pays.
+
+    Public, because the cart is anonymous — and priced from the catalog
+    exactly the way checkout prices it, so the options a customer sees
+    are the options they get charged. The two callers share
+    shipping_rates.quote() precisely so they cannot drift into
+    disagreeing about the price at the last screen.
+    """
+    if not _check_rate(slug):
+        raise HTTPException(429, "Rate limit exceeded")
+    site = _site_by_slug(slug)
+    if not site:
+        raise HTTPException(404, "Store not found")
+    biz = _business(site["business_id"]) or {}
+
+    offerings = {str(o["id"]): o for o in _sellable_offerings(site["business_id"])}
+    rate_items: List[Dict[str, Any]] = []
+    subtotal_cents = 0
+    for it in body.items:
+        o = offerings.get(str(it.offering_id))
+        if not o:
+            continue
+        subtotal_cents += int(round(float(o.get("current_price") or 0) * 100)) * it.quantity
+        rate_items.append({"requires_shipping": bool(o.get("requires_shipping")),
+                           "quantity": it.quantity,
+                           "ship_surcharge_cents": o.get("ship_surcharge_cents"),
+                           "weight_oz": o.get("weight_oz")})
+
+    import shipping_rates
+    cfg = shipping_rates.settings_of(biz)
+    rates = shipping_rates.quote(rate_items, cfg, subtotal_cents=subtotal_cents)
+    return {"ok": True, "options": rates,
+            "needs_shipping": shipping_rates.needs_shipping(rate_items)}
+
+
 # ─── Customer: checkout ───────────────────────────────────────────────
 
 class CartItem(BaseModel):
@@ -285,6 +328,9 @@ class CartItem(BaseModel):
 
 class StoreCheckoutBody(BaseModel):
     slug: str
+    # WHICH option, never HOW MUCH. The amount is priced server-side
+    # from the catalog and the shop's settings, every time.
+    shipping_option: Optional[str] = Field(default=None, max_length=60)
     items: List[CartItem] = Field(min_length=1, max_length=_MAX_LINE_ITEMS)
     customer_email: Optional[str] = None
     customer_name: Optional[str] = None
@@ -314,6 +360,7 @@ async def store_checkout(body: StoreCheckoutBody) -> Dict[str, Any]:
     order_items: List[Dict[str, Any]] = []
     subtotal_cents = 0
     needs_shipping = False
+    rate_items: List[Dict[str, Any]] = []
     for it in body.items:
         o = sellable.get(it.offering_id)
         if not o:
@@ -329,16 +376,33 @@ async def store_checkout(body: StoreCheckoutBody) -> Dict[str, Any]:
                            "quantity": it.quantity})
         order_items.append({"offering_id": o["id"], "name_at_purchase": o["name"],
                             "unit_amount_cents": unit_cents, "quantity": it.quantity})
+        rate_items.append({"requires_shipping": bool(o.get("requires_shipping")),
+                           "quantity": it.quantity,
+                           "ship_surcharge_cents": o.get("ship_surcharge_cents"),
+                           "weight_oz": o.get("weight_oz")})
 
     ss = _store_settings(biz)
     tax_cents = int(round(subtotal_cents * ss["tax_rate_pct"] / 100.0))
-    shipping_cents = ss["flat_shipping_cents"] if needs_shipping else 0
+
+    # Shipping is priced HERE, from the code the cart sent — never from
+    # an amount it sent. A checkout that trusts a shipping price off the
+    # wire is a checkout where shipping is free for anybody who reads
+    # the page source.
+    import shipping_rates
+    ship_cfg = shipping_rates.settings_of(biz)
+    rate = shipping_rates.resolve(
+        rate_items, ship_cfg, subtotal_cents=subtotal_cents,
+        chosen_code=(body.shipping_option or None))
+    shipping_cents = int(rate.get("amount_cents") or 0)
+    # Somebody collecting it in person is not giving us an address.
+    collect_address = needs_shipping and rate.get("code") != shipping_rates.PICKUP
     total_cents = subtotal_cents + tax_cents + shipping_cents
 
     if tax_cents > 0:
         line_items.append({"name": "Sales tax", "amount_cents": tax_cents, "quantity": 1})
     if shipping_cents > 0:
-        line_items.append({"name": "Shipping", "amount_cents": shipping_cents, "quantity": 1})
+        line_items.append({"name": rate.get("label") or "Shipping",
+                           "amount_cents": shipping_cents, "quantity": 1})
 
     # Create the order (pending) before Stripe so the webhook has a row.
     created = sb_clients.sb_post_as_service("/orders", {
@@ -348,6 +412,7 @@ async def store_checkout(body: StoreCheckoutBody) -> Dict[str, Any]:
         "status": "pending",
         "subtotal_cents": subtotal_cents, "tax_cents": tax_cents,
         "shipping_cents": shipping_cents, "total_cents": total_cents,
+        "shipping_method": rate.get("code"),
         "currency": "usd",
     })
     order = (created or [None])[0] if isinstance(created, list) else created
@@ -368,7 +433,8 @@ async def store_checkout(body: StoreCheckoutBody) -> Dict[str, Any]:
             source_type="order",
             source_id=str(order["id"]),
             customer_email=(body.customer_email or "").strip().lower() or None,
-            collect_shipping=needs_shipping,
+            collect_shipping=collect_address,
+            shipping_countries=ship_cfg["countries"],
         )
     except Exception as e:
         sb_clients.sb_patch_as_service(f"/orders?id=eq.{order['id']}",

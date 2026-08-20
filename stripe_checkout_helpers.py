@@ -57,6 +57,7 @@ def _checkout_session_form(
     application_fee_amount_cents: int = 0,
     currency: str = "usd",
     collect_shipping: bool = False,
+    shipping_countries: Optional[List[str]] = None,
     extra_metadata: Optional[Dict[str, Any]] = None,
     setup_future_usage: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -111,7 +112,15 @@ def _checkout_session_form(
     if collect_shipping:
         # Arc 27 — physical goods: Stripe collects the address on the
         # hosted page; the webhook copies it onto the order row.
-        form["shipping_address_collection[allowed_countries][0]"] = "US"
+        #
+        # The country list used to be the literal string "US", which
+        # meant a Canadian customer could not buy a physical product at
+        # all — Stripe's address form simply refused them. It now comes
+        # from the shop's own settings, defaulting to US so nothing
+        # changes for anyone who never opens the screen.
+        countries = [c for c in (shipping_countries or ["US"]) if c]
+        for i, code in enumerate(countries[:40]):
+            form[f"shipping_address_collection[allowed_countries][{i}]"] = str(code).upper()[:2]
     if setup_future_usage:
         form["payment_intent_data[setup_future_usage]"] = setup_future_usage
 
@@ -141,6 +150,7 @@ async def create_checkout_session(
     application_fee_amount_cents: int = 0,
     currency: str = "usd",
     collect_shipping: bool = False,
+    shipping_countries: Optional[List[str]] = None,
     extra_metadata: Optional[Dict[str, Any]] = None,
     setup_future_usage: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -175,6 +185,7 @@ async def create_checkout_session(
         application_fee_amount_cents=application_fee_amount_cents,
         currency=currency,
         collect_shipping=collect_shipping,
+        shipping_countries=shipping_countries,
         extra_metadata=extra_metadata,
         setup_future_usage=setup_future_usage,
     )
