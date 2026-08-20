@@ -678,6 +678,12 @@ def get_inventory(business_id: str,
                       # code with no network call at all.
                       "barcode": o.get("barcode"),
                       "category": o.get("category"),
+                      # THE TILL needs a price, and GET /offerings is
+                      # owner-gated — so the manager-accessible view of
+                      # the catalog has to carry it. Null means "a
+                      # manager added this for stock", which is exactly
+                      # why the till refuses to sell it.
+                      "current_price": o.get("current_price"),
                       "inventory_qty": (int(inv) if tracked else None),
                       "tracked": tracked, "threshold": threshold,
                       "low_stock": low,

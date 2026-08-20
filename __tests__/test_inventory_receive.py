@@ -181,3 +181,6 @@ def test_inventory_list_ships_the_barcode():
     src = inspect.getsource(store_router.get_inventory)
     assert '"barcode": o.get("barcode")' in src
     assert "select=id,name,sku,barcode," in src
+    # The till reads its prices from here too: GET /offerings is
+    # owner-gated, so a manager ringing up a sale never sees it.
+    assert '"current_price": o.get("current_price")' in src
