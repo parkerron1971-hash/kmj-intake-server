@@ -85,6 +85,17 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "payload": ["lines", "units", "orders_closed", "note", "actor",
                     "received_at"],
     },
+    "product_replaced": {
+        "source": ("inventory_scan mark_replacement — a new product takes "
+                   "over a discontinued one's slot on the shelf. Records "
+                   "WHAT carried (reorder point, order qty, supplier, "
+                   "threshold) and whether the predecessor was archived, "
+                   "so a catalog that changed shape can be explained "
+                   "later without guessing"),
+        "payload": ["offering_id", "offering_name", "predecessor_id",
+                    "predecessor_name", "carried", "archived_predecessor",
+                    "actor"],
+    },
     "payment_received": {
         "source": "chief_of_staff manual marks",
         "payload": ["invoice_id", "amount"],
