@@ -110,6 +110,32 @@ def _validate_slug(slug: str) -> str:
     return s
 
 
+def _clean_barcode(raw):
+    """SCAN THE SHELF — normalize a scanned code, or None. Shares the one
+    definition in inventory_scan so a code stored through the catalog
+    form and a code stored through the scanner are the same string; two
+    normalizers would mean a scan that can never find what it saved."""
+    from inventory_scan import clean_barcode
+    return clean_barcode(raw)
+
+
+def _barcode_clash(business_id: str, code, offering_id=None):
+    """409 rather than a Postgres unique-violation 500. One code means
+    one product, and the practitioner needs to be told WHICH product
+    already owns it."""
+    if not code:
+        return
+    rows = sb_clients.sb_get_as_service(
+        f"/offerings?business_id=eq.{business_id}&barcode=eq.{code}"
+        "&select=id,name&limit=1") or []
+    if rows and (offering_id is None or str(rows[0].get("id")) != str(offering_id)):
+        raise HTTPException(
+            status_code=409,
+            detail=f"that barcode already belongs to "
+                   f"'{rows[0].get('name') or 'another product'}'",
+        )
+
+
 # ─── Pydantic bodies ─────────────────────────────────────────────────
 
 
@@ -128,6 +154,9 @@ class OfferingCreateBody(BaseModel):
     # Arc 27 — product fields (store MVP)
     image_url: Optional[str] = Field(default=None, max_length=600)
     sku: Optional[str] = Field(default=None, max_length=80)
+    # SCAN THE SHELF — the scanned product code. One code = one product
+    # per business (unique partial index), so it is an exact match key.
+    barcode: Optional[str] = Field(default=None, max_length=48)
     inventory_qty: Optional[int] = Field(default=None, ge=0)
     requires_shipping: Optional[bool] = None
     fulfillment_note: Optional[str] = Field(default=None, max_length=600)
@@ -175,6 +204,8 @@ class OfferingPatchBody(BaseModel):
     # Arc 27 — product fields (store MVP)
     image_url: Optional[str] = Field(default=None, max_length=600)
     sku: Optional[str] = Field(default=None, max_length=80)
+    # SCAN THE SHELF — see OfferingCreateBody.barcode.
+    barcode: Optional[str] = Field(default=None, max_length=48)
     inventory_qty: Optional[int] = Field(default=None, ge=0)
     requires_shipping: Optional[bool] = None
     fulfillment_note: Optional[str] = Field(default=None, max_length=600)
@@ -245,6 +276,8 @@ def create_offering(body: OfferingCreateBody, user: AuthedUser = Depends(require
                    f"(currently named '{existing[0].get('name')}')",
         )
 
+    _barcode_clash(body.business_id, _clean_barcode(body.barcode))
+
     created = sb_clients.sb_post_as_service("/offerings", {
         "business_id": body.business_id,
         "name": body.name,
@@ -261,6 +294,7 @@ def create_offering(body: OfferingCreateBody, user: AuthedUser = Depends(require
         # unknown columns, so only include set fields).
         **({"image_url": body.image_url} if body.image_url is not None else {}),
         **({"sku": body.sku} if body.sku is not None else {}),
+        **({"barcode": _clean_barcode(body.barcode)} if body.barcode is not None else {}),
         **({"inventory_qty": body.inventory_qty} if body.inventory_qty is not None else {}),
         **({"requires_shipping": body.requires_shipping} if body.requires_shipping is not None else {}),
         **({"fulfillment_note": body.fulfillment_note} if body.fulfillment_note is not None else {}),
@@ -306,6 +340,7 @@ def patch_offering(
     # Arc 27 — product fields
     if body.image_url is not None:             update["image_url"] = body.image_url or None
     if body.sku is not None:                   update["sku"] = body.sku or None
+    if body.barcode is not None:               update["barcode"] = _clean_barcode(body.barcode)
     if body.inventory_qty is not None:         update["inventory_qty"] = body.inventory_qty
     if body.requires_shipping is not None:     update["requires_shipping"] = body.requires_shipping
     if body.fulfillment_note is not None:      update["fulfillment_note"] = body.fulfillment_note or None
@@ -318,6 +353,13 @@ def patch_offering(
     if body.no_show_fee_cents is not None:     update["no_show_fee_cents"] = body.no_show_fee_cents
     if not update:
         raise HTTPException(status_code=400, detail="no fields to update")
+
+    if "barcode" in update and update["barcode"]:
+        biz_rows = sb_clients.sb_get_as_service(
+            f"/offerings?id=eq.{offering_id}&select=business_id&limit=1") or []
+        if biz_rows:
+            _barcode_clash(str(biz_rows[0].get("business_id")),
+                           update["barcode"], offering_id)
 
     # P5 — price updates do NOT propagate to historical module_entries.
     # The denormalized price_at_booking / service_name_at_booking /
