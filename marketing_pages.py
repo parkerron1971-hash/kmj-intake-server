@@ -2093,6 +2093,324 @@ FOLD_SCRIPT = """
 
 
 # ══════════════════════════════════════════════════════════════════════
+# THE DEVICE BAND — the page's closer
+#
+# A full-bleed scene 1680px wide that deliberately crops off BOTH edges,
+# with the copy floating on top of it. The bleed is the point: a scene
+# that ends inside the content column reads as a picture of the product;
+# one that runs past the edges reads as the product being used somewhere
+# past the screen.
+#
+# Three depth slots, read as three distances: a desktop bleeding off the
+# left, the phone nearest and centre, and a second desktop bleeding off
+# the right caught MID-DECISION (Chief's purchase order open, cursor
+# resting on "Send it", never completing). Depth is scale + shadow weight
+# + how low each sits. No 3D — the rooms carousel already owns that.
+#
+# NO scroll-linked anything. No parallax, no pinning, no reveal. This is
+# the only section on the page that does not use `.reveal`, and that is
+# deliberate (Kevin, 2026-08-19): the art has to read as already running
+# when it comes into view, not as something that woke up for you.
+#
+# The screens are REPLICA KIT, not a second vocabulary — the same .app /
+# .app-top / .app-side / .brief / .chief / .kpi-row / .qa the hero and
+# the six room faces use, so the band cannot drift away from the rest of
+# the page. Only what the kit has no word for is new here: the phone
+# frame, the inventory table and the drafted-PO drawer.
+#
+# The fiction is the page's OWN fiction — Andre Whitfield at Fade & Co.,
+# the barber the hero opens on, with the barber's vocabulary (Regulars,
+# Chair calendar, Walk-ins). Nothing here is a real person or business.
+#
+# ── The video seam ────────────────────────────────────────────────────
+# The plan is for the screen areas to become short muted looping video of
+# the real app. Those recordings do not exist yet, so the band ships with
+# the live replicas below, which move on their own 9s loop. When the
+# loops are cut, each screen swaps to:
+#     <video autoplay loop muted playsinline preload="none"
+#            poster="/assets/dv-home-poster.webp"></video>
+# with src assigned by a matchMedia hydrator so only the slots visible at
+# the current width ever fetch, reduced-motion gets the poster and no src,
+# and nothing loads until the band is near the viewport. Note before you
+# add those routes: the live server ignores Range and answers 200 with the
+# whole file (measured on /assets/demo.mp4), which iOS Safari dislikes —
+# add a range-aware responder in the same pass.
+# ══════════════════════════════════════════════════════════════════════
+
+DEVICE_BAND_CSS = """
+      /* Slot widths are variables so one media query re-sizes the whole
+         scene — a wide monitor needs BIGGER screens, not the same ones
+         adrift in more ground. */
+      .dv{position:relative;overflow:hidden;isolation:isolate;padding:104px 0 90px;
+        --dv-a:868px;--dv-c:790px;--dv-b:254px;--dv-scale:1;--dv-stage:1680px;
+        min-height:calc(368px + 452px * var(--dv-scale));}
+      /* the screens hang below the section and used to end on a hard cut
+         line where overflow clipped them; this is where they go dark */
+      .dv::after{content:'';position:absolute;left:0;right:0;bottom:0;height:150px;z-index:5;
+        pointer-events:none;background:linear-gradient(180deg, rgba(8,9,12,0), var(--bg) 92%);}
+
+      /* ── the bloom behind the scene ──────────────────────────────
+         Four blurred colour fields: accent blue carries it, cyan on the
+         left, violet on the right. Ambient drift only, on the same
+         cadence as the shell's .orb loops — nothing reads scroll. ── */
+      .dv-glow{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+      .dv-glow i{position:absolute;display:block;border-radius:50%;filter:blur(78px);}
+      .dv-g1{left:50%;top:42px;width:1180px;height:520px;margin-left:-590px;opacity:.62;
+        background:radial-gradient(50% 50% at 50% 50%, rgba(46,125,255,.44), rgba(46,125,255,0) 72%);
+        animation:dvDrift1 24s ease-in-out infinite;}
+      .dv-g2{left:6%;top:250px;width:680px;height:430px;opacity:.5;
+        background:radial-gradient(50% 50% at 50% 50%, rgba(34,211,238,.34), rgba(34,211,238,0) 70%);
+        animation:dvDrift2 30s ease-in-out infinite;}
+      .dv-g3{right:2%;top:210px;width:720px;height:470px;opacity:.5;
+        background:radial-gradient(50% 50% at 50% 50%, rgba(124,58,237,.40), rgba(124,58,237,0) 70%);
+        animation:dvDrift3 27s ease-in-out infinite;}
+      .dv-g4{left:50%;top:330px;width:900px;height:360px;margin-left:-450px;opacity:.5;
+        background:radial-gradient(50% 50% at 50% 50%, rgba(29,99,230,.36), rgba(8,9,12,0) 72%);
+        animation:dvDrift2 22s ease-in-out infinite reverse;}
+      @keyframes dvDrift1{0%,100%{transform:translate(0,0) scale(1);}50%{transform:translate(34px,-22px) scale(1.06);}}
+      @keyframes dvDrift2{0%,100%{transform:translate(0,0) scale(1);}50%{transform:translate(-40px,26px) scale(1.08);}}
+      @keyframes dvDrift3{0%,100%{transform:translate(0,0) scale(1);}50%{transform:translate(26px,-30px) scale(1.05);}}
+      /* a fine grain over the bloom — without it the gradients band into
+         visible steps on a wide monitor */
+      .dv-grain{position:absolute;inset:0;z-index:1;pointer-events:none;opacity:.16;mix-blend-mode:overlay;
+        background-image:radial-gradient(rgba(255,255,255,.5) .5px, transparent .5px);background-size:3px 3px;}
+
+      .dv-copy{position:relative;z-index:4;max-width:780px;margin:0 auto;padding:0 28px;text-align:center;}
+      .dv-copy h2{margin:18px 0 0;text-shadow:0 2px 30px rgba(8,9,12,.9);}
+      .dv-lead{font-size:18px;color:var(--text-secondary);line-height:1.62;max-width:54ch;margin:16px auto 0;
+        text-shadow:0 1px 22px rgba(8,9,12,.9);}
+      .dv-ctas{display:flex;justify-content:center;gap:12px;margin-top:30px;flex-wrap:wrap;}
+      .dv-note{margin-top:16px;font-size:12.5px;color:var(--text-dim);}
+
+      /* ── the oversized scene ── */
+      .dv-scene{position:relative;z-index:2;height:calc(452px * var(--dv-scale));margin-top:46px;}
+      /* The stage is composed ONCE at 1680 and then scaled as a whole on a
+         wide monitor. Widening it instead (tried first) left the replica's
+         fixed 11px type marooned in a much bigger box — the screens read
+         as empty. Scaling keeps the density the kit was drawn at, keeps
+         the type vector-crisp, and keeps the crop: every step below is
+         chosen so 1680 x scale is wider than the viewport it serves. */
+      .dv-stage{position:absolute;left:50%;bottom:0;width:var(--dv-stage);height:540px;
+        transform:translateX(-50%) scale(var(--dv-scale));transform-origin:bottom center;}
+      .dv-slot{position:absolute;}
+      /* each screen throws its own tinted bloom onto the ground behind it */
+      .dv-slot::before{content:'';position:absolute;left:-8%;right:-8%;top:14%;bottom:-16%;z-index:-1;
+        filter:blur(58px);border-radius:50%;}
+      .dv-a{left:-150px;bottom:-48px;width:var(--dv-a);}
+      .dv-a::before{background:radial-gradient(50% 50% at 50% 50%, rgba(46,125,255,.30), rgba(46,125,255,0) 70%);}
+      .dv-c{right:-150px;bottom:28px;width:var(--dv-c);}
+      .dv-c::before{background:radial-gradient(50% 50% at 50% 50%, rgba(124,58,237,.30), rgba(124,58,237,0) 70%);}
+      .dv-b{left:50%;margin-left:calc(var(--dv-b) / -2);bottom:-26px;width:var(--dv-b);z-index:4;}
+      .dv-b::before{background:radial-gradient(50% 50% at 50% 50%, rgba(34,211,238,.30), rgba(34,211,238,0) 68%);}
+      .dv-a .app,.dv-c .app{aspect-ratio:16/10;height:auto;}
+      .dv-a .app{box-shadow:0 60px 120px -34px rgba(0,0,0,.86),0 24px 50px -18px rgba(0,0,0,.6),
+        0 0 0 1px rgba(0,0,0,.6),0 1px 0 rgba(255,255,255,.06) inset;}
+      .dv-c .app{box-shadow:0 70px 130px -34px rgba(0,0,0,.9),0 26px 56px -18px rgba(0,0,0,.66),
+        0 0 0 1px rgba(0,0,0,.6),0 1px 0 rgba(255,255,255,.07) inset;}
+      /* the sheen that stops the glass reading as flat paper */
+      .dv-slot .app,.dv-fone{position:relative;}
+      .dv-slot .app::after,.dv-fone::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:9;
+        border-radius:inherit;background:linear-gradient(147deg, rgba(255,255,255,.055), rgba(255,255,255,0) 34%);}
+      /* the scene dissolves into the ground instead of ending on an edge */
+      .dv-scene::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:6;
+        background:linear-gradient(180deg, var(--bg) 0%, rgba(8,9,12,0) 15%,
+                                            rgba(8,9,12,0) 72%, rgba(8,9,12,.9) 100%);}
+      .dv-shade{position:absolute;left:50%;top:-140px;width:1040px;height:440px;margin-left:-520px;z-index:3;
+        pointer-events:none;background:radial-gradient(50% 50% at 50% 50%, rgba(8,9,12,.82), rgba(8,9,12,0) 72%);}
+
+      /* ── the phone (the kit has no word for one) ── */
+      .dv-fone{--ink:#F2F4F8;--ink-2:#A9B0BD;--ink-3:#6E7684;--pane:#101319;
+        --line:rgba(255,255,255,.07);--gold:#C9A84C;--vio:#7C3AED;
+        display:flex;flex-direction:column;overflow:hidden;color:var(--ink);
+        aspect-ratio:9/19.5;border-radius:30px;border:6px solid #15181F;background:#080A0E;
+        font-size:11px;line-height:1.42;
+        box-shadow:0 0 0 1px rgba(255,255,255,.1),0 60px 100px -26px rgba(0,0,0,.94),
+                   0 18px 40px -12px rgba(0,0,0,.7);}
+      .dv-fone::before{content:'';position:absolute;top:7px;left:50%;transform:translateX(-50%);
+        width:56px;height:12px;border-radius:99px;background:#05070A;z-index:8;
+        box-shadow:0 0 0 1px rgba(255,255,255,.05);}
+      .dv-fone-top{display:flex;align-items:center;gap:6px;padding:24px 12px 9px;
+        border-bottom:1px solid var(--line);}
+      .dv-fone-top .mk{width:15px;height:15px;border-radius:5px;flex-shrink:0;
+        background:linear-gradient(135deg,#E879F9,#22D3EE);}
+      .dv-fone-top b{font-family:var(--font-heading);font-size:12px;font-weight:600;letter-spacing:-.02em;}
+      .dv-fone-top .on{margin-left:auto;display:inline-flex;align-items:center;gap:4px;font-size:7.5px;
+        font-weight:600;color:#22C55E;}
+      .dv-fone-top .on::before{content:'';width:4px;height:4px;border-radius:50%;background:#22C55E;
+        box-shadow:0 0 6px #22C55E;}
+      .dv-chat{flex:1;padding:10px;display:flex;flex-direction:column;gap:7px;min-height:0;
+        background:radial-gradient(100% 60% at 50% 0%, rgba(124,58,237,.10), transparent 62%);}
+      .dv-msg{padding:7px 9px;border-radius:12px;font-size:9.5px;line-height:1.45;max-width:88%;}
+      .dv-msg.you{align-self:flex-end;border-bottom-right-radius:5px;color:var(--ink);
+        background:color-mix(in srgb, var(--gold) 18%, transparent);
+        border:1px solid color-mix(in srgb, var(--gold) 30%, transparent);}
+      .dv-msg.ai{border-bottom-left-radius:5px;background:var(--pane);border:1px solid var(--line);
+        color:var(--ink-2);}
+      .dv-card{margin-top:auto;padding:10px;border-radius:12px;
+        background:linear-gradient(165deg,#161A22,#0F1218);
+        border:1px solid color-mix(in srgb, var(--gold) 34%, transparent);
+        box-shadow:0 10px 30px rgba(0,0,0,.5), 0 0 22px rgba(201,168,76,.10) inset;}
+      .dv-card .k{font-size:6.5px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);}
+      .dv-card .v{font-family:var(--font-heading);font-size:17px;font-weight:700;margin:2px 0 1px;
+        letter-spacing:-.03em;font-variant-numeric:tabular-nums;}
+      .dv-card .s{font-size:8px;color:var(--ink-3);margin-bottom:8px;}
+      .dv-card .go{position:relative;overflow:hidden;display:block;text-align:center;padding:7.5px;
+        border-radius:9px;background:var(--gold);color:#1A1405;font-size:10px;font-weight:700;
+        box-shadow:0 4px 14px rgba(201,168,76,.26);}
+      .dv-fone-bar{display:flex;align-items:center;gap:7px;margin:0 10px 8px;padding:8px 10px;border-radius:11px;
+        background:var(--pane);border:1px solid var(--line);font-size:8.5px;color:var(--ink-3);}
+      .dv-fone-bar .mic{margin-left:auto;width:11px;height:11px;border-radius:3px;
+        background:color-mix(in srgb, var(--gold) 55%, transparent);}
+      .dv-fone-home{width:78px;height:3px;border-radius:99px;background:rgba(255,255,255,.22);margin:0 auto 7px;}
+
+      /* ── inventory + the drafted PO (slot C) ── */
+      .dv-inv{border-radius:9px;border:1px solid var(--line);background:var(--pane);overflow:hidden;
+        flex:1;min-height:0;}
+      .dv-inv .h,.dv-inv .t{display:grid;grid-template-columns:1fr 62px 44px 78px;gap:8px;align-items:center;
+        padding:6px 11px;border-bottom:1px solid var(--line);}
+      .dv-inv .h{font-size:7px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);
+        background:rgba(255,255,255,.02);}
+      .dv-inv .t{font-size:9.5px;position:relative;}
+      .dv-inv .t:last-child{border-bottom:none;}
+      .dv-inv .t .nm{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      .dv-inv .t .n{font-variant-numeric:tabular-nums;color:var(--ink);font-size:9px;}
+      .dv-inv .t.low{background:linear-gradient(90deg,
+        color-mix(in srgb, var(--gold) 9%, transparent), transparent 42%);}
+      .dv-inv .t.low::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--gold);
+        animation:dvPulse 9s ease-in-out infinite;}
+      @keyframes dvPulse{0%,100%{opacity:.34;}12%,20%{opacity:1;}40%{opacity:.34;}}
+
+      /* The drawer sits on the LEFT of this screen even though the real
+         app opens it from the right: slot C bleeds off the RIGHT edge, so
+         anything anchored there is the first thing cropped away. Built it
+         right-anchored first and measured — at 2560 only 21px of the
+         drafted order survived, which is the one thing this screen exists
+         to show. It clears the header rather than covering it. */
+      .dv-po{position:absolute;top:52px;left:9px;bottom:9px;width:252px;border-radius:11px;padding:11px;
+        background:linear-gradient(165deg,#151821,#0F1218);
+        border:1px solid color-mix(in srgb, var(--gold) 36%, transparent);
+        box-shadow:30px 0 60px rgba(0,0,0,.66), 0 0 26px rgba(201,168,76,.10) inset;
+        display:flex;flex-direction:column;gap:6px;
+        animation:dvPoIn 9s cubic-bezier(.2,.85,.25,1) infinite;}
+      @keyframes dvPoIn{0%,10%{opacity:0;transform:translateX(-26px);}22%,100%{opacity:1;transform:none;}}
+      .dv-po .k{font-size:7px;font-weight:800;letter-spacing:.15em;text-transform:uppercase;color:var(--gold);}
+      .dv-po .t{font-family:var(--font-heading);font-size:13px;font-weight:600;letter-spacing:-.025em;}
+      .dv-po .s{font-size:8px;color:var(--ink-3);margin-top:-3px;}
+      .dv-po .li{display:flex;justify-content:space-between;gap:8px;font-size:8.5px;color:var(--ink-2);
+        padding:4.5px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;}
+      .dv-po .li b{color:var(--ink);font-weight:500;white-space:nowrap;}
+      .dv-po .tot{display:flex;justify-content:space-between;font-size:10px;font-weight:700;padding-top:5px;
+        font-variant-numeric:tabular-nums;}
+      .dv-po .why{font-size:7.5px;color:var(--ink-3);line-height:1.45;padding:6px 7px;border-radius:7px;
+        background:rgba(255,255,255,.03);border:1px solid var(--line);}
+      .dv-po .acts{display:flex;gap:6px;margin-top:auto;position:relative;}
+      .dv-po .go{flex:1;text-align:center;padding:6.5px;border-radius:8px;background:var(--gold);color:#1A1405;
+        font-size:9.5px;font-weight:700;box-shadow:0 4px 14px rgba(201,168,76,.26);}
+      .dv-po .alt{flex:1;text-align:center;padding:6.5px;border-radius:8px;background:rgba(255,255,255,.05);
+        color:var(--ink-2);font-size:9.5px;font-weight:600;border:1px solid rgba(255,255,255,.16);}
+      /* the cursor comes to rest on "Send it" and stops. It never lands —
+         that is the whole argument of this screen. */
+      .dv-cursor{position:absolute;left:44px;top:15px;width:12px;height:12px;border-radius:50%;
+        border:1.5px solid rgba(255,255,255,.92);background:rgba(255,255,255,.2);
+        box-shadow:0 0 0 4px rgba(255,255,255,.06);
+        animation:dvCursor 9s cubic-bezier(.2,.85,.25,1) infinite;}
+      @keyframes dvCursor{0%,26%{opacity:0;transform:translate(18px,12px);}38%,100%{opacity:1;transform:none;}}
+      .dv-canvas{position:relative;}
+
+      /* ── the loops (one shared 9s period, so the band reads as one scene) ── */
+      .dv-drop{animation:dvDrop 9s cubic-bezier(.2,.8,.25,1) infinite;}
+      @keyframes dvDrop{0%,8%{opacity:0;transform:translateY(-7px);}18%,100%{opacity:1;transform:none;}}
+      .dv-roll{height:20px;overflow:hidden;}
+      .dv-roll span{display:block;height:20px;animation:dvRoll 9s cubic-bezier(.7,0,.2,1) infinite;}
+      @keyframes dvRoll{0%,24%{transform:translateY(0);}34%,100%{transform:translateY(-20px);}}
+      .dv-say{animation:dvSay 9s ease-out infinite;}
+      .dv-say-2{animation:dvSay 9s ease-out infinite;animation-delay:.5s;}
+      .dv-say-3{animation:dvSay 9s ease-out infinite;animation-delay:1.1s;}
+      @keyframes dvSay{0%,10%{opacity:0;transform:translateY(7px);}20%,100%{opacity:1;transform:none;}}
+      .dv-tap{position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;
+        background:rgba(26,20,5,.5);animation:dvTap 9s ease-out infinite;}
+      @keyframes dvTap{0%,66%{transform:scale(0);opacity:.7;}84%,100%{transform:scale(16);opacity:0;}}
+      /* let people stop it and read, the same courtesy the hero panel gives */
+      .dv-slot:hover .dv-drop,.dv-slot:hover .dv-roll span,.dv-slot:hover .dv-po,
+      .dv-slot:hover .dv-cursor,.dv-slot:hover .dv-say,.dv-slot:hover .dv-say-2,
+      .dv-slot:hover .dv-say-3,.dv-slot:hover .dv-tap,.dv-slot:hover .dv-inv .t.low::before{
+        animation-play-state:paused;}
+
+      /* ── recomposed, not shrunk ───────────────────────────────────
+         Narrow widths get a DIFFERENT scene. Shrinking one wide picture
+         would put the product type near 4px, which is the same mistake
+         the replicas already learned at 700px. ── */
+      /* A wide monitor is served by BOTH dials, in a deliberate ratio.
+         Scale alone reached the edges but blew the screens up to 1370px
+         (measured) — the product read as a wall, not as devices in a
+         room. Stage width alone kept them small but parked them in two
+         holes of bare ground. So each step widens the stage a little and
+         scales a little, and every step keeps stage x scale ahead of the
+         viewport it serves — that product is what guarantees the crop. */
+      @media (min-width:1600px){ .dv{--dv-stage:1780px;--dv-scale:1.06;} }  /* 1887 */
+      @media (min-width:1850px){ .dv{--dv-stage:1900px;--dv-scale:1.12;} }  /* 2128 */
+      @media (min-width:2100px){ .dv{--dv-stage:2040px;--dv-scale:1.18;} }  /* 2407 */
+      @media (min-width:2400px){ .dv{--dv-stage:2180px;--dv-scale:1.24;} }  /* 2703 */
+      @media (min-width:2700px){ .dv{--dv-stage:2320px;--dv-scale:1.32;} }  /* 3062 */
+      @media (min-width:3000px){ .dv{--dv-stage:2500px;--dv-scale:1.40;} }  /* 3500 */
+
+      /* Every narrow step re-aims the stage as well as the slots, against
+         one rule: the drafted PO — the single thing slot C exists to show
+         — has to land FULLY on screen. The first pass kept the wide
+         geometry and only swapped slots in and out; measured, that put the
+         PO entirely past the right edge between 1000 and 1199 and left the
+         phone half off at 700. Bleed is worth nothing if it eats the
+         payload. */
+      @media (max-width:1199px){
+        .dv{--dv-stage:1180px;}
+        .dv-a{display:none;}
+        .dv-c{right:-150px;--dv-c:756px;}
+        .dv-b{left:22%;margin-left:0;}
+      }
+      @media (max-width:999px){
+        .dv{padding-top:90px;--dv-stage:980px;}
+        .dv-scene{height:398px;}
+        .dv-c{right:-140px;--dv-c:648px;bottom:12px;}
+        .dv-b{left:30%;--dv-b:228px;bottom:-72px;}
+        .dv-g1{width:820px;margin-left:-410px;}
+      }
+      /* 700 matches the replica kit's OWN phone breakpoint: below it the
+         .app drops its sidebar, and that is what makes room for the
+         drawer once the screen is this narrow. */
+      @media (max-width:700px){
+        .dv{padding-top:76px;--dv-stage:620px;}
+        .dv-lead{font-size:16px;}
+        .dv-ctas{flex-direction:column;align-items:stretch;padding:0 18px;}
+        .dv-ctas .btn-primary,.dv-ctas .btn-secondary{justify-content:center;}
+        /* stage height == the phone's own height less its hang, so the
+           scene cannot overflow UPWARD into the copy. Measured before
+           this: the 594px-tall phone rose 136px past the top of the
+           scene and sat on top of the two buttons. */
+        .dv-scene{height:462px;}
+        .dv-stage{height:508px;}
+        .dv-c{right:-168px;--dv-c:528px;bottom:70px;}
+        .dv-b{left:50%;--dv-b:240px;margin-left:calc(var(--dv-b) / -2);bottom:-12px;}
+        .dv-shade{width:560px;margin-left:-280px;}
+        .dv-g1{width:620px;margin-left:-310px;height:420px;}
+        .dv-g2,.dv-g3{width:460px;height:340px;}
+      }
+      @media (max-width:429px){
+        .dv-scene{height:496px;}
+        .dv-stage{height:542px;}
+        .dv-c{display:none;}                            /* the phone stands alone */
+        .dv-b{--dv-b:256px;bottom:-12px;}
+      }
+
+      /* rest on the poster state: everything still composed, nothing moving */
+      @media (prefers-reduced-motion: reduce){
+        .dv-glow i,.dv-drop,.dv-roll span,.dv-po,.dv-cursor,.dv-say,.dv-say-2,.dv-say-3,
+        .dv-tap,.dv-inv .t.low::before{animation:none !important;}
+        .dv-tap{display:none;}
+      }
+"""
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Live plan dials for site copy
 # ══════════════════════════════════════════════════════════════════════
 
@@ -2609,11 +2927,10 @@ def render_home() -> str:
         border:1px solid color-mix(in srgb, var(--accent) 32%, transparent);}
       .why-card p{font-size:14px;color:var(--text-muted);}
 
-      .final-cta{padding:112px 0;text-align:center;position:relative;overflow:hidden;}
-      .final-cta::before{content:'';position:absolute;inset:0;pointer-events:none;opacity:.55;
-        background:radial-gradient(52% 100% at 50% 50%, var(--glow), transparent 68%);}
-      .final-cta .container{position:relative;z-index:1;}
-      .final-cta p{max-width:520px;margin:0 auto 34px;color:var(--text-muted);}
+      /* `.final-cta` lived here until 2026-08-19 — the device band is the
+         closer now, and home is the only page that styled it. /features,
+         /compare and /about still print that class but have never carried
+         its CSS, so nothing here was ever reaching them. */
 
       .reveal{opacity:0;transform:translateY(20px);
         transition:opacity .7s cubic-bezier(.22,1,.36,1), transform .7s cubic-bezier(.22,1,.36,1);}
@@ -3119,12 +3436,227 @@ def render_home() -> str:
   </div>
 </section>
 
-<section class="final-cta">
-  <div class="container">
-    <span class="eyebrow reveal">Ready when you are</span>
-    <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Run your business <span class="gradient-text">from one place.</span></h2>
-    <p class="reveal reveal-delay-2">Currently in private beta. Apply for access and we&rsquo;ll set you up and walk you through onboarding.</p>
-    <a class="btn-primary reveal reveal-delay-3" href="/get-started">Apply for Access &rarr;</a>
+<!-- ══ THE DEVICE BAND — the closer ══════════════════════════════════
+     This REPLACED the old `.final-cta` (Kevin, 2026-08-19). That block
+     and this one do the same job — the last word before the footer —
+     and stacking them would have asked for the same click twice. The
+     beta line it carried lives on under the buttons.
+
+     Deliberately no `.reveal` anywhere in here: see DEVICE_BAND_CSS.
+     The scene is aria-hidden — it is product art, and the copy above it
+     already says everything a screen reader needs. ══ -->
+<section class="dv">
+  <div class="dv-glow" aria-hidden="true">
+    <i class="dv-g1"></i><i class="dv-g2"></i><i class="dv-g3"></i><i class="dv-g4"></i>
+  </div>
+  <div class="dv-grain" aria-hidden="true"></div>
+
+  <div class="dv-copy">
+    <span class="eyebrow">Wherever you work</span>
+    <h2>Your business, open on <span class="gradient-text">every screen you own.</span></h2>
+    <p class="dv-lead">One account, one system. The same data and the same Chief on the desk,
+       at the counter, and in your pocket.</p>
+    <div class="dv-ctas">
+      <a class="btn-primary" href="/get-started">Apply for Access &rarr;</a>
+      <a class="btn-secondary" href="/download">Get the app</a>
+    </div>
+    <p class="dv-note">Currently in private beta &middot; every action logged and reversible.</p>
+  </div>
+
+  <div class="dv-scene" aria-hidden="true">
+    <div class="dv-stage">
+
+      <!-- ── A · the desk: Home, bleeding off the left edge ── -->
+      <div class="dv-slot dv-a">
+        <div class="app">
+          <div class="app-top">
+            <span class="at-mark"></span>
+            <span class="at-search">Search or ask Chief<span class="kbd">&#8984;K</span></span>
+            <span class="at-urgent">3 need you</span>
+            <span class="at-cta">Quick Create</span>
+            <span class="at-av"></span>
+          </div>
+          <div class="app-strip">
+            <span class="biz">Fade &amp; Co.</span>
+            <span class="tab on">Home</span>
+            <span class="sp"></span>
+            <span>Solutionist System</span>
+          </div>
+          <div class="app-body">
+            <div class="app-side">
+              <div class="as-user"><span class="av"></span>
+                <span class="nm">Andre Whitfield<span>Fade &amp; Co.</span></span>
+                <span class="as-plan">PRO</span></div>
+              <div class="as-sec">Mission Control</div>
+              <div class="as-item is-on"><span class="ic"></span>Dashboard</div>
+              <div class="as-item"><span class="ic"></span>Needs you<span class="ct">3</span></div>
+              <div class="as-item"><span class="ic"></span>Notifications<span class="ct">7</span></div>
+              <div class="as-sec">The chair</div>
+              <div class="as-item"><span class="ic"></span>Regulars<span class="ct">124</span></div>
+              <div class="as-item"><span class="ic"></span>Chair calendar</div>
+              <div class="as-item"><span class="ic"></span>Walk-ins</div>
+              <div class="as-item"><span class="ic"></span>Inventory<span class="ct">3</span></div>
+              <div class="as-sec">Finance</div>
+              <div class="as-item"><span class="ic"></span>Invoices</div>
+              <div class="as-item"><span class="ic"></span>Payments</div>
+              <div class="as-chief">Chief AI<span class="on">Online</span></div>
+            </div>
+            <div class="app-canvas">
+              <div class="brief">
+                <div class="brief-l">
+                  <div class="date">Tuesday &middot; 8:04 AM</div>
+                  <div class="hi">Good morning, <b>Andre</b></div>
+                  <div class="cp">Three regulars are past due for a cut, and the pomade is
+                     nearly out.</div>
+                  <div class="brief-btns"><span class="lnk">Read today&rsquo;s briefing</span></div>
+                </div>
+                <div class="chief">
+                  <div class="chief-h">Chief AI<span class="on">Online</span></div>
+                  <div class="chief-lead">I&rsquo;ve analyzed your day. Here&rsquo;s what I found:</div>
+                  <div class="chief-f dv-drop"><span class="sq warn"></span>
+                    <span class="g">3 regulars not rebooked</span><span class="tag">6 WEEKS</span></div>
+                  <div class="chief-f"><span class="sq"></span>
+                    <span class="g">Pomade down to 2 tubs</span><span class="tag">PO READY</span></div>
+                  <div class="chief-f"><span class="sq ok"></span>
+                    <span class="g">$6,910 collected</span><span class="amt">this month</span></div>
+                  <div class="chief-ask">Want me to text them your Tuesday openings?</div>
+                  <div class="chief-btns"><b>Yes, handle it</b><i>Review first</i></div>
+                </div>
+              </div>
+              <div class="kpi-row">
+                <div class="kpi"><span class="k">Chairs booked</span><span class="v">38</span>
+                  <span class="f">4 open Friday</span></div>
+                <div class="kpi"><span class="k">Regulars</span><span class="v">124</span>
+                  <span class="f">9 overdue for a cut</span></div>
+                <div class="kpi"><span class="k">Revenue &middot; this month</span>
+                  <span class="v dv-roll"><span>$6,470</span><span>$6,910</span></span>
+                  <span class="f up">&#9650; 12% vs last mo</span></div>
+                <div class="kpi"><span class="k">Walk-ins today</span><span class="v">5</span>
+                  <span class="f">2 before noon</span></div>
+                <div class="kpi"><span class="k">Business health</span><span class="v up">61%</span>
+                  <span class="f">steady</span></div>
+              </div>
+              <div class="qa-h">Quick Actions<span class="hint">the four you actually use</span></div>
+              <div class="qa">
+                <i style="--c:#C9A84C">New invoice</i>
+                <i style="--c:#7C3AED">Add regular</i>
+                <i style="--c:#22D3EE">Book a chair</i>
+                <i style="--c:#22C55E">Walk-in</i>
+                <i style="--c:#F97316">Text blast</i>
+                <i style="--c:#7C3AED">New post</i>
+                <i style="--c:#C9A84C">Reorder</i>
+                <i style="--c:#22D3EE">Reports</i>
+                <i style="--c:#6B707B">Custom</i>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── C · the counter: Inventory with Chief's order drafted,
+              caught mid-decision, bleeding off the right edge ── -->
+      <div class="dv-slot dv-c">
+        <div class="app">
+          <div class="app-top">
+            <span class="at-mark"></span>
+            <span class="at-search">Search or ask Chief<span class="kbd">&#8984;K</span></span>
+            <span class="at-urgent">3 low</span>
+            <span class="at-cta">New order</span>
+            <span class="at-av"></span>
+          </div>
+          <div class="app-strip">
+            <span class="biz">Fade &amp; Co.</span>
+            <span class="tab on">Operate</span>
+            <span class="sp"></span>
+            <span>Inventory</span>
+          </div>
+          <div class="app-body">
+            <div class="app-side">
+              <div class="as-user"><span class="av"></span>
+                <span class="nm">Andre Whitfield<span>Fade &amp; Co.</span></span>
+                <span class="as-plan">PRO</span></div>
+              <div class="as-sec">Mission Control</div>
+              <div class="as-item"><span class="ic"></span>Dashboard</div>
+              <div class="as-item"><span class="ic"></span>Needs you<span class="ct">3</span></div>
+              <div class="as-sec">The chair</div>
+              <div class="as-item"><span class="ic"></span>Regulars<span class="ct">124</span></div>
+              <div class="as-item"><span class="ic"></span>Chair calendar</div>
+              <div class="as-item is-on"><span class="ic"></span>Inventory<span class="ct">3</span></div>
+              <div class="as-sec">Finance</div>
+              <div class="as-item"><span class="ic"></span>Invoices</div>
+              <div class="as-item"><span class="ic"></span>Payments</div>
+              <div class="as-chief">Chief AI<span class="on">Online</span></div>
+            </div>
+            <div class="app-canvas dv-canvas">
+              <div class="ah-row">
+                <div>
+                  <div class="ah-rule"></div>
+                  <div class="ah-eyebrow">Operate</div>
+                  <div class="ah-title">Inventory</div>
+                  <div class="ah-sub">3 items below par &middot; Chief drafted one order</div>
+                </div>
+                <span class="ah-btn">New order</span>
+              </div>
+              <div class="dv-inv">
+                <div class="h"><span>Item</span><span>On hand</span><span>Par</span><span>Status</span></div>
+                <div class="t low"><span class="nm">Fade &amp; Shine Pomade 4oz</span>
+                  <span class="n">2</span><span class="n">12</span><span class="pill sent">Reorder</span></div>
+                <div class="t low"><span class="nm">Neck strips &mdash; box of 500</span>
+                  <span class="n">1</span><span class="n">4</span><span class="pill sent">Reorder</span></div>
+                <div class="t low"><span class="nm">Clipper guard set</span>
+                  <span class="n">0</span><span class="n">2</span><span class="pill due">Out</span></div>
+                <div class="t"><span class="nm">Blade oil 8oz</span>
+                  <span class="n">18</span><span class="n">10</span><span class="pill ok">OK</span></div>
+                <div class="t"><span class="nm">Straight razor blades</span>
+                  <span class="n">64</span><span class="n">40</span><span class="pill ok">OK</span></div>
+                <div class="t"><span class="nm">Barber capes &mdash; black</span>
+                  <span class="n">12</span><span class="n">8</span><span class="pill ok">OK</span></div>
+                <div class="t"><span class="nm">Talc brush refill</span>
+                  <span class="n">9</span><span class="n">6</span><span class="pill ok">OK</span></div>
+              </div>
+              <div class="dv-po">
+                <span class="k">Chief drafted this</span>
+                <span class="t">PO-0043</span>
+                <span class="s">Midway Supply &middot; 2&ndash;3 day delivery</span>
+                <div class="li"><span>Fade &amp; Shine Pomade 4oz</span><b>24 &times; $6.40</b></div>
+                <div class="li"><span>Neck strips &mdash; box of 500</span><b>10 &times; $3.10</b></div>
+                <div class="li"><span>Clipper guard set</span><b>2 &times; $28.00</b></div>
+                <div class="tot"><span>Total</span><span>$240.60</span></div>
+                <div class="why">You go through about nine tubs a month, and Saturday is
+                   fully booked.</div>
+                <div class="acts">
+                  <span class="go">Send it</span>
+                  <span class="alt">Change it</span>
+                  <span class="dv-cursor"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── B · the pocket: Chief, nearest of the three ── -->
+      <div class="dv-slot dv-b">
+        <div class="dv-fone">
+          <div class="dv-fone-top"><span class="mk"></span><b>Chief</b><span class="on">Online</span></div>
+          <div class="dv-chat">
+            <div class="dv-msg you">Who hasn&rsquo;t rebooked?</div>
+            <div class="dv-msg ai dv-say">Three regulars are past six weeks &mdash; Marcus, Tia and Devon.</div>
+            <div class="dv-msg ai dv-say-2">Tuesday afternoon is your emptiest slot.</div>
+            <div class="dv-card dv-say-3">
+              <div class="k">Overdue for a cut</div>
+              <div class="v">3 regulars</div>
+              <div class="s">Marcus Bell &middot; Tia Okonkwo &middot; Devon Pryce</div>
+              <span class="go">Text them Tuesday<span class="dv-tap"></span></span>
+            </div>
+          </div>
+          <div class="dv-fone-bar">Ask or tell me what to do&hellip;<span class="mic"></span></div>
+          <div class="dv-fone-home"></div>
+        </div>
+      </div>
+
+    </div>
+    <div class="dv-shade"></div>
   </div>
 </section>
 """)
@@ -3230,7 +3762,7 @@ def render_home() -> str:
         title="One workspace that runs your whole business",
         description="The business system that already knows how yours runs. Bookings, clients, invoices, and an AI chief of staff that logs every move and never acts without your approval.",
         content_html=body, path="/",
-        extra_css=extra_css + BOARD_CSS + SPINE_CSS,
+        extra_css=extra_css + BOARD_CSS + SPINE_CSS + DEVICE_BAND_CSS,
         extra_scripts=extra_scripts + BOARD_SCRIPT + SPINE_SCRIPT + FOLD_SCRIPT,
     )
 
