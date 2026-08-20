@@ -122,7 +122,8 @@ SHARED_CSS = """
     --glow-ember: rgba(46,125,255,0.18);
     --font-heading: 'Inter Tight', 'Inter', system-ui, sans-serif;
     --font-body: 'Inter', system-ui, sans-serif;
-    /* the trace board labels its nodes like an instrument readout */
+    /* the one mono face on the site: the contact address, set so it
+       reads as something to copy rather than something to skim */
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   *{margin:0;padding:0;box-sizing:border-box;}
@@ -1285,625 +1286,22 @@ REPLICA_KIT_CSS = """
 
 
 # ══════════════════════════════════════════════════════════════════════
-# THE TRACE BOARD
+# THE TRACE BOARD lived here until 2026-08-20 (BE#540-550 built it).
 #
-# The page's other visuals show what the product LOOKS like. This one
-# argues the thing a screenshot cannot: that the parts are connected.
-# One spine carries a real event from the moment it lands to the moment
-# it is money, and three branches — Build, Operate, Grow, in the order
-# the work actually happens — peel off it.
+# It was the one visual arguing that the PARTS ARE CONNECTED — a real
+# event walking a spine through Build / Operate / Grow. That argument is
+# worth making. This was no longer the thing making it well:
 #
-# Chief sits ON the spine because it is not a room, it is the through-
-# line, and it introduces itself ("your chief of staff") because it is
-# the only proper noun on a board where every other stop is a noun the
-# visitor already owns.
+#   * hairline strokes and 8px labels under a fold that had just been
+#     given a full-size Mission Control panel — a schematic sitting
+#     directly beneath a photograph,
+#   * ~600 lines of CSS + JS shipped on every home page load for it,
+#   * Chromium-only, so a chunk of visitors never saw it move anyway,
+#   * and the device band now closes the page with the same claim made
+#     in the product's own pixels instead of in wireframe.
 #
-# Each of the three events enters a DIFFERENT set of branches, so the
-# unlit branches stay visibly dormant. That is the whole argument: this
-# is a system being operated, not a canned animation.
-#
-# Two layouts, one data model. Wide screens get the horizontal spine
-# and a readout list; phones get the same spine stood upright, with each
-# meaning set beside its own node — there is an empty column there and
-# a separate list would make the reader look away from the dot.
-# ══════════════════════════════════════════════════════════════════════
-
-BOARD_CSS = """
-      .board-sec{position:relative;margin-top:56px;}
-      .board-cap{display:flex;align-items:baseline;justify-content:space-between;
-        gap:16px;flex-wrap:wrap;margin-bottom:16px;}
-      .board-cap-l{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap;}
-      .board-chip{align-self:center;font-family:var(--font-mono);font-size:9.5px;
-        letter-spacing:.14em;text-transform:uppercase;color:var(--accent);
-        border:1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-        border-radius:4px;padding:3px 7px;}
-      .board-cap b{font-family:var(--font-heading);font-size:17px;font-weight:600;
-        letter-spacing:-.015em;color:var(--text-primary);}
-      .board-cap .d{font-size:15px;color:var(--text-muted);}
-
-      .trigs{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px;}
-      .trig{appearance:none;cursor:pointer;font-family:inherit;font-size:14px;font-weight:500;
-        color:var(--text-muted);background:var(--bg-2);border:1px solid #1E2A3B;
-        border-radius:99px;padding:9px 17px 9px 15px;display:inline-flex;align-items:center;gap:9px;
-        transition:color .18s ease,border-color .18s ease,background .18s ease;}
-      .trig::before{content:"";width:7px;height:7px;border-radius:50%;flex:none;background:#1E2A3B;
-        transition:background .18s ease,box-shadow .18s ease;}
-      .trig:hover{color:var(--text-primary);border-color:var(--border-strong);}
-      .trig:focus-visible{outline:2px solid var(--accent);outline-offset:3px;}
-      .trig[aria-pressed="true"]{color:var(--text-primary);border-color:var(--accent);
-        background:color-mix(in srgb, var(--accent) 8%, transparent);}
-      .trig[aria-pressed="true"]::before{background:var(--accent);
-        box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);}
-
-      .board-frame{border-top:1px solid var(--border);border-bottom:1px solid var(--border);
-        background:radial-gradient(120% 72% at 50% 50%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 70%);}
-      .board-scroll{overflow-x:auto;overflow-y:hidden;}
-      .board-scroll svg{display:block;width:100%;height:auto;min-width:1180px;}
-      /* The page scroll pulls the vertical board through this frame, so it
-         must not carry a scrollbar of its own — a nested scroll region on a
-         phone traps the thumb that is supposed to be driving the current. */
-      .board-frame.is-v .board-scroll{overflow:hidden;max-height:64vh;}
-      .board-frame.is-v .board-scroll svg{min-width:0;max-width:420px;margin:0 auto;}
-
-      .tr-base{fill:none;stroke:#1E2A3B;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
-      .tr-live{fill:none;stroke:var(--accent);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;}
-      .tr-glow{fill:none;stroke:var(--accent);stroke-width:7;stroke-linecap:round;stroke-linejoin:round;
-        opacity:.3;filter:url(#bdglow);}
-      .nd-ring{fill:var(--bg-2);stroke:#1E2A3B;stroke-width:2;transition:stroke .3s ease,fill .3s ease;}
-      .nd-core{fill:#1E2A3B;transition:fill .3s ease;}
-      .nd-halo{fill:none;stroke:var(--accent);stroke-width:2;opacity:0;
-        transform-box:fill-box;transform-origin:center;}
-      .nd.on .nd-ring{stroke:var(--accent);fill:#0B1220;}
-      .nd.on .nd-core{fill:var(--accent);}
-      .nd.on .nd-halo{animation:bdhalo .85s cubic-bezier(.2,.7,.3,1) forwards;}
-      @keyframes bdhalo{0%{opacity:.7;transform:scale(1);}100%{opacity:0;transform:scale(3.1);}}
-      .nd-label{font-family:var(--font-mono);font-size:11.5px;fill:var(--text-muted);
-        letter-spacing:.02em;transition:fill .3s ease;}
-      .nd.on .nd-label{fill:var(--text-primary);}
-      .nd-term{font-family:var(--font-mono);font-size:11.5px;fill:var(--text-dim);
-        letter-spacing:.02em;transition:fill .3s ease;}
-      .nd.on .nd-term{fill:var(--text-primary);}
-      .nd-sub{font-family:var(--font-mono);font-size:9.5px;fill:var(--text-dim);
-        letter-spacing:.045em;transition:fill .3s ease;}
-      .nd.on .nd-sub{fill:var(--text-muted);}
-      .nd-say{font-family:var(--font-body);font-size:10px;fill:var(--text-muted);
-        opacity:0;transition:opacity .45s ease;}
-      .nd.on .nd-say{opacity:1;}
-      .bd-label{font-family:var(--font-mono);font-size:10.5px;font-weight:500;letter-spacing:.18em;
-        fill:var(--text-dim);transition:fill .35s ease;}
-      .bd-label.on{fill:var(--accent);}
-      .bd-rule{stroke:#151C28;stroke-width:1;transition:stroke .35s ease;}
-      .bd-rule.on{stroke:color-mix(in srgb, var(--accent) 34%, transparent);}
-      .bd-head{opacity:0;transition:opacity .2s ease;}
-      .bd-head.on{opacity:1;}
-      .bd-head-glow{fill:var(--accent);opacity:.3;filter:url(#bdglow);}
-      .bd-head-core{fill:var(--info);}
-
-      .board-out{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);
-        gap:26px 56px;align-items:start;padding:24px 0 0;}
-      .board-out h4{font-family:var(--font-mono);font-size:11px;font-weight:400;letter-spacing:.14em;
-        text-transform:uppercase;color:var(--text-dim);margin:0 0 12px;}
-      .board-ev{font-family:var(--font-heading);font-size:24px;font-weight:600;letter-spacing:-.02em;
-        margin:0 0 6px;color:var(--text-primary);}
-      .board-src{font-family:var(--font-mono);font-size:12px;color:var(--text-dim);margin:0;}
-      .board-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;min-height:212px;}
-      .board-li{display:grid;grid-template-columns:32px 106px minmax(0,1fr);gap:14px;align-items:baseline;
-        padding:6px 0;border-bottom:1px solid var(--border);opacity:0;transform:translateY(4px);
-        animation:bdline .34s ease forwards;}
-      @keyframes bdline{to{opacity:1;transform:none;}}
-      .board-li .n{font-family:var(--font-mono);font-size:11px;color:var(--accent);font-variant-numeric:tabular-nums;}
-      .board-li .w{font-family:var(--font-mono);font-size:12px;color:var(--text-primary);}
-      .board-li .t{font-size:14.5px;color:var(--text-muted);line-height:1.5;}
-      .board-li.end .w{color:var(--info);}
-
-      @media (max-width:1080px){
-        .board-out{grid-template-columns:minmax(0,1fr);gap:20px;}
-      }
-      @media (max-width:768px){
-        .board-sec{margin-top:40px;}
-        /* each meaning now sits beside its own node, so the list under the
-           board would be the same words a second time */
-        .board-list{display:none;}
-        .board-out h4.lst{display:none;}
-        .board-out{padding-top:18px;}
-      }
-      @media (prefers-reduced-motion: reduce){
-        .nd.on .nd-halo{animation:none;}
-        .board-li{animation:none;opacity:1;transform:none;}
-      }
-"""
-
-
-BOARD_HTML = """
-    <div class="board-sec reveal reveal-delay-3" id="bdSec">
-      <div class="board-cap">
-        <div class="board-cap-l">
-          <span class="board-chip">Live</span>
-          <b>The system</b>
-          <span class="d">&mdash; trace a real event, end to end.</span>
-        </div>
-      </div>
-      <div class="trigs" id="bdTrigs" role="group" aria-label="Choose an event to trace through the system"></div>
-      <div class="board-frame" id="bdFrame">
-        <div class="board-scroll" id="bdScroll"></div>
-      </div>
-      <div class="board-out">
-        <div>
-          <h4>Now tracing</h4>
-          <p class="board-ev" id="bdEvent">&nbsp;</p>
-          <p class="board-src" id="bdSource">&nbsp;</p>
-        </div>
-        <div>
-          <h4 class="lst">What the system did</h4>
-          <ol class="board-list" id="bdList" aria-live="polite"></ol>
-        </div>
-      </div>
-    </div>
-
-    <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
-      <defs><filter id="bdglow" x="-60%" y="-60%" width="220%" height="220%">
-        <feGaussianBlur stdDeviation="4"/></filter></defs>
-    </svg>
-"""
-
-
-BOARD_SCRIPT = """
-<script>
-(function () {
-  var scroller = document.getElementById('bdScroll');
-  if (!scroller) return;
-  var sec    = document.getElementById('bdSec');
-  var frame  = document.getElementById('bdFrame');
-  var list   = document.getElementById('bdList');
-  var evEl   = document.getElementById('bdEvent');
-  var srcEl  = document.getElementById('bdSource');
-  var trigs  = document.getElementById('bdTrigs');
-  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var narrow  = window.matchMedia('(max-width: 768px)');
-
-  /* Build, Operate, Grow — the order the work actually happens in. */
-  var BRANCHES = [
-    { id:'build',   name:'BUILD',   dir:-1, nodes:[{id:'site',label:'Your site'},{id:'brand',label:'Brand kit'}] },
-    { id:'operate', name:'OPERATE', dir: 1, nodes:[{id:'clients',label:'Clients'},{id:'calendar',label:'Calendar'},{id:'invoices',label:'Invoices'}] },
-    { id:'grow',    name:'GROW',    dir:-1, nodes:[{id:'followups',label:'Follow-ups'},{id:'campaigns',label:'Campaigns'}] }
-  ];
-  var EXIT_LABEL = 'Money in the bank';
-
-  var EVENTS = [
-    { id:'lead', button:'A new lead arrives', title:'A new lead arrives',
-      source:'from the contact form on your site',
-      bands:['operate','grow'],
-      say:{ chief:'Chief reads it and decides what happens next.',
-            clients:'Saved as a client. Nothing re-typed.',
-            calendar:'Your three open times this week go out.',
-            invoices:'A quote drafts itself at your standard rate.',
-            followups:'If they go quiet, they hear from you on day three.',
-            campaigns:'Added to the list that matches what they asked about.',
-            exit:'Signed, scheduled, and on the books.' } },
-    { id:'offer', button:'You publish a new offer', title:'You publish a new offer',
-      source:'one sentence typed into Chief',
-      bands:['build','grow'],
-      say:{ chief:'Chief writes the page and the pitch in one pass.',
-            site:'The offer is live on your site.',
-            brand:'Same fonts, same colours. Nothing drifts.',
-            followups:'Everyone who ever asked about this hears first.',
-            campaigns:'A three-email sequence, in your voice.',
-            exit:'The first sale lands in the same ledger as the rest.' } },
-    { id:'paid', button:'A client pays an invoice', title:'A client pays an invoice',
-      source:'card payment, 2:14pm',
-      bands:['operate'],
-      say:{ chief:'Chief matches the payment to the right job.',
-            clients:'Their balance updates itself.',
-            calendar:'Next session confirmed, deposit cleared.',
-            invoices:'Marked paid. The receipt already went out.',
-            exit:'Booked to the right account, ready at tax time.' } }
-  ];
-
-  /* ── layouts ─────────────────────────────────────────────────── */
-
-  function layoutH() {
-    var W = 1360, sy = 268, R = 60, GAP = 30, INSET = 24;
-    var entryX = 92, chiefX = 176, bandStart = 258, bandEnd = W - 148, exitX = W - 74;
-    var weights = BRANCHES.map(function (b) { return b.nodes.length + 1; });
-    var wsum = weights.reduce(function (a, b) { return a + b; }, 0);
-    var avail = (bandEnd - bandStart) - GAP * (BRANCHES.length - 1);
-    var x = bandStart;
-    var bands = BRANCHES.map(function (b, i) {
-      var w = avail * weights[i] / wsum, x0 = x, x1 = x + w;
-      x = x1 + GAP;
-      var by = sy + b.dir * R, rx0 = x0 + R, rx1 = x1 - R, n = b.nodes.length;
-      var span = (rx1 - rx0) - 2 * INSET;
-      var pts = b.nodes.map(function (nd, j) {
-        var px = (n === 1) ? (rx0 + rx1) / 2 : rx0 + INSET + span * j / (n - 1);
-        return { id:nd.id, label:nd.label, x:px, y:by };
-      });
-      return { id:b.id, name:b.name, dir:b.dir, by:by,
-               c0:{x:rx0,y:by}, c1:{x:rx1,y:by}, j0:{x:x0,y:sy}, j1:{x:x1,y:sy}, pts:pts };
-    });
-    /* crop the viewBox to the ink — laying out from a 0 origin leaves
-       ~230px of dead space above and below and the board looks adrift */
-    var PAD = 24, top = (sy - R) - 73, bot = Math.max((sy + R) + 80, sy + 44);
-    return { orient:'h', W:W, sy:sy, vb:{ x:0, y:top - PAD, w:W, h:(bot + PAD) - (top - PAD) },
-             entry:{x:entryX,y:sy}, chief:{x:chiefX,y:sy}, exit:{x:exitX,y:sy}, bands:bands };
-  }
-
-  function layoutV() {
-    var W = 356, sx = 52, R = 54, GAP = 32, INSET = 16, STEP = 92;
-    var entryY = 54, chiefY = 134, y = 210;
-    var bands = BRANCHES.map(function (b) {
-      var n = b.nodes.length, h = 2 * R + 2 * INSET + (n - 1) * STEP;
-      var y0 = y, y1 = y + h;
-      y = y1 + GAP;
-      var bx = sx + R, ry0 = y0 + R, ry1 = y1 - R, span = (ry1 - ry0) - 2 * INSET;
-      var pts = b.nodes.map(function (nd, j) {
-        var py = (n === 1) ? (ry0 + ry1) / 2 : ry0 + INSET + span * j / (n - 1);
-        return { id:nd.id, label:nd.label, x:bx, y:py };
-      });
-      return { id:b.id, name:b.name, dir:1, bx:bx,
-               c0:{x:bx,y:ry0}, c1:{x:bx,y:ry1}, j0:{x:sx,y:y0}, j1:{x:sx,y:y1}, pts:pts };
-    });
-    var exitY = y + 48, H = exitY + 66;
-    return { orient:'v', W:W, vb:{ x:0, y:0, w:W, h:H },
-             entry:{x:sx,y:entryY}, chief:{x:sx,y:chiefY}, exit:{x:sx,y:exitY}, bands:bands };
-  }
-
-  /* ── geometry ────────────────────────────────────────────────── */
-
-  function routePts(L, ev) {
-    var pts = [{ x:L.entry.x, y:L.entry.y, id:'entry' }, { x:L.chief.x, y:L.chief.y, id:'chief' }];
-    L.bands.forEach(function (b) {
-      if (ev.bands.indexOf(b.id) === -1) return;   /* skipped: the spine runs straight through */
-      pts.push({ x:b.j0.x, y:b.j0.y }, { x:b.c0.x, y:b.c0.y });
-      b.pts.forEach(function (p) { pts.push({ x:p.x, y:p.y, id:p.id }); });
-      pts.push({ x:b.c1.x, y:b.c1.y }, { x:b.j1.x, y:b.j1.y });
-    });
-    pts.push({ x:L.exit.x, y:L.exit.y, id:'exit' });
-    return pts;
-  }
-
-  function measure(pts) {
-    var cum = [0], total = 0;
-    for (var i = 1; i < pts.length; i++) {
-      total += Math.sqrt(Math.pow(pts[i].x - pts[i-1].x, 2) + Math.pow(pts[i].y - pts[i-1].y, 2));
-      cum.push(total);
-    }
-    return { cum:cum, total:total };
-  }
-
-  function pointAt(pts, cum, d) {
-    if (d <= 0) return { x:pts[0].x, y:pts[0].y };
-    for (var i = 1; i < pts.length; i++) {
-      if (cum[i] >= d) {
-        var seg = cum[i] - cum[i-1], t = seg === 0 ? 0 : (d - cum[i-1]) / seg;
-        return { x:pts[i-1].x + (pts[i].x - pts[i-1].x) * t,
-                 y:pts[i-1].y + (pts[i].y - pts[i-1].y) * t };
-      }
-    }
-    var last = pts[pts.length - 1];
-    return { x:last.x, y:last.y };
-  }
-
-  function dOf(pts) {
-    return pts.map(function (p, i) {
-      return (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1);
-    }).join(' ');
-  }
-
-  function esc(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
-  /* SVG text does not wrap. Greedy packing at the full width leaves
-     orphans, so find the narrowest width that fits the same line count. */
-  function wrapText(str, max) {
-    var words = String(str).split(' ');
-    function pack(w) {
-      var lines = [], line = '';
-      for (var i = 0; i < words.length; i++) {
-        var t = line ? line + ' ' + words[i] : words[i];
-        if (t.length > w && line) { lines.push(line); line = words[i]; }
-        else line = t;
-      }
-      if (line) lines.push(line);
-      return lines;
-    }
-    var greedy = pack(max), n = greedy.length;
-    if (n <= 1) return greedy;
-    for (var w = Math.ceil(String(str).length / n); w <= max; w++) {
-      var p = pack(w);
-      if (p.length <= n) return p;
-    }
-    return greedy;
-  }
-
-  /* ── rendering ───────────────────────────────────────────────── */
-
-  function sayText(say, lx, y) {
-    var lines = wrapText(say, 40), t = '';
-    for (var i = 0; i < lines.length; i++) {
-      t += '<tspan x="' + lx + '" dy="' + (i === 0 ? 0 : 12) + '">' + esc(lines[i]) + '</tspan>';
-    }
-    return '<text class="nd-say" x="' + lx + '" y="' + y + '">' + t + '</text>';
-  }
-
-  function nodeSVG(id, x, y, label, kind, L, dir, sub, say) {
-    var v = (L.orient === 'v'), lx, ly, anchor, subY = null, sayY = null;
-    if (v) {
-      lx = x + (kind === 'chief' ? 24 : 22); anchor = 'start';
-      if (say && sub)      { ly = y - 16; subY = y - 3; sayY = y + 13; }
-      else if (say)        { ly = y - 8;  sayY = y + 6; }
-      else if (sub)        { ly = y - 2;  subY = y + 13; }
-      else                 { ly = y + 4; }
-    } else if (kind === 'term')  { lx = x; ly = y + 32; anchor = 'middle'; }
-    else if (kind === 'chief')   { lx = x; ly = y - 44; subY = y - 28; anchor = 'middle'; }
-    else { lx = x; ly = (dir < 0) ? y - 22 : y + 30; anchor = 'middle'; }
-
-    var shape;
-    if (kind === 'chief') {
-      shape = '<rect class="nd-ring" x="' + (x-11) + '" y="' + (y-11) + '" width="22" height="22" rx="5" '
-            + 'transform="rotate(45 ' + x + ' ' + y + ')"/>'
-            + '<circle class="nd-core" cx="' + x + '" cy="' + y + '" r="4"/>';
-    } else if (kind === 'term') {
-      shape = '<circle class="nd-ring" cx="' + x + '" cy="' + y + '" r="9"/>'
-            + '<circle class="nd-core" cx="' + x + '" cy="' + y + '" r="3.6"/>';
-    } else {
-      shape = '<circle class="nd-ring" cx="' + x + '" cy="' + y + '" r="7"/>'
-            + '<circle class="nd-core" cx="' + x + '" cy="' + y + '" r="2.8"/>';
-    }
-    return '<g class="nd" data-nd="' + id + '">'
-         + '<circle class="nd-halo" cx="' + x + '" cy="' + y + '" r="9"/>' + shape
-         + '<text class="' + (kind === 'term' ? 'nd-term' : 'nd-label') + '" x="' + lx + '" y="' + ly
-         + '" text-anchor="' + anchor + '">' + esc(label) + '</text>'
-         + (subY !== null && sub ? '<text class="nd-sub" x="' + lx + '" y="' + subY
-             + '" text-anchor="' + anchor + '">' + esc(sub) + '</text>' : '')
-         + (sayY !== null ? sayText(say, lx, sayY) : '')
-         + '</g>';
-  }
-
-  function render(L, ev) {
-    var vb = L.vb;
-    var s = '<svg viewBox="' + vb.x + ' ' + vb.y + ' ' + vb.w + ' ' + vb.h + '" role="img" aria-label="'
-          + 'The Solutionist system as one board: a spine running from ' + esc(ev.title)
-          + ' to money in the bank, with Build, Operate and Grow branching off it.">';
-
-    s += '<path class="tr-base" d="' + dOf([L.entry, L.exit]) + '"/>';
-    L.bands.forEach(function (b) {
-      var bp = [b.j0, b.c0].concat(b.pts.map(function (p) { return { x:p.x, y:p.y }; })).concat([b.c1, b.j1]);
-      s += '<path class="tr-base" d="' + dOf(bp) + '"/>';
-    });
-
-    L.bands.forEach(function (b) {
-      if (L.orient === 'v') {
-        var lx = b.j0.x - 18, ly = (b.c0.y + b.c1.y) / 2;
-        s += '<text class="bd-label" data-bd="' + b.id + '" x="' + lx + '" y="' + ly
-           + '" text-anchor="middle" transform="rotate(-90 ' + lx + ' ' + ly + ')">' + b.name + '</text>';
-      } else {
-        var cx = (b.c0.x + b.c1.x) / 2;
-        var ry = b.by + (b.dir < 0 ? -52 : 56), ty = b.by + (b.dir < 0 ? -64 : 76);
-        s += '<line class="bd-rule" data-bd="' + b.id + '" x1="' + b.c0.x + '" y1="' + ry
-           + '" x2="' + b.c1.x + '" y2="' + ry + '"/>';
-        s += '<text class="bd-label" data-bd="' + b.id + '" x="' + cx + '" y="' + ty
-           + '" text-anchor="middle">' + b.name + '</text>';
-      }
-    });
-
-    var d = dOf(routePts(L, ev));
-    s += '<path class="tr-glow js-glow" d="' + d + '" pathLength="1000" stroke-dasharray="1000" stroke-dashoffset="1000"/>';
-    s += '<path class="tr-live js-trace" d="' + d + '" pathLength="1000" stroke-dasharray="1000" stroke-dashoffset="1000"/>';
-
-    /* the meaning only rides along on the vertical board; the horizontal
-       one has no room beside a node and keeps its readout list instead */
-    var v = (L.orient === 'v');
-    function say(id) { return v ? ev.say[id] : null; }
-
-    s += nodeSVG('entry', L.entry.x, L.entry.y, ev.title, 'term', L, 1);
-    s += nodeSVG('chief', L.chief.x, L.chief.y, 'Chief', 'chief', L, 1, 'your chief of staff', say('chief'));
-    L.bands.forEach(function (b) {
-      b.pts.forEach(function (p) { s += nodeSVG(p.id, p.x, p.y, p.label, 'stop', L, b.dir, null, say(p.id)); });
-    });
-    s += nodeSVG('exit', L.exit.x, L.exit.y, EXIT_LABEL, 'term', L, 1, null, say('exit'));
-
-    s += '<g class="bd-head js-head"><circle class="bd-head-glow" r="11" cx="0" cy="0"/>'
-       + '<circle class="bd-head-core" r="3.4" cx="0" cy="0"/></g>';
-    return s + '</svg>';
-  }
-
-  /* ── the board ───────────────────────────────────────────────── */
-
-  var cur = EVENTS[0], raf = null, litN = -1;
-  var pts = [], cum = [], total = 0, stops = [], bandFirst = {};
-  var trace, glow, head;
-
-  function build() {
-    var L = narrow.matches ? layoutV() : layoutH();
-    frame.classList.toggle('is-v', narrow.matches);
-    scroller.innerHTML = render(L, cur);
-    trace = scroller.querySelector('.js-trace');
-    glow  = scroller.querySelector('.js-glow');
-    head  = scroller.querySelector('.js-head');
-    pts = routePts(L, cur);
-    var m = measure(pts);
-    cum = m.cum; total = m.total;
-    stops = [];
-    for (var i = 0; i < pts.length; i++) { if (pts[i].id) stops.push({ id:pts[i].id, d:cum[i] }); }
-    var idxOf = {};
-    for (i = 0; i < stops.length; i++) idxOf[stops[i].id] = i;
-    bandFirst = {};
-    L.bands.forEach(function (b) {
-      if (cur.bands.indexOf(b.id) !== -1 && b.pts.length && idxOf[b.pts[0].id] !== undefined) {
-        bandFirst[b.id] = idxOf[b.pts[0].id];
-      }
-    });
-    litN = -1;
-  }
-
-  function syncList(n) {
-    var want = [], i;
-    for (i = 0; i < n && i < stops.length; i++) {
-      var t = cur.say[stops[i].id];
-      if (t) want.push({ id:stops[i].id, text:t });
-    }
-    while (list.childElementCount > want.length) list.removeChild(list.lastElementChild);
-    for (i = list.childElementCount; i < want.length; i++) {
-      var w = want[i], k = i + 1, li = document.createElement('li');
-      li.className = 'board-li' + (w.id === 'exit' ? ' end' : '');
-      li.innerHTML = '<span class="n">' + (k < 10 ? '0' + k : k) + '</span>'
-                   + '<span class="w">' + esc(labelFor(w.id)) + '</span>'
-                   + '<span class="t">' + esc(w.text) + '</span>';
-      list.appendChild(li);
-    }
-  }
-
-  function labelFor(id) {
-    if (id === 'chief') return 'Chief';
-    if (id === 'exit')  return 'Result';
-    var found = id;
-    BRANCHES.forEach(function (b) {
-      b.nodes.forEach(function (n) { if (n.id === id) found = n.label; });
-    });
-    return found;
-  }
-
-  /* one source of truth for how far the current has travelled, 0..1 */
-  function applyProgress(e) {
-    e = Math.max(0, Math.min(1, e));
-    var off = (1000 * (1 - e)).toFixed(2), i;
-    trace.setAttribute('stroke-dashoffset', off);
-    glow.setAttribute('stroke-dashoffset', off);
-
-    var d = e * total, pt = pointAt(pts, cum, d);
-    head.setAttribute('transform', 'translate(' + pt.x.toFixed(1) + ',' + pt.y.toFixed(1) + ')');
-    head.classList.toggle('on', e > 0.002 && e < 0.998);
-
-    var n = 0;
-    for (i = 0; i < stops.length; i++) { if (d >= stops[i].d) n++; }
-    if (n === litN) return;
-    litN = n;
-
-    for (i = 0; i < stops.length; i++) {
-      var g = scroller.querySelector('.nd[data-nd="' + stops[i].id + '"]');
-      if (g) g.classList.toggle('on', i < n);
-    }
-    for (var bid in bandFirst) {
-      var on = n > bandFirst[bid];
-      var els = scroller.querySelectorAll('[data-bd="' + bid + '"]');
-      for (i = 0; i < els.length; i++) els[i].classList.toggle('on', on);
-    }
-    syncList(n);
-  }
-
-  /* ── the reader sets the pace ──────────────────────────────────────
-     Progress is read from where the board sits in the viewport, never
-     from a timer. It starts as the board rises from the bottom and
-     completes as it settles into the upper half, so the current moves
-     exactly as fast as the person scrolling. Move slowly and it crawls;
-     stop and it stops; arriving at it never starts a race already run. */
-  function scrollProgress() {
-    var r = sec.getBoundingClientRect(), vh = window.innerHeight;
-    var startAt = vh * 0.85, endAt = vh * 0.45;
-    var span = startAt + r.height - endAt;
-    if (span <= 0) return 0;
-    return Math.max(0, Math.min(1, (startAt - r.top) / span));
-  }
-
-  function paint() {
-    var e = reduced ? 1 : scrollProgress();
-    applyProgress(e);
-    if (narrow.matches) {
-      /* the page scroll pulls the vertical board up through its frame,
-         locked to the same progress that moves the current */
-      var svg = scroller.querySelector('svg');
-      if (svg) {
-        scroller.scrollTop = 0;
-        var over = svg.getBoundingClientRect().height - scroller.clientHeight;
-        svg.style.transform = 'translateY(' + (-Math.max(0, over) * e).toFixed(1) + 'px)';
-      }
-    }
-  }
-
-  /* Deliberately not rAF-throttled: the obvious guard leaves the board
-     frozen for good if the scheduled frame is ever dropped, because the
-     flag never clears. applyProgress returns early unless the lit count
-     actually moved. */
-  function onScroll() { if (!raf) paint(); }
-
-  /* Switching event redraws from zero up to wherever the reader already
-     is, so the click has feedback, then hands control back to the scroll. */
-  function play() {
-    if (raf) cancelAnimationFrame(raf);
-    list.innerHTML = '';
-    evEl.textContent  = cur.title;
-    srcEl.textContent = cur.source;
-    scroller.scrollTop = 0;
-    build();
-
-    if (reduced) { applyProgress(1); return; }
-
-    var target = scrollProgress(), t0 = null, dur = 900;
-    function frameStep(t) {
-      if (t0 === null) t0 = t;
-      var p = Math.min(1, (t - t0) / dur);
-      var e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-      applyProgress(e * target);
-      if (p < 1) { raf = requestAnimationFrame(frameStep); }
-      else { raf = null; paint(); }
-    }
-    raf = requestAnimationFrame(frameStep);
-  }
-
-  EVENTS.forEach(function (ev) {
-    var b = document.createElement('button');
-    b.className = 'trig';
-    b.type = 'button';
-    b.textContent = ev.button;
-    b.setAttribute('data-ev', ev.id);
-    b.setAttribute('aria-pressed', ev.id === cur.id ? 'true' : 'false');
-    b.addEventListener('click', function () {
-      cur = ev;
-      var all = trigs.querySelectorAll('.trig');
-      for (var i = 0; i < all.length; i++) {
-        all[i].setAttribute('aria-pressed', all[i].getAttribute('data-ev') === ev.id ? 'true' : 'false');
-      }
-      play();
-    });
-    trigs.appendChild(b);
-  });
-
-  function rebuild() {
-    var svg = scroller.querySelector('svg');
-    if (svg) svg.style.transform = '';
-    build();
-    paint();
-  }
-
-  evEl.textContent  = cur.title;
-  srcEl.textContent = cur.source;
-  rebuild();
-
-  window.addEventListener('scroll', onScroll, { passive: true });
-  window.addEventListener('resize', rebuild);
-  if (narrow.addEventListener) narrow.addEventListener('change', rebuild);
-  else if (narrow.addListener) narrow.addListener(rebuild);
-})();
-</script>
-"""
-
-
-# ══════════════════════════════════════════════════════════════════════
-# THE PAGE SPINE
-#
-# The board makes the argument inside one section. This carries the same
-# language through the whole page: a single thread down the left gutter,
-# with a node at each numbered section, lighting as the reader descends.
-#
-# It threads a sequence the page ALREADY tells — 01 the engine, 02 Chief,
-# 03 the shape of it, 04 the rooms, 05 the demo, 06 who it's for, 07 why,
-# 08 what it costs. The numbering was already load-bearing; this only
-# draws the line that was implied between them.
-#
-# Deliberately almost invisible: a 1.5px rail, small dots, and accent
-# only on the part you have actually read. It is chrome, not content —
-# if it competes with the board for attention it has failed.
+# Removed on Kevin's call. `git show 31d7446:marketing_pages.py` has the
+# whole thing if the argument needs a better vehicle later.
 # ══════════════════════════════════════════════════════════════════════
 
 SPINE_CSS = """
@@ -2630,6 +2028,14 @@ def render_home() -> str:
     #    flat colour, hairline borders, no glow stacking, generous air.
     extra_css = """
       .container-xl{max-width:1340px;margin:0 auto;padding:0 32px;}
+      /* Wide screens: the VISUAL column grows, prose does not. `.container`
+         stays at 1140 — a 1700px line of body copy is unreadable — while
+         `.container-xl` carries the product art, and art wants the room.
+         These live HERE, not in SHARED_CSS: the shell is injected first,
+         so a media query up there loses to this base rule on source order
+         (media queries add no specificity). Measured dead before moving. */
+      @media (min-width:1800px){ .container-xl{max-width:1560px;} }
+      @media (min-width:2200px){ .container-xl{max-width:1720px;} }
       @media (max-width:640px){.container-xl{padding:0 20px;}}
 
 """ + REPLICA_KIT_CSS + """
@@ -2650,8 +2056,35 @@ def render_home() -> str:
          carries the room-by-room detail.
          ══════════════════════════════════════════════════════════════ */
       .hero{position:relative;padding:76px 0 20px;overflow:hidden;}
-      .hero::before{content:'';position:absolute;inset:-170px 0 auto;height:660px;pointer-events:none;
-        background:radial-gradient(46% 66% at 34% 0%, var(--glow), transparent 72%);opacity:.6;}
+      /* The closer at the foot of the page sits in a drifting colour
+         field; the fold had a single flat radial. Same instrument at both
+         ends now, so the page opens and closes on the same light. The
+         drift keyframes are DEVICE_BAND_CSS's — both blocks ship on this
+         document, and two copies of the same animation would be two
+         things to keep in step. */
+      .hero-glow{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+      .hero-glow i{position:absolute;display:block;border-radius:50%;filter:blur(84px);}
+      .hg1{left:30%;top:-190px;width:1240px;height:760px;margin-left:-620px;opacity:.85;
+        background:radial-gradient(50% 50% at 50% 50%, rgba(46,125,255,.58), rgba(46,125,255,0) 70%);
+        animation:dvDrift1 24s ease-in-out infinite;}
+      .hg2{right:-4%;top:-110px;width:900px;height:680px;opacity:.62;
+        background:radial-gradient(50% 50% at 50% 50%, rgba(124,58,237,.52), rgba(124,58,237,0) 70%);
+        animation:dvDrift3 27s ease-in-out infinite;}
+      .hg3{left:0%;top:300px;width:820px;height:540px;opacity:.5;
+        background:radial-gradient(50% 50% at 50% 50%, rgba(34,211,238,.40), rgba(34,211,238,0) 70%);
+        animation:dvDrift2 30s ease-in-out infinite;}
+      /* .hero is overflow:hidden and .hg3 runs past its foot, so the
+         bloom was being guillotined at the section edge. Fade it with a
+         MASK, not a dark overlay: an overlay paints the hero's last
+         190px to pure --bg, and `.trust` below carries a 3% accent tint,
+         so the "fix" drew a brighter-below ruled line exactly where the
+         seam was supposed to disappear. Masking removes light instead of
+         adding ink, and the boundary goes back to being only the tint. */
+      .hero-glow{-webkit-mask-image:linear-gradient(to bottom, #000 64%, rgba(0,0,0,0) 99%);
+        mask-image:linear-gradient(to bottom, #000 64%, rgba(0,0,0,0) 99%);}
+      .hero-grain{position:absolute;inset:0;z-index:1;pointer-events:none;opacity:.14;mix-blend-mode:overlay;
+        background-image:radial-gradient(rgba(255,255,255,.5) .5px, transparent .5px);background-size:3px 3px;}
+      @media (prefers-reduced-motion: reduce){.hero-glow i{animation:none !important;}}
       .hero .container-xl{position:relative;z-index:1;}
 
       /* min-width:0 on both tracks — a grid child's automatic minimum is
@@ -2660,8 +2093,20 @@ def render_home() -> str:
       .hero-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.04fr);
         gap:clamp(30px,3.4vw,54px);align-items:center;}
       .hero-copy{min-width:0;}
-      .hero h1{margin:0 0 22px;font-size:clamp(34px,4.5vw,64px);line-height:1.0;
+      .hero h1{margin:0 0 22px;font-size:clamp(34px,4.9vw,78px);line-height:1.0;
         letter-spacing:-.042em;text-wrap:balance;}
+      /* `.gradient-text` is flat accent everywhere by design (the blue-led
+         palette pass killed gradient text site-wide). The one statement
+         the whole company is named after gets the exception, and only
+         here — blue into cyan, the same two colours the closer blooms. */
+      .hero h1 .gradient-text{background:linear-gradient(103deg,
+          var(--accent) 0%, #4C9DFF 30%, #45C9F0 58%, var(--info) 82%);
+        -webkit-background-clip:text;background-clip:text;
+        -webkit-text-fill-color:transparent;color:transparent;
+        text-shadow:none;}
+      @supports not ((-webkit-background-clip:text) or (background-clip:text)){
+        .hero h1 .gradient-text{color:var(--accent);-webkit-text-fill-color:var(--accent);}
+      }
       .hero-turn{max-width:44ch;margin:0 0 26px;font-size:clamp(16px,1.25vw,17.5px);
         font-family:var(--font-body);font-weight:400;line-height:1.55;
         color:var(--text-muted);text-wrap:pretty;}
@@ -2705,12 +2150,57 @@ def render_home() -> str:
          min(), flex-wrap). The old .hero-2col dropped its rail on a
          VIEWPORT media query, which never fires when the panel is the
          narrow half of a wide screen — the rail stayed and crushed. */
-      .fold-stage{min-width:0;}
-      .fold-cap{display:flex;align-items:center;gap:9px;margin-bottom:11px;
+      /* The panel and the screens in the closing band are the same
+         replica kit, but the band's read as objects in a room and this
+         one read as a div: the difference was never the UI inside, it
+         was the bloom under it, the layered shadow and the sheen over
+         the glass. Same treatment here. */
+      .fold-stage{min-width:0;position:relative;}
+      .fold-stage::before{content:'';position:absolute;left:-7%;right:-7%;top:6%;bottom:-12%;z-index:-1;
+        filter:blur(64px);border-radius:50%;
+        background:radial-gradient(50% 50% at 50% 50%, rgba(46,125,255,.34), rgba(46,125,255,0) 70%);}
+      .fold-stage .app{border-radius:16px;border-color:rgba(255,255,255,.14);
+        box-shadow:0 60px 120px -34px rgba(0,0,0,.86), 0 24px 50px -18px rgba(0,0,0,.6),
+                   0 0 0 1px rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.07) inset;}
+      .fold-stage .app::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:9;
+        border-radius:inherit;
+        background:linear-gradient(147deg, rgba(255,255,255,.06), rgba(255,255,255,0) 34%);}
+      .fold-stage .app{position:relative;}
+
+      /* What actually separates the closing band's screens from this
+         panel is not resolution, it is that they sit in PERSPECTIVE and
+         this sat flat-on to the reader. A replica photographed square is
+         a div; the same replica at a few degrees is a screen on a desk.
+         So the panel now arrives tilted and settles level — the gesture
+         of something being set down in front of you — and it happens
+         ONCE, on the reveal. Not tied to scroll: a hero that keeps
+         moving while you read it is a hero you cannot read.
+
+         The transform sits on .app, not on .fold-stage, on purpose.
+         .fold-stage::before is the bloom at z-index:-1; transforming its
+         parent would trap it in a new stacking context and put the bloom
+         behind the very panel it exists to light. */
+      .fold-stage .app{transform-origin:62% 100%;
+        transform:perspective(2400px) rotateX(7.5deg) rotateY(-9deg) scale(.962);
+        transition:transform 1.25s cubic-bezier(.16,.84,.28,1) .16s;
+        will-change:transform;}
+      .fold-stage.visible .app{
+        transform:perspective(2400px) rotateX(0deg) rotateY(0deg) scale(1);}
+      @media (prefers-reduced-motion: reduce){
+        .fold-stage .app{transform:none !important;transition:none !important;}
+      }
+      /* A sentence, not a flex row. The caption is one line of prose
+         with a bare text node in the middle, so `display:flex` made each
+         fragment its own item and put a 9px gutter between them — on a
+         phone the line broke into three blocks with visible gaps, like
+         justified text gone wrong. It reads as prose because it IS
+         prose; the dot is the only thing that needs to be a box. */
+      .fold-cap{margin-bottom:11px;line-height:1.55;
         font-size:11.5px;color:var(--text-dim);letter-spacing:.02em;}
       .fold-cap b{color:var(--text-secondary);font-weight:600;}
-      .fold-cap .dot{width:6px;height:6px;border-radius:50%;background:var(--success);
-        box-shadow:0 0 8px var(--success);flex-shrink:0;}
+      .fold-cap .dot{display:inline-block;vertical-align:middle;
+        width:6px;height:6px;border-radius:50%;background:var(--success);
+        box-shadow:0 0 8px var(--success);margin:-1px 7px 0 0;}
 
       .hero .app{min-height:472px;}
       .hero .kpi-row{grid-template-columns:repeat(auto-fit,minmax(min(112px,100%),1fr));}
@@ -2888,8 +2378,18 @@ def render_home() -> str:
          a whole client list. Answering "what happens to my data" directly
          under the hero is the honest place for it. Every claim here is
          already documented in /privacy — nothing new is promised. ── */
-      .trust{border-top:1px solid var(--border);border-bottom:1px solid var(--border);
-        padding:30px 0;background:color-mix(in srgb, var(--accent) 3%, transparent);}
+      /* No top rule. The hero above is now a continuous colour field,
+         and a hairline plus a flat tint band starting on the same pixel
+         drew a hard seam directly under the fold — the one edge on the
+         page a visitor is guaranteed to look at. The tint now grows in
+         from nothing over the first third of the band, so the field
+         resolves into the band instead of hitting a lid. The bottom
+         rule stays: that boundary is a real change of subject. */
+      .trust{border-bottom:1px solid var(--border);padding:34px 0 30px;
+        background:linear-gradient(to bottom,
+          transparent 0%,
+          color-mix(in srgb, var(--accent) 3.5%, transparent) 34%,
+          color-mix(in srgb, var(--accent) 3.5%, transparent) 100%);}
       .trust-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;max-width:1020px;margin:0 auto;}
       @media (max-width:860px){.trust-grid{grid-template-columns:1fr;gap:18px;}}
       .trust-item{display:flex;gap:11px;align-items:flex-start;}
@@ -3054,10 +2554,12 @@ def render_home() -> str:
 
     body = ("""
 <section class="hero">
+  <div class="hero-glow" aria-hidden="true"><i class="hg1"></i><i class="hg2"></i><i class="hg3"></i></div>
+  <div class="hero-grain" aria-hidden="true"></div>
   <div class="container-xl">
     <div class="hero-grid">
       <div class="hero-copy">
-        <h1 class="reveal">Every problem <span class="gradient-text">has a solution.</span></h1>
+        <h1 class="reveal">Every Problem <span class="gradient-text">Has A Solution.</span></h1>
         <p class="hero-slot-line reveal reveal-delay-1">
           <span>Tell it what you do &mdash;</span>
           <span class="hero-slot"><span id="heroWord">barber</span><span class="caret" aria-hidden="true"></span></span>
@@ -3163,7 +2665,7 @@ def render_home() -> str:
       </div>
     </div>
 """
-    + BOARD_HTML + """
+    + """
   </div>
 </section>
 
@@ -3814,8 +3316,8 @@ def render_home() -> str:
         title="One workspace that runs your whole business",
         description="The business system that already knows how yours runs. Bookings, clients, invoices, and an AI chief of staff that logs every move and never acts without your approval.",
         content_html=body, path="/",
-        extra_css=extra_css + BOARD_CSS + SPINE_CSS + DEVICE_BAND_CSS,
-        extra_scripts=extra_scripts + BOARD_SCRIPT + SPINE_SCRIPT + FOLD_SCRIPT,
+        extra_css=extra_css + SPINE_CSS + DEVICE_BAND_CSS,
+        extra_scripts=extra_scripts + SPINE_SCRIPT + FOLD_SCRIPT,
     )
 
 
