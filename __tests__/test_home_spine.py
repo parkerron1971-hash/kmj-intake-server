@@ -93,3 +93,31 @@ def test_the_page_holds_its_shape():
     prose = re.sub(r"<style.*?</style>|<script.*?</script>", " ", body, flags=re.S)
     words = len(re.sub(r"<[^>]+>", " ", prose).split())
     assert words <= 2400, f"{words} words on the home page"
+
+def test_the_page_offers_a_door_before_the_price():
+    """The rooms section is the only stop between the fold and pricing.
+
+    Measured 2026-08-20: 4,234px of page with nothing to press between
+    the hero CTA and the next one. The link that already sat here went
+    to /features, which is another page to read, not a way in.
+    """
+    body = _body(_home())
+    rooms = body.split('<section class="rooms"', 1)[1].split("</section>", 1)[0]
+    assert "rooms-cta" in rooms
+    assert 'href="/get-started"' in rooms
+    assert 'href="/features"' in rooms      # the reading door stays too
+
+
+def test_every_page_that_prints_the_closer_can_style_it():
+    """`.final-cta` is printed by three pages and was styled by none.
+
+    Its only rule lived in render_home's extra_css, which no other page
+    can reach; when the device band replaced home's closer the rule went
+    with it and nothing changed visibly on home — the breakage was on
+    /features, /compare and /about, which had never had it.
+    """
+    for name in ("render_features", "render_compare", "render_about",
+                 "render_home", "render_faq", "render_download", "render_get_started"):
+        html = getattr(marketing_pages, name)()
+        if 'class="final-cta"' in html:
+            assert ".final-cta{" in html, f"{name} prints the closer with no rule behind it"
