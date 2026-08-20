@@ -41,6 +41,37 @@ DESKTOP_RELEASES_URL = ""  # set to the GitHub Releases URL once installers publ
 ANDROID_APK_URL = os.environ.get("ANDROID_APK_URL", "").strip()
 PLAY_STORE_URL = os.environ.get("PLAY_STORE_URL", "").strip()
 
+def _public_contact_email() -> str:
+    """The address the public site prints.
+
+    Kevin, 2026-08-20: contact should land in the system, not in a
+    personal mailbox. It already can — `email_sender` routes mail for the
+    named platform locals (hello / support / contact / info / billing /
+    admin / kevin) into `platform_emails`, which is what Mission
+    Control's inbox reads. So when the inbound domain is live, the site
+    publishes hello@<that domain> and the contact form of the whole
+    business becomes a thread in the product.
+
+    Resolution order:
+      1. PUBLIC_CONTACT_EMAIL — an explicit override, for the case where
+         the address to publish isn't the one derived below.
+      2. hello@INBOUND_EMAIL_DOMAIN — set only when inbound mail is
+         actually configured, which is exactly when it is safe to print.
+      3. CONTACT_EMAIL — the founder mailbox.
+
+    Deliberately NOT "just print hello@mysolutionist.app": an address
+    whose MX isn't live bounces, and a bouncing contact address on the
+    about page is worse than an unglamorous one that works.
+    """
+    override = (os.environ.get("PUBLIC_CONTACT_EMAIL") or "").strip()
+    if override:
+        return override
+    domain = (os.environ.get("INBOUND_EMAIL_DOMAIN") or "").strip().lower()
+    if domain:
+        return f"hello@{domain}"
+    return CONTACT_EMAIL
+
+
 logger = logging.getLogger("marketing_pages")
 if not logger.handlers:
     h = logging.StreamHandler()
@@ -140,7 +171,7 @@ SHARED_CSS = """
   ::view-transition-new(page-main){animation:pgIn .26s cubic-bezier(.2,.7,.3,1) .06s backwards;}
   @keyframes pgOut{to{opacity:0;transform:translateY(-6px);}}
   @keyframes pgIn{from{opacity:0;transform:translateY(10px);}}
-  /* 340ms — Kevin compared 200 / 340 / 600 and picked this one */
+  /* 340ms — chosen against 200 and 600 side by side */
   ::view-transition-group(nav-current){animation-duration:.34s;
     animation-timing-function:cubic-bezier(.2,.7,.3,1);}
 
@@ -351,6 +382,16 @@ SHARED_CSS = """
     .card:hover, .btn-primary:hover, .nav-cta:hover{transform:none !important;}
   }
 
+  /* ─── card used by /download (and formerly /about) ───
+     This rule lived in render_about's extra_css while /download printed
+     the class three times — so the Get-the-App cards have never had a
+     background, a border or padding. A per-page stylesheet cannot reach
+     another page; shared chrome belongs in the shell. */
+  .company-card{padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:14px;}
+  .company-card h3{font-family:var(--font-heading);font-size:14px;color:var(--text-muted);
+    text-transform:uppercase;letter-spacing:1.4px;margin-bottom:10px;}
+  .company-card p{font-size:14px;color:var(--text-secondary);}
+
   /* ─── closing CTA (features / compare / about) ───
      This rule lived in render_home's extra_css until 2026-08-19, when
      the device band replaced home's closer and took the CSS with it.
@@ -470,7 +511,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
         <img class="logo" src="/assets/logo-nav.png" alt="The Solutionist System" style="height:28px;">
         <span class="brand-text">The Solutionist System</span>
       </span>
-      <span class="small">Built by The Solutionist System LLC · Michigan, USA</span>
+      <span class="small">Built by The Solutionist System LLC</span>
     </div>
     <div class="footer-links">
       <a href="/features">Features</a>
@@ -657,7 +698,7 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
         path=path,
         shared_css=SHARED_CSS,
         extra_css=extra_css,
-        contact_email=_html.escape(CONTACT_EMAIL),
+        contact_email=_html.escape(_public_contact_email()),
         business_name=_html.escape(BUSINESS_NAME),
         year=datetime.date.today().year,
         content=content_html,
@@ -2165,7 +2206,7 @@ DEVICE_BAND_CSS = """
          nothing left to soften, and stacked with the scene's own bottom
          stop it painted a flat black bar across the foot of the page.
          Both are gone; the screens simply end, on the section's own
-         ground. (Kevin, 2026-08-19: "looks like a black strip".) */
+         ground. (Reported 2026-08-19 as "a black strip" across the foot.) */
 
       /* ── the bloom behind the scene ──────────────────────────────
          Four blurred colour fields: accent blue carries it, cyan on the
@@ -2236,7 +2277,7 @@ DEVICE_BAND_CSS = """
          the screens START ABOVE the scene box: measured, that scrim's
          solid line landed 137-156px INSIDE the tops of all three screens
          and its end drew a hard horizontal edge across them. That edge is
-         what Kevin circled. Legibility is handled where it belongs — the
+         what was reported. Legibility is handled where it belongs — the
          copy gets clear air below it (.dv-scene margin) and a soft radial
          behind it (.dv-shade), neither of which has an edge to see. */
       .dv-shade{position:absolute;left:50%;top:-470px;width:1180px;height:480px;margin-left:-590px;z-index:3;
@@ -2651,7 +2692,7 @@ def render_home() -> str:
 
       /* ── the fold panel: the REAL replica, not a stand-in ──────────
          First pass built a simplified panel out of the SITE's tokens
-         (blue accent, site surfaces). Kevin's call: that misleads —
+         (blue accent, site surfaces). Ruled a misleading panel —
          it promises a workspace the product does not actually look
          like. So the fold now runs on the replica kit, the same
          vocabulary traced from the product and used by the six room
@@ -3436,7 +3477,7 @@ def render_home() -> str:
 
 
 <!-- ══ THE DEVICE BAND — the closer ══════════════════════════════════
-     This REPLACED the old `.final-cta` (Kevin, 2026-08-19). That block
+     This REPLACED the old `.final-cta` (2026-08-19). That block
      and this one do the same job — the last word before the footer —
      and stacking them would have asked for the same click twice. The
      beta line it carried lives on under the buttons.
@@ -4322,57 +4363,171 @@ def render_faq() -> str:
 # ══════════════════════════════════════════════════════════════════════
 
 def render_about() -> str:
+    """Why the system exists — not who built it.
+
+    Rewritten 2026-08-20 on Kevin's ask: the page was a founder note with
+    his name, his signature, the state the LLC was formed in, and a card
+    listing the stack. None of that is the reason a visitor is on this
+    page. What they are actually asking is "why does this exist, and do
+    these people think about it the way I do?" — so the page answers that,
+    in the company's voice, with the three principles as the proof.
+
+    Deliberately gone: the founder card, the name and signature, every
+    mention of where the company was formed, and the stack card (an
+    inventory of our attack surface, published for no one's benefit).
+
+    Michigan still appears in the Terms (governing law) and the Privacy
+    Policy (the registered entity) — those are legal statements, not
+    marketing copy, and removing them there would be wrong.
+    """
     extra_css = """
-      .founder{position:relative;padding:36px;background:var(--surface);border:1px solid var(--border);border-radius:18px;display:grid;grid-template-columns:80px 1fr;gap:24px;align-items:flex-start;}
-      @media (max-width: 640px){.founder{grid-template-columns:1fr;padding:28px;}}
-      .founder-avatar{width:80px;height:80px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg, var(--accent), var(--info));color:var(--text-primary);font-family:var(--font-heading);font-weight:600;font-size:28px;box-shadow:0 4px 26px var(--glow);}
-      .founder-body p{font-size:15.5px;line-height:1.7;color:var(--text-secondary);margin-bottom:14px;}
-      .founder-body p:last-of-type{margin-bottom:0;}
-      .founder-sig{margin-top:16px;font-family:var(--font-heading);font-weight:600;color:var(--text-primary);font-size:15px;}
-      .founder-sig .small{display:block;font-family:var(--font-body);font-weight:400;font-size:12px;color:var(--text-dim);margin-top:2px;}
+      .why-body{max-width:660px;margin:0 auto;}
+      .why-body p{font-size:16.5px;line-height:1.75;color:var(--text-secondary);margin-bottom:18px;}
+      .why-body p:last-child{margin-bottom:0;}
+      .why-body b{color:var(--text-primary);font-weight:600;}
+      .why-pull{margin:34px auto;max-width:660px;padding:22px 26px;border-left:2px solid var(--accent);
+        background:linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 70%);
+        font-family:var(--font-heading);font-size:21px;line-height:1.4;letter-spacing:-.02em;
+        color:var(--text-primary);}
+
+      /* Eight tools that never spoke to each other, and the thing that
+         replaced them. The page says it; this shows it. */
+      .stack-flow{display:grid;grid-template-columns:1fr 72px 1fr;align-items:center;gap:10px;
+        max-width:940px;margin:0 auto;}
+      .stack-cap{font-size:10px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;
+        color:var(--text-dim);margin-bottom:12px;display:block;}
+      .stack-eight{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;}
+      .stack-eight span{display:flex;align-items:center;gap:9px;padding:12px 13px;border-radius:10px;
+        font-size:13.5px;color:var(--text-secondary);border:1px dashed var(--border-strong);
+        background:rgba(255,255,255,.025);}
+      /* each one sitting on its own island is the point */
+      .stack-eight span::before{content:'';width:7px;height:7px;border-radius:2px;flex-shrink:0;
+        background:var(--text-dim);opacity:.55;}
+      .stack-arrow{position:relative;height:64px;}
+      .stack-arrow::before{content:'';position:absolute;left:0;right:14px;top:50%;height:2px;
+        margin-top:-1px;border-radius:2px;
+        background:linear-gradient(90deg, rgba(255,255,255,.10), var(--accent));}
+      .stack-arrow::after{content:'';position:absolute;right:0;top:50%;width:11px;height:11px;
+        margin-top:-5.5px;border-radius:50%;background:var(--accent);
+        box-shadow:0 0 16px var(--glow), 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);}
+      .stack-one{padding:24px;border-radius:16px;position:relative;overflow:hidden;
+        border:1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+        background:linear-gradient(160deg, color-mix(in srgb, var(--accent) 12%, transparent),
+                                            rgba(255,255,255,.02));
+        box-shadow:0 18px 50px -20px rgba(0,0,0,.7);}
+      .stack-one b{display:block;font-family:var(--font-heading);font-size:22px;font-weight:700;
+        letter-spacing:-.02em;color:var(--text-primary);}
+      .stack-one em{display:block;font-style:normal;font-size:13px;color:var(--text-muted);margin-top:8px;
+        line-height:1.6;}
+      @media (max-width:760px){
+        .stack-flow{grid-template-columns:1fr;gap:16px;}
+        .stack-arrow{height:44px;width:100%;}
+        .stack-arrow::before{left:50%;right:auto;top:0;bottom:14px;width:2px;height:auto;margin:0 0 0 -1px;
+          background:linear-gradient(180deg, rgba(255,255,255,.10), var(--accent));}
+        .stack-arrow::after{right:auto;left:50%;top:auto;bottom:0;margin:0 0 0 -5.5px;}
+      }
+
       .principles{display:grid;grid-template-columns:repeat(3, 1fr);gap:18px;margin-top:14px;}
       @media (max-width: 860px){.principles{grid-template-columns:1fr;}}
-      .principle{padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:14px;}
-      .principle .num{font-family:var(--font-heading);font-size:11px;font-weight:700;color:var(--accent);letter-spacing:1.4px;text-transform:uppercase;margin-bottom:10px;}
-      .principle h3{font-family:var(--font-heading);font-size:16px;color:var(--text-primary);margin-bottom:8px;}
-      .principle p{font-size:14px;color:var(--text-muted);line-height:1.6;}
-      .company-row{display:grid;grid-template-columns:repeat(2, 1fr);gap:18px;margin-top:14px;}
-      @media (max-width: 720px){.company-row{grid-template-columns:1fr;}}
-      .company-card{padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:14px;}
-      .company-card h3{font-family:var(--font-heading);font-size:14px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.4px;margin-bottom:10px;}
-      /* Moved off the home page 2026-08-20 — it answers "will you fall
-         behind?", which is an about-us question, not a first-fold one. */
+      .principle{padding:26px 24px;background:var(--surface);border:1px solid var(--border);
+        border-radius:14px;position:relative;}
+      .principle .num{font-family:var(--font-heading);font-size:11px;font-weight:700;color:var(--accent);
+        letter-spacing:1.4px;text-transform:uppercase;margin-bottom:10px;}
+      .principle h3{font-family:var(--font-heading);font-size:16.5px;color:var(--text-primary);margin-bottom:8px;}
+      .principle p{font-size:14px;color:var(--text-muted);line-height:1.65;}
+
       .about-engine p{font-size:15.5px;line-height:1.7;color:var(--text-secondary);margin-bottom:14px;}
       .about-engine p:last-child{margin-bottom:0;}
       .about-engine-close{padding:18px 20px;border-radius:14px;background:var(--surface);
         border:1px solid var(--border);color:var(--text-muted);font-size:14.5px;margin-top:6px;}
       .about-engine-close b{color:var(--text-primary);}
-      .company-card p{font-size:14px;color:var(--text-secondary);}
+
+      /* Who we are, with no address and no inventory of the stack. */
+      .ident{display:grid;grid-template-columns:repeat(3,1fr);gap:0;max-width:940px;margin:0 auto;
+        border:1px solid var(--border);border-radius:16px;overflow:hidden;background:var(--surface);}
+      .ident > div{padding:22px 24px;border-right:1px solid var(--border);}
+      .ident > div:last-child{border-right:none;}
+      .ident b{display:block;font-family:var(--font-heading);font-size:15px;color:var(--text-primary);
+        margin-bottom:5px;}
+      .ident span{font-size:13.5px;color:var(--text-muted);line-height:1.6;}
+      @media (max-width:760px){
+        .ident{grid-template-columns:1fr;}
+        .ident > div{border-right:none;border-bottom:1px solid var(--border);}
+        .ident > div:last-child{border-bottom:none;}
+      }
+
+      .reach{max-width:940px;margin:18px auto 0;padding:28px;border-radius:16px;
+        border:1px solid var(--border-strong);background:var(--bg-2);
+        display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:center;}
+      @media (max-width:760px){.reach{grid-template-columns:1fr;gap:18px;padding:24px;}}
+      .reach h3{font-family:var(--font-heading);font-size:18px;color:var(--text-primary);margin-bottom:10px;}
+      .reach-mail{font-family:var(--font-mono);font-size:16px;color:var(--accent);word-break:break-all;}
+      .reach-mail:hover{text-decoration:underline;}
+      .reach .small{display:block;font-size:13px;color:var(--text-dim);margin-top:8px;}
+      .reach-note{font-size:13.5px;color:var(--text-muted);line-height:1.7;padding-left:20px;
+        border-left:1px solid var(--border);}
+      @media (max-width:760px){.reach-note{padding-left:0;border-left:none;padding-top:16px;
+        border-top:1px solid var(--border);}}
+      .reach-note b{color:var(--text-secondary);font-weight:600;}
     """
-    body = """
+    contact = _public_contact_email()
+    body = f"""
 <section class="page-hero">
   <span class="orb orb-1" aria-hidden></span>
   <div class="container">
-    <span class="eyebrow reveal">About</span>
-    <h1 class="reveal reveal-delay-1">Built by a solo operator, <span class="gradient-text">for solo operators.</span></h1>
-    <p class="lead reveal reveal-delay-2" style="max-width:680px;margin:14px auto 0;">A small Michigan LLC building a system for the people who actually do the work.</p>
+    <span class="eyebrow reveal">Why this exists</span>
+    <h1 class="reveal reveal-delay-1">The work was never <span class="gradient-text">the problem.</span></h1>
+    <p class="lead reveal reveal-delay-2" style="max-width:640px;margin:14px auto 0;">The eight tools
+       around it were.</p>
   </div>
 </section>
 
 <section>
-  <div class="container-narrow">
-    <div class="section-head reveal" style="margin-bottom:32px;text-align:left;">
-      <span class="eyebrow">From the founder</span>
+  <div class="container">
+    <div class="why-body reveal">
+      <p>Every solo operator runs the same scattered stack. Notes in one app. Invoices in another.
+         Booking somewhere else. Content in a fourth. Goals in a spreadsheet, and a CRM nobody opens.
+         Each one is good at its single job. <b>None of them know the others exist.</b></p>
+      <p>So the operator becomes the integration layer. Copying a name from one tab into another.
+         Remembering what was promised in an email while looking at a calendar that never heard about
+         it. Reconciling a number by hand because two tools disagree. The friction between the tools
+         quietly costs more hours than the work does.</p>
     </div>
-    <div class="founder reveal reveal-delay-1">
-      <div class="founder-avatar">KM</div>
-      <div class="founder-body">
-        <p>I built the Solutionist System because I was tired of running my own business across eight tools that didn't talk to each other.</p>
-        <p>Every solo operator I know lives in the same chaos: Notion for notes, Stripe for invoices, Calendly for booking, Buffer for content, a spreadsheet for goals, a CRM nobody actually uses. The friction between tools eats more time than the actual work.</p>
-        <p>So we built one workspace where everything lives together, with an AI Chief of Staff that actually knows your business, not generic prompts. We're growing it carefully in private beta. If you're a coach, pastor, ministry leader, consultant, or solo studio, I'd love to talk.</p>
-        <div class="founder-sig">
-          Kevin McCloud Jr.
-          <span class="small">Founder &middot; The Solutionist System LLC</span>
+
+    <p class="why-pull reveal">The industry&rsquo;s answer has been enterprise software with the seats
+       removed. That is not the same thing as software built for one person.</p>
+
+    <div class="why-body reveal">
+      <p>A system for one operator has to hold the whole business at once, because that is how the
+         operator holds it. The invoice knows who the client is. The calendar knows what was sold.
+         The follow-up knows what was said last time. That only works if it is <b>one system with one
+         brain</b>, not eight subscriptions with an export button.</p>
+      <p>That is the whole reason this exists: one workspace where the parts share what they know, and
+         a chief of staff that reads the real thing &mdash; your contacts, your money, your week &mdash;
+         instead of guessing at it.</p>
+    </div>
+  </div>
+</section>
+
+<section style="padding-top:0;">
+  <div class="container">
+    <div class="stack-flow reveal">
+      <div>
+        <span class="stack-cap">What you have now</span>
+        <div class="stack-eight" aria-hidden="true">
+        <span>Notes</span><span>Invoices</span>
+        <span>Booking</span><span>Content</span>
+        <span>Goals</span><span>CRM</span>
+        <span>Email</span><span>Files</span>
+        </div>
+      </div>
+      <div class="stack-arrow" aria-hidden="true"></div>
+      <div>
+        <span class="stack-cap">What this is</span>
+        <div class="stack-one">
+        <b>One system</b>
+        <em>Contacts, money, the calendar, content and goals in one place &mdash;
+            and a Chief that reads all of it every turn.</em>
         </div>
       </div>
     </div>
@@ -4383,50 +4538,29 @@ def render_about() -> str:
   <div class="container">
     <div class="section-head reveal">
       <span class="eyebrow">How we build</span>
-      <h2>Three principles we won't break.</h2>
+      <h2>Three principles we won&rsquo;t break.</h2>
     </div>
     <div class="principles">
       <div class="principle reveal">
         <div class="num">01</div>
         <h3>Real data, never invented metrics.</h3>
-        <p>Every number in the workspace comes from your actual data. We never fake counts, never invent "engagement scores" without a source. If we don't have the data to back a metric, the metric doesn't ship.</p>
+        <p>Every number in the workspace comes from your actual data. We never fake counts, never
+           invent &ldquo;engagement scores&rdquo; without a source. If we don&rsquo;t have the data to
+           back a metric, the metric doesn&rsquo;t ship.</p>
       </div>
       <div class="principle reveal reveal-delay-1">
         <div class="num">02</div>
         <h3>AI in service of judgment, not instead of it.</h3>
-        <p>Chief drafts, suggests, and assists. You approve. Actions are explicit. No autonomous decisions on your behalf without your sign-off. Your business stays your business.</p>
+        <p>Chief drafts, suggests and assists. You approve. Anything that touches money, messages a
+           client, or can&rsquo;t be taken back asks first &mdash; and every action is logged in plain
+           language and reversible.</p>
       </div>
       <div class="principle reveal reveal-delay-2">
         <div class="num">03</div>
-        <h3>Single operator, single workspace.</h3>
-        <p>We're not building enterprise SaaS. Every design decision optimizes for one person running their whole business. If a feature only makes sense for a 20-person team, we don't build it.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section>
-  <div class="container-narrow">
-    <div class="section-head reveal" style="text-align:left;">
-      <span class="eyebrow">The company</span>
-      <h2>The Solutionist System LLC.</h2>
-    </div>
-    <div class="company-row">
-      <div class="company-card reveal">
-        <h3>Founded</h3>
-        <p>2025 in Michigan, USA. A real LLC, real legal entity, registered with the state.</p>
-      </div>
-      <div class="company-card reveal reveal-delay-1">
-        <h3>What we ship</h3>
-        <p>The Solutionist System: one product, no spinouts, no pivots. Built to last for the people who use it.</p>
-      </div>
-      <div class="company-card reveal">
-        <h3>Stack</h3>
-        <p>React + TypeScript + Vite (Tauri desktop), Python + FastAPI on Railway, Supabase for data, Resend for email, Anthropic for AI.</p>
-      </div>
-      <div class="company-card reveal reveal-delay-1">
-        <h3>Contact</h3>
-        <p><a href="mailto:kmjcreativesolution@gmail.com" style="color:var(--accent);">kmjcreativesolution@gmail.com</a>. Replies usually within a day.</p>
+        <h3>One operator, one workspace.</h3>
+        <p>We&rsquo;re not building enterprise software with the seats removed. Every decision
+           optimises for one person running their whole business. If a feature only makes sense for a
+           twenty-person team, we don&rsquo;t build it.</p>
       </div>
     </div>
   </div>
@@ -4439,9 +4573,42 @@ def render_about() -> str:
       <h2 style="margin-top:12px;">The AI world moves fast. <span class="gradient-text">You don&rsquo;t have to.</span></h2>
     </div>
     <div class="about-engine reveal">
-      <p>Every few months someone announces a smarter model. For most businesses that&rsquo;s another thing to learn, another tool to evaluate, another migration nobody has time for.</p>
-      <p>Here it&rsquo;s just a better engine dropped into the same car. Your workflows don&rsquo;t change. Your data doesn&rsquo;t move. You don&rsquo;t retrain. The system you opened this morning quietly got sharper overnight, and you find out because the work got easier, not because you got an email about it.</p>
-      <p class="about-engine-close">We are not in the AI business. We&rsquo;re in the <b>how-your-business-actually-runs business.</b> The AI is just the engine, and engines are supposed to get better.</p>
+      <p>Every few months someone announces a smarter model. For most businesses that&rsquo;s another
+         thing to learn, another tool to evaluate, another migration nobody has time for.</p>
+      <p>Here it&rsquo;s just a better engine dropped into the same car. Your workflows don&rsquo;t
+         change. Your data doesn&rsquo;t move. You don&rsquo;t retrain. The system you opened this
+         morning quietly got sharper overnight, and you find out because the work got easier, not
+         because you got an email about it.</p>
+      <p class="about-engine-close">We are not in the AI business. We&rsquo;re in the
+         <b>how-your-business-actually-runs business.</b> The AI is just the engine, and engines are
+         supposed to get better.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="eyebrow">The company</span>
+      <h2>Who you&rsquo;re dealing with.</h2>
+    </div>
+    <div class="ident reveal">
+      <div><b>{BUSINESS_NAME}</b><span>A real company with a real legal entity behind it &mdash;
+        not a side project that disappears.</span></div>
+      <div><b>One product</b><span>The Solutionist System. No spinouts, no pivots, no second bet
+        that takes the attention.</span></div>
+      <div><b>Private beta</b><span>Growing deliberately, so the people already inside get the
+        attention they were promised.</span></div>
+    </div>
+
+    <div class="reach reveal">
+      <div>
+        <h3>Reach a person</h3>
+        <a class="reach-mail" href="mailto:{contact}">{contact}</a>
+        <span class="small">Replies usually within a day.</span>
+      </div>
+      <p class="reach-note">Mail sent here lands in <b>the same inbox the system runs on</b>. We read
+         it in Chief, next to everything else that needs an answer &mdash; the same way you would.</p>
     </div>
   </div>
 </section>
@@ -4450,19 +4617,21 @@ def render_about() -> str:
   <div class="container">
     <span class="eyebrow reveal">Want to talk?</span>
     <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Apply for access, or just say hi.</h2>
-    <a class="btn-primary reveal reveal-delay-3" href="/get-started" style="margin-top:14px;">Apply for Access →</a>
+    <a class="btn-primary reveal reveal-delay-3" href="/get-started">Apply for Access &rarr;</a>
   </div>
 </section>
 """
     return _render_shell(
         title="About",
-        description="Built by Kevin McCloud Jr. at The Solutionist System LLC. A Michigan-based company building one workspace for small businesses.",
+        description=("Why the Solutionist System exists: one workspace for the person who runs the "
+                     "whole business, instead of eight tools that never speak to each other."),
         content_html=body, path="/about", active="about", extra_css=extra_css,
     )
 
 
 # ══════════════════════════════════════════════════════════════════════
-# GET STARTED — intake form (form POSTs to /api/leads via fetch)
+# DOWNLOAD / GET THE APP, then GET STARTED — the intake form
+# (the form POSTs to /api/leads via fetch)
 # ══════════════════════════════════════════════════════════════════════
 
 def render_download() -> str:
