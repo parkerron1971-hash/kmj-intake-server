@@ -117,21 +117,40 @@ def test_nobody_real_is_in_the_shot():
     for real in ("Kevin", "McCloud", "KMJ", "kmjcreativesolution"):
         assert real not in band
 
-def test_nothing_is_painted_over_the_foot_of_the_art():
-    """No bottom fade, on the band or on the scene.
+def test_nothing_is_painted_over_the_art_at_either_end():
+    """No scrim on the band, and none on the scene.
 
-    Shipped with two of them stacked — a 150px ramp to solid --bg on the
-    section plus a stop at 90% on the scene — from when the screens hung
-    past the bottom and ended on a hard cut. Once they sat inside the
-    band the pair had nothing to soften and read as a black bar across
-    the foot of the page (Kevin, 2026-08-19). The scene keeps only its
-    TOP scrim, which is what the copy sits on.
+    Three shipped and all three had to come out (Kevin, 2026-08-19/20):
+
+      * `.dv::after`, 150px ramping to solid --bg at the foot,
+      * `.dv-scene::after`'s bottom stop at 90% opaque,
+      * `.dv-scene::after`'s TOP stop, solid --bg at the top of the scene.
+
+    The first two blacked out the bottom of every screen. The third was
+    worse than it looked: the stage is taller than the scene and overflows
+    upward, so the screens START ABOVE the scene box, and that scrim's
+    solid line landed 137-156px INSIDE their tops and ended in a hard
+    horizontal edge across all three. Every one of them was added to
+    soften a crop that a later pass had already removed.
+
+    Legibility belongs to the copy, not to a wash over the product: clear
+    air below the text, and a soft radial behind it.
     """
     css = marketing_pages.DEVICE_BAND_CSS
     assert ".dv::after{" not in css, "the band's bottom fade is back"
-    rule = css.split(".dv-scene::after{", 1)[1].split("}", 1)[0]
-    assert "var(--bg) 0%" in rule                      # top scrim stays
-    assert "100%" not in rule, "the scene has a bottom stop again"
+    assert ".dv-scene::after{" not in css, "the scene scrim is back"
+
+
+def test_the_copy_gets_air_instead_of_a_scrim():
+    """The art starts below the text, and the wash sits on the text."""
+    css = marketing_pages.DEVICE_BAND_CSS
+    scene = css.split(".dv-scene{", 1)[1].split("}", 1)[0]
+    gap = int(re.search(r"margin-top:(\d+)px", scene).group(1))
+    assert gap >= 80, f"only {gap}px between the copy and the scene"
+    shade = css.split(".dv-shade{", 1)[1].split("}", 1)[0]
+    top = int(re.search(r"top:-(\d+)px", shade).group(1))
+    height = int(re.search(r"height:(\d+)px", shade).group(1))
+    assert top >= height - 40, "the shade hangs into the art instead of backing the copy"
 
 
 def test_the_inventory_list_is_not_hidden_under_the_drawer():
