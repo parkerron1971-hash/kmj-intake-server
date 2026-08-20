@@ -63,6 +63,17 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "payload": ["offering_id", "offering_name", "delta", "new_qty",
                     "reason", "actor"],
     },
+    "stock_counted": {
+        "source": ("inventory_count finish_count — ONE row per closed "
+                   "stocktake, carrying every counted line INCLUDING the "
+                   "ones that matched. It is the audit trail (\"we counted "
+                   "it and it was right\") and the only reason repeat-"
+                   "variance detection works with no extra table; the "
+                   "lines that actually moved also get their own "
+                   "stock_adjusted rows"),
+        "payload": ["counted", "off", "units_short", "units_over",
+                    "value_short", "note", "actor", "finished_at", "items"],
+    },
     "payment_received": {
         "source": "chief_of_staff manual marks",
         "payload": ["invoice_id", "amount"],

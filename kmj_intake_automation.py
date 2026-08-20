@@ -378,6 +378,11 @@ app.include_router(store_router)
 # registered after store_router because it imports its inventory helper.
 from inventory_scan import router as inventory_scan_router
 app.include_router(inventory_scan_router)
+# SCAN THE SHELF rung two (2026-08-20) - the count session: one submit
+# closes a stocktake, sets every counted product to what is on the shelf
+# and answers with the variance.
+from inventory_count import router as inventory_count_router
+app.include_router(inventory_count_router)
 # Digital delivery (2026-07-31) - hosted product files + validated downloads
 from store_files import router as store_files_router
 app.include_router(store_files_router)
