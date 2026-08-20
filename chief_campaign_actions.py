@@ -156,6 +156,19 @@ async def handle_launch_campaign(client, biz, action) -> Dict[str, Any]:
         return _fail("launch_campaign", _detail_str(e))
     summary = core["audience_preview"]
     launched = core["campaign"]
+    # THE FOLLOW-THROUGH — a campaign is judged at a checkpoint, not at
+    # the first reply, so the watch reports on the whole audience a week
+    # out instead of closing the moment one person answers.
+    try:
+        import outcome_watch
+        await outcome_watch.open_watch_async(
+            biz["id"], "campaign_replies", launched.get("id"),
+            label=f"Campaign '{launched.get('name')}' to {summary['count']} people",
+            subject=launched,
+            facts={"name": launched.get("name"),
+                   "audience_at_launch": summary.get("count")})
+    except Exception as _e:
+        logger.warning(f"[follow-through] campaign watch not opened: {_e}")
     return {
         "type": "launch_campaign",
         "campaign_id": launched.get("id"),

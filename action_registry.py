@@ -193,6 +193,11 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                               "prepaid and not yet consumed"),
     "unbilled_time":       _r("totals unbilled time_entries — hours worked and not yet "
                               "charged, for one client or the whole firm"),
+    "follow_through":      _r("the open loops Chief is still waiting on plus the "
+                              "recently-closed ones, read from chief_outcome_watches. "
+                              "Rows are written by the sweep re-reading invoices, "
+                              "offerings, campaigns and events; this verb reports what "
+                              "is already recorded and changes nothing"),
     "campaign_status":     _r("campaigns + send progress from the campaign_sends ledger; "
                               "replies/bookings surfaced as activity, not attribution"),
     "list_expenses":       _r("lists business_expenses rows with an honest total; same "
