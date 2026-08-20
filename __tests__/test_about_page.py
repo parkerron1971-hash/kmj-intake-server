@@ -123,3 +123,35 @@ def test_cards_are_styled_on_every_page_that_prints_them():
         html = getattr(marketing_pages, f)()
         if 'class="company-card' in html:
             assert ".company-card{" in html, f"{f} prints unstyled cards"
+
+class TestTheIntakeFlowSpeaksAsATeam:
+    """Kevin, 2026-08-20: "Solutionist Team or someone from the team".
+
+    /about stopped being a bio in the same pass, but the moment someone
+    actually applies was still a named personal promise: the page said
+    "Kevin reaches out", the confirmation email said the same, was signed
+    with his full name and title, and arrived from "Kevin at Solutionist".
+    """
+
+    def test_the_page_promises_the_team(self):
+        html = marketing_pages.render_get_started()
+        assert "Someone from the team reaches out" in html
+        for named in ("Kevin", "McCloud", "He&rsquo;ll", "He'll"):
+            assert named not in html
+
+    def test_the_confirmation_email_does_too(self):
+        """The body is built inside the /api/leads handler, so this reads
+        the template it is built from rather than sending real mail."""
+        src = pathlib.Path(marketing_pages.__file__).read_text(encoding="utf-8")
+        block = src.split("lead_subject = ", 1)[1].split("except Exception", 1)[0]
+        assert "Someone from the team will reach out" in block
+        assert "The Solutionist Team" in block
+        assert "Kevin" not in block and "McCloud" not in block
+        assert 'from_name="The Solutionist Team"' in block
+
+    def test_a_reply_reaches_the_inbox_the_copy_promises(self, monkeypatch):
+        """The mail says "it comes straight to the team", so Reply-To has
+        to be the resolved public address, not a hardcoded mailbox."""
+        src = pathlib.Path(marketing_pages.__file__).read_text(encoding="utf-8")
+        block = src.split("lead_subject = ", 1)[1].split("except Exception", 1)[0]
+        assert "reply_to=_public_contact_email()" in block

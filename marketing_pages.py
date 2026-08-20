@@ -4862,7 +4862,7 @@ def render_get_started() -> str:
           </li>
           <li>
             <span class="num">2</span>
-            <span class="text"><strong>Kevin reaches out within 24 hours,</strong> usually faster. He'll ask a few questions to make sure Solutionist is a fit for your business.</span>
+            <span class="text"><strong>Someone from the team reaches out within 24 hours,</strong> usually faster. We&rsquo;ll ask a few questions to make sure Solutionist is a fit for your business.</span>
           </li>
           <li>
             <span class="num">3</span>
@@ -4991,18 +4991,18 @@ async def handle_lead_intake(req: LeadIntakeRequest) -> Dict[str, Any]:
 <h2 style="color:#1D63E6;margin-bottom:14px;">Thanks for applying, {_html.escape(name.split()[0])}.</h2>
 <p style="font-size:15px;color:#333;">We got your application for the Solutionist System private beta. Here's what happens next:</p>
 <ol style="font-size:14px;color:#444;padding-left:20px;margin:18px 0;">
-<li style="margin-bottom:8px;"><strong>Kevin will reach out within 24 hours,</strong> usually faster. He'll ask a few questions to make sure we're a fit for what you're building.</li>
+<li style="margin-bottom:8px;"><strong>Someone from the team will reach out within 24 hours,</strong> usually faster. We'll ask a few questions to make sure we're a fit for what you're building.</li>
 <li style="margin-bottom:8px;"><strong>If it's a fit, we'll set up personal onboarding:</strong> about 30 minutes, we walk you through the workspace and get you running.</li>
 <li><strong>You'll get grandfathered pricing</strong> when we launch publicly.</li>
 </ol>
-<p style="font-size:14px;color:#666;margin-top:18px;">Questions before then? Just reply to this email. It goes straight to Kevin.</p>
-<p style="margin-top:24px;font-size:14px;color:#444;">Talk soon,<br><strong>Kevin McCloud Jr.</strong><br>Founder, The Solutionist System LLC</p>
+<p style="font-size:14px;color:#666;margin-top:18px;">Questions before then? Just reply to this email &mdash; it comes straight to the team.</p>
+<p style="margin-top:24px;font-size:14px;color:#444;">Talk soon,<br><strong>The Solutionist Team</strong><br>The Solutionist System LLC</p>
 </body></html>"""
         try:
             await send_via_resend(
                 to_email=email, to_name=name,
-                from_email=from_email, from_name="Kevin at Solutionist",
-                subject=lead_subject, body=lead_body, reply_to=CONTACT_EMAIL,
+                from_email=from_email, from_name="The Solutionist Team",
+                subject=lead_subject, body=lead_body, reply_to=_public_contact_email(),
             )
         except Exception as e:
             logger.warning(f"lead confirmation email failed: {e}")
