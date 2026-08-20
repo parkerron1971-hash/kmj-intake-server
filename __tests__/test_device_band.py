@@ -116,3 +116,43 @@ def test_nobody_real_is_in_the_shot():
     assert "Andre Whitfield" in band and "Fade &amp; Co." in band
     for real in ("Kevin", "McCloud", "KMJ", "kmjcreativesolution"):
         assert real not in band
+
+def test_nothing_is_painted_over_the_foot_of_the_art():
+    """No bottom fade, on the band or on the scene.
+
+    Shipped with two of them stacked — a 150px ramp to solid --bg on the
+    section plus a stop at 90% on the scene — from when the screens hung
+    past the bottom and ended on a hard cut. Once they sat inside the
+    band the pair had nothing to soften and read as a black bar across
+    the foot of the page (Kevin, 2026-08-19). The scene keeps only its
+    TOP scrim, which is what the copy sits on.
+    """
+    css = marketing_pages.DEVICE_BAND_CSS
+    assert ".dv::after{" not in css, "the band's bottom fade is back"
+    rule = css.split(".dv-scene::after{", 1)[1].split("}", 1)[0]
+    assert "var(--bg) 0%" in rule                      # top scrim stays
+    assert "100%" not in rule, "the scene has a bottom stop again"
+
+
+def test_the_inventory_list_is_not_hidden_under_the_drawer():
+    """The table has its own lane beside the drafted order.
+
+    Underneath it, the only part of the list clearing the drawer was the
+    on-hand column, so the screen read as a black panel with loose digits
+    in it instead of as an inventory.
+    """
+    css = marketing_pages.DEVICE_BAND_CSS
+    inv = css.split(".dv-inv{", 1)[1].split("}", 1)[0]
+    m = re.search(r"margin-left:(\d+)px", inv)
+    assert m, "the table is back underneath the drawer"
+    po = css.split(".dv-po{", 1)[1].split("}", 1)[0]
+    left = int(re.search(r"left:(\d+)px", po).group(1))
+    width = int(re.search(r"width:(\d+)px", po).group(1))
+    assert int(m.group(1)) >= left + width, "the table still runs under the drawer"
+
+
+def test_the_list_fills_its_panel():
+    """A stretched panel with a handful of rows is the same black box."""
+    band = _band(marketing_pages.render_home())
+    rows = band.count('<div class="t ') + band.count('<div class="t"')
+    assert rows >= 12, f"only {rows} inventory rows — the panel will show bare"
