@@ -322,6 +322,10 @@ app.include_router(bills_router)
 # primary link, and suppliers_router is the only thing that maintains them.
 from suppliers_router import router as suppliers_router
 app.include_router(suppliers_router)
+# THE SOURCING DESK stage 1 - find vendors on the live web. Metered as an
+# AI action on every tier, plus a per-business daily circuit breaker.
+from sourcing_router import router as sourcing_router
+app.include_router(sourcing_router)
 # Phase I.1 — Double-entry General Ledger (backfill + verify)
 from gl_router import router as gl_router
 app.include_router(gl_router)
