@@ -317,6 +317,11 @@ app.include_router(contacts_import_router)
 # Phase H.1 — Accounts Payable (bills + recurring bills)
 from bills_router import router as bills_router
 app.include_router(bills_router)
+# THE SOURCING DESK stage 0 — a vendor as an entity instead of two free-text
+# columns on a product. offerings.supplier_name/email stay as a cache of the
+# primary link, and suppliers_router is the only thing that maintains them.
+from suppliers_router import router as suppliers_router
+app.include_router(suppliers_router)
 # Phase I.1 — Double-entry General Ledger (backfill + verify)
 from gl_router import router as gl_router
 app.include_router(gl_router)
