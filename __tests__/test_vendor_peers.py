@@ -136,6 +136,38 @@ def test_a_domain_from_their_own_search_results_is_askable(monkeypatch):
     assert out["peers"]["acme.com"]["any"] == 3
 
 
+def test_the_answer_comes_back_under_the_key_the_caller_sent(monkeypatch):
+    """Otherwise every caller has to reimplement the domain rule to match
+    a result to the vendor it belongs to — a third copy of one rule, and
+    a third thing to drift."""
+    _install(monkeypatch,
+             sharing_rows=[{"business_id": BIZ, "opted_out_at": None}],
+             suppliers=[{"domain": "northwind.com"}],
+             rpc=lambda b: [{"peers_any": 6, "peers_trade": None,
+                             "shared": True, "trade": "agency"}])
+    raw = "https://www.Northwind.com/wholesale?x=1"
+    out = sr.peer_counts(BIZ, sr.PeersBody(domains=[raw]), user=_U())
+    assert out["peers"][raw]["any"] == 6
+
+
+def test_two_spellings_of_one_vendor_each_get_their_own_key(monkeypatch):
+    asked = []
+
+    def _rpc(body):
+        asked.append(body["p_domain"])
+        return [{"peers_any": 4, "peers_trade": None, "shared": True,
+                 "trade": "agency"}]
+
+    _install(monkeypatch,
+             sharing_rows=[{"business_id": BIZ, "opted_out_at": None}],
+             suppliers=[{"domain": "northwind.com"}], rpc=_rpc)
+    a, b = "www.northwind.com", "orders@northwind.com"
+    out = sr.peer_counts(BIZ, sr.PeersBody(domains=[a, b]), user=_U())
+    assert asked == ["northwind.com"], "asked the database twice for one vendor"
+    assert out["peers"][a]["any"] == 4
+    assert out["peers"][b]["any"] == 4
+
+
 def test_the_request_is_capped(monkeypatch):
     asked = []
 
