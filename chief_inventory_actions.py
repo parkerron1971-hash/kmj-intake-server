@@ -367,6 +367,30 @@ async def handle_set_reorder_plan(client, biz, action) -> Dict[str, Any]:
     }
 
 
+def _primary_supplier(business_id: str, offering_id: str):
+    """The vendor ENTITY behind this product, when there is one.
+
+    offerings.supplier_name/email are a cache of the primary link and are
+    enough to ADDRESS the order; they cannot carry the trade account
+    number, which lives on the vendor. Best-effort on purpose — a PO
+    without an account line is still a valid PO, so a lookup failure must
+    never stop somebody ordering stock.
+    """
+    try:
+        links = sb_clients.sb_get_as_service(
+            f"/offering_suppliers?offering_id=eq.{offering_id}"
+            f"&business_id=eq.{business_id}&is_primary=is.true"
+            f"&select=supplier_id&limit=1") or []
+        if not links:
+            return None
+        sup = sb_clients.sb_get_as_service(
+            f"/suppliers?id=eq.{links[0]['supplier_id']}&select=*&limit=1") or []
+        return sup[0] if sup else None
+    except Exception as e:
+        logger.warning(f"[inventory] supplier lookup failed (non-fatal): {e}")
+        return None
+
+
 async def handle_draft_purchase_order(client, biz, action) -> Dict[str, Any]:
     offering = await _resolve_sellable(client, biz, action,
                                        "draft_purchase_order")
@@ -394,7 +418,9 @@ async def handle_draft_purchase_order(client, biz, action) -> Dict[str, Any]:
                      f"set one with the reorder plan")
 
     from reorder_engine import compose_purchase_order
-    po = compose_purchase_order(biz, offering, qty)
+    supplier = await asyncio.to_thread(
+        _primary_supplier, str(biz["id"]), str(offering["id"]))
+    po = compose_purchase_order(biz, offering, qty, supplier=supplier)
     pending = offering.get("reorder_pending_at")
     note = (f" Heads up: a PO for {name} already went out "
             f"({str(pending)[:10]}) and the restock hasn't been recorded "
@@ -453,7 +479,9 @@ async def handle_send_purchase_order(client, biz, action) -> Dict[str, Any]:
     import os
     import email_sender
     from reorder_engine import compose_purchase_order
-    po = compose_purchase_order(biz, offering, qty)
+    supplier = await asyncio.to_thread(
+        _primary_supplier, str(biz["id"]), str(offering["id"]))
+    po = compose_purchase_order(biz, offering, qty, supplier=supplier)
     reply_to = email_sender.build_routed_reply_to(str(biz["id"]), None)
     try:
         await email_sender.send_via_resend(

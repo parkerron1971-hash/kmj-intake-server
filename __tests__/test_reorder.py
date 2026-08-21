@@ -103,7 +103,13 @@ def test_compose_purchase_order():
          "supplier_name": "Acme Apparel", "supplier_email": "orders@acme.com"},
         25)
     assert po["to_email"] == "orders@acme.com"
-    assert po["po_number"].startswith("PO-") and "ABCDEF" in po["po_number"]
+    # The number must NOT be derived from the product id any more. That
+    # was the collision: two orders of one product on one day shared a
+    # PO number, which is how a supplier's invoice loses the order it
+    # answers. This assertion used to pin that behaviour; it now pins
+    # its absence.
+    assert po["po_number"].startswith("PO-")
+    assert "ABCDEF" not in po["po_number"].upper()
     assert "25 x Blueprint Tee" in po["subject"] and "Studio One" in po["subject"]
     for needle in ("Hello Acme Apparel,", "Quantity: 25", "SKU: TEE-1",
                    "Studio One"):
