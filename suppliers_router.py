@@ -734,3 +734,48 @@ def site_preview_for(supplier_id: str,
         "new_emails": [e for e in (result.get("emails") or [])
                        if e.lower() not in known],
     }
+
+
+class ReadBody(BaseModel):
+    """Which page to read. Constrained to the vendor's OWN site below —
+    a caller may not name an arbitrary URL, or this becomes a proxy for
+    anything on the internet, wearing our IP address."""
+    url: Optional[str] = None
+
+
+@router.post("/{supplier_id}/read")
+def read_vendor_page(supplier_id: str, body: ReadBody,
+                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """The vendor's actual page, sanitised for display inside the app.
+
+    `url` is optional and, when given, must be on the SAME HOST as the
+    vendor's own site. That is what stops this being an open proxy: the
+    practitioner can follow the wholesale link they were just shown, and
+    cannot point it at anything else.
+    """
+    import site_reader
+    import agent_readiness
+
+    sup = _supplier_or_404(supplier_id)
+    _reader(str(sup["business_id"]), user)
+
+    home = (sup.get("website") or "").strip()
+    if not home and (sup.get("email") or "").strip():
+        home = "https://" + (sup["email"].split("@")[-1] or "").strip()
+    if not home:
+        raise HTTPException(400, {
+            "error": "no_site",
+            "message": "Add their website first — there's nothing to read without one.",
+        })
+
+    target = (body.url or "").strip() or home
+    vendor_host = agent_readiness.normalise_domain(home)
+    target_host = agent_readiness.normalise_domain(target)
+    if not target_host or target_host != vendor_host:
+        raise HTTPException(400, {
+            "error": "off_site",
+            "message": ("That page isn't on this vendor's site. Open it in a new "
+                        "tab instead."),
+        })
+
+    return {"ok": True, "page": site_reader.read(target)}
