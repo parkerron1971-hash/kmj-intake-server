@@ -2107,7 +2107,19 @@ def render_home() -> str:
       @supports not ((-webkit-background-clip:text) or (background-clip:text)){
         .hero h1 .gradient-text{color:var(--accent);-webkit-text-fill-color:var(--accent);}
       }
-      .hero-turn{max-width:44ch;margin:0 0 26px;font-size:clamp(16px,1.25vw,17.5px);
+      /* The anchor: the one line that says what the system IS. The h1 is
+         a maxim and the slot line below is a demo — without a category
+         between them a cold visitor is told the product is better before
+         being told what it is. It sits one tier brighter than the muted
+         copy under it because it is the sentence the rest of the fold
+         spends its time arguing. */
+      .hero-anchor{max-width:46ch;margin:0 0 20px;
+        font-family:var(--font-body);font-weight:400;
+        font-size:clamp(16.5px,1.42vw,20px);line-height:1.5;
+        color:var(--text-secondary);text-wrap:balance;}
+      .hero-anchor b{color:var(--text-primary);font-weight:600;}
+      /* demoted a step so the anchor above reads as the louder of the two */
+      .hero-turn{max-width:44ch;margin:0 0 26px;font-size:clamp(15px,1.12vw,16.5px);
         font-family:var(--font-body);font-weight:400;line-height:1.55;
         color:var(--text-muted);text-wrap:pretty;}
       .hero-turn b{color:var(--text-primary);font-weight:500;}
@@ -2275,27 +2287,23 @@ def render_home() -> str:
 
       @media (max-width:1000px){
         .hero{padding-top:52px;}
-        .hero-grid{grid-template-columns:1fr;gap:36px;}
+        .hero-grid{display:flex;flex-direction:column;align-items:stretch;gap:24px;}
         .hero h1{font-size:clamp(32px,7.2vw,54px);}
+        .hero-anchor{max-width:60ch;}
         .hero-turn{max-width:56ch;}
         .fold-stage{margin-right:0;}
-      }
 
-      /* Phones get the same deal the desktop fold gets, or the change is
-         only half shipped. Stacked at 390px the panel first landed ~690px
-         down — a whole screen of copy again, which is the bug this fold
-         exists to kill. Three moves claw it back without cutting a word:
-         the chips become one swipeable row instead of three stacked ones,
-         the stat pill and beta note move below the panel (supporting
-         detail, not the pitch), and the top padding tightens.
+        /* One column turns the copy above the panel into a budget, and the
+           anchor now spends most of it saying what the system is. So the
+           chameleon demo moves below the panel and takes the chips with it:
+           the anchor answers "what is this", the panel proves it, and the
+           demo is the supporting act it always was. Chips end up adjacent
+           to the slot word they drive, which the panel used to split.
 
-         display:contents dissolves .hero-copy so its children become flex
-         items of .hero-grid and can be ordered around the panel. Safe
-         here only because .hero-copy carries no .reveal of its own — a
-         transform on a display:contents box does nothing. */
-      @media (max-width:640px){
-        .hero{padding-top:34px;}
-        .hero-grid{display:flex;flex-direction:column;gap:20px;}
+           display:contents dissolves .hero-copy so its children become flex
+           items of .hero-grid and can be ordered around the panel. Safe
+           here only because .hero-copy carries no .reveal of its own — a
+           transform on a display:contents box does nothing. */
         .hero-copy{display:contents;}
         /* display:contents moves these into the flex BOX tree, but
            selectors still match the DOM tree — .hero-grid > .hero-meta
@@ -2303,8 +2311,29 @@ def render_home() -> str:
            real parent. `order` then applies because they are flex items. */
         .hero-grid > *, .hero-copy > *{margin-top:0;margin-bottom:0;}
         .hero-grid > .fold-stage{order:1;}
-        .hero-copy > .hero-chips{order:2;}
-        .hero-copy > .hero-meta{order:3;}
+        .hero-copy > .hero-slot-line{order:2;}
+        .hero-copy > .hero-turn{order:2;}
+        .hero-copy > .hero-chips{order:3;}
+        .hero-copy > .hero-meta{order:4;}
+      }
+
+      /* Phones get the same deal the desktop fold gets, or the change is
+         only half shipped. Stacked at 390px the panel first landed ~690px
+         down — a whole screen of copy again, which is the bug this fold
+         exists to kill. The ordering that claws it back now lives in the
+         1000px block above, because every single-column width has the same
+         problem. What is left here is genuinely phone-only: the chips
+         become one swipeable row instead of three stacked ones, the top
+         padding tightens, and the panel drops the chrome that needs width
+         to read. */
+      @media (max-width:640px){
+        .hero{padding-top:34px;}
+        /* align-items goes back to the grid's own `center`: on a phone the
+           CTA row and the slot line shrink-wrap and sit centred, which is
+           how this fold has always shipped. Only the wider single-column
+           range needs `stretch`, where shrink-wrapping would leave the
+           headline and the anchor floating in the middle of a 700px column. */
+        .hero-grid{gap:20px;align-items:center;}
         .hero-slot{min-width:0;flex:1;}
         /* a nowrap scroller's automatic minimum size is its content, so
            without min-width:0 the chip row sets the column's width and
@@ -2560,11 +2589,12 @@ def render_home() -> str:
     <div class="hero-grid">
       <div class="hero-copy">
         <h1 class="reveal">Every Problem <span class="gradient-text">Has A Solution.</span></h1>
+        <p class="hero-anchor reveal reveal-delay-1"><b>The Solutionist System</b> is one workspace that runs your whole business &mdash; clients, money, marketing, your site &mdash; with a chief of staff who does the work, under one subscription.</p>
         <p class="hero-slot-line reveal reveal-delay-1">
           <span>Tell it what you do &mdash;</span>
           <span class="hero-slot"><span id="heroWord">barber</span><span class="caret" aria-hidden="true"></span></span>
         </p>
-        <p class="hero-turn reveal reveal-delay-1">&mdash; and the whole system arrives already speaking that language. Not a system you teach: <b>a system that already knows your business.</b></p>
+        <p class="hero-turn reveal reveal-delay-1">&mdash; and it arrives already speaking that language. Not a system you teach: <b>a system that already knows your business.</b></p>
         <div class="hero-chips reveal reveal-delay-2" id="heroChips" role="group" aria-label="See the system as a different business"></div>
         <div class="hero-ctas reveal reveal-delay-2">
           <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
