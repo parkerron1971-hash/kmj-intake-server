@@ -1942,7 +1942,7 @@ def _price_cards_html() -> str:
                "Everything in Starter, plus Autopilot running overnight and deeper Chief automation.",
                mid=True)
         + card("practice", "Solutionist",
-               "For the operator running everything through the system &mdash; "
+               "For the operator running everything through the system: "
                "everything in Professional, plus room for a team and more than one business.")
     )
 
@@ -2767,7 +2767,7 @@ def render_home() -> str:
     </div>
 
     <div class="shape-body reveal reveal-delay-2">
-      <p>A salon doesn&rsquo;t have &ldquo;clients.&rdquo; It has regulars. A contractor doesn&rsquo;t book &ldquo;appointments&rdquo; &mdash; they schedule jobs. A bookkeeper&rsquo;s late-payment nudge sounds nothing like a therapist&rsquo;s.</p>
+      <p>A salon doesn&rsquo;t have &ldquo;clients.&rdquo; It has regulars. A contractor doesn&rsquo;t book &ldquo;appointments.&rdquo; They schedule jobs. A bookkeeper&rsquo;s late-payment nudge sounds nothing like a therapist&rsquo;s.</p>
       <p>Tell the system what you do and it loads the whole world of your specialty: the vocabulary, the workflows, the rhythm of the week, what should happen automatically and what should never happen without you. Not a blank assistant waiting to be trained. A system that showed up knowing.</p>
     </div>
 
@@ -2798,7 +2798,7 @@ def render_home() -> str:
     <div class="section-head reveal">
             <span data-spine class="eyebrow">Look inside</span>
       <h2>Six rooms. <span class="gradient-text">One brain.</span></h2>
-      <p>Each room is built for what happens in it, and they all share your contacts, your brand, and your Chief. Every number updates as the data changes &mdash; no CSV exports, no waiting on a weekly report.</p>
+      <p>Each room is built for what happens in it, and they all share your contacts, your brand, and your Chief. Every number updates as the data changes: no CSV exports, no waiting on a weekly report.</p>
     </div>
 
     <div class="rooms-tabs reveal" role="tablist" aria-label="Rooms">
@@ -2986,7 +2986,7 @@ def render_home() -> str:
     </div>
     <div class="price-grid reveal reveal-delay-2">""" + _price_cards_html() + """
     </div>
-    <p class="price-note reveal">Annual plans are two months free (about 17% off). Running a team or more than one business? That is what the Solutionist plan is for; bigger networks are custom &mdash; <a href="/get-started" style="color:var(--accent);">talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
+    <p class="price-note reveal">Annual plans are two months free (about 17% off). Running a team or more than one business? That is what the Solutionist plan is for; bigger networks are custom. <a href="/get-started" style="color:var(--accent);">Talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
   </div>
 </section>
 
@@ -3225,7 +3225,7 @@ def render_home() -> str:
           <div class="dv-fone-top"><span class="mk"></span><b>Chief</b><span class="on">Online</span></div>
           <div class="dv-chat">
             <div class="dv-msg you">Who hasn&rsquo;t rebooked?</div>
-            <div class="dv-msg ai dv-say">Three regulars are past six weeks &mdash; Marcus, Tia and Devon.</div>
+            <div class="dv-msg ai dv-say">Three regulars are past six weeks: Marcus, Tia and Devon.</div>
             <div class="dv-msg ai dv-say-2">Tuesday afternoon is your emptiest slot.</div>
             <div class="dv-card dv-say-3">
               <div class="k">Overdue for a cut</div>
@@ -3836,11 +3836,11 @@ def render_faq() -> str:
       </details>
       <details class="faq-item">
         <summary>Do I need a team to use this?</summary>
-        <div class="faq-body"><p>No. Solo-first is the default: one operator, everything in one workspace. When you do bring people in, the Solutionist plan includes team seats with roles and an accountant collaborator seat &mdash; invite by email, they see the business, no enterprise admin sprawl.</p></div>
+        <div class="faq-body"><p>No. Solo-first is the default: one operator, everything in one workspace. When you do bring people in, the Solutionist plan includes team seats with roles and an accountant collaborator seat: invite by email, they see the business, no enterprise admin sprawl.</p></div>
       </details>
       <details class="faq-item">
         <summary>What about pricing?</summary>
-        <div class="faq-body"><p>Starter is $79/month, Professional $199, and Solutionist $399 &mdash; every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. Annual plans are two months free. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. We're in private beta: apply for access, and your beta pricing is grandfathered for good &mdash; if prices rise later, yours does not move.</p></div>
+        <div class="faq-body"><p>Starter is $79/month, Professional $199, and Solutionist $399. Every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. Annual plans are two months free. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. We're in private beta: apply for access, and your beta pricing is grandfathered for good: if prices rise later, yours does not move.</p></div>
       </details>
       <details class="faq-item">
         <summary>How is this different from Notion, HubSpot, or just using ChatGPT?</summary>
