@@ -146,6 +146,36 @@ def _sync_all_for_supplier(supplier_id: str) -> None:
         _sync_offering_cache(str(l["offering_id"]))
 
 
+def _close_rfq_for(business_id: str, supplier_id: str) -> None:
+    """A quote from this vendor answers whatever we asked them.
+
+    THE SOURCING DESK closes the loops it opens. An RFQ that sits at
+    'sent' forever is the follow-through failure in miniature: the app
+    asked somebody a question on the practitioner's behalf and then had
+    no idea whether it was ever answered. The moment a price is written
+    down against that vendor, the answer plainly arrived.
+
+    Only 'sent' rows move, and only to 'replied' — a closed RFQ stays
+    closed, and this never invents a reply for a request that was never
+    made. Best-effort on purpose: losing this must never fail the
+    practitioner's save of a real number they were quoted.
+    """
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/vendor_rfqs?business_id=eq.{business_id}"
+            f"&supplier_id=eq.{supplier_id}&status=eq.sent"
+            f"&select=id&limit=25") or []
+        if not rows:
+            return
+        ids = ",".join(str(r["id"]) for r in rows)
+        now = _now_iso()
+        sb_clients.sb_patch_as_service(
+            f"/vendor_rfqs?id=in.({ids})",
+            {"status": "replied", "replied_at": now, "updated_at": now})
+    except Exception as e:
+        logger.warning(f"[suppliers] rfq close failed for {supplier_id}: {e}")
+
+
 def _clear_other_primaries(offering_id: str, keep_link_id: str) -> None:
     """The partial unique index allows exactly one primary per offering,
     so the old one is demoted before the new one is promoted."""
@@ -421,6 +451,11 @@ def update_link(link_id: str, body: LinkPatch,
     sb_clients.sb_patch_as_service(f"/offering_suppliers?id=eq.{link_id}", patch)
     if "is_primary" in patch:
         _sync_offering_cache(str(link["offering_id"]))
+    # A price arriving where there was none is a quote coming back, and
+    # that closes whatever we asked this vendor. Only on the transition:
+    # editing a price that was already there is a correction, not a reply.
+    if patch.get("unit_cost") is not None and link.get("unit_cost") is None:
+        _close_rfq_for(str(link["business_id"]), str(link["supplier_id"]))
     return {"ok": True, "link": _link_or_404(link_id)}
 
 
@@ -460,7 +495,10 @@ def link_product(supplier_id: str, body: LinkBody,
 
     existing = sb_clients.sb_get_as_service(
         f"/offering_suppliers?offering_id=eq.{body.offering_id}"
-        f"&supplier_id=eq.{supplier_id}&select=id&limit=1") or []
+        f"&supplier_id=eq.{supplier_id}&select=id,unit_cost&limit=1") or []
+    # Read before the write: after it, "was there a price already?" would
+    # always answer yes, and every edit would look like a fresh reply.
+    prior_cost = existing[0].get("unit_cost") if existing else None
 
     fields = {
         "unit_cost": body.unit_cost,
@@ -495,6 +533,9 @@ def link_product(supplier_id: str, body: LinkBody,
         if not created:
             raise HTTPException(500, "could not link that product")
         link_id = str((created[0] if isinstance(created, list) else created)["id"])
+
+    if body.unit_cost is not None and prior_cost is None:
+        _close_rfq_for(biz, supplier_id)
 
     _sync_offering_cache(body.offering_id)
     return {"ok": True, "link": _link_or_404(link_id)}
