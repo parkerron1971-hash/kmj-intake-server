@@ -159,6 +159,100 @@ def test_the_list_is_capped_rather_than_unbounded():
 
 # ─── End to end, with the model faked ────────────────────────────────
 
+def test_the_breakdown_comes_back_in_parts_not_one_paragraph(monkeypatch):
+    """coverage_note used to carry four jobs at once and read as a wall
+    of text. Three of them are lists; keeping them separate is what lets
+    the surface show them at a glance."""
+    calls = []
+
+    def fake_post(payload, **kw):
+        calls.append(payload)
+        if len(calls) == 1:
+            return _Resp({"content": [
+                _text_block("notes"),
+                _search_block("https://northwind.com/wholesale")]})
+        return _Resp({"content": [_text_block(json.dumps({
+            "candidates": [
+                {"name": "Northwind", "website": "northwind.com",
+                 "source_url": "https://northwind.com/wholesale", "why": "fits",
+                 "moq": "", "region": "US", "contact_route": "form"},
+            ],
+            "coverage_note": "Blank apparel is well covered.",
+            "left_out": [
+                {"what": "A top-10 supplier listicle", "why": "not a supplier"},
+                {"what": "An unnamed overseas manufacturer page",
+                 "why": "could not verify who they are"},
+            ],
+            "better_routes": [
+                {"name": "SanMar, S&S Activewear, alphabroder",
+                 "why": "the wholesale backbone of US blank apparel"},
+                {"name": "Your local screen printer",
+                 "why": "buys blanks on their own account at a better rate"},
+            ],
+        }))]})
+
+    monkeypatch.setattr(llm_call, "post", fake_post)
+    out = se.search_vendors(need="blank hoodies")
+    assert len(out["left_out"]) == 2
+    assert out["left_out"][0]["what"] and out["left_out"][0]["why"]
+    assert len(out["better_routes"]) == 2
+    assert "SanMar" in out["better_routes"][0]["name"]
+    # The note itself stays short — it is no longer carrying the rest.
+    assert len(out["coverage_note"]) < 200
+
+
+def test_malformed_breakdown_entries_are_dropped_not_rendered_blank(monkeypatch):
+    """A route with no name is an empty row on somebody's screen."""
+    calls = []
+
+    def fake_post(payload, **kw):
+        calls.append(payload)
+        if len(calls) == 1:
+            return _Resp({"content": [
+                _text_block("notes"), _search_block("https://a.com/x")]})
+        return _Resp({"content": [_text_block(json.dumps({
+            "candidates": [],
+            "coverage_note": "n",
+            "left_out": [{"what": "", "why": "no name"}, "not an object",
+                         {"what": "real", "why": "kept"}],
+            "better_routes": [{"name": "", "why": "nameless"},
+                              {"name": "Real lead", "why": ""}],
+        }))]})
+
+    monkeypatch.setattr(llm_call, "post", fake_post)
+    out = se.search_vendors(need="x")
+    assert [l["what"] for l in out["left_out"]] == ["real"]
+    assert [r["name"] for r in out["better_routes"]] == ["Real lead"]
+
+
+def test_the_schema_demands_the_breakdown_parts():
+    """The `required` list is a contract with the API, not with this
+    code — a mocked response can satisfy any shape, so no end-to-end test
+    can catch it being loosened. Asserting the constant is the only way
+    to notice, and it is a real value the request carries."""
+    assert set(se._CANDIDATE_SCHEMA["required"]) >= {
+        "candidates", "coverage_note", "left_out", "better_routes"}
+    props = se._CANDIDATE_SCHEMA["properties"]
+    assert props["left_out"]["type"] == "array"
+    assert props["better_routes"]["type"] == "array"
+
+
+def test_the_model_is_told_not_to_write_the_disclaimer(monkeypatch):
+    """It is identical every run, it is a policy statement rather than a
+    finding, and the app says it. Paying a model to retype it each time
+    also risks it drifting or being dropped."""
+    low = se._PASS1_SYSTEM.lower()
+    assert "do not write a disclaimer" in low
+    assert "left out" in low and "better routes" in low
+
+
+def test_the_search_budget_is_big_enough_to_finish_a_sweep():
+    """Measured: a real "blank hoodies, 200/run" run ended with "ran out
+    of search budget" before it could reach SanMar, S&S or alphabroder —
+    the three most useful names in that trade."""
+    assert se._MAX_SEARCHES >= 10
+
+
 def test_a_dropped_candidate_is_said_out_loud(monkeypatch):
     """A silent trim reads as 'this is everything there is'."""
     calls = []

@@ -71,7 +71,15 @@ SOURCING_MODEL = "claude-opus-5"
 # The search tool's own budget. Chief's chat turn is capped at 3 uses,
 # which is right for "look that up mid-conversation" and far too small
 # for a real sweep — so this path has its own and does not raid Chief's.
-_MAX_SEARCHES = 6
+#
+# Raised from 6 on evidence rather than instinct: on a real "blank
+# hoodies, 200/run" search the write-up ended with "I attempted to search
+# them and ran out of search budget before I could point you at a
+# specific page" — about SanMar, S&S Activewear and alphabroder, which are
+# the three most useful names in that trade. The cap was cutting off the
+# answer at the point it got good. Ten is roughly one sweep plus the
+# follow-ups a good sweep provokes.
+_MAX_SEARCHES = 10
 
 _PASS1_MAX_TOKENS = 16000
 _PASS2_MAX_TOKENS = 8000
@@ -103,8 +111,41 @@ _CANDIDATE_SCHEMA: Dict[str, Any] = {
             },
         },
         "coverage_note": {"type": "string"},
+        # What was found and dropped, and why. This used to be a sentence
+        # buried in the middle of the note; as its own list it can be
+        # read at a glance and, more importantly, counted.
+        "left_out": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "what": {"type": "string"},
+                    "why": {"type": "string"},
+                },
+                "required": ["what", "why"],
+                "additionalProperties": False,
+            },
+        },
+        # Routes that would beat this list — named trade distributors, a
+        # local decorator, a trade show. These are LEADS, not candidates:
+        # they carry no source_url and never pass through the citation
+        # gate, so they must be rendered as something visibly different
+        # from a found vendor. That distinction is the whole reason they
+        # are a separate field rather than more prose.
+        "better_routes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "why": {"type": "string"},
+                },
+                "required": ["name", "why"],
+                "additionalProperties": False,
+            },
+        },
     },
-    "required": ["candidates", "coverage_note"],
+    "required": ["candidates", "coverage_note", "left_out", "better_routes"],
     "additionalProperties": False,
 }
 
@@ -151,11 +192,29 @@ URL FROM YOUR SEARCH RESULTS where you found it, one line on why it fits \
 THIS need, any minimum order you saw, roughly where it is, and how to \
 contact them. If you did not see a minimum, say so — do not guess one.
 
-Then write a short, honest coverage note: how well the open web covers \
-this kind of supplier, and what would beat it. For niche, regulated or \
-trade-show-driven goods the honest answer is often that a trade \
-association or a show beats an open web search, and saying so is more \
-useful than a padded list.
+Then, SEPARATELY and in this order — do not run these together into one \
+paragraph, because they are read at a glance rather than studied:
+
+1. COVERAGE — at most two sentences on how well the open web covers this \
+kind of supplier. Not a summary of everything below.
+
+2. LEFT OUT — anything you found and deliberately did not list, one line \
+each: what it was, and why it did not make the cut. "Top 10 supplier" \
+listicles, aggregator pages and companies you could not verify all \
+belong here. This is not an apology; it is the most trust-building thing \
+on the page.
+
+3. BETTER ROUTES — things that would beat this list, one line each. Named \
+trade distributors you could not reach a specific page for, a local \
+decorator who already buys through a distributor account, a trade \
+association or show for a recurring programme. Name them plainly. These \
+are LEADS for the practitioner to verify, and they are shown as such — \
+so it is fine, and useful, to name a company here that you could not \
+cite.
+
+Do NOT write a disclaimer about not having vetted anyone. The app says \
+that itself, in the same words every time, and it does not need you to \
+repeat it.
 
 You are FINDING options, not recommending or vetting anyone. The \
 practitioner checks them out and signs the contract. Never describe a \
@@ -332,6 +391,7 @@ def search_vendors(*, need: str,
     """
     empty: Dict[str, Any] = {
         "candidates": [], "sources": [], "coverage_note": "",
+        "left_out": [], "better_routes": [],
         "proposed_count": 0, "dropped_count": 0, "model": SOURCING_MODEL,
     }
 
@@ -417,10 +477,24 @@ def search_vendors(*, need: str,
         note = ("Nothing here cleared the bar of being a real, reachable supplier "
                 "for this. That is a real answer, not an error.")
 
+    def _pairs(key: str, a: str, b: str) -> List[Dict[str, str]]:
+        raw = parsed.get(key)
+        out: List[Dict[str, str]] = []
+        for item in (raw if isinstance(raw, list) else [])[:6]:
+            if not isinstance(item, dict):
+                continue
+            first = (item.get(a) or "").strip()
+            second = (item.get(b) or "").strip()
+            if first:
+                out.append({a: first, b: second})
+        return out
+
     return {
         "candidates": kept,
         "sources": sources,
         "coverage_note": note.strip(),
+        "left_out": _pairs("left_out", "what", "why"),
+        "better_routes": _pairs("better_routes", "name", "why"),
         "proposed_count": len(proposed),
         "dropped_count": dropped,
         "model": SOURCING_MODEL,
