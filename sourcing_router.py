@@ -45,6 +45,7 @@ THE RFQ IS THE SAME SHAPE AS THE PURCHASE ORDER, ON PURPOSE
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -483,3 +484,186 @@ def list_rfqs(business_id: str,
         for r in rows:
             r["supplier"] = by_id.get(str(r["supplier_id"]))
     return {"ok": True, "rfqs": rows}
+
+
+# ─── Stage 4: the anonymous peer signal ──────────────────────────────
+#
+# The privacy rules live in the database function — opt-in, reciprocal,
+# k-anonymous, and it names nobody. Putting them there rather than here
+# means a future caller that forgets to check cannot leak a raw count.
+#
+# What lives HERE is the fourth rule: NO ENUMERATION. A business may only
+# ask about vendors it already holds — its own saved vendors, or
+# candidates its own paid searches turned up. Without that, this endpoint
+# is a directory you can walk one domain at a time, which is the exact
+# thing §0 of the spec refused to build.
+
+PEER_MIN = 3
+_PEER_DOMAIN_CAP = 60
+
+
+def _domain_of(value: str) -> Optional[str]:
+    """Mirror of the suppliers.domain generated column, in Python.
+
+    Two implementations of one rule is a drift risk, so it is worth being
+    precise about which way this one can fail: it is used ONLY to build
+    the allow-list of domains a business may ask about, and to normalise
+    what the caller sent. If it ever disagrees with the SQL, the result
+    is a legitimate lookup being dropped — never an illegitimate one
+    being answered. It fails closed.
+
+    Agreement with the SQL is pinned by test_vendor_peers against the six
+    shapes the column itself was verified on in production.
+    """
+    v = (value or "").strip().lower()
+    if not v:
+        return None
+    v = re.sub(r"^\s*https?://", "", v)
+    # An address contributes its domain half, matching split_part(email,'@',2).
+    if "@" in v:
+        v = v.split("@")[-1]
+    v = re.sub(r"^www\.", "", v)
+    v = re.split(r"[/?#]", v)[0]
+    return v.strip() or None
+
+
+def _askable_domains(business_id: str) -> set:
+    """Every vendor domain this business is entitled to ask about: the
+    ones it has saved, plus the ones its own sourcing searches found."""
+    out: set = set()
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/suppliers?business_id=eq.{business_id}&domain=not.is.null"
+            f"&select=domain&limit={_LIST_CAP}") or []
+        for r in rows:
+            d = _domain_of(str(r.get("domain") or ""))
+            if d:
+                out.add(d)
+    except Exception as e:
+        logger.warning(f"[sourcing] askable (saved) failed: {e}")
+    try:
+        searches = sb_clients.sb_get_as_service(
+            f"/sourcing_searches?business_id=eq.{business_id}"
+            f"&order=created_at.desc&select=candidates&limit=25") or []
+        for s in searches:
+            for c in (s.get("candidates") or []):
+                if not isinstance(c, dict):
+                    continue
+                for key in ("website", "source_url"):
+                    d = _domain_of(str(c.get(key) or ""))
+                    if d:
+                        out.add(d)
+    except Exception as e:
+        logger.warning(f"[sourcing] askable (searches) failed: {e}")
+    return out
+
+
+@router.get("/{business_id}/sharing")
+def sharing_state(business_id: str,
+                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _reader(business_id, user)
+    rows = sb_clients.sb_get_as_service(
+        f"/vendor_sharing_consent?business_id=eq.{business_id}"
+        f"&select=*&limit=1") or []
+    row = rows[0] if rows else None
+    sharing = bool(row and not row.get("opted_out_at"))
+    return {"ok": True, "sharing": sharing,
+            "since": (row or {}).get("opted_in_at") if sharing else None,
+            "min_peers": PEER_MIN}
+
+
+class SharingBody(BaseModel):
+    sharing: bool
+
+
+@router.post("/{business_id}/sharing")
+def set_sharing(business_id: str, body: SharingBody,
+                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Turning it on and off is the owner's call and nobody else's.
+
+    Withdrawal stamps opted_out_at rather than deleting the row: "they
+    turned it off in September" is a fact worth being able to answer. It
+    takes effect for everyone immediately, because every count joins on
+    opted_out_at is null.
+    """
+    _owner(business_id, user)
+    now = _now().isoformat()
+    existing = sb_clients.sb_get_as_service(
+        f"/vendor_sharing_consent?business_id=eq.{business_id}"
+        f"&select=business_id&limit=1") or []
+    if existing:
+        sb_clients.sb_patch_as_service(
+            f"/vendor_sharing_consent?business_id=eq.{business_id}",
+            {"opted_out_at": None if body.sharing else now,
+             "actor": str(user.id), "updated_at": now,
+             **({"opted_in_at": now} if body.sharing else {})})
+    elif body.sharing:
+        sb_clients.sb_post_as_service("/vendor_sharing_consent", {
+            "business_id": business_id, "opted_in_at": now,
+            "actor": str(user.id), "updated_at": now}, prefer=None)
+    # Opting out when there was never a row is a no-op, not a row that
+    # records a consent nobody ever gave.
+    return {"ok": True, "sharing": bool(body.sharing)}
+
+
+class PeersBody(BaseModel):
+    domains: List[str]
+
+
+@router.post("/{business_id}/peers")
+def peer_counts(business_id: str, body: PeersBody,
+                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """How many other businesses here work with these vendors.
+
+    Domains the business is not entitled to ask about are dropped
+    silently rather than refused: an error naming a domain would itself
+    confirm that domain is interesting, and the caller has no legitimate
+    need to learn which of its own list was filtered.
+    """
+    _reader(business_id, user)
+
+    wanted: List[str] = []
+    seen = set()
+    for raw in (body.domains or [])[:_PEER_DOMAIN_CAP]:
+        d = _domain_of(str(raw or ""))
+        if d and d not in seen:
+            seen.add(d)
+            wanted.append(d)
+
+    sharing = _is_sharing(business_id)
+    if not wanted or not sharing:
+        # Not contributing means no answer, and saying so plainly is what
+        # lets the surface explain the trade rather than look broken.
+        return {"ok": True, "peers": {}, "sharing": sharing,
+                "min_peers": PEER_MIN}
+
+    allowed = _askable_domains(business_id)
+    wanted = [d for d in wanted if d in allowed]
+
+    peers: Dict[str, Any] = {}
+    for d in wanted:
+        try:
+            got = sb_clients.sb_post_as_service("/rpc/vendor_peer_counts", {
+                "p_business_id": business_id, "p_domain": d, "p_min": PEER_MIN,
+            })
+        except Exception as e:
+            logger.warning(f"[sourcing] peer count failed for {d}: {e}")
+            continue
+        row = got[0] if isinstance(got, list) and got else got
+        if not isinstance(row, dict):
+            continue
+        # Only k-cleared numbers ever reach the wire. The function returns
+        # null below the threshold and nothing here invents a zero to fill
+        # the gap — "not enough to say" and "nobody" must not look alike.
+        if row.get("peers_any") is not None:
+            peers[d] = {"any": row["peers_any"],
+                        "trade": row.get("peers_trade"),
+                        "trade_name": row.get("trade")}
+    return {"ok": True, "peers": peers, "sharing": True, "min_peers": PEER_MIN}
+
+
+def _is_sharing(business_id: str) -> bool:
+    rows = sb_clients.sb_get_as_service(
+        f"/vendor_sharing_consent?business_id=eq.{business_id}"
+        f"&opted_out_at=is.null&select=business_id&limit=1") or []
+    return bool(rows)
