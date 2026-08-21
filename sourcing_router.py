@@ -86,8 +86,14 @@ def _now() -> datetime:
 
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    # select=* rather than a named list, and that is the fix for a real
+    # outage: this asked for `industry`, a column that does not exist on
+    # this schema (it is `type`). PostgREST answers an unknown column with
+    # a 400, sb_clients turns any 4xx into None, and the `or []` below
+    # turned that into "business not found" — so EVERY owner-gated
+    # sourcing endpoint 404'd. A star cannot name a column wrongly.
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,owner_id,name,industry&limit=1") or []
+        f"/businesses?id=eq.{biz}&select=*&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
     if str(rows[0].get("owner_id")) != str(user.id):
@@ -126,11 +132,14 @@ def _business_context(biz_row: Dict[str, Any], business_id: str) -> str:
     every extra field is another thing leaving the building."""
     bits: List[str] = []
     name = (biz_row.get("name") or "").strip()
-    industry = (biz_row.get("industry") or "").strip()
+    # `type` is the column that holds the trade on this schema. Values are
+    # keys like "personal_services", so the underscores come out before it
+    # reaches a prompt that will be read as a sentence.
+    trade = (biz_row.get("type") or "").strip().replace("_", " ")
     if name:
         bits.append(name)
-    if industry:
-        bits.append(f"a {industry} business")
+    if trade:
+        bits.append(f"a {trade} business")
     try:
         offs = sb_clients.sb_get_as_service(
             f"/offerings?business_id=eq.{business_id}&is_active=is.true"
