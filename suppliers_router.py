@@ -693,3 +693,44 @@ def ordering_state(supplier_id: str,
             "agent_checked_at": sup.get("agent_checked_at"),
             "ordering_notes": sup.get("ordering_notes"),
             **step}
+
+
+@router.get("/{supplier_id}/preview")
+def site_preview_for(supplier_id: str,
+                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Read the vendor's own site and answer the ordering question here,
+    so nobody has to leave to find out whether a supplier takes POs.
+
+    Reader-gated rather than owner-gated: this changes nothing, and the
+    URL is not the caller's to choose — it comes off the vendor record we
+    already hold, which is what keeps this from being a fetch-anything
+    endpoint.
+    """
+    import site_preview
+
+    sup = _supplier_or_404(supplier_id)
+    _reader(str(sup["business_id"]), user)
+
+    target = (sup.get("website") or "").strip()
+    if not target and (sup.get("email") or "").strip():
+        # No site on file, but an address implies a domain worth reading.
+        target = "https://" + (sup["email"].split("@")[-1] or "").strip()
+    if not target:
+        raise HTTPException(400, {
+            "error": "no_site",
+            "message": "Add their website first — there's nothing to read without one.",
+        })
+
+    result = site_preview.preview(target)
+    known = {(sup.get("email") or "").strip().lower()}
+    return {
+        "ok": True,
+        "preview": result,
+        "summary": site_preview.summarise(result.get("signals") or []),
+        # Addresses the site published that are NOT already on the vendor
+        # record. This is the actionable half: it is how a vendor moves
+        # off the bottom rung, and the practitioner should be offered it
+        # rather than left to spot it.
+        "new_emails": [e for e in (result.get("emails") or [])
+                       if e.lower() not in known],
+    }
