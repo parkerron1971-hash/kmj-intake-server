@@ -309,6 +309,13 @@ def get_supplier(supplier_id: str,
 
 class SupplierPatch(BaseModel):
     name: Optional[str] = None
+    # THE ORDERING LADDER. account_number is THEIRS — the trade account
+    # the supplier issued. It is stored and printed on the PO, never
+    # generated: a made-up account number on a commercial document is
+    # ignored at best.
+    account_number: Optional[str] = None
+    takes_email_po: Optional[bool] = None
+    ordering_notes: Optional[str] = None
     website: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
@@ -325,9 +332,11 @@ class SupplierPatch(BaseModel):
 
 
 _PATCHABLE = ("name", "website", "email", "phone", "contact_name", "categories",
-              "min_order", "lead_time_days", "payment_terms", "notes", "status")
+              "min_order", "lead_time_days", "payment_terms", "notes", "status",
+              "account_number", "takes_email_po", "ordering_notes")
 _CLEARABLE = ("website", "email", "phone", "contact_name", "min_order",
-              "lead_time_days", "payment_terms", "notes")
+              "lead_time_days", "payment_terms", "notes",
+              "account_number", "ordering_notes")
 
 
 @router.patch("/{supplier_id}")
@@ -343,7 +352,9 @@ def update_supplier(supplier_id: str, body: SupplierPatch,
             continue
         if k == "categories":
             patch[k] = [c.strip() for c in (given[k] or []) if c and c.strip()]
-        elif k == "lead_time_days":
+        elif k in ("lead_time_days", "takes_email_po"):
+            # Straight through. Running a bool past _clean() would turn a
+            # deliberate False into None and quietly lose the "no".
             patch[k] = given[k]
         else:
             v = _clean(given[k])
@@ -560,3 +571,125 @@ def suppliers_for_offering(offering_id: str,
     for l in links:
         l["supplier"] = by_id.get(str(l["supplier_id"]))
     return {"ok": True, "links": links}
+
+
+# ─── The ordering ladder: is their site set up for an agent? ─────────
+#
+# The rung itself is a generated column — it derives from evidence and no
+# router keeps it honest. This endpoint only gathers ONE piece of that
+# evidence: a live probe of the vendor's /.well-known/ucp.
+#
+# Measured 2026-08-21 before building it. Against sixteen enterprise
+# suppliers (Grainger, Uline, McMaster, Staples, Vistaprint, Faire,
+# Alibaba...) it was ZERO. Against the small and mid-sized wholesalers
+# these practitioners actually buy from — beauty and barber supply — it
+# was roughly one in four, including the first vendor a practitioner
+# saved here. Those two cohorts are not the same world, and the second
+# one is the one that matters.
+
+
+class ReadinessBody(BaseModel):
+    """Empty on purpose — the vendor is the path parameter and the domain
+    is derived server-side from what we already hold. Letting a caller
+    pass a domain would make this a probe-anything endpoint."""
+    pass
+
+
+@router.post("/{supplier_id}/check-ordering")
+def check_ordering(supplier_id: str,
+                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Ask the vendor's own site whether it can be ordered from by an
+    agent, and record the answer with a date.
+
+    Owner-gated because it writes, and because it reaches out to a third
+    party under this business's name.
+
+    The date is as much of the answer as the verdict: "we asked in August
+    and they did not" is a different fact from "we never asked", and a
+    vendor that adopts the protocol next quarter should not be
+    permanently marked as lacking it.
+    """
+    import agent_readiness
+
+    sup = _supplier_or_404(supplier_id)
+    _owner(str(sup["business_id"]), user)
+
+    source = (sup.get("website") or "").strip() or (sup.get("email") or "").strip()
+    domain = agent_readiness.normalise_domain(source)
+    if not domain:
+        raise HTTPException(400, {
+            "error": "no_domain",
+            "message": ("Add their website or email address first — there's "
+                        "nothing to check without one."),
+        })
+
+    result = agent_readiness.check_domain(domain)
+    now = _now_iso()
+    patch = {
+        "agent_ready": bool(result.get("agent_ready")),
+        "agent_checked_at": now,
+        "agent_detail": {
+            "domain": result.get("domain"),
+            "reason": result.get("reason"),
+            "manifest": result.get("manifest"),
+        },
+        "updated_at": now,
+    }
+    sb_clients.sb_patch_as_service(f"/suppliers?id=eq.{supplier_id}", patch)
+    return {"ok": True, "supplier": _supplier_or_404(supplier_id),
+            "checked": {"domain": domain,
+                        "agent_ready": bool(result.get("agent_ready")),
+                        "reason": result.get("reason")}}
+
+
+@router.get("/{supplier_id}/ordering")
+def ordering_state(supplier_id: str,
+                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """The rung, and the honest next step off it.
+
+    Every vendor sits somewhere, and every rung below the top has
+    something concrete to do next — which is the point. A vendor that
+    cannot be ordered from yet is not a dead end, it is a vendor with a
+    next action, and Chief can draft that email.
+    """
+    sup = _supplier_or_404(supplier_id)
+    _reader(str(sup["business_id"]), user)
+    level = sup.get("ordering_level") or "contact"
+
+    nexts = {
+        "contact": {
+            "next": "ask_about_po",
+            "label": "Ask if they take purchase orders",
+            "why": ("Right now an order here means picking up the phone. Most "
+                    "suppliers take a purchase order by email — one question "
+                    "settles it."),
+        },
+        "email_po": {
+            "next": "open_account",
+            "label": "Open a trade account",
+            "why": ("An account number gets you terms, and their system can "
+                    "route the order automatically instead of somebody "
+                    "reading the email."),
+        },
+        "account": {
+            "next": None,
+            "label": None,
+            "why": ("This is a good place to be. Orders carry your account "
+                    "number, they invoice you, and the bill lands in "
+                    "Bills to pay on terms."),
+        },
+        "agent": {
+            "next": None,
+            "label": None,
+            "why": ("Their site publishes an ordering manifest, so an order "
+                    "can be put together end to end. You still approve it."),
+        },
+    }
+    step = nexts.get(level, nexts["contact"])
+    return {"ok": True, "ordering_level": level,
+            "account_number": sup.get("account_number"),
+            "takes_email_po": sup.get("takes_email_po"),
+            "agent_ready": sup.get("agent_ready"),
+            "agent_checked_at": sup.get("agent_checked_at"),
+            "ordering_notes": sup.get("ordering_notes"),
+            **step}

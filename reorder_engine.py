@@ -73,24 +73,64 @@ def tripped(offerings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def next_po_number(business_id: str) -> str:
+    """A purchase order number that cannot collide.
+
+    This used to be PO-{yyyymmdd}-{first 6 of the PRODUCT id}, which gave
+    two orders of the same product on the same day the SAME number — the
+    one thing a PO number exists not to do, since it is how a supplier's
+    invoice finds its way back to the order it answers. It was also keyed
+    to the product rather than the order, which stops making sense the
+    moment a PO carries two lines.
+
+    The sequence is per business and row-locked in the database, so two
+    concurrent sends cannot take the same number. Falls back to a
+    timestamp form if the counter is unreachable: a slightly ugly number
+    beats blocking somebody's order.
+    """
+    try:
+        got = sb_clients.sb_post_as_service(
+            "/rpc/next_po_number", {"p_business_id": business_id})
+        if isinstance(got, str) and got.strip():
+            return got.strip()
+        if isinstance(got, list) and got and isinstance(got[0], str):
+            return got[0].strip()
+    except Exception as e:
+        logger.warning(f"[reorder] PO counter unreachable, falling back: {e}")
+    return f"PO-{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
+
+
 def compose_purchase_order(biz: Dict[str, Any], offering: Dict[str, Any],
-                           qty: int) -> Dict[str, Any]:
+                           qty: int,
+                           supplier: Optional[Dict[str, Any]] = None,
+                           po_number: Optional[str] = None) -> Dict[str, Any]:
     """The PO email. One format for preview and send, so what the
-    practitioner approved is exactly what goes out."""
+    practitioner approved is exactly what goes out.
+
+    `supplier` is the vendor ENTITY when we have it, which is what
+    carries the trade account number. That number is the supplier's own —
+    it is printed so their system can route the order, and it is never
+    invented: a made-up account number on a commercial document is
+    ignored at best and looks like fraud at worst.
+    """
     biz_name = (biz.get("name") or "our business").strip()
     name = (offering.get("name") or "product").strip()
     sku = (offering.get("sku") or "").strip()
     supplier_name = (offering.get("supplier_name") or "").strip()
     supplier_email = (offering.get("supplier_email") or "").strip()
-    po_number = (f"PO-{datetime.now(timezone.utc):%Y%m%d}"
-                 f"-{str(offering.get('id') or '')[:6].upper()}")
+    account_number = ((supplier or {}).get("account_number") or "").strip()
+    if po_number is None:
+        po_number = next_po_number(str(biz.get("id") or ""))
 
     sku_line = f"\n  SKU: {sku}" if sku else ""
+    # Only printed when we actually have one. An "Account: " line with
+    # nothing after it tells the supplier we do not know what we are doing.
+    account_line = f"\n  Account: {account_number}" if account_number else ""
     greeting = f"Hello {supplier_name}," if supplier_name else "Hello,"
     body = (
         f"{greeting}\n\n"
         f"{biz_name} would like to place the following order:\n\n"
-        f"  {po_number}\n"
+        f"  {po_number}{account_line}\n"
         f"  Item: {name}{sku_line}\n"
         f"  Quantity: {qty}\n\n"
         f"Please reply to this email to confirm availability, pricing, "
@@ -104,6 +144,7 @@ def compose_purchase_order(biz: Dict[str, Any], offering: Dict[str, Any],
         "body": body,
         "to_email": supplier_email,
         "to_name": supplier_name or None,
+        "account_number": account_number or None,
         "qty": qty,
     }
 
