@@ -622,13 +622,18 @@ def peer_counts(business_id: str, body: PeersBody,
     """
     _reader(business_id, user)
 
-    wanted: List[str] = []
-    seen = set()
+    # Keyed by what the CALLER sent, not by the normalised domain.
+    # Otherwise every caller has to reimplement the domain rule to match
+    # a result back to the vendor it belongs to, and a third copy of one
+    # rule is a third thing to drift. Several inputs may normalise to the
+    # same domain; each keeps its own key and they share the answer.
+    by_domain: Dict[str, List[str]] = {}
     for raw in (body.domains or [])[:_PEER_DOMAIN_CAP]:
-        d = _domain_of(str(raw or ""))
-        if d and d not in seen:
-            seen.add(d)
-            wanted.append(d)
+        key = str(raw or "")
+        d = _domain_of(key)
+        if d:
+            by_domain.setdefault(d, []).append(key)
+    wanted: List[str] = list(by_domain.keys())
 
     sharing = _is_sharing(business_id)
     if not wanted or not sharing:
@@ -656,9 +661,11 @@ def peer_counts(business_id: str, body: PeersBody,
         # null below the threshold and nothing here invents a zero to fill
         # the gap — "not enough to say" and "nobody" must not look alike.
         if row.get("peers_any") is not None:
-            peers[d] = {"any": row["peers_any"],
-                        "trade": row.get("peers_trade"),
-                        "trade_name": row.get("trade")}
+            answer = {"any": row["peers_any"],
+                      "trade": row.get("peers_trade"),
+                      "trade_name": row.get("trade")}
+            for key in by_domain.get(d, []):
+                peers[key] = answer
     return {"ok": True, "peers": peers, "sharing": True, "min_peers": PEER_MIN}
 
 
