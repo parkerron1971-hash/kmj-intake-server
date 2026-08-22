@@ -2002,13 +2002,18 @@ def _plan_compare_section_html() -> str:
     <div class="section-head reveal">
       <span class="eyebrow">Which plan</span>
       <h2>Every plan is the whole product.</h2>
-      <p>Bigger plans add AI headroom, deeper analysis, seats for a team, and room for more than one business. Annual plans are two months free.</p>
+      <p>Bigger plans add AI headroom, deeper analysis, seats for a team, and room for more than one business.</p>
     </div>
     <div class="table-wrap reveal reveal-delay-1">
       <table class="compare plans">
         <thead><tr><th>What you get</th>{header}</tr></thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
+    </div>
+    <div class="compare-door reveal reveal-delay-2">
+      <a class="btn-primary" href="/get-started">Start your subscription &rarr;</a>
+      <span>Private beta, so we set the plan up with you rather than dropping you
+        into a checkout. Beta pricing is grandfathered for good.</span>
     </div>
   </div>
 </section>
@@ -2386,6 +2391,21 @@ def render_home() -> str:
       .price-cta.is-mid:hover{background:var(--accent-2);}
       @media (prefers-reduced-motion: reduce){.price-cta:hover{transform:none;}}
       .price-note{max-width:620px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--text-muted);}
+
+      /* The cards answer "which one"; they cannot answer "what is
+         actually different". That question had one door on the whole
+         page and it was the word "comparison" inside a FAQ answer two
+         screens down. Ghost weight on purpose: the three card CTAs are
+         the primary action here and this must not outrank them. */
+      .price-doors{display:flex;justify-content:center;margin-top:22px;}
+      .price-compare{display:inline-flex;align-items:center;gap:8px;
+        padding:11px 20px;border-radius:10px;font-family:inherit;
+        font-size:13.5px;font-weight:600;color:var(--text-secondary);
+        background:transparent;border:1px solid var(--border-strong);
+        transition:color .18s, border-color .18s, background .18s, box-shadow .28s;}
+      .price-compare:hover{color:var(--text-primary);background:var(--surface);
+        border-color:color-mix(in srgb, var(--accent) 55%, transparent);
+        box-shadow:0 10px 26px color-mix(in srgb, var(--accent) 18%, transparent);}
 
       /* ── pricing: cards that answer the cursor ──────────────────────
          Three cards published three numbers and then sat perfectly
@@ -3085,7 +3105,10 @@ def render_home() -> str:
     </div>
     <div class="price-grid reveal reveal-delay-2">""" + _price_cards_html() + """
     </div>
-    <p class="price-note reveal">Annual plans are two months free (about 17% off). Running a team or more than one business? That is what the Solutionist plan is for; bigger networks are custom. <a href="/get-started" style="color:var(--accent);">Talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
+    <div class="price-doors reveal reveal-delay-3">
+      <a class="price-compare" href="/compare">Compare every plan &rarr;</a>
+    </div>
+    <p class="price-note reveal">Running a team or more than one business? That is what the Solutionist plan is for; bigger networks are custom. <a href="/get-started" style="color:var(--accent);">Talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
   </div>
 </section>
 
@@ -3804,6 +3827,14 @@ def render_features() -> str:
 
 def render_compare() -> str:
     extra_css = """
+      /* The tier table is where the decision actually gets made, and it
+         ended with nothing to press: the only door was the final CTA two
+         sections further down, past "Switching from?". */
+      .compare-door{display:flex;flex-direction:column;align-items:center;
+        gap:12px;margin-top:30px;text-align:center;}
+      .compare-door span{max-width:480px;font-size:12.5px;line-height:1.6;
+        color:var(--text-muted);}
+
       .cost-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:28px 0;}
       @media (max-width: 760px){.cost-grid{grid-template-columns:1fr;}}
       .cost-card{padding:28px;border-radius:18px;}
@@ -3886,7 +3917,7 @@ def render_compare() -> str:
           <li><span>Chief of Staff (AI)</span><span>✓</span></li>
         </ul>
         <div class="cost-total"><span class="label">From</span><span class="price">$79 /mo</span></div>
-        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Solutionist $399, two months free on annual. Currently in private beta: apply for access, and beta pricing is grandfathered for good.</p>
+        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Solutionist $399. Currently in private beta: apply for access, and beta pricing is grandfathered for good.</p>
       </div>
     </div>
   </div>
@@ -4001,7 +4032,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item">
         <summary>What about pricing?</summary>
-        <div class="faq-body"><p>Starter is $79/month, Professional $199, and Solutionist $399. Every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. Annual plans are two months free. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. We're in private beta: apply for access, and your beta pricing is grandfathered for good: if prices rise later, yours does not move.</p></div>
+        <div class="faq-body"><p>Starter is $79/month, Professional $199, and Solutionist $399. Every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. We're in private beta: apply for access, and your beta pricing is grandfathered for good: if prices rise later, yours does not move.</p></div>
       </details>
       <details class="faq-item">
         <summary>How is this different from Notion, HubSpot, or just using ChatGPT?</summary>
