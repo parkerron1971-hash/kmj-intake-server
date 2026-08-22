@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import List, Dict
 import datetime
 import html as _html
+import os
 
 # ──────────────────────────────────────────────────────────────────────
 # Editable copy — change these in place; routes pick up automatically.
@@ -358,6 +359,22 @@ def render_page(*, title: str, description: str, content_html: str) -> str:
 # ══════════════════════════════════════════════════════════════════════
 
 def render_privacy_html() -> str:
+    # Advertising disclosure — present ONLY while the Meta Pixel is
+    # actually configured (marketing_pages._pixel_script gates the
+    # script on the same env var; the disclosure and the pixel must
+    # appear and disappear together, or the policy lies in one
+    # direction or the other).
+    ads_bullet = ""
+    if (os.environ.get("META_PIXEL_ID") or "").strip():
+        ads_bullet = (
+            "\n  <li><strong>Advertising measurement:</strong> while we are running ads, our"
+            "\n      public marketing site also loads the Meta (Facebook) Pixel, which sets"
+            "\n      cookies and reports your visit to Meta so we can measure whether our ads"
+            "\n      work; when you apply or sign up we may also send Meta a one-way hashed"
+            "\n      (unreadable) version of your email for the same purpose. This applies only"
+            "\n      to the marketing site &mdash; never inside the app &mdash; and is separate from the"
+            "\n      anonymous analytics above. We honour the Do Not Track browser setting"
+            "\n      here too. See Meta&rsquo;s privacy policy for how Meta handles this data.</li>")
     body = f"""
 <span class="badge">Privacy Policy</span>
 <h1>Privacy Policy</h1>
@@ -392,7 +409,7 @@ are your responsibility and are not covered by this policy.</p>
       stored only for the life of the browser tab. We deliberately do <strong>not</strong>
       record your IP address, your browser&rsquo;s user-agent string, or any cookie, and this
       data is never linked to your account. It cannot identify you and is not used to
-      track you across other websites. We honour the Do Not Track browser setting.</li>
+      track you across other websites. We honour the Do Not Track browser setting.</li>{ads_bullet}
     <li><strong>Usage information:</strong> basic technical data such as log records needed to operate
       and secure the Service.</li>
 </ul>

@@ -440,6 +440,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>{shared_css}{extra_css}</style>
+{pixel_script}
 </head>
 <body>
 
@@ -718,6 +719,30 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
+def _pixel_script() -> str:
+    """The Meta Pixel, present ONLY while META_PIXEL_ID is configured —
+    ads not running means no third-party script and the privacy page's
+    advertising section stays hidden with it (legal_content.py gates on
+    the same env var; they must move together). Honours Do Not Track
+    exactly like the first-party analytics beacon does."""
+    pid = (os.environ.get("META_PIXEL_ID") or "").strip()
+    if not pid:
+        return ""
+    return (
+        "<script>\n"
+        "if (!(navigator.doNotTrack === '1' || window.doNotTrack === '1')) {\n"
+        "!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?"
+        "n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;"
+        "n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;"
+        "t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}"
+        "(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');\n"
+        f"fbq('init', '{pid}');\n"
+        "fbq('track', 'PageView');\n"
+        "}\n"
+        "</script>"
+    )
+
+
 def _render_shell(*, title: str, description: str, content_html: str, path: str = "/",
                   active: str = "", extra_css: str = "", extra_scripts: str = "") -> str:
     """Render any page in the shared shell. `active` keys into the nav
@@ -746,6 +771,7 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
         content=content_html,
         extra_scripts=extra_scripts,
         app_url=APP_URL,
+        pixel_script=_pixel_script(),
         **active_map,
     )
 
@@ -5112,7 +5138,8 @@ class LeadIntakeRequest(BaseModel):
 
 
 async def handle_lead_intake(req: LeadIntakeRequest,
-                             request: Any = None) -> Dict[str, Any]:
+                             request: Any = None,
+                             background_tasks: Any = None) -> Dict[str, Any]:
     """Validate + persist + notify. Honeypot returns success silently
     so bots don't learn they were rejected. `request` (the Starlette
     request, when the route passes it) supplies the Referer header —
@@ -5254,6 +5281,24 @@ async def handle_lead_intake(req: LeadIntakeRequest,
             logger.warning(f"lead confirmation email failed: {e}")
     except Exception as e:
         logger.warning(f"resend import/send failed: {e}")
+
+    # 3. Growth arc Rung 2 — tell Meta a Lead happened, AFTER the
+    # response (BackgroundTasks), so ad delivery optimizes toward people
+    # who apply rather than people who click. No-op unless META_PIXEL_ID
+    # + META_CAPI_ACCESS_TOKEN are configured. The honeypot returned
+    # early above, so anything reaching here is a human.
+    try:
+        import meta_capi
+        if background_tasks is not None and meta_capi.configured():
+            ctx = meta_capi.request_context(request)
+            background_tasks.add_task(
+                meta_capi.send_event, "Lead",
+                email=email,
+                event_id=str(inserted_id) if inserted_id else None,
+                event_source_url="https://mysolutionist.app/get-started",
+                **ctx)
+    except Exception as e:
+        logger.warning(f"capi lead schedule failed: {e}")
 
     logger.info(f"new lead persisted id={inserted_id} from {email}")
     return {"ok": True, "id": inserted_id}

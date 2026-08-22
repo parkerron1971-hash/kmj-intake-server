@@ -123,7 +123,7 @@ def _brand_head_meta_tags(business_id: str) -> str:
     return "\n    ".join(parts)
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from auth_supabase import require_user, AuthedUser
 from business_access import business_access
 from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
@@ -6797,10 +6797,12 @@ async def public_login_redirect(request: Request):
     return RedirectResponse(url=MARKETING_APP_URL, status_code=302)
 
 # Intake form submission — POSTed via fetch() from /get-started. The
-# request rides along so lead_attribution can read the Referer header.
+# request rides along so lead_attribution can read the Referer header;
+# background_tasks so the Meta CAPI Lead event fires after the response.
 @router.post("/api/leads", include_in_schema=False)
-async def post_lead(req: LeadIntakeRequest, request: Request):
-    return await handle_lead_intake(req, request)
+async def post_lead(req: LeadIntakeRequest, request: Request,
+                    background_tasks: BackgroundTasks):
+    return await handle_lead_intake(req, request, background_tasks)
 
 # A2P CTA page — the publicly verifiable SMS opt-in (2026-07-04).
 # Carriers' reviewers fetch this; it must stay public + crawlable.

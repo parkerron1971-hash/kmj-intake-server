@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import lead_attribution
@@ -220,7 +220,8 @@ def _attribution_from_funnel(email: Optional[str]) -> Optional[Dict[str, Any]]:
 
 @router.post("/businesses/create")
 def create_business(body: CreateBusinessBody,
-                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+                    user: AuthedUser = Depends(require_user),
+                    background_tasks: BackgroundTasks = None) -> Dict[str, Any]:
     """Replaces the frontend's direct PostgREST insert. Enforces, in order:
       1. Launch admission (invite-only): grandfathered or invited.
       2. Tier business cap (grandfathered bypass; advisory→REAL now).
@@ -287,6 +288,21 @@ def create_business(body: CreateBusinessBody,
     row = (res or [None])[0] if isinstance(res, list) else res
     if not row:
         raise HTTPException(500, "business insert failed")
+
+    # Growth arc Rung 2 — tell Meta a signup completed, after the
+    # response. No-op unless the pixel + CAPI token are configured.
+    try:
+        import meta_capi
+        if background_tasks is not None and meta_capi.configured():
+            a = body.attribution or {}
+            background_tasks.add_task(
+                meta_capi.send_event, "CompleteRegistration",
+                email=getattr(user, "email", None),
+                event_id=str(row.get("id") or "") or None,
+                fbp=a.get("fbp"), fbc=a.get("fbc"))
+    except Exception as e:
+        logger.warning(f"[access] capi registration schedule failed: {e}")
+
     return {"ok": True, "business": row}
 
 
