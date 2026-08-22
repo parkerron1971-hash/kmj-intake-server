@@ -3343,7 +3343,7 @@ def render_home() -> str:
             <div class="app-body">""" + SIDEBAR + """
               <div class="app-canvas">
                 <div class="ah-rule"></div>
-                <div class="ah-eyebrow">The Academy &middot; Foundation Track</div>
+                <div class="ah-eyebrow">The Academy &middot; Legal &amp; Tax Setup</div>
                 <div style="display:flex;align-items:center;gap:14px;">
                   <span class="ring"><i>62%</i></span>
                   <span style="flex:1;"><span class="ah-title" style="display:block;">5 of 8 courses sealed</span>
