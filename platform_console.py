@@ -108,6 +108,9 @@ API_REGISTRY: List[Dict[str, Any]] = [
     {"id": "meta_ads",  "name": "Meta Ads (Pixel + CAPI)", "envs": ["META_PIXEL_ID", "META_CAPI_ACCESS_TOKEN"],
      "powers": "Ad measurement for the platform's own marketing — pixel on mysolutionist.app + server-side Lead / CompleteRegistration / Subscribe conversions",
      "touchpoints": "meta_capi.py, marketing_pages.py, launch_access.py, stripe_billing.py"},
+    {"id": "meta_spend", "name": "Meta Ads spend (read-only)", "envs": ["META_ADS_ACCESS_TOKEN", "META_AD_ACCOUNT_ID"],
+     "powers": "Ad spend + CAC on the Growth panel — campaigns stay managed in Ads Manager; this only reads what they cost",
+     "touchpoints": "meta_ads.py, platform_console.py:/platform/growth"},
     {"id": "webpush",   "name": "Web Push (VAPID)", "envs": ["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY"],
      "powers": "Chief notifications to phones (PWA push)",
      "touchpoints": "push sender"},
@@ -672,6 +675,21 @@ async def growth_summary(days: int = 30, _owner=Depends(require_owner)):
         "subscription_status": b.get("subscription_status"),
     } for b in recent]
 
+    # Rung 3 — spend next to what it bought. Dark ({"configured": False},
+    # no card rendered) until META_ADS_ACCESS_TOKEN + META_AD_ACCOUNT_ID
+    # are set. CAC divides Meta spend by the window's Meta-channel
+    # signups — both sides measured here, so the number is honest, and
+    # None whenever either side is zero rather than a fake $0.
+    import meta_ads
+    ads = await meta_ads.spend_summary(days)
+    if ads.get("configured"):
+        paid_signups = sum(v["signups"] for k, v in channels.items()
+                           if k in ("facebook", "instagram", "meta", "fb", "ig"))
+        ads["paid_signups_window"] = paid_signups
+        ads["cac_cents"] = (int(ads["spend_cents"] / paid_signups)
+                            if ads.get("ok") and ads.get("spend_cents") and paid_signups
+                            else None)
+
     return {
         "ok": True,
         "days": days,
@@ -687,6 +705,7 @@ async def growth_summary(days: int = 30, _owner=Depends(require_owner)):
         "recent_signups": recent_signups,
         "lead_statuses": lead_statuses,
         "truncated_traffic": len(events) >= 50000,
+        "ads": ads,
     }
 
 
