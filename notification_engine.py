@@ -148,15 +148,23 @@ def _require_access(business_id: str, user: AuthedUser,
 
 
 async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str,
-                       max_tokens: int = 600) -> str:
+                       max_tokens: int = 600,
+                       business_id: Optional[str] = None) -> str:
     key = _anthropic_key()
     if not key:
         return ""
     try:
+        # business_id + units=0 (2026-08-22): these rows were the seam's
+        # unattributed poster child — 123 calls in 14 days billed to
+        # nobody. Attribution makes the per-business cost visible;
+        # units=0 keeps the doctrine that PROACTIVE work the
+        # practitioner never asked for (briefs, pings, urgent alerts)
+        # bills nothing — same rule as /chief/insights and
+        # /chief/playbook in pricing_config.
         resp = await llm_call.apost(client, {
             "model": NOTIF_MODEL, "max_tokens": max_tokens, "system": system,
             "messages": [{"role": "user", "content": user_msg}],
-        }, timeout=HTTP_TIMEOUT, key=key)
+        }, timeout=HTTP_TIMEOUT, key=key, business_id=business_id, units=0)
     except httpx.HTTPError as e:
         logger.warning(f"Claude request failed: {e}")
         return ""
@@ -367,7 +375,8 @@ async def _ai_generate_notification(
         '"suggested_action_text": "Yes, do that" | null, '
         '"action_payload": { ... } | null}'
     )
-    raw = await _call_claude(client, system_prompt, user_msg, max_tokens=700)
+    raw = await _call_claude(client, system_prompt, user_msg, max_tokens=700,
+                             business_id=str(biz.get("id") or "") or None)
     parsed = _extract_json(raw)
     if not parsed or not parsed.get("title") or not parsed.get("body"):
         return {
