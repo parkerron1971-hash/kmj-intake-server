@@ -122,9 +122,12 @@ async def invite(biz: str, body: InviteBody, request: Request,
     inviter_role = require_role(biz, str(user.id), "manager")
     if body.role == "admin" and _ROLE_RANK[inviter_role] < _ROLE_RANK["admin"]:
         raise HTTPException(403, "only an admin or the owner can invite admins")
+    # comp_tier in the select (flip-test class, 2026-08-22): without it a
+    # comped business resolves to NO plan and the seat cap reads 1 —
+    # blocking the very accounts comp_tier exists to unblock.
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,name,owner_id,subscription_status,"
-        f"subscription_plan&limit=1") or []
+        f"subscription_plan,comp_tier&limit=1") or []
     biz_row = rows[0] if rows else {}
     if body.role not in _ROLES:
         raise HTTPException(400, f"role must be one of {_ROLES}")
@@ -181,7 +184,7 @@ async def invite(biz: str, body: InviteBody, request: Request,
 def list_team(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     require_role(biz, str(user.id), "manager")
     rows0 = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,subscription_status,subscription_plan&limit=1") or []
+        f"/businesses?id=eq.{biz}&select=id,subscription_status,subscription_plan,comp_tier&limit=1") or []
     biz_row = rows0[0] if rows0 else {}
     rows = sb_clients.sb_get_as_service(
         f"/business_users?business_id=eq.{biz}&status=in.(invited,active)"

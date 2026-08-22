@@ -24,6 +24,14 @@ import feature_gates
 
 logger = logging.getLogger("billing_limits")
 
+# Customer-facing plan names. The top tier's KEY stays 'practice'
+# everywhere (env vars, Stripe lookup keys, required_plan in the 402
+# payload — the frontend maps the key itself), but its NAME has been
+# "Solutionist" since the 8/19 rename. The flip test caught the 402
+# message still saying "Practice-plan feature".
+PLAN_DISPLAY = {"starter": "Starter", "professional": "Professional",
+                "practice": "Solutionist"}
+
 
 def require_feature(business_id: str, feature: str) -> None:
     """The 402 gate for tier features — the first production caller of
@@ -53,8 +61,8 @@ def require_feature(business_id: str, feature: str) -> None:
         "error": "feature_locked",
         "feature": feature,
         "required_plan": min_plan,
-        "message": (f"This is a {min_plan.title()}-plan feature. "
-                    "Upgrade in Settings → Billing to unlock it."),
+        "message": (f"This is a {PLAN_DISPLAY.get(min_plan, min_plan.title())}"
+                    "-plan feature. Upgrade in Settings → Billing to unlock it."),
     })
 
 
@@ -135,9 +143,16 @@ def _month_start_iso() -> str:
 def owner_best_plan_row(owner_id: str) -> Optional[Dict[str, Any]]:
     """The owned business row whose subscription resolves to the highest
     tier (None if no business resolves to a plan)."""
+    # comp_tier is IN the select on purpose — the flip test (2026-08-22)
+    # caught a comped Solutionist business resolving to NO plan here, so
+    # its owner was capped at 1 business instead of 3. plan_of() reads
+    # comp_tier first; a select that omits the column silently disables
+    # every comp account for whatever cap the row feeds. Same class as
+    # the wrong-column-reads-as-missing-row outage: prefer select=* or
+    # carry every column plan_of() consumes.
     rows = sb_clients.sb_get_as_service(
         f"/businesses?owner_id=eq.{owner_id}&is_active=eq.true"
-        f"&select=id,subscription_status,subscription_plan&limit=100") or []
+        f"&select=id,subscription_status,subscription_plan,comp_tier&limit=100") or []
     best, best_rank = None, 0
     for r in rows:
         plan = feature_gates.plan_of(r)
@@ -196,7 +211,7 @@ def chief_usage(business_id: str, biz_row: Optional[Dict[str, Any]] = None) -> D
     if biz_row is None:
         rows = sb_clients.sb_get_as_service(
             f"/businesses?id=eq.{business_id}"
-            f"&select=id,subscription_status,subscription_plan&limit=1") or []
+            f"&select=id,subscription_status,subscription_plan,comp_tier&limit=1") or []
         biz_row = rows[0] if rows else None
     used = chief_messages_this_month(business_id)
     limit = feature_gates.limit_for(biz_row, "chief_messages_monthly")
@@ -224,7 +239,7 @@ def can_connect_account(business_id: str,
     if biz_row is None:
         rows = sb_clients.sb_get_as_service(
             f"/businesses?id=eq.{business_id}"
-            f"&select=id,owner_id,subscription_status,subscription_plan&limit=1") or []
+            f"&select=id,owner_id,subscription_status,subscription_plan,comp_tier&limit=1") or []
         biz_row = rows[0] if rows else None
     if usage_metering.is_grandfathered_business(business_id, biz_row):
         return {"ok": True, "allowed": True, "count": None, "limit": None,
@@ -252,7 +267,7 @@ def can_add_seat(business_id: str, biz_row: Optional[Dict[str, Any]] = None) -> 
     if biz_row is None:
         rows = sb_clients.sb_get_as_service(
             f"/businesses?id=eq.{business_id}"
-            f"&select=id,subscription_status,subscription_plan&limit=1") or []
+            f"&select=id,subscription_status,subscription_plan,comp_tier&limit=1") or []
         biz_row = rows[0] if rows else None
     count = seat_count(business_id)
     limit = feature_gates.limit_for(biz_row, "max_seats")
