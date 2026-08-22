@@ -1591,6 +1591,28 @@ FOLD_SCRIPT = """
 # add a range-aware responder in the same pass.
 # ══════════════════════════════════════════════════════════════════════
 
+# The 55-second walkthrough. It sat on the home page until 2026-08-21,
+# where it was the fifth place in a row the page showed the product:
+# the fold panel, the Chief chat, the six-room carousel, this, and
+# then the device band. It lives on /features now, which the home page
+# already links to from the rooms section, and it is one constant plus
+# one section so putting it back on the home page is two edits.
+DEMO_CSS = """
+      .demo-section{padding:96px 0;border-top:1px solid var(--border);}
+      .demo-frame{max-width:900px;margin:0 auto;border-radius:14px;overflow:hidden;
+        border:1px solid var(--border-strong);background:var(--surface);box-shadow:0 40px 90px rgba(0,0,0,.6);}
+      .demo-chrome{display:flex;align-items:center;gap:7px;padding:11px 16px;border-bottom:1px solid var(--border);
+        background:#0C0F14;}
+      .demo-chrome span{width:10px;height:10px;border-radius:50%;background:var(--border-strong);}
+      .demo-chrome span:nth-child(1){background:#EF4444;}
+      .demo-chrome span:nth-child(2){background:var(--warning);}
+      .demo-chrome span:nth-child(3){background:var(--success);}
+      .demo-chrome em{margin-left:10px;font-style:normal;font-size:11px;letter-spacing:.16em;
+        text-transform:uppercase;color:var(--text-dim);}
+      .demo-video{width:100%;display:block;aspect-ratio:16/9;background:#000;}
+      .demo-caption{text-align:center;margin-top:18px;font-size:13px;color:var(--text-dim);}
+"""
+
 DEVICE_BAND_CSS = """
       /* Slot widths are variables so one media query re-sizes the whole
          scene — a wide monitor needs BIGGER screens, not the same ones
@@ -2745,20 +2767,6 @@ def render_home() -> str:
       /* ══════════════════════════════════════════════════════════════
          rest of page
          ══════════════════════════════════════════════════════════════ */
-      .demo-section{padding:96px 0;border-top:1px solid var(--border);}
-      .demo-frame{max-width:900px;margin:0 auto;border-radius:14px;overflow:hidden;
-        border:1px solid var(--border-strong);background:var(--surface);box-shadow:0 40px 90px rgba(0,0,0,.6);}
-      .demo-chrome{display:flex;align-items:center;gap:7px;padding:11px 16px;border-bottom:1px solid var(--border);
-        background:#0C0F14;}
-      .demo-chrome span{width:10px;height:10px;border-radius:50%;background:var(--border-strong);}
-      .demo-chrome span:nth-child(1){background:#EF4444;}
-      .demo-chrome span:nth-child(2){background:var(--warning);}
-      .demo-chrome span:nth-child(3){background:var(--success);}
-      .demo-chrome em{margin-left:10px;font-style:normal;font-size:11px;letter-spacing:.16em;
-        text-transform:uppercase;color:var(--text-dim);}
-      .demo-video{width:100%;display:block;aspect-ratio:16/9;background:#000;}
-      .demo-caption{text-align:center;margin-top:18px;font-size:13px;color:var(--text-dim);}
-
       .audience{padding:80px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
       .audience-grid{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;}
       .audience-pill{display:inline-flex;align-items:center;gap:9px;padding:11px 20px;background:var(--surface);
@@ -3295,22 +3303,6 @@ def render_home() -> str:
   </div>
 </section>
 
-<section id="demo" class="demo-section">
-  <div class="container">
-    <div class="section-head reveal">
-            <span data-spine class="eyebrow">See it move</span>
-      <h2>Fifty-five seconds, <span class="gradient-text">end to end.</span></h2>
-      <p>The real system, scene by scene: Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</p>
-    </div>
-    <div class="demo-frame reveal">
-      <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
-      <video class="demo-video" controls playsinline preload="metadata" poster="/assets/demo-poster.jpg?v=2">
-        <source src="/assets/demo.mp4?v=3" type="video/mp4">
-        Your browser doesn't support embedded video - <a href="/assets/demo.mp4?v=3">download the demo</a>.
-      </video>
-    </div>
-  </div>
-</section>
 
 
 <!-- ══ THE DEVICE BAND — the closer ══════════════════════════════════
@@ -3829,7 +3821,7 @@ def render_home() -> str:
 # ══════════════════════════════════════════════════════════════════════
 
 def render_features() -> str:
-    extra_css = REPLICA_KIT_CSS + FEATURES_FX_CSS + """
+    extra_css = REPLICA_KIT_CSS + FEATURES_FX_CSS + DEMO_CSS + """
       .feature-section{padding:64px 0;border-bottom:1px solid var(--border);}
       .feature-section:last-of-type{border-bottom:none;}
       .fs-grid{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;}
@@ -4090,6 +4082,23 @@ def render_features() -> str:
           <li>Real engagement tracking</li><li>Server-side token storage</li>
         </ul>
       </div>
+    </div>
+  </div>
+</section>
+
+<section id="demo" class="demo-section">
+  <div class="container">
+    <div class="section-head reveal">
+            <span data-spine class="eyebrow">See it move</span>
+      <h2>Fifty-five seconds, <span class="gradient-text">end to end.</span></h2>
+      <p>The real system, scene by scene: Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</p>
+    </div>
+    <div class="demo-frame reveal">
+      <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
+      <video class="demo-video" controls playsinline preload="metadata" poster="/assets/demo-poster.jpg?v=2">
+        <source src="/assets/demo.mp4?v=3" type="video/mp4">
+        Your browser doesn't support embedded video - <a href="/assets/demo.mp4?v=3">download the demo</a>.
+      </video>
     </div>
   </div>
 </section>
