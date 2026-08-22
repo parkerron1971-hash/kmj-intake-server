@@ -206,6 +206,12 @@ def run_search(business_id: str, body: SearchBody,
                         f"you've already run are saved below."),
         })
 
+    # Then the tier. Kevin's ruling 2026-08-22: the Sourcing Desk rides
+    # the hero tier — an AI surface, same rule as site_concierge and
+    # agent_connector. Viewing landed vendors/quotes stays open on
+    # every plan; NEW searches and RFQs are Professional+.
+    billing_limits.require_feature(business_id, "sourcing_desk")
+
     # Then the meter. This is an AI action like any other.
     billing_limits.require_units(business_id)
 
@@ -215,6 +221,7 @@ def run_search(business_id: str, body: SearchBody,
         qty=body.qty,
         budget_per_unit=body.budget_per_unit,
         business_context=_business_context(biz_row, business_id),
+        business_id=business_id,
     )
 
     row = {
@@ -341,6 +348,7 @@ def preview_rfq(business_id: str, body: RfqBody,
     """Compose and send NOTHING. The same composer the send uses, so the
     preview is the email rather than an impression of it."""
     biz = _owner(business_id, user)
+    billing_limits.require_feature(business_id, "sourcing_desk")
     need, ids = _validated_rfq(body)
     offering = _offering(business_id, body.offering_id)
     sells = _sells(business_id)
@@ -380,6 +388,7 @@ async def send_rfq(business_id: str, body: RfqBody,
     import email_sender
 
     biz = _owner(business_id, user)
+    billing_limits.require_feature(business_id, "sourcing_desk")
     need, ids = _validated_rfq(body)
 
     sent_today = rfqs_today(business_id)

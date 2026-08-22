@@ -155,6 +155,24 @@ def doc_gen() -> int:
     return _dial("DOC_GEN", "PRICE_", 40)
 
 
+def sourcing_search() -> int:
+    """One Sourcing Desk vendor search (both model passes + the live web
+    sweep — the whole action, not per call).
+
+    Priced 50 on 2026-08-22 (Kevin's ruling, revised same day from an
+    initial 25 once a booking error surfaced): the engine runs
+    claude-opus-5, which was missing from MODEL_PRICING_CENTS and booked
+    at the Sonnet fallback rate — the real cost of a search is ~60c, not
+    the ~35c the first number was priced against. 50 credits collects
+    ~67-80c at pack/marginal rates: honest margin, cheap next to what a
+    vendor shortlist is worth.
+
+    The RFQ letter is deterministic (rfq_engine, no model call) and
+    free; require_units still gates the send so a dead subscription
+    can't email vendors."""
+    return _dial("SOURCING_SEARCH", "PRICE_", 50)
+
+
 def chat_price() -> int:
     """One Chief turn.
 
@@ -398,6 +416,12 @@ def unit_weights() -> Dict[str, int]:
         "/doctemplates/compose": doc_gen(),
         "/doctemplates": doc_gen(),
         "/docintel": doc_gen(),
+        # One vendor search. The engine writes explicit units on its own
+        # rows (the price on pass 1's marker row, 0 on pass 2 — the
+        # marker carries the whole bill, the composer double-billing
+        # rule); this entry is the floor for any marker row logged
+        # without units and the price_list display value.
+        "/sourcing/search": sourcing_search(),
         "/concierge/reply": concierge_price(),
         "/composer/coach/turn": chat_price(),
 
@@ -620,6 +644,7 @@ def snapshot() -> Dict[str, object]:
             "small_edit": small_edit(),
             "hero_regen": hero_regen(),
             "doc_gen": doc_gen(),
+            "sourcing_search": sourcing_search(),
             "chat": chat_price(),
             "concierge": concierge_price(),
             "premium_voice": premium_voice_price(),

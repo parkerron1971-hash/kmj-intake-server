@@ -55,10 +55,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlsplit
 
 import llm_call
+import pricing_config
 
 logger = logging.getLogger("sourcing_engine")
 
@@ -365,23 +367,60 @@ def _need_line(need: str, region: Optional[str], qty: Optional[int],
     return "\n".join(bits)
 
 
-def _post(payload: Dict[str, Any]) -> Tuple[bool, Any]:
+def _meter_pass(data: Any, *, business_id: Optional[str],
+                units: int, started: float) -> None:
+    """Self-metering (2026-08-22). Until now these calls were logged by
+    the llm_call seam as `llm:sourcing_engine` with NO business_id — so
+    the platform's priciest per-call action could never draw down an
+    allowance and billed 0 credits on every plan. Now each pass writes
+    its own row: endpoint /sourcing/search, the practitioner attached,
+    and the price on pass 1's marker row (pass 2 rides at 0 — the marker
+    carries the whole bill, the composer double-billing rule).
+
+    Never raises: a metering failure must not fail a search that already
+    succeeded."""
+    try:
+        usage = (data or {}).get("usage") or {}
+        from api_usage_logger import log_api_usage_sync
+        log_api_usage_sync(
+            endpoint="/sourcing/search",
+            model=str((data or {}).get("model") or SOURCING_MODEL),
+            input_tokens=int(usage.get("input_tokens") or 0),
+            output_tokens=int(usage.get("output_tokens") or 0),
+            cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
+            cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+            business_id=business_id,
+            task_type="sourcing",
+            units=units,
+            duration_ms=int((time.time() - started) * 1000),
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("[sourcing] metering failed: %s", e)
+
+
+def _post(payload: Dict[str, Any], *,
+          business_id: Optional[str] = None,
+          units: int = 0) -> Tuple[bool, Any]:
+    started = time.time()
     resp = llm_call.post(payload, timeout=_TIMEOUT, task="sourcing")
     if resp.status_code != 200:
         logger.warning("[sourcing] model call %s: %s",
                        resp.status_code, resp.text[:400])
         return False, None
     try:
-        return True, resp.json()
+        data = resp.json()
     except Exception:
         return False, None
+    _meter_pass(data, business_id=business_id, units=units, started=started)
+    return True, data
 
 
 def search_vendors(*, need: str,
                    region: Optional[str] = None,
                    qty: Optional[int] = None,
                    budget_per_unit: Optional[float] = None,
-                   business_context: Optional[str] = None) -> Dict[str, Any]:
+                   business_context: Optional[str] = None,
+                   business_id: Optional[str] = None) -> Dict[str, Any]:
     """Run one sourcing search.
 
     Never raises for a model or search failure — returns a result whose
@@ -412,7 +451,7 @@ def search_vendors(*, need: str,
             "content": _need_line(need, region, qty, budget_per_unit,
                                   business_context),
         }],
-    })
+    }, business_id=business_id, units=pricing_config.sourcing_search())
     if not ok:
         return {**empty,
                 "coverage_note": "The search couldn't run just now. "
@@ -446,7 +485,7 @@ def search_vendors(*, need: str,
                         f"ALLOWED SOURCE URLS (copy exactly, nothing else "
                         f"is accepted):\n{allowed_list}"),
         }],
-    })
+    }, business_id=business_id, units=0)
     if not ok2:
         return {**empty, "sources": sources,
                 "coverage_note": "The search ran but the results couldn't be "
