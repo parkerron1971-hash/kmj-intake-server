@@ -2589,7 +2589,7 @@ def render_home() -> str:
     <div class="hero-grid">
       <div class="hero-copy">
         <h1 class="reveal">Every Problem <span class="gradient-text">Has A Solution.</span></h1>
-        <p class="hero-anchor reveal reveal-delay-1"><b>The Solutionist System</b> is one workspace that runs your whole business &mdash; clients, money, marketing, your site &mdash; with a chief of staff who does the work, under one subscription.</p>
+        <p class="hero-anchor reveal reveal-delay-1"><b>The Solutionist System</b> is one workspace that runs your whole business: clients, money, marketing, and your site. A chief of staff does the work, all under one subscription.</p>
         <p class="hero-slot-line reveal reveal-delay-1">
           <span>Tell it what you do &mdash;</span>
           <span class="hero-slot"><span id="heroWord">barber</span><span class="caret" aria-hidden="true"></span></span>
