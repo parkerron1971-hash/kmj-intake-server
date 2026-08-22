@@ -1,0 +1,112 @@
+<!doctype html>
+<!--
+  Source for static/brand/solutionist-og.png, the 1200x630 card every
+  share of mysolutionist.app renders.
+
+  This file exists because the previous card did not have one. It was
+  screenshotted from a throwaway page in July, the page was never kept,
+  and by the time the hero copy changed there was nothing to re-render
+  from. Regenerate with:
+
+      python tools/render_og_card.py
+
+  and bump the ?v= on the og:image / twitter:image tags in
+  marketing_pages.py and legal_content.py, or caches will keep serving
+  the old picture.
+
+  Rules this card follows, same as the page it advertises:
+    * the statement is TITLE CASE (Kevin's ruling; sentence case is the
+      shape it drifts back to, and the July card had already drifted),
+    * "Has A Solution." carries the one licensed gradient on the site,
+      the same 103deg blue-into-cyan the hero uses,
+    * no em dashes anywhere,
+    * the subhead says what the system IS before it says why it is
+      better, which is the whole point of the anchor line on the page.
+-->
+<meta charset="utf-8">
+<title>Solutionist OG card</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#08090C; --accent:#2E7DFF; --info:#22D3EE;
+    --text-primary:#F7F8FA; --text-secondary:#C9CDD6;
+    --text-muted:#949AA6; --text-dim:#6B707B;
+    --border:rgba(255,255,255,0.09);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:1200px;height:630px;}
+  body{background:var(--bg);font-family:'Inter',system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;overflow:hidden;}
+
+  .card{position:relative;width:1200px;height:630px;overflow:hidden;
+    padding:64px 72px;display:flex;flex-direction:column;}
+
+  /* the same light the fold sits in: one blue bloom off the left
+     shoulder, one cyan off the bottom right, both far enough out that
+     the type never sits in the bright part of either */
+  .glow{position:absolute;border-radius:50%;filter:blur(90px);pointer-events:none;}
+  .g1{width:820px;height:820px;left:-300px;top:-380px;
+      background:radial-gradient(circle, rgba(46,125,255,.30), transparent 68%);}
+  .g2{width:700px;height:700px;right:-240px;bottom:-360px;
+      background:radial-gradient(circle, rgba(34,211,238,.16), transparent 68%);}
+  .grid{position:absolute;inset:0;pointer-events:none;opacity:.5;
+    background:
+      linear-gradient(rgba(255,255,255,.022) 1px, transparent 1px) 0 0/64px 64px,
+      linear-gradient(90deg, rgba(255,255,255,.022) 1px, transparent 1px) 0 0/64px 64px;
+    mask-image:radial-gradient(120% 90% at 30% 20%, #000 20%, transparent 78%);
+    -webkit-mask-image:radial-gradient(120% 90% at 30% 20%, #000 20%, transparent 78%);}
+
+  .row{position:relative;z-index:2;display:flex;align-items:center;
+    justify-content:space-between;}
+  .brand{display:flex;align-items:center;gap:16px;}
+  .brand img{width:52px;height:52px;object-fit:contain;display:block;}
+  .brand b{font-family:'Inter Tight',sans-serif;font-size:27px;font-weight:600;
+    color:var(--text-primary);letter-spacing:-.012em;}
+  .beta{font-size:14px;font-weight:600;letter-spacing:.17em;text-transform:uppercase;
+    color:var(--accent);border:1px solid rgba(46,125,255,.42);
+    background:rgba(46,125,255,.10);border-radius:999px;padding:11px 22px;}
+
+  .mid{position:relative;z-index:2;margin-top:auto;margin-bottom:auto;}
+  h1{font-family:'Inter Tight',sans-serif;font-size:88px;font-weight:700;
+    line-height:1.0;letter-spacing:-.042em;color:var(--text-primary);}
+  /* the single licensed gradient on the whole property */
+  h1 .grad{background:linear-gradient(103deg,
+      var(--accent) 0%, #4C9DFF 30%, #45C9F0 58%, var(--info) 82%);
+    -webkit-background-clip:text;background-clip:text;
+    -webkit-text-fill-color:transparent;color:transparent;}
+
+  .sub{margin-top:30px;font-size:29px;line-height:1.45;letter-spacing:-.012em;
+    color:var(--text-muted);max-width:1000px;}
+  .sub b{color:var(--text-primary);font-weight:600;}
+
+  .foot{position:relative;z-index:2;display:flex;align-items:center;gap:12px;
+    font-size:20px;color:var(--text-muted);letter-spacing:-.005em;}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);
+    box-shadow:0 0 14px rgba(46,125,255,.85);}
+</style>
+
+<div class="card">
+  <div class="glow g1"></div>
+  <div class="glow g2"></div>
+  <div class="grid"></div>
+
+  <div class="row">
+    <div class="brand">
+      <img src="solutionist-mark.png" alt="">
+      <b>The Solutionist System</b>
+    </div>
+    <span class="beta">Private Beta</span>
+  </div>
+
+  <div class="mid">
+    <h1>Every Problem<br><span class="grad">Has A Solution.</span></h1>
+    <!-- one sentence per line, on purpose: left to wrap it strands the
+         word "work." alone on the second line -->
+    <p class="sub">One workspace that runs your whole business.<br>
+      <b>A chief of staff does the work.</b></p>
+  </div>
+
+  <div class="foot"><span class="dot"></span>mysolutionist.app</div>
+</div>
