@@ -159,8 +159,14 @@ def _tier_allows_connector(business_id: str) -> bool:
         return True
     try:
         import feature_gates
+        # This select was DOUBLY starved (flip-test class, 2026-08-22):
+        # no subscription_status meant even a PAYING subscriber resolved
+        # to no plan here (plan_of requires an active/trialing status),
+        # and no comp_tier meant comped accounts failed too. Under
+        # enforcement this denied agent_connector to everyone.
         rows = sb_clients.sb_get_as_service(
-            f"/businesses?id=eq.{business_id}&select=id,subscription_plan&limit=1")
+            f"/businesses?id=eq.{business_id}"
+            f"&select=id,subscription_status,subscription_plan,comp_tier&limit=1")
         if not rows:
             return True
         return bool(feature_gates.has_feature(rows[0], "agent_connector"))

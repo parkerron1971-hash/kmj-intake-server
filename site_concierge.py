@@ -170,7 +170,7 @@ def _biz_row(business_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{urllib.parse.quote(str(business_id), safe='')}"
         f"&select=id,name,type,settings,owner_id,stripe_account_id,"
-        f"subscription_status,subscription_plan&limit=1") or []
+        f"subscription_status,subscription_plan,comp_tier&limit=1") or []
     return rows[0] if rows else None
 
 

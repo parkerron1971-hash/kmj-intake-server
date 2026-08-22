@@ -552,7 +552,7 @@ def billing_readiness(_owner=Depends(require_owner)) -> Dict[str, Any]:
     grandfathered = sum(1 for p in profiles if p.get("is_grandfathered"))
     bizzes = sb_clients.sb_get_as_service(
         "/businesses?is_active=eq.true"
-        "&select=id,owner_id,subscription_status,subscription_plan&limit=2000") or []
+        "&select=id,owner_id,subscription_status,subscription_plan,comp_tier&limit=2000") or []
     by_plan: Dict[str, int] = {}
     unsubscribed = []
     gf_ids = {p["user_id"] for p in profiles if p.get("is_grandfathered")}
