@@ -149,6 +149,30 @@ def compose_purchase_order(biz: Dict[str, Any], offering: Dict[str, Any],
     }
 
 
+def one_tap_vendor(business_id: str, offering_id: str) -> Optional[Dict[str, Any]]:
+    """The primary vendor for this product, IF the owner has granted a
+    one-tap send to them. None otherwise.
+
+    Best-effort: a lookup failure means the alert falls back to drafting,
+    which is the current behaviour and always safe. The permission is
+    never assumed — only ever read.
+    """
+    try:
+        links = sb_clients.sb_get_as_service(
+            f"/offering_suppliers?offering_id=eq.{offering_id}"
+            f"&business_id=eq.{business_id}&is_primary=is.true"
+            f"&select=supplier_id&limit=1") or []
+        if not links:
+            return None
+        rows = sb_clients.sb_get_as_service(
+            f"/suppliers?id=eq.{links[0]['supplier_id']}"
+            f"&chief_can_reorder=is.true&select=id,name,email&limit=1") or []
+        return rows[0] if rows else None
+    except Exception as e:
+        logger.warning(f"[reorder] one-tap lookup failed (non-fatal): {e}")
+        return None
+
+
 def clear_reorder_pending_if_restocked(business_id: str, offering_id: str,
                                        new_qty: Optional[int]) -> bool:
     """Called from every stock-RAISING path (manual adjust, Chief's
@@ -224,6 +248,19 @@ async def low_stock_reorder_sweep(now: Optional[datetime] = None) -> Dict[str, A
                 left = f"{w_qty} left" if w_qty > 0 else "sold out"
                 has_supplier = bool((worst.get("supplier_email") or "").strip())
 
+                # ONE TAP. Offered only when all three are true: the owner
+                # granted it for this vendor, there is an address to send
+                # to, and a reorder QUANTITY is on file. The last one is
+                # not bureaucracy — the notification has to be able to say
+                # exactly what the tap will order, and "tap to send an
+                # order" without a number asks for approval of something
+                # unstated.
+                w_reorder_qty = worst.get("reorder_qty")
+                one_tap = None
+                if has_supplier and w_reorder_qty:
+                    one_tap = await asyncio.to_thread(
+                        one_tap_vendor, bid, str(worst.get("id")))
+
                 if len(items) == 1:
                     title = f"{w_name}: {left} — time to reorder"
                     body = (f"Stock hit your reorder point of "
@@ -234,20 +271,35 @@ async def low_stock_reorder_sweep(now: Optional[datetime] = None) -> Dict[str, A
                     title = f"{len(items)} products hit their reorder point"
                     body = (f"{names}{more} are at or below their reorder "
                             f"points. {w_name} is furthest down ({left}).")
-                body += (" Tap and Chief drafts the purchase order — "
-                         "nothing sends without your say-so."
-                         if has_supplier else
-                         " Add a supplier on the product (or tell Chief) "
-                         "and the purchase order drafts itself.")
+                if one_tap:
+                    # Say the quantity and the vendor in the body. The tap
+                    # IS the approval, so what it will do has to be legible
+                    # before it happens, not after.
+                    vendor = (one_tap.get("name") or "your supplier").strip()
+                    body += (f" Tap to send the order — "
+                             f"{int(w_reorder_qty)} x {w_name} to {vendor}.")
+                    suggested = (f"Send {int(w_reorder_qty)} x {w_name} "
+                                 f"to {vendor}")
+                    payload = {"type": "send_purchase_order",
+                               "offering_id": str(worst.get("id")),
+                               "qty": int(w_reorder_qty)}
+                else:
+                    body += (" Tap and Chief drafts the purchase order — "
+                             "nothing sends without your say-so."
+                             if has_supplier else
+                             " Add a supplier on the product (or tell Chief) "
+                             "and the purchase order drafts itself.")
+                    suggested = f"Draft the PO for {w_name}"
+                    payload = {"type": "draft_purchase_order",
+                               "offering_id": str(worst.get("id"))}
 
                 alert = await create_urgent_alert(
                     client, bid, title=title, body=body,
                     dedup_key=f"reorder:{bid}",
                     dedup_hours=REORDER_DEDUP_HOURS,
                     priority="high",
-                    suggested_action=f"Draft the PO for {w_name}",
-                    action_payload={"type": "draft_purchase_order",
-                                    "offering_id": str(worst.get("id"))},
+                    suggested_action=suggested,
+                    action_payload=payload,
                 )
                 if alert:
                     alerts += 1
