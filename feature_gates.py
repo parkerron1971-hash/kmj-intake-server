@@ -57,6 +57,16 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # collaboration and compliance
                                            # deliverables, and this is
                                            # neither.
+    "sourcing_desk": "professional",       # find vendors on the live web +
+                                           # RFQ them (sourcing_router).
+                                           # Kevin's ruling 2026-08-22: the
+                                           # same AI-surface-rides-the-hero-
+                                           # tier rule. Gates NEW searches
+                                           # and RFQ compose/send only —
+                                           # vendors and quotes already
+                                           # landed stay readable on every
+                                           # plan (data is never plan-
+                                           # locked).
     # Practice — collaboration + compliance deliverables + scale
     "accountant_collaborator": "practice",
     "audit_trail": "practice",

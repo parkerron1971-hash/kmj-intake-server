@@ -1979,6 +1979,7 @@ _SITE_FEATURE_LABELS = (
     ("period_close", "Period closing"),
     ("contractor_payments", "Contractor payments + 1099"),
     ("accountant_package", "Year-end accountant package"),
+    ("sourcing_desk", "Sourcing Desk — find &amp; RFQ vendors"),
     ("vertical_ledgers", "Trust accounting check (IOLTA)"),
     ("vertical_reports", "Compliance reports (trust reconciliation, 990 prep)"),
     ("accountant_collaborator", "Accountant collaborator seat"),

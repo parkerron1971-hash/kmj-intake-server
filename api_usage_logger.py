@@ -72,6 +72,12 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     # Fable 5 — Mythos-class flagship: $10/MTok in, $50/MTok out.
     # (Elite-tier deep/insight lanes — the launch-gate entry.)
     "claude-fable-5":    (1000.0, 5000.0),
+    # Opus 5 — $5/MTok in, $25/MTok out. MISSING until 2026-08-22: the
+    # sourcing engine's every call fell to the Sonnet fallback below and
+    # under-booked by ~40% — the number a pricing ruling was made
+    # against. When a new model ships, its row lands here BEFORE any
+    # engine adopts it.
+    "claude-opus-5":     (500.0, 2500.0),
     # Opus 4.5–4.8 — $5/MTok in, $25/MTok out
     "claude-opus-4-8":   (500.0, 2500.0),
     "claude-opus-4-7":   (500.0, 2500.0),

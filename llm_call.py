@@ -84,7 +84,7 @@ _SELF_METERING = frozenset({
     "chief_insights", "chief_llm", "chief_of_staff", "chief_playbook",
     "design_coach", "design_intent", "doc_intelligence_router",
     "doc_templates_router", "passes", "platform_console", "site_composer",
-    "site_concierge", "spec_author", "vision_grader",
+    "site_concierge", "sourcing_engine", "spec_author", "vision_grader",
 })
 
 # Frames to walk past when deciding who the caller is. model_ladder
