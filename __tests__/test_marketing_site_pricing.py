@@ -48,6 +48,22 @@ def test_home_price_cards_read_the_dials():
     assert "no seat math" not in html.lower()
 
 
+def test_price_figure_and_its_countup_target_agree():
+    """The figure counts up to data-to, so the two must be the same
+    number. Both read one dial today, but a later edit could move the
+    label and leave the target behind, and the card would animate up to
+    a price the product does not charge.
+
+    Added 2026-08-21 with the hover pass, because this suite went green
+    with the displayed figure replaced by the word BROKEN: it pinned the
+    credits, the seats and the businesses, and never the price."""
+    html = marketing_pages.render_home()
+    prices = pricing_config.tier_price_cents()
+    for plan in ("starter", "professional", "practice"):
+        dollars = prices[plan] // 100
+        assert f'data-to="{dollars}" data-prefix="$">${dollars}</b>' in html, plan
+
+
 def test_compare_page_has_the_tier_table():
     html = marketing_pages.render_compare()
     credits = pricing_config.tier_credits()

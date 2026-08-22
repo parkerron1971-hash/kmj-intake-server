@@ -1901,6 +1901,7 @@ def _tier_dials() -> dict:
         banks = lim.get("plaid_connections")
         out[plan] = {
             "price": f"${prices.get(plan, 0) // 100}",
+            "price_num": prices.get(plan, 0) // 100,
             "credits": f"{lim['chief_messages_monthly']:,}",
             "seats": lim["max_seats"],
             "businesses": lim["max_businesses"],
@@ -1924,7 +1925,7 @@ def _price_cards_html() -> str:
         return f"""
       <div class="price-card{' is-mid' if mid else ''}">
         <div class="price-name">{name}</div>
-        <div class="price-fig"><b>{t['price']}</b><span>/month</span></div>
+        <div class="price-fig"><b class="pc-num" data-to="{t['price_num']}" data-prefix="$">{t['price']}</b><span>/month</span></div>
         <p>{blurb}</p>
         <ul class="price-facts">
           <li>{t['credits']} AI actions a month</li>
@@ -2385,6 +2386,104 @@ def render_home() -> str:
       .price-cta.is-mid:hover{background:var(--accent-2);}
       @media (prefers-reduced-motion: reduce){.price-cta:hover{transform:none;}}
       .price-note{max-width:620px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--text-muted);}
+
+      /* ── pricing: cards that answer the cursor ──────────────────────
+         Three cards published three numbers and then sat perfectly
+         still. Everything below is either hover-driven or fires once on
+         arrival. Nothing loops forever: that is the taste call (one
+         ignite moment per screen) and the battery call on a phone.
+
+         --pc-angle MUST be a registered property. CSS interpolates a
+         registered <angle>; it never interpolates a gradient, so an
+         unregistered angle gives a conic gradient that simply cannot
+         move. The var() carries its own 0deg fallback so a browser
+         without @property paints a static ring instead of throwing the
+         whole background out as invalid. */
+      @property --pc-angle{syntax:'<angle>';initial-value:0deg;inherits:false;}
+
+      .price-card{position:relative;isolation:isolate;
+        transition:transform .28s cubic-bezier(.2,.7,.3,1),
+                   border-color .28s ease, box-shadow .28s ease;}
+      /* the card's own content rides above the spotlight wash */
+      .price-card > *{position:relative;z-index:2;}
+
+      /* THE TRAVELLING EDGE — a conic gradient masked down to the 1px
+         ring. content-box mask minus full-box mask leaves the border
+         and nothing else; -webkit-mask-composite:xor is Safari's
+         spelling of mask-composite:exclude, so both ship. */
+      .price-card::before{content:'';position:absolute;inset:0;border-radius:inherit;
+        padding:1px;pointer-events:none;z-index:3;opacity:0;transition:opacity .3s ease;
+        background:conic-gradient(from var(--pc-angle,0deg),
+          transparent 0deg,
+          color-mix(in srgb, var(--accent) 70%, transparent) 34deg,
+          var(--accent) 62deg, var(--info) 92deg,
+          color-mix(in srgb, var(--info) 55%, #fff) 108deg,
+          var(--accent) 134deg, transparent 178deg, transparent 360deg);
+        -webkit-mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+        -webkit-mask-composite:xor;
+        mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+        mask-composite:exclude;}
+
+      /* THE SPOTLIGHT — a bloom parked wherever the cursor actually is.
+         --pc-x/--pc-y are written by the script on pointermove. */
+      .price-card::after{content:'';position:absolute;inset:0;border-radius:inherit;
+        pointer-events:none;z-index:1;opacity:0;transition:opacity .35s ease;
+        background:radial-gradient(340px circle at var(--pc-x,50%) var(--pc-y,0%),
+          color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%);}
+
+      .price-facts li{transition:color .3s ease, transform .3s ease;}
+      .price-facts li:nth-child(1){transition-delay:.02s;}
+      .price-facts li:nth-child(2){transition-delay:.07s;}
+      .price-facts li:nth-child(3){transition-delay:.12s;}
+      .price-facts li:nth-child(4){transition-delay:.17s;}
+
+      @media (hover:hover) and (pointer:fine){
+        .price-card:hover{transform:translateY(-4px);
+          border-color:color-mix(in srgb, var(--accent) 32%, transparent);
+          box-shadow:0 22px 48px rgba(0,0,0,.42);}
+        .price-card:hover::before{opacity:1;animation:pcTravel 2.6s linear infinite;}
+        .price-card:hover::after{opacity:1;}
+        /* the facts light in order instead of all at once */
+        .price-card:hover .price-facts li{color:var(--text-primary);transform:translateX(3px);}
+      }
+
+      /* A phone never fires :hover, so the edge runs once as each card
+         arrives instead — same signature move, one pass, no loop. The
+         script adds .is-lit and takes it back off when the run ends. */
+      .price-card.is-lit::before{opacity:1;animation:pcTravel 2.6s linear 1;}
+      @keyframes pcTravel{to{--pc-angle:360deg;}}
+
+      /* THE BUTTON — a bloom that grows out of it, and one sheen that
+         crosses it. The sheen is meant to pass over the label too, so it
+         deliberately sits above the text. */
+      .price-cta{position:relative;overflow:hidden;
+        transition:background .18s, border-color .18s, transform .18s, box-shadow .3s ease;}
+      .price-cta::after{content:'';position:absolute;inset:0;pointer-events:none;
+        background:linear-gradient(105deg, transparent 38%,
+          rgba(255,255,255,.20) 50%, transparent 62%);
+        transform:translateX(-130%);}
+      @media (hover:hover) and (pointer:fine){
+        .price-cta:hover{transform:translateY(-2px);
+          box-shadow:0 12px 30px color-mix(in srgb, var(--accent) 30%, transparent);}
+        .price-cta:hover::after{animation:pcSheen .75s ease;}
+        .price-cta.is-mid:hover{box-shadow:0 16px 42px color-mix(in srgb, var(--accent) 55%, transparent);}
+      }
+      @keyframes pcSheen{from{transform:translateX(-130%);}to{transform:translateX(130%);}}
+
+      /* touch gets the press instead of the hover */
+      @media (hover:none){
+        .price-card:active::before{opacity:1;}
+        .price-cta:active{transform:scale(.985);}
+      }
+
+      @media (prefers-reduced-motion: reduce){
+        .price-card,.price-cta,.price-facts li{transition:none;}
+        .price-card:hover{transform:none;}
+        .price-card:hover::before,.price-card.is-lit::before{animation:none;opacity:1;}
+        .price-card:hover::after{opacity:.5;}
+        .price-cta:hover{transform:none;}
+        .price-cta:hover::after{animation:none;}
+      }
 
       /* ── the chameleon section ───────────────────────────────────── */
       .shape{padding:96px 0;border-top:1px solid var(--border);}
@@ -3339,6 +3438,68 @@ def render_home() -> str:
     }
   }
   show(0, false);
+})();
+</script>
+<script>
+(function () {
+  /* Pricing cards. Three jobs: park the spotlight under the cursor,
+     count the price up when the row arrives, and — only where :hover
+     can never fire — run the travelling edge once so a phone gets the
+     same move a desktop gets on hover. */
+  var reduced = window.matchMedia &&
+                window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var fine    = window.matchMedia &&
+                window.matchMedia('(hover:hover) and (pointer:fine)').matches;
+  var cards   = [].slice.call(document.querySelectorAll('.price-card'));
+  if (!cards.length) return;
+
+  if (fine && !reduced) {
+    cards.forEach(function (c) {
+      c.addEventListener('pointermove', function (e) {
+        var r = c.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        c.style.setProperty('--pc-x', ((e.clientX - r.left) / r.width  * 100).toFixed(1) + '%');
+        c.style.setProperty('--pc-y', ((e.clientY - r.top)  / r.height * 100).toFixed(1) + '%');
+      });
+    });
+  }
+
+  function countUp(el) {
+    var to = Number(el.dataset.to || 0), pre = el.dataset.prefix || '';
+    if (!to) return;
+    if (reduced) { el.textContent = pre + to; return; }
+    var dur = 900, t0 = null;
+    function step(ts) {
+      if (t0 === null) t0 = ts;
+      var p = Math.min(1, (ts - t0) / dur);
+      el.textContent = pre + Math.round(to * (1 - Math.pow(1 - p, 3)));  /* easeOutCubic */
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  function arrive(card, i) {
+    var n = card.querySelector('.pc-num');
+    if (n) countUp(n);
+    if (reduced || fine) return;          /* desktop gets the edge on hover */
+    setTimeout(function () {
+      card.classList.add('is-lit');
+      setTimeout(function () { card.classList.remove('is-lit'); }, 2700);
+    }, i * 220);                          /* left to right, not all at once */
+  }
+
+  if (!('IntersectionObserver' in window)) {
+    cards.forEach(function (c, i) { arrive(c, i); });
+    return;
+  }
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      arrive(e.target, cards.indexOf(e.target));
+      io.unobserve(e.target);
+    });
+  }, { threshold: 0.35 });
+  cards.forEach(function (c) { io.observe(c); });
 })();
 </script>
 """
