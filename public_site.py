@@ -127,7 +127,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from auth_supabase import require_user, AuthedUser
 from business_access import business_access
 from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
-                               RedirectResponse, Response)
+                               RedirectResponse, Response, StreamingResponse)
 
 from auth_supabase import AuthedUser, require_user
 
@@ -6523,6 +6523,106 @@ def _brand_file(name: str, media_type: str):
         raise HTTPException(404, f"asset not found: {name}")
     return _FileResponse(str(fp), media_type=media_type, headers=_BRAND_CACHE_HEADERS)
 
+
+# ─── Byte ranges, for the media that needs them ───────────────────────
+# Measured on production 2026-08-21: GET /assets/demo.mp4 with
+# `Range: bytes=0-999` answered 200 and the whole 8.7MB. iOS Safari will
+# not play a <video> whose server ignores Range, and every seek re-pulls
+# the entire file for everyone else.
+#
+# Starlette's own FileResponse grew range support, but only in a release
+# newer than the one fastapi==0.115.0 pins, so upgrading to reach it would
+# drag the whole framework under this backend. This is the same behaviour
+# in thirty lines, scoped to the media routes, and it stops mattering the
+# day that pin moves.
+#
+# GZipMiddleware was the other suspect and is not guilty: tested against
+# this file, a ranged request still returns 206 with an intact
+# Content-Range and no Content-Encoding.
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+_RANGE_CHUNK = 64 * 1024
+
+
+def _brand_file_ranged(request: Request, name: str, media_type: str):
+    """Same as _brand_file, but honours a single byte range.
+
+    Multi-range requests (`bytes=0-99,200-299`) fall through to the whole
+    file rather than being answered wrongly: they are vanishingly rare
+    from media elements, and a bad multipart body is worse than a 200."""
+    fp = _STATIC_BRAND / name
+    if not fp.exists():
+        raise HTTPException(404, f"asset not found: {name}")
+
+    size = fp.stat().st_size
+    headers = dict(_BRAND_CACHE_HEADERS)
+    headers["Accept-Ranges"] = "bytes"
+
+    def _whole():
+        """Serve the file ourselves rather than handing an unparseable
+        Range down to FileResponse. Newer Starlette parses the header and
+        answers 400; the version this backend pins ignores it and answers
+        200. RFC 9110 says ignore, and either way the point of this
+        helper is that the behaviour must not depend on which Starlette
+        happens to be installed."""
+        def _all():
+            with open(fp, "rb") as fh:
+                while True:
+                    block = fh.read(_RANGE_CHUNK)
+                    if not block:
+                        break
+                    yield block
+        h = dict(headers)
+        h["Content-Length"] = str(size)
+        return StreamingResponse(_all(), status_code=200,
+                                 media_type=media_type, headers=h)
+
+    raw = (request.headers.get("range") or "").strip()
+    if not raw:
+        return _FileResponse(str(fp), media_type=media_type, headers=headers)
+
+    m = _RANGE_RE.match(raw)
+    if not m:
+        return _whole()
+
+    first, last = m.group(1), m.group(2)
+    if not first and not last:
+        return _whole()
+
+    if first:
+        start = int(first)
+        end = int(last) if last else size - 1
+    else:
+        # a suffix range: "give me the final N bytes", which is how a
+        # player reaches for the moov atom at the tail of an mp4
+        n = int(last)
+        if n <= 0:
+            return Response(status_code=416, headers={
+                "Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
+        start, end = max(0, size - n), size - 1
+
+    end = min(end, size - 1)
+    if start >= size or start > end:
+        return Response(status_code=416, headers={
+            "Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
+
+    length = end - start + 1
+    headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    headers["Content-Length"] = str(length)
+
+    def _chunks():
+        with open(fp, "rb") as fh:
+            fh.seek(start)
+            left = length
+            while left > 0:
+                block = fh.read(min(_RANGE_CHUNK, left))
+                if not block:
+                    break
+                left -= len(block)
+                yield block
+
+    return StreamingResponse(_chunks(), status_code=206,
+                             media_type=media_type, headers=headers)
+
 @router.get("/assets/logo.png", include_in_schema=False)
 async def asset_logo_full():
     return _brand_file("solutionist-logo.png", "image/png")
@@ -6549,12 +6649,12 @@ async def asset_mark_png():
 # The real demo video (Remotion-rendered, ~7MB) + its poster frame —
 # replaces the animated HTML loop on the marketing home.
 @router.get("/assets/demo.mp4", include_in_schema=False)
-async def asset_demo_video():
-    return _brand_file("solutionist-demo.mp4", "video/mp4")
+async def asset_demo_video(request: Request):
+    return _brand_file_ranged(request, "solutionist-demo.mp4", "video/mp4")
 
 @router.get("/assets/demo-poster.jpg", include_in_schema=False)
-async def asset_demo_poster():
-    return _brand_file("solutionist-demo-poster.jpg", "image/jpeg")
+async def asset_demo_poster(request: Request):
+    return _brand_file_ranged(request, "solutionist-demo-poster.jpg", "image/jpeg")
 
 @router.get("/favicon.png", include_in_schema=False)
 async def asset_favicon_png():
