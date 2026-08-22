@@ -25,10 +25,12 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+import lead_attribution
 import sb_clients
 import billing_limits
 import usage_metering
@@ -67,18 +69,25 @@ def user_admitted(user_id: str) -> bool:
 class WaitlistBody(BaseModel):
     email: str
     name: Optional[str] = None
+    # Campaign params the app captured off its own front-door URL
+    # (utm_*, gclid, fbclid, referrer, landing_path). Whitelisted
+    # server-side — a lie here can only misattribute one marketing row.
+    attribution: Optional[Dict[str, Any]] = None
 
 
 @router.post("/waitlist")
-def join_waitlist(body: WaitlistBody) -> Dict[str, Any]:
+def join_waitlist(body: WaitlistBody, request: Request = None) -> Dict[str, Any]:
     email = (body.email or "").strip().lower()
     if not email or "@" not in email or len(email) > 320:
         raise HTTPException(400, "valid email required")
+    attribution = lead_attribution.capture(
+        request, {"attribution": body.attribution}) or None
     existing = sb_clients.sb_get_as_service(
         f"/waitlist?email=eq.{email}&select=id&limit=1") or []
     if not existing:
         sb_clients.sb_post_as_service("/waitlist", {
             "email": email, "name": (body.name or "").strip()[:120] or None,
+            **({"attribution": attribution} if attribution else {}),
         }, prefer=None)
     # Idempotent + non-enumerating: same answer either way.
     return {"ok": True, "message": "You're on the list — we'll email you "
@@ -179,6 +188,34 @@ class CreateBusinessBody(BaseModel):
     cdi_vocabulary: Optional[str] = None
     settings: Dict[str, Any] = {}
     tier: Optional[str] = None
+    # Which door they walked in through — the app stashed campaign params
+    # off its front-door URL at first visit (same stash-and-redeem as
+    # invite tokens) and sends them once, here. Whitelisted server-side.
+    attribution: Optional[Dict[str, Any]] = None
+
+
+def _attribution_from_funnel(email: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The invite funnel crosses days and devices — apply on the
+    marketing site, get the invite email later, sign up on whatever
+    device the email was opened on. The signup URL carries nothing by
+    then; the EMAIL is the join key back to the marketing_leads or
+    waitlist row that did see the campaign."""
+    em = (email or "").strip().lower()
+    if not em or "@" not in em:
+        return None
+    for table, via in (("marketing_leads", "lead_form"), ("waitlist", "waitlist")):
+        try:
+            rows = sb_clients.sb_get_as_service(
+                f"/{table}?email=eq.{quote(em)}&select=attribution"
+                f"&attribution=not.is.null&order=created_at.desc&limit=1") or []
+        except Exception as e:
+            logger.warning(f"[access] funnel attribution lookup ({table}) failed: {e}")
+            rows = []
+        if rows and isinstance(rows[0].get("attribution"), dict) and rows[0]["attribution"]:
+            a = dict(rows[0]["attribution"])
+            a["via"] = via
+            return a
+    return None
 
 
 @router.post("/businesses/create")
@@ -227,6 +264,16 @@ def create_business(body: CreateBusinessBody,
             "acknowledgment_required": True,
             "acknowledged_at": None,
         })
+    # Signup attribution — stamped once, at birth. The app's own blob
+    # (direct signup with a tagged URL) wins; otherwise the funnel row
+    # that shares this email (invite path) supplies it. Absent both,
+    # the column stays NULL and the Growth panel says "untracked".
+    attribution = lead_attribution.from_client(body.attribution)
+    if attribution:
+        attribution["via"] = "app"
+    else:
+        attribution = _attribution_from_funnel(getattr(user, "email", None))
+
     res = sb_clients.sb_post_as_service("/businesses", {
         "owner_id": uid,
         "name": name[:160],
@@ -235,6 +282,7 @@ def create_business(body: CreateBusinessBody,
         "cdi_vocabulary": body.cdi_vocabulary,
         "settings": settings,
         **({"tier": body.tier} if body.tier else {}),
+        **({"attribution": attribution} if attribution else {}),
     })
     row = (res or [None])[0] if isinstance(res, list) else res
     if not row:

@@ -632,6 +632,34 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 </script>
 
 <script>
+/* Campaign attribution — session-scoped, no cookie. If this session's
+   first page load carried campaign params (utm_*, gclid, fbclid, ref)
+   or an external referrer, remember them in sessionStorage so the lead
+   form and the traffic beacon can report the channel. First touch wins
+   for the session; the server re-whitelists everything it receives. */
+(function () {{
+  try {{
+    var KEY = '_sol_attr';
+    if (sessionStorage.getItem(KEY)) return;
+    var KEYS = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','fbclid','ref'];
+    var qs = new URLSearchParams(location.search);
+    var attr = {{}}; var found = false;
+    for (var i = 0; i < KEYS.length; i++) {{
+      var v = qs.get(KEYS[i]);
+      if (v) {{ attr[KEYS[i]] = String(v).slice(0, 120); found = true; }}
+    }}
+    var ref = document.referrer || '';
+    if (ref && ref.indexOf(location.hostname) === -1) {{
+      attr.referrer = ref.slice(0, 300); found = true;
+    }}
+    if (!found) return;
+    attr.landing_path = location.pathname.slice(0, 200);
+    sessionStorage.setItem(KEY, JSON.stringify(attr));
+  }} catch (e) {{ /* attribution must never break the page */ }}
+}})();
+</script>
+
+<script>
 /* First-party, anonymous traffic. No cookie is set: the session id lives
    in sessionStorage and dies with the tab, so it cannot follow anyone
    across visits or across sites. Do Not Track is honoured here AND again
@@ -648,10 +676,23 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
     var w = window.innerWidth || 1024;
     var device = w < 700 ? 'mobile' : (w < 1024 ? 'tablet' : 'desktop');
 
+    /* the session's campaign params, if any — whitelisted again server-side */
+    var camp = null;
+    try {{
+      var a = JSON.parse(sessionStorage.getItem('_sol_attr') || 'null');
+      if (a) {{
+        camp = {{}};
+        ['utm_source','utm_medium','utm_campaign','gclid','fbclid','ref'].forEach(function (k) {{
+          if (a[k]) camp[k] = a[k];
+        }});
+        if (!Object.keys(camp).length) camp = null;
+      }}
+    }} catch (e) {{ camp = null; }}
+
     function send(event) {{
       var body = JSON.stringify({{
         s: sid, p: location.pathname, r: document.referrer || null,
-        d: device, e: event
+        d: device, e: event, c: camp
       }});
       /* sendBeacon survives the page unloading; fetch is the fallback */
       if (navigator.sendBeacon) {{
@@ -4933,7 +4974,15 @@ def render_get_started() -> str:
         role:        form.role.value,
         what_you_do: form.what_you_do.value.trim(),
         source:      form.source.value.trim(),
-        honeypot:    form.website.value  // honeypot field
+        honeypot:    form.website.value,  // honeypot field
+        // which door they walked in through — the shell stashed the
+        // session's campaign params; the server whitelists them again
+        attribution: (function () {
+          try {
+            var a = JSON.parse(sessionStorage.getItem('_sol_attr') || 'null');
+            return (a && Object.keys(a).length) ? a : null;
+          } catch (e) { return null; }
+        })()
       };
       try {
         try { window.dispatchEvent(new Event('solutionist:applied')); } catch (e) {}
@@ -5056,11 +5105,18 @@ class LeadIntakeRequest(BaseModel):
     what_you_do: Optional[str] = None
     source: Optional[str] = None
     honeypot: Optional[str] = None   # bots fill this; humans don't
+    # Session campaign params the shell stashed (utm_*, gclid, fbclid,
+    # ref, referrer, landing_path). Whitelisted server-side — a lie here
+    # can only misattribute one marketing row.
+    attribution: Optional[Dict[str, Any]] = None
 
 
-async def handle_lead_intake(req: LeadIntakeRequest) -> Dict[str, Any]:
+async def handle_lead_intake(req: LeadIntakeRequest,
+                             request: Any = None) -> Dict[str, Any]:
     """Validate + persist + notify. Honeypot returns success silently
-    so bots don't learn they were rejected."""
+    so bots don't learn they were rejected. `request` (the Starlette
+    request, when the route passes it) supplies the Referer header —
+    lead_attribution reads campaign params + landing page off it."""
     name = (req.name or "").strip()
     email = (req.email or "").strip().lower()
 
@@ -5082,6 +5138,12 @@ async def handle_lead_intake(req: LeadIntakeRequest) -> Dict[str, Any]:
     if what_you_do and len(what_you_do) > 4000:
         what_you_do = what_you_do[:4000]
 
+    # Which door they walked in through: campaign params off the Referer
+    # + whatever the shell stashed client-side, whitelisted + clipped.
+    import lead_attribution
+    attribution = lead_attribution.capture(
+        request, {"attribution": req.attribution}) or None
+
     # 1. Insert into Supabase
     supabase_url = os.environ.get("SUPABASE_URL", "")
     supabase_key = os.environ.get("SUPABASE_ANON", "")
@@ -5089,6 +5151,13 @@ async def handle_lead_intake(req: LeadIntakeRequest) -> Dict[str, Any]:
     if supabase_url and supabase_key:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
             try:
+                row = {
+                    "name": name, "email": email, "role": role,
+                    "what_you_do": what_you_do, "source": source,
+                    "status": "new",
+                }
+                if attribution:
+                    row["attribution"] = attribution
                 r = await client.post(
                     f"{supabase_url}/rest/v1/marketing_leads",
                     headers={
@@ -5097,12 +5166,24 @@ async def handle_lead_intake(req: LeadIntakeRequest) -> Dict[str, Any]:
                         "Content-Type": "application/json",
                         "Prefer": "return=representation",
                     },
-                    content=json.dumps({
-                        "name": name, "email": email, "role": role,
-                        "what_you_do": what_you_do, "source": source,
-                        "status": "new",
-                    }),
+                    content=json.dumps(row),
                 )
+                if r.status_code >= 400 and attribution:
+                    # attribution column not migrated yet — the lead
+                    # itself must never be lost to a marketing field.
+                    logger.warning(f"insert with attribution failed "
+                                   f"{r.status_code} — retrying without")
+                    row.pop("attribution", None)
+                    r = await client.post(
+                        f"{supabase_url}/rest/v1/marketing_leads",
+                        headers={
+                            "apikey": supabase_key,
+                            "Authorization": f"Bearer {supabase_key}",
+                            "Content-Type": "application/json",
+                            "Prefer": "return=representation",
+                        },
+                        content=json.dumps(row),
+                    )
                 if r.status_code < 400:
                     data = r.json() if r.text else []
                     if isinstance(data, list) and data:
@@ -5120,6 +5201,11 @@ async def handle_lead_intake(req: LeadIntakeRequest) -> Dict[str, Any]:
         from_email = os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app"
 
         # Owner notification
+        _attr = attribution or {}
+        channel = (" / ".join(x for x in (_attr.get("utm_source"),
+                                          _attr.get("utm_medium"),
+                                          _attr.get("utm_campaign")) if x)
+                   or _attr.get("referrer_host") or "direct / untagged")
         owner_subject = f"New lead: {name} ({role or 'no role'})"
         owner_body = f"""<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#222;padding:20px;max-width:600px;margin:0 auto;background:#fff;">
 <h2 style="color:#1D63E6;margin-bottom:18px;">New beta application</h2>
@@ -5128,6 +5214,7 @@ async def handle_lead_intake(req: LeadIntakeRequest) -> Dict[str, Any]:
 <tr><td style="padding:8px 0;color:#666;">Email</td><td style="padding:8px 0;font-weight:600;"><a href="mailto:{_html.escape(email)}">{_html.escape(email)}</a></td></tr>
 <tr><td style="padding:8px 0;color:#666;">Role</td><td style="padding:8px 0;">{_html.escape(role or '(not specified)')}</td></tr>
 <tr><td style="padding:8px 0;color:#666;">Source</td><td style="padding:8px 0;">{_html.escape(source or '(not specified)')}</td></tr>
+<tr><td style="padding:8px 0;color:#666;">Channel</td><td style="padding:8px 0;">{_html.escape(channel)}</td></tr>
 </table>
 <div style="margin-top:18px;padding:14px;background:#f5f5f7;border-radius:8px;font-size:13px;line-height:1.6;">
 <strong style="display:block;margin-bottom:6px;color:#444;">About their business:</strong>

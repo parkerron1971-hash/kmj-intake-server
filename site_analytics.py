@@ -27,6 +27,9 @@ a person, which is what makes the no-banner position honest:
     with the tab, so it cannot follow anyone across visits or sites
   • referrer is reduced to its HOST before storage, because full referrer
     URLs routinely carry search terms in their query strings
+  • campaign params (`c`) are whitelisted to lead_attribution's
+    CAMPAIGN_KEYS — utm_*, gclid, fbclid, ref — and clipped. They label
+    the CAMPAIGN, not the person; everything else sent is dropped unread
 
 If any of those change, the privacy policy has to change with them.
 
@@ -125,6 +128,8 @@ class TrackEvent(BaseModel):
     e: str = Field("view", max_length=16)  # event
     b: Optional[str] = Field(None, max_length=64)    # business id, or None
                                                      # for the marketing site
+    c: Optional[Dict[str, str]] = None     # campaign params (whitelisted
+                                           # server-side to CAMPAIGN_KEYS)
 
 
 router = APIRouter(tags=["site-analytics"])
@@ -223,15 +228,42 @@ async def track(ev: TrackEvent, request: Request,
 
         device = ev.d if ev.d in {"mobile", "tablet", "desktop"} else None
 
+        # Campaign params, whitelisted to the same keys lead_attribution
+        # reads off a Referer. They label the campaign, not the person —
+        # anything else the client sent is dropped unread.
+        data = None
+        if ev.c:
+            import lead_attribution
+            camp = {}
+            for k, v in list(ev.c.items())[:12]:
+                kk = str(k).strip().lower()
+                if kk in lead_attribution.CAMPAIGN_KEYS:
+                    vv = str(v or "").strip()[:120]
+                    if vv:
+                        camp[kk] = vv
+            data = camp or None
+
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             business_id = await _known_business(client, ev.b)
+            row = {"session_id": session, "path": path, "referrer_host": ref_host,
+                   "device": device, "event": event,
+                   "business_id": business_id}
+            if data:
+                row["data"] = data
             r = await client.post(
                 f"{SUPABASE_URL}/rest/v1/site_events",
                 headers=_service_headers({"Prefer": "return=minimal"}),
-                json={"session_id": session, "path": path, "referrer_host": ref_host,
-                      "device": device, "event": event,
-                      "business_id": business_id},
+                json=row,
             )
+            if r.status_code >= 400 and data:
+                # data column not migrated yet — the view itself must
+                # never be lost to a marketing field.
+                row.pop("data", None)
+                r = await client.post(
+                    f"{SUPABASE_URL}/rest/v1/site_events",
+                    headers=_service_headers({"Prefer": "return=minimal"}),
+                    json=row,
+                )
             if r.status_code >= 400:
                 logger.warning("track insert failed %s: %s", r.status_code, r.text[:200])
     except Exception as e:                                  # never bubble up

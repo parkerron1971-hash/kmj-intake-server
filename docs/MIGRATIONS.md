@@ -61,6 +61,7 @@ SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = '<table>';
 
 | File | What | Status |
 |---|---|---|
+| `APPLY-2026_08_22_signup_attribution.sql` | Growth arc Rung 1 — `attribution jsonb` on marketing_leads/waitlist/businesses + `data jsonb` on site_events (campaign params by channel) | **applied** 2026-08-22 |
 | `supabase/APPLY-2026-07-13-drop-permissive-policies.sql` | drop the `_all` `USING(true)` policies on invoices/social_accounts/email_replies/business_profiles (cross-tenant fix) | **applied** 2026-07-13 (deploy the paired anon→service code first) |
 | `../solutionist-studio/supabase/APPLY-2026-07-13-insight-category.sql` | add `insight` to `chief_memories_category_check` + backfill | applied 2026-07-13 |
 | `supabase/APPLY-2026-07-12-credit-ledger.sql` | prepaid credit_ledger (Pricing v2) | verify |

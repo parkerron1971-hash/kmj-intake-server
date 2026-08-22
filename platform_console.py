@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -522,6 +522,168 @@ async def subscriptions_summary(_owner=Depends(require_owner)):
         "payment_issues":       payment_issues,
         "mrr_cents":            mrr_cents,
         "stripe_configured":    stripe_configured,
+    }
+
+
+# ─── Growth — the funnel by channel (GROWTH ARC Rung 1) ────────────────
+
+def _channel_of(attribution: Optional[Dict[str, Any]]) -> Optional[str]:
+    """One label per funnel row. utm_source is the tag the link went out
+    with; the ad-click ids and the referrer host are the fallbacks for
+    untagged links. None = the row carries no attribution at all (older
+    than the feature, or genuinely untraceable) — callers label that
+    "untracked", which is honest where "direct" would be a claim."""
+    a = attribution if isinstance(attribution, dict) else None
+    if not a:
+        return None
+    src = a.get("utm_source")
+    if src:
+        return str(src).strip().lower()[:60] or "direct"
+    if a.get("gclid"):
+        return "google-ads"
+    if a.get("fbclid"):
+        return "facebook"
+    host = a.get("referrer_host")
+    if host:
+        return str(host).strip().lower()[:60]
+    if a.get("ref"):
+        return "referral"
+    return "direct"
+
+
+@router.get("/growth")
+async def growth_summary(days: int = 30, _owner=Depends(require_owner)):
+    """The marketing scoreboard: visits → leads → waitlist → signups →
+    paying, grouped by the door people walked in through.
+
+    Window semantics: sessions, leads, waitlist and signups count the
+    last `days` only. businesses_total, active_subs and mrr_cents are
+    ALL-TIME per channel — revenue stays attributed to the door that
+    produced it, however long ago the walk-in happened.
+    """
+    days = max(1, min(int(days or 30), 365))
+    since = ((datetime.now(timezone.utc) - timedelta(days=days))
+             .isoformat().replace("+00:00", "Z"))
+    headers = _service_headers()
+
+    try:
+        from feature_gates import price_to_plan as _p2p
+        from usage_metering import TIER_PRICE_CENTS as _tier_cents
+        _price_map = _p2p()
+    except Exception:
+        _price_map, _tier_cents = {}, {}
+
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        async def _get(path: str, params: Dict[str, str]) -> List[Dict[str, Any]]:
+            """Missing table/column (pre-migration) degrades to [] —
+            the panel renders what exists rather than erroring whole."""
+            try:
+                r = await c.get(f"{SUPABASE_URL}/rest/v1/{path}",
+                                headers=headers, params=params)
+                return r.json() if r.status_code < 400 else []
+            except Exception as e:
+                logger.warning(f"growth fetch {path} failed: {e}")
+                return []
+
+        businesses = await _get("businesses", {
+            "select": "id,name,created_at,attribution,subscription_status,subscription_plan",
+            "is_active": "eq.true", "limit": "2000"})
+        leads = await _get("marketing_leads", {
+            "select": "id,created_at,status,attribution",
+            "created_at": f"gte.{since}", "limit": "2000"})
+        waitlist = await _get("waitlist", {
+            "select": "id,created_at,attribution",
+            "created_at": f"gte.{since}", "limit": "2000"})
+        events = await _get("site_events", {
+            "select": "session_id,event,data",
+            "business_id": "is.null", "ts": f"gte.{since}",
+            "limit": "50000"})
+
+    def _bucket() -> Dict[str, Any]:
+        return {"sessions": 0, "leads": 0, "waitlist": 0, "signups": 0,
+                "businesses_total": 0, "active_subs": 0, "mrr_cents": 0}
+
+    channels: Dict[str, Dict[str, Any]] = {}
+
+    def _row(label: str) -> Dict[str, Any]:
+        return channels.setdefault(label, _bucket())
+
+    def _ch(attribution: Any) -> str:
+        return _channel_of(attribution) or "untracked"
+
+    # Marketing-site traffic: distinct sessions per channel. A session's
+    # first campaign-carrying event names its channel; sessions that
+    # never carried one are untracked (organic direct, mostly).
+    session_channel: Dict[str, str] = {}
+    all_sessions: set = set()
+    for e in events:
+        sid = e.get("session_id")
+        if not sid:
+            continue
+        all_sessions.add(sid)
+        ch = _channel_of(e.get("data"))
+        if ch and sid not in session_channel:
+            session_channel[sid] = ch
+    for sid in all_sessions:
+        _row(session_channel.get(sid, "untracked"))["sessions"] += 1
+
+    for l in leads:
+        _row(_ch(l.get("attribution")))["leads"] += 1
+    for w in waitlist:
+        _row(_ch(w.get("attribution")))["waitlist"] += 1
+
+    signups_window = 0
+    active_total = 0
+    mrr_total = 0
+    for b in businesses:
+        row = _row(_ch(b.get("attribution")))
+        row["businesses_total"] += 1
+        if (b.get("created_at") or "") >= since:
+            row["signups"] += 1
+            signups_window += 1
+        if b.get("subscription_status") == "active":
+            row["active_subs"] += 1
+            active_total += 1
+            plan = _price_map.get(b.get("subscription_plan") or "")
+            if plan:
+                cents = _tier_cents.get(plan, 0)
+                row["mrr_cents"] += cents
+                mrr_total += cents
+
+    lead_statuses: Dict[str, int] = {}
+    for l in leads:
+        st = l.get("status") or "new"
+        lead_statuses[st] = lead_statuses.get(st, 0) + 1
+
+    ordered = sorted(
+        ({"channel": k, **v} for k, v in channels.items()),
+        key=lambda r: (r["mrr_cents"], r["signups"], r["leads"], r["sessions"]),
+        reverse=True)
+
+    recent = sorted(businesses, key=lambda b: b.get("created_at") or "",
+                    reverse=True)[:15]
+    recent_signups = [{
+        "name": b.get("name") or "(unnamed)",
+        "created_at": b.get("created_at"),
+        "channel": _ch(b.get("attribution")),
+        "subscription_status": b.get("subscription_status"),
+    } for b in recent]
+
+    return {
+        "ok": True,
+        "days": days,
+        "totals": {
+            "sessions": len(all_sessions),
+            "leads": len(leads),
+            "waitlist": len(waitlist),
+            "signups": signups_window,
+            "active_subs": active_total,
+            "mrr_cents": mrr_total,
+        },
+        "channels": ordered,
+        "recent_signups": recent_signups,
+        "lead_statuses": lead_statuses,
+        "truncated_traffic": len(events) >= 50000,
     }
 
 

@@ -192,6 +192,39 @@ def capture(request: Any = None, body: Optional[Dict[str, Any]] = None,
     return out
 
 
+def from_client(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Sanitize an attribution blob the app sends directly. Never raises.
+
+    Signup and the waitlist live on the app domain, where there is no
+    marketing-page Referer to read — the app captured the campaign params
+    off its own front-door URL and stashed them (same stash-and-redeem
+    pattern as invite tokens, because the email-confirmation link returns
+    to the bare origin). Same whitelist and clipping as capture(): a
+    client-supplied blob is a marketing report, not an identity claim.
+    """
+    out: Dict[str, Any] = {}
+    try:
+        if not isinstance(payload, dict):
+            return out
+        for key in CAMPAIGN_KEYS:
+            value = _clip(payload.get(key))
+            if value:
+                out[key] = value
+        ref_host = _host(payload.get("referrer")) or _clip(payload.get("referrer_host"))
+        if ref_host:
+            out["referrer_host"] = ref_host
+        page = _clip(payload.get("landing_path"), MAX_PATH)
+        if page:
+            out["landing_path"] = page.split("?")[0].split("#")[0]
+        if out:
+            out["captured_at"] = (datetime.now(timezone.utc).isoformat()
+                                  .replace("+00:00", "Z"))
+    except Exception as e:                       # never break a capture
+        logger.warning("[lead_attribution] from_client failed: %s", e)
+        return {}
+    return out
+
+
 # Self-reported attribution. The form templates have shipped a "How did
 # you hear about us?" select since the beginning — Friend / Social Media
 # / Google / Drive-by / Event / Other — and NOTHING has ever read it. It
