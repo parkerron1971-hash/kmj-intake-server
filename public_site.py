@@ -6648,6 +6648,21 @@ async def asset_mark_png():
 
 # The real demo video (Remotion-rendered, ~7MB) + its poster frame —
 # replaces the animated HTML loop on the marketing home.
+# The film the site plays. Range-aware, because a phone will not play a
+# <video> whose server ignores Range.
+@router.get("/assets/film.mp4", include_in_schema=False)
+async def asset_film(request: Request):
+    return _brand_file_ranged(request, "solutionist-film.mp4", "video/mp4")
+
+@router.get("/assets/film-poster.jpg", include_in_schema=False)
+async def asset_film_poster(request: Request):
+    return _brand_file_ranged(request, "solutionist-film-poster.jpg", "image/jpeg")
+
+# The 55-second walkthrough that ran until 2026-08-22. Deliberately kept
+# reachable rather than deleted: it is the only recording of the product
+# as it looked this summer, and Kevin asked for it to be saved. Nothing
+# on the site links here, which is the intent — it is an archive URL, not
+# a surface. Do not remove it to tidy up.
 @router.get("/assets/demo.mp4", include_in_schema=False)
 async def asset_demo_video(request: Request):
     return _brand_file_ranged(request, "solutionist-demo.mp4", "video/mp4")

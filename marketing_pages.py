@@ -1587,7 +1587,8 @@ FOLD_SCRIPT = """
 # the current width ever fetch, reduced-motion gets the poster and no src,
 # and nothing loads until the band is near the viewport. Note before you
 # add those routes: the live server ignores Range and answers 200 with the
-# whole file (measured on /assets/demo.mp4), which iOS Safari dislikes —
+# whole file (measured on /assets/demo.mp4 before ranges landed), which
+# iOS Safari dislikes; /assets/film.mp4 answers ranges properly now,
 # add a range-aware responder in the same pass.
 # ══════════════════════════════════════════════════════════════════════
 
@@ -2897,7 +2898,7 @@ def render_home() -> str:
                 aria-haspopup="dialog" aria-controls="videoModal">
           <span class="tag">New</span>
           <b>See it move</b>
-          <span class="dur">&middot; 55 seconds</span>
+          <span class="dur">&middot; 45 seconds</span>
           <span class="play" aria-hidden="true">&#9654;</span>
         </button>
         <h1 class="reveal">Every Problem <span class="gradient-text">Has A Solution.</span></h1>
@@ -3384,16 +3385,16 @@ def render_home() -> str:
      The same film is still inline on /features for anyone reading that
      page top to bottom. -->
 <div class="vmodal" id="videoModal" role="dialog" aria-modal="true"
-     aria-label="The Solutionist System, fifty-five seconds end to end">
+     aria-label="The Solutionist System, forty-five seconds end to end">
   <div class="vmodal-box">
     <button type="button" class="vmodal-x" id="videoModalClose" aria-label="Close video">&times;</button>
     <video id="videoModalPlayer" controls playsinline preload="none"
-           poster="/assets/demo-poster.jpg?v=2">
-      <source src="/assets/demo.mp4?v=3" type="video/mp4">
-      Your browser doesn&rsquo;t support embedded video &mdash;
-      <a href="/assets/demo.mp4?v=3">download the walkthrough</a>.
+           poster="/assets/film-poster.jpg?v=1">
+      <source src="/assets/film.mp4?v=1" type="video/mp4">
+      Your browser doesn&rsquo;t support embedded video.
+      <a href="/assets/film.mp4?v=1">Download the film</a>.
     </video>
-    <div class="vmodal-cap">The real system, scene by scene: Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</div>
+    <div class="vmodal-cap">The same system in three different businesses, the shift it works while you are closed, and the one thing it will not do without you.</div>
   </div>
 </div>
 
@@ -4226,14 +4227,14 @@ def render_features() -> str:
   <div class="container">
     <div class="section-head reveal">
             <span data-spine class="eyebrow">See it move</span>
-      <h2>Fifty-five seconds, <span class="gradient-text">end to end.</span></h2>
-      <p>The real system, scene by scene: Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</p>
+      <h2>Forty-five seconds, <span class="gradient-text">end to end.</span></h2>
+      <p>The same system in three different businesses, the shift it works while you are closed, and the one thing it will not do without you.</p>
     </div>
     <div class="demo-frame reveal">
       <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
-      <video class="demo-video" controls playsinline preload="metadata" poster="/assets/demo-poster.jpg?v=2">
-        <source src="/assets/demo.mp4?v=3" type="video/mp4">
-        Your browser doesn't support embedded video - <a href="/assets/demo.mp4?v=3">download the demo</a>.
+      <video class="demo-video" controls playsinline preload="metadata" poster="/assets/film-poster.jpg?v=1">
+        <source src="/assets/film.mp4?v=1" type="video/mp4">
+        Your browser doesn't support embedded video. <a href="/assets/film.mp4?v=1">Download the film</a>.
       </video>
     </div>
   </div>
