@@ -2591,10 +2591,10 @@ def render_home() -> str:
         <h1 class="reveal">Every Problem <span class="gradient-text">Has A Solution.</span></h1>
         <p class="hero-anchor reveal reveal-delay-1"><b>The Solutionist System</b> is one workspace that runs your whole business: clients, money, marketing, and your site. A chief of staff does the work, all under one subscription.</p>
         <p class="hero-slot-line reveal reveal-delay-1">
-          <span>Tell it what you do &mdash;</span>
+          <span>Tell it what you do:</span>
           <span class="hero-slot"><span id="heroWord">barber</span><span class="caret" aria-hidden="true"></span></span>
         </p>
-        <p class="hero-turn reveal reveal-delay-1">&mdash; and it arrives already speaking that language. Not a system you teach: <b>a system that already knows your business.</b></p>
+        <p class="hero-turn reveal reveal-delay-1">It arrives already speaking that language. Not a system you teach: <b>a system that already knows your business.</b></p>
         <div class="hero-chips reveal reveal-delay-2" id="heroChips" role="group" aria-label="See the system as a different business"></div>
         <div class="hero-ctas reveal reveal-delay-2">
           <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
@@ -2612,7 +2612,7 @@ def render_home() -> str:
              (top bar, sidebar, briefing, Quick Actions) and the page did
              not define it until word ~566. So the caption carries the
              role, and the name is never naked on first sight. -->
-        <div class="fold-cap"><span class="dot"></span><b>Mission Control</b> &middot; what Chief, your chief of staff, has ready each morning &mdash; <span id="heroCap">for a barber</span></div>
+        <div class="fold-cap"><span class="dot"></span><b>Mission Control</b> &middot; what Chief, your chief of staff, has ready each morning <span id="heroCap">for a barber</span></div>
         <div class="app">
           <div class="app-top">
             <span class="at-mark"></span>
@@ -2715,7 +2715,7 @@ def render_home() -> str:
       <span data-spine class="eyebrow">Meet Chief</span>
       <h2>Every business runs on a chief of staff. <span class="gradient-text">Yours is called Chief.</span></h2>
       <p>The one who knows what is going on, keeps the day moving, and handles what you shouldn&rsquo;t have to.</p>
-      <p><b>Autonomous, not unsupervised.</b> Chief runs your week on its own &mdash; and asks first on anything that touches money, messages a client, or can&rsquo;t be taken back. Every action it takes is written down, explained in plain language, and reversible.</p>
+      <p><b>Autonomous, not unsupervised.</b> Chief runs your week on its own, and it asks first on anything that touches money, messages a client, or can&rsquo;t be taken back. Every action it takes is written down, explained in plain language, and reversible.</p>
     </div>
     <div class="trust-grid reveal">
         <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg><span><b>Asks before it acts</b>Refunds, bulk messages, anything irreversible: your call, every time.</span></div>
@@ -2789,7 +2789,7 @@ def render_home() -> str:
     <p class="audience-note reveal reveal-delay-2">Each one gets its own version of the system, not a generic one with your logo dropped in.</p>
     <p class="audience-ask reveal reveal-delay-2">Don&rsquo;t see yours?
       <a href="/get-started">Tell us what you do &rarr;</a></p>
-    <p class="audience-note reveal reveal-delay-2" style="margin-top:10px;">Two of those come with the scope stated up front. For therapists, the system runs the practice &mdash; scheduling, billing, reminders &mdash; and deliberately keeps clinical notes and records out; those stay in your EHR. For attorneys, it runs the office &mdash; clients, matters, invoicing &mdash; and reconciles your trust account three ways: book, client ledgers, bank; IOLTA report formats vary by jurisdiction, so filing in your state&rsquo;s format stays with you.</p>
+    <p class="audience-note reveal reveal-delay-2" style="margin-top:10px;">Two of those come with the scope stated up front. For therapists, the system runs the practice: scheduling, billing, and reminders. It deliberately keeps clinical notes and records out; those stay in your EHR. For attorneys, it runs the office: clients, matters, and invoicing. It reconciles your trust account three ways: book, client ledgers, and bank. IOLTA report formats vary by jurisdiction, so filing in your state&rsquo;s format stays with you.</p>
   </div>
 </section>
 
@@ -3866,7 +3866,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item">
         <summary>Does it work for churches and ministries?</summary>
-        <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry: pastors, ministry leaders, faith-based coaches. The product is solo-first &mdash; one person runs the workspace &mdash; and the Solutionist plan adds staff seats when you need them. If you need full church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
+        <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry: pastors, ministry leaders, faith-based coaches. The product is solo-first: one person runs the workspace. The Solutionist plan adds staff seats when you need them. If you need full church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
       </details>
       <details class="faq-item">
         <summary>Can the AI publish to my social accounts?</summary>
@@ -4035,7 +4035,7 @@ def render_about() -> str:
          The follow-up knows what was said last time. That only works if it is <b>one system with one
          brain</b>, not eight subscriptions with an export button.</p>
       <p>That is the whole reason this exists: one workspace where the parts share what they know, and
-         a chief of staff that reads the real thing &mdash; your contacts, your money, your week &mdash;
+         a chief of staff that reads the real thing (your contacts, your money, your week)
          instead of guessing at it.</p>
     </div>
   </div>
@@ -4058,8 +4058,8 @@ def render_about() -> str:
         <span class="stack-cap">What this is</span>
         <div class="stack-one">
         <b>One system</b>
-        <em>Contacts, money, the calendar, content and goals in one place &mdash;
-            and a Chief that reads all of it every turn.</em>
+        <em>Contacts, money, the calendar, content and goals in one place, plus
+            a Chief that reads all of it every turn.</em>
         </div>
       </div>
     </div>
@@ -4084,7 +4084,7 @@ def render_about() -> str:
         <div class="num">02</div>
         <h3>AI in service of judgment, not instead of it.</h3>
         <p>Chief drafts, suggests and assists. You approve. Anything that touches money, messages a
-           client, or can&rsquo;t be taken back asks first &mdash; and every action is logged in plain
+           client, or can&rsquo;t be taken back asks first, and every action is logged in plain
            language and reversible.</p>
       </div>
       <div class="principle reveal reveal-delay-2">
@@ -4125,7 +4125,7 @@ def render_about() -> str:
       <h2>Who you&rsquo;re dealing with.</h2>
     </div>
     <div class="ident reveal">
-      <div><b>{BUSINESS_NAME}</b><span>A real company with a real legal entity behind it &mdash;
+      <div><b>{BUSINESS_NAME}</b><span>A real company with a real legal entity behind it,
         not a side project that disappears.</span></div>
       <div><b>One product</b><span>The Solutionist System. No spinouts, no pivots, no second bet
         that takes the attention.</span></div>
@@ -4140,7 +4140,7 @@ def render_about() -> str:
         <span class="small">Replies usually within a day.</span>
       </div>
       <p class="reach-note">Mail sent here lands in <b>the same inbox the system runs on</b>. We read
-         it in Chief, next to everything else that needs an answer &mdash; the same way you would.</p>
+         it in Chief, next to everything else that needs an answer, just as you would.</p>
     </div>
   </div>
 </section>
