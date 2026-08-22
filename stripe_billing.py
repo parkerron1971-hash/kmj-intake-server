@@ -1032,7 +1032,24 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
                     error_msg = "credit_pack session missing business_id"
             # Subscription checkouts: the subsequent
             # customer.subscription.created carries the real state —
-            # this event is audit-only for those.
+            # this event stays audit-only for those, EXCEPT the Meta
+            # Conversions signal: this is the one event carrying the
+            # customer's email AND what the checkout charged, which is
+            # exactly what ad optimization needs (growth arc Rung 2).
+            elif obj.get("mode") == "subscription":
+                try:
+                    import asyncio
+                    import meta_capi
+                    if meta_capi.configured():
+                        _cap_email = (obj.get("customer_details") or {}).get("email")
+                        if _cap_email:
+                            asyncio.create_task(meta_capi.send_event(
+                                "Subscribe", email=_cap_email,
+                                event_id=obj.get("id"),
+                                value_cents=obj.get("amount_total") or 0,
+                                currency=obj.get("currency") or "usd"))
+                except Exception as _cap_e:
+                    logger.warning(f"capi subscribe schedule failed: {_cap_e}")
         elif event_type == "checkout.session.async_payment_succeeded":
             # Delayed payment methods (bank debits) land here instead.
             meta = obj.get("metadata") or {}
