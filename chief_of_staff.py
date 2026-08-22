@@ -8233,7 +8233,7 @@ async def _seed_products_module_from_packages(client, biz_id: str, packages: Lis
             "business_id": biz_id,
             "name": "Products & Services",
             "slug": "products-services",
-            "description": "Your offerings from the Strategy Track",
+            "description": "Your offerings from The Academy",
             "icon": "💼",
             "schema": {
                 "fields": [
@@ -8427,7 +8427,7 @@ async def handle_complete_strategy_track(client, biz, action) -> Dict:
     return {
         "type": "complete_strategy_track",
         "result": "launched",
-        "label": "Strategy Track complete — business is live",
+        "label": "The Academy complete — business is live",
         "nav": {"tab": "build", "page": "strategy-track"},
         "products_module_id": module_id,
     }
@@ -13880,10 +13880,11 @@ def _strategy_profile_fill_block(track: Optional[Dict[str, Any]]) -> str:
     if not lines:
         return ""
     return (
-        "STRATEGY TRACK DELIVERABLES (captured in their coaching sessions — real data, use it):\n"
+        "ACADEMY DELIVERABLES (captured in their coaching sessions — real data, use it). "
+        "The practitioner-facing name is THE ACADEMY (BUILD → The Academy; called 'Strategy Track' before 2026-08-22 — understand either, say the new one):\n"
         + "\n".join(lines)
-        + "\n  PROFILE FILL: when the practitioner asks you to fill their business profile from the "
-        "Strategy Track (or a profile gap is answered by the data above), propose the values you found, "
+        + "\n  PROFILE FILL: when the practitioner asks you to fill their business profile from "
+        "The Academy (or 'my Strategy Track', or a profile gap is answered by the data above), propose the values you found, "
         "and once they confirm, emit one [ACTION:{\"type\":\"update_business_profile_field\","
         "\"field_path\":\"...\",\"value\":...}] per field.\n"
         "  Valid field paths: " + _PROFILE_FIELD_MENU + "."
@@ -13907,8 +13908,10 @@ def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]],
     # Non-coach (normal Chief): stay in your lane and defer strategy questions.
     if not is_coach:
         hint = (
-            "STRATEGY TRACK AWARENESS:\n"
-            f"  The practitioner is on the Strategy Track (mode={track_mode})."
+            "ACADEMY AWARENESS:\n"
+            f"  The practitioner is on The Academy, the business strategy course (mode={track_mode})."
+            " Its practitioner-facing name is THE ACADEMY (BUILD → The Academy; it was called"
+            " 'Strategy Track' before 2026-08-22 — understand either name, always say the new one)."
         )
         if track:
             current = track.get("current_phase") or "discovery"
@@ -13920,7 +13923,7 @@ def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]],
             " market research, launch plan), acknowledge briefly and redirect:"
             " 'That's a Strategy Session question — let me open it for you.'"
             " Then emit [ACTION:{\"type\":\"navigate\",\"tab\":\"build\",\"page\":\"strategy-track\"}]"
-            " so they land on the Strategy dashboard and can hit Continue Session."
+            " so they land on The Academy dashboard and can hit Continue Session."
             " Do NOT emit save_phase / save_pricing / save_packages / etc."
             " For operational questions (contacts, queue, agents, modules), answer normally."
         )
@@ -13932,7 +13935,7 @@ def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]],
     # Coach mode is handled by _build_coach_prompt; return empty here so the
     # main chief prompt doesn't double up.
     if not track:
-        return "STRATEGY TRACK: practitioner is on the Strategy Track but no track row exists yet. Create one by emitting save_phase with phase=discovery once discovery is captured."
+        return "THE ACADEMY: practitioner is on The Academy (the strategy track) but no track row exists yet. Create one by emitting save_phase with phase=discovery once discovery is captured."
 
     current = track.get("current_phase") or "discovery"
     phases = track.get("phases") or {}
@@ -16236,7 +16239,7 @@ ACTIONS — MISC:
   [ACTION:{{"type":"update_practitioner_profile_field","field_path":"full_legal_name|preferred_title|timezone|working_hours_start|working_hours_end|primary_accountant_name","value":"<their answer>"}}]
   — used ONLY after the user has explicitly confirmed a value for a practitioner-level field (about the human, not the business). Practitioner data follows the user across ALL their businesses — same human, same legal name, same timezone, same accountant. Never emit on speculation.
   [ACTION:{{"type":"propose_brand_kit_from_context"}}]
-  — generates a starter brand kit proposal (colors, fonts, tagline, voice) using the business archetype, voice_profile, Strategy Track outputs, and practitioner profile. Use when the user asks to draft / propose / generate a brand kit, OR when their brand kit is empty and they ask anything brand-related (colors, design, site look, logo). The proposal is returned in the action result — the frontend will preview and the user confirms before save. Never overwrite an existing brand kit without the user explicitly asking to regenerate.
+  — generates a starter brand kit proposal (colors, fonts, tagline, voice) using the business archetype, voice_profile, Academy (strategy-course) outputs, and practitioner profile. Use when the user asks to draft / propose / generate a brand kit, OR when their brand kit is empty and they ask anything brand-related (colors, design, site look, logo). The proposal is returned in the action result — the frontend will preview and the user confirms before save. Never overwrite an existing brand kit without the user explicitly asking to regenerate.
   [ACTION:{{"type":"update_voice_sample","slot":"discovery_followup|launch_announcement|casual_nurture","text":"<paste of the practitioner's actual writing>"}}]
   — saves a writing sample so the inner draft call can match the practitioner's voice. ONLY emit after the user has explicitly given you the sample text.
   [ACTION:{{"type":"add_voice_rule","list":"voice_dos|voice_donts","rule":"<plain-language rule>"}}]

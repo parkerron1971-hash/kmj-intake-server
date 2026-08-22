@@ -836,7 +836,12 @@ async def chief_context_block(business_id: str) -> str:
     if not phases:
         return ""
     lines: List[str] = []
-    lines.append("## Foundation Track")
+    lines.append("## Legal & Tax Setup")
+    lines.append(
+        "The practitioner-facing name is LEGAL & TAX SETUP (BUILD -> Legal & Tax "
+        "Setup; called 'Foundation Track' before 2026-08-22 - understand either "
+        "name, always say the new one)."
+    )
     if progress.get("in_the_clear"):
         lines.append("This business is BUSINESS IN THE CLEAR - all 7 phases complete.")
     else:
@@ -855,8 +860,8 @@ async def chief_context_block(business_id: str) -> str:
     lines.append(
         "When the user asks about legal setup, entity formation, EIN, taxes, "
         "operating agreements, bank accounts, licenses, or insurance/policies, "
-        "use this state to ground your answer. Suggest they open Foundation Track "
-        "for guided help. Never give specific legal or tax advice - always defer to "
+        "use this state to ground your answer. Suggest they open Legal & Tax Setup "
+        "(BUILD -> Legal & Tax Setup) for guided help. Never give specific legal or tax advice - always defer to "
         "a licensed attorney or CPA for binding decisions."
     )
     return "\n".join(lines)

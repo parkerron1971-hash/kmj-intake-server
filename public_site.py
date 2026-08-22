@@ -78,7 +78,7 @@ def _in_the_clear_badge_html(business_id: str) -> str:
         return ""
     return (
         '<span class="in-the-clear-badge" '
-        'title="Foundation Track complete">'
+        'title="Legal &amp; Tax Setup complete">'
         '✓ Business In The Clear</span>'
     )
 
