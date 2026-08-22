@@ -3,6 +3,16 @@ chief_bookkeeping_router.py — Phase G endpoints.
 
 Owner-gated (require_user + explicit business_id ownership check), mirroring
 plaid_router. Thin HTTP layer over chief_bookkeeping.py.
+
+Tier gate (2026-08-22): chief_bookkeeping is a Professional-plan feature —
+it has been ADVERTISED on the live plan cards since the 8/18 offer pass but
+had zero enforcement, so every plan shipped it (the 7/30 audit class). The
+gate rides the six INTELLIGENCE routes (the four analyzers + the two
+LLM-in-loop endpoints). counts / list / approve / reject / send-to-inbox
+stay ungated on purpose: counts drives the HOME nudge, and a practitioner
+who downgrades must still be able to see and resolve proposals Chief
+already made — data is never held hostage behind a plan. Dormant like
+every gate: BILLING_ENFORCE off → require_feature never raises.
 """
 from __future__ import annotations
 
@@ -13,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from auth_supabase import AuthedUser, require_user
+import billing_limits
 import chief_bookkeeping
 
 logger = logging.getLogger("chief_bookkeeping_router")
@@ -23,6 +34,7 @@ router = APIRouter(prefix="/chief", tags=["chief_bookkeeping"])
 @router.post("/bookkeeping/analyze-unmatched/{business_id}")
 def analyze_unmatched(business_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     chief_bookkeeping.owner_business(business_id, user.id)
+    billing_limits.require_feature(business_id, "chief_bookkeeping")
     created = chief_bookkeeping.analyze_unmatched(business_id)
     return {"ok": True, "proposals": created, "count": len(created)}
 
@@ -30,6 +42,7 @@ def analyze_unmatched(business_id: str, user: AuthedUser = Depends(require_user)
 @router.post("/bookkeeping/analyze-uncategorized/{business_id}")
 def analyze_uncategorized(business_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     chief_bookkeeping.owner_business(business_id, user.id)
+    billing_limits.require_feature(business_id, "chief_bookkeeping")
     created = chief_bookkeeping.analyze_uncategorized(business_id)
     return {"ok": True, "proposals": created, "count": len(created)}
 
@@ -38,6 +51,7 @@ def analyze_uncategorized(business_id: str, user: AuthedUser = Depends(require_u
 def analyze_period_close(business_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """At a reconciled period end, Chief proposes closing the period."""
     chief_bookkeeping.owner_business(business_id, user.id)
+    billing_limits.require_feature(business_id, "chief_bookkeeping")
     created = chief_bookkeeping.analyze_period_close(business_id)
     return {"ok": True, "proposals": created, "count": len(created)}
 
@@ -47,6 +61,7 @@ def analyze_gl(business_id: str, user: AuthedUser = Depends(require_user)) -> Di
     """Phase I.5 — GL analyzers: bank↔ledger reconciliation drift + the
     post-close Opening Balance Equity reclass."""
     chief_bookkeeping.owner_business(business_id, user.id)
+    billing_limits.require_feature(business_id, "chief_bookkeeping")
     created = chief_bookkeeping.analyze_gl(business_id)
     return {"ok": True, "proposals": created, "count": len(created)}
 
@@ -76,6 +91,7 @@ async def ask_transaction(body: AskTransactionBody,
     Claude answers in the archetype voice; a confident categorization comes
     back as a PENDING proposal through the normal trust pipeline."""
     biz_row = chief_bookkeeping.owner_business(body.business_id, user.id)
+    billing_limits.require_feature(body.business_id, "chief_bookkeeping")
     import chief_llm
     return await chief_llm.ask_transaction(
         body.business_id, biz_row.get("type"), body.transaction_id, body.question)
@@ -87,6 +103,7 @@ async def analyze_hard(business_id: str,
     """LLM pass over the transactions the deterministic analyzers deflected
     on (one batched call, ≤15 txns). Results are pending proposals."""
     biz_row = chief_bookkeeping.owner_business(business_id, user.id)
+    billing_limits.require_feature(business_id, "chief_bookkeeping")
     import chief_llm
     return await chief_llm.analyze_hard(business_id, biz_row.get("type"))
 
