@@ -168,6 +168,53 @@ class TestCallerAttribution:
         assert llm_call._caller_module() == "test_llm_seam_metering"
 
 
+class TestAttribution:
+    """business_id through the seam (2026-08-22). The seam wrote every
+    row with NO business, so a seam-metered module could never draw
+    down an allowance — spend counted globally, billed to nobody
+    (live: llm:notification_engine, 123 calls/14d, all unattributed)."""
+
+    def test_business_id_and_units_reach_the_row(self, monkeypatch):
+        rows = []
+        monkeypatch.setattr("api_usage_logger.log_api_usage_sync",
+                            lambda **kw: rows.append(kw))
+        llm_call._meter(_Resp({"input_tokens": 10, "output_tokens": 5}),
+                        {}, "growth_engine", 0.0,
+                        business_id="b1", units=0)
+        assert rows[0]["business_id"] == "b1"
+        assert rows[0]["units"] == 0, \
+            "0 is meaningful — proactive work bills nothing"
+
+    def test_the_old_shape_is_unchanged(self, monkeypatch):
+        """Callers that don't pass attribution keep exactly the row they
+        always wrote (business NULL, endpoint-table pricing)."""
+        rows = []
+        monkeypatch.setattr("api_usage_logger.log_api_usage_sync",
+                            lambda **kw: rows.append(kw))
+        llm_call._meter(_Resp({"input_tokens": 10, "output_tokens": 5}),
+                        {}, "growth_engine", 0.0)
+        assert rows[0]["business_id"] is None
+        assert rows[0]["units"] is None
+
+    def test_notification_engine_attributes_and_rides_free(self, monkeypatch):
+        """The briefs/pings/alerts engine passes WHOSE work this is and
+        units=0 — the proactive-work-bills-nothing doctrine
+        (/chief/insights, /chief/playbook)."""
+        import asyncio
+        import notification_engine as ne
+        seen = {}
+
+        async def fake_apost(client, payload, **kw):
+            seen.update(kw)
+            return _Resp({"input_tokens": 1, "output_tokens": 1})
+
+        monkeypatch.setattr(ne.llm_call, "apost", fake_apost)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        asyncio.run(ne._call_claude(None, "sys", "msg", business_id="b9"))
+        assert seen["business_id"] == "b9"
+        assert seen["units"] == 0
+
+
 class TestWiring:
     @pytest.mark.parametrize("fn", ["apost", "post_with", "post"])
     def test_every_non_streaming_sender_meters(self, fn):

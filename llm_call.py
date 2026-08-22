@@ -109,12 +109,24 @@ def _caller_module() -> str:
 
 
 def _meter(response: Any, payload: Optional[Dict[str, Any]],
-           caller: str, started: float) -> None:
+           caller: str, started: float,
+           business_id: Optional[str] = None,
+           units: Optional[int] = None) -> None:
     """Write one api_usage row for a call whose caller does not log it.
 
     Never raises and never blocks: a metering failure must not fail an
     AI call that already succeeded.
-    """
+
+    `business_id` (2026-08-22): the seam wrote every row WITHOUT a
+    business, which meant a seam-metered module could never draw down an
+    allowance or be seen in per-business cost — the spend was counted
+    globally and billed to nobody (live: notification_engine 123 calls
+    in 14 days, all unattributed). Callers that know whose work this is
+    pass it through post/apost/post_with; callers that don't keep the
+    old shape. `units` rides along for the same reason — 0 is
+    meaningful (proactive work the practitioner never asked for bills
+    nothing, the /chief/insights doctrine), None means "price by the
+    endpoint table as before"."""
     if caller in _SELF_METERING:
         return
     try:
@@ -136,6 +148,8 @@ def _meter(response: Any, payload: Optional[Dict[str, Any]],
             output_tokens=int(usage.get("output_tokens") or 0),
             cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
             cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+            business_id=business_id,
+            units=units,
             duration_ms=int((time.time() - started) * 1000),
         )
     except Exception as e:  # pragma: no cover - defensive
@@ -218,10 +232,16 @@ async def apost(client: httpx.AsyncClient,
                 timeout: Any = None,
                 extra_headers: Optional[Mapping[str, str]] = None,
                 key: Optional[str] = None,
-                task: Optional[str] = None) -> httpx.Response:
+                task: Optional[str] = None,
+                business_id: Optional[str] = None,
+                units: Optional[int] = None) -> httpx.Response:
     """POST on a caller-owned AsyncClient. Pass `content` instead of
     `payload` when the caller needs to control serialization (the studio
-    modules send ensure_ascii=False UTF-8 bytes on purpose)."""
+    modules send ensure_ascii=False UTF-8 bytes on purpose).
+
+    `business_id`/`units` reach the seam's api_usage row (see _meter) —
+    pass them when the caller knows whose work this is; both are
+    ignored for self-metering callers."""
     _route(task)
     body = {"content": content} if content is not None else {"json": payload}
     caller, started = _caller_module(), time.time()
@@ -231,7 +251,7 @@ async def apost(client: httpx.AsyncClient,
         timeout=_CLIENT_DEFAULT if timeout is None else timeout,
         **body,
     )
-    _meter(resp, payload, caller, started)
+    _meter(resp, payload, caller, started, business_id=business_id, units=units)
     return resp
 
 
@@ -242,7 +262,9 @@ def post_with(client: httpx.Client,
               timeout: Any = None,
               extra_headers: Optional[Mapping[str, str]] = None,
               key: Optional[str] = None,
-              task: Optional[str] = None) -> httpx.Response:
+              task: Optional[str] = None,
+              business_id: Optional[str] = None,
+              units: Optional[int] = None) -> httpx.Response:
     """POST on a caller-owned SYNCHRONOUS client — the `with httpx.Client(
     timeout=…) as client` shape. Same client-default rule as `apost`."""
     _route(task)
@@ -254,7 +276,7 @@ def post_with(client: httpx.Client,
         timeout=_CLIENT_DEFAULT if timeout is None else timeout,
         **body,
     )
-    _meter(resp, payload, caller, started)
+    _meter(resp, payload, caller, started, business_id=business_id, units=units)
     return resp
 
 
@@ -264,7 +286,9 @@ def post(payload: Optional[Dict[str, Any]] = None,
          timeout: Any = None,
          extra_headers: Optional[Mapping[str, str]] = None,
          key: Optional[str] = None,
-         task: Optional[str] = None) -> httpx.Response:
+         task: Optional[str] = None,
+         business_id: Optional[str] = None,
+         units: Optional[int] = None) -> httpx.Response:
     """Synchronous one-shot POST (httpx opens and closes its own client),
     for the modules that were already calling httpx.post directly."""
     _route(task)
@@ -276,7 +300,7 @@ def post(payload: Optional[Dict[str, Any]] = None,
         timeout=DEFAULT_TIMEOUT if timeout is None else timeout,
         **body,
     )
-    _meter(resp, payload, caller, started)
+    _meter(resp, payload, caller, started, business_id=business_id, units=units)
     return resp
 
 
