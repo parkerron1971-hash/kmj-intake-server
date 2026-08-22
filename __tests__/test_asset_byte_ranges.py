@@ -30,9 +30,16 @@ from fastapi.testclient import TestClient
 
 import public_site
 
-VIDEO = "/assets/demo.mp4"
-SIZE = (pathlib.Path(public_site.__file__).resolve().parent
-        / "static" / "brand" / "solutionist-demo.mp4").stat().st_size
+BRAND = pathlib.Path(public_site.__file__).resolve().parent / "static" / "brand"
+
+# Both routes, and film.mp4 first because it is the one the site plays.
+# The original suite only covered demo.mp4; when the site swapped to the
+# new cut on 2026-08-22 that left the archive URL guarded and the live one
+# bare, which is exactly backwards.
+ROUTES = [
+    ("/assets/film.mp4", "solutionist-film.mp4"),
+    ("/assets/demo.mp4", "solutionist-demo.mp4"),
+]
 
 
 @pytest.fixture(scope="module")
@@ -42,55 +49,74 @@ def client():
     return TestClient(app)
 
 
-def test_plain_get_advertises_range_support(client):
-    r = client.get(VIDEO)
+@pytest.fixture(params=ROUTES, ids=[r[0] for r in ROUTES])
+def video(request):
+    url, name = request.param
+    return url, (BRAND / name).stat().st_size
+
+
+def test_plain_get_advertises_range_support(client, video):
+
+    url, size = video
+    r = client.get(url)
     assert r.status_code == 200
     assert r.headers["accept-ranges"] == "bytes"
-    assert int(r.headers["content-length"]) == SIZE
+    assert int(r.headers["content-length"]) == size
 
 
-def test_a_leading_range_returns_only_those_bytes(client):
-    r = client.get(VIDEO, headers={"Range": "bytes=0-999"})
+def test_a_leading_range_returns_only_those_bytes(client, video):
+
+    url, size = video
+    r = client.get(url, headers={"Range": "bytes=0-999"})
     assert r.status_code == 206
-    assert r.headers["content-range"] == f"bytes 0-999/{SIZE}"
+    assert r.headers["content-range"] == f"bytes 0-999/{size}"
     assert int(r.headers["content-length"]) == 1000
     assert len(r.content) == 1000
 
 
-def test_an_open_ended_range_runs_to_the_last_byte(client):
-    start = SIZE - 500
-    r = client.get(VIDEO, headers={"Range": f"bytes={start}-"})
+def test_an_open_ended_range_runs_to_the_last_byte(client, video):
+
+    url, size = video
+    start = size - 500
+    r = client.get(url, headers={"Range": f"bytes={start}-"})
     assert r.status_code == 206
-    assert r.headers["content-range"] == f"bytes {start}-{SIZE - 1}/{SIZE}"
+    assert r.headers["content-range"] == f"bytes {start}-{size - 1}/{size}"
     assert len(r.content) == 500
 
 
-def test_a_suffix_range_returns_the_tail(client):
+def test_a_suffix_range_returns_the_tail(client, video):
     """`bytes=-N` is how a player finds the moov atom."""
-    r = client.get(VIDEO, headers={"Range": "bytes=-2048"})
+
+    url, size = video
+    r = client.get(url, headers={"Range": "bytes=-2048"})
     assert r.status_code == 206
-    assert r.headers["content-range"] == f"bytes {SIZE - 2048}-{SIZE - 1}/{SIZE}"
+    assert r.headers["content-range"] == f"bytes {size - 2048}-{size - 1}/{size}"
     assert len(r.content) == 2048
 
 
-def test_the_bytes_are_the_right_bytes(client):
+def test_the_bytes_are_the_right_bytes(client, video):
     """A range that reports the correct length but hands back the wrong
     slice would pass every assertion above and still play as garbage."""
-    whole = (pathlib.Path(public_site.__file__).resolve().parent
-             / "static" / "brand" / "solutionist-demo.mp4").read_bytes()
-    r = client.get(VIDEO, headers={"Range": "bytes=1000000-1000255"})
+
+    url, size = video
+    whole = (BRAND / dict(ROUTES)[url]).read_bytes()
+    r = client.get(url, headers={"Range": "bytes=1000000-1000255"})
     assert r.status_code == 206
     assert r.content == whole[1000000:1000256]
 
 
-def test_a_range_past_the_end_is_refused_not_clamped(client):
-    r = client.get(VIDEO, headers={"Range": f"bytes={SIZE + 10}-{SIZE + 99}"})
+def test_a_range_past_the_end_is_refused_not_clamped(client, video):
+
+    url, size = video
+    r = client.get(url, headers={"Range": f"bytes={size + 10}-{size + 99}"})
     assert r.status_code == 416
-    assert r.headers["content-range"] == f"bytes */{SIZE}"
+    assert r.headers["content-range"] == f"bytes */{size}"
 
 
-def test_a_garbled_range_serves_the_whole_file(client):
+def test_a_garbled_range_serves_the_whole_file(client, video):
     """Better a working 200 than a wrong 206."""
-    r = client.get(VIDEO, headers={"Range": "furlongs=0-9"})
+
+    url, size = video
+    r = client.get(url, headers={"Range": "furlongs=0-9"})
     assert r.status_code == 200
-    assert len(r.content) == SIZE
+    assert len(r.content) == size
