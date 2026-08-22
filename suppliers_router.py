@@ -316,6 +316,11 @@ class SupplierPatch(BaseModel):
     account_number: Optional[str] = None
     takes_email_po: Optional[bool] = None
     ordering_notes: Optional[str] = None
+    # ONE TAP. When true, a low-stock alert for a product this vendor
+    # supplies offers to SEND the purchase order rather than draft it.
+    # The tap is still the approval — see the migration for why that
+    # leaves the class-C rule untouched.
+    chief_can_reorder: Optional[bool] = None
     website: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
@@ -333,7 +338,8 @@ class SupplierPatch(BaseModel):
 
 _PATCHABLE = ("name", "website", "email", "phone", "contact_name", "categories",
               "min_order", "lead_time_days", "payment_terms", "notes", "status",
-              "account_number", "takes_email_po", "ordering_notes")
+              "account_number", "takes_email_po", "ordering_notes",
+              "chief_can_reorder")
 _CLEARABLE = ("website", "email", "phone", "contact_name", "min_order",
               "lead_time_days", "payment_terms", "notes",
               "account_number", "ordering_notes")
@@ -352,7 +358,7 @@ def update_supplier(supplier_id: str, body: SupplierPatch,
             continue
         if k == "categories":
             patch[k] = [c.strip() for c in (given[k] or []) if c and c.strip()]
-        elif k in ("lead_time_days", "takes_email_po"):
+        elif k in ("lead_time_days", "takes_email_po", "chief_can_reorder"):
             # Straight through. Running a bool past _clean() would turn a
             # deliberate False into None and quietly lose the "no".
             patch[k] = given[k]
@@ -367,6 +373,18 @@ def update_supplier(supplier_id: str, body: SupplierPatch,
     if not patch:
         return {"ok": True, "supplier": sup}
 
+    # A one-tap send needs somewhere to send to. Enabling it on a vendor
+    # with no address would produce a button that fails at the moment
+    # somebody taps it, which is worse than the button never appearing.
+    if patch.get("chief_can_reorder") is True:
+        addr = _clean(patch.get("email", sup.get("email")))
+        if not addr:
+            raise HTTPException(400, {
+                "error": "no_email",
+                "message": ("Add their email address first — a one-tap order "
+                            "needs somewhere to send to."),
+            })
+
     _validated({
         "email": patch.get("email", sup.get("email")),
         "source": sup.get("source"),
@@ -376,6 +394,11 @@ def update_supplier(supplier_id: str, body: SupplierPatch,
         "status": patch.get("status", sup.get("status")),
         "lead_time_days": patch.get("lead_time_days", sup.get("lead_time_days")),
     })
+
+    # Removing the address revokes the one-tap send with it. Leaving it
+    # on would arm a button whose target has gone.
+    if "email" in patch and not _clean(patch.get("email")):
+        patch["chief_can_reorder"] = False
 
     patch["updated_at"] = _now_iso()
     sb_clients.sb_patch_as_service(f"/suppliers?id=eq.{supplier_id}", patch)
