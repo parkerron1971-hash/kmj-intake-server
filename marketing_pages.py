@@ -2141,6 +2141,63 @@ def render_home() -> str:
          being told what it is. It sits one tier brighter than the muted
          copy under it because it is the sentence the rest of the fold
          spends its time arguing. */
+      /* The announcement slot. The walkthrough used to be a 952px
+         section at position seven, which is a long way to scroll for a
+         film. As a pill it costs ~34px, sits above the statement, and
+         opens over the page instead of navigating away. The slot outlives
+         this particular video: it is where the next shipped thing goes. */
+      .hero-pill{display:inline-flex;align-items:center;gap:9px;
+        margin:0 0 20px;padding:7px 8px 7px 9px;border-radius:999px;
+        font-family:var(--font-body);font-size:12.5px;font-weight:500;
+        color:var(--text-secondary);cursor:pointer;
+        border:1px solid var(--border);background:var(--surface);
+        transition:color .16s, border-color .16s, background .16s;}
+      .hero-pill:hover{color:var(--text-primary);background:var(--surface-2);
+        border-color:color-mix(in srgb, var(--accent) 50%, transparent);}
+      .hero-pill:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+      .hero-pill .tag{font-size:10px;font-weight:700;letter-spacing:.11em;
+        text-transform:uppercase;color:var(--accent);
+        background:color-mix(in srgb, var(--accent) 15%, transparent);
+        border-radius:999px;padding:3px 8px;}
+      .hero-pill b{font-weight:600;color:var(--text-primary);}
+      .hero-pill .dur{color:var(--text-dim);}
+      .hero-pill .play{display:inline-flex;align-items:center;justify-content:center;
+        width:20px;height:20px;border-radius:50%;flex:0 0 auto;
+        background:var(--accent);color:var(--ink-on-accent);font-size:8px;}
+
+      /* the modal */
+      .vmodal{position:fixed;inset:0;z-index:200;display:none;
+        align-items:center;justify-content:center;padding:24px;
+        background:rgba(4,5,8,.82);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);}
+      .vmodal[open]{display:flex;}
+      .vmodal-box{position:relative;width:min(960px,100%);
+        border-radius:14px;overflow:hidden;border:1px solid var(--border-strong);
+        background:#000;box-shadow:0 50px 120px rgba(0,0,0,.7);}
+      .vmodal video{display:block;width:100%;aspect-ratio:16/9;background:#000;}
+      .vmodal-x{position:absolute;top:10px;right:10px;z-index:2;
+        width:36px;height:36px;border-radius:50%;cursor:pointer;
+        display:inline-flex;align-items:center;justify-content:center;
+        font-family:var(--font-body);font-size:17px;line-height:1;
+        color:var(--text-primary);background:rgba(10,12,16,.72);
+        border:1px solid var(--border-strong);
+        transition:background .16s, border-color .16s;}
+      .vmodal-x:hover{background:rgba(10,12,16,.92);
+        border-color:color-mix(in srgb, var(--accent) 60%, transparent);}
+      .vmodal-x:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+      .vmodal-cap{padding:12px 16px;font-size:12.5px;color:var(--text-muted);
+        border-top:1px solid var(--border);background:var(--bg-2);}
+      /* Under 1000px the hero column is a stretching flex, which blew the
+         pill out to the full 689px at 768. It is a label, not a bar. */
+      .hero-pill{align-self:flex-start;}
+      @media (hover:none), (max-width:900px){
+        .hero-pill{min-height:44px;}
+      }
+      @media (max-width:640px){
+        .vmodal{padding:14px;}
+        .vmodal-x{width:44px;height:44px;}
+        .hero-pill{font-size:12px;}
+      }
+
       .hero-anchor{max-width:46ch;margin:0 0 20px;
         font-family:var(--font-body);font-weight:400;
         font-size:clamp(16.5px,1.42vw,20px);line-height:1.5;
@@ -2835,6 +2892,13 @@ def render_home() -> str:
   <div class="container-xl">
     <div class="hero-grid">
       <div class="hero-copy">
+        <button type="button" class="hero-pill reveal" id="heroPill"
+                aria-haspopup="dialog" aria-controls="videoModal">
+          <span class="tag">New</span>
+          <b>See it move</b>
+          <span class="dur">&middot; 55 seconds</span>
+          <span class="play" aria-hidden="true">&#9654;</span>
+        </button>
         <h1 class="reveal">Every Problem <span class="gradient-text">Has A Solution.</span></h1>
         <p class="hero-anchor reveal reveal-delay-1"><b>The Solutionist System</b> is one workspace that runs your whole business: clients, money, marketing, and your site. A chief of staff does the work, all under one subscription.</p>
         <p class="hero-slot-line reveal reveal-delay-1">
@@ -3314,6 +3378,24 @@ def render_home() -> str:
      Deliberately no `.reveal` anywhere in here: see DEVICE_BAND_CSS.
      The scene is aria-hidden — it is product art, and the copy above it
      already says everything a screen reader needs. ══ -->
+<!-- The walkthrough. preload="none" so the 8.7MB costs nothing until
+     somebody asks for it; the source is only fetched on the first open.
+     The same film is still inline on /features for anyone reading that
+     page top to bottom. -->
+<div class="vmodal" id="videoModal" role="dialog" aria-modal="true"
+     aria-label="The Solutionist System, fifty-five seconds end to end">
+  <div class="vmodal-box">
+    <button type="button" class="vmodal-x" id="videoModalClose" aria-label="Close video">&times;</button>
+    <video id="videoModalPlayer" controls playsinline preload="none"
+           poster="/assets/demo-poster.jpg?v=2">
+      <source src="/assets/demo.mp4?v=3" type="video/mp4">
+      Your browser doesn&rsquo;t support embedded video &mdash;
+      <a href="/assets/demo.mp4?v=3">download the walkthrough</a>.
+    </video>
+    <div class="vmodal-cap">The real system, scene by scene: Chief, Mission Control, getting paid, the Academy, the Studio, Autopilot.</div>
+  </div>
+</div>
+
 <section class="dv">
   <div class="dv-glow" aria-hidden="true">
     <i class="dv-g1"></i><i class="dv-g2"></i><i class="dv-g3"></i><i class="dv-g4"></i>
@@ -3804,6 +3886,59 @@ def render_home() -> str:
       foot.textContent = undone ? PULLED : REST;
     });
   }
+})();
+</script>
+<script>
+(function () {
+  var pill  = document.getElementById('heroPill');
+  var modal = document.getElementById('videoModal');
+  var vid   = document.getElementById('videoModalPlayer');
+  var xBtn  = document.getElementById('videoModalClose');
+  if (!pill || !modal || !vid || !xBtn) return;
+
+  var lastFocus = null;
+
+  function open() {
+    lastFocus = document.activeElement;
+    modal.setAttribute('open', '');
+    document.body.style.overflow = 'hidden';
+    xBtn.focus();
+    /* the click that opened this counts as the gesture, so play() is
+       allowed even unmuted. If a browser disagrees, the poster and the
+       controls are already there and nothing is broken. */
+    var p = vid.play();
+    if (p && p.catch) p.catch(function () {});
+  }
+
+  function close() {
+    modal.removeAttribute('open');
+    document.body.style.overflow = '';
+    vid.pause();
+    /* back where they were, or the pill. A programmatic open leaves
+       activeElement on <body>, and restoring focus to the body drops the
+       keyboard user at the top of the document instead of where they
+       opened the dialog from. */
+    var back = (lastFocus && lastFocus.focus && lastFocus !== document.body)
+             ? lastFocus : pill;
+    back.focus();
+  }
+
+  pill.addEventListener('click', open);
+  xBtn.addEventListener('click', close);
+  /* the backdrop closes; a click inside the box must not */
+  modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && modal.hasAttribute('open')) close();
+  });
+
+  /* keep the tab ring inside the dialog while it is open */
+  modal.addEventListener('keydown', function (e) {
+    if (e.key !== 'Tab') return;
+    var focusable = [xBtn, vid];
+    var first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
 })();
 </script>
 """
