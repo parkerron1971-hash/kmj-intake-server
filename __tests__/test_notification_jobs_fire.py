@@ -196,7 +196,8 @@ def test_a_day_with_leads_does_get_a_brief():
                 "new_leads_24h": [{"id": "c-1", "name": "Dana",
                                    "lead_score": 81, "source": "site"}]}
 
-    async def claude(client, system, user_msg, max_tokens=600):
+    async def claude(client, system, user_msg, max_tokens=600,
+                     business_id=None):
         assert "NEW_LEADS_24H" in user_msg, user_msg
         return '```json{"title":"Two to call","body":"Dana came in at 81."}```'
 
