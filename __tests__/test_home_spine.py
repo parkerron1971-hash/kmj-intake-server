@@ -48,7 +48,12 @@ def test_language_and_audience_are_one_argument():
     body = _body(_home())
     assert body.count("Why it already speaks") == 1
     assert "Built for people who serve people" not in body     # the old second head
-    assert body.count("audience-pill") == 7                    # all seven verticals survived
+    # Counts the markup, not the substring: the pills became buttons that
+    # drive the vocabulary panel, so "audience-pill" now also appears in a
+    # querySelectorAll inside the page script. Matching class="..." keeps
+    # this pinned to the seven verticals and immune to a selector or a
+    # CSS rule drifting the count.
+    assert body.count('class="audience-pill"') == 7           # all seven verticals survived
     assert "IOLTA" in body                                     # and the scope note with them
 
 

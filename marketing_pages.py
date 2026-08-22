@@ -2507,17 +2507,86 @@ def render_home() -> str:
 
       /* ── the chameleon section ───────────────────────────────────── */
       .shape{padding:96px 0;border-top:1px solid var(--border);}
-      .shape-body{max-width:760px;margin:0 auto 40px;}
-      .shape-body p{font-size:16.5px;line-height:1.72;color:var(--text-secondary);margin:0 0 16px;}
-      .shape-body p:last-child{margin-bottom:0;color:var(--text-primary);}
-      .shape-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;max-width:960px;margin:0 auto;}
-      @media (max-width:820px){.shape-steps{grid-template-columns:1fr;}}
-      .shape-step{padding:22px;border:1px solid var(--border);border-radius:14px;background:var(--surface);}
-      .shape-step .n{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
+
+      /* This section spent 1181px, the second most on the page, telling
+         you that a salon has regulars and a contractor has jobs. It is
+         the most demonstrable claim the product owns and it was written
+         as an essay. Now it demonstrates: the words on the right are the
+         terminology the product actually ships, and they re-letter when
+         you pick a business.
+
+         The seven pills used to sit at the bottom as decoration, a
+         second list of the same seven verticals the fold already lists.
+         They are the control now, so one component both names who it is
+         for and proves the claim, where there used to be two. */
+      .shape-grid{display:grid;grid-template-columns:minmax(0,.92fr) minmax(0,1.08fr);
+        gap:clamp(28px,4vw,56px);align-items:center;max-width:1120px;margin:0 auto;}
+      .shape-copy p{font-size:16px;line-height:1.7;color:var(--text-secondary);
+        margin:0 0 15px;max-width:46ch;}
+      .shape-copy p:last-of-type{color:var(--text-primary);}
+      /* a column, not a 3-up: these are a sequence, and they now sit
+         beside the thing they describe instead of under it */
+      .shape-steps{display:flex;flex-direction:column;gap:9px;margin-top:24px;}
+      .shape-step{display:flex;gap:12px;align-items:flex-start;
+        padding:13px 15px;border:1px solid var(--border);border-radius:12px;
+        background:var(--surface);}
+      .shape-step .n{display:inline-flex;align-items:center;justify-content:center;
+        width:22px;height:22px;flex:0 0 auto;margin-top:1px;
         border-radius:50%;background:color-mix(in srgb, var(--accent) 16%, transparent);
-        color:var(--accent);font-weight:700;font-size:12.5px;margin-bottom:12px;}
-      .shape-step b{display:block;font-size:15px;color:var(--text-primary);margin-bottom:6px;letter-spacing:-.01em;}
-      .shape-step span:last-child{display:block;font-size:13.5px;color:var(--text-muted);line-height:1.6;}
+        color:var(--accent);font-weight:700;font-size:11.5px;}
+      .shape-step b{display:block;font-size:14px;color:var(--text-primary);
+        margin-bottom:2px;letter-spacing:-.01em;}
+      .shape-step span:last-child{display:block;font-size:13px;color:var(--text-muted);line-height:1.55;}
+
+      .mp{border:1px solid var(--border);border-radius:18px;padding:24px;
+        background:linear-gradient(160deg, rgba(255,255,255,.05), rgba(255,255,255,.018));
+        box-shadow:0 26px 60px rgba(0,0,0,.5);}
+      .mp-cap{display:flex;align-items:center;gap:9px;margin-bottom:18px;
+        font-size:11.5px;letter-spacing:.13em;text-transform:uppercase;
+        color:var(--text-dim);font-weight:700;}
+      .mp-cap .live{width:7px;height:7px;border-radius:50%;flex:0 0 auto;
+        background:var(--success);box-shadow:0 0 10px rgba(34,197,94,.75);}
+      .mrow{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1.2fr);
+        align-items:baseline;gap:14px;padding:13px 0;
+        border-bottom:1px dashed rgba(255,255,255,.08);}
+      .mrow:last-of-type{border-bottom:0;}
+      .mlab{font-size:13px;color:var(--text-dim);}
+      .marrow{font-size:13px;color:var(--text-dim);}
+      .mval{font-family:var(--font-heading);font-size:clamp(18px,1.9vw,24px);
+        font-weight:600;letter-spacing:-.022em;color:var(--text-primary);text-align:right;}
+      .mp-rest{margin-top:18px;padding-top:16px;border-top:1px solid var(--border);}
+      .mp-rest .lbl{font-size:11px;letter-spacing:.13em;text-transform:uppercase;
+        color:var(--text-dim);font-weight:700;}
+      .mp-items{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px;}
+      .mp-item{font-size:12.5px;color:var(--text-secondary);padding:6px 11px;
+        border-radius:8px;background:var(--surface-2);border:1px solid var(--border);}
+      /* out, swap the text, back in, staggered down the column */
+      .swap{display:inline-block;
+        transition:opacity .2s ease, transform .2s ease, filter .2s ease;}
+      .swap.out{opacity:0;transform:translateY(-7px);filter:blur(4px);}
+
+      /* the control belongs with the thing it controls: these used to
+         sit at the bottom of the section, past a paragraph, as a second
+         list of the same seven verticals */
+      .mp-pick{margin-top:18px;}
+      .mp-pick .lbl{display:block;font-size:11px;letter-spacing:.13em;
+        text-transform:uppercase;color:var(--text-dim);font-weight:700;
+        margin-bottom:10px;}
+      .mp-pick .audience-grid{display:flex;flex-wrap:wrap;gap:7px;
+        justify-content:flex-start;margin:0;}
+      .mp-pick .audience-pill{cursor:pointer;font-family:var(--font-body);}
+      .mp-pick .audience-pill[aria-pressed="true"]{color:var(--text-primary);
+        border-color:color-mix(in srgb, var(--accent) 60%, transparent);
+        background:color-mix(in srgb, var(--accent) 13%, transparent);}
+      .mp-pick .audience-pill:focus-visible{outline:2px solid var(--accent);
+        outline-offset:2px;}
+
+      @media (max-width:900px){
+        .shape-grid{grid-template-columns:1fr;gap:30px;}
+        .mrow{grid-template-columns:minmax(0,1fr) auto;row-gap:3px;}
+        .marrow{display:none;}
+        .mval{grid-column:1 / -1;text-align:left;}
+      }
       .audience-note{max-width:620px;margin:22px auto 0;text-align:center;font-size:14px;color:var(--text-muted);}
       .shape-close{max-width:700px;margin:38px auto 0;text-align:center;font-size:15.5px;
         line-height:1.65;color:var(--text-secondary);}
@@ -2538,8 +2607,59 @@ def render_home() -> str:
           transparent 0%,
           color-mix(in srgb, var(--accent) 3.5%, transparent) 34%,
           color-mix(in srgb, var(--accent) 3.5%, transparent) 100%);}
-      .trust-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;max-width:1020px;margin:0 auto;}
-      @media (max-width:860px){.trust-grid{grid-template-columns:1fr;gap:18px;}}
+      /* "Every action logged. Undo means undo." was the most important
+         promise on the page and the least visual thing on it: 507px of
+         centred prose and three icons. It gets the artifact it had been
+         describing all along, and the section goes asymmetric with the
+         log on the left, which also breaks the centred rhythm the rest
+         of the page kept repeating. */
+      .trust-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+        gap:clamp(28px,4vw,54px);align-items:center;max-width:1120px;margin:0 auto;}
+      .trust-layout .trust-head{max-width:none;margin:0;text-align:left;}
+      .trust-layout .trust-head > .eyebrow{align-self:flex-start;}
+      .trust-grid{display:flex;flex-direction:column;gap:15px;margin-top:22px;}
+
+      .log{border:1px solid var(--border);border-radius:18px;padding:22px;
+        background:linear-gradient(160deg, rgba(255,255,255,.05), rgba(255,255,255,.018));
+        box-shadow:0 26px 60px rgba(0,0,0,.5);}
+      .lrow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;
+        align-items:center;padding:12px 2px;border-bottom:1px solid rgba(255,255,255,.055);}
+      .lrow:last-of-type{border-bottom:0;}
+      .ltick{width:8px;height:8px;border-radius:50%;background:var(--success);}
+      .lrow.needs .ltick{background:var(--warn);}
+      .lmain{min-width:0;}
+      .lmain b{display:block;font-size:13.5px;font-weight:500;color:var(--text-primary);
+        letter-spacing:-.008em;}
+      .lmain span{display:block;margin-top:2px;font-size:11.5px;color:var(--text-dim);
+        font-variant-numeric:tabular-nums;}
+      .lundo{font-family:var(--font-body);font-size:11.5px;font-weight:600;
+        padding:6px 12px;border-radius:8px;cursor:pointer;white-space:nowrap;
+        color:var(--text-secondary);background:var(--surface-2);
+        border:1px solid var(--border-strong);
+        transition:color .16s, border-color .16s, background .16s;}
+      .lundo:hover{color:var(--text-primary);background:rgba(46,125,255,.12);
+        border-color:color-mix(in srgb, var(--accent) 60%, transparent);}
+      .lundo[disabled]{opacity:.45;cursor:default;}
+      .lrow.undone .lmain b{color:var(--text-dim);text-decoration:line-through;
+        text-decoration-color:rgba(255,255,255,.3);}
+      .lrow.undone .ltick{background:var(--text-dim);}
+      .lpill{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+        padding:4px 9px;border-radius:999px;white-space:nowrap;color:var(--warn);
+        background:color-mix(in srgb, var(--warn) 12%, transparent);
+        border:1px solid color-mix(in srgb, var(--warn) 32%, transparent);}
+      .log-foot{margin-top:14px;padding-top:13px;border-top:1px solid var(--border);
+        font-size:12px;color:var(--text-dim);min-height:1.5em;}
+
+      @media (max-width:900px){
+        .trust-layout{grid-template-columns:1fr;gap:28px;}
+        .trust-layout .log{order:2;}
+      }
+      /* a finger needs 44px. Undo measured 28 and the pills 41, which is
+         a control you can see and cannot reliably hit. */
+      @media (hover:none), (max-width:900px){
+        .lundo{min-height:44px;padding:6px 15px;}
+        .mp-pick .audience-pill{min-height:44px;}
+      }
       .trust-item{display:flex;gap:11px;align-items:flex-start;}
       .trust-item svg{width:17px;height:17px;flex-shrink:0;margin-top:1px;color:var(--accent);}
       .trust-item b{display:block;font-size:13px;font-weight:600;color:var(--text-primary);
@@ -2830,16 +2950,54 @@ def render_home() -> str:
      conduct paragraph, which is the job it was always doing. -->
 <section class="trust" id="chief">
   <div class="container-xl">
-    <div class="trust-head reveal">
+    <div class="trust-layout reveal">
+
+    <!-- The rows are the same overnight run the Autopilot room already
+         shows in the carousel below. One of them is live: undo actually
+         undoes, and the footer records that it did, because "we log the
+         undo too" is the part of the promise a paragraph cannot make. -->
+    <div class="log" id="trustLog">
+      <div class="lrow" id="trustUndoRow">
+        <span class="ltick"></span>
+        <span class="lmain"><b>Sent 3 invoice reminders</b><span>from your address &middot; 04:12</span></span>
+        <button type="button" class="lundo" id="trustUndoBtn">Undo</button>
+      </div>
+      <div class="lrow">
+        <span class="ltick"></span>
+        <span class="lmain"><b>Reconciled 14 bank transactions</b><span>matched to invoices &middot; 07:01</span></span>
+        <button type="button" class="lundo" disabled>Undo</button>
+      </div>
+      <div class="lrow">
+        <span class="ltick"></span>
+        <span class="lmain"><b>Prepped notes for the 9:00 discovery call</b><span>pulled the last 3 conversations &middot; 06:20</span></span>
+        <button type="button" class="lundo" disabled>Undo</button>
+      </div>
+      <div class="lrow needs">
+        <span class="ltick"></span>
+        <span class="lmain"><b>Drafted a follow-up to Northside Co-op</b><span>waiting on your approval &middot; 05:03</span></span>
+        <span class="lpill">Needs you</span>
+      </div>
+      <div class="lrow needs">
+        <span class="ltick"></span>
+        <span class="lmain"><b>Tia&rsquo;s card expires in 6 days</b><span>needs a human &middot; 07:28</span></span>
+        <span class="lpill">Needs you</span>
+      </div>
+      <div class="log-foot" id="trustLogFoot" role="status">Autopilot, overnight &middot; nothing happened without a line in this log.</div>
+    </div>
+
+    <div>
+    <div class="trust-head">
       <span data-spine class="eyebrow">Meet Chief</span>
       <h2>Every business runs on a chief of staff. <span class="gradient-text">Yours is called Chief.</span></h2>
       <p>The one who knows what is going on, keeps the day moving, and handles what you shouldn&rsquo;t have to.</p>
       <p><b>Autonomous, not unsupervised.</b> Chief runs your week on its own, and it asks first on anything that touches money, messages a client, or can&rsquo;t be taken back. Every action it takes is written down, explained in plain language, and reversible.</p>
     </div>
-    <div class="trust-grid reveal">
+    <div class="trust-grid">
         <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg><span><b>Asks before it acts</b>Refunds, bulk messages, anything irreversible: your call, every time.</span></div>
         <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg><span><b>Shows its work</b>Every action logged in plain English. No black box, no mystery charges.</span></div>
         <div class="trust-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/></svg><span><b>Undo means undo</b>If Chief gets it wrong, you take it back. That&rsquo;s a feature, not an apology.</span></div>
+    </div>
+    </div>
     </div>
     <p class="trust-kicker reveal">Most AI will do what you ask. <span>The question worth asking is what it does when you&rsquo;re not looking.</span></p>
     <div class="trust-more reveal">
@@ -2885,26 +3043,51 @@ def render_home() -> str:
       <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Why it already speaks <span class="gradient-text">your language.</span></h2>
     </div>
 
-    <div class="shape-body reveal reveal-delay-2">
-      <p>A salon doesn&rsquo;t have &ldquo;clients.&rdquo; It has regulars. A contractor doesn&rsquo;t book &ldquo;appointments.&rdquo; They schedule jobs. A bookkeeper&rsquo;s late-payment nudge sounds nothing like a therapist&rsquo;s.</p>
-      <p>Tell the system what you do and it loads the whole world of your specialty: the vocabulary, the workflows, the rhythm of the week, what should happen automatically and what should never happen without you. Not a blank assistant waiting to be trained. A system that showed up knowing.</p>
+    <div class="shape-grid reveal reveal-delay-2">
+      <div class="shape-copy">
+        <p>A salon doesn&rsquo;t have &ldquo;clients.&rdquo; It has regulars. A contractor doesn&rsquo;t book &ldquo;appointments.&rdquo; They schedule jobs. A bookkeeper&rsquo;s late-payment nudge sounds nothing like a therapist&rsquo;s.</p>
+        <p>Tell the system what you do and it loads the whole world of your specialty: the vocabulary, the workflows, the rhythm of the week, what should happen automatically and what should never happen without you. Not a blank assistant waiting to be trained. A system that showed up knowing.</p>
+        <div class="shape-steps">
+          <div class="shape-step"><span class="n">1</span><span><b>You say what you do.</b><span>One sentence at intake. No setup wizard, no database design.</span></span></div>
+          <div class="shape-step"><span class="n">2</span><span><b>The system takes that shape.</b><span>Terminology, workflows, dashboard, the whole room.</span></span></div>
+          <div class="shape-step"><span class="n">3</span><span><b>Chief works inside it.</b><span>It is not guessing at your business. It is standing in it.</span></span></div>
+        </div>
+      </div>
+
+      <div class="mp" id="shapePanel">
+        <div class="mp-cap"><span class="live"></span>What <span class="swap" id="mpWord">a barber</span> opens on day one</div>
+        <div class="mrow">
+          <span class="mlab">The people you serve</span><span class="marrow">&rarr;</span>
+          <span class="mval"><span class="swap" data-mp="people">Regulars</span></span>
+        </div>
+        <div class="mrow">
+          <span class="mlab">The room they live in</span><span class="marrow">&rarr;</span>
+          <span class="mval"><span class="swap" data-mp="room">The chair</span></span>
+        </div>
+        <div class="mrow">
+          <span class="mlab">What you book</span><span class="marrow">&rarr;</span>
+          <span class="mval"><span class="swap" data-mp="work">Chair calendar</span></span>
+        </div>
+        <div class="mp-rest">
+          <span class="lbl">And the rest of the sidebar</span>
+          <div class="mp-items" id="mpRest"></div>
+        </div>
+
+        <div class="mp-pick">
+          <span class="lbl">Seven it already speaks &middot; pick one</span>
+          <div class="audience-grid" id="shapeChips" role="group" aria-label="See the system as a different business"><button type="button" class="audience-pill" data-trade="coach" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> Coaches</button>
+            <button type="button" class="audience-pill" data-trade="consultant" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="7" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> Consultants</button>
+            <button type="button" class="audience-pill" data-trade="barber" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7a4 4 0 0 1 8 0v7"/><path d="M8 10V3"/><path d="M14 21V8l6-3v16"/></svg> Barbers &amp; salons</button>
+            <button type="button" class="audience-pill" data-trade="therapist" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l8.8 8.8 8.8-8.8a5.5 5.5 0 0 0 0-7.8z"/></svg> Therapists</button>
+            <button type="button" class="audience-pill" data-trade="contractor" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> Contractors</button>
+            <button type="button" class="audience-pill" data-trade="attorney" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 14h6zM19 7l-3 7h6z"/></svg> Attorneys</button>
+            <button type="button" class="audience-pill" data-trade="pastor" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 22h18"/><path d="M6 18v-7M10 18v-7M14 18v-7M18 18v-7"/><path d="M12 2 3 8h18Z"/></svg> Ministries &amp; churches</button></div>
+        </div>
+      </div>
     </div>
 
-    <div class="shape-steps reveal reveal-delay-2">
-      <div class="shape-step"><span class="n">1</span><b>You say what you do.</b><span>One sentence at intake. No setup wizard, no database design.</span></div>
-      <div class="shape-step"><span class="n">2</span><b>The system takes that shape.</b><span>Terminology, workflows, dashboard, the whole room.</span></div>
-      <div class="shape-step"><span class="n">3</span><b>Chief works inside it.</b><span>It is not guessing at your business. It is standing in it.</span></div>
-    </div>
+    <p class="shape-close reveal">One system instead of eight subscriptions, and unlike the eight, this one actually knows what your business is.</p>
 
-    <p class="shape-close reveal">One system instead of eight subscriptions, and unlike the eight, this one actually knows what your business is. Seven of those languages it already speaks:</p>
-
-    <div class="audience-grid reveal reveal-delay-2"><span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> Coaches</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="7" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> Consultants</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7a4 4 0 0 1 8 0v7"/><path d="M8 10V3"/><path d="M14 21V8l6-3v16"/></svg> Barbers &amp; salons</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l8.8 8.8 8.8-8.8a5.5 5.5 0 0 0 0-7.8z"/></svg> Therapists</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> Contractors</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 14h6zM19 7l-3 7h6z"/></svg> Attorneys</span>
-      <span class="audience-pill"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 22h18"/><path d="M6 18v-7M10 18v-7M14 18v-7M18 18v-7"/><path d="M12 2 3 8h18Z"/></svg> Ministries &amp; churches</span></div>
     <p class="audience-note reveal reveal-delay-2">Each one gets its own version of the system, not a generic one with your logo dropped in.</p>
     <p class="audience-ask reveal reveal-delay-2">Don&rsquo;t see yours?
       <a href="/get-started">Tell us what you do &rarr;</a></p>
@@ -3523,6 +3706,112 @@ def render_home() -> str:
     });
   }, { threshold: 0.35 });
   cards.forEach(function (c) { io.observe(c); });
+})();
+</script>
+<script>
+(function () {
+  /* The shape section's panel. The vocabulary is the same TRADES table
+     the fold runs on: if the product renames Regulars, both have to
+     move together, so they are deliberately the same words. */
+  var VOCAB = {
+    barber:     {word:'a barber',     people:'Regulars',  room:'The chair',        work:'Chair calendar', rest:['Walk-ins','Payments']},
+    therapist:  {word:'a therapist',  people:'Clients',   room:'The practice',     work:'Sessions',       rest:['Intake forms','Superbills']},
+    attorney:   {word:'an attorney',   people:'Clients',   room:'The office',       work:'Matters',        rest:['Time &amp; billing','Trust ledger']},
+    contractor: {word:'a contractor', people:'Customers', room:'The jobs',         work:'Jobs',           rest:['Estimates','Change orders']},
+    coach:      {word:'a coach',      people:'Clients',   room:'The practice',     work:'Programs',       rest:['Sessions','Payments']},
+    consultant: {word:'a consultant', people:'Clients',   room:'The book',         work:'Engagements',    rest:['Proposals','Retainers']},
+    pastor:     {word:'a ministry',     people:'Members',   room:'The congregation', work:'Services',       rest:['Giving','Volunteers']}
+  };
+
+  var chips = document.getElementById('shapeChips');
+  var rest  = document.getElementById('mpRest');
+  var capW  = document.getElementById('mpWord');
+  if (chips && rest && capW) {
+    var reduced = window.matchMedia &&
+                  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var vals = {};
+    ['people','room','work'].forEach(function (k) {
+      vals[k] = document.querySelector('[data-mp="' + k + '"]');
+    });
+
+    var setText = function (el, text, i) {
+      if (!el) return;
+      if (reduced) { el.innerHTML = text; return; }
+      setTimeout(function () {
+        el.classList.add('out');
+        setTimeout(function () {
+          el.innerHTML = text;
+          el.classList.remove('out');
+        }, 200);
+      }, i * 65);
+    };
+
+    var buttons = [].slice.call(chips.querySelectorAll('.audience-pill'));
+    var cur = -1, timer = null;
+
+    var paint = function (i) {
+      var b = buttons[i];
+      if (!b) return;
+      var v = VOCAB[b.getAttribute('data-trade')];
+      if (!v) return;
+      cur = i;
+      setText(capW, v.word, 0);
+      setText(vals.people, v.people, 0);
+      setText(vals.room,   v.room,   1);
+      setText(vals.work,   v.work,   2);
+      rest.innerHTML = '';
+      v.rest.forEach(function (n, k) {
+        var el = document.createElement('span');
+        el.className = 'mp-item swap' + (reduced ? '' : ' out');
+        el.innerHTML = n;
+        rest.appendChild(el);
+        if (!reduced) setTimeout(function () { el.classList.remove('out'); }, 240 + k * 65);
+      });
+      buttons.forEach(function (x, n) {
+        x.setAttribute('aria-pressed', n === i ? 'true' : 'false');
+      });
+    };
+
+    var stop = function () { if (timer) { clearInterval(timer); timer = null; } };
+    buttons.forEach(function (b, i) {
+      b.addEventListener('click', function () { stop(); paint(i); });
+    });
+
+    /* start on the barber, which is the row already in the markup, then
+       cycle so the mechanic is visible without a click. Any click ends
+       the cycle for good: it is a control, not a carousel. */
+    var startAt = 0;
+    buttons.forEach(function (b, i) { if (b.getAttribute('data-trade') === 'barber') startAt = i; });
+    paint(startAt);
+    if (!reduced && 'IntersectionObserver' in window) {
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting && !timer) {
+            timer = setInterval(function () { paint((cur + 1) % buttons.length); }, 2800);
+          } else if (!e.isIntersecting) { stop(); }
+        });
+      }, { threshold: 0.3 });
+      io.observe(chips.closest('.shape') || chips);
+    }
+  }
+
+  /* The trust section's log. Undo is real, and the footer says the undo
+     was logged too, which is the half of the promise the copy could
+     only assert. */
+  var row = document.getElementById('trustUndoRow');
+  var btn = document.getElementById('trustUndoBtn');
+  var foot = document.getElementById('trustLogFoot');
+  if (row && btn && foot) {
+    var REST = 'Autopilot, overnight \u00b7 nothing happened without a line in this log.';
+    var PULLED = 'Reminders pulled back \u00b7 the log keeps the action and the undo.';
+    var undone = false;
+    btn.addEventListener('click', function () {
+      undone = !undone;
+      row.classList.toggle('undone', undone);
+      btn.textContent = undone ? 'Redo' : 'Undo';
+      foot.textContent = undone ? PULLED : REST;
+    });
+  }
 })();
 </script>
 """
