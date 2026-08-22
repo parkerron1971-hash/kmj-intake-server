@@ -6796,10 +6796,11 @@ async def public_login_redirect(request: Request):
         return await _platform_page_or_site(request, lambda: "")
     return RedirectResponse(url=MARKETING_APP_URL, status_code=302)
 
-# Intake form submission — POSTed via fetch() from /get-started.
+# Intake form submission — POSTed via fetch() from /get-started. The
+# request rides along so lead_attribution can read the Referer header.
 @router.post("/api/leads", include_in_schema=False)
-async def post_lead(req: LeadIntakeRequest):
-    return await handle_lead_intake(req)
+async def post_lead(req: LeadIntakeRequest, request: Request):
+    return await handle_lead_intake(req, request)
 
 # A2P CTA page — the publicly verifiable SMS opt-in (2026-07-04).
 # Carriers' reviewers fetch this; it must stay public + crawlable.
