@@ -137,7 +137,9 @@ SHARED_CSS = """
   .eyebrow{display:inline-flex;align-items:center;gap:8px;padding:5px 14px;font-size:10px;font-weight:700;letter-spacing:2.4px;text-transform:uppercase;color:var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent);border:1px solid color-mix(in srgb, var(--accent) 28%, transparent);border-radius:99px;}
   .gradient-text{color:var(--accent);-webkit-text-fill-color:currentColor;background:none;}
   h1,h2,h3{font-family:var(--font-heading);letter-spacing:-0.032em;line-height:1.04;}
-  h1{font-size:clamp(42px, 6.2vw, 68px);font-weight:700;}
+  /* 78, matching the home page's fold. At 68 the inner pages read as
+     a lesser tier of page, and nothing justified the demotion. */
+  h1{font-size:clamp(42px, 6.2vw, 78px);font-weight:700;}
   h2{font-size:clamp(30px, 4.2vw, 46px);font-weight:700;letter-spacing:-0.03em;margin-bottom:14px;}
   h3{font-size:18px;font-weight:600;color:var(--text-primary);margin-bottom:6px;}
   p{color:var(--text-secondary);font-size:16px;}
@@ -149,7 +151,13 @@ SHARED_CSS = """
      with the content rather than sticking. A translucent strip still
      reads as a strip — the only way to stop the black band joining the
      brand to the nav was to stop painting one. */
-  .nav{position:relative;z-index:50;background:transparent;border-bottom:none;}
+  /* Absolute, not fixed: the row scrolls away with the page. Out of
+     flow so the first section starts at the top of the document and
+     its light — the hero's blobs on home, .page-hero::before on the
+     rest — paints behind the wordmark instead of starting under it.
+     Every first section carries 128px of top padding, which clears
+     the 65px row with room to spare. */
+  .nav{position:absolute;top:0;left:0;right:0;z-index:50;background:transparent;border-bottom:none;}
   .nav-inner{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;max-width:1140px;margin:0 auto;}
   .brand{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;display:inline-flex;align-items:center;gap:10px;}
   .brand .logo{height:32px;width:32px;object-fit:contain;display:block;flex-shrink:0;filter:drop-shadow(0 0 8px var(--glow));}
@@ -327,7 +335,10 @@ SHARED_CSS = """
   .reveal-delay-3{transition-delay:0.24s;}
 
   /* ─── section base ─── */
-  section{position:relative;padding:80px 0;}
+  /* One number for every section on every page. The home page runs
+     128 and the rest ran 80, so following a nav link tightened the
+     whole site by 48px a side. */
+  section{position:relative;padding:128px 0;}
   .section-head{text-align:center;max-width:680px;margin:0 auto 56px;}
   .section-head .eyebrow{margin-bottom:14px;}
   .section-head p{color:var(--text-muted);margin-top:8px;}
@@ -426,7 +437,7 @@ SHARED_CSS = """
      never carried the rule — a per-page stylesheet cannot reach them.
      It sits in the shell now, which is the only place shared chrome
      actually is shared. */
-  .final-cta{padding:112px 0;text-align:center;position:relative;overflow:hidden;}
+  .final-cta{padding:128px 0;text-align:center;position:relative;overflow:hidden;}
   .final-cta::before{content:'';position:absolute;inset:0;pointer-events:none;opacity:.55;
     background:radial-gradient(52% 100% at 50% 50%, var(--glow), transparent 68%);}
   .final-cta .container{position:relative;z-index:1;}
@@ -435,7 +446,7 @@ SHARED_CSS = """
   .final-cta .btn-primary{margin-top:22px;}
 
   /* ─── page-hero (for non-home pages) ─── */
-  .page-hero{position:relative;padding:80px 0 60px;text-align:center;overflow:hidden;border-bottom:1px solid var(--border);}
+  .page-hero{position:relative;padding:128px 0;text-align:center;overflow:hidden;border-bottom:1px solid var(--border);}
   .page-hero::before{content:'';position:absolute;inset:-40px 0 auto;height:280px;background:radial-gradient(60% 80% at 50% 0%, var(--glow), transparent 70%);pointer-events:none;opacity:0.6;}
   .page-hero .container{position:relative;z-index:1;}
   .page-hero h1{margin:14px 0 16px;}
@@ -2153,21 +2164,6 @@ def render_home() -> str:
     #    Restraint follows bridgemind.ai, which Kevin cited as the target:
     #    flat colour, hairline borders, no glow stacking, generous air.
     extra_css = """
-      /* ── THE NAV FLOATS OVER THE FOLD ────────────────────────────
-         Taking the bar's background off was never going to be enough.
-         .nav sits in normal flow, so it reserved ~65px of flat --bg
-         above .hero — and .hero owns the glow and is overflow:hidden,
-         so the light was cut off at the hero's top edge. The result
-         was a black strip across the top with a hard horizontal line
-         under it: a bar in everything but the paint.
-
-         Absolute, not fixed: the row still scrolls away with the page.
-         HOME ONLY — the inner pages have no fold for it to float over,
-         and pulling it out of flow there would drop it on the copy.
-         It lives in extra_css, which is injected after SHARED_CSS, so
-         it wins on order without needing to out-specify anything. */
-      .nav{position:absolute;top:0;left:0;right:0;}
-
       .container-xl{max-width:1340px;margin:0 auto;padding:0 32px;}
       /* Wide screens: the VISUAL column grows, prose does not. `.container`
          stays at 1140 — a 1700px line of body copy is unreadable — while
@@ -2992,7 +2988,7 @@ def render_home() -> str:
       /* ══════════════════════════════════════════════════════════════
          rest of page
          ══════════════════════════════════════════════════════════════ */
-      .audience{padding:80px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
+      .audience{padding:128px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
       .audience-grid{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;}
       .audience-pill{display:inline-flex;align-items:center;gap:9px;padding:11px 20px;background:var(--surface);
         border:1px solid var(--border);border-radius:99px;font-size:14px;font-weight:500;
@@ -4125,7 +4121,7 @@ def render_home() -> str:
 
 def render_features() -> str:
     extra_css = REPLICA_KIT_CSS + FEATURES_FX_CSS + DEMO_CSS + """
-      .feature-section{padding:64px 0;border-bottom:1px solid var(--border);}
+      .feature-section{padding:128px 0;border-bottom:1px solid var(--border);}
       .feature-section:last-of-type{border-bottom:none;}
       .fs-grid{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;}
       @media (max-width: 880px){.fs-grid{grid-template-columns:1fr;gap:32px;}}
@@ -4406,7 +4402,7 @@ def render_features() -> str:
   </div>
 </section>
 
-<section class="final-cta" style="padding:80px 0;">
+<section class="final-cta">
   <div class="container">
     <span class="eyebrow reveal">Ready to try it?</span>
     <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Apply for access today.</h2>
@@ -4578,7 +4574,7 @@ def render_compare() -> str:
   </div>
 </section>
 
-<section class="final-cta" style="padding:80px 0;">
+<section class="final-cta">
   <div class="container">
     <span class="eyebrow reveal">Stop stitching tools.</span>
     <h2 style="margin-top:14px;" class="reveal reveal-delay-1">One workspace, one login, one Chief.</h2>
@@ -4834,7 +4830,7 @@ def render_about() -> str:
   </div>
 </section>
 
-<section style="padding-top:0;">
+<section>
   <div class="container">
     <div class="stack-flow reveal">
       <div>
@@ -4938,7 +4934,7 @@ def render_about() -> str:
   </div>
 </section>
 
-<section class="final-cta" style="padding:80px 0;">
+<section class="final-cta">
   <div class="container">
     <span class="eyebrow reveal">Want to talk?</span>
     <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Apply for access, or just say hi.</h2>
@@ -4999,7 +4995,7 @@ def render_download() -> str:
           <p class="dl-note">The desktop app is in final packaging. Everything it does,
              the web app does today: same account, same data, same Chief.</p>"""
     content = f"""
-<section class="hero" style="padding-top:96px;padding-bottom:40px;text-align:center;">
+<section class="hero" style="padding-top:128px;padding-bottom:128px;text-align:center;">
   <div class="container">
     <h1 class="reveal">Solutionist, wherever you work.</h1>
     <p class="reveal" style="color:var(--text-muted);max-width:560px;margin:18px auto 0;">
@@ -5008,7 +5004,7 @@ def render_download() -> str:
     </p>
   </div>
 </section>
-<section style="padding:0 0 80px;">
+<section>
   <div class="container">
     <div class="dl-grid">
       <div class="company-card reveal">
