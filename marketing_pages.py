@@ -1497,18 +1497,14 @@ SPINE_SCRIPT = """
 # barber, Members for a ministry) — if that drifts, this drifts with it.
 # ══════════════════════════════════════════════════════════════════════
 
-FOLD_SCRIPT = """
-<script>
-(function () {
-  var word  = document.getElementById('heroWord');
-  var chips = document.getElementById('heroChips');
-  var stage = document.getElementById('foldStage');
-  if (!word || !chips || !stage) return;
-
-  /* kpi = [label, value, footnote] x4 ; rows = [text, amount|null] x3 ;
-     sugg = [name, sub, pill] x3. The vocabulary is the terminology the
-     product actually ships (Regulars for a barber, Members for a
-     ministry) — if that drifts, this has to drift with it. */
+TRADES_JS = """
+  /* THE TRADE VOCABULARY — one source, two consumers.
+     kpi = [label, value, footnote] x4 ; rows = [text, amount|null] x3 ;
+     sugg = [name, sub, pill] x3. This is the terminology the product
+     actually ships (Regulars for a barber, Members for a ministry) —
+     if that drifts, this has to drift with it. The home fold reads it
+     to rebuild Mission Control; Get Started reads it to show which
+     room you would be handed. Neither owns it.  */
   var TRADES = [
     { word: 'barber', cap: 'for a barber', biz: 'Fade &amp; Co.', owner: 'Andre Whitfield', first: 'Andre',
       grp: 'The chair', nav: ['Regulars', 'Chair calendar', 'Walk-ins', 'Payments'],
@@ -1567,6 +1563,17 @@ FOLD_SCRIPT = """
       sugg: [['14 members quiet', 'no attendance in 30 days', 'Check in'], ['Nursery Sunday', '2 slots unfilled', 'Ask'], ['Giving statements', 'ready for Q2', 'Send']],
       today: ['5', ['8:00 AM', 'Staff prayer'], ['12:00 PM', 'Hospital visit'], ['6:30 PM', 'Youth group']] }
   ];
+"""
+
+FOLD_SCRIPT = """
+<script>
+(function () {
+  var word  = document.getElementById('heroWord');
+  var chips = document.getElementById('heroChips');
+  var stage = document.getElementById('foldStage');
+  if (!word || !chips || !stage) return;
+
+""" + TRADES_JS + """
 
   var IDS = ['heroCap','fdBiz','fdOwner','fdFirst','fdGrp','fdN1','fdN2','fdN3','fdN4',
              'fdK1','fdV1','fdF1','fdK2','fdV2','fdF2','fdK3','fdV3','fdF3','fdK4','fdV4','fdF4',
@@ -5207,8 +5214,100 @@ def render_download() -> str:
     )
 
 
+GS_SWITCHER_SCRIPT = """
+<script>
+""" + TRADES_JS + """
+(function () {
+  var chips = document.getElementById('gsChips');
+  var card  = document.getElementById('gsCard');
+  if (!chips || !card || typeof TRADES === 'undefined') return;
+
+  var nav  = document.getElementById('gsNav');
+  var kpis = document.getElementById('gsKpis');
+  var biz  = document.getElementById('gsBiz');
+  var room = document.getElementById('gsRoom');
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function cap(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  function paint(t) {
+    biz.innerHTML  = t.biz;
+    room.innerHTML = t.grp;
+    nav.innerHTML  = t.nav.map(function (n) { return '<span>' + n + '</span>'; }).join('');
+    kpis.innerHTML = t.kpi.slice(0, 4).map(function (k, i) {
+      return '<div class="gs-pv-kpi"><span class="k">' + k[0] + '</span>' +
+             '<span class="v' + (i === 2 ? ' gold' : '') + '">' + k[1] + '</span></div>';
+    }).join('');
+  }
+
+  function select(i) {
+    var btns = chips.querySelectorAll('.gs-chip');
+    for (var j = 0; j < btns.length; j++) {
+      btns[j].setAttribute('aria-pressed', String(j === i));
+    }
+    if (reduced) { paint(TRADES[i]); return; }
+    card.classList.add('is-swapping');
+    window.setTimeout(function () {
+      paint(TRADES[i]);
+      card.classList.remove('is-swapping');
+    }, 170);
+  }
+
+  chips.innerHTML = TRADES.map(function (t, i) {
+    return '<button type="button" class="gs-chip" data-i="' + i + '" aria-pressed="' +
+           (i === 0 ? 'true' : 'false') + '">' + cap(t.word) + '</button>';
+  }).join('');
+
+  chips.addEventListener('click', function (e) {
+    var b = e.target.closest('.gs-chip');
+    if (b) select(parseInt(b.getAttribute('data-i'), 10));
+  });
+
+  paint(TRADES[0]);
+})();
+</script>
+"""
+
 def render_get_started() -> str:
     extra_css = """
+
+      /* ── the workspace you would be handed ────────────────────────────
+         This page asked someone to describe their business and gave
+         nothing back until they submitted. The trade switcher already
+         existed on the home fold; it reads the same TRADES_JS here and
+         answers the form's first question before it is asked. */
+      .gs-preview{margin-top:40px;}
+      .gs-pv-eyebrow{font-size:11px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;
+        color:var(--text-muted);margin:0 0 14px;}
+      .gs-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px;}
+      .gs-chip{font:inherit;font-size:13.5px;font-weight:500;cursor:pointer;padding:7px 15px;
+        border-radius:99px;border:1px solid var(--border);background:transparent;
+        color:var(--text-secondary);transition:color .16s, background .16s, border-color .16s;}
+      .gs-chip:hover{color:var(--text-primary);border-color:var(--border-strong);}
+      .gs-chip[aria-pressed="true"]{background:color-mix(in srgb, var(--accent) 16%, transparent);
+        border-color:color-mix(in srgb, var(--accent) 44%, transparent);color:var(--accent);font-weight:600;}
+      .gs-chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+      .gs-pv-card{border:1px solid var(--border);border-radius:16px;background:var(--surface);
+        padding:20px 22px;transition:opacity .2s ease;}
+      .gs-pv-card.is-swapping{opacity:.3;}
+      .gs-pv-top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+        padding-bottom:12px;border-bottom:1px solid var(--border);}
+      .gs-pv-biz{font-family:var(--font-heading);font-size:17px;font-weight:700;
+        letter-spacing:-.02em;color:var(--text-primary);}
+      .gs-pv-room{font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;
+        color:var(--accent);}
+      .gs-pv-nav{display:flex;flex-wrap:wrap;gap:7px;padding:14px 0;}
+      .gs-pv-nav span{font-size:12.5px;color:var(--text-secondary);border:1px solid var(--border);
+        border-radius:7px;padding:5px 10px;background:var(--bg-2);}
+      .gs-pv-kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;}
+      .gs-pv-kpi{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--bg-2);}
+      .gs-pv-kpi .k{display:block;font-size:9.5px;font-weight:700;letter-spacing:.11em;
+        text-transform:uppercase;color:var(--text-dim);line-height:1.3;}
+      .gs-pv-kpi .v{display:block;font-family:var(--font-heading);font-size:21px;font-weight:700;
+        letter-spacing:-.02em;margin-top:3px;font-variant-numeric:tabular-nums;}
+      .gs-pv-kpi .v.gold{color:var(--amber);}
+      .gs-pv-foot{margin:14px 0 0;font-size:12.5px;color:var(--text-dim);line-height:1.5;}
+      @media (max-width: 520px){.gs-pv-kpis{grid-template-columns:1fr;}}
       .gs-grid{display:grid;grid-template-columns:1.4fr 1fr;gap:48px;margin-top:20px;align-items:flex-start;}
       @media (max-width: 880px){.gs-grid{grid-template-columns:1fr;gap:28px;}}
       .form-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:32px;}
@@ -5297,6 +5396,20 @@ def render_get_started() -> str:
 
 <section>
   <div class="container">
+    <div class="gs-preview reveal">
+      <p class="gs-pv-eyebrow">Pick your trade &mdash; this is the workspace you would be handed</p>
+      <div class="gs-chips" id="gsChips" role="group" aria-label="Business type"></div>
+      <div class="gs-pv-card" id="gsCard">
+        <div class="gs-pv-top">
+          <span class="gs-pv-biz" id="gsBiz">Fade &amp; Co.</span>
+          <span class="gs-pv-room" id="gsRoom">The chair</span>
+        </div>
+        <div class="gs-pv-nav" id="gsNav"></div>
+        <div class="gs-pv-kpis" id="gsKpis"></div>
+        <p class="gs-pv-foot">Every one of those names is the vocabulary the system ships with.
+           Nothing here is set up by you.</p>
+      </div>
+    </div>
     <div class="gs-grid">
       <form id="lead-form" class="form-card reveal">
         <div class="form-row">
@@ -5366,7 +5479,7 @@ def render_get_started() -> str:
         title="Get Started",
         description="Apply for private beta access to the Solutionist System. We onboard each new user personally.",
         content_html=body, path="/get-started", active="get_started",
-        extra_css=extra_css, extra_scripts=extra_scripts,
+        extra_css=extra_css, extra_scripts=extra_scripts + GS_SWITCHER_SCRIPT,
     )
 
 
