@@ -4995,23 +4995,105 @@ def render_download() -> str:
           <p class="dl-note">The desktop app is in final packaging. Everything it does,
              the web app does today: same account, same data, same Chief.</p>"""
     content = f"""
-<section class="hero" style="padding-top:128px;padding-bottom:128px;text-align:center;">
+<section class="hero" style="text-align:center;">
   <div class="container">
     <h1 class="reveal">Solutionist, wherever you work.</h1>
     <p class="reveal" style="color:var(--text-muted);max-width:560px;margin:18px auto 0;">
       One account, one system: phone, tablet, and desktop.
       The web app at <a href="{APP_URL}" style="color:var(--accent);">{APP_URL.replace("https://", "")}</a> works everywhere today.
     </p>
+
+    <div class="dl-devices reveal" aria-hidden="true">
+      <div class="dl-dev desk">
+        <div class="dl-screen">
+          <div class="app">
+            <div class="app-top">
+              <span class="at-mark"></span>
+              <span class="at-search">Search or ask Chief<span class="kbd">&#8984;K</span></span>
+              <span class="at-urgent">3 need you</span>
+              <span class="at-cta">Quick Create</span>
+              <span class="at-av"></span>
+            </div>
+            <div class="app-body">
+              <div class="app-side">
+                <div class="as-sec">Mission Control</div>
+                <div class="as-item is-on"><span class="ic"></span>Dashboard</div>
+                <div class="as-item"><span class="ic"></span>Needs you<span class="ct">3</span></div>
+                <div class="as-sec">The chair</div>
+                <div class="as-item"><span class="ic"></span>Regulars<span class="ct">124</span></div>
+                <div class="as-item"><span class="ic"></span>Chair calendar</div>
+                <div class="as-sec">Finance</div>
+                <div class="as-item"><span class="ic"></span>Invoices</div>
+                <div class="as-chief">Chief AI<span class="on">Online</span></div>
+              </div>
+              <div class="app-canvas">
+                <div class="kpi-row">
+                  <div class="kpi"><span class="k">Regulars</span><span class="v">124</span><span class="f">9 overdue for a cut</span></div>
+                  <div class="kpi"><span class="k">Revenue</span><span class="v gold">$6,910</span><span class="f">+12% vs last mo</span></div>
+                </div>
+                <div class="brief">
+                  <div class="brief-l">
+                    <div class="date">Tuesday &middot; 8:04 AM</div>
+                    <div class="hi">Good morning, <b>Andre</b></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="dl-dev tab">
+        <div class="dl-screen">
+          <div class="app">
+            <div class="app-top">
+              <span class="at-mark"></span>
+              <span class="at-search">Ask Chief</span>
+              <span class="at-av"></span>
+            </div>
+            <div class="app-body">
+              <div class="app-canvas">
+                <div class="brief">
+                  <div class="brief-l">
+                    <div class="date">Morning edition</div>
+                    <div class="hi">Good morning, <b>Andre</b></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="dl-dev phone">
+        <div class="dl-screen">
+          <div class="app">
+            <div class="app-body">
+              <div class="app-canvas">
+                <div class="brief">
+                  <div class="brief-l">
+                    <div class="date">Tuesday</div>
+                    <div class="hi">Good morning, <b>Andre</b></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="dl-caption">The same account on every screen. Nothing syncs, because nothing is separate.</p>
   </div>
 </section>
 <section>
   <div class="container">
+    <p class="dl-eyebrow" id="dlHere">Pick your platform</p>
     <div class="dl-grid">
-      <div class="company-card reveal">
+      <div class="company-card reveal" data-plat="android">
         <h3>Android</h3>
         {android_block}
       </div>
-      <div class="company-card reveal reveal-delay-1">
+      <div class="company-card reveal reveal-delay-1" data-plat="ios">
         <h3>iPhone &amp; iPad</h3>
         <p class="dl-note">Installs as an app straight from Safari. No App Store needed.</p>
         <details class="dl-steps" open>
@@ -5023,7 +5105,7 @@ def render_download() -> str:
           </ol>
         </details>
       </div>
-      <div class="company-card reveal reveal-delay-2">
+      <div class="company-card reveal reveal-delay-2" data-plat="desktop">
         <h3>Windows &amp; macOS</h3>
         {desktop_block}
       </div>
@@ -5039,7 +5121,56 @@ def render_download() -> str:
         content_html=content,
         path="/download",
         active="download",
-        extra_css="""
+        extra_css=REPLICA_KIT_CSS + """
+  /* ── the three screens ─────────────────────────────────────────────
+     A download page with no picture of the app was asking people to
+     take the product on faith. These are the replica kit at three
+     sizes: each frame carries only as much markup as it can hold
+     legibly, so the phone shows the briefing and nothing else rather
+     than a desktop layout shrunk past reading. */
+  .dl-devices{display:flex;align-items:flex-end;justify-content:center;gap:22px;
+    margin:56px auto 0;max-width:940px;}
+  .dl-dev{position:relative;border-radius:14px;background:var(--bg-2);
+    border:1px solid var(--border-strong);padding:7px;flex:0 0 auto;
+    box-shadow:0 30px 70px -34px rgba(0,0,0,.9);}
+  .dl-dev .dl-screen{border-radius:8px;overflow:hidden;background:#0F1218;height:100%;}
+  .dl-dev .app{height:100%;width:100%;}
+  .dl-dev.desk{flex:1 1 auto;max-width:600px;height:340px;border-radius:16px;}
+  .dl-dev.tab{width:246px;height:292px;}
+  .dl-dev.phone{width:158px;height:252px;border-radius:22px;padding:5px;}
+  .dl-dev.phone .dl-screen{border-radius:17px;}
+  /* No font-size override here. Bumping the type inside a 210px frame
+     was what truncated the KPI labels to single letters; the fix was to
+     give each frame less to hold, not smaller words. */
+  /* The kit's .kpi-row is a fixed 5-column grid, so two tiles were
+     being held to two fifths of the width and clipping their own
+     figures. In these frames the row carries exactly what is in it. */
+  .dl-dev .kpi-row{grid-template-columns:repeat(2,1fr);}
+  .dl-caption{text-align:center;color:var(--text-muted);font-size:13.5px;margin-top:22px;}
+  @media (max-width: 880px){
+    .dl-devices{flex-wrap:wrap;gap:16px;}
+    .dl-dev.desk{max-width:100%;flex:1 1 100%;height:260px;}
+    .dl-dev.tab{width:200px;height:236px;}
+    .dl-dev.phone{width:140px;height:224px;}
+  }
+  @media (max-width: 560px){
+    .dl-dev.tab{display:none;}
+    .dl-dev.desk{height:210px;}
+  }
+
+  .dl-eyebrow{text-align:center;font-size:11px;font-weight:700;letter-spacing:2px;
+    text-transform:uppercase;color:var(--text-muted);margin:0 0 24px;}
+
+  /* the card for the device you are actually holding */
+  .company-card[data-plat].is-yours{border-color:color-mix(in srgb, var(--accent) 52%, transparent);
+    background:color-mix(in srgb, var(--accent) 7%, var(--surface));
+    box-shadow:0 18px 46px -26px color-mix(in srgb, var(--accent) 70%, transparent);}
+  .company-card[data-plat].is-yours::before{content:'You are on this';position:absolute;
+    top:-10px;left:22px;font-size:10px;font-weight:700;letter-spacing:1.4px;
+    text-transform:uppercase;color:var(--ink-on-accent);background:var(--accent);
+    border-radius:99px;padding:3px 11px;}
+  .company-card[data-plat]{position:relative;}
+
   .dl-soon{display:inline-block;margin-top:4px;padding:6px 16px;border:1px solid var(--border-strong);border-radius:99px;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text-muted);}
   .dl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:8px;}
   @media (max-width: 880px){.dl-grid{grid-template-columns:1fr;}}
@@ -5048,6 +5179,30 @@ def render_download() -> str:
   .dl-steps{margin-top:14px;text-align:left;}
   .dl-steps summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--text-muted);letter-spacing:0.4px;}
   .dl-steps ol{margin:10px 0 0;padding-left:20px;color:var(--text-secondary);font-size:13.5px;line-height:1.6;display:flex;flex-direction:column;gap:6px;}
+""",
+        extra_scripts="""
+<script>
+  /* Lift the card for the device you are holding. Read-only feature
+     sniffing on the UA string: it decides which of three cards gets a
+     highlight and nothing else, so a wrong guess costs a visitor
+     nothing and every card stays visible and usable either way. */
+  (function(){
+    var ua = navigator.userAgent || '';
+    var plat;
+    if (/Android/i.test(ua))                                  plat = 'android';
+    else if (/iPhone|iPad|iPod/i.test(ua))                    plat = 'ios';
+    else if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) plat = 'ios';
+    else if (/Windows|Macintosh|Linux|CrOS/i.test(ua))        plat = 'desktop';
+    if (!plat) return;
+    var card = document.querySelector('.company-card[data-plat="' + plat + '"]');
+    if (!card) return;
+    card.classList.add('is-yours');
+    var grid = card.parentNode;
+    if (grid && grid.firstChild !== card) grid.insertBefore(card, grid.firstChild);
+    var label = document.getElementById('dlHere');
+    if (label) label.textContent = 'Pick your platform \u2014 yours is first';
+  })();
+</script>
 """,
     )
 
