@@ -1188,6 +1188,24 @@ async def startup():
                               "interval", hours=1, id="reorder_sweep")
         except Exception as e:
             print(f"   [warn] reorder sweep not scheduled: {e}")
+    # THE FOLLOW-THROUGH (2026-08-20) — Chief closes the loops it opens.
+    # Every invoice sent, purchase order mailed, campaign launched and
+    # email delivered leaves a watch; this pass resolves them against
+    # the live tables and tells the practitioner how each one landed.
+    #
+    # Hourly, but the volume knob is not the cadence: the announce half
+    # rolls up per business and caps at two notifications a pass, and
+    # `announced_at` retires a loop the first time Chief speaks about
+    # it. Resolution runs at any hour; only announcing waits for waking
+    # hours, so a 3am payment is known by the panel at 3am and
+    # mentioned out loud at 8am. Kill switch: FOLLOW_THROUGH=off.
+    if (os.environ.get("FOLLOW_THROUGH") or "on").strip().lower() != "off":
+        try:
+            import outcome_watch as _ow
+            scheduler.add_job(g("follow_through", _ow.follow_through_sweep),
+                              "interval", hours=1, id="follow_through")
+        except Exception as e:
+            print(f"   [warn] follow-through sweep not scheduled: {e}")
     # Chief Layers arc (2026-07-09) — the weekly longitudinal insight
     # engine (Opus lane; eligibility + cadence + per-tick cap inside).
     # Kill switch: CHIEF_INSIGHTS=off.

@@ -507,6 +507,21 @@ async def handle_send_purchase_order(client, biz, action) -> Dict[str, Any]:
                   " (couldn't record the outstanding-order marker — a "
                   "repeat low-stock nudge may appear)")
 
+    # THE FOLLOW-THROUGH — the loop this send opens is "did the stock
+    # actually arrive". reorder_pending_at is the arrival signal (every
+    # stock-raising path clears it), so the watch reads the same stamp
+    # the duplicate-order guard above does rather than inventing a
+    # second definition of a restock.
+    try:
+        import outcome_watch
+        await outcome_watch.open_watch_async(
+            biz["id"], "restock_arrived", offering["id"],
+            label=f"{po['po_number']} — {qty} x {name}",
+            subject=offering,
+            facts={"po_number": po["po_number"], "qty": qty,
+                   "supplier": po["to_name"] or po["to_email"]})
+    except Exception as _e:
+        logger.warning(f"[follow-through] PO watch not opened: {_e}")
     return {
         "type": "send_purchase_order",
         "offering_id": offering["id"],
