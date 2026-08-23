@@ -2153,6 +2153,21 @@ def render_home() -> str:
     #    Restraint follows bridgemind.ai, which Kevin cited as the target:
     #    flat colour, hairline borders, no glow stacking, generous air.
     extra_css = """
+      /* ── THE NAV FLOATS OVER THE FOLD ────────────────────────────
+         Taking the bar's background off was never going to be enough.
+         .nav sits in normal flow, so it reserved ~65px of flat --bg
+         above .hero — and .hero owns the glow and is overflow:hidden,
+         so the light was cut off at the hero's top edge. The result
+         was a black strip across the top with a hard horizontal line
+         under it: a bar in everything but the paint.
+
+         Absolute, not fixed: the row still scrolls away with the page.
+         HOME ONLY — the inner pages have no fold for it to float over,
+         and pulling it out of flow there would drop it on the copy.
+         It lives in extra_css, which is injected after SHARED_CSS, so
+         it wins on order without needing to out-specify anything. */
+      .nav{position:absolute;top:0;left:0;right:0;}
+
       .container-xl{max-width:1340px;margin:0 auto;padding:0 32px;}
       /* Wide screens: the VISUAL column grows, prose does not. `.container`
          stays at 1140 — a 1700px line of body copy is unreadable — while
@@ -2501,7 +2516,11 @@ def render_home() -> str:
       }
 
       @media (max-width:1000px){
-        .hero{padding-top:52px;}
+        /* 52px predates the one-number rhythm, and with the nav out of
+           flow it would seat the badge under the wordmark. 128 both
+           clears the row and keeps the fold on the same number as
+           every other section. */
+        .hero{padding-top:128px;}
         .hero-grid{display:flex;flex-direction:column;align-items:stretch;gap:24px;}
         /* 7.2vw bottomed out at the 32px floor on every phone — a 78px
    desktop headline arriving at 32. 11.8vw lands it near 46 at 390px
@@ -2545,7 +2564,11 @@ def render_home() -> str:
          padding tightens, and the panel drops the chrome that needs width
          to read. */
       @media (max-width:640px){
-        .hero{padding-top:34px;}
+        /* 34px was fine while the nav sat above the fold in flow. It does
+           not any more — it floats over it — so 34 seated the NEW badge
+           underneath the wordmark. 128 both clears the row and keeps the
+           phone on the same one number as every other section. */
+        .hero{padding-top:128px;}
         /* align-items goes back to the grid's own `center`: on a phone the
            CTA row and the slot line shrink-wrap and sit centred, which is
            how this fold has always shipped. Only the wider single-column
