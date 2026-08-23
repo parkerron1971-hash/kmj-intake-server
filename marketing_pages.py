@@ -242,14 +242,18 @@ SHARED_CSS = """
 
   .mobile-menu{position:fixed;inset:0;z-index:60;display:none;}
   .mobile-menu.is-open{display:block;}
-  .mm-scrim{position:absolute;inset:0;background:rgba(4,5,8,.6);opacity:0;transition:opacity .22s ease;}
+  /* --mm-panel-h is written by openMenu(). Falling back to 0 keeps
+     the old full-height scrim if the script never runs, so the
+     overlay is never left without something to close it. */
+  .mm-scrim{position:absolute;inset:0;top:var(--mm-panel-h,0px);
+    background:rgba(4,5,8,.66);opacity:0;transition:opacity .22s ease;}
   .mobile-menu.is-in .mm-scrim{opacity:1;}
   /* 72% + blur rather than solid --bg-2: the hero's light carries
      through the whole panel, including behind the mark and the close
      button, so the menu reads as a layer over the page instead of a
      black slab that replaced it. Rounded foot for the same reason. */
   .mm-panel{position:absolute;top:0;left:0;right:0;max-height:100%;overflow-y:auto;
-    background:color-mix(in srgb, var(--bg-2) 72%, transparent);
+    background:color-mix(in srgb, var(--bg-2) 66%, transparent);
     backdrop-filter:blur(26px) saturate(1.35);-webkit-backdrop-filter:blur(26px) saturate(1.35);
     border-bottom:1px solid var(--border-strong);border-radius:0 0 22px 22px;
     box-shadow:0 30px 56px rgba(0,0,0,.7);padding:0 10px 18px;
@@ -607,6 +611,10 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
         menu.classList.add('is-open');
         /* reflow so the opening transition actually runs */
         void menu.offsetWidth;
+        /* The panel is translucent on purpose. Measure it now that it
+           has laid out, so the scrim can start where the panel ends
+           instead of double-darkening the page behind it. */
+        menu.style.setProperty('--mm-panel-h', panel.offsetHeight + 'px');
         menu.classList.add('is-in');
         burger.setAttribute('aria-expanded', 'true');
         document.body.style.overflow = 'hidden';
@@ -2173,11 +2181,11 @@ def render_home() -> str:
          panel says the same thing inside the fold, and §04 already
          carries the room-by-room detail.
          ══════════════════════════════════════════════════════════════ */
-      /* The hero opens at 96 because nothing sits above it any more, and
-   closes tight into .trust: the strip's tint is a continuation of
-   the fold, not a section of its own. Every real section boundary
-   below is 128 + 128. */
-      .hero{position:relative;padding:96px 0 0;overflow:hidden;}
+      /* One number, no exceptions — the hero included. An earlier pass
+   welded the hero to .trust and gave the pair their own spacing;
+   that made the fold the one place on the page playing by
+   different rules. */
+      .hero{position:relative;padding:128px 0;overflow:hidden;}
       /* The closer at the foot of the page sits in a drifting colour
          field; the fold had a single flat radial. Same instrument at both
          ends now, so the page opens and closes on the same light. The
@@ -2462,6 +2470,34 @@ def render_home() -> str:
          can never outrun the container's 32px gutter. */
       @media (min-width:1200px){
         .fold-stage{margin-right:calc(-1 * min(72px, max(0px, (100vw - 1404px) / 2)));}
+      }
+
+      /* ── the fold's replica, at phone width ──────────────────────
+         The stage is 335px across at 390px, and the replica was
+         setting its labels at 7-8px inside it: the biggest object
+         on the screen was the one nobody could read. The panes that
+         do not fit are already dropped below; these are the sizes
+         for the ones that stay. Type only — moving anything
+         structural here would reflow a layout that is already
+         correct. */
+      @media (max-width:700px){
+        /* The label is nowrap+ellipsis at desktop size, where it fits.
+           At 10.5px in a 152px tile it does not, so let it take a
+           second line rather than truncate the noun it exists to
+           name. */
+        .fold-stage .app .kpi .k{font-size:10px;letter-spacing:.05em;
+          white-space:normal;overflow:visible;line-height:1.25;}
+        .fold-stage .app .kpi .f{font-size:11px;}
+        .fold-stage .app .brief-l .date{font-size:10px;}
+        .fold-stage .app .chief-h .on{font-size:10px;}
+        .fold-stage .app .chief-f .tag{font-size:9.5px;}
+        .fold-stage .app .chief-f .amt{font-size:10.5px;}
+        .fold-stage .app .chief-f .g{font-size:12px;}
+        .fold-stage .app .cf .chief-lead{font-size:11.5px;}
+        .fold-stage .app .cf .chief-ask{font-size:11.5px;}
+        .fold-stage .app .chief-btns b,
+        .fold-stage .app .chief-btns i{font-size:11.5px;}
+        .fold-stage .app .cin-wrap .cin-ph{font-size:11.5px;}
       }
 
       @media (max-width:1000px){
@@ -2790,7 +2826,7 @@ def render_home() -> str:
          from nothing over the first third of the band, so the field
          resolves into the band instead of hitting a lid. The bottom
          rule stays: that boundary is a real change of subject. */
-      .trust{border-bottom:1px solid var(--border);padding:72px 0 128px;
+      .trust{border-bottom:1px solid var(--border);padding:128px 0;
         background:linear-gradient(to bottom,
           transparent 0%,
           color-mix(in srgb, var(--accent) 3.5%, transparent) 34%,
