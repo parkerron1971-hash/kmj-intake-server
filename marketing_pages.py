@@ -144,7 +144,12 @@ SHARED_CSS = """
   .lead{font-size:18px;color:var(--text-muted);line-height:1.65;}
 
   /* ─── nav ─── */
-  .nav{position:sticky;top:0;z-index:50;background:rgba(8,9,12,0.82);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border-bottom:1px solid var(--border);}
+  /* NO BAR. The mark and the links sit straight on the page, with the
+     hero's own light running behind them, and the row scrolls away
+     with the content rather than sticking. A translucent strip still
+     reads as a strip — the only way to stop the black band joining the
+     brand to the nav was to stop painting one. */
+  .nav{position:relative;z-index:50;background:transparent;border-bottom:none;}
   .nav-inner{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;max-width:1140px;margin:0 auto;}
   .brand{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;display:inline-flex;align-items:center;gap:10px;}
   .brand .logo{height:32px;width:32px;object-fit:contain;display:block;flex-shrink:0;filter:drop-shadow(0 0 8px var(--glow));}
@@ -207,17 +212,25 @@ SHARED_CSS = """
      brand and "Get the App" onto extra lines and buckled the whole bar. */
   @media (max-width: 900px){.nav-links{gap:12px;font-size:12px;} .nav-pages{display:none;} .nav-links a:not(.nav-cta):not(.nav-login){display:none;}
     .brand-text{white-space:nowrap;}}
+  /* Get Started is already the primary button INSIDE the menu, so on a
+     phone it was on screen twice and the bar carried three objects in
+     390px. The bar keeps the mark and the trigger; the CTA lives one
+     tap away where it has room to be a real button. */
+  @media (max-width: 900px){.nav-links .nav-cta{display:none;}}
   /* under ~420 the bar runs out of room: Log in lives in the menu instead */
   @media (max-width: 420px){.nav-inner{padding:12px 16px;} .nav-links .nav-login{display:none;}}
 
   /* ─── mobile menu ───────────────────────────────────────────────
      The links above are hidden below 900px, so without this the only
      way off the page on a phone is the footer. The panel is a SIBLING
-     of .nav on purpose: .nav has backdrop-filter, which creates a
-     stacking context AND a containing block for fixed children, so a
-     panel nested inside it would be trapped under the bar. ── */
-  .nav-burger{display:none;align-items:center;justify-content:center;width:40px;height:40px;flex-shrink:0;
-    border:1px solid var(--border-strong);border-radius:10px;background:var(--surface);
+     of .nav on purpose: .nav carries a z-index, which creates a
+     stacking context, so a panel nested inside it could never climb
+     above the bar however high its own z-index went. ── */
+  /* 44px, not 40: 44 is the touch-target floor, and a circle reads as
+     one object next to the wordmark where a rounded square read as a
+     second button. */
+  .nav-burger{display:none;align-items:center;justify-content:center;width:44px;height:44px;flex-shrink:0;
+    border:1px solid var(--border-strong);border-radius:50%;background:transparent;
     color:var(--text-primary);cursor:pointer;padding:0;font-family:inherit;
     transition:border-color .15s, background .15s;}
   .nav-burger:hover{border-color:var(--accent);background:var(--surface-2);}
@@ -229,34 +242,43 @@ SHARED_CSS = """
 
   .mobile-menu{position:fixed;inset:0;z-index:60;display:none;}
   .mobile-menu.is-open{display:block;}
-  .mm-scrim{position:absolute;inset:0;background:rgba(4,5,8,.74);opacity:0;transition:opacity .22s ease;}
+  .mm-scrim{position:absolute;inset:0;background:rgba(4,5,8,.6);opacity:0;transition:opacity .22s ease;}
   .mobile-menu.is-in .mm-scrim{opacity:1;}
+  /* 72% + blur rather than solid --bg-2: the hero's light carries
+     through the whole panel, including behind the mark and the close
+     button, so the menu reads as a layer over the page instead of a
+     black slab that replaced it. Rounded foot for the same reason. */
   .mm-panel{position:absolute;top:0;left:0;right:0;max-height:100%;overflow-y:auto;
-    background:var(--bg-2);border-bottom:1px solid var(--border);
-    box-shadow:0 26px 60px rgba(0,0,0,.6);padding:0 20px 22px;
+    background:color-mix(in srgb, var(--bg-2) 72%, transparent);
+    backdrop-filter:blur(26px) saturate(1.35);-webkit-backdrop-filter:blur(26px) saturate(1.35);
+    border-bottom:1px solid var(--border-strong);border-radius:0 0 22px 22px;
+    box-shadow:0 30px 56px rgba(0,0,0,.7);padding:0 10px 18px;
     opacity:0;transform:translateY(-12px);
     transition:opacity .2s ease, transform .26s cubic-bezier(.22,1,.36,1);}
   .mobile-menu.is-in .mm-panel{opacity:1;transform:none;}
   .mm-top{display:flex;align-items:center;justify-content:space-between;
-    padding:14px 0;border-bottom:1px solid var(--border);}
-  .mm-close{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;
-    border:1px solid var(--border-strong);border-radius:10px;background:var(--surface);
+    padding:10px 10px;}
+  .mm-close{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;
+    border:1px solid var(--border-strong);border-radius:50%;background:transparent;
     color:var(--text-primary);cursor:pointer;padding:0;font-family:inherit;
     transition:border-color .15s, background .15s;}
   .mm-close:hover{border-color:var(--accent);background:var(--surface-2);}
   .mm-close svg{width:18px;height:18px;}
-  .mm-links{display:flex;flex-direction:column;}
-  .mm-links a{display:flex;align-items:center;justify-content:space-between;gap:12px;
-    padding:15px 2px;font-family:var(--font-heading);font-size:17px;font-weight:600;
-    letter-spacing:-.01em;color:var(--text-secondary);border-bottom:1px solid var(--border);
-    transition:color .15s;}
-  .mm-links a:hover{color:var(--text-primary);}
-  .mm-links a.is-active{color:var(--accent);}
-  .mm-links a svg{width:16px;height:16px;color:var(--text-dim);flex-shrink:0;}
-  .mm-links a.is-active svg{color:var(--accent);}
-  .mm-actions{display:flex;flex-direction:column;gap:10px;margin-top:20px;}
+  /* A hairline under every row made a four-item menu read as a
+     settings table. Separation comes from the gap and the pressed
+     state instead, and the chevrons are gone with them: a > promises
+     a submenu and every one of these opens a page. */
+  .mm-links{display:flex;flex-direction:column;gap:4px;padding:4px 0;}
+  .mm-links a{display:flex;align-items:center;min-height:52px;
+    padding:0 16px;border-radius:999px;
+    font-family:var(--font-heading);font-size:17px;font-weight:500;
+    letter-spacing:-.01em;color:var(--text-secondary);
+    transition:color .16s, background .16s;}
+  .mm-links a:hover{color:var(--text-primary);background:var(--surface-2);}
+  .mm-links a.is-active{color:var(--accent);background:color-mix(in srgb, var(--accent) 16%, transparent);}
+  .mm-actions{display:flex;flex-direction:column;gap:10px;margin-top:14px;padding:0 10px;}
   .mm-actions a{display:flex;align-items:center;justify-content:center;padding:14px 18px;
-    border-radius:10px;font-size:15px;font-weight:700;font-family:inherit;}
+    border-radius:999px;font-size:15px;font-weight:700;font-family:inherit;}
   .mm-actions .mm-primary{background:var(--accent);color:var(--ink-on-accent);
     box-shadow:0 6px 22px color-mix(in srgb, var(--accent) 30%, transparent);}
   .mm-actions .mm-secondary{background:var(--surface);color:var(--text-primary);
@@ -453,12 +475,10 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
     <div class="nav-links">
       <div class="nav-pages">
         <span class="nav-home {ax_home}" aria-hidden="true"><span class="nav-dot"></span></span>
+        <a href="/about" class="{ax_about}">About<span class="nav-dot"></span></a>
         <a href="/features" class="{ax_features}">Features<span class="nav-dot"></span></a>
         <a href="/compare" class="{ax_compare}">Compare<span class="nav-dot"></span></a>
-        <a href="/faq" class="{ax_faq}">FAQ<span class="nav-dot"></span></a>
-        <a href="/about" class="{ax_about}">About<span class="nav-dot"></span></a>
-        <a href="/help" class="{ax_help}">Help<span class="nav-dot"></span></a>
-        <a href="/download" class="{ax_download}" title="Get the app for Android, iPhone, Windows &amp; macOS">Get the App<span class="nav-dot"></span></a>
+        <a href="/#pricing">Pricing<span class="nav-dot"></span></a>
       </div>
       <a class="nav-login" href="{app_url}">Log in</a>
       <a class="nav-cta {ax_get_started}" href="/get-started">Get Started</a>
@@ -483,12 +503,10 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       </button>
     </div>
     <nav class="mm-links" aria-label="Pages">
-      <a href="/features" class="{ax_features}">Features<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
-      <a href="/compare" class="{ax_compare}">Compare<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
-      <a href="/faq" class="{ax_faq}">FAQ<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
-      <a href="/about" class="{ax_about}">About<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
-      <a href="/help" class="{ax_help}">Help<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
-      <a href="/download" class="{ax_download}">Get the App<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></a>
+      <a href="/about" class="{ax_about}">About</a>
+      <a href="/features" class="{ax_features}">Features</a>
+      <a href="/compare" class="{ax_compare}">Compare</a>
+      <a href="/#pricing">Pricing</a>
     </nav>
     <div class="mm-actions">
       <a class="mm-primary" href="/get-started">Get Started &rarr;</a>
@@ -746,8 +764,11 @@ def _pixel_script() -> str:
 def _render_shell(*, title: str, description: str, content_html: str, path: str = "/",
                   active: str = "", extra_css: str = "", extra_scripts: str = "") -> str:
     """Render any page in the shared shell. `active` keys into the nav
-    to mark the current page (one of: features, compare, faq, about,
-    help, get_started)."""
+    to mark the current page. Only about/features/compare still light a
+    nav dot — faq, help and download moved to the footer when the bar was
+    cut to four links, and Pricing is an in-page anchor with no active
+    state of its own. The unused keys stay in the map so every existing
+    caller keeps working."""
     active_map = {
         "ax_home":        "is-active" if path == "/"            else "",
         "ax_features":    "is-active" if active == "features"    else "",
@@ -1666,7 +1687,7 @@ FOLD_SCRIPT = """
 # already links to from the rooms section, and it is one constant plus
 # one section so putting it back on the home page is two edits.
 DEMO_CSS = """
-      .demo-section{padding:96px 0;border-top:1px solid var(--border);}
+      .demo-section{padding:128px 0;border-top:1px solid var(--border);}
       .demo-frame{max-width:900px;margin:0 auto;border-radius:14px;overflow:hidden;
         border:1px solid var(--border-strong);background:var(--surface);box-shadow:0 40px 90px rgba(0,0,0,.6);}
       .demo-chrome{display:flex;align-items:center;gap:7px;padding:11px 16px;border-bottom:1px solid var(--border);
@@ -1685,7 +1706,7 @@ DEVICE_BAND_CSS = """
       /* Slot widths are variables so one media query re-sizes the whole
          scene — a wide monitor needs BIGGER screens, not the same ones
          adrift in more ground. */
-      .dv{position:relative;overflow:hidden;isolation:isolate;padding:104px 0 64px;
+      .dv{position:relative;overflow:hidden;isolation:isolate;padding:128px 0;
         --dv-a:868px;--dv-c:790px;--dv-b:254px;--dv-scale:1;--dv-stage:1680px;
         min-height:calc(368px + 452px * var(--dv-scale));}
       /* NO bottom fade here. There was one — 150px ramping to solid --bg —
@@ -2152,7 +2173,11 @@ def render_home() -> str:
          panel says the same thing inside the fold, and §04 already
          carries the room-by-room detail.
          ══════════════════════════════════════════════════════════════ */
-      .hero{position:relative;padding:76px 0 20px;overflow:hidden;}
+      /* The hero opens at 96 because nothing sits above it any more, and
+   closes tight into .trust: the strip's tint is a continuation of
+   the fold, not a section of its own. Every real section boundary
+   below is 128 + 128. */
+      .hero{position:relative;padding:96px 0 0;overflow:hidden;}
       /* The closer at the foot of the page sits in a drifting colour
          field; the fold had a single flat radial. Same instrument at both
          ends now, so the page opens and closes on the same light. The
@@ -2161,13 +2186,13 @@ def render_home() -> str:
          things to keep in step. */
       .hero-glow{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
       .hero-glow i{position:absolute;display:block;border-radius:50%;filter:blur(84px);}
-      .hg1{left:30%;top:-190px;width:1240px;height:760px;margin-left:-620px;opacity:.85;
+      .hg1{left:50%;top:-190px;width:1240px;height:760px;margin-left:-930px;opacity:.85;
         background:radial-gradient(50% 50% at 50% 50%, rgba(46,125,255,.58), rgba(46,125,255,0) 70%);
         animation:dvDrift1 24s ease-in-out infinite;}
-      .hg2{right:-4%;top:-110px;width:900px;height:680px;opacity:.62;
+      .hg2{left:50%;top:-110px;width:900px;height:680px;margin-left:-190px;opacity:.62;
         background:radial-gradient(50% 50% at 50% 50%, rgba(124,58,237,.52), rgba(124,58,237,0) 70%);
         animation:dvDrift3 27s ease-in-out infinite;}
-      .hg3{left:0%;top:300px;width:820px;height:540px;opacity:.5;
+      .hg3{left:50%;top:300px;width:820px;height:540px;margin-left:-890px;opacity:.5;
         background:radial-gradient(50% 50% at 50% 50%, rgba(34,211,238,.40), rgba(34,211,238,0) 70%);
         animation:dvDrift2 30s ease-in-out infinite;}
       /* .hero is overflow:hidden and .hg3 runs past its foot, so the
@@ -2442,7 +2467,10 @@ def render_home() -> str:
       @media (max-width:1000px){
         .hero{padding-top:52px;}
         .hero-grid{display:flex;flex-direction:column;align-items:stretch;gap:24px;}
-        .hero h1{font-size:clamp(32px,7.2vw,54px);}
+        /* 7.2vw bottomed out at the 32px floor on every phone — a 78px
+   desktop headline arriving at 32. 11.8vw lands it near 46 at 390px
+   and still tops out at 54. */
+.hero h1{font-size:clamp(38px,11.8vw,54px);}
         .hero-anchor{max-width:60ch;}
         .hero-turn{max-width:56ch;}
         .fold-stage{margin-right:0;}
@@ -2508,7 +2536,7 @@ def render_home() -> str:
       }
 
       /* ── pricing ─────────────────────────────────────────────────── */
-      .pricing{padding:96px 0;border-top:1px solid var(--border);}
+      .pricing{padding:128px 0;border-top:1px solid var(--border);}
       .price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;max-width:1000px;margin:0 auto;}
       @media (max-width:860px){.price-grid{grid-template-columns:1fr;}}
       .price-card{padding:26px 24px;border:1px solid var(--border);border-radius:16px;background:var(--surface);
@@ -2518,7 +2546,10 @@ def render_home() -> str:
       .price-name{font-size:11px;letter-spacing:.14em;text-transform:uppercase;
         color:var(--text-muted);font-weight:700;margin-bottom:12px;}
       .price-fig{display:flex;align-items:baseline;gap:6px;margin-bottom:14px;}
+      /* The figure counts up on reveal; without tabular numerals every
+         digit change reflowed the row and the roll read as a glitch. */
       .price-fig b{font-family:var(--font-heading);font-size:40px;font-weight:700;
+        font-variant-numeric:tabular-nums;
         color:var(--text-primary);letter-spacing:-.03em;line-height:1;}
       .price-fig span{font-size:13.5px;color:var(--text-muted);}
       .price-card p{margin:0;font-size:13.5px;line-height:1.65;color:var(--text-secondary);}
@@ -2579,14 +2610,23 @@ def render_home() -> str:
          ring. content-box mask minus full-box mask leaves the border
          and nothing else; -webkit-mask-composite:xor is Safari's
          spelling of mask-composite:exclude, so both ship. */
+      /* 2.5px, and colour all the way round rather than one arc across
+         178deg with the rest transparent: at 1px on a faint border the
+         travel was there and nobody saw it. The stops are the site's
+         own tokens in order — accent, info, violet, amber, success —
+         so the card lights up in the palette it already lives in, and
+         the drop-shadow follows the masked ring rather than the box. */
       .price-card::before{content:'';position:absolute;inset:0;border-radius:inherit;
-        padding:1px;pointer-events:none;z-index:3;opacity:0;transition:opacity .3s ease;
+        padding:2.5px;pointer-events:none;z-index:3;opacity:0;transition:opacity .3s ease;
+        filter:drop-shadow(0 0 7px color-mix(in srgb, var(--accent) 50%, transparent));
         background:conic-gradient(from var(--pc-angle,0deg),
-          transparent 0deg,
-          color-mix(in srgb, var(--accent) 70%, transparent) 34deg,
-          var(--accent) 62deg, var(--info) 92deg,
-          color-mix(in srgb, var(--info) 55%, #fff) 108deg,
-          var(--accent) 134deg, transparent 178deg, transparent 360deg);
+          var(--accent) 0deg,
+          var(--info) 62deg,
+          var(--violet) 128deg,
+          var(--amber) 192deg,
+          var(--success) 256deg,
+          var(--info) 310deg,
+          var(--accent) 360deg);
         -webkit-mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
         -webkit-mask-composite:xor;
         mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
@@ -2654,7 +2694,7 @@ def render_home() -> str:
       }
 
       /* ── the chameleon section ───────────────────────────────────── */
-      .shape{padding:96px 0;border-top:1px solid var(--border);}
+      .shape{padding:128px 0;border-top:1px solid var(--border);}
 
       /* This section spent 1181px, the second most on the page, telling
          you that a salon has regulars and a contractor has jobs. It is
@@ -2750,7 +2790,7 @@ def render_home() -> str:
          from nothing over the first third of the band, so the field
          resolves into the band instead of hitting a lid. The bottom
          rule stays: that boundary is a real change of subject. */
-      .trust{border-bottom:1px solid var(--border);padding:34px 0 30px;
+      .trust{border-bottom:1px solid var(--border);padding:72px 0 128px;
         background:linear-gradient(to bottom,
           transparent 0%,
           color-mix(in srgb, var(--accent) 3.5%, transparent) 34%,
@@ -2834,7 +2874,7 @@ def render_home() -> str:
       /* ══════════════════════════════════════════════════════════════
          CHIEF strip
          ══════════════════════════════════════════════════════════════ */
-      .ask{position:relative;padding:104px 0;border-top:1px solid var(--border);}
+      .ask{position:relative;padding:128px 0;border-top:1px solid var(--border);}
       .ask-grid{display:grid;grid-template-columns:.88fr 1.12fr;gap:60px;align-items:center;}
       @media (max-width:980px){.ask-grid{grid-template-columns:1fr;gap:36px;}}
       .ask-list{list-style:none;margin-top:28px;display:grid;gap:16px;}
@@ -2848,7 +2888,7 @@ def render_home() -> str:
       /* ══════════════════════════════════════════════════════════════
          THE ROOMS — a carousel of real product surfaces
          ══════════════════════════════════════════════════════════════ */
-      .rooms{padding:104px 0 88px;border-top:1px solid var(--border);position:relative;overflow:hidden;}
+      .rooms{padding:128px 0;border-top:1px solid var(--border);position:relative;overflow:hidden;}
       .rooms .container-xl{position:relative;z-index:1;}
       .rooms-tabs{display:flex;flex-wrap:wrap;justify-content:center;gap:7px;margin:0 auto 40px;max-width:940px;}
       .room-tab{padding:8px 15px;border-radius:99px;font-size:12.5px;font-weight:600;
@@ -3421,7 +3461,7 @@ def render_home() -> str:
 </section>
 
 
-<section class="pricing">
+<section class="pricing" id="pricing">
   <div class="container">
     <div class="section-head reveal">
             <span data-spine class="eyebrow">What it costs</span>

@@ -85,7 +85,11 @@ def test_the_page_spine_survived_losing_the_numbers():
 def test_every_price_has_a_door():
     """Three cards, zero buttons — measured on the live page 2026-08-20."""
     body = _body(_home())
-    pricing = body.split('<section class="pricing">', 1)[1].split("</section>", 1)[0]
+    # Match the opening tag WITHOUT its closing bracket: the section grew
+    # an id="pricing" when the nav gained a Pricing link, and splitting on
+    # the whole literal tag broke this test over an attribute that is none
+    # of its business.
+    pricing = body.split('<section class="pricing"', 1)[1].split("</section>", 1)[0]
     assert pricing.count('class="price-cta') == 3
     assert pricing.count('href="/get-started"') >= 3
 
