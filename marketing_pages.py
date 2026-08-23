@@ -4128,6 +4128,35 @@ def render_home() -> str:
 
 def render_features() -> str:
     extra_css = REPLICA_KIT_CSS + FEATURES_FX_CSS + DEMO_CSS + """
+
+      /* ── the way through nine sections ────────────────────────────
+         5,900px with no navigation: you scrolled or you left. A left
+         rail only has room to exist above ~1400px, which would have
+         been navigation for wide monitors and nothing for anyone else.
+         A sticky strip works at every width, and the main nav is
+         absolute now so nothing is competing for the top edge. */
+      .fs-nav{position:sticky;top:0;z-index:40;
+        background:color-mix(in srgb, var(--bg) 86%, transparent);
+        backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+        border-bottom:1px solid var(--border);}
+      .fsn-row{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;
+        padding:10px 0;-webkit-overflow-scrolling:touch;}
+      .fsn-row::-webkit-scrollbar{display:none;}
+      .fsn-l{flex:0 0 auto;font-size:13px;font-weight:500;white-space:nowrap;
+        padding:7px 14px;border-radius:99px;color:var(--text-muted);
+        transition:color .16s, background .16s;}
+      .fsn-l:hover{color:var(--text-primary);background:var(--surface);}
+      .fsn-l.is-here{color:var(--accent);background:color-mix(in srgb, var(--accent) 14%, transparent);
+        font-weight:600;}
+      .fsn-l:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+      /* the strip is what pins now, so anchored sections clear IT */
+      .feature-section{scroll-margin-top:64px;}
+
+      /* Eleven pills in a run read heavy because they were drawn as
+         eleven buttons. They are a list of capabilities, so: one hairline
+         each, no fill, and the dot carries the accent instead of the
+         border. Same information, a third of the visual weight. */
+      .fs-chips .fs-chip{background:transparent;border-color:var(--border);}
       .feature-section{padding:128px 0;border-bottom:1px solid var(--border);}
       .feature-section:last-of-type{border-bottom:none;}
       .fs-grid{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;}
@@ -4150,7 +4179,20 @@ def render_features() -> str:
   </div>
 </section>
 
-<section class="feature-section">
+<nav class="fs-nav" id="fsNav" aria-label="Sections on this page">
+  <div class="container">
+    <div class="fsn-row">
+      <a href="#fs-command" class="fsn-l">Command Center</a>
+      <a href="#fs-build" class="fsn-l">Build</a>
+      <a href="#fs-operate" class="fsn-l">Operate</a>
+      <a href="#fs-grow" class="fsn-l">Grow</a>
+      <a href="#fs-chief" class="fsn-l">Chief of Staff</a>
+      <a href="#fs-channels" class="fsn-l">Channels</a>
+    </div>
+  </div>
+</nav>
+
+<section class="feature-section" id="fs-command">
   <div class="container">
     <div class="fs-grid">
       <div class="reveal">
@@ -4189,7 +4231,7 @@ def render_features() -> str:
   </div>
 </section>
 
-<section class="feature-section">
+<section class="feature-section" id="fs-build">
   <div class="container">
     <div class="fs-grid">
       <div class="fs-visual fsv reveal">
@@ -4230,7 +4272,7 @@ def render_features() -> str:
   </div>
 </section>
 
-<section class="feature-section">
+<section class="feature-section" id="fs-operate">
   <div class="container">
     <div class="fs-grid">
       <div class="reveal">
@@ -4284,7 +4326,7 @@ def render_features() -> str:
   </div>
 </section>
 
-<section class="feature-section">
+<section class="feature-section" id="fs-grow">
   <div class="container">
     <div class="fs-grid">
       <div class="fs-visual fsv reveal">
@@ -4321,7 +4363,7 @@ def render_features() -> str:
   </div>
 </section>
 
-<section class="feature-section">
+<section class="feature-section" id="fs-chief">
   <div class="container">
     <div class="fs-grid">
       <div class="reveal">
@@ -4351,7 +4393,7 @@ def render_features() -> str:
   </div>
 </section>
 
-<section class="feature-section">
+<section class="feature-section" id="fs-channels">
   <div class="container">
     <div class="fs-grid">
       <div class="fs-visual fsv reveal">
@@ -4421,7 +4463,49 @@ def render_features() -> str:
     return _render_shell(
         title="Features",
         description="Every surface in the Solutionist System: Command Center, Build, Operate, Grow, Chief of Staff, and Publish.",
-        content_html=body, path="/features", active="features", extra_css=extra_css, extra_scripts=FEATURES_SCRIPT,
+        content_html=body, path="/features", active="features", extra_css=extra_css, extra_scripts=FEATURES_SCRIPT + """
+<script>
+(function () {
+  var bar = document.getElementById('fsNav');
+  if (!bar || !('IntersectionObserver' in window)) return;
+  var links = {};
+  var ls = bar.querySelectorAll('.fsn-l');
+  for (var i = 0; i < ls.length; i++) {
+    links[ls[i].getAttribute('href').slice(1)] = ls[i];
+  }
+  var secs = document.querySelectorAll('.feature-section[id]');
+  if (!secs.length) return;
+
+  var here = null;
+  function light(id) {
+    if (id === here) return;
+    here = id;
+    for (var k in links) {
+      if (Object.prototype.hasOwnProperty.call(links, k)) {
+        links[k].classList.toggle('is-here', k === id);
+      }
+    }
+  }
+
+  /* Top-biased band: a section counts as "here" once its heading has
+     reached the upper third, which is where you are actually reading —
+     not when it merely touches the viewport. */
+  var io = new IntersectionObserver(function (entries) {
+    var best = null;
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].isIntersecting) {
+        if (!best || entries[i].boundingClientRect.top < best.boundingClientRect.top) {
+          best = entries[i];
+        }
+      }
+    }
+    if (best) light(best.target.id);
+  }, { rootMargin: '-64px 0px -66% 0px', threshold: 0 });
+
+  for (var j = 0; j < secs.length; j++) io.observe(secs[j]);
+})();
+</script>
+""",
     )
 
 
@@ -4602,6 +4686,23 @@ def render_compare() -> str:
 
 def render_faq() -> str:
     extra_css = """
+      /* Ten closed headings in one flat run gave nobody a way to find the
+         thing they came to check. The accordion was already here; what
+         was missing was somewhere to aim. Groups, not a search box: at
+         ten questions a filter is faster to use than a field to type in,
+         and it shows you the shape of the list as a side effect. */
+      .faq-filter{display:flex;flex-wrap:wrap;gap:8px;max-width:780px;margin:0 auto 20px;}
+      .faq-f{font:inherit;font-size:13.5px;font-weight:500;cursor:pointer;
+        display:inline-flex;align-items:center;gap:7px;padding:8px 15px;border-radius:99px;
+        border:1px solid var(--border);background:transparent;color:var(--text-secondary);
+        transition:color .16s, background .16s, border-color .16s;}
+      .faq-f span{font-family:var(--font-mono);font-size:11px;color:var(--text-dim);}
+      .faq-f:hover{color:var(--text-primary);border-color:var(--border-strong);}
+      .faq-f[aria-pressed="true"]{background:color-mix(in srgb, var(--accent) 16%, transparent);
+        border-color:color-mix(in srgb, var(--accent) 44%, transparent);color:var(--accent);font-weight:600;}
+      .faq-f[aria-pressed="true"] span{color:var(--accent);}
+      .faq-f:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+      .faq-item[hidden]{display:none;}
       .faq-list{display:flex;flex-direction:column;gap:10px;max-width:780px;margin:0 auto;}
       .faq-item{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:border-color 0.18s;}
       .faq-item[open]{border-color:color-mix(in srgb, var(--accent) 45%, transparent);}
@@ -4625,20 +4726,27 @@ def render_faq() -> str:
 
 <section>
   <div class="container-narrow">
-    <div class="faq-list reveal">
-      <details class="faq-item">
+    <div class="faq-filter reveal" id="faqFilter" role="group" aria-label="Filter questions">
+      <button type="button" class="faq-f" data-f="all"   aria-pressed="true">Everything<span>10</span></button>
+      <button type="button" class="faq-f" data-f="fit"   aria-pressed="false">Is it for me<span>3</span></button>
+      <button type="button" class="faq-f" data-f="how"   aria-pressed="false">How it works<span>3</span></button>
+      <button type="button" class="faq-f" data-f="money" aria-pressed="false">Money<span>2</span></button>
+      <button type="button" class="faq-f" data-f="data"  aria-pressed="false">Your data<span>2</span></button>
+    </div>
+    <div class="faq-list reveal" id="faqList">
+      <details class="faq-item" data-g="fit">
         <summary>Who is this actually for?</summary>
         <div class="faq-body"><p>People who run the whole thing themselves: pastors, ministry leaders, coaches, consultants, creatives, agencies-of-one, and small service businesses. If you run your whole show, from sales and delivery to marketing and finances, Solutionist is for you. If you have a 20-person team with a dedicated ops person, it's overkill.</p></div>
       </details>
-      <details class="faq-item">
+      <details class="faq-item" data-g="fit">
         <summary>Do I need a team to use this?</summary>
         <div class="faq-body"><p>No. Solo-first is the default: one operator, everything in one workspace. When you do bring people in, the Solutionist plan includes team seats with roles and an accountant collaborator seat: invite by email, they see the business, no enterprise admin sprawl.</p></div>
       </details>
-      <details class="faq-item">
+      <details class="faq-item" data-g="money">
         <summary>What about pricing?</summary>
         <div class="faq-body"><p>Starter is $79/month, Professional $199, and Solutionist $399. Every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. We're in private beta: apply for access, and your beta pricing is grandfathered for good: if prices rise later, yours does not move.</p></div>
       </details>
-      <details class="faq-item">
+      <details class="faq-item" data-g="how">
         <summary>How is this different from Notion, HubSpot, or just using ChatGPT?</summary>
         <div class="faq-body">
           <p><strong>Notion</strong> is a blank canvas, so you'd build all this yourself, and it doesn't have an AI that knows your actual business data.</p>
@@ -4648,27 +4756,27 @@ def render_faq() -> str:
           <p>See the full <a href="/compare" style="color:var(--accent);">comparison page</a> for the side-by-side.</p>
         </div>
       </details>
-      <details class="faq-item">
+      <details class="faq-item" data-g="how">
         <summary>Does the AI replace my judgment?</summary>
         <div class="faq-body"><p>No. Chief drafts, suggests, and assists. It never sends without you approving (except for explicit actions you ask it to take, like "send this email" or "publish this post"). It's an instrument, not a replacement.</p></div>
       </details>
-      <details class="faq-item">
+      <details class="faq-item" data-g="data">
         <summary>What about my existing tools? Do I have to move everything?</summary>
         <div class="faq-body"><p>No. Connect what you want (Stripe for payments, Facebook for publishing, Resend for email). The rest stays. Solutionist is opinionated about workflow but not greedy, so you can keep Calendly or your existing email tool and Solutionist will work around it.</p></div>
       </details>
-      <details class="faq-item">
+      <details class="faq-item" data-g="data">
         <summary>How secure is my data?</summary>
         <div class="faq-body"><p>Connected social account tokens and other credentials are stored server-side only, and your browser never sees them. We use Supabase for data storage and Railway for hosting. You can disconnect any integration immediately from the app, which deletes the stored token. Full details in the <a href="/privacy" style="color:var(--accent);">Privacy Policy</a>.</p></div>
       </details>
-      <details class="faq-item">
+      <details class="faq-item" data-g="fit">
         <summary>Does it work for churches and ministries?</summary>
         <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry: pastors, ministry leaders, faith-based coaches. The product is solo-first: one person runs the workspace. The Solutionist plan adds staff seats when you need them. If you need full church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
       </details>
-      <details class="faq-item">
+      <details class="faq-item" data-g="how">
         <summary>Can the AI publish to my social accounts?</summary>
         <div class="faq-body"><p>Yes, once you connect your Facebook Page (and linked Instagram Business account). Chief can draft, schedule, and publish directly. You approve each post; nothing goes out without your action. Connect from <strong>Build → Integrations → Social Publishing</strong>.</p></div>
       </details>
-      <details class="faq-item">
+      <details class="faq-item" data-g="money">
         <summary>When can I sign up?</summary>
         <div class="faq-body"><p>Right now. <a href="/get-started" style="color:var(--accent);">apply for access</a> with a few sentences about your business. If we're a fit, we'll onboard you within a few days.</p></div>
       </details>
@@ -4683,6 +4791,44 @@ def render_faq() -> str:
         title="FAQ",
         description="Answers to common questions about the Solutionist System: who it's for, pricing, how it compares to other tools, security, and signup.",
         content_html=body, path="/faq", active="faq", extra_css=extra_css,
+        extra_scripts="""
+<script>
+(function () {
+  var bar  = document.getElementById('faqFilter');
+  var list = document.getElementById('faqList');
+  if (!bar || !list) return;
+  var items = list.querySelectorAll('.faq-item');
+
+  function openFirstVisible() {
+    var first = null;
+    for (var i = 0; i < items.length; i++) {
+      if (!items[i].hidden) { first = items[i]; break; }
+    }
+    /* Every group lands with its first answer already open, so a filter
+       never resolves to a column of closed headings. */
+    for (var j = 0; j < items.length; j++) items[j].open = (items[j] === first);
+  }
+
+  function apply(f) {
+    for (var i = 0; i < items.length; i++) {
+      items[i].hidden = !(f === 'all' || items[i].getAttribute('data-g') === f);
+    }
+    var btns = bar.querySelectorAll('.faq-f');
+    for (var k = 0; k < btns.length; k++) {
+      btns[k].setAttribute('aria-pressed', String(btns[k].getAttribute('data-f') === f));
+    }
+    openFirstVisible();
+  }
+
+  bar.addEventListener('click', function (e) {
+    var b = e.target.closest('.faq-f');
+    if (b) apply(b.getAttribute('data-f'));
+  });
+
+  openFirstVisible();
+})();
+</script>
+""",
     )
 
 
@@ -4709,6 +4855,47 @@ def render_about() -> str:
     marketing copy, and removing them there would be wrong.
     """
     extra_css = """
+      /* ── the one picture on this page ──────────────────────────────
+         Seven sections of prose and nothing to look at, so the argument
+         was being read by almost nobody who started it. This is the
+         claim the page already makes, drawn: eight boxes that do not
+         touch, then one that does. The eight are CATEGORIES, not named
+         products — naming competitors would be a claim about other
+         companies, and the point does not need one. */
+      .stk{margin:38px 0;padding:0;display:grid;grid-template-columns:1fr auto 1fr;
+        gap:22px;align-items:center;}
+      .stk-lbl{font-size:10.5px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;
+        color:var(--text-dim);margin:0 0 12px;}
+      .stk-grid{list-style:none;margin:0;padding:0;display:grid;
+        grid-template-columns:repeat(2,1fr);gap:8px;}
+      .stk-t{border:1px solid var(--border);border-radius:9px;padding:10px 12px;
+        background:var(--bg-2);display:flex;flex-direction:column;gap:2px;}
+      .stk-t .n{font-family:var(--font-heading);font-size:14px;font-weight:600;
+        color:var(--text-secondary);letter-spacing:-.01em;}
+      .stk-t .s{font-size:10.5px;color:var(--text-dim);}
+      .stk-turn{display:flex;align-items:center;justify-content:center;}
+      .stk-turn span{display:block;width:34px;height:1px;background:var(--border-strong);
+        position:relative;}
+      .stk-turn span::after{content:'';position:absolute;right:0;top:-3.5px;
+        border-left:7px solid var(--accent);border-top:4px solid transparent;
+        border-bottom:4px solid transparent;}
+      .stk-one{border:1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+        border-radius:12px;padding:20px 18px;background:color-mix(in srgb, var(--accent) 8%, var(--bg-2));
+        display:flex;flex-direction:column;gap:7px;min-height:118px;justify-content:center;}
+      .stk-one .n{font-family:var(--font-heading);font-size:19px;font-weight:700;
+        color:var(--text-primary);letter-spacing:-.02em;}
+      .stk-one .s{font-size:12.5px;color:var(--text-secondary);line-height:1.5;}
+      .stk-note{margin:12px 0 0;font-size:12.5px;color:var(--text-dim);line-height:1.5;}
+      .stk-cap{grid-column:1 / -1;margin:22px 0 0;text-align:center;font-size:13px;
+        color:var(--text-muted);font-style:italic;}
+      @media (max-width: 760px){
+        .stk{grid-template-columns:1fr;gap:16px;}
+        /* the arrow turns to point down when the halves stack */
+        .stk-turn span{width:1px;height:30px;}
+        .stk-turn span::after{right:-3.5px;top:auto;bottom:0;
+          border-left:4px solid transparent;border-right:4px solid transparent;
+          border-top:7px solid var(--accent);border-bottom:0;}
+      }
       .why-body{max-width:660px;margin:0 auto;}
       .why-body p{font-size:16.5px;line-height:1.75;color:var(--text-secondary);margin-bottom:18px;}
       .why-body p:last-child{margin-bottom:0;}
@@ -4821,6 +5008,39 @@ def render_about() -> str:
          it. Reconciling a number by hand because two tools disagree. The friction between the tools
          quietly costs more hours than the work does.</p>
     </div>
+
+
+    <figure class="stk reveal" aria-labelledby="stkCap">
+      <div class="stk-half">
+        <p class="stk-lbl">What you have now</p>
+        <ul class="stk-grid">
+          <li class="stk-t"><span class="n">Notes</span><span class="s">own login</span></li>
+          <li class="stk-t"><span class="n">Invoices</span><span class="s">own bill</span></li>
+          <li class="stk-t"><span class="n">Booking</span><span class="s">own login</span></li>
+          <li class="stk-t"><span class="n">Content</span><span class="s">own bill</span></li>
+          <li class="stk-t"><span class="n">Goals</span><span class="s">a spreadsheet</span></li>
+          <li class="stk-t"><span class="n">CRM</span><span class="s">own bill</span></li>
+          <li class="stk-t"><span class="n">Email</span><span class="s">own login</span></li>
+          <li class="stk-t"><span class="n">Files</span><span class="s">own bill</span></li>
+        </ul>
+        <p class="stk-note">Eight bills, eight logins, and you in the middle carrying
+           what none of them will tell each other.</p>
+      </div>
+
+      <div class="stk-turn" aria-hidden="true"><span></span></div>
+
+      <div class="stk-half">
+        <p class="stk-lbl">What this is</p>
+        <div class="stk-one">
+          <span class="n">One workspace</span>
+          <span class="s">Notes, invoices, booking, content, goals, contacts, email and files &mdash;
+             sharing what they know</span>
+        </div>
+        <p class="stk-note">One bill, one login, and nothing to carry between them.</p>
+      </div>
+
+      <figcaption id="stkCap" class="stk-cap">The hours are not in the work. They are in the gaps.</figcaption>
+    </figure>
 
     <p class="why-pull reveal">The industry&rsquo;s answer has been enterprise software with the seats
        removed. That is not the same thing as software built for one person.</p>
