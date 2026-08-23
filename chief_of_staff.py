@@ -1307,6 +1307,14 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     so an old low-importance-but-relevant memory still surfaces."""
     now = datetime.now(timezone.utc)
     in_7d = (now + timedelta(days=7)).isoformat()
+    # Insight rows go stale and STAY stale. Until 2026-08-23 the GROW →
+    # Insights feed was the only thing that ever marked one read; that
+    # page is retired (FE: the Briefing is the one intelligence surface),
+    # so nothing clears the flag any more. Without a floor, the five rows
+    # below would be the same five April rows injected into every prompt
+    # this business ever sends. Thirty days is the window the generator
+    # itself analyses, so an insight outlives its own evidence by nothing.
+    insights_since = (now - timedelta(days=30)).isoformat()
 
     tasks = [
         _sb(client, "GET", f"/businesses?id=eq.{biz_id}&select=*&limit=1"),
@@ -1330,6 +1338,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&select=id,title,scheduled_for,contact_id,contacts(name)"),
         _sb(client, "GET",
             f"/insights?business_id=eq.{biz_id}&status=eq.unread"
+            f"&created_at=gte.{insights_since}"
             f"&order=priority.asc,created_at.desc&limit=5"
             f"&select=id,category,title,priority"),
         _sb(client, "GET",
@@ -4472,8 +4481,10 @@ async def handle_run_agent(client, biz, action) -> Dict:
         "insights": f"{count} new insight{'' if count == 1 else 's'} generated",
     }
     label = summary_map.get(agent, f"{agent} ran")
-    nav = _nav("grow", "briefing") if agent == "briefing" else \
-          _nav("grow", "insights") if agent == "insights" else \
+    # GROW → Insights was retired 2026-08-23; the Briefing is the one
+    # intelligence surface, and the frontend aliases the old sub-route
+    # onto it. Send people at the real page rather than leaning on that.
+    nav = _nav("grow", "briefing") if agent in ("briefing", "insights") else \
           _nav("operate", "queue")
 
     return {"type": "run_agent", "result": "completed", "label": label, "nav": nav}
