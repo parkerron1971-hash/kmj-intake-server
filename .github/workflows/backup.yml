@@ -1,0 +1,241 @@
+name: Backup
+
+# A copy of the data that does not live in the account holding the data.
+#
+# Supabase already takes a daily physical backup and keeps 7. Those are
+# good and this does not replace them. What they cannot do:
+#
+#   * survive losing the ACCOUNT. Compromise, a billing lapse, or one
+#     mis-clicked project delete takes the database and its backups
+#     together, because they are the same account. Same argument as
+#     uptime.yml running here rather than on Railway: a backup inside
+#     the thing being backed up is a single point of failure wearing a
+#     seatbelt.
+#   * cover STORAGE. Physical backups are the database. Every object in
+#     every bucket -- practitioner documents, proposals, product files,
+#     brand assets -- is outside them. `storage.objects` rows ARE in the
+#     database backup, which is the trap: restore the database alone and
+#     you get a table full of references to files that no longer exist.
+#   * reach back more than 7 days. A corruption noticed on day 8 is
+#     unrecoverable from them. The retention ladder below fixes that.
+#
+# The whole dataset is ~90 MB (49 MB database, 40 MB storage), which is
+# why this can be a complete nightly copy rather than something clever.
+#
+# DESTINATIONS, in order of preference. The job picks the best one
+# configured, so it starts working the moment this merges and gets
+# better when a bucket is added:
+#
+#   1. S3-compatible (Backblaze B2, S3, R2) if BACKUP_S3_* are set.
+#      Real retention, real durability, off GitHub.
+#   2. GitHub artifact otherwise. Free and immediate, but capped at 90
+#      days by GitHub, so it is a floor and not a destination.
+#
+# ENCRYPTION: the dump contains PII and Plaid-derived bank data. TINs are
+# already encrypted at rest by tin_crypto, the rest is not. When
+# BACKUP_AGE_PUBLIC_KEY is set the artefact is encrypted with age before
+# it leaves the runner. Without it the job still runs, and says loudly in
+# the summary that it produced a plaintext backup.
+
+on:
+  schedule:
+    - cron: "40 7 * * *"       # 07:40 UTC, just after Supabase's own ~07:10
+  workflow_dispatch:
+    inputs:
+      skip_upload:
+        description: "Run and verify but do not upload (rehearse the job)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # pg_dump must match the server major (17) or it refuses to run.
+      - name: Install postgresql-client-17 and age
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17 age
+          pg_dump --version
+
+      - name: Preflight — refuse to produce a backup nobody can restore
+        id: pre
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SRK: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MGMT: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          missing=""
+          [ -z "$DB_URL" ] && missing="$missing SUPABASE_DB_URL"
+          [ -z "$SRK" ]    && missing="$missing SUPABASE_SERVICE_ROLE_KEY"
+          [ -z "$MGMT" ]   && missing="$missing SUPABASE_ACCESS_TOKEN"
+          if [ -n "$missing" ]; then
+            echo "::error::Backup cannot run. Missing secrets:$missing"
+            echo "See docs/backup_and_restore.md for where each one comes from." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          # Optional destinations are resolved HERE, into outputs. A
+          # secret referenced directly in an `if:` is not reliably
+          # evaluated by Actions -- it reads as empty and the step is
+          # skipped silently, which for an upload step means believing
+          # you have off-site copies that were never made.
+          if [ -n "${{ secrets.BACKUP_S3_BUCKET }}" ]; then
+            echo "s3=yes" >> $GITHUB_OUTPUT
+          else
+            echo "s3=no" >> $GITHUB_OUTPUT
+          fi
+
+      # --schema is deliberately explicit and deliberately includes auth.
+      # A public-only dump restores to a database where nobody can log in
+      # and every owner_id points at a ghost.
+      - name: Dump the database (public + auth + storage)
+        env:
+          PGCONNECT_TIMEOUT: "30"
+        run: |
+          mkdir -p backup
+          pg_dump "${{ secrets.SUPABASE_DB_URL }}" \
+            --schema=public --schema=auth --schema=storage \
+            --no-owner --no-privileges \
+            --quote-all-identifiers \
+            --file=backup/db.sql
+          ls -lh backup/db.sql
+
+      - name: Back up every storage object
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || format('https://{0}.supabase.co', 'brqjgbpzackdihgjsorf') }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python scripts/backup_storage.py --out backup/storage
+
+      # The step that makes this a backup rather than a cron job.
+      - name: Verify the backup against the LIVE database
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: python scripts/verify_backup.py --dump backup/db.sql --storage backup/storage
+
+      - name: Package
+        id: pack
+        run: |
+          STAMP=$(date -u +%Y-%m-%d)
+          tar -czf "solutionist-$STAMP.tar.gz" -C backup .
+          echo "stamp=$STAMP" >> $GITHUB_OUTPUT
+          echo "file=solutionist-$STAMP.tar.gz" >> $GITHUB_OUTPUT
+          ls -lh "solutionist-$STAMP.tar.gz"
+
+      - name: Encrypt
+        id: encrypt
+        env:
+          AGE_KEY: ${{ secrets.BACKUP_AGE_PUBLIC_KEY }}
+        run: |
+          FILE="${{ steps.pack.outputs.file }}"
+          if [ -n "$AGE_KEY" ]; then
+            age -r "$AGE_KEY" -o "$FILE.age" "$FILE"
+            rm "$FILE"
+            echo "file=$FILE.age" >> $GITHUB_OUTPUT
+            echo "encrypted=yes" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::BACKUP_AGE_PUBLIC_KEY is not set — this backup contains PII and bank data IN PLAINTEXT."
+            echo "file=$FILE" >> $GITHUB_OUTPUT
+            echo "encrypted=no" >> $GITHUB_OUTPUT
+          fi
+
+      # Preferred destination. Retention ladder lives on the bucket
+      # (lifecycle rules), because a ladder implemented in a workflow
+      # stops running the moment the workflow does.
+      - name: Upload to object storage
+        id: s3
+        if: ${{ !inputs.skip_upload && steps.pre.outputs.s3 == 'yes' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.BACKUP_S3_REGION || 'us-east-1' }}
+          ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+          BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+        run: |
+          FILE="${{ steps.encrypt.outputs.file }}"
+          EXTRA=""
+          [ -n "$ENDPOINT" ] && EXTRA="--endpoint-url $ENDPOINT"
+          aws s3 cp $EXTRA "$FILE" "s3://$BUCKET/daily/$FILE"
+          # Weekly on Sundays, monthly on the 1st — the ladder that makes
+          # a day-8 discovery recoverable.
+          [ "$(date -u +%u)" = "7" ] && aws s3 cp $EXTRA "$FILE" "s3://$BUCKET/weekly/$FILE" || true
+          [ "$(date -u +%d)" = "01" ] && aws s3 cp $EXTRA "$FILE" "s3://$BUCKET/monthly/$FILE" || true
+          echo "uploaded=yes" >> $GITHUB_OUTPUT
+
+      # Floor, not destination. 90 days is GitHub's cap.
+      - name: Keep as a GitHub artifact
+        if: ${{ !inputs.skip_upload }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-${{ steps.pack.outputs.stamp }}
+          path: ${{ steps.encrypt.outputs.file }}
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Backup ${{ steps.pack.outputs.stamp }}"
+            echo ""
+            echo "- encrypted: **${{ steps.encrypt.outputs.encrypted || 'n/a' }}**"
+            echo "- object storage: **${{ steps.s3.outputs.uploaded || 'not configured' }}**"
+            echo "- github artifact: 90-day retention"
+            if [ "${{ steps.encrypt.outputs.encrypted }}" != "yes" ]; then
+              echo ""
+              echo "> **This backup is unencrypted and contains PII.** Set \`BACKUP_AGE_PUBLIC_KEY\`."
+            fi
+            if [ -z "${{ steps.s3.outputs.uploaded }}" ]; then
+              echo ""
+              echo "> Only a GitHub artifact exists, capped at 90 days. Set \`BACKUP_S3_*\` for real retention."
+            fi
+          } >> $GITHUB_STEP_SUMMARY
+
+      # An alarm that needs the backed-up system to be healthy is not an
+      # alarm. GitHub issues need only GitHub — same choice as uptime.yml.
+      - name: Raise the alarm
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'Backup FAILED';
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'backup-failure',
+            });
+            const body = [
+              `The nightly backup failed.`,
+              ``,
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ``,
+              `Until this is green there is no off-platform copy for today.`,
+              `Supabase's own daily backups are unaffected — but they do not`,
+              `cover storage and do not survive losing the account.`,
+            ].join('\n');
+            if (existing.data.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['backup-failure'],
+              });
+            }
