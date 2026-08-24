@@ -187,12 +187,22 @@ jobs:
       # Session mode holds one backend per client, so pg_dump's snapshot
       # and search_path survive; transaction mode (:6543) hands the
       # connection back between statements and breaks both.
+      # $DB_URL -- NOT the raw secret interpolated inline. Preflight repairs the
+      # secret (whitespace) and exports the clean value through
+      # $GITHUB_ENV; interpolating the raw secret here would walk straight
+      # back into the damage preflight had just fixed -- which is exactly
+      # what happened: preflight went green and pg_dump then failed with
+      # `unexpected spaces found in "…supabase.co`.
+      #
+      # It is also the safer shape generally. A secret pasted directly
+      # into a command line is subject to shell quoting and word
+      # splitting; an env var is passed through untouched.
       - name: Dump the database (public + auth + storage)
         env:
           PGCONNECT_TIMEOUT: "30"
         run: |
           mkdir -p backup
-          pg_dump "${{ secrets.SUPABASE_DB_URL }}" \
+          pg_dump "$DB_URL" \
             --schema=public --schema=auth --schema=storage \
             --no-owner --no-privileges \
             --quote-all-identifiers \
