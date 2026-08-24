@@ -14,6 +14,7 @@ them again.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import pathlib
 import sys
@@ -82,11 +83,14 @@ def test_session_id_from_the_query_string_cannot_walk_the_api_path():
     assert not sb._valid_session_id("cs_" + "a" * 200)
 
 
-@pytest.mark.asyncio
-async def test_peek_is_skipped_entirely_without_a_key(monkeypatch):
+def test_peek_is_skipped_entirely_without_a_key(monkeypatch):
+    """asyncio.run rather than @pytest.mark.asyncio: pytest-asyncio is
+    not a dependency of this repo, and CI has no plugin to honour the
+    marker — it collects the coroutine and fails. Every other async test
+    here drives the loop directly."""
     monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    assert await sb._peek_checkout_session("cs_test_abc") is None
-    assert await sb._peek_checkout_session(None) is None
+    assert asyncio.run(sb._peek_checkout_session("cs_test_abc")) is None
+    assert asyncio.run(sb._peek_checkout_session(None)) is None
 
 
 def test_the_catch_all_does_not_shadow_the_return_pages():
