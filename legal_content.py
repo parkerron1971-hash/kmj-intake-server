@@ -13,11 +13,13 @@ import datetime
 import html as _html
 import os
 
+import platform_addresses
+
 # ──────────────────────────────────────────────────────────────────────
 # Editable copy — change these in place; routes pick up automatically.
 # ──────────────────────────────────────────────────────────────────────
 
-LAST_UPDATED_DATE = "July 4, 2026"
+LAST_UPDATED_DATE = "August 23, 2026"
 BUSINESS_NAME = "The Solutionist System LLC"
 # No public postal address by choice (2026-07-04): Kevin works from home
 # and a street address is NOT required on the site — A2P checks the SMS
@@ -25,7 +27,13 @@ BUSINESS_NAME = "The Solutionist System LLC"
 # If a mailing address is ever added (PO Box before email marketing per
 # CAN-SPAM), set it here and the contact blocks pick it up automatically.
 BUSINESS_ADDRESS = ""
-CONTACT_EMAIL = "kmjcreativesolution@gmail.com"
+# No module-level CONTACT_EMAIL on purpose. It used to hold the founder
+# Gmail as a literal, and because it was a module global every render
+# function silently picked it up -- which is how the Privacy Policy went
+# on printing a personal address for weeks after the marketing site had
+# moved to a derived one. Each renderer now binds it from
+# platform_addresses.public_contact_email(); forget the binding and you
+# get a NameError on the first render, not a stale address in public.
 DOMAIN = "mysolutionist.app"
 
 
@@ -340,10 +348,33 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
 </html>"""
 
 
+# HELP_ARTICLES is built at import time, so an f-string in it freezes
+# whatever the address was when the process booted. These pages carry the
+# address in prose, so they use this sentinel and get it substituted at
+# RENDER time instead -- same contract as marketing_pages.CONTACT_TOKEN.
+CONTACT_TOKEN = "__CONTACT_EMAIL__"
+
+
+def _fill_contact(html: str) -> str:
+    """Swap the contact sentinel for the resolved address.
+
+    Does not raise on a missing token -- most pages never name the
+    address in prose, and a renderer that throws turns a cosmetic
+    problem into a 500. What stops this from quietly doing nothing is
+    a test: test_no_public_page_prints_the_founder_gmail renders every
+    page on the site and fails if the old literal survives anywhere.
+    """
+    if CONTACT_TOKEN not in html:
+        return html
+    return html.replace(CONTACT_TOKEN,
+                        _html.escape(platform_addresses.public_contact_email()))
+
+
 def render_page(*, title: str, description: str, content_html: str) -> str:
     """Wrap a page body in the shared shell. `content_html` is the
     already-rendered inner markup (headings, paragraphs, lists)."""
-    return PAGE_SHELL_HTML.format(
+    CONTACT_EMAIL = platform_addresses.public_contact_email()
+    return _fill_contact(PAGE_SHELL_HTML.format(
         title=_html.escape(title),
         description=_html.escape(description),
         contact_email=_html.escape(CONTACT_EMAIL),
@@ -351,7 +382,7 @@ def render_page(*, title: str, description: str, content_html: str) -> str:
         year=datetime.date.today().year,
         app_url=APP_URL,
         content=content_html,
-    )
+    ))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -359,6 +390,7 @@ def render_page(*, title: str, description: str, content_html: str) -> str:
 # ══════════════════════════════════════════════════════════════════════
 
 def render_privacy_html() -> str:
+    CONTACT_EMAIL = platform_addresses.public_contact_email()
     # Advertising disclosure — present ONLY while the Meta Pixel is
     # actually configured (marketing_pages._pixel_script gates the
     # script on the same env var; the disclosure and the pixel must
@@ -476,7 +508,33 @@ practices:</p>
   <li><strong>Twilio</strong>: for delivering SMS messages you have opted in to receive.</li>
   <li><strong>Stripe</strong>: for payment processing.</li>
   <li><strong>Plaid</strong>: for bank connections you authorize.</li>
+  <li><strong>Google</strong>: if you connect a Gmail mailbox, we request
+      read-only access to your mail (the <code>gmail.readonly</code> scope) so
+      the Service can show you customer replies in context. We do not send mail
+      as you, and we do not request access to anything else in your Google
+      account. You can disconnect at any time, from the Service or from your
+      Google account&rsquo;s security settings.</li>
+  <li><strong>Intuit (QuickBooks)</strong>: if you connect QuickBooks, accounting
+      data moves between it and the Service so your books stay consistent.
+      Connected only when you authorize it.</li>
+  <li><strong>Resend</strong>: for sending the email the Service sends on your
+      behalf, and our own transactional email to you.</li>
+  <li><strong>Amazon Web Services</strong>: receives inbound email sent to our
+      domain, so replies reach the right conversation.</li>
+  <li><strong>Vercel</strong>: for hosting the web application.</li>
+  <li><strong>Cloudflare</strong>: for DNS, and for serving any custom domain you
+      connect to a site you publish.</li>
 </ul>
+
+<p>One of these is different enough from the rest to describe separately.
+If ledger anchoring is enabled on your account, the Service periodically
+publishes a <em>cryptographic hash</em> of your action ledger to the
+<strong>Hedera</strong> public network. A hash is a one-way fingerprint: it lets
+you (or an auditor) later prove a record has not been altered, and it cannot be
+reversed to recover what the record said. Your business data itself is never
+written to any public network. What goes out is the fingerprint and a timestamp
+&mdash; but because that network is public and permanent, the fact that an anchor
+was written at a given moment is public and cannot be deleted.</p>
 
 <h2>How we use AI</h2>
 <p>Chief and several features of the Service are powered by third-party AI providers
@@ -518,6 +576,7 @@ updating the &ldquo;Last updated&rdquo; date above.</p>
 # ══════════════════════════════════════════════════════════════════════
 
 def render_data_deletion_html() -> str:
+    CONTACT_EMAIL = platform_addresses.public_contact_email()
     body = f"""
 <span class="badge">Data Deletion</span>
 <h1>Data Deletion Instructions</h1>
@@ -566,6 +625,7 @@ is published to your accounts.</p>
 # ══════════════════════════════════════════════════════════════════════
 
 def render_terms_html() -> str:
+    CONTACT_EMAIL = platform_addresses.public_contact_email()
     body = f"""
 <span class="badge">Terms of Service</span>
 <h1>Terms of Service</h1>
@@ -815,8 +875,8 @@ HELP_ARTICLES: List[Dict[str, str]] = [
         "category": "Billing & Account",
         "title": "Closing your account",
         "body": (
-            f"<p>To close your account and delete your data, see our <a href=\"/data-deletion\">Data Deletion page</a> "
-            f"or email <a href=\"mailto:{CONTACT_EMAIL}\">{CONTACT_EMAIL}</a>.</p>"
+            "<p>To close your account and delete your data, see our <a href=\"/data-deletion\">Data Deletion page</a> "
+            "or email <a href=\"mailto:__CONTACT_EMAIL__\">__CONTACT_EMAIL__</a>.</p>"
         ),
     },
 
@@ -825,7 +885,7 @@ HELP_ARTICLES: List[Dict[str, str]] = [
         "category": "Contact Support",
         "title": "Need more help?",
         "body": (
-            f"<p>We&rsquo;re here to help. Email us at <strong><a href=\"mailto:{CONTACT_EMAIL}\">{CONTACT_EMAIL}</a></strong> "
+            "<p>We&rsquo;re here to help. Email us at <strong><a href=\"mailto:__CONTACT_EMAIL__\">__CONTACT_EMAIL__</a></strong> "
             "and we&rsquo;ll get back to you. Please include your account email and a description of what you need.</p>"
         ),
     },
@@ -842,6 +902,7 @@ def render_sms_page_html() -> str:
     links to Privacy + Terms, and a description of the keyword path.
     POSTs to /api/sms/opt-in (sms_routing.py) which records the consent
     audit row in sms_consents."""
+    CONTACT_EMAIL = platform_addresses.public_contact_email()
     body = f"""
 <span class="badge">Text Messaging</span>
 <h1>Get texts from The Solutionist System</h1>
@@ -951,6 +1012,7 @@ confirm with the same message shown above.</p>
 
 
 def render_help_html() -> str:
+    CONTACT_EMAIL = platform_addresses.public_contact_email()
     # Group articles by category in insertion order so the editor controls
     # ordering by just rearranging the list.
     seen_cats: List[str] = []

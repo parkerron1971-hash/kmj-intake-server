@@ -27,7 +27,11 @@ import httpx
 from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr
 
-CONTACT_EMAIL = "kmjcreativesolution@gmail.com"
+import platform_addresses
+
+# Kept as the bounce-guard fallback only — see platform_addresses. Nothing
+# should print this directly; call _public_contact_email() instead.
+CONTACT_EMAIL = platform_addresses.FOUNDER_FALLBACK_EMAIL
 BUSINESS_NAME = "The Solutionist System LLC"
 SITE_NAME = "The Solutionist System"
 SITE_DOMAIN = "mysolutionist.app"
@@ -42,34 +46,53 @@ ANDROID_APK_URL = os.environ.get("ANDROID_APK_URL", "").strip()
 PLAY_STORE_URL = os.environ.get("PLAY_STORE_URL", "").strip()
 
 def _public_contact_email() -> str:
-    """The address the public site prints.
+    """The address the public site prints — resolver in
+    `platform_addresses`, which the legal pages now share.
 
     Kevin, 2026-08-20: contact should land in the system, not in a
     personal mailbox. It already can — `email_sender` routes mail for the
     named platform locals (hello / support / contact / info / billing /
     admin / kevin) into `platform_emails`, which is what Mission
-    Control's inbox reads. So when the inbound domain is live, the site
-    publishes hello@<that domain> and the contact form of the whole
-    business becomes a thread in the product.
+    Control's inbox reads.
 
-    Resolution order:
-      1. PUBLIC_CONTACT_EMAIL — an explicit override, for the case where
-         the address to publish isn't the one derived below.
-      2. hello@INBOUND_EMAIL_DOMAIN — set only when inbound mail is
-         actually configured, which is exactly when it is safe to print.
-      3. CONTACT_EMAIL — the founder mailbox.
-
-    Deliberately NOT "just print hello@mysolutionist.app": an address
-    whose MX isn't live bounces, and a bouncing contact address on the
-    about page is worse than an unglamorous one that works.
+    Kevin, 2026-08-23: the published local is `info`, and it is the SAME
+    address the legal pages print. It used to not be — this module had
+    already moved to a derived address while `legal_content` still
+    printed the founder's Gmail, so the About page and the Privacy
+    Policy disagreed about how to reach the company. One resolver owns
+    both now, and a test holds them together.
     """
-    override = (os.environ.get("PUBLIC_CONTACT_EMAIL") or "").strip()
-    if override:
-        return override
-    domain = (os.environ.get("INBOUND_EMAIL_DOMAIN") or "").strip().lower()
-    if domain:
-        return f"hello@{domain}"
-    return CONTACT_EMAIL
+    return platform_addresses.public_contact_email()
+
+
+def _operator_email() -> str:
+    """Where the system mails the operator (lead alerts). Internal —
+    never printed on a page. See platform_addresses.operator_email."""
+    return platform_addresses.operator_email()
+
+
+# Page bodies are plain triple-quoted strings, not f-strings — they carry
+# raw CSS, so every `{` in them would have to be doubled. That is why the
+# contact address could not be interpolated where it appears mid-copy and
+# got hardcoded twice instead. This sentinel is the way to write it into
+# a body: `_render_shell` swaps it on every page, so a new page gets the
+# behaviour for free.
+CONTACT_TOKEN = "__CONTACT_EMAIL__"
+
+
+def _fill_contact(html: str) -> str:
+    """Swap the contact sentinel for the resolved address.
+
+    Deliberately does NOT raise when the token is absent — most pages
+    don't mention the address in their body and a renderer that throws
+    turns a cosmetic problem into a 500. The guard against this quietly
+    doing nothing is a test, not an exception:
+    `test_no_public_page_prints_the_founder_gmail` renders every page
+    and fails if the old literal survives anywhere.
+    """
+    if CONTACT_TOKEN not in html:
+        return html
+    return html.replace(CONTACT_TOKEN, _html.escape(_public_contact_email()))
 
 
 logger = logging.getLogger("marketing_pages")
@@ -798,7 +821,7 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
         "ax_download":    "is-active" if active == "download"    else "",
         "ax_get_started": "is-active" if active == "get_started" else "",
     }
-    return SHELL_TEMPLATE.format(
+    return _fill_contact(SHELL_TEMPLATE.format(
         title=_html.escape(title),
         description=_html.escape(description),
         og_title=_html.escape(f"{title} · {SITE_NAME}"),
@@ -813,7 +836,7 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
         app_url=APP_URL,
         pixel_script=_pixel_script(),
         **active_map,
-    )
+    ))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -4619,7 +4642,7 @@ def render_faq() -> str:
   <div class="container">
     <span class="eyebrow reveal">Common questions</span>
     <h1 class="reveal reveal-delay-1">Answers to <span class="gradient-text">what people ask first.</span></h1>
-    <p class="lead reveal reveal-delay-2" style="max-width:600px;margin:14px auto 0;">Don't see your question? Email us at <a href="mailto:kmjcreativesolution@gmail.com" style="color:var(--accent);">kmjcreativesolution@gmail.com</a>.</p>
+    <p class="lead reveal reveal-delay-2" style="max-width:600px;margin:14px auto 0;">Don't see your question? Email us at <a href="mailto:__CONTACT_EMAIL__" style="color:var(--accent);">__CONTACT_EMAIL__</a>.</p>
   </div>
 </section>
 
@@ -5376,7 +5399,7 @@ def render_get_started() -> str:
         btn.textContent = 'Sent ✓';
       } catch (err) {
         msg.classList.add('err');
-        msg.textContent = 'Something went wrong — please email kmjcreativesolution@gmail.com directly.';
+        msg.textContent = 'Something went wrong — please email __CONTACT_EMAIL__ directly.';
         btn.disabled = false;
         btn.textContent = 'Apply for Access →';
       }
@@ -5614,7 +5637,7 @@ async def handle_lead_intake(req: LeadIntakeRequest,
 </body></html>"""
         try:
             await send_via_resend(
-                to_email=CONTACT_EMAIL, to_name=None,
+                to_email=_operator_email(), to_name=None,
                 from_email=from_email, from_name="Solutionist Site",
                 subject=owner_subject, body=owner_body, reply_to=email,
             )

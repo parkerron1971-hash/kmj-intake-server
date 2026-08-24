@@ -82,6 +82,82 @@ def test_the_subprocessor_list_stays_where_it_belongs():
     assert "Supabase" in privacy and "Railway" in privacy
 
 
+class TestEveryProcessorIsDisclosed:
+    """The Privacy Policy went seven weeks naming eight processors while
+    the product had quietly connected several more. A disclosure that
+    lags the code is the failure mode here, so these pin the list to
+    things that are demonstrably in the request path -- not to a
+    hand-kept inventory that drifts the same way the last one did.
+    """
+
+    def test_the_ai_and_data_processors_are_named(self):
+        privacy = legal_content.render_privacy_html()
+        for vendor in ("Anthropic", "OpenAI", "Supabase", "Railway",
+                       "Twilio", "Stripe", "Plaid"):
+            assert _discloses(privacy, vendor), f"{vendor} is not disclosed"
+        assert "Meta Platforms" in privacy
+
+    def test_a_mounted_google_integration_is_disclosed(self):
+        """gmail.readonly is a restricted scope. If the router is mounted,
+        the policy has to say so -- Google's own verification checks it."""
+        import kmj_intake_automation as app_module
+        mounted = "include_router(google_router)" in _source(app_module)
+        if not mounted:
+            pytest.skip("Google OAuth router is not mounted")
+        privacy = legal_content.render_privacy_html()
+        assert _discloses(privacy, "Google"), (
+            "Google needs its own entry in the processor list -- mentioning "
+            "the word elsewhere in the prose is not a disclosure")
+        assert "gmail.readonly" in privacy, (
+            "the policy must name the actual scope requested")
+
+    def test_a_mounted_quickbooks_integration_is_disclosed(self):
+        import kmj_intake_automation as app_module
+        if "include_router(quickbooks_router)" not in _source(app_module):
+            pytest.skip("QuickBooks router is not mounted")
+        assert _discloses(legal_content.render_privacy_html(), "Intuit")
+
+    def test_the_mail_path_is_disclosed(self):
+        """Resend sends and SES receives. Both handle message content."""
+        privacy = legal_content.render_privacy_html()
+        assert _discloses(privacy, "Resend")
+        assert _discloses(privacy, "Amazon Web Services")
+
+    def test_the_public_ledger_anchor_is_disclosed_as_public(self):
+        """Anchoring writes to a permanent public network. The policy has
+        to say both that only a hash goes out AND that what goes out
+        cannot be deleted -- the second half is the part a reader needs
+        and the part that is easy to leave off."""
+        privacy = legal_content.render_privacy_html()
+        assert "Hedera" in privacy
+        low = privacy.lower()
+        assert "hash" in low
+        assert "public" in low
+        assert "cannot be deleted" in low or "permanent" in low
+
+    def test_the_policy_was_updated_when_the_processors_were(self):
+        """A disclosure edit with a stale date reads as an older policy
+        than it is."""
+        assert legal_content.LAST_UPDATED_DATE == "August 23, 2026"
+
+
+def _source(module):
+    import inspect
+    return inspect.getsource(module)
+
+
+def _discloses(privacy_html: str, vendor: str) -> bool:
+    """True only when the vendor has its OWN entry in the processor list.
+
+    A substring check is not enough and the rehearsal proved it: deleting
+    Google from the list left the test green, because the prose further
+    down still said "your Google account's security settings". A named
+    processor is a <li><strong>Name</strong> row, so that is what this
+    looks for.
+    """
+    return f"<li><strong>{vendor}" in privacy_html
+
+
 class TestPublicContactAddress:
     """Mail should land in the product, not a personal mailbox — but only
     once an address that actually receives mail exists."""
@@ -91,28 +167,106 @@ class TestPublicContactAddress:
         monkeypatch.delenv("INBOUND_EMAIL_DOMAIN", raising=False)
         assert marketing_pages._public_contact_email() == marketing_pages.CONTACT_EMAIL
 
-    def test_uses_hello_at_the_inbound_domain_once_it_is_live(self, monkeypatch):
+    def test_uses_info_at_the_inbound_domain_once_it_is_live(self, monkeypatch):
+        """Kevin, 2026-08-23: the published local is `info`. It was
+        `hello` here while the legal pages were still printing a personal
+        Gmail -- two addresses for one company. One resolver owns both
+        now (platform_addresses), and the drift test below holds them
+        together."""
         monkeypatch.delenv("PUBLIC_CONTACT_EMAIL", raising=False)
         monkeypatch.setenv("INBOUND_EMAIL_DOMAIN", "mysolutionist.app")
-        assert marketing_pages._public_contact_email() == "hello@mysolutionist.app"
+        assert marketing_pages._public_contact_email() == "info@mysolutionist.app"
 
     def test_an_explicit_override_wins(self, monkeypatch):
         monkeypatch.setenv("INBOUND_EMAIL_DOMAIN", "mysolutionist.app")
         monkeypatch.setenv("PUBLIC_CONTACT_EMAIL", "team@mysolutionist.app")
         assert marketing_pages._public_contact_email() == "team@mysolutionist.app"
 
-    def test_the_published_local_part_is_one_the_inbox_actually_claims(self):
-        """`hello` has to be in the platform inbox list or the mail lands
-        in the contact-reply pipeline instead of Mission Control."""
+    def test_the_published_locals_are_ones_the_inbox_actually_claims(self):
+        """Both locals have to be in the platform inbox list or the mail
+        lands in the contact-reply pipeline instead of Mission Control.
+        This coupling is what makes publishing an address safe at all."""
         import email_sender
-        assert "hello" in email_sender.PLATFORM_INBOX_DEFAULT_LOCALS.split(",")
+        import platform_addresses
+        claimed = email_sender.PLATFORM_INBOX_DEFAULT_LOCALS.split(",")
+        assert platform_addresses.PUBLIC_CONTACT_LOCAL in claimed
+        assert platform_addresses.OPERATOR_LOCAL in claimed
+
+    def test_the_legal_pages_and_the_marketing_pages_agree(self, monkeypatch):
+        """The bug this class now exists to prevent: marketing_pages
+        derived its address while legal_content held its own constant, so
+        /about and /privacy printed different ways to reach the same
+        company. Two modules, one resolver, one address."""
+        monkeypatch.delenv("PUBLIC_CONTACT_EMAIL", raising=False)
+        monkeypatch.setenv("INBOUND_EMAIL_DOMAIN", "mysolutionist.app")
+        addr = marketing_pages._public_contact_email()
+        assert addr in legal_content.render_privacy_html()
+        assert addr in legal_content.render_help_html()
+        assert addr in marketing_pages.render_about()
+
+    def test_operator_mail_is_not_the_published_address(self, monkeypatch):
+        """Lead alerts are internal. They go to the operator local, which
+        is deliberately NOT the one on the Privacy Policy, so inbound
+        customer mail and "a lead came in" stay separable in the inbox."""
+        monkeypatch.delenv("PUBLIC_CONTACT_EMAIL", raising=False)
+        monkeypatch.delenv("PLATFORM_OPERATOR_EMAIL", raising=False)
+        monkeypatch.setenv("INBOUND_EMAIL_DOMAIN", "mysolutionist.app")
+        import platform_addresses
+        assert platform_addresses.operator_email() == "admin@mysolutionist.app"
+        assert (platform_addresses.operator_email()
+                != platform_addresses.public_contact_email())
+
+    def test_the_operator_address_can_be_put_back_on_a_phone(self, monkeypatch):
+        """One env var returns lead alerts to a personal mailbox if the
+        Mission Control inbox is not being watched."""
+        monkeypatch.setenv("INBOUND_EMAIL_DOMAIN", "mysolutionist.app")
+        monkeypatch.setenv("PLATFORM_OPERATOR_EMAIL", "someone@gmail.com")
+        import platform_addresses
+        assert platform_addresses.operator_email() == "someone@gmail.com"
 
     def test_the_whole_site_prints_the_resolved_address(self, monkeypatch):
         monkeypatch.delenv("PUBLIC_CONTACT_EMAIL", raising=False)
         monkeypatch.setenv("INBOUND_EMAIL_DOMAIN", "mysolutionist.app")
         for f in ("render_about", "render_home", "render_faq"):
             html = getattr(marketing_pages, f)()
-            assert "hello@mysolutionist.app" in html, f"{f} still prints the old address"
+            assert "info@mysolutionist.app" in html, f"{f} still prints the old address"
+
+    def test_no_public_page_prints_the_founder_gmail(self, monkeypatch):
+        """The guard the sentinel substitution leans on.
+
+        `_fill_contact` returns the html untouched when the token is
+        absent -- a deliberately silent no-op, because a renderer that
+        raises would turn a cosmetic problem into a 500. That makes a
+        hardcoded address exactly the kind of thing that ships quietly,
+        which is what had already happened twice (the FAQ body and the
+        get-started error toast). So this renders every page on the site
+        and fails if the literal survives anywhere, or if a sentinel ever
+        reaches a visitor unsubstituted.
+        """
+        monkeypatch.delenv("PUBLIC_CONTACT_EMAIL", raising=False)
+        monkeypatch.setenv("INBOUND_EMAIL_DOMAIN", "mysolutionist.app")
+        import platform_addresses
+        pages = [(marketing_pages, n) for n in dir(marketing_pages)
+                 if n.startswith("render_")]
+        pages += [(legal_content, n) for n in dir(legal_content)
+                  if n.startswith("render_") and n != "render_page"]
+        rendered = 0
+        for mod, name in pages:
+            try:
+                html = getattr(mod, name)()
+            except TypeError:
+                continue          # renderers that take arguments
+            if not isinstance(html, str):
+                continue
+            rendered += 1
+            assert platform_addresses.FOUNDER_FALLBACK_EMAIL not in html, (
+                f"{mod.__name__}.{name} still prints the founder Gmail")
+            assert marketing_pages.CONTACT_TOKEN not in html, (
+                f"{mod.__name__}.{name} leaked an unsubstituted sentinel")
+            assert "hello@mysolutionist.app" not in html, (
+                f"{mod.__name__}.{name} still prints the old hello@ address")
+        assert rendered >= 10, (
+            f"only {rendered} pages rendered -- the sweep stopped finding them")
 
 
 def test_cards_are_styled_on_every_page_that_prints_them():
