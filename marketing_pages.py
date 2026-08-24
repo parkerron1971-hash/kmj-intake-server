@@ -4513,8 +4513,58 @@ def render_features() -> str:
 # COMPARE — polished comparison page
 # ══════════════════════════════════════════════════════════════════════
 
+# ── the compare page's arithmetic ────────────────────────────────────
+# Both of these are quoted twice on /compare: once as the headline in
+# the fold, once at the foot of the itemised stack. They live here so a
+# price change lands in both places or neither. The per-tool prices
+# under STACK_TOTAL are list prices for the named plans and are stated
+# as "about" for that reason.
+STACK_TOTAL = "$125+"
+SOLUTIONIST_FROM = "$79"
+
+
 def render_compare() -> str:
     extra_css = """
+
+      /* ── the arithmetic, in the fold ──────────────────────────────
+         The number that wins this page was already on it and sat about
+         1,400px down. Both figures come from STACK_TOTAL and
+         SOLUTIONIST_FROM, so this cannot drift from the itemised card
+         below it. The list stays there: the fold makes the claim, the
+         section proves it. */
+      .cmp-math{display:grid;grid-template-columns:1fr auto 1fr;gap:24px;align-items:center;
+        max-width:820px;margin:44px auto 0;text-align:left;}
+      .cmp-side{display:flex;flex-direction:column;gap:5px;}
+      .cmp-lbl{font-size:10.5px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;
+        color:var(--text-dim);}
+      .cmp-fig{font-family:var(--font-heading);font-size:52px;font-weight:700;letter-spacing:-.035em;
+        line-height:1;color:var(--accent);font-variant-numeric:tabular-nums;}
+      .cmp-fig.alt{color:var(--text-muted);}
+      .cmp-fig i{font-style:normal;font-size:16px;font-weight:500;letter-spacing:0;
+        color:var(--text-dim);margin-left:3px;}
+      .cmp-sub{font-size:12.5px;color:var(--text-dim);line-height:1.5;}
+      .cmp-arrow{display:flex;align-items:center;justify-content:center;}
+      .cmp-arrow span{display:block;width:38px;height:1px;background:var(--border-strong);
+        position:relative;}
+      .cmp-arrow span::after{content:'';position:absolute;right:0;top:-3.5px;
+        border-left:7px solid var(--accent);border-top:4px solid transparent;
+        border-bottom:4px solid transparent;}
+      @media (max-width: 720px){
+        .cmp-math{grid-template-columns:1fr;gap:14px;text-align:center;}
+        .cmp-side{align-items:center;}
+        .cmp-fig{font-size:44px;}
+        .cmp-arrow span{width:1px;height:26px;}
+        .cmp-arrow span::after{right:-3.5px;top:auto;bottom:0;
+          border-left:4px solid transparent;border-right:4px solid transparent;
+          border-top:7px solid var(--accent);border-bottom:0;}
+      }
+
+      /* Ten rows is long enough that the column you are reading stops
+         being obvious. The head pins under the page's own sticky
+         offset so "Solutionist" and "The 8-tool stack" stay overhead. */
+      table.compare thead th{position:sticky;top:0;z-index:2;
+        background:color-mix(in srgb, var(--bg) 92%, transparent);
+        backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);}
       /* The tier table is where the decision actually gets made, and it
          ended with nothing to press: the only door was the final CTA two
          sections further down, past "Switching from?". */
@@ -4566,6 +4616,21 @@ def render_compare() -> str:
     <span class="eyebrow reveal">Solutionist vs. alternatives</span>
     <h1 class="reveal reveal-delay-1">Eight tools that don&rsquo;t know each other.<br>Or <span class="gradient-text">one that knows you.</span></h1>
     <p class="lead reveal reveal-delay-2" style="max-width:700px;margin:14px auto 0;">The stack is not expensive because of what it costs. It is expensive because you are the integration layer.</p>
+    <div class="cmp-math reveal reveal-delay-3">
+      <div class="cmp-side">
+        <span class="cmp-lbl">Eight tools, list price</span>
+        <span class="cmp-fig alt">""" + STACK_TOTAL + """<i>/mo</i></span>
+        <span class="cmp-sub">HubSpot &middot; Stripe &middot; Calendly &middot; Buffer &middot; Notion
+          &middot; Mixpanel &middot; Squarespace &middot; ChatGPT</span>
+      </div>
+      <div class="cmp-arrow" aria-hidden="true"><span></span></div>
+      <div class="cmp-side">
+        <span class="cmp-lbl">One system</span>
+        <span class="cmp-fig">""" + SOLUTIONIST_FROM + """<i>/mo</i></span>
+        <span class="cmp-sub">Everything below, on one login, sharing what it knows</span>
+      </div>
+    </div>
+
   </div>
 </section>
 
@@ -4589,7 +4654,7 @@ def render_compare() -> str:
           <li><span>Squarespace Business (website)</span><span>$23</span></li>
           <li><span>ChatGPT Plus (AI assistant)</span><span>$20</span></li>
         </ul>
-        <div class="cost-total"><span class="label">≈ Total</span><span class="price">$125+ /mo</span></div>
+        <div class="cost-total"><span class="label">≈ Total</span><span class="price">""" + STACK_TOTAL + """ /mo</span></div>
         <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Plus the time + headache of stitching them together. Each tool wants its own login, notification settings, billing cycle, and integrations that mostly don't work.</p>
       </div>
       <div class="cost-card sol reveal reveal-delay-1">
