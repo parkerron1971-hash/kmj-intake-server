@@ -125,10 +125,40 @@ jobs:
               exit 1 ;;
           esac
 
+          # A secret pasted from a browser very often carries a trailing
+          # newline, and from Windows a trailing CR. libpq parses the URI
+          # strictly, so a single invisible character at the end is the
+          # difference between connecting and "authentication failed".
+          # Strip them rather than make anyone hunt for whitespace they
+          # cannot see.
+          CLEAN="$(printf '%s' "$DB_URL" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+          if [ "$CLEAN" != "$DB_URL" ]; then
+            echo "::warning::SUPABASE_DB_URL had leading/trailing whitespace; trimmed."
+            DB_URL="$CLEAN"
+            echo "DB_URL=$CLEAN" >> $GITHUB_ENV
+          fi
+
           # Prove it connects before spending the job on a dump that was
           # never going to work.
-          if ! psql "$DB_URL" -qtAc 'select 1' > /dev/null 2>&1; then
-            echo "::error::Cannot connect with SUPABASE_DB_URL. Check the password, and that you copied the Session pooler URI (:5432)."
+          #
+          # The first version of this sent psql's stderr to /dev/null and
+          # printed a generic "cannot connect". That threw away the ONE
+          # piece of information needed to fix it -- "password
+          # authentication failed" and "tenant or user not found" are
+          # completely different problems with completely different
+          # fixes, and both looked identical. psql's own words now come
+          # through, with any credentials masked out.
+          if ! ERR="$(psql "$DB_URL" -qtAc 'select 1' 2>&1)"; then
+            SAFE="$(printf '%s' "$ERR" | sed -E 's#(postgres(ql)?://)[^@]*@#\1***:***@#g' | head -4)"
+            echo "::error::Cannot connect with SUPABASE_DB_URL. psql said: $SAFE"
+            case "$SAFE" in
+              *"assword authentication failed"*|*SASL*|*"assword"*)
+                echo "::error::That is a WRONG PASSWORD. If you reset it after saving the secret, save the new one." ;;
+              *"Tenant or user not found"*)
+                echo "::error::Wrong username. It must be postgres.<project-ref>, not plain 'postgres', on the pooler." ;;
+              *"could not translate host name"*|*"Connection timed out"*|*"Network is unreachable"*)
+                echo "::error::Host unreachable from the runner. Confirm the Session pooler host (…pooler.supabase.com)." ;;
+            esac
             exit 1
           fi
           echo "database reachable"
