@@ -67,9 +67,29 @@ until these exist it will open an issue every night.
 
 | secret | where it comes from |
 |---|---|
-| `SUPABASE_DB_URL` | Supabase → Project Settings → Database → Connection string (URI). Use the **direct** connection, not the pooler — pooled connections cannot run `pg_dump`. |
+| `SUPABASE_DB_URL` | Supabase → Project Settings → Database → Connection string → **Session pooler**. Read the note below — this is the one setting that is easy to get wrong, and the workflow now rejects both wrong answers by name. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Project Settings → API → `service_role`. Reads private buckets. |
 | `SUPABASE_ACCESS_TOKEN` | supabase.com/dashboard/account/tokens. Used to verify against live. |
+
+### Which connection string — the one thing worth reading twice
+
+The dashboard offers three. Only one works from GitHub Actions.
+
+| | IPv4? | mode | works? |
+|---|---|---|---|
+| Direct — `db.<ref>.supabase.co:5432` | **no, AAAA only** | session | ✗ unreachable from a GitHub runner |
+| Transaction pooler — `…pooler.supabase.com:6543` | yes | transaction | ✗ `pg_dump` needs session state |
+| **Session pooler** — `…pooler.supabase.com:5432` | yes | session | ✓ **use this** |
+
+The direct host genuinely has no A record — Supabase moved direct
+connections to IPv6-only and IPv4 is a paid add-on — and GitHub-hosted
+runners have no IPv6. Pasting it produces a connection timeout that reads
+like a Supabase outage rather than a configuration mistake, which is
+exactly why preflight now rejects both wrong strings by name and then
+proves it can `select 1` before starting a dump.
+
+An earlier version of this document recommended the direct connection.
+That was wrong and would have failed on the first real run.
 
 **Strongly recommended:**
 

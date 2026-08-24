@@ -102,9 +102,51 @@ jobs:
             echo "s3=no" >> $GITHUB_OUTPUT
           fi
 
+          # Which connection string. Not a style preference -- it decides
+          # whether this job can reach the database at all.
+          #
+          #   db.<ref>.supabase.co   AAAA only, NO IPv4 record. GitHub
+          #                          runners are IPv4-only, so the
+          #                          "direct" connection is unreachable
+          #                          from here and fails as a timeout
+          #                          that reads like a Supabase outage.
+          #   pooler...:6543         IPv4, but TRANSACTION mode. pg_dump
+          #                          needs session state; this breaks it.
+          #   pooler...:5432         IPv4 + SESSION mode. Correct.
+          #
+          # Checked rather than documented: a note in a runbook does not
+          # stop anyone pasting the string the dashboard shows first.
+          case "$DB_URL" in
+            *:6543/*)
+              echo "::error::SUPABASE_DB_URL points at the TRANSACTION pooler (:6543). pg_dump cannot use it. Copy the SESSION pooler URI (:5432)."
+              exit 1 ;;
+            *db.*.supabase.co*)
+              echo "::error::SUPABASE_DB_URL is the direct connection (db.<ref>.supabase.co). That host has no IPv4 record and GitHub runners are IPv4-only. Copy the SESSION pooler URI (:5432)."
+              exit 1 ;;
+          esac
+
+          # Prove it connects before spending the job on a dump that was
+          # never going to work.
+          if ! psql "$DB_URL" -qtAc 'select 1' > /dev/null 2>&1; then
+            echo "::error::Cannot connect with SUPABASE_DB_URL. Check the password, and that you copied the Session pooler URI (:5432)."
+            exit 1
+          fi
+          echo "database reachable"
+
+          SERVER_MAJOR=$(psql "$DB_URL" -qtAc 'show server_version' | cut -d. -f1)
+          echo "server major: $SERVER_MAJOR"
+          if [ "$SERVER_MAJOR" != "17" ]; then
+            echo "::warning::Server is PG $SERVER_MAJOR but this job installs client 17."
+          fi
+
       # --schema is deliberately explicit and deliberately includes auth.
       # A public-only dump restores to a database where nobody can log in
       # and every owner_id points at a ghost.
+      #
+      # Runs through the SESSION pooler (:5432), which preflight enforces.
+      # Session mode holds one backend per client, so pg_dump's snapshot
+      # and search_path survive; transaction mode (:6543) hands the
+      # connection back between statements and breaks both.
       - name: Dump the database (public + auth + storage)
         env:
           PGCONNECT_TIMEOUT: "30"
