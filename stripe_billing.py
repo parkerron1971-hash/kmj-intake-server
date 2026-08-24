@@ -24,6 +24,12 @@ Adds three endpoints:
         stripe_webhook_events table (dedupe via the stripe_id UNIQUE
         constraint).
 
+    GET  /billing/success | /cancel | /done   (no auth, HTML)
+        Where Stripe returns the customer's browser after checkout and
+        after the Customer Portal. Real pages, because checkout runs in
+        its own tab: without them the last thing a practitioner saw
+        after paying was the catch-all's 404.
+
     GET  /billing/status        (no auth)
         → { configured: bool, has_price_id: bool, has_webhook_secret: bool }
         Frontend uses this to decide whether to show the Start
@@ -69,6 +75,7 @@ from typing import Any, Dict, Optional
 import ledger_unlock
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from auth_supabase import AuthedUser, require_user
@@ -639,6 +646,164 @@ async def create_portal(body: PortalBody, request: Request,
         "return_url": _portal_return_url(),
     })
     return {"url": session.get("url")}
+
+
+# ─── Where Stripe sends the browser back to ───────────────────────────
+# Checkout returns the customer's tab to success_url / cancel_url, and
+# the Customer Portal returns it to STRIPE_PORTAL_RETURN_URL. All three
+# default to mysolutionist.app/billing/{success,cancel,done} — and
+# NOTHING served those paths. They fell past public_site's catch-all and
+# answered `{"detail":"Not found"}`.
+#
+# Checkout opens in a NEW TAB (AccessGate.checkout → window.open), so the
+# last thing a practitioner saw after handing over a card was raw 404
+# JSON. The subscription was real — the webhook wrote it, the app's
+# focus-recheck cleared the wall — but nobody believes a payment that
+# ends in "Not found". These three routes are that missing ending.
+#
+# They live on the billing router, which is registered well before
+# public_site_router, so the catch-all can never shadow them again.
+
+APP_HOME = "https://system.mysolutionist.app"
+
+
+def _valid_session_id(sid: str) -> bool:
+    """A Stripe Checkout Session id, and nothing else — this value comes
+    off a query string and gets interpolated into an API path."""
+    return (sid.startswith("cs_") and len(sid) <= 120
+            and all(c.isalnum() or c == "_" for c in sid))
+
+
+async def _peek_checkout_session(session_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Read a finished Checkout Session back, fail-soft. None when Stripe
+    isn't configured, the id isn't one, or the call fails — the page
+    still renders, just without the specifics."""
+    sid = (session_id or "").strip()
+    if not _valid_session_id(sid) or not os.environ.get("STRIPE_SECRET_KEY", "").strip():
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            r = await c.get(f"{STRIPE_API_BASE}/checkout/sessions/{sid}",
+                            auth=(_stripe_key(), ""))
+        if r.status_code >= 400:
+            logger.warning(f"session peek {sid} → {r.status_code}")
+            return None
+        return r.json()
+    except Exception as e:
+        logger.warning(f"session peek {sid} failed: {e}")
+        return None
+
+
+def _billing_page(*, title: str, eyebrow: str, heading: str,
+                  body_html: str, cta_label: str = "Open your workspace",
+                  cta_href: str = APP_HOME) -> HTMLResponse:
+    """Render one of the return pages in the marketing shell. Falls back
+    to a plain, self-contained page if the shell can't be imported — a
+    person who just paid must never see a stack trace or a 404."""
+    content = f"""
+<section class="page-hero">
+  <span class="orb orb-1" aria-hidden></span>
+  <div class="container" style="max-width:640px;">
+    <span class="eyebrow reveal">{eyebrow}</span>
+    <h1 class="reveal reveal-delay-1">{heading}</h1>
+    <div class="lead reveal reveal-delay-2" style="margin:16px auto 0;">{body_html}</div>
+    <p class="reveal reveal-delay-3" style="margin-top:26px;">
+      <a class="btn-primary" href="{cta_href}">{cta_label} &rarr;</a>
+    </p>
+  </div>
+</section>
+"""
+    try:
+        import marketing_pages
+        html = marketing_pages._render_shell(
+            title=title, description=heading,
+            content_html=content, path="/billing", active="")
+    except Exception as e:
+        logger.warning(f"billing return page shell failed: {e}")
+        html = (f"<!doctype html><meta charset=utf-8>"
+                f"<meta name=viewport content='width=device-width,initial-scale=1'>"
+                f"<title>{title}</title>"
+                f"<body style='font:16px/1.6 system-ui,sans-serif;background:#0c0d10;"
+                f"color:#e8e9ec;margin:0;padding:64px 24px;text-align:center'>"
+                f"<h1 style='font-size:28px'>{heading}</h1>{body_html}"
+                f"<p><a style='color:#7aa2ff' href='{cta_href}'>{cta_label} &rarr;</a></p>")
+    return HTMLResponse(html)
+
+
+@router.get("/success", include_in_schema=False)
+async def billing_success(session_id: Optional[str] = None,
+                          credits: Optional[str] = None):
+    """Stripe's success_url. Confirms what was actually bought (read back
+    from the session when we can) and points the tab at the app."""
+    sess = await _peek_checkout_session(session_id)
+    mode = (sess or {}).get("mode") or ("payment" if credits else "subscription")
+    paid = (sess or {}).get("payment_status") in ("paid", "no_payment_required")
+    complete = (sess or {}).get("status") == "complete"
+
+    if credits or mode == "payment":
+        heading = "Your credits are on the way."
+        body = ("<p>The pack is added to your balance as soon as Stripe confirms "
+                "the payment &mdash; usually within a few seconds. Your monthly "
+                "allowance is always spent first; packs never expire.</p>")
+        eyebrow = "Payment received"
+    else:
+        heading = "You're in."
+        # A checkout that opened a trial has no charge yet, and saying
+        # "payment received" over a $0 trial start is a lie the first
+        # invoice would expose.
+        trialing = bool(((sess or {}).get("subscription") and
+                         (sess or {}).get("amount_total") == 0))
+        eyebrow = "Subscription started"
+        opening = ("<p>Your subscription is active. Welcome to the "
+                   "Solutionist System.</p>") if not trialing else (
+                  "<p>Your trial has started and your subscription is set up. "
+                  "You won't be charged until the trial ends.</p>")
+        body = opening + (
+            "<p style='font-size:14px;opacity:.75;margin-top:12px;'>"
+            "This tab can be closed &mdash; your workspace is in the tab you "
+            "came from, and it unlocks on its own the moment Stripe confirms. "
+            "If it still shows the paywall, hit <em>Check again</em> there.</p>")
+
+    if sess and not (complete or paid):
+        # Bank debits and other delayed methods complete the session
+        # before the money moves. Don't promise what hasn't cleared.
+        eyebrow = "Payment processing"
+        heading = "Almost there."
+        body = ("<p>Your payment method takes a little longer to clear. We'll "
+                "switch your account on the moment it does &mdash; no action "
+                "needed from you.</p>")
+
+    return _billing_page(title="Subscription started", eyebrow=eyebrow,
+                         heading=heading, body_html=body)
+
+
+@router.get("/cancel", include_in_schema=False)
+async def billing_cancel():
+    """Stripe's cancel_url — they backed out of checkout. Nothing was
+    charged, and nothing about their account changed."""
+    return _billing_page(
+        title="Checkout canceled",
+        eyebrow="Nothing was charged",
+        heading="No card, no charge.",
+        body_html=("<p>You closed the checkout before it finished, so nothing "
+                   "moved. Your account is exactly where you left it, and you "
+                   "can start again whenever you're ready.</p>"),
+        cta_label="Back to your workspace")
+
+
+@router.get("/done", include_in_schema=False)
+async def billing_portal_done():
+    """The Customer Portal's return_url — they finished managing the
+    subscription and clicked back."""
+    return _billing_page(
+        title="Billing updated",
+        eyebrow="Billing",
+        heading="All set.",
+        body_html=("<p>Any change you made in the billing portal is saved. "
+                   "Plan and payment changes reach your workspace within a "
+                   "few seconds.</p>"),
+        cta_label="Back to your workspace")
+
 
 
 # ─── Webhook (Stripe → us) ─────────────────────────────────────────────
