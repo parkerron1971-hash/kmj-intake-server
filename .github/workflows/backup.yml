@@ -66,14 +66,38 @@ jobs:
         with:
           python-version: "3.12"
 
-      # pg_dump must match the server major (17) or it refuses to run.
+      # pg_dump refuses to dump a server newer than itself, so the client
+      # major must be 17.
+      #
+      # Installing postgresql-client-17 is NOT enough. The Ubuntu runner
+      # ships its own PostgreSQL 16 client, and /usr/bin wins on PATH over
+      # /usr/lib/postgresql/17/bin -- so `pg_dump` stayed 16.15 and the
+      # job died with "aborting because of server version mismatch" AFTER
+      # a clean preflight.
+      #
+      # The first version of this step ran `pg_dump --version` and printed
+      # 16.15 into a green log, because printing a version is not the same
+      # as checking it. It is checked now.
       - name: Install postgresql-client-17 and age
         run: |
           sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update -qq
           sudo apt-get install -y -qq postgresql-client-17 age
-          pg_dump --version
+
+          # Ahead of the runner's bundled client, for this step and every
+          # step after it.
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+          echo "/usr/lib/postgresql/17/bin" >> $GITHUB_PATH
+
+          echo "which pg_dump : $(which pg_dump)"
+          echo "version       : $(pg_dump --version)"
+          MAJOR="$(pg_dump --version | grep -oE '[0-9]+' | head -1)"
+          if [ "$MAJOR" != "17" ]; then
+            echo "::error::pg_dump is major $MAJOR but the database is 17. The client-17 install did not win on PATH."
+            exit 1
+          fi
+          echo "pg_dump major $MAJOR — matches the server"
 
       - name: Preflight — refuse to produce a backup nobody can restore
         id: pre
