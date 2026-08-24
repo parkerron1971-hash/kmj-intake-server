@@ -6796,6 +6796,31 @@ async def public_login_redirect(request: Request):
         return await _platform_page_or_site(request, lambda: "")
     return RedirectResponse(url=MARKETING_APP_URL, status_code=302)
 
+
+@router.get("/pricing", include_in_schema=False)
+async def public_pricing_redirect(request: Request):
+    """Pricing is an in-page anchor on the home page, not a page of its
+    own — but /pricing is the URL everyone guesses. It was a 404, which
+    is a bad landing for the one link most likely to be typed, pasted
+    into a chat, or produced by a search engine or an assistant
+    summarising the product.
+
+    Same practitioner-host guard as /login above, and for the same
+    reason: on someone's own published site /pricing is very plausibly a
+    real page of theirs, and hijacking it into a redirect to OUR pricing
+    would be worse than the 404 this fixes.
+    """
+    from fastapi.responses import RedirectResponse
+    host = public_host(request)
+    if extract_slug_from_host(request) or (
+            not _is_api_host(host) and "." in host
+            and not any(host == b or host.endswith(f".{b}") for b in BASE_DOMAINS)):
+        return await _platform_page_or_site(request, lambda: "")
+    # 302, not 301: pricing may well earn its own page later, and a
+    # permanent redirect is cached by browsers in a way that is painful
+    # to take back.
+    return RedirectResponse(url="/#pricing", status_code=302)
+
 # Intake form submission — POSTed via fetch() from /get-started. The
 # request rides along so lead_attribution can read the Referer header;
 # background_tasks so the Meta CAPI Lead event fires after the response.
