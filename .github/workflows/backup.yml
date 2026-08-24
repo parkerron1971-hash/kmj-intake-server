@@ -131,9 +131,19 @@ jobs:
           # difference between connecting and "authentication failed".
           # Strip them rather than make anyone hunt for whitespace they
           # cannot see.
-          CLEAN="$(printf '%s' "$DB_URL" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+          # ALL whitespace, not just the ends. A URI cannot legally
+          # contain a bare space anywhere -- a space inside a password has
+          # to be percent-encoded as %20 -- so any literal whitespace here
+          # is damage, and stripping it is always the right repair.
+          #
+          # Not hypothetical tidying. The first run with real secrets died on:
+          #   unexpected spaces found in "aws-1-us-east-2.pooler.supabase.co  m"
+          # Two spaces had been introduced INSIDE the hostname when the URL
+          # was copied out of a wrapped display. The previous version of
+          # this line trimmed only the ends and sailed straight past it.
+          CLEAN="$(printf '%s' "$DB_URL" | tr -d '[:space:]')"
           if [ "$CLEAN" != "$DB_URL" ]; then
-            echo "::warning::SUPABASE_DB_URL had leading/trailing whitespace; trimmed."
+            echo "::warning::SUPABASE_DB_URL contained whitespace; stripped. Re-save the secret cleanly to silence this."
             DB_URL="$CLEAN"
             echo "DB_URL=$CLEAN" >> $GITHUB_ENV
           fi
