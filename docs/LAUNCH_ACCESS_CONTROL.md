@@ -4,10 +4,17 @@ How to run the invite-only launch, grandfather accounts, set up Stripe for
 the LOCKED pricing (docs/pricing_model.md), and flip billing enforcement —
 plus how to roll all of it back.
 
+> **2026-08-24 — the doors are open.** `LAUNCH_INVITE_ONLY` now defaults
+> **OFF**: anyone can create an account, create a business, and start a
+> subscription on a 7-day free trial. Everything below still works — set
+> `LAUNCH_INVITE_ONLY=on` in Railway and the invite-only launch described
+> here is back, no deploy needed. Invites, referrals, team invites and
+> grandfathering are unaffected either way.
+
 **State after deploy + migration:**
-- `LAUNCH_INVITE_ONLY` defaults **ON** → new business creation requires an
-  invite (or grandfather). Sign-IN stays open; uninvited sign-UPs see the
-  waitlist.
+- `LAUNCH_INVITE_ONLY` defaults **OFF** → anyone can create a business and
+  subscribe. Set it to `on` to require an invite (or grandfather); sign-IN
+  stays open either way, and uninvited sign-UPs then see the waitlist.
 - `BILLING_ENFORCE` stays **off** → all features free, no caps, no charges.
   Usage counters + the usage UI are live regardless (honest from day one).
 - **Every account existing at migration time is grandfathered automatically**
@@ -134,9 +141,10 @@ Then: Railway → service → Variables → `BILLING_ENFORCE=on` → redeploy.
   subscriptions persist. This is always safe.
 - **Stop charging overage only:** remove the `*_OVERAGE` env vars — the
   daily reporter skips businesses with no overage price configured.
-- **Open the floodgates (end invite-only):** `LAUNCH_INVITE_ONLY=off` →
-  public sign-up + business creation for anyone (the 14-day-trial pattern
-  from Phase E takes over for billing).
+- **Close the doors again (re-gate to invite-only):** `LAUNCH_INVITE_ONLY=on`
+  → business creation needs an invite or a grandfather flag again. This is
+  the reverse of the 2026-08-24 flip; the open state is the default, and
+  the free-trial pattern from Phase E is what carries billing.
 - **Un-grandfather someone:** Launch Console → Grandfather → Remove.
 - **Nuclear:** the migration's rollback block drops the five access tables
   (grandfather flags included — re-running the migration re-grandfathers

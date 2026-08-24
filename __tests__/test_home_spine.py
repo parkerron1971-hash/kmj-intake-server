@@ -91,7 +91,9 @@ def test_every_price_has_a_door():
     # of its business.
     pricing = body.split('<section class="pricing"', 1)[1].split("</section>", 1)[0]
     assert pricing.count('class="price-cta') == 3
-    assert pricing.count('href="/get-started"') >= 3
+    # Each card opens ITS tier (2026-08-24): the door is /start, and it
+    # carries which price was clicked.
+    assert pricing.count('href="/start?plan=') >= 3
 
 
 def test_the_page_holds_its_shape():
@@ -113,7 +115,7 @@ def test_the_page_offers_a_door_before_the_price():
     body = _body(_home())
     rooms = body.split('<section class="rooms"', 1)[1].split("</section>", 1)[0]
     assert "rooms-cta" in rooms
-    assert 'href="/get-started"' in rooms
+    assert 'href="/start"' in rooms
     assert 'href="/features"' in rooms      # the reading door stays too
 
 

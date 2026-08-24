@@ -288,8 +288,12 @@ class TestTheIntakeFlowSpeaksAsATeam:
     """
 
     def test_the_page_promises_the_team(self):
+        """The page stopped being an application on 2026-08-24 — the
+        four steps are now the self-serve path, and the form is the
+        "talk to a person" door beside it. Whoever that person is, they
+        are still "the team" and never a name."""
         html = marketing_pages.render_get_started()
-        assert "Someone from the team reaches out" in html
+        assert "reaches the team" in html
         for named in ("Kevin", "McCloud", "He&rsquo;ll", "He'll"):
             assert named not in html
 
@@ -298,7 +302,7 @@ class TestTheIntakeFlowSpeaksAsATeam:
         the template it is built from rather than sending real mail."""
         src = pathlib.Path(marketing_pages.__file__).read_text(encoding="utf-8")
         block = src.split("lead_subject = ", 1)[1].split("except Exception", 1)[0]
-        assert "Someone from the team will reach out" in block
+        assert "someone from the team will reply" in block
         assert "The Solutionist Team" in block
         assert "Kevin" not in block and "McCloud" not in block
         assert 'from_name="The Solutionist Team"' in block

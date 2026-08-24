@@ -2,16 +2,17 @@
 launch_access.py — Arc 19 Phase B — invite-only launch gate, waitlist,
 grandfathering, and backend-mediated business creation.
 
-Access model (Kevin's ruling): invite-only/waitlist pre-launch →
-14-day-trial pattern post-validation. The HARD gate is server-side at
-business creation + invite redemption: an uninvited browser can still
-create a bare Supabase auth user, but without an invite (or grandfather
-flag) they cannot create a business — they see the waitlist message.
-(Belt-and-braces option of disabling public signup in the Supabase
-dashboard is documented in the runbook, not required.)
+Access model (Kevin's ruling): invite-only/waitlist pre-launch → free-
+trial pattern post-validation. **The trial pattern is live as of
+2026-08-24** — invite_only() now defaults OFF, so anyone can create a
+business and start a subscription. The HARD gate is still here and still
+server-side at business creation: set LAUNCH_INVITE_ONLY=on and an
+uninvited browser can create a bare Supabase auth user but not a
+business, and sees the waitlist message again.
 
-Kill switch: LAUNCH_INVITE_ONLY env (default ON). Flip to "off" when the
-trial pattern opens to the public.
+Invites, referrals and team invites are unchanged by the flip. They stop
+being the only door; they do not stop working. Grandfathering, comped
+tiers and the waitlist table all behave exactly as before.
 
 Admin endpoints gate on lead_admin.require_owner (platform-owner email),
 matching Mission Control. Invite tokens are deliberately a SEPARATE
@@ -49,7 +50,15 @@ def _now_iso() -> str:
 
 
 def invite_only() -> bool:
-    return (os.environ.get("LAUNCH_INVITE_ONLY") or "on").lower() != "off"
+    """Default OFF as of 2026-08-24: the doors are open, and anyone can
+    create a business and subscribe without an invite. This is the flip
+    the module docstring's kill switch was built for — set
+    LAUNCH_INVITE_ONLY=on to close them again, which re-gates business
+    creation to invited + grandfathered users with no other change.
+
+    The invite, referral and team-invite paths all keep working while
+    it is off; they simply stop being the ONLY way in."""
+    return (os.environ.get("LAUNCH_INVITE_ONLY") or "off").lower() != "off"
 
 
 def _profile(user_id: str) -> Optional[Dict[str, Any]]:
@@ -304,6 +313,28 @@ def create_business(body: CreateBusinessBody,
         logger.warning(f"[access] capi registration schedule failed: {e}")
 
     return {"ok": True, "business": row}
+
+
+@router.get("/open")
+def access_open() -> Dict[str, Any]:
+    """Public: is the platform taking self-serve signups right now?
+
+    Deliberately unauthenticated — it is the same fact the marketing
+    site states in public copy, and the app's front door has to know it
+    BEFORE anyone has an account to authenticate with. /status answers
+    the signed-in version of the question and stays authed.
+
+    This exists so LAUNCH_INVITE_ONLY really is the one switch the
+    runbook promises: with it, flipping the env re-gates the app's
+    "Create account" button too, with no frontend deploy. Without it the
+    app would keep offering a signup the server then refuses at business
+    creation. trial_days rides along for the same reason — so the front
+    door can say what checkout will actually grant."""
+    try:
+        trial_days = max(0, int(os.environ.get("BILLING_TRIAL_DAYS") or "7"))
+    except ValueError:
+        trial_days = 7
+    return {"ok": True, "invite_only": invite_only(), "trial_days": trial_days}
 
 
 @router.get("/status")

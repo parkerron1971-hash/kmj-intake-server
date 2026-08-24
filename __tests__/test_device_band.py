@@ -41,11 +41,16 @@ def test_band_replaced_the_old_closer():
     assert 'class="final-cta"' not in html
 
 
-def test_band_carries_both_ctas_and_keeps_the_beta_promise():
+def test_band_carries_both_ctas_and_says_what_starting_costs():
+    """The band inherited a "currently in private beta" line from the
+    .final-cta it replaced. The doors opened on 2026-08-24, so the line
+    it carries now is the trial — still the same job: the closer states
+    the terms, it does not just shout."""
     band = _band(marketing_pages.render_home())
-    assert 'href="/get-started"' in band          # apply
+    assert 'href="/start"' in band                # start the trial
     assert 'href="/download"' in band             # get the app — Kevin's pick
-    assert "private beta" in band                 # inherited from .final-cta
+    assert "days free" in band                    # the terms, stated
+    assert "private beta" not in band
 
 
 def test_band_never_fades_in():

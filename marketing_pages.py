@@ -7,7 +7,11 @@ Pages served:
   /compare     → Solutionist vs the 8-tool stack (with cost breakdown)
   /faq         → FAQ on its own URL
   /about       → Founder note + company
-  /get-started → Intake form (POSTs to /api/leads)
+  /get-started → Talk to a person (intake form, POSTs to /api/leads)
+
+Every "start" button points at /start (public_site.py), which forwards to
+the app carrying the visitor's campaign params. The site sells a
+self-serve subscription: it does not ask anyone to apply.
 
 All pages share a single shell (nav + footer + CSS + scroll-reveal
 script) so they feel like one product. Edit copy here; routes in
@@ -37,6 +41,11 @@ SITE_NAME = "The Solutionist System"
 SITE_DOMAIN = "mysolutionist.app"
 # Arc 18 — the web app's home (Vite app on Vercel; marketing stays here).
 APP_URL = "https://system.mysolutionist.app"
+# Every "start your free trial" button on the site points HERE, not at
+# APP_URL directly — /start forwards to the app with the visitor's
+# campaign params attached, which is the only way an ad's utm tags
+# survive the hop to a different origin. See public_site.public_start.
+SIGNUP_PATH = "/start"
 DESKTOP_RELEASES_URL = ""  # set to the GitHub Releases URL once installers publish
 # Arc 25 — Android distribution. Env-driven so the links go live from
 # Railway the moment the first signed APK is uploaded (GitHub Releases),
@@ -44,6 +53,28 @@ DESKTOP_RELEASES_URL = ""  # set to the GitHub Releases URL once installers publ
 # is approved (docs/play_store_submission.md in the frontend repo).
 ANDROID_APK_URL = os.environ.get("ANDROID_APK_URL", "").strip()
 PLAY_STORE_URL = os.environ.get("PLAY_STORE_URL", "").strip()
+
+def _trial_days() -> int:
+    """How many free days the site is allowed to promise.
+
+    Read from the SAME env var stripe_billing hands Stripe as
+    trial_period_days. One source, so the number on the page and the
+    number on the subscription cannot drift apart — the site promising
+    14 while checkout grants 7 is the kind of thing you only discover
+    from a refund request."""
+    try:
+        return max(0, int(os.environ.get("BILLING_TRIAL_DAYS") or "7"))
+    except ValueError:
+        return 7
+
+
+def _trial_free_phrase() -> str:
+    """What `__TRIAL_FREE__` becomes in page copy. Every use reads
+    "<phrase>, then $79/mo" or "<phrase> · something", so the no-trial
+    case has to be a phrase too, not an empty string."""
+    days = _trial_days()
+    return f"{days} days free" if days else "No setup fee"
+
 
 def _public_contact_email() -> str:
     """The address the public site prints — resolver in
@@ -78,6 +109,10 @@ def _operator_email() -> str:
 # a body: `_render_shell` swaps it on every page, so a new page gets the
 # behaviour for free.
 CONTACT_TOKEN = "__CONTACT_EMAIL__"
+# Same trick for the length of the free trial. It appears in copy on
+# five pages, and every one of them has to say what checkout actually
+# grants — so none of them hardcodes a number.
+TRIAL_TOKEN = "__TRIAL_FREE__"
 
 
 def _fill_contact(html: str) -> str:
@@ -93,6 +128,14 @@ def _fill_contact(html: str) -> str:
     if CONTACT_TOKEN not in html:
         return html
     return html.replace(CONTACT_TOKEN, _html.escape(_public_contact_email()))
+
+
+def _fill_trial(html: str) -> str:
+    """Swap the trial sentinel for the length checkout actually grants.
+    Absent-token tolerant for the same reason _fill_contact is."""
+    if TRIAL_TOKEN not in html:
+        return html
+    return html.replace(TRIAL_TOKEN, _html.escape(_trial_free_phrase()))
 
 
 logger = logging.getLogger("marketing_pages")
@@ -519,7 +562,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
         <a href="/#pricing">Pricing<span class="nav-dot"></span></a>
       </div>
       <a class="nav-login" href="{app_url}">Log in</a>
-      <a class="nav-cta {ax_get_started}" href="/get-started">Get Started</a>
+      <a class="nav-cta" href="/start">Start free trial</a>
       <button class="nav-burger" id="navBurger" type="button" aria-label="Open menu"
               aria-expanded="false" aria-controls="mobileMenu">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
@@ -547,7 +590,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       <a href="/#pricing">Pricing</a>
     </nav>
     <div class="mm-actions">
-      <a class="mm-primary" href="/get-started">Get Started &rarr;</a>
+      <a class="mm-primary" href="/start">Start free trial &rarr;</a>
       <a class="mm-secondary" href="{app_url}">Log in</a>
     </div>
     <div class="mm-fine">
@@ -576,7 +619,8 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       <a href="/compare">Compare</a>
       <a href="/faq">FAQ</a>
       <a href="/about">About</a>
-      <a href="/get-started">Get Started</a>
+      <a href="/start">Start free trial</a>
+      <a href="/get-started">Talk to us</a>
       <a href="{app_url}">Log in</a>
       <a href="/download">Get the app</a>
       <a href="/help">Help</a>
@@ -767,7 +811,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
     send('view');
     /* the two conversions worth knowing about */
     document.addEventListener('click', function (e) {{
-      var a = e.target && e.target.closest && e.target.closest('a[href*="get-started"], .btn-primary, .nav-cta');
+      var a = e.target && e.target.closest && e.target.closest('a[href*="/start"], a[href*="get-started"], .btn-primary, .nav-cta');
       if (a) send('cta');
     }}, {{ passive: true }});
     window.addEventListener('solutionist:applied', function () {{ send('submit'); }});
@@ -821,7 +865,7 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
         "ax_download":    "is-active" if active == "download"    else "",
         "ax_get_started": "is-active" if active == "get_started" else "",
     }
-    return _fill_contact(SHELL_TEMPLATE.format(
+    return _fill_trial(_fill_contact(SHELL_TEMPLATE.format(
         title=_html.escape(title),
         description=_html.escape(description),
         og_title=_html.escape(f"{title} · {SITE_NAME}"),
@@ -836,7 +880,7 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
         app_url=APP_URL,
         pixel_script=_pixel_script(),
         **active_map,
-    ))
+    )))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2093,7 +2137,7 @@ def _price_cards_html() -> str:
           <li>{seats} &middot; {biz}</li>
           <li>{banks}</li>
         </ul>
-        <a class="price-cta{' is-mid' if mid else ''}" href="/get-started">Start with {name} &rarr;</a>
+        <a class="price-cta{' is-mid' if mid else ''}" href="/start?plan={plan}">Start with {name} &rarr;</a>
       </div>"""
 
     return (
@@ -2172,9 +2216,9 @@ def _plan_compare_section_html() -> str:
       </table>
     </div>
     <div class="compare-door reveal reveal-delay-2">
-      <a class="btn-primary" href="/get-started">Start your subscription &rarr;</a>
-      <span>Private beta, so we set the plan up with you rather than dropping you
-        into a checkout. Beta pricing is grandfathered for good.</span>
+      <a class="btn-primary" href="/start">Start your free trial &rarr;</a>
+      <span>__TRIAL_FREE__ on any plan, then the one you picked. Switch tier or
+        cancel from inside the app; nothing here is locked in.</span>
     </div>
   </div>
 </section>
@@ -3102,12 +3146,12 @@ def render_home() -> str:
         <p class="hero-turn reveal reveal-delay-1">It arrives already speaking that language. Not a system you teach: <b>a system that already knows your business.</b></p>
         <div class="hero-chips reveal reveal-delay-2" id="heroChips" role="group" aria-label="See the system as a different business"></div>
         <div class="hero-ctas reveal reveal-delay-2">
-          <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
+          <a class="btn-primary" href="/start">Start your free trial &rarr;</a>
           <a class="btn-secondary" href="#rooms">Look inside</a>
         </div>
         <div class="hero-meta reveal reveal-delay-3">
           <span class="stat-block"><span class="big">7</span><span>business types it already knows</span></span>
-          <span class="hero-note">Currently in private beta &middot; Every action logged and reversible</span>
+          <span class="hero-note">__TRIAL_FREE__ &middot; Every action logged and reversible</span>
         </div>
       </div>
 
@@ -3539,7 +3583,7 @@ def render_home() -> str:
     <p class="room-caption" id="roomCaption">Invoices, payments and bookkeeping that reconcile themselves. Chief chases what's late so you don't have to write another awkward email.</p>
 
     <div class="rooms-cta reveal">
-      <a class="btn-primary" href="/get-started">Start Solving &rarr;</a>
+      <a class="btn-primary" href="/start">Start your free trial &rarr;</a>
       <a class="btn-secondary" href="/features">Explore every feature in depth &rarr;</a>
     </div>
   </div>
@@ -3557,7 +3601,7 @@ def render_home() -> str:
     <div class="price-doors reveal reveal-delay-3">
       <a class="price-compare" href="/compare">Compare every plan &rarr;</a>
     </div>
-    <p class="price-note reveal">Running a team or more than one business? That is what the Solutionist plan is for; bigger networks are custom. <a href="/get-started" style="color:var(--accent);">Talk to us</a>. Beta pricing is grandfathered for good: if we raise prices later, yours does not move.</p>
+    <p class="price-note reveal">Running a team or more than one business? That is what the Solutionist plan is for; bigger networks are custom. <a href="/get-started" style="color:var(--accent);">Talk to us</a>. Every plan starts with __TRIAL_FREE__, and you can change tier or cancel yourself at any time.</p>
   </div>
 </section>
 
@@ -3602,10 +3646,10 @@ def render_home() -> str:
     <p class="dv-lead">One account, one system. The same data and the same Chief on the desk,
        at the counter, and in your pocket.</p>
     <div class="dv-ctas">
-      <a class="btn-primary" href="/get-started">Apply for Access &rarr;</a>
+      <a class="btn-primary" href="/start">Start your free trial &rarr;</a>
       <a class="btn-secondary" href="/download">Get the app</a>
     </div>
-    <p class="dv-note">Currently in private beta &middot; every action logged and reversible.</p>
+    <p class="dv-note">__TRIAL_FREE__ &middot; every action logged and reversible.</p>
   </div>
 
   <div class="dv-scene" aria-hidden="true">
@@ -4477,9 +4521,10 @@ def render_features() -> str:
 <section class="final-cta">
   <div class="container">
     <span class="eyebrow reveal">Ready to try it?</span>
-    <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Apply for access today.</h2>
-    <p class="reveal reveal-delay-2">Private beta. We'll set you up and walk you through onboarding personally.</p>
-    <a class="btn-primary reveal reveal-delay-3" href="/get-started">Apply for Access →</a>
+    <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Open it and see.</h2>
+    <p class="reveal reveal-delay-2">__TRIAL_FREE__ on any plan. Your workspace arrives already
+       speaking your trade, so there is nothing to configure before it is useful.</p>
+    <a class="btn-primary reveal reveal-delay-3" href="/start">Start your free trial →</a>
   </div>
 </section>
 """
@@ -4693,7 +4738,7 @@ def render_compare() -> str:
           <li><span>Chief of Staff (AI)</span><span>✓</span></li>
         </ul>
         <div class="cost-total"><span class="label">From</span><span class="price">$79 /mo</span></div>
-        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Solutionist $399. Currently in private beta: apply for access, and beta pricing is grandfathered for good.</p>
+        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Solutionist $399. Every plan starts with __TRIAL_FREE__, and you can cancel yourself at any time.</p>
       </div>
     </div>
   </div>
@@ -4757,7 +4802,7 @@ def render_compare() -> str:
   <div class="container">
     <span class="eyebrow reveal">Stop stitching tools.</span>
     <h2 style="margin-top:14px;" class="reveal reveal-delay-1">One workspace, one login, one Chief.</h2>
-    <a class="btn-primary reveal reveal-delay-3" href="/get-started" style="margin-top:14px;">Apply for Access →</a>
+    <a class="btn-primary reveal reveal-delay-3" href="/start" style="margin-top:14px;">Start your free trial →</a>
   </div>
 </section>
 """
@@ -4832,7 +4877,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item" data-g="money">
         <summary>What about pricing?</summary>
-        <div class="faq-body"><p>Starter is $79/month, Professional $199, and Solutionist $399. Every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. We're in private beta: apply for access, and your beta pricing is grandfathered for good: if prices rise later, yours does not move.</p></div>
+        <div class="faq-body"><p>Starter is $79/month, Professional $199, and Solutionist $399. Every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. Every plan opens with __TRIAL_FREE__, and you can move between tiers or cancel yourself from inside the app.</p></div>
       </details>
       <details class="faq-item" data-g="how">
         <summary>How is this different from Notion, HubSpot, or just using ChatGPT?</summary>
@@ -4866,11 +4911,11 @@ def render_faq() -> str:
       </details>
       <details class="faq-item" data-g="money">
         <summary>When can I sign up?</summary>
-        <div class="faq-body"><p>Right now. <a href="/get-started" style="color:var(--accent);">apply for access</a> with a few sentences about your business. If we're a fit, we'll onboard you within a few days.</p></div>
+        <div class="faq-body"><p>Right now, and you do it yourself. <a href="/start" style="color:var(--accent);">Start your free trial</a>, name your business, and the workspace is built around that trade before you have typed anything else. No application, no waiting list, no call to book. If you would rather talk to a person first, <a href="/get-started" style="color:var(--accent);">we're here</a>.</p></div>
       </details>
     </div>
     <div style="text-align:center;margin-top:48px;" class="reveal reveal-delay-2">
-      <a class="btn-primary" href="/get-started">Apply for Access →</a>
+      <a class="btn-primary" href="/start">Start your free trial →</a>
     </div>
   </div>
 </section>
@@ -5233,8 +5278,8 @@ def render_about() -> str:
         not a side project that disappears.</span></div>
       <div><b>One product</b><span>The Solutionist System. No spinouts, no pivots, no second bet
         that takes the attention.</span></div>
-      <div><b>Private beta</b><span>Growing deliberately, so the people already inside get the
-        attention they were promised.</span></div>
+      <div><b>Open to sign up</b><span>You start it yourself, today, on a __TRIAL_FREE__ trial.
+        No application to pass and nobody to wait on.</span></div>
     </div>
 
     <div class="reach reveal">
@@ -5252,8 +5297,10 @@ def render_about() -> str:
 <section class="final-cta">
   <div class="container">
     <span class="eyebrow reveal">Want to talk?</span>
-    <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Apply for access, or just say hi.</h2>
-    <a class="btn-primary reveal reveal-delay-3" href="/get-started">Apply for Access &rarr;</a>
+    <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Start it yourself, or just say hi.</h2>
+    <a class="btn-primary reveal reveal-delay-3" href="/start">Start your free trial &rarr;</a>
+    <p class="reveal reveal-delay-3" style="margin-top:12px;font-size:13.5px;">Rather ask a question first?
+      <a href="/get-started" style="color:var(--accent);">Tell us what you do &rarr;</a></p>
   </div>
 </section>
 """
@@ -5615,6 +5662,13 @@ def render_get_started() -> str:
         letter-spacing:-.02em;margin-top:3px;font-variant-numeric:tabular-nums;}
       .gs-pv-kpi .v.gold{color:var(--amber);}
       .gs-pv-foot{margin:14px 0 0;font-size:12.5px;color:var(--text-dim);line-height:1.5;}
+      /* The preview used to be the end of the thought. It is now the
+         start of one: you looked at your own workspace, so the button
+         that opens it belongs directly under it. */
+      .gs-pv-start{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin:18px 0 0;}
+      .gs-pv-start span{font-size:12.5px;color:var(--text-dim);}
+      .form-intro{margin:0 0 20px;padding-bottom:16px;border-bottom:1px solid var(--border);
+        font-size:13.5px;line-height:1.55;color:var(--text-secondary);}
       @media (max-width: 520px){.gs-pv-kpis{grid-template-columns:1fr;}}
       .gs-grid{display:grid;grid-template-columns:1.4fr 1fr;gap:48px;margin-top:20px;align-items:flex-start;}
       @media (max-width: 880px){.gs-grid{grid-template-columns:1fr;gap:28px;}}
@@ -5679,14 +5733,14 @@ def render_get_started() -> str:
           throw new Error(t || ('Server ' + res.status));
         }
         msg.classList.add('ok');
-        msg.textContent = "Got it. We'll be in touch within 24 hours — check your inbox for a quick confirmation.";
+        msg.textContent = "Got it — we'll reply within 24 hours. You don't have to wait on us to start, though: the trial is open right now.";
         form.reset();
         btn.textContent = 'Sent ✓';
       } catch (err) {
         msg.classList.add('err');
         msg.textContent = 'Something went wrong — please email __CONTACT_EMAIL__ directly.';
         btn.disabled = false;
-        btn.textContent = 'Apply for Access →';
+        btn.textContent = 'Send it →';
       }
     });
   })();
@@ -5696,9 +5750,12 @@ def render_get_started() -> str:
 <section class="page-hero">
   <span class="orb orb-1" aria-hidden></span>
   <div class="container">
-    <span class="eyebrow reveal">Private beta · Apply for access</span>
-    <h1 class="reveal reveal-delay-1">Tell us about your <span class="gradient-text">business.</span></h1>
-    <p class="lead reveal reveal-delay-2" style="max-width:600px;margin:14px auto 0;">We onboard each new user personally. Takes about 60 seconds to apply.</p>
+    <span class="eyebrow reveal">__TRIAL_FREE__ &middot; no application, no waiting list</span>
+    <h1 class="reveal reveal-delay-1">Start it yourself in about <span class="gradient-text">two minutes.</span></h1>
+    <p class="lead reveal reveal-delay-2" style="max-width:640px;margin:14px auto 0;">Create your account, name your business, and the whole workspace arrives already speaking your trade. Pick yours below and see exactly what you would be handed.</p>
+    <p class="reveal reveal-delay-3" style="margin-top:22px;">
+      <a class="btn-primary" href="/start">Start your free trial &rarr;</a>
+    </p>
   </div>
 </section>
 
@@ -5717,9 +5774,13 @@ def render_get_started() -> str:
         <p class="gs-pv-foot">Every one of those names is the vocabulary the system ships with.
            Nothing here is set up by you.</p>
       </div>
+      <p class="gs-pv-start"><a class="btn-primary" href="/start">Start with this workspace &rarr;</a>
+        <span>__TRIAL_FREE__ &middot; cancel yourself any time</span></p>
     </div>
     <div class="gs-grid">
       <form id="lead-form" class="form-card reveal">
+        <p class="form-intro">Rather ask a person first? This reaches the team directly &mdash;
+          and it is not a gate: the trial above is open either way.</p>
         <div class="form-row">
           <label>Your name <span class="req">*</span></label>
           <input type="text" name="name" required autocomplete="name" placeholder="Jane Doe">
@@ -5754,28 +5815,28 @@ def render_get_started() -> str:
           <label>Website</label>
           <input type="text" name="website" tabindex="-1" autocomplete="off">
         </div>
-        <button type="submit" id="submit-btn" class="btn-primary form-submit">Apply for Access →</button>
+        <button type="submit" id="submit-btn" class="btn-primary form-submit">Send it →</button>
         <div id="form-msg" class="form-msg" role="status" aria-live="polite"></div>
       </form>
 
       <aside class="next-steps reveal reveal-delay-1">
-        <h3>What happens next</h3>
+        <h3>If you start it yourself</h3>
         <ul class="next-list">
           <li>
             <span class="num">1</span>
-            <span class="text"><strong>Quick confirmation email.</strong> You'll get a "we got it" email within a minute of submitting.</span>
+            <span class="text"><strong>Create your account.</strong> Email and a password. Nothing to approve, nobody to wait on.</span>
           </li>
           <li>
             <span class="num">2</span>
-            <span class="text"><strong>Someone from the team reaches out within 24 hours,</strong> usually faster. We&rsquo;ll ask a few questions to make sure Solutionist is a fit for your business.</span>
+            <span class="text"><strong>Name your business and say what you do.</strong> The rooms, the vocabulary and Chief's first questions are all built from that answer.</span>
           </li>
           <li>
             <span class="num">3</span>
-            <span class="text"><strong>Personal onboarding.</strong> If it's a fit, we set up your account and walk you through it together (~30 min).</span>
+            <span class="text"><strong>Pick a plan.</strong> Starter, Professional or Solutionist &mdash; __TRIAL_FREE__ on any of them, and the card is not charged until the trial ends.</span>
           </li>
           <li>
             <span class="num">4</span>
-            <span class="text"><strong>You start running your business from one place,</strong> and lock in your beta pricing for good.</span>
+            <span class="text"><strong>Change your mind whenever.</strong> Switch tier or cancel yourself from inside the app. Your data stays exportable either way.</span>
           </li>
         </ul>
       </aside>
@@ -5785,7 +5846,7 @@ def render_get_started() -> str:
 """
     return _render_shell(
         title="Get Started",
-        description="Apply for private beta access to the Solutionist System. We onboard each new user personally.",
+        description="Start your free trial of the Solutionist System, or ask us a question first. Self-serve: no application and no waiting list.",
         content_html=body, path="/get-started", active="get_started",
         extra_css=extra_css, extra_scripts=extra_scripts + GS_SWITCHER_SCRIPT,
     )
@@ -5906,7 +5967,7 @@ async def handle_lead_intake(req: LeadIntakeRequest,
                    or _attr.get("referrer_host") or "direct / untagged")
         owner_subject = f"New lead: {name} ({role or 'no role'})"
         owner_body = f"""<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#222;padding:20px;max-width:600px;margin:0 auto;background:#fff;">
-<h2 style="color:#1D63E6;margin-bottom:18px;">New beta application</h2>
+<h2 style="color:#1D63E6;margin-bottom:18px;">Someone wants to talk</h2>
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <tr><td style="padding:8px 0;color:#666;width:140px;">Name</td><td style="padding:8px 0;font-weight:600;">{_html.escape(name)}</td></tr>
 <tr><td style="padding:8px 0;color:#666;">Email</td><td style="padding:8px 0;font-weight:600;"><a href="mailto:{_html.escape(email)}">{_html.escape(email)}</a></td></tr>
@@ -5930,16 +5991,13 @@ async def handle_lead_intake(req: LeadIntakeRequest,
             logger.warning(f"owner email failed: {e}")
 
         # Lead confirmation
-        lead_subject = "Got your application — welcome to Solutionist"
+        lead_subject = "Got your note — and the trial is open whenever you are"
         lead_body = f"""<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#222;padding:20px;max-width:600px;margin:0 auto;background:#fff;line-height:1.65;">
-<h2 style="color:#1D63E6;margin-bottom:14px;">Thanks for applying, {_html.escape(name.split()[0])}.</h2>
-<p style="font-size:15px;color:#333;">We got your application for the Solutionist System private beta. Here's what happens next:</p>
-<ol style="font-size:14px;color:#444;padding-left:20px;margin:18px 0;">
-<li style="margin-bottom:8px;"><strong>Someone from the team will reach out within 24 hours,</strong> usually faster. We'll ask a few questions to make sure we're a fit for what you're building.</li>
-<li style="margin-bottom:8px;"><strong>If it's a fit, we'll set up personal onboarding:</strong> about 30 minutes, we walk you through the workspace and get you running.</li>
-<li><strong>You'll get grandfathered pricing</strong> when we launch publicly.</li>
-</ol>
-<p style="font-size:14px;color:#666;margin-top:18px;">Questions before then? Just reply to this email &mdash; it comes straight to the team.</p>
+<h2 style="color:#1D63E6;margin-bottom:14px;">Thanks for writing, {_html.escape(name.split()[0])}.</h2>
+<p style="font-size:15px;color:#333;">We got your note about the Solutionist System, and someone from the team will reply within 24 hours &mdash; usually faster.</p>
+<p style="font-size:15px;color:#333;">One thing worth saying now: <strong>you don't have to wait on us to start.</strong> The system is self-serve, every plan opens with a {_trial_days()}-day free trial, and your workspace is built around your trade the moment you name it.</p>
+<p style="text-align:center;margin:26px 0;"><a href="https://mysolutionist.app/start" style="display:inline-block;background:#1D63E6;color:#fff;text-decoration:none;padding:13px 26px;border-radius:8px;font-weight:600;font-size:15px;">Start your free trial &rarr;</a></p>
+<p style="font-size:14px;color:#666;margin-top:18px;">Either way, just reply to this email &mdash; it comes straight to the team.</p>
 <p style="margin-top:24px;font-size:14px;color:#444;">Talk soon,<br><strong>The Solutionist Team</strong><br>The Solutionist System LLC</p>
 </body></html>"""
         try:

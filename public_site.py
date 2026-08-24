@@ -6784,6 +6784,40 @@ async def public_get_started(request: Request):
 async def public_download(request: Request):
     return await _platform_page_or_site(request, render_download)
 
+# The one door to the product. Every "start your free trial" button on
+# the marketing site points at /start rather than at the app directly,
+# for two reasons: the pages are plain HTML strings (no place to
+# interpolate a constant), and an ad landing on mysolutionist.app used to
+# LOSE its campaign params the moment the visitor crossed to the app —
+# different origin, so the sessionStorage stash the site made never
+# arrived. Forwarding the whitelisted params means the app's own
+# captureAttribution() sees the door they actually came through, and
+# businesses.attribution is finally true for marketing-site signups.
+@router.get("/start", include_in_schema=False)
+async def public_start(request: Request):
+    from fastapi.responses import RedirectResponse
+    import lead_attribution
+    from urllib.parse import urlencode
+
+    # On a practitioner host /start is THEIR page (or their 404) — this
+    # is a platform-host affordance, same rule /login already follows.
+    host = public_host(request)
+    if extract_slug_from_host(request) or (
+            not _is_api_host(host) and "." in host
+            and not any(host == b or host.endswith(f".{b}") for b in BASE_DOMAINS)):
+        return await _platform_page_or_site(request, lambda: "")
+
+    carried = {k: v for k, v in request.query_params.items()
+               if k in lead_attribution.CAMPAIGN_KEYS and v}
+    # `plan` lets a price card say which tier was clicked. Whitelisted to
+    # the real tier keys so the URL can't be used to smuggle anything.
+    plan = (request.query_params.get("plan") or "").strip().lower()
+    if plan in ("starter", "professional", "practice"):
+        carried["plan"] = plan
+    url = MARKETING_APP_URL + (f"/?{urlencode(carried)}" if carried else "/")
+    return RedirectResponse(url=url, status_code=302)
+
+
 @router.get("/login", include_in_schema=False)
 async def public_login_redirect(request: Request):
     from fastapi.responses import RedirectResponse
