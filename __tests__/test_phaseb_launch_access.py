@@ -100,7 +100,12 @@ def test_invite_lifecycle(fake):
 
 # ─── Backend-mediated business creation (the real gate) ──────────────
 
-def test_create_business_invite_only_gate(fake):
+def test_create_business_invite_only_gate(fake, monkeypatch):
+    """The gate defaults OFF since 2026-08-24 (the doors opened), so this
+    turns it on explicitly — what is under test is that the switch still
+    works, not which way it points. The open case is covered in
+    test_self_serve_signup.py."""
+    monkeypatch.setenv("LAUNCH_INVITE_ONLY", "on")
     fb = fake
     body = la.CreateBusinessBody(name="My Biz", type="coach")
     # Uninvited stranger: 403 invite-only.

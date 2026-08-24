@@ -79,7 +79,7 @@ def test_trial_only_for_first_subscription(monkeypatch):
     fresh = {"id": "biz1", "stripe_subscription_id": None}
     returning = {"id": "biz1", "stripe_subscription_id": "sub_old"}
     d1 = sb._subscription_data(fresh, _U())
-    assert d1.get("trial_period_days") == 14            # default trial
+    assert d1.get("trial_period_days") == 7             # default trial (7 from 2026-08-24)
     d2 = sb._subscription_data(returning, _U())
     assert "trial_period_days" not in d2                 # no second trial
     monkeypatch.setenv("BILLING_TRIAL_DAYS", "30")

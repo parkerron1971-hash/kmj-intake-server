@@ -606,10 +606,13 @@ def _subscription_data(biz, user):
     data = {
         "metadata": {"business_id": biz["id"], "auth_user_id": user.id},
     }
+    # 7, per Kevin, 2026-08-24. The marketing site quotes this same env
+    # var (marketing_pages._trial_days), so the "N days free" on the page
+    # and trial_period_days on the subscription cannot drift apart.
     try:
-        trial_days = int(os.environ.get("BILLING_TRIAL_DAYS") or "14")
+        trial_days = int(os.environ.get("BILLING_TRIAL_DAYS") or "7")
     except ValueError:
-        trial_days = 14
+        trial_days = 7
     if trial_days > 0 and not biz.get("stripe_subscription_id"):
         data["trial_period_days"] = trial_days
     return data
