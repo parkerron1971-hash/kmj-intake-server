@@ -136,7 +136,8 @@ def test_platform_pages_do_not_shadow_practitioner_sites():
     for fn_name in ("public_about", "public_faq", "public_features",
                     "public_compare", "public_get_started", "public_download",
                     "public_sms_optin", "public_privacy", "public_terms",
-                    "public_help", "public_data_deletion", "public_login_redirect"):
+                    "public_help", "public_data_deletion", "public_login_redirect",
+                    "public_pricing_redirect"):
         fn = getattr(ps, fn_name)
         src = inspect.getsource(fn)
         assert "_platform_page_or_site" in src, (
@@ -144,6 +145,25 @@ def test_platform_pages_do_not_shadow_practitioner_sites():
             f"practitioner's own page at that path")
         assert "request" in inspect.signature(fn).parameters, (
             f"{fn_name} cannot check the host without the request")
+
+
+def test_pricing_is_a_door_and_not_a_404():
+    """/pricing was a 404 while the price ladder lived at /#pricing.
+
+    That is the single most guessable URL on the site -- typed from
+    memory, pasted into a chat, and produced by search engines and
+    assistants summarising the product -- so it was the worst available
+    place to land nobody. It redirects now.
+    """
+    routes = {r.path for r in ps.router.routes}
+    assert "/pricing" in routes
+
+    import inspect
+    src = inspect.getsource(ps.public_pricing_redirect)
+    assert "/#pricing" in src, "the redirect must reach the price ladder"
+    # 302, not 301: pricing may earn its own page later and a permanent
+    # redirect is cached in a way that is painful to take back.
+    assert "status_code=302" in src
 
 
 def test_host_guard_prefers_the_site_on_a_site_host():
