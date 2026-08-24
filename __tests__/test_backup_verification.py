@@ -26,7 +26,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import scripts.verify_backup as vb  # noqa: E402
 
 
-LIVE = {"policies": 316, "tables": 200, "objects": 45}
+LIVE = {"policies": 316, "tables": 200, "objects": 45, "auth_users": 4}
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +39,8 @@ def _no_network(monkeypatch):
             return [{"n": LIVE["tables"]}]
         if "storage.objects" in sql:
             return [{"n": LIVE["objects"]}]
+        if "auth.users" in sql:
+            return [{"n": LIVE["auth_users"]}]
         raise AssertionError(f"unexpected query: {sql}")
     monkeypatch.setattr(vb, "live_query", fake)
     vb.failures.clear()
@@ -51,10 +53,19 @@ def _good_dump() -> str:
                   for i in range(LIVE["tables"]))
         + "".join(f'CREATE POLICY "p{i}" ON "public"."t0";\n'
                   for i in range(LIVE["policies"]))
-        + 'COPY auth.users (id, email) FROM stdin;\n'
-        + 'COPY "public"."t0" (id) FROM stdin;\n'
+        + _auth_copy(LIVE["auth_users"])
+        + 'COPY "public"."t0" ("id") FROM stdin;\n1\n\\.\n'
         + "x" * 200_000
     )
+
+
+def _auth_copy(rows: int) -> str:
+    """An auth.users COPY block, quoted the way --quote-all-identifiers
+    writes it — which is exactly the quoting that made the old substring
+    check report a good backup as broken."""
+    body = "".join(f"{i}\tuser{i}@example.com\n" for i in range(rows))
+    return ('COPY "auth"."users" ("id", "email") FROM stdin;\n'
+            + body + "\\.\n")
 
 
 def _write(tmp_path, dump_text: str, objects: int = LIVE["objects"],
@@ -102,8 +113,10 @@ def test_a_good_backup_passes(tmp_path):
 def test_a_public_only_dump_is_rejected(tmp_path):
     """`pg_dump --schema=public` — restores to a database where nobody
     can log in and every owner_id points at a ghost."""
-    dump = _good_dump().replace("CREATE SCHEMA auth;\n", "").replace(
-        "COPY auth.users (id, email) FROM stdin;\n", "")
+    dump = _good_dump().replace("CREATE SCHEMA auth;\n", "")
+    start = dump.index('COPY "auth"."users"')
+    end = dump.index("\\.\n", start) + 3
+    dump = dump[:start] + dump[end:]
     assert _run(*_write(tmp_path, dump)) == 1
     assert any("auth" in f for f in vb.failures)
 
@@ -119,8 +132,11 @@ def test_a_dump_without_rls_policies_is_rejected(tmp_path):
 
 def test_a_schema_only_dump_is_rejected(tmp_path):
     """Right shape, no rows. Passes a size check easily."""
-    dump = _good_dump().replace("COPY auth.users (id, email) FROM stdin;\n", "")
-    dump = dump.replace('COPY "public"."t0" (id) FROM stdin;\n', "")
+    dump = _good_dump()
+    start = dump.index('COPY "auth"."users"')
+    end = dump.index("\\.\n", start) + 3
+    dump = dump[:start] + dump[end:]
+    dump = dump.replace('COPY "public"."t0" ("id") FROM stdin;\n1\n\\.\n', "")
     assert _run(*_write(tmp_path, dump)) == 1
 
 
@@ -170,3 +186,39 @@ def test_the_verifier_reports_failure_when_it_cannot_reach_live(monkeypatch, tmp
     dump, storage = _write(tmp_path, _good_dump())
     with pytest.raises(RuntimeError):
         _run(dump, storage)
+
+
+def test_quoting_cannot_hide_the_auth_rows(tmp_path):
+    """The regression that made this check worth rewriting.
+
+    The dump is taken with --quote-all-identifiers, so it says
+    "auth"."users". The original check was a substring search for
+    `auth.users`, which meant it reported a perfectly good backup as
+    broken -- and, far worse, would have reported a dump with the table
+    but NO ROWS as fine, because the name was present either way.
+    """
+    assert _run(*_write(tmp_path, _good_dump())) == 0
+
+
+def test_an_auth_copy_block_with_no_rows_is_rejected(tmp_path):
+    """The failure that actually matters. The dump looks complete: the
+    schema is there, the table is there, the COPY block is there. It
+    restores to a database that cannot log anybody in."""
+    dump = _good_dump().replace(_auth_copy(LIVE["auth_users"]),
+                                _auth_copy(0))
+    assert _run(*_write(tmp_path, dump)) == 1
+    assert any("auth.users" in f for f in vb.failures)
+
+
+def test_a_partial_auth_dump_is_rejected(tmp_path):
+    """Some accounts restored, some not, is not a successful restore."""
+    dump = _good_dump().replace(_auth_copy(LIVE["auth_users"]),
+                                _auth_copy(LIVE["auth_users"] - 1))
+    assert _run(*_write(tmp_path, dump)) == 1
+
+
+def test_an_unquoted_dump_still_verifies(tmp_path):
+    """pg_dump without --quote-all-identifiers must work too, so the
+    check is not merely inverted to expect the other spelling."""
+    dump = _good_dump().replace('"auth"."users"', 'auth.users')
+    assert _run(*_write(tmp_path, dump)) == 0

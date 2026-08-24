@@ -28,6 +28,7 @@ import gzip
 import io
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -59,6 +60,40 @@ def live_query(sql: str) -> list[dict]:
         return json.loads(r.read().decode("utf-8"))
 
 
+
+def _q(schema: str, table: str) -> str:
+    """Regex fragment matching schema.table with or without quoting."""
+    return rf'"?{re.escape(schema)}"?\."?{re.escape(table)}"?'
+
+
+def _mentions(sql: str, schema: str, table: str) -> bool:
+    return re.search(_q(schema, table), sql) is not None
+
+
+def _schema(sql: str, name: str) -> bool:
+    return re.search(rf'CREATE SCHEMA (IF NOT EXISTS )?"?{re.escape(name)}"?',
+                     sql) is not None
+
+
+def _copy_rows(sql: str, schema: str, table: str):
+    """Number of data rows in this table's COPY block, or None if the
+    table has no COPY block at all.
+
+    A COPY block runs from `COPY <table> (...) FROM stdin;` to a line
+    containing only `\\.`. Every line between is one row.
+    """
+    m = re.search(rf'^COPY {_q(schema, table)}[^\n]*FROM stdin;$',
+                  sql, re.MULTILINE)
+    if not m:
+        return None
+    rows = 0
+    for line in sql[m.end():].split("\n")[1:]:
+        if line.strip() == "\\.":
+            return rows
+        rows += 1
+    return rows
+
+
 def read_dump(path: str) -> str:
     if path.endswith(".gz"):
         with gzip.open(path, "rt", encoding="utf-8", errors="ignore") as fh:
@@ -88,13 +123,30 @@ def main() -> int:
     sql = read_dump(args.dump)
 
     # auth.users is THE Supabase restore trap.
+    #
+    # These were substring checks for "auth.users" and they reported a
+    # perfectly good backup as broken, because the dump is taken with
+    # --quote-all-identifiers and therefore says "auth"."users". A check
+    # that can be defeated by quoting was never checking the thing it
+    # claimed to.
+    #
+    # Rather than loosen it, it now counts the ROWS in the auth.users
+    # COPY block and compares them against live. Quoting cannot fool a
+    # row count, and neither can a dump that emits the table definition
+    # while silently skipping its data -- which is the failure that
+    # actually matters, because it restores to a database that looks
+    # complete and cannot log anybody in.
     check("the dump contains the auth schema",
-          "CREATE SCHEMA auth" in sql or "auth.users" in sql,
-          "no auth.users -- a restore from this cannot log anybody in")
+          _mentions(sql, "auth", "users") or "CREATE SCHEMA" in sql and _schema(sql, "auth"),
+          "no auth schema -- a restore from this cannot log anybody in")
 
-    check("the dump contains auth.users rows",
-          "COPY auth.users" in sql or "INSERT INTO auth.users" in sql,
-          "auth.users has no data -- accounts would restore empty")
+    dumped_users = _copy_rows(sql, "auth", "users")
+    live_users = live_query(
+        "select count(*)::int as n from auth.users")[0]["n"]
+    check("the dump carries every auth.users row",
+          dumped_users is not None and dumped_users == live_users,
+          f"{dumped_users} rows in dump vs {live_users} live -- "
+          "accounts would restore missing or empty")
 
     # RLS is the difference between a restore and a data breach.
     policies_in_dump = sql.count("CREATE POLICY")
