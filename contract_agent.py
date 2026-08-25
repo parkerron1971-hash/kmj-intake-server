@@ -958,6 +958,12 @@ class PdfRequest(BaseModel):
     contact_id: Optional[str] = None
     proposal_body: str
     subject: str
+    # The agent_queue row this body came from, when it came from one.
+    # Optional because this endpoint has always accepted a raw body, and
+    # a caller that supplies no id is printing something we did not
+    # write — there is nothing to check and nothing is claimed about it.
+    queue_id: Optional[str] = None
+    override_blockers: bool = False
 
 
 @router.post("/agents/contract/pdf")
@@ -968,6 +974,21 @@ async def contract_pdf(req: PdfRequest, user: AuthedUser = Depends(require_user)
     # contact — this is a disclosure endpoint, not just a render one.
     import business_access
     business_access.assert_access(str(req.business_id), user, "member")
+
+    # Printing is publishing: the PDF is the artifact that gets attached
+    # to an email or uploaded for signature. Gated only when the caller
+    # names the queue row, which is what the Documents room does.
+    if (req.queue_id or "").strip():
+        import doc_guard
+        try:
+            row = doc_guard.load_document(req.queue_id.strip(), str(req.business_id))
+        except HTTPException:
+            row = None
+        if row:
+            doc_guard.require_sendable(
+                row, business_id=str(req.business_id), actor_id=str(user.id),
+                override=bool(req.override_blockers), door="pdf")
+
     async with httpx.AsyncClient() as client:
         # Fetch business + contact for header/recipient info
         businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")

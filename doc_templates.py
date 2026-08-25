@@ -61,22 +61,28 @@ _REVIEW_NOTE = (
 
 
 def sig(text: str) -> Dict[str, Any]:
-    return {"kind": "fixed", "heading": None, "text": text}
+    return {"kind": "fixed", "heading": None, "text": text,
+            "article": "signature"}
 
 
 def fixed(heading: Optional[str], text: str,
           requires: Optional[str] = None,
-          requires_value: Optional[tuple] = None) -> Dict[str, Any]:
+          requires_value: Optional[tuple] = None,
+          article: Optional[str] = None) -> Dict[str, Any]:
     """requires: render only when that field is non-empty.
     requires_value: ("field", "value") — render only when the field
     equals the value (the fee-model branch mechanism). Both may be set;
-    they AND together."""
+    they AND together.
+    article: the ARTICLES key this clause satisfies. Only clauses that
+    carry one can answer a template's declared contract (see ARTICLES)."""
     d: Dict[str, Any] = {"kind": "fixed", "heading": heading, "text": text}
     if requires:
         d["requires"] = requires
     if requires_value:
         d["requires_value"] = {"field": requires_value[0],
                                "value": requires_value[1]}
+    if article:
+        d["article"] = article
     return d
 
 
@@ -102,12 +108,44 @@ _NO_INVENTION = (
     "given it, leave it out.")
 
 
-def drafted(heading: Optional[str], brief: str, fallback: str) -> Dict[str, Any]:
+def drafted(heading: Optional[str], brief: str, fallback: str,
+            article: Optional[str] = None,
+            requires: Optional[str] = None) -> Dict[str, Any]:
     # Idempotent: a brief that already says it keeps its own wording and
     # does not get the sentence twice.
     armoured = brief if "nvent" in brief else brief.rstrip() + _NO_INVENTION
-    return {"kind": "drafted", "heading": heading,
-            "brief": armoured, "fallback": fallback}
+    d: Dict[str, Any] = {"kind": "drafted", "heading": heading,
+                         "brief": armoured, "fallback": fallback}
+    if article:
+        d["article"] = article
+    if requires:
+        d["requires"] = requires
+    return d
+
+
+# ─── The structural contract ─────────────────────────────────────────
+#
+# An article is a thing a complete instrument HAS: a scope, a payment
+# term, a way out, a place to sign. A clause satisfies at most one.
+#
+# A template may declare `contract`: the article keys it asserts every
+# rendered copy of itself will contain. doc_audit then proves it, per
+# document, after conditional gating — which is the difference between
+# "the template looks complete" and "this document IS complete". It also
+# catches the branch hole: two mutually exclusive PAYMENT clauses where
+# the select landed on neither, leaving the document with no payment
+# term at all and nothing anywhere raising.
+#
+# Only instruments declare a contract. A letter is not an instrument and
+# is not held to one.
+ARTICLES = {
+    "recitals", "definitions", "scope", "deliverables", "fees", "payment",
+    "revisions", "acceptance", "delay", "client_responsibilities",
+    "ownership", "portfolio", "materials", "representations",
+    "third_party", "confidentiality", "liability", "indemnity",
+    "relationship", "no_guarantee", "overdue", "termination", "notices",
+    "dispute", "governing_law", "general", "signature", "schedule",
+}
 
 
 def field(key: str, label: str, *, type_: str = "text", required: bool = False,
@@ -164,9 +202,28 @@ TEMPLATES: List[Dict[str, Any]] = [
                   placeholder="e.g. Representation in the negotiation and closing of the Northside lease"),
             field("fee", "Fee", required=True, sticky=True,
                   placeholder="e.g. $300/hour — or a flat $2,500 (just the amount; structure goes below)"),
+            # REQUIRED, and deliberately not defaulted.
+            #
+            # Every PAYMENT STRUCTURE clause branches on this field, and
+            # it used to be optional with no default — so leaving it
+            # blank rendered NONE of them: an engagement letter that
+            # named a fee and then said nothing whatsoever about when it
+            # was payable. Nothing raised; the clauses were simply
+            # absent. The structural contract check found it the first
+            # time it ran.
+            #
+            # A default would have been the smaller change and the wrong
+            # one. test_contract_fixtures pins the reason: "never a
+            # broken or wrong-concept clause". Guess "hourly" and a
+            # flat-fee engagement reads "Time is billed at $500"; guess
+            # "flat_fee" and an hourly one understates the bill. The
+            # system cannot know how somebody charges — but it also must
+            # not print a fee with no terms attached. So it asks.
+            #
+            # Sticky: asked once, then pre-fills every later document.
             select_field("fee_model", "How the fee works",
                          ["flat_fee", "hourly", "retainer", "milestone"],
-                         sticky=True),
+                         required=True, sticky=True),
             field("payment_terms", "Payment structure (optional)", type_="textarea",
                   sticky=True, default="",
                   placeholder="e.g. 50% due on signing; the remaining 50% due at completion."),
@@ -834,6 +891,7 @@ DERIVED_VARS = {
     "state_full", "venue_clause", "effective_date_resolved",
     "expense_examples", "outcome_factors", "work_materials_term",
     "expense_cap_clause", "extra_rate_clause", "practitioner_title",
+    "notice_addresses_clause",
 }
 
 
@@ -893,27 +951,73 @@ def build_vars(template: Dict[str, Any], params: Dict[str, str],
                               else "are quoted first and")
     v["practitioner_title"] = ((v.get("title") or "").strip()
                                or "____________________")
+
+    # The notice block. Renders whichever addresses exist and says so
+    # plainly when one is missing — never a blank line under a party's
+    # name, and never an invented address. With neither, the clause
+    # falls back to the working relationship, which is exactly what the
+    # old GENERAL TERMS (e) one-liner said.
+    _biz_addr = (v.get("business_address") or "").strip()
+    _cli_addr = (v.get("client_address") or "").strip()
+    if _biz_addr or _cli_addr:
+        _lines = ["Notices go to:"]
+        _lines.append(f"  {business_name}: "
+                      + (_biz_addr.replace("\n", ", ") if _biz_addr
+                         else "the address it regularly uses with you"))
+        _lines.append(f"  {client_name}: "
+                      + (_cli_addr.replace("\n", ", ") if _cli_addr
+                         else "the address you regularly use with us"))
+        v["notice_addresses_clause"] = "\n".join(_lines) + "\n"
+    else:
+        v["notice_addresses_clause"] = ""
     return v
 
 
-def assemble(template: Dict[str, Any], variables: Dict[str, str],
-             drafted_texts: Dict[int, str], *,
-             include_review_note: bool) -> str:
-    """Sections → the finished document body. drafted_texts maps a
-    section index to the model's text; a drafted section with no entry
-    uses its fallback, so the document always completes."""
+def section_renders(section: Dict[str, Any], variables: Dict[str, str]) -> bool:
+    """Does this section survive its own gates?
+
+    The single answer to that question. _draft_sections used to ask it
+    separately and only checked `requires`, so a drafted section gated
+    on requires_value would have been paid for and then discarded at
+    assembly. No template does that today; the point is that it can't
+    start silently going wrong the day one does."""
+    req = section.get("requires")
+    if req and not (variables.get(req) or "").strip():
+        return False
+    rv = section.get("requires_value")
+    # Case-folded on BOTH sides — see the note in render_sections.
+    if rv and ((variables.get(rv["field"]) or "").strip().lower()
+               != str(rv["value"]).strip().lower()):
+        return False
+    return True
+
+
+def render_sections(template: Dict[str, Any], variables: Dict[str, str],
+                    drafted_texts: Dict[int, str]) -> List[Dict[str, Any]]:
+    """Every section that ACTUALLY renders, in order, substituted.
+
+    Split out of assemble() because the auditor was being handed the
+    template's raw source instead — clauses still reading {fee} at the
+    moment they were scanned for conflicting amounts, and drafted
+    sections, which carry no "text" key at all, scanned as empty
+    strings. The document the client reads is the one thing worth
+    checking, so both the body and the audit are now built from this.
+
+    Each entry: index, kind, article, heading (raw), number (1-based
+    within the document, or None), text (rendered, no heading prefix),
+    and drafted_used — True only where the MODEL's words landed, which
+    is the set fact-fidelity is allowed to police. A fallback is
+    authored paper and is held to the same standard as a fixed clause."""
     safe = _SafeMap(variables)
-    parts: List[str] = []
+    out: List[Dict[str, Any]] = []
     # Agreements number their headed sections AT ASSEMBLY — a hidden
     # conditional clause (no deposit → no deposit section) can then
     # never leave a gap in the numbering. Letters stay unnumbered.
     numbered = bool(template.get("numbered"))
     clause_no = 0
     for i, s in enumerate(template["sections"]):
-        req = s.get("requires")
-        if req and not (variables.get(req) or "").strip():
-            continue
-        rv = s.get("requires_value")
+        # One gate implementation, shared with _draft_sections. The
+        # long note below is why it is case-folded on both sides.
         # Case-folded on BOTH sides. It used to lower() only the value
         # read from the form, so a template declaring requires_value with
         # any capital letter got a section that silently never rendered —
@@ -924,19 +1028,54 @@ def assemble(template: Dict[str, Any], variables: Dict[str, str],
         # sentences walked into it. On a donation receipt it removed the
         # amount and the §170(f)(8) goods-and-services statement, which
         # is the difference between a receipt and a thank-you note.
-        if rv and ((variables.get(rv["field"]) or "").strip().lower()
-                   != str(rv["value"]).strip().lower()):
+        if not section_renders(s, variables):
             continue
+        drafted_used = False
         if s["kind"] == "drafted":
-            text = (drafted_texts.get(i) or "").strip() or s["fallback"]
+            model_text = (drafted_texts.get(i) or "").strip()
+            drafted_used = bool(model_text)
+            text = model_text or s["fallback"]
         else:
             text = s["text"]
-        rendered = text.format_map(safe)
-        if s.get("heading"):
-            heading = s["heading"]
-            if numbered:
-                clause_no += 1
-                heading = f"{clause_no}. {heading}"
+        number = None
+        if s.get("heading") and numbered:
+            clause_no += 1
+            number = clause_no
+        out.append({
+            "index": i,
+            "kind": s["kind"],
+            "article": s.get("article"),
+            "heading": s.get("heading"),
+            "number": number,
+            "text": text.format_map(safe),
+            "drafted_used": drafted_used,
+        })
+    return out
+
+
+def verify_contract(template: Dict[str, Any],
+                    rendered: List[Dict[str, Any]]) -> List[str]:
+    """Article keys the template DECLARED and this document does not
+    have. Empty list when the template declares no contract."""
+    declared = list(template.get("contract") or [])
+    if not declared:
+        return []
+    present = {s.get("article") for s in rendered if s.get("article")}
+    return [a for a in declared if a not in present]
+
+
+def assemble(template: Dict[str, Any], variables: Dict[str, str],
+             drafted_texts: Dict[int, str], *,
+             include_review_note: bool) -> str:
+    """Sections → the finished document body. drafted_texts maps a
+    section index to the model's text; a drafted section with no entry
+    uses its fallback, so the document always completes."""
+    parts: List[str] = []
+    for s in render_sections(template, variables, drafted_texts):
+        rendered = s["text"]
+        if s["heading"]:
+            heading = (f'{s["number"]}. {s["heading"]}' if s["number"]
+                       else s["heading"])
             rendered = f"{heading}\n\n{rendered}"
         parts.append(rendered)
     if include_review_note:
@@ -969,18 +1108,113 @@ _GENERAL_TERMS = fixed("GENERAL TERMS",
     "(d) Assignment. Neither party may transfer this agreement to someone "
     "else without the other's written consent, except as part of a sale "
     "of substantially all of a party's business.\n"
-    "(e) Notices. Formal notices go in writing to the addresses or email "
-    "addresses the parties regularly use with each other, and count when "
-    "received.\n"
-    "(f) Events beyond control. Neither party is responsible for delay or "
+    # (e) Notices used to live here as one sentence. It is now a full
+    # article of its own, because a notice provision with nowhere to send
+    # the notice is the clause people discover is useless at exactly the
+    # moment they need it. The letters below re-lettered accordingly.
+    "(e) Events beyond control. Neither party is responsible for delay or "
     "failure caused by events beyond its reasonable control (illness, "
     "disaster, outage, or similar), provided the affected party gives "
     "prompt notice and resumes as soon as reasonably possible.\n"
-    "(g) Signatures. This agreement may be signed in counterparts, and "
+    "(f) Signatures. This agreement may be signed in counterparts, and "
     "electronic signatures — including through an e-signature service — "
     "are as valid as ink.\n"
-    "(h) Effective date. This agreement takes effect on "
-    "{effective_date_resolved}.")
+    "(g) No waiver. A party's failure to enforce any part of this "
+    "agreement on one occasion does not waive its right to enforce that "
+    "part, or any other part, later.\n"
+    "(h) Survival. Any term that by its nature is meant to outlast this "
+    "agreement — confidentiality, ownership, responsibility for claims, "
+    "and payment of amounts already owed — continues after it ends.\n"
+    "(i) Headings. Headings are for convenience and do not affect how "
+    "this agreement is read.\n"
+    "(j) Effective date. This agreement takes effect on "
+    "{effective_date_resolved}.", article="general")
+
+# The notice provision, promoted out of GENERAL TERMS (e).
+#
+# Addresses are optional and STICKY on the business side: a practitioner
+# types their own once and it rides every later agreement. When neither
+# address is given the clause falls back to the working relationship,
+# which is what the old one-liner said — so a document is never worse
+# off than it was, and is better the moment either address exists.
+_NOTICES = fixed("NOTICES",
+    "Formal notices under this agreement — a termination, a breach, a "
+    "demand — must be in writing and are effective when received. "
+    "Delivery may be by hand, by recognized overnight courier, by "
+    "certified mail, or by email to an address the parties regularly use "
+    "with each other, provided that notice of termination or breach sent "
+    "by email is effective only if the sender does not receive a delivery "
+    "failure and follows it with one of the other methods.\n"
+    "{notice_addresses_clause}"
+    "Either party may change its address for notices by giving notice "
+    "under this section.", article="notices")
+
+_REPRESENTATIONS = fixed("REPRESENTATIONS",
+    "Each party represents to the other that: (a) it has the authority to "
+    "enter into this agreement and to perform it; (b) signing it does not "
+    "breach any other agreement that party is bound by; and (c) it will "
+    "comply with the laws that apply to its own performance, including "
+    "any licensing or registration its work requires.", article="representations")
+
+# ─── The front page ──────────────────────────────────────────────────
+#
+# Recitals and definitions open an instrument; the catalogue had
+# neither, anywhere. Their absence is most of why a generated agreement
+# read thin next to one a firm would send: it began mid-sentence, at the
+# first operative clause, with nothing establishing who was agreeing to
+# what or what any of its terms meant.
+#
+# Both are FIXED text built only from variables that already exist. They
+# add pages and structure without adding a single fact the practitioner
+# did not supply — which is the whole basis on which depth is safe here.
+
+_RECITALS = fixed("BACKGROUND",
+    "This agreement is made on {date} between {business_name} (\"we\", "
+    "\"us\" or \"our\") and {client_name} (\"you\" or \"your\"). You wish "
+    "to engage us for the work described in this agreement, and we wish "
+    "to perform it on the terms set out below. Each party is relying on "
+    "those terms, and this agreement takes effect on "
+    "{effective_date_resolved}.", article="recitals")
+
+_DEFINITIONS = fixed("DEFINITIONS",
+    "In this agreement:\n"
+    "(a) \"Agreement\" means this document together with any schedule to "
+    "it and any written change order the parties adopt under it.\n"
+    "(b) \"Effective Date\" means {effective_date_resolved}.\n"
+    "(c) \"Work\" means the services and materials described in the "
+    "clauses below, together with anything a written change order adds "
+    "to them.\n"
+    "(d) \"Fees\" means the amounts payable for the Work under this "
+    "agreement, and does not include pre-approved costs billed at cost.\n"
+    "(e) \"Confidential Information\" means non-public business "
+    "information one party gives the other in connection with the Work, "
+    "in any form and whether or not it is marked confidential.\n"
+    "(f) \"Business Day\" means a day other than a Saturday, Sunday or "
+    "public holiday where the receiving party is located.\n"
+    "(g) \"In writing\" includes email, except where a clause requires "
+    "another method.", article="definitions")
+
+_CLIENT_RESPONSIBILITIES = fixed("YOUR RESPONSIBILITIES",
+    "The Work depends on you as well as on us. You agree to:\n"
+    "(a) give us the information, access, materials and decisions the "
+    "Work needs, in good time;\n"
+    "(b) name one person who can approve work and answer questions on "
+    "your behalf;\n"
+    "(c) review what we send you and give us consolidated written "
+    "feedback within the windows this agreement sets; and\n"
+    "(d) pay the Fees when they fall due.\n"
+    "Where a delay is caused by any of these, our dates move by at least "
+    "the length of the delay, and we are not responsible for the "
+    "consequences of that delay.", article="client_responsibilities")
+
+# Sits AFTER the signature block, which is where a schedule belongs.
+# Only renders for a template that actually collected a deliverables
+# list — everything conditional in this file is gated, never blank.
+_SCHEDULE_A_DELIVERABLES = fixed("SCHEDULE A — DELIVERABLES",
+    "This schedule forms part of the agreement.\n\n{deliverables}\n\n"
+    "Anything not listed in this schedule is out of scope until a written "
+    "change order adds it, with its price and any effect on the dates.",
+    requires="deliverables", article="schedule")
 
 _DISPUTE = fixed("DISPUTE RESOLUTION",
     "If a dispute arises under this agreement, the parties will first try "
@@ -988,45 +1222,45 @@ _DISPUTE = fixed("DISPUTE RESOLUTION",
     "raising it in writing. If that fails, they will consider mediation "
     "before either begins a court proceeding — except that either party "
     "may go straight to court to protect confidential information. Where the law allows, the prevailing party in "
-    "any proceeding may recover its reasonable costs.")
+    "any proceeding may recover its reasonable costs.", article="dispute")
 
 _NO_GUARANTEE_PRO = fixed("NO GUARANTEE OF OUTCOME",
     "We will bring professional skill, care, and judgment to this "
     "engagement. Outcomes depend on facts, third parties, and "
     "{outcome_factors}, and no particular result is promised or "
-    "implied.")
+    "implied.", article="no_guarantee")
 
 _OVERDUE = fixed("OVERDUE ACCOUNTS",
     "Amounts more than 15 days past due may accrue a late charge of 1.5% "
     "per month or the maximum the law allows, whichever is less, and work "
     "may pause until the account is current. You are responsible for the "
     "reasonable costs of collecting seriously overdue amounts where the "
-    "law allows.")
+    "law allows.", article="overdue")
 
 _RELATIONSHIP = fixed("RELATIONSHIP OF THE PARTIES",
     "{business_name} is an independent contractor, not an employee, "
     "partner, or agent of {client_name}. Neither party may bind the "
-    "other, and nothing in this agreement creates a joint venture.")
+    "other, and nothing in this agreement creates a joint venture.", article="relationship")
 
 _INDEMNITY = fixed("RESPONSIBILITY FOR CLAIMS",
     "Each party will be responsible for, and will hold the other harmless "
     "from, third-party claims to the extent they arise out of that "
     "party's own negligence, willful misconduct, or breach of this "
     "agreement. Neither party takes on the other's independent "
-    "obligations to third parties.")
+    "obligations to third parties.", article="indemnity")
 
 _LIABILITY_CAP = fixed("LIMITATION OF LIABILITY",
     "Except for breaches of confidentiality, amounts owed under this "
     "agreement, or liabilities that cannot be limited by law, each "
     "party's total liability under this agreement is limited to the fees "
-    "paid or payable for the engagement.")
+    "paid or payable for the engagement.", article="liability")
 
 _CONFIDENTIALITY_MUTUAL = fixed("CONFIDENTIALITY",
     "Each party will protect the other's non-public business information "
     "with at least the care it uses for its own, use it only for this "
     "project, and disclose it only to those who need it for the work or "
     "as required by law. This obligation survives the end of the project "
-    "for two years, and indefinitely for trade secrets. Nothing in this agreement prevents either party from reporting suspected unlawful conduct to a government agency or from making disclosures protected by law.")
+    "for two years, and indefinitely for trade secrets. Nothing in this agreement prevents either party from reporting suspected unlawful conduct to a government agency or from making disclosures protected by law.", article="confidentiality")
 
 # A shared TERMINATION clause. Every agreement's exit was a bare mutual
 # notice with no cure period and no for-cause route — and the consulting
@@ -1039,7 +1273,7 @@ _TERMINATION = fixed("ENDING THIS AGREEMENT",
     "writing. On termination the client pays for work performed through "
     "the termination date, each party returns the other's property and "
     "confidential material, and the confidentiality, ownership and "
-    "responsibility-for-claims terms of this agreement continue to apply.")
+    "responsibility-for-claims terms of this agreement continue to apply.", article="termination")
 
 _BACK_PAGE: Dict[str, List[Dict[str, Any]]] = {
     # CONFIDENTIALITY was missing from three of these entirely. A monthly
@@ -1053,20 +1287,83 @@ _BACK_PAGE: Dict[str, List[Dict[str, Any]]] = {
     #
     # mutual_nda gets _DISPUTE, which it never had — an NDA whose whole
     # value is enforceability shipped with no forum and no fees clause.
-    "engagement_letter":      [_NO_GUARANTEE_PRO, _OVERDUE, _TERMINATION, _DISPUTE, _GENERAL_TERMS],
-    "retainer_agreement":     [_NO_GUARANTEE_PRO, _CONFIDENTIALITY_MUTUAL, _OVERDUE, _TERMINATION, _DISPUTE, _GENERAL_TERMS],
-    "service_agreement":      [_RELATIONSHIP, _CONFIDENTIALITY_MUTUAL, _INDEMNITY, _TERMINATION, _DISPUTE, _GENERAL_TERMS],
-    "consulting_agreement":   [_LIABILITY_CAP, _OVERDUE, _TERMINATION, _DISPUTE, _GENERAL_TERMS],
-    "coaching_agreement":     [_TERMINATION, _DISPUTE, _GENERAL_TERMS],
-    "mutual_nda":             [_DISPUTE, _GENERAL_TERMS],
-    "independent_contractor": [_CONFIDENTIALITY_MUTUAL, _INDEMNITY, _TERMINATION, _DISPUTE, _GENERAL_TERMS],
+    #
+    # REPRESENTATIONS and NOTICES join every agreement in the same spirit:
+    # authority to sign, and a defined way to serve a termination — the
+    # two things a reader looks for when the relationship has gone wrong.
+    "engagement_letter":      [_CLIENT_RESPONSIBILITIES, _NO_GUARANTEE_PRO, _OVERDUE, _TERMINATION, _REPRESENTATIONS, _NOTICES, _DISPUTE, _GENERAL_TERMS],
+    "retainer_agreement":     [_CLIENT_RESPONSIBILITIES, _NO_GUARANTEE_PRO, _CONFIDENTIALITY_MUTUAL, _OVERDUE, _TERMINATION, _REPRESENTATIONS, _NOTICES, _DISPUTE, _GENERAL_TERMS],
+    "service_agreement":      [_CLIENT_RESPONSIBILITIES, _RELATIONSHIP, _CONFIDENTIALITY_MUTUAL, _INDEMNITY, _TERMINATION, _REPRESENTATIONS, _NOTICES, _DISPUTE, _GENERAL_TERMS],
+    "consulting_agreement":   [_CLIENT_RESPONSIBILITIES, _LIABILITY_CAP, _OVERDUE, _TERMINATION, _REPRESENTATIONS, _NOTICES, _DISPUTE, _GENERAL_TERMS],
+    # coaching already carries YOUR COMMITMENT, which is the same article.
+    "coaching_agreement":     [_TERMINATION, _REPRESENTATIONS, _NOTICES, _DISPUTE, _GENERAL_TERMS],
+    "mutual_nda":             [_REPRESENTATIONS, _NOTICES, _DISPUTE, _GENERAL_TERMS],
+    "independent_contractor": [_CONFIDENTIALITY_MUTUAL, _INDEMNITY, _TERMINATION, _REPRESENTATIONS, _NOTICES, _DISPUTE, _GENERAL_TERMS],
 }
 
+# The front page. An instrument opens by saying who is agreeing and what
+# its words mean; every one of these opened at the first operative
+# clause instead. Spliced after the drafted opener (which is a letter
+# greeting and has no heading), so the reading order stays natural.
+#
+# mutual_nda takes recitals only: it defines Confidential Information in
+# its own operative clause, and a second definitions article would have
+# it say the same thing twice in different words — the same reason it
+# has never taken the shared CONFIDENTIALITY clause.
+_FRONT_PAGE: Dict[str, List[Dict[str, Any]]] = {
+    "engagement_letter":      [_RECITALS, _DEFINITIONS],
+    "retainer_agreement":     [_RECITALS, _DEFINITIONS],
+    "service_agreement":      [_RECITALS, _DEFINITIONS],
+    "consulting_agreement":   [_RECITALS, _DEFINITIONS],
+    "coaching_agreement":     [_RECITALS, _DEFINITIONS],
+    "mutual_nda":             [_RECITALS],
+    "independent_contractor": [_RECITALS, _DEFINITIONS],
+}
+
+# Schedules sit after the signature block, which is where a schedule
+# belongs and also why they cannot ride the back page.
+_AFTER_SIGNATURE: Dict[str, List[Dict[str, Any]]] = {}
+
+# Notice addresses. Sticky on our side (a practitioner types their own
+# once and it rides every later document), per-document on the client's.
+# Both optional: build_vars renders whichever exist and says plainly
+# where one is missing rather than leaving a blank line under a name.
+_ADDRESS_FIELDS = [
+    field("business_address", "Your address for notices (optional)",
+          type_="textarea", sticky=True,
+          placeholder="e.g. 400 Monroe St, Suite 210, Detroit, MI 48226"),
+    field("client_address", "Their address for notices (optional)",
+          type_="textarea",
+          placeholder="Where a formal notice should be sent"),
+]
+
+
+def _splice_spine(t: Dict[str, Any]) -> None:
+    """Front page, back page, notice fields, schedules — in that order.
+    Idempotent by construction: called once per template at import."""
+    front = _FRONT_PAGE.get(t["id"])
+    back = _BACK_PAGE.get(t["id"])
+    after = _AFTER_SIGNATURE.get(t["id"])
+    if not (front or back or after):
+        return
+    if front:
+        # After the opener when there is one (a drafted, headingless
+        # greeting), otherwise at the very top.
+        at = 1 if (t["sections"] and not t["sections"][0].get("heading")) else 0
+        t["sections"][at:at] = list(front)
+    if back or after:
+        _sig_block = t["sections"].pop()   # signature block is last
+        t["sections"].extend(list(back or []) + [_sig_block] + list(after or []))
+    # A NOTICES article without somewhere to send the notice is the
+    # clause this whole change exists to stop shipping, so the fields
+    # follow the article rather than the splice that happened to add it.
+    if any(s.get("article") == "notices" for s in t["sections"]):
+        _have = {f["key"] for f in t["fields"]}
+        t["fields"].extend(f for f in _ADDRESS_FIELDS if f["key"] not in _have)
+
+
 for _t in TEMPLATES:
-    _extra = _BACK_PAGE.get(_t["id"])
-    if _extra:
-        _sig_block = _t["sections"].pop()   # signature block is last
-        _t["sections"].extend(list(_extra) + [_sig_block])
+    _splice_spine(_t)
 
 
 # ─── The tenth: Creative Services Agreement ──────────────────────────
@@ -1088,7 +1385,7 @@ _DISPUTE_IP = fixed("DISPUTE RESOLUTION",
     "before either begins a court proceeding — except that either party "
     "may go straight to court to protect confidential information or "
     "intellectual property. Where the law allows, the prevailing party in "
-    "any proceeding may recover its reasonable costs.")
+    "any proceeding may recover its reasonable costs.", article="dispute")
 
 _CREATIVE_TEMPLATE: Dict[str, Any] = {
     "id": "creative_services_agreement",
@@ -1143,9 +1440,10 @@ _CREATIVE_TEMPLATE: Dict[str, Any] = {
         fixed("THE PROJECT",
               "{scope}"),
         fixed("DELIVERABLES",
-              "The deliverables for this project:\n\n{deliverables}\n\n"
-              "Anything not listed is out of scope until it is added by a "
-              "written change order."),
+              "The deliverables for this project are listed in Schedule A, "
+              "which forms part of this agreement. Anything not listed "
+              "there is out of scope until it is added by a written change "
+              "order.", article="deliverables"),
         fixed("FEES AND EXPENSES",
               "The project fee is: {fee}. Reasonable pre-approved costs "
               "incurred on your behalf (such as {expense_examples}) are "
@@ -1214,16 +1512,27 @@ _CREATIVE_TEMPLATE: Dict[str, Any] = {
 }
 
 _CREATIVE_TEMPLATE["sections"].extend([
+    _CLIENT_RESPONSIBILITIES,
     _CONFIDENTIALITY_MUTUAL,
     _LIABILITY_CAP,
+    _REPRESENTATIONS,
+    _NOTICES,
     fixed("GOVERNING LAW",
           "This agreement is governed by the laws of "
           "{state_full}.{venue_clause}",
-          requires="state"),
+          requires="state", article="governing_law"),
     _DISPUTE_IP,
     _GENERAL_TERMS,
     sig(_SIGNATURE_BLOCK),
 ])
+
+# The one template that collects a deliverables LIST gets a real
+# schedule for it, after the signatures where a schedule belongs. The
+# DELIVERABLES article above now points at it instead of carrying the
+# list inline — the same items in two places is how they drift apart.
+_FRONT_PAGE[_CREATIVE_TEMPLATE["id"]] = [_RECITALS, _DEFINITIONS]
+_AFTER_SIGNATURE[_CREATIVE_TEMPLATE["id"]] = [_SCHEDULE_A_DELIVERABLES]
+_splice_spine(_CREATIVE_TEMPLATE)
 
 TEMPLATES.append(_CREATIVE_TEMPLATE)
 TEMPLATE_INDEX[_CREATIVE_TEMPLATE["id"]] = _CREATIVE_TEMPLATE
@@ -1659,6 +1968,110 @@ VERTICAL_LANGUAGE["nonprofit"].update({
     "engagement": "the program",
 })
 VERTICAL_LANGUAGE["ministry"] = dict(VERTICAL_LANGUAGE["nonprofit"])
+
+
+# ─── Articles, and the contract each instrument declares ─────────────
+#
+# The shared clauses carry their article explicitly (they are written
+# once and spliced everywhere). A template's OWN clauses are tagged from
+# their heading here instead, because tagging them inline would mean
+# touching every one of seventeen template literals to record something
+# their heading already says.
+#
+# Several clauses may share an article on purpose: the three mutually
+# exclusive PAYMENT STRUCTURE branches are all the payment article, so
+# "did this document end up with a payment term" has one answer no
+# matter which branch the select landed on — and no answer at all is
+# exactly the hole worth catching.
+
+_HEADING_ARTICLE: Dict[str, str] = {
+    "SCOPE OF ENGAGEMENT": "scope", "RETAINED SERVICES": "scope",
+    "SERVICES": "scope", "THE ENGAGEMENT": "scope",
+    "THE PROGRAM": "scope", "THE PROJECT": "scope",
+    "FEES": "fees", "FEES AND BILLING": "fees",
+    "FEES AND EXPENSES": "fees", "RETAINER FEE": "fees",
+    "INVESTMENT": "fees", "WORK BEYOND THE RETAINER": "fees",
+    "PAYMENT": "payment", "PAYMENT STRUCTURE": "payment",
+    "RETAINER": "payment", "THE BALANCE": "payment",
+    "REVISIONS AND CHANGE ORDERS": "revisions", "CHANGES": "revisions",
+    "ACCEPTANCE AND COMPLETION": "acceptance",
+    "CLIENT DELAY": "delay",
+    "YOUR COMMITMENT": "client_responsibilities",
+    "OWNERSHIP": "ownership", "OWNERSHIP OF WORK": "ownership",
+    "WORK PRODUCT": "ownership",
+    "PORTFOLIO": "portfolio",
+    "CLIENT MATERIALS": "materials",
+    "THIRD-PARTY SERVICES": "third_party",
+    "CONFIDENTIALITY": "confidentiality",
+    "CONFIDENTIAL INFORMATION": "confidentiality",
+    "WARRANTY AND LIABILITY": "liability",
+    "RELATIONSHIP": "relationship", "INDEPENDENT CONTRACTOR": "relationship",
+    "NO GUARANTEE": "no_guarantee",
+    "TERM": "termination", "TERM AND RENEWAL": "termination",
+    "TERM AND TERMINATION": "termination", "TERMINATION": "termination",
+    "ENDING THE ENGAGEMENT": "termination", "ENDING THE PROGRAM": "termination",
+    "GOVERNING LAW": "governing_law",
+}
+
+for _t in TEMPLATES:
+    for _s in _t["sections"]:
+        if not _s.get("article") and _s.get("heading"):
+            _a = _HEADING_ARTICLE.get(_s["heading"])
+            if _a:
+                _s["article"] = _a
+
+# What each instrument asserts every rendered copy of itself contains.
+#
+# ONLY articles that survive the minimal fill are declared. GOVERNING
+# LAW is gated on an optional state field on most of these, so it is
+# deliberately absent from the lists below: a contract that declares
+# something a blank optional field removes is a checker that cries wolf
+# on its own paper, and a checker nobody believes is worse than none.
+#
+# The letters and the nonprofit governance documents declare nothing.
+# They are not instruments and are not held to an instrument's shape.
+_CONTRACTS: Dict[str, List[str]] = {
+    "engagement_letter": [
+        "recitals", "definitions", "scope", "fees", "payment",
+        "client_responsibilities", "no_guarantee", "overdue", "termination",
+        "representations", "notices", "dispute", "general", "signature"],
+    "retainer_agreement": [
+        "recitals", "definitions", "scope", "fees", "client_responsibilities",
+        "no_guarantee", "confidentiality", "overdue", "termination",
+        "representations", "notices", "dispute", "general", "signature"],
+    "service_agreement": [
+        "recitals", "definitions", "scope", "payment", "ownership",
+        "liability", "client_responsibilities", "relationship",
+        "confidentiality", "indemnity", "termination", "representations",
+        "notices", "dispute", "general", "signature"],
+    "consulting_agreement": [
+        "recitals", "definitions", "scope", "fees", "confidentiality",
+        "ownership", "no_guarantee", "client_responsibilities", "liability",
+        "overdue", "termination", "representations", "notices", "dispute",
+        "general", "signature"],
+    "coaching_agreement": [
+        "recitals", "definitions", "scope", "fees",
+        "client_responsibilities", "confidentiality", "termination",
+        "representations", "notices", "dispute", "general", "signature"],
+    "mutual_nda": [
+        "recitals", "confidentiality", "termination", "representations",
+        "notices", "dispute", "general", "signature"],
+    "independent_contractor": [
+        "recitals", "definitions", "scope", "payment", "relationship",
+        "ownership", "confidentiality", "indemnity", "termination",
+        "representations", "notices", "dispute", "general", "signature"],
+    "creative_services_agreement": [
+        "recitals", "definitions", "scope", "deliverables", "fees",
+        "payment", "revisions", "acceptance", "delay", "ownership",
+        "materials", "third_party", "client_responsibilities",
+        "confidentiality", "liability", "representations", "notices",
+        "dispute", "general", "signature", "schedule"],
+}
+
+for _tid, _articles in _CONTRACTS.items():
+    _tpl = TEMPLATE_INDEX.get(_tid)
+    if _tpl:
+        _tpl["contract"] = list(_articles)
 
 
 # ─── Which paper belongs in which room ───────────────────────────────

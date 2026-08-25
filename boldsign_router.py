@@ -116,6 +116,9 @@ class SendBody(BaseModel):
     # one matter — and because a business with no work pipeline (a
     # salon) has nothing to attach it to.
     module_entry_id: Optional[str] = None
+    # See doc_guard: a blocked document can still be sent, deliberately,
+    # and the override is recorded rather than silent.
+    override_blockers: bool = False
 
 
 @router.post("/send")
@@ -127,6 +130,23 @@ async def esign_send(body: SendBody,
     if "@" not in email:
         raise HTTPException(400, "signer_email required")
     title = (body.title or "Agreement").strip()[:120]
+
+    # The last door, and the one that matters most: after this the
+    # document is in front of somebody being asked to sign it. When the
+    # caller names the queue row it came from, the auditor reads the
+    # CURRENT body — catching an edit made after generation. A send with
+    # no source_ref is an upload we never wrote and cannot vouch for, so
+    # there is nothing to check and nothing is claimed.
+    if (body.source_ref or "").strip():
+        import doc_guard
+        try:
+            row = doc_guard.load_document(body.source_ref.strip(), body.business_id)
+        except HTTPException:
+            row = None
+        if row:
+            doc_guard.require_sendable(
+                row, business_id=body.business_id, actor_id=str(user.id),
+                override=bool(body.override_blockers), door="esign")
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         pdf = await c.get(body.pdf_url)
