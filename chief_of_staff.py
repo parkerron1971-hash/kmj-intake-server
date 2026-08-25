@@ -5582,6 +5582,50 @@ async def _process_autopilot_for_draft(
         },
         "source": "chief_autopilot",
     })
+
+    # THE UNATTENDED SENDER JOINS THE LEDGER.
+    #
+    # _should_auto_approve's own docstring calls this path "THE unattended
+    # sender", and until now it was the only unattended dispatcher that
+    # wrote no audit_log row. The scheduler, the workflow runner and the
+    # trust sweep all write one; this path wrote an `events` row and a
+    # chief_activity entry instead. Neither is append-only, neither is
+    # anchored, and neither carries the rule that permitted the send — so
+    # the one action that reaches a client with nobody watching was the
+    # one action absent from the tamper-evident record.
+    #
+    # HOLDS ARE DELIBERATELY NOT RECORDED. A held draft keeps status
+    # 'draft' and is re-swept every ten minutes for as long as it sits
+    # inside the fifteen-minute lookback, so auditing the hold would write
+    # the same row six times an hour, for every held draft, forever. The
+    # ledger records what was EXECUTED. A draft nobody sent is already
+    # visible as a draft nobody sent.
+    #
+    # authorized_by names the autopilot rule that allowed it —
+    # 'full_auto', 'routine_checkin', 'routine_reminder'. The policy
+    # engine has already run and allowed by this point (it is the first
+    # thing _should_auto_approve does); what this field adds is WHICH
+    # autopilot setting turned a permitted action into an automatic one.
+    try:
+        import audit_log
+        await asyncio.to_thread(
+            audit_log.record, biz["id"],
+            actor_type="system", actor_id="autopilot",
+            verb="approve_draft",
+            ok=bool(result.get("ok")),
+            error=(None if result.get("ok")
+                   else str(result.get("reason") or "send failed")[:500]),
+            summary=(f"Auto-approved {agent_name}: "
+                     f"{str(draft_row.get('subject') or 'draft')[:80]}"),
+            payload={"queue_id": str(draft_row.get("id") or ""),
+                     "agent": agent_name,
+                     "autopilot_reason": reason,
+                     "sent": bool(result.get("sent"))},
+            target_type="agent_queue", target_id=str(draft_row.get("id") or ""),
+            source="autopilot", authorized_by=f"autopilot:{reason}")
+    except Exception as e:
+        print(f"[Chief Autopilot] audit write failed: {e}", flush=True)
+
     print(f"[Chief Autopilot] Auto-approved {agent_name} draft: {reason}", flush=True)
     return result
 

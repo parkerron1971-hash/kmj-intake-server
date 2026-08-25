@@ -312,6 +312,45 @@ EXECUTABLE_PROPOSAL_TYPES = {
     "propose_content_draft",
 }
 
+# What each proposal type ACTUALLY DOES, named as the Chief verb that does
+# the same thing — so the trusted sweep can ask policy_engine the same
+# question every other unattended path asks.
+#
+# WHY A MAP AND NOT REGISTRY ENTRIES. The obvious move is to classify
+# these five in action_registry beside the other 149. It is not available:
+# that registry is pinned to ACTION_HANDLERS in BOTH directions
+# (test_action_registry asserts no verb in one is missing from the other,
+# and that coverage()['total'] equals the handler count), deliberately, so
+# it stays a mirror of Chief's verb set rather than a general-purpose
+# classification table. Adding `propose_followup_email` there would break
+# the pin that keeps the registry honest.
+#
+# The alternative — a second classification table with its own effects and
+# reversibility — is the drift this codebase keeps paying for. So instead
+# of classifying these afresh, each one NAMES THE VERB IT IS EQUIVALENT
+# TO, and the single registry answers for both. A proposal cannot acquire
+# a gentler classification than the action it performs.
+#
+# The mapping is a human judgment per line, same discipline as the
+# registry itself:
+_PROPOSAL_EQUIVALENT_VERB = {
+    # _exec_send_template_email calls send_via_resend directly. The mail
+    # is gone the moment this runs — that is draft_and_send exactly, and
+    # draft_and_send is class C and in CLIENT_FACING for the same reason.
+    "propose_followup_email":    "draft_and_send",
+    # _exec_create_task inserts one tasks row. create_task, class A.
+    "propose_task":              "create_task",
+    "propose_schedule_followup": "create_task",
+    # v1 files the draft AS A TASK for the practitioner to post from their
+    # content surface — it publishes nothing, so it is create_task and not
+    # publish_post. If direct publish ever lands (Phase C), this line has
+    # to move to publish_post with it.
+    "propose_content_draft":     "create_task",
+    # _exec_apply_tag PATCHes contacts.tags — an edit to a contact row,
+    # with the prior value re-enterable. update_contact, class A.
+    "propose_contact_tag":       "update_contact",
+}
+
 
 def _trust_stats(biz: str) -> Dict[str, Dict[str, Any]]:
     """Per proposal-type approval tallies across BOTH proposal tables,
@@ -526,6 +565,54 @@ def _run_trusted_sweep_sync() -> None:
                 f"/chief_proposals?business_id=eq.{biz}&status=eq.pending"
                 f"&proposal_type=eq.{ptype}&order=created_at.asc"
                 f"&select=*&limit={budget}") or []
+            # THE SHARED EVALUATOR, on the last acting path that never
+            # called it. This sweep executes granted proposals with nobody
+            # watching — one of them mails a client — and its gates were
+            # entirely its own: the graduation ratio, the live re-check,
+            # the per-business cap. Real gates, but none of them knows
+            # what a regulated vertical is, and the promise policy_engine
+            # exists to keep is that a therapist's account does not
+            # contact clients unattended. A standing trust grant is not
+            # the practitioner asking for THIS send, so prompted=False.
+            #
+            # A refusal leaves the proposal PENDING, exactly as an
+            # execution failure does. The grant is not revoked and nothing
+            # is marked failed: the practitioner opens their queue and
+            # finds it waiting for them, which is the propose-and-wait
+            # behaviour this sweep is supposed to fall back to.
+            verdict = None
+            try:
+                import policy_engine
+                verdict = policy_engine.evaluate(
+                    biz, verb=_PROPOSAL_EQUIVALENT_VERB.get(ptype, ptype),
+                    surface="trust-track", prompted=False, biz_row=biz_row)
+            except Exception as e:
+                # FAIL CLOSED, matching chief_scheduler and
+                # workflow_engine. A safety check that cannot run is not
+                # permission to send.
+                logger.warning(f"[trusted] policy check failed {biz}/{ptype}: {e}")
+                verdict = None
+            if verdict is None or not verdict.allowed:
+                reason = (verdict.reason if verdict is not None
+                          else "action safety check unavailable")
+                rule = (verdict.rule if verdict is not None
+                        else "policy:unavailable")
+                logger.info(f"[trusted] {biz} {ptype}: refused — {rule}")
+                # Audited ONCE per sweep per type, not once per pending
+                # proposal: a paused business with forty pending rows
+                # would otherwise write forty identical refusals every ten
+                # minutes. The refusal is a fact about the category.
+                import audit_log
+                audit_log.record(
+                    biz, actor_type="system", actor_id="trust-track",
+                    verb=str(ptype)[:80], ok=False, error=reason[:500],
+                    summary=f"Held {len(pending)} {ptype} — {rule}",
+                    payload={"proposal_type": ptype,
+                             "held_count": len(pending),
+                             "authorized_by": rule},
+                    source="system", authorized_by=rule)
+                continue
+
             for p in pending:
                 try:
                     _execute_proposal(biz, p)
@@ -543,7 +630,7 @@ def _run_trusted_sweep_sync() -> None:
                         summary=f"Autonomous {ptype} failed — left pending for review",
                         payload={"proposal_id": p.get("id"),
                                  "proposal_type": ptype},
-                        source="system")
+                        source="system", authorized_by=verdict.rule)
                     continue
                 sb_clients.sb_patch_as_service(
                     f"/chief_proposals?id=eq.{p['id']}",
@@ -567,7 +654,7 @@ def _run_trusted_sweep_sync() -> None:
                         summary=f"Handled autonomously: {str(label)[:90]}",
                         payload={"proposal_id": p.get("id"),
                                  "proposal_type": ptype},
-                        source="system"):
+                        source="system", authorized_by=verdict.rule):
                     logger.warning(f"[trusted] audit write failed {biz}/{ptype}")
                 if biz_row.get("owner_id"):
                     try:

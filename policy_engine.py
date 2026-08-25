@@ -19,14 +19,17 @@ strings already existed and were all discarded.
 
 WHAT THIS DELIBERATELY DOES NOT DO. It is not a new gate that silently
 changes what the product allows. Every existing block stays exactly as it
-was, and the engine BLOCKS only three things:
+was, and the engine BLOCKS only four things:
 
   1. verbs the action registry does not classify (drift fails closed,
      matching _gate_class_c),
   2. bulk verbs running unattended (the registry's own standing rule,
      which the scheduler and workflow paths were quietly violating),
   3. client-facing actions running unattended for a REGULATED vertical
-     whose owner never enabled that (see below).
+     whose owner never enabled that (see below),
+  4. ANY unattended action for a business whose practitioner has paused
+     automations (see is_paused — the switch that four of the five paths
+     that act have never read).
 
 Everything else is RECORDED, not refused — including class-C verbs on a
 recurrence. Recurring invoices are a real feature; whether they should
@@ -132,6 +135,36 @@ def client_facing_autonomy(biz: Dict[str, Any]) -> str:
     return "disabled" if is_regulated(biz) else "enabled"
 
 
+def is_paused(biz: Dict[str, Any]) -> bool:
+    """Has the practitioner switched their own automations off?
+
+    settings.automations_paused has existed since the rules arc and was
+    read by exactly two call sites — rules_engine's trigger loop and the
+    trusted-autonomy sweep. The scheduler, the workflow runner and the
+    autopilot sweep never consulted it, so a practitioner who paused
+    automations still had Chief executing scheduled actions, advancing
+    workflows and sending auto-approved email. A switch that stops one
+    automation in five is worse than no switch at all, because the person
+    who flipped it believes they have stopped.
+
+    Delegates to rules_engine, which has owned this predicate from the
+    start — re-reading the same setting here is precisely the drift this
+    module exists to end. Lazy import: rules_engine is heavy and this is
+    on the hot path of every write.
+
+    The fallback reads the flag off the row we are already holding rather
+    than defaulting either way. Guessing "paused" on an import error
+    would stop the platform; guessing "running" would silently discard
+    the practitioner's instruction. Reading the row does neither.
+    """
+    try:
+        from rules_engine import business_paused
+        return bool(business_paused(biz))
+    except Exception as e:
+        logger.warning(f"[policy] pause predicate unavailable, reading directly: {e}")
+        return bool(((biz or {}).get("settings") or {}).get("automations_paused"))
+
+
 def role_of(business_id: str, user_id: Optional[str]) -> Optional[str]:
     """Best-effort seat role. Never raises: the engine records what it
     knows, and an unavailable role must not take an action down."""
@@ -183,6 +216,33 @@ def evaluate(business_id: str, *, verb: str, surface: str,
     if effect in ("read", "ui"):
         return Verdict(True, f"{surface}:{effect}", "Read-only action.", role)
 
+    # The business row is resolved BEFORE the unattended rules now, because
+    # the pause check below needs it. Reads still return above without ever
+    # touching the database, which is what kept this cheap.
+    biz = _biz(business_id, biz_row)
+
+    # THE PAUSE SWITCH, finally read on every path that acts.
+    #
+    # Checked here rather than at five call sites so that the sixth
+    # unattended path — whatever it turns out to be — inherits it without
+    # anyone remembering to add it. That is the same argument the bulk
+    # rule lost on the scheduler and workflow paths before Stage 0.
+    #
+    # FIRST among the unattended rules, so the refusal names the reason
+    # the practitioner will recognise. "You paused automations" is an
+    # answer they can act on; "bulk verbs cannot run unattended" is a true
+    # sentence about a state they already turned off.
+    #
+    # Prompted actions are deliberately untouched: pausing automations
+    # pauses what runs on its own, not what the practitioner asks for by
+    # hand. Someone who pauses their automations and then tells Chief to
+    # send an invoice has not contradicted themselves.
+    if not prompted and is_paused(biz):
+        return Verdict(False, "business:automations_paused",
+                       "Automations are paused for this business, so this "
+                       "did not run. Turn them back on in Settings, or do "
+                       "it yourself and it will go through.", role)
+
     # Bulk is never autonomy-eligible at any class — the registry's rule,
     # unenforced on the scheduler and workflow paths until Stage 0/1b.
     if bulk and not prompted:
@@ -190,8 +250,6 @@ def evaluate(business_id: str, *, verb: str, surface: str,
                        f"{verb} affects many records at once and cannot run "
                        "unattended. Open the screen and confirm the list.",
                        role)
-
-    biz = _biz(business_id, biz_row)
 
     # THE PROMISE. A regulated business whose owner has not enabled
     # client-facing autonomy does not get Chief contacting clients on its
