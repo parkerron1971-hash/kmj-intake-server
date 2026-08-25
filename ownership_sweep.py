@@ -123,6 +123,23 @@ PUBLIC_BY_DESIGN = frozenset({
 #       via _owns_business(), which returns a bool instead of raising, so
 #       the gate rule cannot see it. Every deny falls back to OpenAI.
 #
+#   whisper_proxy.transcribe
+#       the same shape as its sibling above, added 2026-08-24. It is
+#       behind require_user, and business_id is OPTIONAL and used for
+#       exactly one thing: naming the tenant on the api_usage row, so
+#       19.8% of the AI bill stops being unattributable. It gates
+#       nothing and reads no business data — the id never reaches a
+#       query. It goes through the same _owns_business() bool, so a
+#       caller naming someone else's business gets their row attributed
+#       to nobody rather than to that business.
+#
+#       Deliberately does NOT raise on a mismatch, matching text_to_speech:
+#       a stale business_id in the frontend would otherwise break voice
+#       INPUT outright, and ~94% of Chief turns now arrive by voice. The
+#       precedent there is "every deny falls back rather than silencing
+#       the Chief"; failing a transcription to protect an analytics field
+#       would be the wrong trade in the other direction.
+#
 #   auditor_portal.auditor_navigate
 #       built for a reader with a link and no account. It also never sees
 #       a row: the model receives the question and a verb vocabulary and
@@ -136,6 +153,7 @@ VERIFIED_BY_HAND = frozenset({
     ("chief_jobs", "list_jobs"),
     ("chief_jobs", "retry_job"),
     ("whisper_proxy", "text_to_speech"),
+    ("whisper_proxy", "transcribe"),
     ("auditor_portal", "auditor_navigate"),
     ("vertical_intelligence_router", "get_vertical"),
 })

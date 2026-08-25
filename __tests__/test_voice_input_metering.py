@@ -114,22 +114,7 @@ def inspect_source(fn):
     return inspect.getsource(fn)
 
 
-# ─── The prompt-shape hole this same sweep closed ────────────────────
-
-def test_chief_failure_rows_record_their_prompt_shape():
-    """_call_claude's three ERROR paths logged without task_type, so a
-    failed turn could not be traced to the prompt it actually sent —
-    the exact question #484 added prompt_shape to answer. Zero-cost
-    rows, but the gap made the shape column read as incomplete."""
-    import inspect
-    import chief_of_staff
-    src = inspect.getsource(chief_of_staff)
-    start = src.index("async def _call_claude")
-    body = src[start:start + 60000]
-    logs = body.count('endpoint="/chief/backend"')
-    shapes = body.count("task_type=prompt_shape")
-    assert logs >= 4, f"expected the /chief/backend log sites, found {logs}"
-    assert shapes >= logs - 1, (
-        f"{logs} log sites but only {shapes} record prompt_shape — "
-        "a failure row that cannot name its prompt shape is the hole "
-        "this test exists to keep closed")
+# The other hole this sweep closed — _call_claude's three ERROR paths
+# logging without task_type — is asserted in test_chief_prompt_shape.py,
+# which owns that invariant. Pinning it in two places would let the two
+# copies drift into disagreeing about the same rule.

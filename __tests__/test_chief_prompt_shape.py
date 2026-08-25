@@ -51,10 +51,27 @@ class TestTheShapeIsRecorded:
         # uncached prompt would be reported as an extended-cache one.
         assert 'if _extended and prompt_shape != "uncached-single"' in SRC
 
-    def test_both_success_paths_carry_it(self):
+    def test_every_usage_row_carries_it(self):
         """Streaming and non-streaming both log usage. Tagging one and
-        not the other would split the data in half without saying so."""
-        assert SRC.count("task_type=prompt_shape") == 2
+        not the other would split the data in half without saying so.
+
+        WIDENED 2026-08-24, from `count(...) == 2` to every log site.
+        The original number was right for the two SUCCESS paths, but
+        _call_claude has five log sites and the three ERROR paths were
+        writing rows with no shape at all — so a failed turn could not be
+        traced to the prompt it actually sent, which is the one question
+        this whole feature exists to answer.
+
+        Asserted as an invariant over the log sites rather than as a
+        literal count, because a literal is what went stale here: a new
+        log site would silently satisfy `== 2` by not being counted."""
+        sites = SRC.count('endpoint="/chief/backend"')
+        tagged = SRC.count("task_type=prompt_shape")
+        assert sites >= 2, f"expected the /chief/backend log sites, found {sites}"
+        assert tagged == sites, (
+            f"{sites} usage rows are written but only {tagged} name their "
+            "prompt shape — an untagged row is invisible to the SELECT this "
+            "feature was built for")
 
 
 class TestTheSilentFailureIsMadeLoud:
