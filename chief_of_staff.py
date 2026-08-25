@@ -903,6 +903,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                               f"{resp.status_code} {body[:300]}")
                           await log_api_usage(endpoint="/chief/backend", model=model,
                               input_tokens=0, output_tokens=0, business_id=business_id,
+                              task_type=prompt_shape,
                               duration_ms=int(time.time() * 1000) - started_ms, ok=False,
                               error=f"{resp.status_code}")
                           fb_reason = f"stream {resp.status_code}"
@@ -957,6 +958,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                   logger.warning(f"Claude stream failed (attempt {attempt + 1}/3): {e}")
                   await log_api_usage(endpoint="/chief/backend", model=model,
                       input_tokens=in_tok, output_tokens=out_tok, business_id=business_id,
+                      task_type=prompt_shape,
                       duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=str(e))
                   partial = "".join(full_parts).strip()
                   if partial or turn_streamed:
@@ -1082,6 +1084,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
       if resp is None:
           await log_api_usage(endpoint="/chief/backend", model=model,
               input_tokens=0, output_tokens=0, business_id=business_id,
+              task_type=prompt_shape,
               duration_ms=int(time.time() * 1000) - started_ms, ok=False,
               error=last_err or "exhausted retries")
           # Backup Brain (#103, 2026-07-12). Anthropic has now failed three

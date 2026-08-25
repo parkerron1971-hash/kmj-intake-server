@@ -44,6 +44,7 @@ from pydantic import BaseModel
 
 from api_usage_logger import log_api_usage
 from auth_supabase import AuthedUser, optional_user, require_user
+import pricing_config
 import rate_limit
 import sb_clients
 from speech_text import normalize_for_speech
@@ -192,9 +193,15 @@ async def transcribe(
     request: Request,
     audio: UploadFile = File(...),
     language: Optional[str] = Form(None),
+    business_id: Optional[str] = Form(None),
     user: AuthedUser = Depends(require_user),
 ):
-    """Transcribe an uploaded audio blob via OpenAI Whisper."""
+    """Transcribe an uploaded audio blob via OpenAI Whisper.
+
+    `business_id` is OPTIONAL and only ever used to attribute the usage
+    row — same ownership rail as /ai/tts (never trust a bare body field).
+    A caller that omits it still transcribes; the row just lands with a
+    user_id and no tenant, which is what every row looked like before."""
     _voice_rate_guard(request)
     key = _openai_key()
     if not key:
@@ -247,11 +254,27 @@ async def transcribe(
     # Metering (beta-readiness audit): voice input was completely dark.
     # Whisper is $0.006/min; estimate minutes from the byte size of the
     # (opus/webm voice) blob — ~2.5 KB/sec is a reasonable voice rate.
+    #
+    # ATTRIBUTION (2026-08-24). The row was written with neither a
+    # business_id nor a user_id, so every one of them was unattributable.
+    # That is not a rounding error: measured over 2026-08-10..24, /ai/whisper
+    # was 370 calls and $9.12 — 19.8% of the platform's entire AI bill, and
+    # the single largest line no per-tenant control could see. spend_guard's
+    # per-business ceiling cannot count what carries no business, and the
+    # Costs view cannot show whose voice it was.
+    #
+    # Roughly 94% of Chief turns now arrive by voice (370 whisper calls
+    # against 394 /chief/backend turns in the same window), so this is the
+    # normal path, not an edge one.
     try:
         est_minutes = max(len(audio_bytes) / 2500.0 / 60.0, 1 / 60.0)
+        biz = (business_id or "").strip() or None
+        metered_biz = biz if (biz and _owns_business(user.id, biz)) else None
         await log_api_usage(
             endpoint="/ai/whisper", model=WHISPER_MODEL,
             input_tokens=0, output_tokens=0,
+            business_id=metered_biz, user_id=user.id,
+            units=pricing_config.voice_input_price(),
             cost_cents_override=round(est_minutes * 0.6, 4))  # $0.006/min = 0.6c/min
     except Exception:
         pass
