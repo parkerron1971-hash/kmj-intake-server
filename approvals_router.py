@@ -62,6 +62,13 @@ class ApproveBody(BaseModel):
     subject: Optional[str] = None
     body: Optional[str] = None
     source: Optional[str] = None  # desktop|mobile — audit display only
+    # Send a document the auditor has blockers on. A deterministic rule
+    # can still be wrong about one particular document, and a
+    # practitioner who cannot send their own paper will send it from
+    # somewhere the system never sees. So the gate yields — and
+    # doc_guard records the override as an event, because a bypass
+    # nobody can find afterwards would make the gate worse than absent.
+    override_blockers: bool = False
 
 
 class DismissBody(BaseModel):
@@ -135,10 +142,20 @@ async def approve_draft_endpoint(
     error: Optional[str] = None
     try:
         async with httpx.AsyncClient() as client:
-            delivery = await chief_of_staff._do_approve_one(client, biz, item)
+            delivery = await chief_of_staff._do_approve_one(
+                client, biz, item,
+                override_blockers=bool(payload.override_blockers))
     except Exception as e:  # the "failed": True seam — audited, then surfaced
         error = str(e)[:300]
         logger.exception(f"[approvals] approve {queue_id} failed")
+
+    # A document stopped by the auditor is not a failure — it is the
+    # gate doing its job, and it needs its own status so the room can
+    # show the findings and offer the override. 409, not 500: nothing
+    # was sent and the draft is exactly as it was.
+    if (delivery or {}).get("reason") == "blocked":
+        raise HTTPException(409, (delivery.get("blocked")
+                                  or {"error": "document_blocked"}))
 
     ok = error is None and bool(delivery.get("ok"))
     label = chief_of_staff._approve_label(item.get("subject"), delivery or {})

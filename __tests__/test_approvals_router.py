@@ -154,7 +154,7 @@ def test_failed_approve_is_audited_too(fake, monkeypatch):
     fb = fake
     _draft(fb, "q1")
 
-    async def boom(client, biz, item):
+    async def boom(client, biz, item, **kw):
         raise RuntimeError("resend exploded")
 
     monkeypatch.setattr(chief_of_staff, "_do_approve_one", boom)
@@ -229,9 +229,9 @@ def test_endpoint_runs_through_the_verbs_core(fake, monkeypatch):
     calls = []
     real = chief_of_staff._do_approve_one
 
-    async def spy(client, biz, item):
+    async def spy(client, biz, item, **kw):
         calls.append(item["id"])
-        return await real(client, biz, item)
+        return await real(client, biz, item, **kw)
 
     monkeypatch.setattr(chief_of_staff, "_do_approve_one", spy)
     _approve("b1", "q1", "mg1")

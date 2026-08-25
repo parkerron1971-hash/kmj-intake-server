@@ -342,17 +342,21 @@ def test_first_contract_teaches_then_second_fills_itself(patchable, wired):
     fake = patchable
     biz = fake.rows("businesses")[0]
 
-    # FIRST document: fee + state given explicitly → generated AND saved.
+    # FIRST document: fee + how-the-fee-works + state given explicitly
+    # → generated AND saved. fee_model is required (the system will not
+    # guess how somebody charges) and sticky, so it is asked once here
+    # and then rides every later document like the rest of them.
     out = asyncio.run(handle_generate_document(None, biz, {
         "type": "generate_document", "template": "engagement_letter",
         "contact_name": "Dana",
         "params": {"scope": "The Northside lease", "fee": "$300/hour",
-                   "state": "Georgia"},
+                   "fee_model": "hourly", "state": "Georgia"},
     }))
     assert not out.get("failed")
     assert "I've saved" in out["result"] and "fee" in out["result"]
     saved = fake.rows("businesses")[0]["settings"]["doc_defaults"]
-    assert saved == {"fee": "$300/hour", "state": "Georgia"}
+    assert saved == {"fee": "$300/hour", "fee_model": "hourly",
+                     "state": "Georgia"}
     # engagement facts are never saved
     assert "scope" not in saved
 

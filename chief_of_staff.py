@@ -5771,7 +5771,8 @@ async def _evaluate_escalations(client, biz: Dict[str, Any]) -> int:
     return created
 
 
-async def _do_approve_one(client, biz: Dict[str, Any], item: Dict) -> Dict[str, Any]:
+async def _do_approve_one(client, biz: Dict[str, Any], item: Dict,
+                          *, override_blockers: bool = False) -> Dict[str, Any]:
     """Approve a single queue item: PATCH status, attempt Resend send,
     emit event, bump health. Returns delivery info for the caller to
     surface in the action's `result`/`label`.
@@ -5782,6 +5783,27 @@ async def _do_approve_one(client, biz: Dict[str, Any], item: Dict) -> Dict[str, 
     result: Dict[str, Any] = {"ok": False, "sent": False, "reason": None, "to_email": None, "to_name": None, "provider_id": None}
     if not qid:
         return result
+
+    # A generated document gets read once more on its way out.
+    #
+    # The gate lives HERE, in the shared core, rather than at the HTTP
+    # endpoint — because this function has three callers (the approvals
+    # endpoint, Chief's approve verb, and the auto-approve path), and a
+    # gate on one of them is a gate on none of them. No-ops for every
+    # action_type except 'document', and fails OPEN on its own errors.
+    # An override goes THROUGH the guard, never around it — that is the
+    # call that records the override event.
+    try:
+        import doc_guard
+        doc_guard.require_sendable(
+            item, business_id=biz_id,
+            actor_id=str(biz.get("owner_id") or ""),
+            override=bool(override_blockers), door="approve")
+    except HTTPException as e:
+        detail = e.detail if isinstance(e.detail, dict) else {}
+        return {**result, "reason": "blocked",
+                "blocked": detail,
+                "message": detail.get("message") or "this document has blockers"}
 
     now_iso = datetime.now(timezone.utc).isoformat()
 

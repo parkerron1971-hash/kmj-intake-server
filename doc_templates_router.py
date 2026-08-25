@@ -52,14 +52,49 @@ logger = logging.getLogger("doc_templates_router")
 
 router = APIRouter(prefix="/doctemplates", tags=["doctemplates"])
 
-# Short personalization paragraphs with explicit briefs — a small model
-# is plenty, and the fallbacks make failure invisible anyway.
-DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+# Document drafting rides the `draft` lane, like every other set of
+# words that reaches a client.
+#
+# It used to be a hardcoded Haiku constant, on the reasoning that these
+# are "short personalization paragraphs" and "a small model is plenty".
+# chief_models had already settled the question the other way for every
+# other drafter — the `draft` lane exists because of Kevin's 2026-07-03
+# ruling that "drafts ride the conversational tier, so quality of the
+# words that reach clients never drops" — and a signed agreement is the
+# most client-facing paper the system produces. It was exempt from that
+# ruling by accident, not by decision.
+#
+# Still env-overridable two ways: DOCTEMPLATES_MODEL pins this call
+# alone, CHIEF_MODEL_DRAFT moves every drafter together.
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
+
+# One drafted section is a paragraph; the whole set used to share a
+# single 1000-token ceiling, so a template with several of them was
+# rationing tokens across sections that had nothing to do with each
+# other — and the last one in the JSON object was the one that got
+# truncated. Budget per section, with a floor and a ceiling.
+TOKENS_PER_DRAFTED_SECTION = 700
+MIN_DRAFT_TOKENS = 1200
+MAX_DRAFT_TOKENS = 4000
 
 
 def _model() -> str:
-    return (os.environ.get("DOCTEMPLATES_MODEL") or "").strip() or DEFAULT_MODEL
+    pinned = (os.environ.get("DOCTEMPLATES_MODEL") or "").strip()
+    if pinned:
+        return pinned
+    try:
+        import chief_models
+        return chief_models.model_for("draft")
+    except Exception:
+        # chief_models is the source of truth; this is only so a broken
+        # import cannot take document generation down with it.
+        return "claude-sonnet-5"
+
+
+def _draft_budget(section_count: int) -> int:
+    return max(MIN_DRAFT_TOKENS,
+               min(MAX_DRAFT_TOKENS,
+                   TOKENS_PER_DRAFTED_SECTION * max(1, section_count)))
 
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
@@ -220,8 +255,7 @@ async def _draft_sections(business: Dict[str, Any], template: Dict[str, Any],
     fallbacks carry the document; a template layer must never be down."""
     todo = [(i, s) for i, s in enumerate(template["sections"])
             if s["kind"] == "drafted"
-            and not (s.get("requires")
-                     and not (variables.get(s["requires"]) or "").strip())]
+            and doc_templates.section_renders(s, variables)]
     if not todo or not llm_call.api_key():
         return {}
 
@@ -243,7 +277,7 @@ async def _draft_sections(business: Dict[str, Any], template: Dict[str, Any],
         "ONLY a JSON object mapping each section number to its text, e.g. "
         '{"0": "..."}.')
     payload = {
-        "model": _model(), "max_tokens": 1000, "system": system,
+        "model": _model(), "max_tokens": _draft_budget(len(todo)), "system": system,
         "messages": [{"role": "user", "content":
                       f'Document: {template["title"]}, dated {variables["date"]}, '
                       f'from {variables["business_name"]} to {variables["client_name"]}.'
@@ -395,8 +429,29 @@ async def generate_document_core(business: Dict[str, Any],
     # in the app (dialog, queue, Chief's reply) and never prints on the
     # client's document. Lawyers see none (they are the counsel).
     is_lawyer = (business.get("type") or "").lower() == "lawyer"
+    # Rendered ONCE, and both the body and the audit are built from it.
+    # The auditor used to be handed template["sections"] — the raw
+    # source — so it was reading clauses that still said {fee} when it
+    # looked for conflicting amounts, and drafted sections, which have
+    # no "text" key at all, arrived as empty strings. The money rule
+    # could not fire on a real document and the model's own paragraphs,
+    # the least constrained prose in the system, were never scanned.
+    rendered = doc_templates.render_sections(template, variables, drafted)
     doc_body = doc_templates.assemble(
         template, variables, drafted, include_review_note=False)
+
+    # Read the finished text before the client does.
+    #
+    # Deterministic only: no model call, no network, no metering, and no
+    # veto HERE — audit_document never raises, and a document with
+    # findings still generates, because a practitioner has to see the
+    # draft to fix it. The teeth are on the way out (doc_guard).
+    import doc_audit
+    import doc_guard
+    audit = doc_audit.audit_document(
+        doc_body, sections=rendered,
+        numbered=bool(template.get("numbered")),
+        contract=template.get("contract"), variables=variables)
 
     subject = f"{template['title']} — {business_name}"
     queue_id: Optional[str] = None
@@ -413,6 +468,13 @@ async def generate_document_core(business: Dict[str, Any],
         "ai_reasoning": (f"Generated from the {template['title']} template "
                          f"for {contact.get('name')}."),
         "ai_model": _model() if drafted else None,
+        # The verdict rides with the document. /doctemplates/history reads
+        # it back without recomputing, and doc_guard re-audits against the
+        # contract and field values stashed here when the body reaches a
+        # door — which is how an edit made in the approval queue gets
+        # caught. Existing jsonb column; no migration.
+        "data": {doc_guard.DATA_KEY: doc_guard.stash(
+            template, variables, audit, rendered)},
     })
     if isinstance(queued, list) and queued:
         queue_id = queued[0].get("id")
@@ -439,19 +501,6 @@ async def generate_document_core(business: Dict[str, Any],
     # State counsel notes — advisory, practitioner-facing, off-paper.
     state_notes = await _state_notes(business, template, variables,
                                      user_id=user_id)
-
-    # Read the finished text before the client does.
-    #
-    # Deterministic only: no model call, no network, no metering, and no
-    # veto — audit_document never raises, so a fault here yields no
-    # findings rather than blocking a document that is otherwise ready.
-    # Every guarantee above this line is an AUTHORING guarantee; this is
-    # the first thing that looks at what actually came out.
-    import doc_audit
-    audit = doc_audit.audit_document(
-        doc_body,
-        sections=[{"text": s.get("text") or ""} for s in template["sections"]],
-        numbered=bool(template.get("numbered")))
 
     return {"ok": True, "queue_id": queue_id, "subject": subject,
             "title": template["title"], "body": doc_body,
@@ -527,6 +576,170 @@ async def doctemplates_generate(body: GenerateBody,
             business, contact, template, body.params or {}, user_id=user.id)
     except GenerationError as e:
         raise HTTPException(e.status, e.message)
+
+
+# ─── History — the documents this business has actually issued ───────
+#
+# There was no way to see them. A generated document lands in
+# agent_queue as a draft and the dialog then navigates to the Approval
+# Queue with no link back; /doctemplates/list returns TEMPLATES, not
+# documents; and the two folders in the Documents room are Storage
+# objects — things somebody UPLOADED. A document the system wrote had
+# nowhere it could be looked at again.
+#
+# approvals_router says "There is no GET on purpose: seats already read
+# the queue via RLS", and that is right for the approval queue, which is
+# a worklist. This is not a worklist. It is the practitioner's record of
+# their own paper, it needs the e-signature state joined onto it, and it
+# needs the stored verdict — so it reads through the owner gate like
+# every other /doctemplates route.
+#
+# Reads rows that already exist, so it works retroactively on every
+# document ever generated. No migration.
+
+HISTORY_PAGE = 50
+_PREVIEW_CHARS = 240
+
+
+def _esign_by_source(business_id: str, queue_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Signature state keyed by the queue row it came from. Best-effort:
+    the history list is worth showing without it."""
+    if not queue_ids:
+        return {}
+    try:
+        ids = ",".join(f'"{q}"' for q in queue_ids if q)
+        rows = sb_clients.sb_get_as_service(
+            f"/esign_documents?business_id=eq.{business_id}"
+            f"&source_ref=in.({ids})"
+            "&select=source_ref,status,sent_at,completed_at,signer_name,signer_email"
+            "&order=sent_at.desc") or []
+    except Exception as e:
+        logger.warning(f"esign join failed (non-fatal): {e}")
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        out.setdefault(str(r.get("source_ref")), r)   # newest wins
+    return out
+
+
+def _history_row(row: Dict[str, Any], contact_names: Dict[str, str],
+                 esign: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    import doc_guard
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    stash = (data or {}).get(doc_guard.DATA_KEY) or {}
+    body = row.get("body") or ""
+    sig = esign.get(str(row.get("id"))) or None
+    return {
+        "id": row.get("id"),
+        "title": row.get("subject") or "Document",
+        "template_id": stash.get("template_id"),
+        "contact_id": row.get("contact_id"),
+        "contact_name": contact_names.get(str(row.get("contact_id") or "")) or None,
+        "status": row.get("status"),
+        "created_at": row.get("created_at"),
+        "reviewed_at": row.get("reviewed_at"),
+        "sent_at": row.get("sent_at"),
+        "preview": " ".join(body[:_PREVIEW_CHARS].split()),
+        "verification": doc_guard.summarize(stash.get("audit")),
+        "esign": ({"status": sig.get("status"), "sent_at": sig.get("sent_at"),
+                   "completed_at": sig.get("completed_at"),
+                   "signer_name": sig.get("signer_name")} if sig else None),
+    }
+
+
+@router.get("/history")
+async def doctemplates_history(biz: str, limit: int = HISTORY_PAGE,
+                               offset: int = 0,
+                               user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Every document this business has issued, newest first."""
+    _owner(biz, user)
+    limit = max(1, min(int(limit or HISTORY_PAGE), 200))
+    offset = max(0, int(offset or 0))
+    rows = sb_clients.sb_get_as_service(
+        f"/agent_queue?business_id=eq.{biz}&action_type=eq.document"
+        "&select=id,contact_id,subject,body,status,data,created_at,reviewed_at,sent_at"
+        f"&order=created_at.desc&limit={limit + 1}&offset={offset}") or []
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    contact_ids = sorted({str(r.get("contact_id")) for r in rows if r.get("contact_id")})
+    names: Dict[str, str] = {}
+    if contact_ids:
+        try:
+            ids = ",".join(f'"{c}"' for c in contact_ids)
+            for c in (sb_clients.sb_get_as_service(
+                    f"/contacts?business_id=eq.{biz}&id=in.({ids})"
+                    "&select=id,name") or []):
+                names[str(c.get("id"))] = c.get("name") or ""
+        except Exception as e:
+            logger.warning(f"contact names failed (non-fatal): {e}")
+
+    esign = _esign_by_source(biz, [str(r.get("id")) for r in rows])
+    documents = [_history_row(r, names, esign) for r in rows]
+
+    # Counters for the standing rail. Scoped to this page deliberately:
+    # a count that disagrees with the list under it is worse than no
+    # count, and the rail sits directly above the list it describes.
+    needs = sum(1 for d in documents
+                if (d["verification"] or {}).get("verdict") == "blocked")
+    out_for_sig = sum(1 for d in documents
+                      if (d.get("esign") or {}).get("status") == "sent")
+    return {"ok": True, "documents": documents, "has_more": has_more,
+            "offset": offset,
+            "counts": {"listed": len(documents), "needs_attention": needs,
+                       "out_for_signature": out_for_sig}}
+
+
+@router.get("/history/{queue_id}")
+async def doctemplates_history_one(queue_id: str, biz: str,
+                                   user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """One document, with its full body and every stored finding."""
+    _owner(biz, user)
+    import doc_guard
+    row = doc_guard.load_document(queue_id, biz)
+    if (row.get("action_type") or "") != "document":
+        raise HTTPException(404, "document not found")
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    stash = (data or {}).get(doc_guard.DATA_KEY) or {}
+    esign = _esign_by_source(biz, [str(row.get("id"))])
+    doc = _history_row(row, {}, esign)
+    doc["body"] = row.get("body") or ""
+    doc["audit"] = stash.get("audit") or None
+    doc["contract"] = stash.get("contract") or []
+    if row.get("contact_id"):
+        try:
+            c = sb_clients.sb_get_as_service(
+                f"/contacts?id=eq.{row['contact_id']}&business_id=eq.{biz}"
+                "&select=id,name,email&limit=1") or []
+            if c:
+                doc["contact_name"] = c[0].get("name")
+                doc["contact_email"] = c[0].get("email")
+        except Exception:
+            pass
+    return {"ok": True, "document": doc}
+
+
+@router.post("/history/{queue_id}/verify")
+async def doctemplates_history_verify(queue_id: str, biz: str,
+                                      user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Re-read the document as it stands NOW.
+
+    The verdict stamped at generation describes the body as generated,
+    and a practitioner can edit that body in the approval queue. This
+    re-runs every rule against the current text and re-stamps the row,
+    which is how an edit that deletes the signature block or renumbers
+    past the end gets caught here rather than at the client's desk.
+
+    Deterministic and free — no model call, so no units."""
+    _owner(biz, user)
+    import doc_guard
+    row = doc_guard.load_document(queue_id, biz)
+    if (row.get("action_type") or "") != "document":
+        raise HTTPException(404, "document not found")
+    audit = doc_guard.audit_stored_body(row)
+    doc_guard.restash(row, audit)
+    return {"ok": True, "audit": audit,
+            "verification": doc_guard.summarize(audit)}
 
 
 # ─── Learn from upload — their own paper becomes a template ──────────
