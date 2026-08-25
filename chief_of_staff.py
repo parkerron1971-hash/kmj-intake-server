@@ -5628,6 +5628,48 @@ async def autopilot_sweep_tick() -> None:
                 print(f"[Autopilot tick] {biz.get('id')}: {e}", flush=True)
 
 
+# Latency arc round 2 (2026-08-25) — the per-turn sweeps run OFF the
+# turn's critical path. Strong references keep the tasks alive (a bare
+# create_task can be garbage-collected mid-flight); tests drain them
+# through _drain_turn_sweeps so behaviour stays assertable.
+_TURN_SWEEP_TASKS: set = set()
+
+
+def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
+    """Run the autopilot + escalation sweeps for this business in the
+    background. Same per-turn trigger as before, but the practitioner no
+    longer waits through 1–2s of bookkeeping before Chief's first word.
+    billing_context and the JWT bind are contextvars, and create_task
+    snapshots the current context, so attribution and RLS behave exactly
+    as they did inline. The task opens its OWN http client because the
+    request's client closes when the turn returns."""
+    async def _run() -> None:
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+                auto_count = await _autopilot_sweep(c, biz_lite)
+                if auto_count:
+                    print(f"[Chief Autopilot] swept {auto_count} draft(s)", flush=True)
+                esc_count = await _evaluate_escalations(c, biz_lite)
+                if esc_count:
+                    print(f"[Chief] surfaced {esc_count} escalation(s)", flush=True)
+        except Exception as e:  # pragma: no cover — background, never a turn's problem
+            print(f"[Chief] background sweep error: {e}", flush=True)
+
+    try:
+        task = asyncio.create_task(_run())
+        _TURN_SWEEP_TASKS.add(task)
+        task.add_done_callback(_TURN_SWEEP_TASKS.discard)
+    except Exception as e:  # pragma: no cover — no loop = no sweep, never a crash
+        print(f"[Chief] sweep spawn failed: {e}", flush=True)
+
+
+async def _drain_turn_sweeps() -> None:
+    """Tests only — await every background sweep the turn spawned, so
+    assertions about swept drafts stay deterministic."""
+    while _TURN_SWEEP_TASKS:
+        await asyncio.gather(*list(_TURN_SWEEP_TASKS), return_exceptions=True)
+
+
 async def _autopilot_sweep(client, biz: Dict[str, Any], lookback_minutes: int = 15) -> int:
     """At the top of each chief_chat, look at drafts created in the last
     few minutes and auto-process whatever the autopilot config allows.
@@ -17157,12 +17199,20 @@ async def chief_chat(
                     # and escalation sweeps below — which call AI too —
                     # are billed to the same business as the turn.
                     billing_context.set_current(req.business_id)
-                    auto_count = await _autopilot_sweep(client, biz_lite)
-                    if auto_count:
-                        print(f"[Chief Autopilot] swept {auto_count} draft(s)", flush=True)
-                    esc_count = await _evaluate_escalations(client, biz_lite)
-                    if esc_count:
-                        print(f"[Chief] surfaced {esc_count} escalation(s)", flush=True)
+                    # Latency arc round 2 (2026-08-25, Kevin: "why it
+                    # feels so slow"): these sweeps are BACKGROUND
+                    # bookkeeping — autopilot drafts + escalation
+                    # surfacing — and they were billed to the
+                    # practitioner's WAIT on every turn: [Chief timing]
+                    # showed sweeps=870–1900ms before a single word
+                    # moved. They now run as a fire-and-forget task:
+                    # same trigger (every turn), same attribution
+                    # (billing_context + the JWT bind are contextvars,
+                    # and create_task snapshots them), just off the
+                    # critical path. The task gets its OWN http client —
+                    # the request's client closes when the turn returns,
+                    # while the sweep may still be working.
+                    _spawn_turn_sweeps(biz_lite)
             except Exception as e:  # pragma: no cover
                 print(f"[Chief] autopilot/escalation sweep error: {e}", flush=True)
             _t.mark("sweeps")
@@ -17888,6 +17938,17 @@ async def chief_chat_stream(
 
     async def _events():
         filt = _ActionTagFilter()
+        # Buffer-breaking preamble (latency arc round 2, 2026-08-25).
+        # Measured from the client, every delta of a voice turn arrived
+        # in ONE burst at the end — an entire spoken reply is under 1KB
+        # of SSE, and an edge proxy that flushes on buffer-full simply
+        # never flushed until the stream closed. X-Accel-Buffering is an
+        # nginx convention Railway's edge does not honour. A 16KB SSE
+        # comment (clients ignore ":" lines by spec) crosses the buffer
+        # threshold up front so every subsequent delta flushes through.
+        # The cost is 16KB per turn on a path whose whole purpose is to
+        # ship a few hundred bytes EARLY.
+        yield ":" + (" " * 16384) + "\n\n"
         try:
             while True:
                 getter = asyncio.ensure_future(q.get())
@@ -17924,7 +17985,9 @@ async def chief_chat_stream(
                 turn.cancel()
 
     return StreamingResponse(_events(), media_type="text/event-stream", headers={
-        "Cache-Control": "no-cache",
+        # no-transform: forbid intermediary compression — a gzip layer
+        # re-buffers the stream and undoes the preamble above.
+        "Cache-Control": "no-cache, no-transform",
         "Connection": "keep-alive",
         # Disable proxy buffering so deltas reach the client immediately.
         "X-Accel-Buffering": "no",
