@@ -113,18 +113,26 @@ def require_live_access(business_id: str) -> None:
             return
         biz_row = usage_metering._biz_row(business_id)
         gf = usage_metering.is_grandfathered_business(business_id, biz_row)
-        state = feature_gates.access_state(biz_row, gf)
+        spent = usage_metering.trial_credits_exhausted(business_id, biz_row)
+        state = feature_gates.access_state(biz_row, gf, spent)
     except Exception as e:
         logger.warning(f"require_live_access failed open: {e}")
         return
     if (state or {}).get("state") != "locked":
         return
+    _reason = (state or {}).get("reason")
+    _spent = _reason == "trial_credits_spent"
     raise HTTPException(status_code=402, detail={
         "error": "subscription_locked",
-        "reason": (state or {}).get("reason"),
-        "message": ("This account's subscription has ended. Restart it in "
-                    "Settings → Billing to keep using AI features and "
-                    "campaigns — your data is safe and exports stay open."),
+        "reason": _reason,
+        "message": (
+            ("You've used all the credits in your free trial. Pick a plan in "
+             "Settings → Billing to keep going — your work is safe, and "
+             "bookings, invoices and bookkeeping never stop.")
+            if _spent else
+            ("This account's subscription has ended. Restart it in "
+             "Settings → Billing to keep using AI features and "
+             "campaigns — your data is safe and exports stay open.")),
     })
 
 

@@ -315,7 +315,11 @@ async def billing_access(business_id: str, user: AuthedUser = Depends(require_us
         business = await _load_business(business_id)
         grandfathered = usage_metering.is_grandfathered_user(
             str(business.get("owner_id") or ""))
-        state = feature_gates.access_state(business, grandfathered)
+        # A trial ends on whichever runs out first, the calendar or the
+        # tank. access_state is pure, so the tank half is read here.
+        trial_spent = usage_metering.trial_credits_exhausted(
+            business_id, business)
+        state = feature_gates.access_state(business, grandfathered, trial_spent)
         return {
             "ok": True,
             **state,

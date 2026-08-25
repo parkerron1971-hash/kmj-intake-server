@@ -171,7 +171,8 @@ def plan_of(business_row: Optional[Dict[str, Any]]) -> Optional[str]:
 
 
 def access_state(business_row: Optional[Dict[str, Any]],
-                 grandfathered: bool = False) -> Dict[str, Any]:
+                 grandfathered: bool = False,
+                 trial_spent: bool = False) -> Dict[str, Any]:
     """Subscription access enforcement (2026-07-03, Kevin's ruling:
     'if no person paid then they lose access').
 
@@ -179,8 +180,15 @@ def access_state(business_row: Optional[Dict[str, Any]],
       'full'   — use the app normally
       'grace'  — payment failed; warn loudly, don't lock yet (Stripe
                  Smart Retries run during past_due/incomplete)
-      'locked' — no live subscription; the frontend shows the paywall
-                 (data is never deleted; export stays available)
+      'locked' — no live subscription, OR a trial that has run out of
+                 credits; the frontend shows the paywall (data is never
+                 deleted; export stays available)
+
+    A trial ends on WHICHEVER COMES FIRST, the calendar or the tank
+    (2026-08-24). `trial_spent` is the tank half — the caller passes
+    usage_metering.trial_credits_exhausted(), because this function is
+    deliberately pure and does not read the database. Left False, the
+    behaviour is exactly what it was: the calendar alone.
 
     Dormant like everything else: enforcement_on() off → always full.
     Grandfathered users and comp_tier businesses never lock.
@@ -197,6 +205,8 @@ def access_state(business_row: Optional[Dict[str, Any]],
     if status == "active":
         return {"state": "full", "reason": "active"}
     if status == "trialing":
+        if trial_spent:
+            return {"state": "locked", "reason": "trial_credits_spent"}
         trial_end = (row.get("trial_ends_at") or "").strip()
         if trial_end:
             from datetime import datetime, timezone
