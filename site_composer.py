@@ -4197,6 +4197,20 @@ def compose_site(business_id: str, brief_notes: str = "",
                 # price the meter charges and the price the UI quotes.
                 _units = pricing_config.price_for_build(len(spec or []))
                 _kind = "site_build_marker"
+                # The trial's first build is free (2026-08-24). 600
+                # credits is 60% of the trial tank, and this build IS
+                # the pitch — charging the trial for it spent the tank
+                # on the demo. The marker still lands at units=0, so
+                # the build stays visible in usage and Costs.
+                try:
+                    import usage_metering
+                    if usage_metering.trial_first_build_is_free(business_id):
+                        _units = 0
+                        logger.info(f"[composer] trial first build free "
+                                    f"for {business_id[:8]}")
+                except Exception as _tb_e:
+                    logger.warning(f"[composer] trial-build check failed, "
+                                   f"charging normally: {_tb_e}")
             log_api_usage_sync(
                 endpoint="/composer/compose", model="site-build-marker",
                 input_tokens=0, output_tokens=0, business_id=business_id,

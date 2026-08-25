@@ -279,6 +279,43 @@ def premium_voice_price() -> int:
     return _dial("PREMIUM_VOICE_PRICE", "PRICE_", 1)
 
 
+# ─── The trial tank ──────────────────────────────────────────────────
+
+def trial_credits() -> int:
+    """What a business may spend during its free trial, whichever runs
+    out first — these credits or the calendar.
+
+    ONE NUMBER FOR EVERY TIER (Kevin, 2026-08-24). Before this, a trial
+    inherited the tier's whole MONTHLY allowance, because plan_of()
+    treats 'trialing' exactly like 'active': trialing Solutionist meant
+    25,000 credits free, ~$154 of measured cost, and the rational move
+    was to trial the most expensive tier for the biggest free tank and
+    downgrade after. A flat tank removes the move entirely.
+
+    Sized against the 1,000-credit ruling: with the first build free
+    (see trial_build_free) that is 83 Chief turns, ~12 a day across a
+    7-day trial, for about $8 of measured cost — a hard ceiling, versus
+    the $154-$307 a trial could cost before.
+
+    An opening default like every dial here. Raise it in Railway the
+    moment real trials say 1,000 is thin."""
+    return _dial("TRIAL_CREDITS", "PRICE_", 1000)
+
+
+def trial_build_free() -> bool:
+    """Whether a trial's FIRST site build is on the house.
+
+    A build is 600 credits — 60% of the trial tank — and it is also the
+    single most persuasive thing the product does: the workspace and the
+    site arriving already speaking the practitioner's trade. Charging
+    the trial for it left 33 Chief turns behind and spent the tank on
+    the demo.
+
+    It costs us ~$1.90, and buys back 50 Chief turns. Set
+    PRICE_TRIAL_BUILD_FREE=0 to charge for it."""
+    return _dial("TRIAL_BUILD_FREE", "PRICE_", 1) != 0
+
+
 # ─── Does the tank pay for itself? ───────────────────────────────────
 
 # Measured from api_usage over 640 real Chief turns, 2026-07-23..08-10.

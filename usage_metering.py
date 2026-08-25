@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import sb_clients
@@ -164,21 +164,32 @@ def weight_for_row(row: Optional[Dict[str, Any]]) -> int:
     return weight_for(row.get("endpoint"))
 
 
-def weighted_usage_this_month(business_id: str) -> int:
-    # Paginated: the old single limit=10000 read silently under-counted
-    # any business past 10k rows/month. Terminates on the first short
-    # page; the offset ceiling is a runaway guard, not a real bound.
+def weighted_usage_since(business_id: str, since_iso: str) -> int:
+    """Weighted credits this business has spent since `since_iso`.
+
+    The window is a parameter because a TRIAL is not a calendar month:
+    its tank has to be measured from the day the trial started, or a
+    trial straddling the 1st would silently refill. See
+    trial_window_start.
+
+    Paginated: the old single limit=10000 read silently under-counted
+    any business past 10k rows/month. Terminates on the first short
+    page; the offset ceiling is a runaway guard, not a real bound."""
     total, offset, page = 0, 0, 10000
     while offset <= 200_000:
         rows = sb_clients.sb_get_as_service(
             f"/api_usage?business_id=eq.{business_id}"
-            f"&created_at=gte.{_month_start_iso()}&select=endpoint,units"
+            f"&created_at=gte.{since_iso}&select=endpoint,units"
             f"&limit={page}&offset={offset}") or []
         total += sum(weight_for_row(r) for r in rows)
         if len(rows) < page:
             break
         offset += page
     return total
+
+
+def weighted_usage_this_month(business_id: str) -> int:
+    return weighted_usage_since(business_id, _month_start_iso())
 
 
 def chat_turns_today(business_id: str) -> int:
@@ -280,6 +291,38 @@ def is_grandfathered_business(business_id: str,
     return is_grandfathered_user(str((row or {}).get("owner_id") or "")) if row else False
 
 
+def trial_window_start(biz_row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """First instant of this business's trial (UTC, Z form), or None if
+    it is not on one.
+
+    Derived as trial_ends_at minus the configured trial length, because
+    Stripe hands us the END and nothing writes a start. That is exact
+    while BILLING_TRIAL_DAYS is stable, and drifts by the difference if
+    the dial moves mid-trial — in the safe direction for a raise (a
+    LONGER window counts MORE usage against the tank) and by a few days
+    the customer's way for a cut. Not worth a migration to make exact;
+    very much worth measuring from the trial rather than the month.
+
+    Returns None on anything unparseable, which sends the caller back to
+    the calendar month — today's behaviour, and never a crash."""
+    row = biz_row or {}
+    if (row.get("subscription_status") or "").strip().lower() != "trialing":
+        return None
+    ends = (row.get("trial_ends_at") or "").strip()
+    if not ends:
+        return None
+    try:
+        end = datetime.fromisoformat(ends.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    try:
+        days = max(0, int(os.environ.get("BILLING_TRIAL_DAYS") or "7"))
+    except ValueError:
+        days = 7
+    start = end - timedelta(days=days)
+    return start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def usage_summary(business_id: str,
                   biz_row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Everything the UI + enforcement need in one read. Allotment/credit
@@ -289,13 +332,24 @@ def usage_summary(business_id: str,
     Prepaid semantics (Pricing v2): allowance first, then credits.
     Reading the summary also reconciles this month's credit burn."""
     row = biz_row or _biz_row(business_id)
-    used = weighted_usage_this_month(business_id)
     grandfathered = is_grandfathered_business(business_id, row)
     plan = feature_gates.plan_of(row) if row else None
     enforce = feature_gates.enforcement_on()
 
+    # A TRIAL IS NOT A MONTH (2026-08-24). plan_of() treats 'trialing'
+    # like 'active', so a trial used to inherit the tier's whole monthly
+    # allowance — 25,000 credits on Solutionist, and a second full tank
+    # if the trial straddled the 1st. Now it draws a flat trial tank,
+    # measured from the day the trial began. Same for every tier, so
+    # trialing the dearest plan no longer buys the biggest free tank.
+    trial_start = trial_window_start(row)
+    on_trial = trial_start is not None
+    used = weighted_usage_since(business_id, trial_start) if on_trial         else weighted_usage_this_month(business_id)
+
     allotment = None
-    if plan:
+    if on_trial:
+        allotment = pricing_config.trial_credits()
+    elif plan:
         allotment = (feature_gates.plan_limits().get(plan) or {}).get("chief_messages_monthly")
 
     # Launch-ops monthly bonus grants (usage_grants) top up the plan
@@ -327,6 +381,8 @@ def usage_summary(business_id: str,
     return {
         "ok": True,
         "month": _month_key(),
+        "on_trial": on_trial,
+        "trial_started_at": trial_start,
         "weighted_used": used,
         "allotment": None if grandfathered else allotment,
         "remaining": (None if (grandfathered or allotment is None)
@@ -387,7 +443,10 @@ def credits_overview(business_id: str,
     the beyond-allowance part shows up as packs consumption instead.
     Grandfathered accounts read as unlimited: allowance/total None."""
     import credit_ledger
-    s = usage_summary(business_id, biz_row)
+    # Resolved once and handed down: usage_summary would otherwise
+    # re-read the same row, and the trial end date is read below.
+    row = biz_row or _biz_row(business_id)
+    s = usage_summary(business_id, row)
     led = credit_ledger.summary(business_id)
 
     allowance = s["allotment"]          # None → grandfathered or no plan
@@ -420,12 +479,23 @@ def credits_overview(business_id: str,
         "plan": s["plan"],
         "grandfathered": grandfathered,
         "enforce": s["enforce"],
+        # A TRIAL TANK IS NOT A MONTHLY ALLOWANCE and must not be
+        # described as one: it is smaller, it is measured from the day
+        # the trial began, and it does NOT come back on the 1st. The
+        # surfaces that render this say "this month" and "resets on",
+        # both of which would be false to a trialing practitioner — so
+        # they are told which kind of tank they are reading.
+        "on_trial": s.get("on_trial", False),
+        "trial_ends_at": (row or {}).get("trial_ends_at"),
         "monthly": {
             "allowance": allowance,
             "used": monthly_used,
             "used_raw": used_raw,
             "remaining": monthly_remaining,
-            "resets_at": _next_month_start_iso(),
+            # During a trial the tank does not refill — it ends with the
+            # trial. Null rather than a month boundary that means nothing.
+            "resets_at": (None if s.get("on_trial")
+                          else _next_month_start_iso()),
         },
         "packs": {
             "granted": packs_granted,
@@ -511,6 +581,69 @@ def check_low_credit(business_id: str,
         return True
     except Exception as e:
         logger.warning(f"[metering] low-credit check failed: {e}")
+        return False
+
+
+def trial_first_build_is_free(business_id: str,
+                              biz_row: Optional[Dict[str, Any]] = None) -> bool:
+    """Is THIS build the one a trial gets on the house?
+
+    True only while the business is on a trial, the dial is on, and no
+    build marker has been written for it yet. A build is 600 credits
+    against a 1,000-credit trial tank, and it is also the thing that
+    proves the product — the workspace and the site arriving already
+    speaking the practitioner's trade. Charging the trial for it spent
+    60% of the tank on the demo and left 33 Chief turns behind.
+
+    Costs ~$1.90 and buys back 50 turns. The marker is still WRITTEN at
+    units=0, so the build is visible in usage and Costs — it is priced
+    at nothing, not hidden.
+
+    Fails CLOSED (returns False → the build is charged): an error here
+    must not hand out free builds forever."""
+    try:
+        if not pricing_config.trial_build_free():
+            return False
+        row = biz_row or _biz_row(business_id)
+        if trial_window_start(row) is None:
+            return False
+        prior = sb_clients.sb_get_as_service(
+            f"/api_usage?business_id=eq.{business_id}"
+            f"&task_type=eq.site_build_marker&select=id&limit=1") or []
+        return not prior
+    except Exception as e:
+        logger.warning(f"[metering] trial_first_build check failed: {e}")
+        return False
+
+
+def trial_credits_exhausted(business_id: str,
+                            biz_row: Optional[Dict[str, Any]] = None) -> bool:
+    """Has a trialing business spent its trial tank?
+
+    The tank half of "whichever comes first" — feature_gates.access_state
+    takes this as `trial_spent`. False for anything not on a trial, for
+    grandfathered accounts, while enforcement is dormant, and on any read
+    error: a metering hiccup must never lock a paying customer out of
+    their own workspace.
+
+    Purchased credits count. Someone who buys a pack mid-trial has paid
+    us, and taking their workspace away while they hold a balance would
+    be indefensible."""
+    try:
+        if not feature_gates.enforcement_on():
+            return False
+        row = biz_row or _biz_row(business_id)
+        if trial_window_start(row) is None:
+            return False
+        if is_grandfathered_business(business_id, row):
+            return False
+        s = usage_summary(business_id, row)
+        if not s.get("on_trial") or s.get("allotment") is None:
+            return False
+        return (s["weighted_used"] >= s["allotment"]
+                and credit_ledger.balance(business_id) <= 0)
+    except Exception as e:
+        logger.warning(f"[metering] trial_credits_exhausted failed open: {e}")
         return False
 
 
