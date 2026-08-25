@@ -5643,7 +5643,7 @@ def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
     snapshots the current context, so attribution and RLS behave exactly
     as they did inline. The task opens its OWN http client because the
     request's client closes when the turn returns."""
-    async def _run() -> None:
+    async def _body() -> None:
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
                 auto_count = await _autopilot_sweep(c, biz_lite)
@@ -5655,10 +5655,29 @@ def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
         except Exception as e:  # pragma: no cover — background, never a turn's problem
             print(f"[Chief] background sweep error: {e}", flush=True)
 
+    async def _run(inner: "asyncio.Task") -> None:
+        # asyncio.shield: a targeted cancel of THIS wrapper (request
+        # teardown machinery, a supervisor) must not sever the sweep
+        # mid-flight — #715's send→ledger sequence lives inside it, and
+        # a cancel between "the mail went out" and "the row exists"
+        # would reopen that gap non-deterministically. The shield does
+        # NOT survive loop shutdown (nothing does); the ledger write
+        # itself rides asyncio.to_thread, whose executor threads drain
+        # on close — the truly unkillable leg is theirs.
+        try:
+            await asyncio.shield(inner)
+        except asyncio.CancelledError:
+            pass  # the shielded body finishes on its own
+        except Exception as e:  # pragma: no cover
+            print(f"[Chief] background sweep error: {e}", flush=True)
+
     try:
-        task = asyncio.create_task(_run())
-        _TURN_SWEEP_TASKS.add(task)
-        task.add_done_callback(_TURN_SWEEP_TASKS.discard)
+        inner = asyncio.create_task(_body())
+        _TURN_SWEEP_TASKS.add(inner)
+        inner.add_done_callback(_TURN_SWEEP_TASKS.discard)
+        outer = asyncio.create_task(_run(inner))
+        _TURN_SWEEP_TASKS.add(outer)
+        outer.add_done_callback(_TURN_SWEEP_TASKS.discard)
     except Exception as e:  # pragma: no cover — no loop = no sweep, never a crash
         print(f"[Chief] sweep spawn failed: {e}", flush=True)
 
