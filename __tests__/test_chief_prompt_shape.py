@@ -31,8 +31,9 @@ SRC = inspect.getsource(cos._call_claude)
 
 
 class TestTheShapeIsRecorded:
-    def test_all_three_shapes_are_named(self):
-        for shape in ("cached-3seg", "cached-2seg", "uncached-single"):
+    def test_all_four_shapes_are_named(self):
+        for shape in ("cached-4seg", "cached-3seg", "cached-2seg",
+                      "uncached-single"):
             assert f'"{shape}"' in SRC, f"{shape} is never assigned"
 
     def test_an_unrecognised_prompt_falls_back_to_uncached(self):
@@ -98,3 +99,77 @@ class TestTheSplitStillWorks:
         assert SENTINEL not in stable, (
             "dynamic state leaked into the cacheable prefix — the prefix "
             "then changes every turn and nothing ever caches")
+
+
+class TestTheTurnSplit:
+    """Cache round 3 (2026-08-25): api_usage showed every turn paying
+    ~13k UNCACHED input tokens — the whole state tail rebuilt at full
+    price although most of it only changes when the business's data
+    changes. [[CHIEF_TURN_SPLIT]] carves the snapshot into a THIRD
+    cached segment (default 5-minute ttl); only the true per-turn tail
+    stays uncached."""
+
+    def _ctx(self):
+        import collections
+        return collections.defaultdict(lambda: [], {
+            "business": {"id": "b1", "name": "Biz",
+                         "settings": {"practitioner_name": "K"},
+                         "voice_profile": {}}})
+
+    def test_the_template_carries_the_turn_split(self):
+        s = cos._build_system_prompt(self._ctx(), False)
+        assert "[[CHIEF_TURN_SPLIT]]" in s
+        assert s.index("[[CHIEF_CACHE_SPLIT]]") < s.index("[[CHIEF_TURN_SPLIT]]")
+
+    def test_state_and_turn_land_on_their_own_sides(self):
+        """session_context is a data snapshot → the cached STATE side.
+        time_block is the clock → the uncached TURN side. A clock in the
+        cached segment would break its byte-identity every ~minute,
+        which is the exact failure this split exists to avoid."""
+        STATE_S = "ZZ_STATE_SENTINEL_5531"
+        TURN_S = "ZZ_TURN_SENTINEL_7712"
+        s = cos._build_system_prompt(self._ctx(), False,
+                                     session_context=STATE_S,
+                                     time_block=TURN_S)
+        _, _, tail = s.partition("[[CHIEF_CACHE_SPLIT]]")
+        state, _, turn = tail.partition("[[CHIEF_TURN_SPLIT]]")
+        assert STATE_S in state and STATE_S not in turn
+        assert TURN_S in turn and TURN_S not in state, (
+            "the clock leaked into the cached state segment")
+
+    def test_the_state_segment_is_byte_stable_across_builds(self):
+        """Two builds with identical inputs must produce an identical
+        state segment — any drift means a hidden clock or randomness,
+        and the cache would miss on every turn while looking healthy."""
+        a = cos._build_system_prompt(self._ctx(), False, session_context="X")
+        b = cos._build_system_prompt(self._ctx(), False, session_context="X")
+        seg = lambda s: s.partition("[[CHIEF_CACHE_SPLIT]]")[2].partition("[[CHIEF_TURN_SPLIT]]")[0]
+        assert seg(a) == seg(b), "the state segment is not deterministic"
+
+    def test_the_builder_emits_four_blocks_with_the_right_ttls(self):
+        """Source-level, like the rest of this file: the 4seg branch
+        exists, and the state segment cache-controls on the PLAIN
+        5-minute ephemeral — never the extended ttl, because Anthropic
+        requires longer-ttl segments earlier in the prefix and staleness
+        of an hour is not wanted on live data anyway."""
+        assert '"cached-4seg"' in SRC
+        assert 'dynamic.partition("[[CHIEF_TURN_SPLIT]]")' in SRC
+        assert '"cache_control": {"type": "ephemeral"}' in SRC, (
+            "the state segment must cache on the plain 5-minute default")
+
+    def test_the_jit_directive_lands_below_the_turn_split(self):
+        """A per-message directive at the head of the cached state
+        segment would break its byte-stability on exactly the turns it
+        fires. It must prefer the TURN marker."""
+        chat_src = inspect.getsource(cos.chief_chat)
+        assert 'marker = ("[[CHIEF_TURN_SPLIT]]"' in chat_src
+
+    def test_the_fallback_never_leaks_the_marker(self):
+        import fallback_brain
+        raw = ("UNIVERSAL[[CHIEF_GLOBAL_SPLIT]]MANUAL" + "m" * 4000
+               + "[[CHIEF_CACHE_SPLIT]]STATE" + "s" * 500
+               + "[[CHIEF_TURN_SPLIT]]TURNTAIL")
+        out = fallback_brain._fallback_system(raw)
+        assert "CHIEF_TURN_SPLIT" not in out, (
+            "the new marker leaked into the fallback prompt text")
+        assert "TURNTAIL" in out or "STATE" in out

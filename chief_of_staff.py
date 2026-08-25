@@ -777,12 +777,35 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # recorded, and the next question is a SELECT.
     def _build_system(extended: bool):
         """Returns (system_payload, shape). Rebuildable, because a beta
-        rejection means doing this again without the extended ttl."""
+        rejection means doing this again without the extended ttl.
+
+        Latency arc round 3 (2026-08-25, Kevin: "lets do the prompt
+        caching fix"): api_usage showed every turn paying ~13k UNCACHED
+        input tokens — the whole state tail was rebuilt at full price
+        even though most of it is a data snapshot that only changes when
+        the business's data changes. [[CHIEF_TURN_SPLIT]] carves that
+        snapshot out as a THIRD cached segment on the DEFAULT 5-minute
+        ttl (a conversation's turns land seconds apart; an hour of ttl
+        would just pay the 2x write premium for staleness we don't
+        want). Anthropic requires longer-ttl segments earlier in the
+        prefix — 1h, 1h, 5m satisfies that; with extended off it is
+        5m, 5m, 5m. Only the true per-turn tail (the clock, sentiment,
+        greeting clauses, the JIT directive) stays uncached."""
         cc = _cache_control(extended)
         if isinstance(system, str) and "[[CHIEF_CACHE_SPLIT]]" in system:
             stable, _, dynamic = system.partition("[[CHIEF_CACHE_SPLIT]]")
+            state, turn_marker, turn = dynamic.partition("[[CHIEF_TURN_SPLIT]]")
             if "[[CHIEF_GLOBAL_SPLIT]]" in stable:
                 universal, _, per_business = stable.partition("[[CHIEF_GLOBAL_SPLIT]]")
+                if turn_marker:
+                    return [
+                        {"type": "text", "text": universal.rstrip(), "cache_control": dict(cc)},
+                        {"type": "text", "text": per_business.strip(), "cache_control": dict(cc)},
+                        # The state snapshot always caches on the 5-minute
+                        # default — never the extended ttl.
+                        {"type": "text", "text": state.strip(), "cache_control": {"type": "ephemeral"}},
+                        {"type": "text", "text": turn.strip()},
+                    ], "cached-4seg"
                 return [
                     {"type": "text", "text": universal.rstrip(), "cache_control": dict(cc)},
                     {"type": "text", "text": per_business.strip(), "cache_control": dict(cc)},
@@ -16650,9 +16673,9 @@ Keep responses concise unless asked for depth.
 
 [[CHIEF_CACHE_SPLIT]]
 
-REAL-TIME BUSINESS DATA — STATE UPDATE (fresh every message; this section
-changes constantly while everything above it is your stable operating
-manual):
+BUSINESS STATE — DATA SNAPSHOT (changes when the business's data
+changes; steady between the turns of one conversation, while everything
+above it is your stable operating manual):
 
 {context_block}
 {view_block}
@@ -16661,10 +16684,6 @@ manual):
 {setup_block}
 
 {learned_block}
-
-{priorities_block}
-
-{time_block}
 
 {forecast_block}
 
@@ -16676,27 +16695,35 @@ manual):
 
 {growth_block}
 
-{sentiment_block}
-
 {whatif_block}
-
-{pre_session_block}
 
 {weekly_block}
 
 {decision_block}
 
-{contextual_draft_block}
-
 {habit_recognition_block}
-
-{catchup_block}
 
 {website_block}
 
 {testimonial_block}
 
 {nudges_block}
+
+[[CHIEF_TURN_SPLIT]]
+
+THIS TURN (fresh every message):
+
+{priorities_block}
+
+{time_block}
+
+{sentiment_block}
+
+{pre_session_block}
+
+{contextual_draft_block}
+
+{catchup_block}
 
 {eod_block}{greeting_clause}{resume_clause}"""
 
@@ -17469,11 +17496,19 @@ async def chief_chat(
                 # the coach's context.
                 jit_directive = "" if is_coach_mode else _build_jit_directive(ctx, req.message or "")
                 if jit_directive:
-                    marker = "[[CHIEF_CACHE_SPLIT]]"
+                    # Cache round 3: the directive must land in the TURN
+                    # tail, not at the head of the state snapshot — a
+                    # per-message directive leading a cached segment
+                    # would break that segment's byte-stability on
+                    # exactly the turns it fires. Fall back to the older
+                    # markers for prompts that don't carry the new one.
+                    marker = ("[[CHIEF_TURN_SPLIT]]"
+                              if "[[CHIEF_TURN_SPLIT]]" in system
+                              else "[[CHIEF_CACHE_SPLIT]]")
                     if marker in system:
                         # Arc 20B — keep the cached stable prefix intact:
-                        # the directive leads the DYNAMIC block instead of
-                        # the whole prompt.
+                        # the directive leads the uncached block instead
+                        # of the whole prompt.
                         system = system.replace(
                             marker,
                             marker + "\n\n*** PRIORITY DIRECTIVE (act on this "
