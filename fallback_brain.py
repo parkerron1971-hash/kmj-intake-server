@@ -100,7 +100,8 @@ def _flatten_system(system: Any) -> str:
     else:
         text = str(system or "")
     return (text.replace("[[CHIEF_GLOBAL_SPLIT]]", "\n")
-                .replace("[[CHIEF_CACHE_SPLIT]]", "\n").strip())
+                .replace("[[CHIEF_CACHE_SPLIT]]", "\n")
+                .replace("[[CHIEF_TURN_SPLIT]]", "\n").strip())
 
 
 # ─── The trim (2026-07-28) ───────────────────────────────────────────
@@ -157,6 +158,10 @@ def _fallback_system(system: Any) -> str:
     # string, not the block list built for Anthropic's cache.
     if "[[CHIEF_CACHE_SPLIT]]" in raw:
         stable, _, dynamic = raw.partition("[[CHIEF_CACHE_SPLIT]]")
+        # Cache round 3 split the tail again; the fallback wants the
+        # whole live state as one piece, without a marker leaking into
+        # the prompt text.
+        dynamic = dynamic.replace("[[CHIEF_TURN_SPLIT]]", "\n")
     else:
         stable, dynamic = raw, ""
     if "[[CHIEF_GLOBAL_SPLIT]]" in stable:
