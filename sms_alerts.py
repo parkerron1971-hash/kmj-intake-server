@@ -107,6 +107,25 @@ def _alert_setting(settings: Optional[Dict[str, Any]], kind: str) -> bool:
     return True if v is None else bool(v)
 
 
+def _paused(biz: Optional[Dict[str, Any]]) -> bool:
+    """settings.automations_paused — the practitioner's blanket stop.
+
+    Distinct from the sms_alerts.reminders toggle above: that one says
+    "not this kind of message, ever", this one says "nothing automatic,
+    for now". Both have to be off for the sweep to text anyone.
+
+    Delegates to rules_engine so there is one reading of the flag. Falls
+    back to the row we already hold rather than defaulting either way —
+    guessing "paused" silences a working alert rail on an import error,
+    guessing "running" discards the practitioner's instruction."""
+    try:
+        import rules_engine
+        return bool(rules_engine.business_paused(biz))
+    except Exception as e:
+        logger.warning(f"[ALERT] pause predicate unavailable, reading directly: {e}")
+        return bool(((biz or {}).get("settings") or {}).get("automations_paused"))
+
+
 # ─── Consent (the shared rule) ────────────────────────────────────────
 
 async def _positive_consent(client: httpx.AsyncClient, business_id: str,
@@ -354,6 +373,17 @@ async def reminder_sweep() -> Dict[str, int]:
                     stats["skipped_no_phone"] += 1  # unresolvable — count with unsendables
                     continue
                 if not _alert_setting(biz.get("settings"), "reminders"):
+                    stats["skipped_toggled_off"] += 1
+                    continue
+                # The pause switch. Counted with the toggle because that
+                # is what it is — a second, broader "not right now" that
+                # this sweep has never read, so a practitioner who paused
+                # their automations still had Chief texting their clients
+                # the next morning. Reminders resume on the hourly pass
+                # after it is switched back on; a session whose window has
+                # closed by then simply does not get one, which is the
+                # correct reading of "pause my automations".
+                if _paused(biz):
                     stats["skipped_toggled_off"] += 1
                     continue
                 contact = contact_map.get(s.get("contact_id")) or {}

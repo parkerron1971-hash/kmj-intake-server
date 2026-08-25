@@ -508,6 +508,26 @@ async def campaigns_tick() -> Dict[str, int]:
             biz = _load_business(camp["business_id"])
         except HTTPException:
             continue
+        # The practitioner's pause switch, honored here too.
+        #
+        # settings.automations_paused stopped the rules engine and the
+        # trust sweep and nothing else — so a practitioner who paused
+        # their automations watched a campaign keep mailing their list.
+        # This path has no Chief verb to hand policy_engine, which is
+        # where the check now lives for the four paths that do, so it
+        # reads the same predicate directly.
+        #
+        # The campaign stays RUNNING and is simply not advanced: pausing
+        # automations is a "not now", not a cancellation, and the touches
+        # resume from where they stopped when it is switched back on.
+        try:
+            import rules_engine
+            if rules_engine.business_paused(biz):
+                stats["skipped"] += 1
+                continue
+        except Exception as e:
+            logger.warning(f"campaigns_tick pause check failed for "
+                           f"{camp.get('business_id')}: {e}")
         touches = camp.get("touches") or []
         start_raw = camp.get("start_at")
         if not start_raw:

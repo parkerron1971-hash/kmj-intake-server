@@ -177,9 +177,163 @@ def test_chat_path_now_computes_the_seat_role():
     assert '_authorized_by' in body
 
 
-def test_scheduler_and_workflow_share_the_evaluator():
-    for mod in ("chief_scheduler.py", "workflow_engine.py"):
+def test_every_acting_path_shares_the_evaluator():
+    """The pin that grew.
+
+    It named the scheduler and the workflow runner, which is exactly the
+    set that had been fixed at the time — and the trusted-autonomy sweep,
+    which mails clients under a standing grant, was not on the list and so
+    went on not calling the engine. A pin that lists only the paths
+    already fixed cannot catch the next one."""
+    for mod in ("chief_scheduler.py", "workflow_engine.py", "rules_router.py"):
         src = pathlib.Path(_here.parent / mod).read_text(encoding="utf-8")
         assert "policy_engine" in src, f"{mod} must use the shared evaluator"
         assert "action_registry.is_bulk" not in src, \
             f"{mod} should defer to the engine, not re-implement the rule"
+
+
+# ─── The pause switch ────────────────────────────────────────────────
+#
+# settings.automations_paused was read by rules_engine and the trust
+# sweep, and by nothing else. A practitioner who paused their automations
+# still had the scheduler executing actions, workflows advancing, and
+# autopilot sending mail.
+
+def _paused_biz(btype="coach", paused=True, bid="b1"):
+    return {"id": bid, "type": btype, "owner_id": "owner1",
+            "settings": {"automations_paused": paused}}
+
+
+def test_paused_business_stops_unattended_work(fake):
+    v = pe.evaluate("b1", verb="create_task", surface="scheduled",
+                    prompted=False, biz_row=_paused_biz())
+    assert not v.allowed
+    assert v.rule == "business:automations_paused"
+
+
+def test_pause_does_not_touch_what_the_practitioner_asks_for(fake):
+    """Pausing automations pauses what runs on its own. Someone who
+    pauses automations and then tells Chief to do something has not
+    contradicted themselves."""
+    v = pe.evaluate("b1", verb="create_task", surface="chat",
+                    prompted=True, biz_row=_paused_biz())
+    assert v.allowed
+
+
+def test_an_unpaused_business_is_unaffected(fake):
+    v = pe.evaluate("b1", verb="create_task", surface="scheduled",
+                    prompted=False, biz_row=_paused_biz(paused=False))
+    assert v.allowed
+
+
+def test_a_business_with_no_setting_is_not_paused(fake):
+    v = pe.evaluate("b1", verb="create_task", surface="scheduled",
+                    prompted=False, biz_row=_biz("coach"))
+    assert v.allowed
+
+
+def test_the_refusal_names_the_reason_the_practitioner_will_recognise(fake):
+    """A paused business asked to run a BULK verb unattended breaks two
+    rules at once. The one worth saying out loud is the one they can act
+    on: they turned automations off. 'Bulk verbs cannot run unattended'
+    is true and useless here."""
+    v = pe.evaluate("b1", verb="bulk_approve", surface="scheduled",
+                    prompted=False, biz_row=_paused_biz())
+    assert not v.allowed
+    assert v.rule == "business:automations_paused"
+
+
+def test_reads_never_pay_for_the_pause_check(monkeypatch):
+    """The business row is now fetched BEFORE the unattended rules,
+    because the pause check needs it. A read must still return above all
+    of that — otherwise every read-only action just acquired a database
+    round trip, and reads are the common case."""
+    def _boom(*a, **k):
+        raise AssertionError("a read must not touch the database")
+    monkeypatch.setattr(pe, "_biz", _boom)
+    v = pe.evaluate("b1", verb="show_revenue", surface="scheduled",
+                    prompted=False, biz_row=None)
+    assert v.allowed
+    assert v.rule == "scheduled:read"
+
+
+def test_the_paths_that_cannot_ask_the_engine_read_the_flag_themselves():
+    """campaigns_tick and the SMS reminder sweep send on a schedule but
+    have no Chief verb to hand the evaluator, so they read the same
+    predicate directly rather than being left out."""
+    for mod in ("campaigns_router.py", "sms_alerts.py"):
+        src = pathlib.Path(_here.parent / mod).read_text(encoding="utf-8")
+        assert "business_paused" in src, \
+            f"{mod} sends unattended and must honor automations_paused"
+
+
+# ─── The trusted sweep's proposal mapping ────────────────────────────
+
+def test_every_executable_proposal_type_names_an_equivalent_verb():
+    """A proposal type the sweep can execute but cannot classify would
+    reach policy_engine as an unregistered verb and be refused forever —
+    a silent, total outage of the trust track."""
+    import rules_router as rr
+    missing = sorted(rr.EXECUTABLE_PROPOSAL_TYPES
+                     - set(rr._PROPOSAL_EQUIVALENT_VERB))
+    assert not missing, f"executable proposal types with no verb: {missing}"
+
+
+def test_every_equivalent_verb_is_a_real_registered_verb():
+    """The mapping's whole point is to reuse the one registry. A typo
+    here fails closed and stops the sweep, so it fails loudly first."""
+    import rules_router as rr
+    import action_registry
+    for ptype, verb in rr._PROPOSAL_EQUIVALENT_VERB.items():
+        assert action_registry.classification(verb) is not None, \
+            f"{ptype} maps to '{verb}', which is not in the registry"
+
+
+def test_the_followup_email_is_classified_as_the_send_it_is():
+    """_exec_send_template_email calls Resend directly — the mail is gone.
+    Mapping it to anything gentler than a class-C client-facing verb
+    would launder an unattended send through a proposal."""
+    import rules_router as rr
+    import action_registry
+    import policy_engine
+    verb = rr._PROPOSAL_EQUIVALENT_VERB["propose_followup_email"]
+    assert action_registry.reversibility(verb) == "C"
+    assert verb in policy_engine.CLIENT_FACING
+
+
+def test_a_regulated_practice_is_not_mailed_by_the_trust_track(fake):
+    """The grant is a standing one, not the practitioner asking for THIS
+    send — so the regulated-vertical promise applies to it."""
+    import rules_router as rr
+    v = pe.evaluate("b1",
+                    verb=rr._PROPOSAL_EQUIVALENT_VERB["propose_followup_email"],
+                    surface="trust-track", prompted=False,
+                    biz_row=_biz("therapist"))
+    assert not v.allowed
+    assert v.rule == "vertical:client_facing_disabled"
+
+
+def test_the_trust_sweep_fails_closed_on_a_broken_check():
+    """Matching chief_scheduler and workflow_engine: a safety check that
+    cannot run is not permission to send."""
+    src = pathlib.Path(_here.parent / "rules_router.py").read_text(encoding="utf-8")
+    body = src.split("def _run_trusted_sweep_sync(")[1].split("\nasync def ")[0]
+    assert "policy_engine.evaluate(" in body
+    assert body.index("policy_engine.evaluate(") < body.index("_execute_proposal("), \
+        "the policy check must precede execution, not follow it"
+
+
+# ─── The unattended sender's ledger row ──────────────────────────────
+
+def test_autopilot_writes_to_the_ledger():
+    """_should_auto_approve's own docstring calls this path THE
+    unattended sender. It was the only unattended dispatcher writing no
+    audit_log row — an `events` row is not append-only and carries no
+    authorized_by."""
+    src = pathlib.Path(_here.parent / "chief_of_staff.py").read_text(encoding="utf-8")
+    body = src.split("async def _process_autopilot_for_draft(")[1].split("\nasync def ")[0]
+    assert "audit_log" in body, "the unattended sender must reach the ledger"
+    assert "actor_id=\"autopilot\"" in body, \
+        "actor_type is CHECK-constrained, so the identity rides actor_id"
+    assert "authorized_by=" in body, \
+        "the ledger's sixth field is the point of the row"
