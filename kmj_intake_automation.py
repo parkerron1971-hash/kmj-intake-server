@@ -170,6 +170,13 @@ app.add_middleware(
 # gzip header would cost more than it saves.
 from fastapi.middleware.gzip import GZipMiddleware
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+# Chief's chat stream must NOT ride through gzip — Starlette compresses
+# a streaming body through one zlib stream that only drains on close,
+# so every SSE delta arrived in a single burst at turn end (measured
+# live, 2026-08-25). Added AFTER GZipMiddleware so it sits OUTSIDE it
+# and strips Accept-Encoding before gzip decides. See sse_middleware.py.
+from sse_middleware import NoGzipForStreams
+app.add_middleware(NoGzipForStreams)
 # Guarantee CORS headers on ALL error responses (500/404/422/unhandled) — an
 # unhandled exception escapes CORSMiddleware otherwise, masking every error as
 # a browser CORS block. See cors_error_handlers.py.
