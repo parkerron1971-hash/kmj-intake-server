@@ -5007,30 +5007,83 @@ async def handle_remember(client, biz, action) -> Dict:
     return {"type": "remember", "result": "stored", "label": label, "nav": None}
 
 
+# ── The kinds a note can carry ───────────────────────────────────────
+# Kevin, 2026-08-25: "allow for chief to place note based on what is
+# stated and they can choose for themself if they are taking notes."
+# So the kind is CHIEF'S READING of what was said when Chief files the
+# note, and the practitioner's own pick when they type one — and either
+# is changeable afterwards from the chip on the slip. Nothing here is
+# binding; it is the opening guess.
+#
+# Kept in step with KIND_ORDER in the frontend's NotesPanel.tsx.
+NOTE_KINDS = ("idea", "task", "question", "quote", "note")
+NOTE_KIND_LABELS = {"idea": "an idea", "task": "a to-do", "question": "a question",
+                    "quote": "a quote", "note": "a note"}
+
+_NOTE_QUOTED = re.compile(r'["“”]')
+_NOTE_ATTRIB = re.compile(r"\b(said|says|told me|quote)\b")
+_NOTE_IDEA = re.compile(r"^idea\b|^what if\b|\bwe could\b|\bmaybe we should\b")
+_NOTE_ASKING = re.compile(r"^(ask|check whether|find out|should we|why|do we|does)\b")
+_NOTE_DOING = re.compile(
+    r"^(follow up|call|email|send|get|book|renew|chase|remember to|schedule"
+    r"|order|pay|file|remind|fix|write)\b")
+
+
+def _guess_note_kind(content: str) -> str:
+    """What KIND of note this is, read off what was actually said.
+
+    The MODEL normally decides — it saw the whole conversation and names
+    the kind on the action tag. This is the fallback for when it does not
+    (an older cached prompt, another caller), and it mirrors guessKind()
+    in NotesPanel.tsx so both sides land on the same word for the same
+    sentence."""
+    t = (content or "").strip()
+    s = t.lower()
+    if _NOTE_QUOTED.search(t) and _NOTE_ATTRIB.search(s):
+        return "quote"
+    if _NOTE_IDEA.search(s):
+        return "idea"
+    if t.endswith("?") or _NOTE_ASKING.match(s):
+        return "question"
+    if _NOTE_DOING.match(s):
+        return "task"
+    return "note"
+
+
 async def handle_save_note(client, biz, action) -> Dict:
-    """THE NOTES RAIL (2026-07-23, Kevin's ruling): 'note this for later'
+    """THE NOTES PAD (2026-07-23, Kevin's ruling): 'note this for later'
     in any Chief conversation files a NOTE the practitioner reviews in
-    the app's Notes section. Rides chief_memories (category='note') —
-    zero new schema. Unlike memories, notes are the practitioner's OWN
-    parking lot: no dedup (repeating a note is allowed), stored verbatim."""
+    the app's Notes room. Rides chief_memories — zero new schema. Unlike
+    memories, notes are the practitioner's OWN parking lot: no dedup
+    (repeating a note is allowed), stored verbatim."""
     content = (action.get("content") or "").strip()
     if not content:
         return _fail("save_note", "nothing to note — content required")
-    # Category rides 'other' with a [note] marker: the DB's
+    kind = (action.get("kind") or "").strip().lower()
+    if kind not in NOTE_KINDS:
+        kind = _guess_note_kind(content)
+    # Category rides 'other' with a [note:<kind>] marker: the DB's
     # chief_memories_category_check predates 'note' (live 400, 2026-07-23)
     # and notes living in the memory table means Chief RECALLS them in
     # later conversations — which is the point of "note this for later".
+    #
+    # The marker grew the kind on 2026-08-25 rather than the table growing
+    # a column. The panel reads on the `[note` prefix, so rows written
+    # before that (plain "[note] ") still come back and read as plain
+    # notes. If this ever earns a migration, that is where it goes —
+    # a real category plus note_kind, and the marker retires.
     inserted = await _sb(client, "POST", "/chief_memories", {
         "business_id": biz["id"],
         "category": "other",
-        "content": ("[note] " + content)[:2000],
+        "content": (f"[note:{kind}] " + content)[:2000],
         "source": "user_stated",
         "importance": 5,
     })
     if not inserted:
         return _fail("save_note", "note insert failed")
     return {"type": "save_note", "result": "noted",
-            "label": f"📝 Noted for later: {content[:80]}", "nav": None}
+            "label": f"📝 Noted as {NOTE_KIND_LABELS[kind]} for later: {content[:80]}",
+            "nav": None}
 
 
 # ─── Chief → Claude Code bridge (2026-07-11) ─────────────────────────
@@ -16263,7 +16316,7 @@ ACTIONS — MISC:
   [ACTION:{{"type":"add_testimonial","name":"...","quote":"...","role":"...","show_on_website":true}}]  — save a testimonial the practitioner shares ("Sandra said the program changed her business — keep that").
   [ACTION:{{"type":"analyze_trends"}}]  — run the weekly longitudinal insight engine RIGHT NOW ("analyze my trends", "what patterns do you see lately") instead of waiting for the scheduled run; writes fresh insight memories.
   [ACTION:{{"type":"remember","category":"preference|pattern|context|decision|boundary|goal|standing_instruction|other","content":"...","importance":1-10}}]
-  [ACTION:{{"type":"save_note","content":"..."}}]  — THE NOTES PAD: when they say "note this for later", "put this in a note", "save that thought", "write this down", or hand you anything they'll want to REVIEW later (an idea, a to-revisit, a reminder-to-self), file it as a NOTE — verbatim or lightly cleaned, never summarized away. Notes land on the Notes tab (under Workspace in the sidebar; navigate: tab:"grow", sub:"notes"). Use save_note for the practitioner's OWN parking lot; use remember for facts YOU should recall about them. After filing, confirm with the note's first words so they know it's captured.
+  [ACTION:{{"type":"save_note","content":"...","kind":"idea|task|question|quote|note"}}]  — THE NOTES PAD: when they say "note this for later", "put this in a note", "save that thought", "write this down", or hand you anything they'll want to REVIEW later (an idea, a to-revisit, a reminder-to-self), file it as a NOTE — verbatim or lightly cleaned, never summarized away. Notes land on the Notes tab (under Workspace in the sidebar; navigate: tab:"grow", sub:"notes"). Use save_note for the practitioner's OWN parking lot; use remember for facts YOU should recall about them. SET "kind" FROM WHAT THEY ACTUALLY SAID — "idea" for something they might build or try, "task" for something to be done, "question" for something to find out or ask someone, "quote" for words they want kept as spoken, "note" for anything else. It is only your reading of it: they can re-file a note under any kind from the slip itself, so pick the honest one and never ask them to confirm it. After filing, confirm with the note's first words so they know it's captured.
   [ACTION:{{"type":"update_business_profile_field","field_path":"governing_state|produces_deliverables|sensitive_areas.health_advice|sensitive_areas.session_recording|sensitive_areas.physical_activity","value":"<their answer>"}}]
   [ACTION:{{"type":"update_voice_profile","patch":{{"description":"...","audience_note":"...","avoid":"...","signature_phrases":"..."}}}}]  — VOICE NOTES: when the practitioner describes HOW they want to sound or WHO they serve — tone blends the brand_voice enum can't hold ("warm, but mix ministry and corporate language depending on the client"), audience framing ("faith-based and secular clients alike"), phrases they love, words to avoid — save it HERE, not just in remember(). Include only the keys they actually addressed. These notes live in About Me → My Voice, the practitioner can edit them there, and they are in your context on every future draft. brand_voice (the single enum) still goes through update_business_profile_field.
     • THIS IS ALSO HOW YOU WRITE TO THE ABOUT ME PAGE. There is no separate "About page body copy" action and none is needed — when you draft a positioning/audience line and the practitioner approves it ("add that to my About Me", "implement it into the About Me"), emit this action with the approved text: audience-framing lines go in audience_note, tone descriptions in description. Example: [ACTION:{{"type":"update_voice_profile","patch":{{"audience_note":"I work with entrepreneurs from all walks of life, some from a faith background, others not — the coaching is the same: practical strategy paired with real accountability."}}}}]

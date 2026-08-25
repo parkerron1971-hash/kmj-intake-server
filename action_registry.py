@@ -357,7 +357,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "save_swot":              _w("A", "saves a strategy-track deliverable"),
     "session_summary":        _w("A", "appends a coaching-session summary to phases.session_log"),
     "save_email_template":    _w("A", "saves a reusable template into settings; editable"),
-    "save_note":              _w("A", "files a note (chief_memories, category='note')"),
+    "save_note":              _w("A", "files a note (chief_memories, a '[note:<kind>]' marker on content)"),
     "set_availability_day":       _w("A", "sets one day's weekly hours; re-settable"),
     "set_availability_override":  _w("A", "sets a date-specific override; re-settable"),
     "set_lead_time":              _w("A", "sets required booking lead time"),
