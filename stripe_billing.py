@@ -106,6 +106,24 @@ def _stripe_key() -> str:
     return key
 
 
+def _stripe_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Headers for a Stripe call, pinning the API version when one is set.
+
+    Deliberately OPT-IN (STRIPE_API_VERSION, unset by default = the
+    account's own version, which is what every call has always used).
+    A pinned version is the right end state, but a WRONG version string
+    400s every call including checkout, and that is not a failure worth
+    risking to fix a display field. Set it in Railway once, verify a
+    checkout, and it is pinned from then on.
+
+    Whether or not it is pinned, _period_end below reads both shapes."""
+    headers = dict(extra or {})
+    version = (os.environ.get("STRIPE_API_VERSION") or "").strip()
+    if version:
+        headers["Stripe-Version"] = version
+    return headers
+
+
 def _success_url() -> str:
     return os.environ.get("STRIPE_SUCCESS_URL", "https://mysolutionist.app/billing/success")
 
@@ -130,7 +148,8 @@ async def _stripe_post(path: str, form: Dict[str, Any]) -> Dict[str, Any]:
             f"{STRIPE_API_BASE}{path}",
             auth=(_stripe_key(), ""),
             data=flat,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            headers=_stripe_headers(
+                {"Content-Type": "application/x-www-form-urlencoded"}),
         )
     if r.status_code >= 400:
         logger.error(f"Stripe {path} {r.status_code}: {r.text[:300]}")
@@ -269,7 +288,8 @@ async def _price_display(pid: str) -> Optional[Dict[str, Any]]:
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
             r = await c.get(f"{STRIPE_API_BASE}/prices/{pid}",
-                            auth=(_stripe_key(), ""))
+                            auth=(_stripe_key(), ""),
+                            headers=_stripe_headers())
         if r.status_code < 400:
             pr = r.json()
             return {
@@ -688,7 +708,8 @@ async def _peek_checkout_session(session_id: Optional[str]) -> Optional[Dict[str
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
             r = await c.get(f"{STRIPE_API_BASE}/checkout/sessions/{sid}",
-                            auth=(_stripe_key(), ""))
+                            auth=(_stripe_key(), ""),
+                            headers=_stripe_headers())
         if r.status_code >= 400:
             logger.warning(f"session peek {sid} → {r.status_code}")
             return None
@@ -904,6 +925,31 @@ async def _resolve_business_id_async(event):
     return rows[0]["id"] if rows else None
 
 
+def _period_end(sub_obj: Dict[str, Any]) -> Optional[int]:
+    """When the current billing period ends, from either shape.
+
+    THE BUG THIS FIXES: Stripe's Basil version (2025-03-31) REMOVED
+    current_period_start/end from the Subscription object and moved them
+    onto each subscription item, which each track their own period. We
+    pin no API version, so live calls run at the account's version —
+    Basil or later — and `sub_obj.get("current_period_end")` has been
+    coming back None. businesses.current_period_end has been writing
+    NULL, and /billing/entitlements has been serving that null to every
+    surface that wants to say when a subscription renews.
+
+    Item first (the current shape), subscription second (pre-Basil, or
+    if STRIPE_API_VERSION pins an older one). Our subscriptions carry a
+    single item, so item[0] IS the period; on a mixed-interval
+    subscription the earliest end is the honest answer to "when does
+    this renew", because that is when the customer is next charged."""
+    ends = [it.get("current_period_end")
+            for it in (((sub_obj.get("items") or {}).get("data")) or [])
+            if it.get("current_period_end")]
+    if ends:
+        return min(ends)
+    return sub_obj.get("current_period_end")
+
+
 def _ts_to_iso(ts: Optional[int]) -> Optional[str]:
     if not ts:
         return None
@@ -932,7 +978,7 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
         "subscription_status":     status_value,
         "subscription_plan":       price_id,
         "trial_ends_at":           _ts_to_iso(sub_obj.get("trial_end")),
-        "current_period_end":      _ts_to_iso(sub_obj.get("current_period_end")),
+        "current_period_end":      _ts_to_iso(_period_end(sub_obj)),
         "cancel_at_period_end":    bool(sub_obj.get("cancel_at_period_end")),
     }
     # 7/30 tier arc — businesses.tier was DEAD DATA: written once as
@@ -1026,7 +1072,8 @@ async def _stripe_get(path: str, params: list) -> Dict[str, Any]:
     """GET from Stripe with repeated-key params (lookup_keys[] etc.)."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         r = await c.get(f"{STRIPE_API_BASE}{path}",
-                        auth=(_stripe_key(), ""), params=params)
+                        auth=(_stripe_key(), ""), params=params,
+                        headers=_stripe_headers())
     if r.status_code >= 400:
         logger.error(f"Stripe GET {path} {r.status_code}: {r.text[:300]}")
         raise HTTPException(status_code=r.status_code,
