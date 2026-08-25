@@ -30,6 +30,13 @@ BASE_TERMS: Dict[str, str] = {
     "contacts":     "Contacts",
     "service":      "Service",
     "services":     "Services",
+    # The unit of WORK, as distinct from the thing sold. `service` is
+    # what a practice OFFERS; `project` is one running instance of it —
+    # the module_entries row a lawyer calls a Matter and a contractor a
+    # Job. Added alongside the studio's dictionary.ts, whose Home strip
+    # was the caller that needed it.
+    "project":      "Project",
+    "projects":     "Projects",
     "appointment":  "Appointment",
     "appointments": "Appointments",
     "booking":      "Booking",
@@ -80,6 +87,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "contacts":     "Clients",
         "service":      "Matter",
         "services":     "Matters",
+        "project":      "Matter",
+        "projects":     "Matters",
         "appointment":  "Consultation",
         "appointments": "Consultations",
         "booking":      "Consultation",
@@ -131,6 +140,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "contacts":     "Clients",
         "service":      "Engagement",
         "services":     "Engagements",
+        "project":      "Engagement",
+        "projects":     "Engagements",
         "appointment":  "Meeting",
         "appointments": "Meetings",
         "booking":      "Meeting",
@@ -252,6 +263,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         # site, with a start and an end.
         "service":      "Job",
         "services":     "Jobs",
+        "project":      "Job",
+        "projects":     "Jobs",
         # The price list they quote from is still Services — that is the
         # menu, distinct from the Job that gets scheduled off it.
         "offering":     "Service",
