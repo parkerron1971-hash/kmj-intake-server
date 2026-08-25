@@ -279,6 +279,32 @@ def premium_voice_price() -> int:
     return _dial("PREMIUM_VOICE_PRICE", "PRICE_", 1)
 
 
+def voice_input_price() -> int:
+    """One Whisper transcription — a spoken turn's INPUT half.
+
+    DEFAULTS TO 0, which is exactly what it charged before this dial
+    existed. It is here because the cost was invisible and the price was
+    unmovable, and only one of those two is a pricing decision.
+
+    Measured 2026-08-10..24: /ai/whisper was 370 calls and $9.12, 19.8%
+    of the platform's entire AI bill and its second-largest line after
+    Chief chat itself. It ran at 2.47c a call against a Chief turn's
+    7.72c, so a spoken turn really costs about 10.2c before the reply is
+    even spoken back — roughly 32% more than the turn it is billed as.
+
+    The reason it is not simply priced today: 0 is what every existing
+    customer has been quoted, ~94% of turns now arrive by voice (370
+    whisper calls against 394 turns in that window), and pricing the
+    input half of the main interaction is Kevin's call, not a cleanup's.
+    So the dial ships at the status quo and moves with a Railway value
+    change — the rule this module exists to enforce.
+
+    If it does move, 1 credit is the natural first stop: it collects
+    2.63c at the Starter rate against 2.47c of cost, which is roughly
+    break-even, and 3 is where it earns the same ~3x as everything else."""
+    return _dial("VOICE_INPUT_PRICE", "PRICE_", 0)
+
+
 # ─── Does the tank pay for itself? ───────────────────────────────────
 
 # Measured from api_usage over 640 real Chief turns, 2026-07-23..08-10.
@@ -440,7 +466,12 @@ def unit_weights() -> Dict[str, int]:
         # ── Voice ──
         "/ai/tts": 0,                    # standard TTS included with every plan
         "/ai/tts-el": premium_voice_price(),
-        "/ai/whisper": 0,                # transcription rides the turn it feeds
+        # Transcription rides the turn it feeds — at 0 that is a claim
+        # about price, and it was also, until 2026-08-24, a claim about
+        # cost nobody could check: the row carried no business_id, so
+        # 19.8% of the AI bill was invisible to every per-tenant control.
+        # The dial is 0 by default; what changed is that it is now a dial.
+        "/ai/whisper": voice_input_price(),
 
         # ── Infrastructure, never billed ──
         "/gate/embed": 0,
