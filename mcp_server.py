@@ -262,6 +262,13 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
             "type": "boolean",
             "description": "Include forms that have been switched off. "
                            "Default false."}})),
+    "sms_status": (
+        "Whether texting is actually working for this business: the keyword "
+        "clients text to reach it, whether the provider is switched on, "
+        "whether the automated booking confirmations and appointment "
+        "reminders are on, and how many contacts have replied STOP. No "
+        "message contents.",
+        _NO_ARGS),
     "list_offerings": (
         "The services or packages this business sells, with prices.",
         _NO_ARGS),
@@ -577,6 +584,15 @@ HANDOFFS: Dict[str, _Handoff] = {
         text="Chief can build a client form and put it on the site.",
         where="Build › Client Forms",
         when=lambda p: _num(_sig(p).get("active")) == 0),
+
+    # No keyword means inbound texts route to nobody — a silent failure
+    # the practitioner cannot see from their end, because the client just
+    # gets the platform help reply and gives up.
+    "sms_status": _Handoff(
+        verb="set_sms_keyword",
+        text="Chief can claim the keyword so texts to that number reach you.",
+        where="Operate › Texts",
+        when=lambda p: _num(_sig(p).get("has_keyword")) == 0),
 
     "draft_purchase_order": _Handoff(
         verb="send_purchase_order",

@@ -328,6 +328,17 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "enroll_student":         _w("A", "inserts an academy_enrollments row"),
     "mark_reply_read":        _w("A", "flips email_replies.read; re-markable"),
     "mark_sms_read":          _w("A", "flips sms_messages.read; re-markable"),
+    # Texting setup. Both are configuration — no message leaves, no client
+    # is contacted, and each verb reports the state it changed FROM so the
+    # practitioner can put it back.
+    "set_sms_keyword":        _w("A", "claims or rewrites ONE sms_keywords row — the "
+                                      "word a client texts to reach this business. "
+                                      "Re-claimable; existing bindings survive a change"),
+    "set_sms_alerts":         _w("A", "flips businesses.settings.sms_alerts "
+                                      "{confirmations, reminders}. A toggle, and the only "
+                                      "writer of a key sms_alerts has always read"),
+    "sms_status":             _r("keyword, provider readiness, alert switches and an "
+                                 "opt-out tally for this business; writes nothing"),
     "notify_practitioner":    _w("A", "in-app notification + push to the OWNER. It does leave the "
                                       "device, but never reaches a client, so it is not the "
                                       "client-facing send class B exists for"),

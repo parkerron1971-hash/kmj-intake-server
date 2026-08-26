@@ -136,7 +136,12 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # contacts and events, which this verb never reads. Same
     # self-description class as list_offerings / inspect_module. It carries
     # a handoff, because a business with no form has no front door.
-    assert len(tools) == 28, (
+    # 29 (8/26): sms_status joined — keyword, provider readiness, alert
+    # switches and an opt-out tally. Configuration and counts, never a
+    # message body (the conversation itself is not on this surface at
+    # all). Same self-description class as site_health. It carries a
+    # handoff, because no keyword means inbound texts reach nobody.
+    assert len(tools) == 29, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -573,6 +578,13 @@ def _clean_payloads():
             "type": "list_bookkeeping_proposals",
             "result": "no pending proposals", "proposals": [],
             "signal": {"status": "pending", "total": 0}},
+        # Clean here means texting is set up — the handoff fires on a
+        # MISSING keyword, which is the state that means work.
+        "sms_status": {
+            "type": "sms_status", "result": "keyword BLOOM; reminders on",
+            "label": "Texting - ready",
+            "signal": {"has_keyword": 1, "configured": 1, "ready": 1,
+                       "opted_out": 0}},
         # Clean here means the business HAS a live form — the handoff
         # fires on zero, which is the state that means work.
         "list_client_forms": {

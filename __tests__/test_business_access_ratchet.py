@@ -54,7 +54,14 @@ RESIDUAL = [h for h in UNGUARDED
 # one that is a bug list. The total includes surfaces that are anonymous
 # on purpose (public sites, public forms, signature-verified webhooks) —
 # still worth pinning, so that set cannot grow quietly either.
-MAX_UNGUARDED_TOTAL = 52
+# 52 -> 46 (2026-08-26): the six SMS practitioner handlers
+# (/sms/send, /sms/conversation, /sms/session-reminder,
+# /sms/keyword x2, /sms/broadcast) now assert_access. They used to
+# sit inside PUBLIC_BY_DESIGN's 'inbound webhooks' entry, which was
+# never true of them — the webhooks are in twilio_sms.py. Lowered
+# rather than left, because six units of new slack is how a ratchet
+# stops ratcheting.
+MAX_UNGUARDED_TOTAL = 46
 MAX_UNGUARDED_RESIDUAL = 0
 
 

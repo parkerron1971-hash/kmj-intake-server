@@ -85,9 +85,20 @@ METHODS = ("get", "post", "put", "patch", "delete")
 #   intake_endpoint
 #       public forms. A client booking an appointment or giving to a
 #       church has no account and should not need one.
-#   stripe_proxy, stripe_payments_router, sms_service, sms_routing
+#   stripe_proxy, stripe_payments_router
 #       inbound webhooks. Authenticated by SIGNATURE, not by session —
 #       see webhook_guard. A session check here would reject Stripe.
+#
+#       sms_service and sms_routing USED TO SIT ON THIS LINE, and did not
+#       belong on it. SMS's inbound webhooks live in twilio_sms.py, which
+#       is signature-validated and takes no business id from the caller;
+#       these two modules hold the PRACTITIONER endpoints — /sms/send,
+#       /sms/conversation, /sms/session-reminder, /sms/keyword,
+#       /sms/broadcast. Every one of them read business_id out of the
+#       request and trusted it, and the exemption is why nothing said so
+#       for a year. An entry here is a judgement about a module, and a
+#       module is the wrong unit when one file holds both a webhook and a
+#       session endpoint. Removed 2026-08-26; all six now assert_access.
 #   meta_oauth
 #       the OAuth redirect. It cannot carry a bearer token, which is the
 #       entire reason the connect TICKET exists (#468).
@@ -100,7 +111,6 @@ PUBLIC_BY_DESIGN = frozenset({
     "booking_widget_router", "booking_series",
     "events_rsvp_router", "giving_router", "intake_endpoint",
     "stripe_proxy", "stripe_payments_router",
-    "sms_service", "sms_routing",
     "meta_oauth",
 })
 
@@ -145,6 +155,23 @@ def _source_files():
     for path in sorted(ROOT.rglob("*.py")):
         s = str(path)
         if "__pycache__" in s or "__tests__" in s or "site-packages" in s:
+            continue
+        # SKIP DOT-DIRECTORIES, and why it is not housekeeping.
+        #
+        # rglob walked everything, so any stray copy of the tree — a
+        # worktree-context snapshot, a vendored checkout, a backup —
+        # produced a SECOND module under the same name, and the duplicate
+        # won. This was found the hard way: a real ownership fix landed on
+        # sms_service.py and the sweep kept reporting the handler
+        # unguarded, because it was reading a months-old copy of that file
+        # out of an untracked .claude-wt-ctx/ directory.
+        #
+        # A ratchet that can be computed against files which are not the
+        # repository reports a number for something nobody is shipping,
+        # and it fails in the dangerous direction: it hides a fix, so the
+        # next person concludes the guard does not work and takes it out.
+        if any(part.startswith(".") and part not in (".", "..")
+               for part in path.relative_to(ROOT).parts[:-1]):
             continue
         yield path
 

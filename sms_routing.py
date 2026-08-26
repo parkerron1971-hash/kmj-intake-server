@@ -375,6 +375,12 @@ class KeywordBody(BaseModel):
 
 @router.get("/sms/keyword")
 async def get_keyword(business_id: str, user: AuthedUser = Depends(require_user)):
+    # See the note on /sms/send: `require_user` proves the caller is
+    # signed in, not that this business is theirs. A keyword is the word
+    # a stranger texts to reach a practitioner — reading someone else's
+    # is reading the key to their front door.
+    import business_access
+    business_access.assert_access(str(business_id), user, "viewer")
     async with httpx.AsyncClient() as client:
         rows = await _sb_get(
             client, f"/sms_keywords?business_id=eq.{business_id}&select=keyword&limit=1",
@@ -384,6 +390,13 @@ async def get_keyword(business_id: str, user: AuthedUser = Depends(require_user)
 
 @router.post("/sms/keyword")
 async def set_keyword(body: KeywordBody, user: AuthedUser = Depends(require_user)):
+    # Admin, not member: under the one-number model the keyword IS the
+    # business's inbound identity, and the uniqueness check below made
+    # this look safe from the wrong angle — it stops you STEALING a
+    # keyword somebody else claimed, and did nothing about setting or
+    # rewriting the keyword of a business that is not yours.
+    import business_access
+    business_access.assert_access(str(body.business_id), user, "admin")
     word = (body.keyword or "").strip().upper()
     if not KEYWORD_RE.match(word):
         return JSONResponse({"error": "Keyword must be 3-20 letters/numbers."}, 400)
@@ -423,6 +436,17 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
     """Send to every contact WITH a phone on THIS practitioner's list.
     Scoping by business_id is what makes cross-contamination
     structurally impossible; opted-out numbers are skipped."""
+    # THE ONE THIS MATTERS MOST FOR. The docstring says scoping by
+    # business_id is "what makes cross-contamination structurally
+    # impossible" — but the business_id was the CALLER'S to choose. Any
+    # signed-in account could text up to 500 of another practitioner's
+    # contacts, from the shared platform number, under that
+    # practitioner's brand name, billed to the platform and charged
+    # against their 10DLC standing. The scoping was real; the
+    # authorisation for it was missing. Admin, because this is bulk
+    # outbound to the whole list.
+    import business_access
+    business_access.assert_access(str(body.business_id), user, "admin")
     msg = (body.message or "").strip()
     if not msg:
         return JSONResponse({"error": "Message body required"}, 400)
