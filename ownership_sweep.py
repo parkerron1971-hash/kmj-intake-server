@@ -81,13 +81,49 @@ METHODS = ("get", "post", "put", "patch", "delete")
 #   public_site, site_composer, site_concierge, store_router, store_files
 #       the customer-facing website and storefront. Their whole job is to
 #       serve a stranger who has never signed in.
-#   booking_widget_router, booking_series, events_rsvp_router, giving_router,
+#   booking_widget_router, events_rsvp_router, giving_router,
 #   intake_endpoint
 #       public forms. A client booking an appointment or giving to a
 #       church has no account and should not need one.
-#   stripe_proxy, stripe_payments_router
-#       inbound webhooks. Authenticated by SIGNATURE, not by session —
-#       see webhook_guard. A session check here would reject Stripe.
+#
+#       booking_series USED TO BE ON THIS LINE and never belonged: both
+#       its handlers call _require_member_writer -> require_role, and a
+#       recurring series is a practitioner action, not a public form. It
+#       was here to silence a FALSE positive — require_role raises an
+#       aliased _HTTPException through a function-local import, and the
+#       sweep could see through neither. Both are fixed above, so the
+#       entry is gone. A false positive absorbed into this list costs
+#       more than the noise it hides: the list stops reading as a set of
+#       judgements, and the next REAL gap in that module is invisible.
+#   stripe_proxy, stripe_payments_router — NAMED HANDLERS ONLY
+#       These were whole-module entries under the same "inbound webhooks"
+#       claim, and the claim is no more true of them than it was of SMS.
+#       /stripe/webhook IS a webhook and verifies its signature (fails
+#       closed on a missing secret). Everything else in those two files is
+#       a session endpoint, and the money-moving ones — create-payment-link,
+#       product-link, invoice-checkout, charge-no-show, refund — already
+#       carry _require_owner. A blanket over the module said nothing about
+#       any of that and would have swallowed the next handler added to it.
+#       So the exemption is now per-handler, and it is three:
+#
+#         stripe_payments_router.booking_checkout
+#             a customer paying for their own booking, from the wizard or
+#             an email button, with no account. The amount is derived
+#             server-side from the booking row — the caller cannot
+#             influence it.
+#         stripe_proxy.payments_connect
+#             answers from the payments_core registry. Static copy about
+#             which providers are connectable; reaches no database.
+#         stripe_proxy.payments_providers
+#             the render-time provider read a storefront needs before a
+#             visitor has signed in to anything. It stays anonymous, and
+#             it no longer answers with connect_account_id /
+#             oauth_merchant_id — see the note on the handler. Nothing
+#             deciding whether to draw a Buy button needs a merchant id,
+#             and business ids are public (they ride in the intake embed
+#             snippet), so anything this returns is returned to everyone.
+#             payments_callback needs no entry: it takes no business id,
+#             so the sweep never asks about it.
 #
 #       sms_service and sms_routing USED TO SIT ON THIS LINE, and did not
 #       belong on it. SMS's inbound webhooks live in twilio_sms.py, which
@@ -108,10 +144,16 @@ METHODS = ("get", "post", "put", "patch", "delete")
 PUBLIC_BY_DESIGN = frozenset({
     "public_site", "site_composer", "site_concierge",
     "store_router", "store_files",
-    "booking_widget_router", "booking_series",
+    "booking_widget_router",
     "events_rsvp_router", "giving_router", "intake_endpoint",
-    "stripe_proxy", "stripe_payments_router",
     "meta_oauth",
+    # Per-handler entries. A module name here exempts the whole file; a
+    # (module, handler) pair exempts exactly one door. Reach for the pair
+    # whenever a file mixes public and session endpoints — which is the
+    # shape that hid six unguarded SMS handlers for a year.
+    ("stripe_payments_router", "booking_checkout"),
+    ("stripe_proxy", "payments_connect"),
+    ("stripe_proxy", "payments_providers"),
 })
 
 
@@ -176,6 +218,40 @@ def _source_files():
         yield path
 
 
+def _imported_names(tree: ast.AST) -> Dict[str, str]:
+    """`from X import Y` bindings in a module, INCLUDING function-local
+    ones, as {bound_name: source_module_stem}.
+
+    WHY THIS EXISTS. Gate-ness propagates along the call graph, and a
+    plain-name call used to resolve only against functions defined in the
+    SAME module. That is wrong for this codebase's dominant shape:
+
+        def _require_member_writer(business_id, user):
+            from business_users_router import require_role   # local import
+            return require_role(business_id, str(user.id), "member")
+
+    `require_role` is a real gate in another module, and the call is a
+    bare Name, so the link was lost and both /series handlers were
+    reported unguarded. They are not — and somebody silenced that by
+    putting `booking_series` on PUBLIC_BY_DESIGN under "public forms",
+    which it is not. A false positive absorbed into the exemption list
+    costs more than the noise: the list stops being readable as a set of
+    judgements, and the next real gap in that module is invisible.
+
+    Only EXPLICIT `from X import Y` is followed. A name reached through a
+    variable, a dict of callables or a decorator is still not seen, so
+    this remains an under-count of coverage — the safe direction.
+    """
+    out: Dict[str, str] = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom) and n.module and not n.level:
+            src = n.module.split(".")[-1]
+            for a in n.names:
+                if a.name != "*":
+                    out[a.asname or a.name] = src
+    return out
+
+
 def _calls_of(node: ast.AST) -> Set[Tuple[str, str]]:
     """Calls made inside a function, as ('*', name) or ('module', attr)."""
     out: Set[Tuple[str, str]] = set()
@@ -192,6 +268,7 @@ def _calls_of(node: ast.AST) -> Set[Tuple[str, str]]:
 def sweep() -> Dict[str, Any]:
     """Returns {'handlers': [...], 'unguarded': [...], 'modules': n}."""
     mods: Dict[str, Dict[str, Tuple[str, Set[Tuple[str, str]]]]] = {}
+    imported: Dict[str, Dict[str, str]] = {}
     handlers: List[Dict[str, Any]] = []
 
     for path in _source_files():
@@ -202,6 +279,7 @@ def sweep() -> Dict[str, Any]:
             continue
         stem = path.stem
         fns = mods.setdefault(stem, {})
+        imported.setdefault(stem, {}).update(_imported_names(tree))
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -228,21 +306,39 @@ def sweep() -> Dict[str, Any]:
                 "line": node.lineno, "body": body, "calls": calls,
                 "write": any(m in ("post", "put", "patch", "delete")
                              for m in methods),
-                "public_by_design": stem in PUBLIC_BY_DESIGN,
+                "public_by_design": (stem in PUBLIC_BY_DESIGN
+                                     or (stem, node.name) in PUBLIC_BY_DESIGN),
                 "verified_by_hand": (stem, node.name) in VERIFIED_BY_HAND,
             })
 
     # A gate refuses AND consults ownership.
+    # `raise <anything>HTTPException` — dotted or aliased.
+    #
+    # The pattern was `raise\s+HTTPException`, which missed
+    # `business_users_router.require_role`:
+    #
+    #     from fastapi import HTTPException as _HTTPException
+    #     ...
+    #     raise _HTTPException(403, f"requires {min_role} access or above")
+    #
+    # That function is the SHARED ROLE LADDER — the gate a whole family of
+    # handlers delegates to — so one alias made every one of them look
+    # unguarded. It still has to be a literal raise of something named
+    # HTTPException; this widens the spelling, not the rule.
+    _RAISES = re.compile(r"raise\s+[\w.]*HTTPException")
     gate: Dict[Tuple[str, str], bool] = {
-        (m, n): bool(re.search(r"raise\s+HTTPException", b))
-                and any(h in b for h in HINTS)
+        (m, n): bool(_RAISES.search(b)) and any(h in b for h in HINTS)
         for m, fns in mods.items() for n, (b, _) in fns.items()
     }
 
     def resolve(mod: str, call: Tuple[str, str]):
         who, fn = call
         if who == "*":
-            return (mod, fn) if fn in mods.get(mod, {}) else None
+            if fn in mods.get(mod, {}):
+                return (mod, fn)
+            # Not local — follow an explicit `from X import fn`.
+            src = imported.get(mod, {}).get(fn)
+            return (src, fn) if src and fn in mods.get(src, {}) else None
         return (who, fn) if fn in mods.get(who, {}) else None
 
     changed = True
