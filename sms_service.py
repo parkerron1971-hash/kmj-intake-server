@@ -536,6 +536,18 @@ async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
 async def send_sms(req: SendSmsRequest, user: AuthedUser = Depends(require_user)):
     """Send an SMS (Twilio Messaging Service first; Telnyx fallback)
     and persist it as outbound. Thin wrapper over send_sms_core."""
+    # WHOSE BUSINESS. `require_user` only proves the caller is signed in
+    # — as ANY user on the platform. business_id arrived in the request
+    # and was trusted, so a signed-in stranger could text anyone AS any
+    # business: the recipient sees that business's name in the body, the
+    # send lands in that business's thread, and it spends their carrier
+    # reputation and their 10DLC standing. This is the
+    # defect email_sender.send_email already carries a fix and a comment
+    # for; SMS never got the sweep, because ownership_sweep exempted this
+    # whole module as "inbound webhooks" — which the Twilio webhooks in
+    # twilio_sms.py are, and these practitioner endpoints are not.
+    import business_access
+    business_access.assert_access(str(req.business_id), user, "member")
     async with httpx.AsyncClient() as client:
         try:
             return await send_sms_core(
@@ -686,6 +698,20 @@ async def record_inbound_sms(
 @router.get("/sms/conversation/{business_id}/{contact_id}")
 async def get_conversation(business_id: str, contact_id: str, user: AuthedUser = Depends(require_user)):
     """Return the full ordered SMS thread for a contact."""
+    # WHOSE BUSINESS. `require_user` only proves the caller is signed in
+    # — as ANY user on the platform. business_id arrived in the request
+    # and was trusted, so a signed-in stranger could read any business's
+    # entire SMS thread with any of their clients, message bodies
+    # included. The whole reason this module moved off the anon key (see
+    # _sb_anon) is that sms_messages content must not be readable with a
+    # public credential — and this handed it out over the service role
+    # instead. This is the
+    # defect email_sender.send_email already carries a fix and a comment
+    # for; SMS never got the sweep, because ownership_sweep exempted this
+    # whole module as "inbound webhooks" — which the Twilio webhooks in
+    # twilio_sms.py are, and these practitioner endpoints are not.
+    import business_access
+    business_access.assert_access(str(business_id), user, "viewer")
     async with httpx.AsyncClient() as client:
         rows = await _sb_get(client,
             f"/sms_messages?business_id=eq.{business_id}&contact_id=eq.{contact_id}"
@@ -710,6 +736,17 @@ async def send_session_reminder(req: SessionReminderRequest, user: AuthedUser = 
     message, and routes through /sms/send so all the usual storage +
     event-logging fires.
     """
+    # WHOSE BUSINESS. `require_user` only proves the caller is signed in
+    # — as ANY user on the platform. business_id arrived in the request
+    # and was trusted, so a signed-in stranger could send a reminder as
+    # any business, to that business's own client. This is the
+    # defect email_sender.send_email already carries a fix and a comment
+    # for; SMS never got the sweep, because ownership_sweep exempted this
+    # whole module as "inbound webhooks" — which the Twilio webhooks in
+    # twilio_sms.py are, and these practitioner endpoints are not.
+    import business_access
+    business_access.assert_access(str(req.business_id), user, "member")
+
     async with httpx.AsyncClient() as client:
         sess_rows = await _sb_get(client,
             f"/sessions?id=eq.{req.session_id}&business_id=eq.{req.business_id}"

@@ -104,6 +104,13 @@ from chief_form_actions import (
     handle_list_client_forms,
     handle_update_client_form,
 )
+# Texting SETUP — the keyword that routes inbound, and the switch on the
+# automated alerts. See chief_sms_actions module docstring.
+from chief_sms_actions import (
+    handle_set_sms_alerts,
+    handle_set_sms_keyword,
+    handle_sms_status,
+)
 # Customer drawdown ledger — what a client prepaid and has not used yet.
 from chief_balance_actions import (
     handle_check_balance,
@@ -11290,14 +11297,33 @@ async def handle_send_sms(client, biz, action) -> Dict:
     phone_override = (action.get("to") or action.get("phone") or "").strip()
 
     # Resolve contact id by name when not supplied directly.
+    #
+    # A MULTI-MATCH ASKS. This used to take rows[0] of a `limit=2` query
+    # and send. A text is class C — it leaves immediately, there is no
+    # outbox and no recall — so "text Marcus" with two Marcuses on the
+    # list was a coin flip that put one client's words in front of
+    # another, and neither the practitioner nor the recipient could undo
+    # it. Same rule chief_contract_actions applies to a counterparty, for
+    # the same reason: the cost of guessing wrong is not recoverable.
+    resolved_missing = False
     if not contact_id and contact_name:
         safe = contact_name.replace("%", "")
         rows = await _sb(client, "GET",
             f"/contacts?business_id=eq.{biz['id']}&name=ilike.*{safe}*"
-            f"&select=id,name&limit=2") or []
+            f"&select=id,name,phone&limit=5") or []
+        if len(rows) > 1:
+            names = ", ".join(r.get("name") or "" for r in rows[:5])
+            return _fail("send_sms",
+                         f"Several contacts match '{contact_name}': {names}. "
+                         f"Which one should I text?")
         if rows:
             contact_id = rows[0].get("id") or ""
             contact_name = rows[0].get("name") or contact_name
+        elif not phone_override:
+            # No such contact — say THAT, not "no phone on file", which
+            # sends the practitioner to look for a number on a record
+            # that does not exist.
+            resolved_missing = True
 
     contact_phone: Optional[str] = phone_override or None
     if contact_id and not contact_phone:
@@ -11307,6 +11333,10 @@ async def handle_send_sms(client, biz, action) -> Dict:
             contact_phone = rows[0].get("phone")
             contact_name = contact_name or rows[0].get("name") or ""
 
+    if resolved_missing:
+        return _fail("send_sms",
+                     f"I don't have a contact called '{contact_name}'. Add "
+                     f"them first, or give me the number to text.")
     if not contact_phone:
         who = contact_name or contact_id or "the contact"
         return _fail("send_sms", f"{who} has no phone number on file")
@@ -11323,7 +11353,27 @@ async def handle_send_sms(client, biz, action) -> Dict:
             client, business_id=biz["id"], to=contact_phone,
             message=message, contact_id=contact_id or None)
     except Exception as e:
-        return _fail("send_sms", f"sms error: {str(e)[:300]}")
+        # SmsSendError carries a PRACTITIONER-READABLE reason by
+        # construction — "Marcus has opted out of texts (STOP)" is a fact
+        # they can act on. It used to be wrapped as "sms error: <reason>",
+        # which dresses an answer up as a fault and invites a retry that
+        # will fail identically forever. Only the reason travels.
+        #
+        # Except the one reason that is not theirs to act on: the
+        # unconfigured-provider message names the env vars and the host,
+        # which is a note to whoever runs the server, not to the person
+        # trying to text a client.
+        import sms_service as _sms
+        reason = str(e)[:300]
+        if isinstance(e, _sms.SmsSendError):
+            if "not configured" in reason.lower():
+                return _fail("send_sms",
+                             "Texting isn't switched on for this account yet "
+                             "— I've noted it; nothing was sent.")
+            return _fail("send_sms", reason)
+        logger.warning(f"[send_sms] unexpected failure: {e}")
+        return _fail("send_sms",
+                     "I couldn't send that text just now — try again in a moment.")
     return {
         "type": "send_sms",
         "result": "sent",
@@ -13123,6 +13173,12 @@ ACTION_HANDLERS = {
     "mark_reply_read":            handle_mark_reply_read,
     "mark_sms_read":              handle_mark_sms_read,
     "send_sms":                   handle_send_sms,
+    # Texting SETUP. send_sms could text a client; nothing could claim the
+    # keyword that routes their reply back, and NOTHING in this codebase
+    # could switch the automated alerts off.
+    "set_sms_keyword":            handle_set_sms_keyword,
+    "set_sms_alerts":             handle_set_sms_alerts,
+    "sms_status":                 handle_sms_status,
     "remove_testimonial":         handle_remove_testimonial,
     # Timers & alarms
     "set_timer":                  handle_set_timer,
@@ -16187,6 +16243,10 @@ ACTIONS — TEXT MESSAGES (see TEXT MESSAGES context block above):
   [ACTION:{{"type":"send_sms","contact_id":"<uuid>","message":"..."}}]   — direct id form
   [ACTION:{{"type":"send_sms","to":"+15551234567","message":"..."}}]      — raw phone (skip contact lookup)
   [ACTION:{{"type":"mark_sms_read","contact_name":"Marcus"}}]  — flips that contact's unread texts; omit contact entirely to clear ALL unread texts
+  [ACTION:{{"type":"sms_status"}}]  — IS TEXTING ACTUALLY WORKING? Reports the keyword, whether texting is switched on for the account, whether the automated alerts are on, and how many of their contacts have replied STOP. Use it for "why aren't my texts going out?", "is my texting set up?", "did anyone opt out?" — and BEFORE telling them anything is wrong with texting. Never guess at a texting problem you can check.
+  [ACTION:{{"type":"set_sms_keyword","keyword":"BLOOM"}}]  — claims the word clients text to reach THEM. One number serves the whole platform, so the keyword is what connects a stranger's text to this business: without one, a client texting the number reaches nobody. 3-20 letters/numbers, usually the business name. Tells: "set up texting", "how do people text me?", "I want clients to be able to text". SUGGEST one from their business name rather than asking them to invent it, and confirm before claiming. If it's taken or reserved the action says so — offer the next best.
+  [ACTION:{{"type":"set_sms_alerts","reminders":false}}]  — the switch on the AUTOMATED texts: "confirmations" (sent the moment a client books) and "reminders" (24 hours before the appointment). Both are ON by default. Pass either key, or "on":false to switch both. Tells: "stop texting my clients reminders", "turn the confirmation texts back on", "my clients say they're getting too many texts". This does NOT affect anything the practitioner or you send by hand.
+    — BULK TEXTS GO THROUGH CAMPAIGNS, not a broadcast. When they want to text their whole list ("text everyone about the sale"), use plan_campaign with sms touches — it checks each recipient's consent, honors quiet hours, and shows them the audience first. Never describe a way to text everyone at once outside that.
     — Texts must be SHORT: under 160 chars ideal, never over 320. Warm tone, first-name only, no links in the first text.
     — When the practitioner says "text Marcus" / "send a text to X" / "shoot X a text" → send_sms.
     — When asked "did anyone text me?" / "any new texts?" → summarize unread inbound from the TEXT MESSAGES block.
