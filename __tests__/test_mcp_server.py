@@ -130,7 +130,13 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # 27 (8/18): draft_purchase_order joined — composes the reorder-email
     # preview from the business's own reorder plan; writes nothing, sends
     # nothing. send_purchase_order (class C, client-facing) stays off.
-    assert len(tools) == 27, (
+    # 28 (8/25): list_client_forms joined — the business's OWN public form
+    # configuration (names, question labels) plus an aggregate submission
+    # tally. No submission contents, no contact data: the answers live in
+    # contacts and events, which this verb never reads. Same
+    # self-description class as list_offerings / inspect_module. It carries
+    # a handoff, because a business with no form has no front door.
+    assert len(tools) == 28, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -567,6 +573,15 @@ def _clean_payloads():
             "type": "list_bookkeeping_proposals",
             "result": "no pending proposals", "proposals": [],
             "signal": {"status": "pending", "total": 0}},
+        # Clean here means the business HAS a live form — the handoff
+        # fires on zero, which is the state that means work.
+        "list_client_forms": {
+            "type": "list_client_forms",
+            "result": "Intake — 4 questions, 12 submissions",
+            "label": "1 client form",
+            "forms": [{"form_id": "f1", "name": "Intake", "is_active": True,
+                       "submissions": 12}],
+            "signal": {"forms": 1, "active": 1, "submissions": 12}},
         "campaign_status": {
             "type": "campaign_status", "result": "no campaigns yet",
             "signal": {"campaigns": 0, "unsent": 0}},

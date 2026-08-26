@@ -96,6 +96,14 @@ from chief_contract_actions import (
     handle_draft_contract,
     handle_generate_document,
 )
+# Client Forms — the public questionnaire that captures a lead. The
+# intake pipeline existed end to end; only the verb that CREATES a form
+# was missing. See chief_form_actions module docstring.
+from chief_form_actions import (
+    handle_create_client_form,
+    handle_list_client_forms,
+    handle_update_client_form,
+)
 # Customer drawdown ledger — what a client prepaid and has not used yet.
 from chief_balance_actions import (
     handle_check_balance,
@@ -3256,6 +3264,13 @@ async def handle_draft_and_send(client, biz, action) -> Dict:
     item = rows[0]
     delivery = await _do_approve_one(client, biz, item)
 
+    # A blocked document was drafted but NOT sent (see _blocked_result).
+    # The merge below has no branch for it, so it read as "drafted and
+    # approved" — the one wording that is false in both halves.
+    if delivery.get("reason") == "blocked":
+        return {**_blocked_result("draft_and_send", item, delivery),
+                "draft_preview": draft_result.get("draft_preview")}
+
     # Step 3 — merge results.
     if delivery.get("sent"):
         result_str = "drafted and sent"
@@ -5413,6 +5428,17 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any]) 
             subject=item.get("subject") or f"Message from {biz.get('name', '')}",
             body=composed_body,
             reply_to=routed or reply_to,
+            # WHOSE NAME IS ON IT.
+            #
+            # send_via_resend swaps in a business's VERIFIED custom sending
+            # domain when the send is attributable to it — by an explicit
+            # business_id, or by a routed reply-to it can parse a prefix out
+            # of. Chief passed neither, so it leaned entirely on the routed
+            # address, which is None whenever INBOUND_EMAIL_DOMAIN is unset.
+            # On such a deployment a practitioner who had verified their own
+            # domain still had every Chief email leave as the platform. We
+            # know the business here; say so.
+            business_id=biz.get("id"),
         )
         out["sent"] = True
         out["to_email"] = email
@@ -6046,6 +6072,29 @@ async def _do_approve_one(client, biz: Dict[str, Any], item: Dict,
     return result
 
 
+def _blocked_result(action_type: str, item: Dict[str, Any],
+                    delivery: Dict[str, Any]) -> Dict[str, Any]:
+    """doc_guard refused this document. Nothing was approved, nothing was
+    sent, and the queue row is untouched — so this reads as a failure, it
+    carries the guard's own wording, and it sets the `failed` flag that
+    the narrator and the audit trail both key on."""
+    blocked = delivery.get("blocked") or {}
+    message = (delivery.get("message") or blocked.get("message")
+               or "this document has blockers")
+    subject = item.get("subject") or "the document"
+    return {
+        "type": action_type,
+        "result": (f"Held — not approved, not sent. {message} Open it in "
+                   f"Approvals to fix it, or tell me to send it anyway."),
+        "label": f"Held: {subject}",
+        "nav": _nav("operate", "queue"),
+        "queue_id": item.get("id"),
+        "email_sent": False,
+        "blocked": blocked,
+        "failed": True,
+    }
+
+
 def _approve_label(subject: Optional[str], delivery: Dict[str, Any]) -> str:
     """Human-readable label for the Chief's action card."""
     subj = subject or "draft"
@@ -6091,6 +6140,18 @@ async def handle_approve_draft(client, biz, action) -> Dict:
     if item.get("status") != "draft":
         return {"type": "approve_draft", "result": f"already {item.get('status')}", "label": item.get("subject") or qid, "nav": None}
     delivery = await _do_approve_one(client, biz, item)
+
+    # THE ONE OUTCOME THAT WAS NARRATED AS ITS OPPOSITE.
+    #
+    # doc_guard can refuse a document on its way out, and when it does
+    # _do_approve_one returns BEFORE it patches the row — nothing is
+    # approved and nothing is sent. But "blocked" matched none of the
+    # reasons below, so it fell through to the bare "approved", and
+    # _approve_label said "Approved: <subject>". The HTTP door already
+    # answers 409 for exactly this; Chief's door told the practitioner
+    # their document was approved while it sat untouched in the queue.
+    if delivery.get("reason") == "blocked":
+        return _blocked_result("approve_draft", item, delivery)
 
     result_str = "approved and sent" if delivery.get("sent") else \
                  "approved (no email on file)" if delivery.get("reason") == "no_email" else \
@@ -6144,6 +6205,13 @@ async def handle_edit_draft(client, biz, action) -> Dict:
     item = rows[0]
     await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {"body": new_body})
     delivery = await _do_approve_one(client, biz, {**item, "body": new_body})
+    # The edit landed; the approval did not. Say both — a practitioner told
+    # "edited and approved" has no reason to look at the queue again.
+    if delivery.get("reason") == "blocked":
+        held = _blocked_result("edit_draft", item, delivery)
+        return {**held,
+                "result": "Edit saved, but " + held["result"][0].lower() + held["result"][1:],
+                "draft_preview": new_body[:300]}
     result_str = "edited, approved, and sent" if delivery.get("sent") else "edited and approved"
     return {
         "type": "edit_draft",
@@ -6325,8 +6393,16 @@ async def handle_bulk_approve(client, biz, action) -> Dict:
     sent_count = 0
     no_email_count = 0
     failed_send_count = 0
+    # Blocked documents were already skipped here (ok is False), but
+    # SILENTLY — they vanished into the "of N" denominator with nothing
+    # naming them, so a sweep that refused three contracts read as a sweep
+    # that approved everything it could reach.
+    blocked_subjects: List[str] = []
     for item in items:
         delivery = await _do_approve_one(client, biz, item)
+        if delivery.get("reason") == "blocked":
+            blocked_subjects.append(str(item.get("subject") or item.get("id")))
+            continue
         if delivery.get("ok"):
             approved.append(item.get("subject") or item.get("id"))
             if delivery.get("sent"):
@@ -6340,6 +6416,7 @@ async def handle_bulk_approve(client, biz, action) -> Dict:
     if sent_count:        breakdown.append(f"{sent_count} sent")
     if no_email_count:    breakdown.append(f"{no_email_count} no email")
     if failed_send_count: breakdown.append(f"{failed_send_count} delivery failed")
+    if blocked_subjects:  breakdown.append(f"{len(blocked_subjects)} held for review")
     breakdown_str = f" — {', '.join(breakdown)}" if breakdown else ""
     return {
         "type": "bulk_approve",
@@ -6348,6 +6425,7 @@ async def handle_bulk_approve(client, biz, action) -> Dict:
         "nav": _nav("operate", "queue"),
         "items": approved[:10],
         "sent_count": sent_count,
+        "blocked_items": blocked_subjects[:10],
     }
 
 
@@ -12905,6 +12983,13 @@ ACTION_HANDLERS = {
     "bulk_dismiss":          handle_bulk_dismiss,
     "contact_deep_dive":     handle_contact_deep_dive,
     "ensure_module":         handle_ensure_module,
+    # Client Forms. The public door a lead walks through — intake_forms
+    # rows, read by intake_endpoint on submit and advertised by the
+    # composed site. Chief could navigate to the screen and not write a
+    # single form; now it can.
+    "create_client_form":    handle_create_client_form,
+    "update_client_form":    handle_update_client_form,
+    "list_client_forms":     handle_list_client_forms,
     # Strategy Track
     "save_phase":                 handle_save_phase,
     "advance_phase":              handle_advance_phase,
@@ -15348,8 +15433,31 @@ def _build_website_block() -> str:
         "STEP 6 — STYLE: 'Modern and clean? Warm and welcoming? Bold? Or pick from your brand colors?'\n"
         "STEP 7 — REVIEW: Show a structured summary of everything collected and ask 'Does this "
         "look right? I'll generate the site and you can preview before it goes live.'\n\n"
-        "Only after explicit confirmation, emit:\n"
-        "[ACTION:{\"type\":\"generate_website\",\"content\":{...collected fields...}}]\n\n"
+        # THE VERB THIS BLOCK USED TO NAME DID NOT EXIST.
+        #
+        # It said to emit generate_website, and there has never been a
+        # generate_website handler. So the seven-step interview above ended
+        # in "Does this look right? I'll generate the site" — the
+        # practitioner said yes — and the tag fell through to the unknown-
+        # action path. The one place in this prompt that asks for explicit
+        # permission was the one place that could not act on the answer.
+        #
+        # The site is composed from what is SAVED about the business, not
+        # from a payload on the action, so the interview's answers have to
+        # land in their real homes first. Each verb named below exists and
+        # is documented elsewhere in this prompt.
+        "Only after explicit confirmation: SAVE what you collected, then build.\n"
+        "  1. Tagline / positioning -> update_business_profile_field. Bio and "
+        "audience framing -> update_voice_profile.\n"
+        "  2. Services they described that are not in the catalog yet -> "
+        "create_offering (or create_product for the legacy catalog).\n"
+        "  3. Each verbatim testimonial -> add_testimonial. Never one they "
+        "did not give you.\n"
+        "  4. THEN emit [ACTION:{\"type\":\"enqueue_job\",\"kind\":\"rebuild_site\"}]"
+        " - it runs in the background and lands finished on their desktop. "
+        "Say that; do not promise the site in this reply.\n"
+        "If they only want the LOOK changed and the content is already right, "
+        "skip straight to step 4 - no interview.\n\n"
         "RULES:\n"
         "- NEVER invent testimonials, quotes, awards, statistics, team members, or partners.\n"
         "- If a section has no real content, OMIT it entirely — no placeholder copy.\n"
@@ -16149,6 +16257,19 @@ ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MOD
   [ACTION:{{"type":"accept_module_spec","spec_id":"<from the PENDING MODULE PROPOSALS context block>"}}]  — BUILDS the proposed module. When the practitioner says "yes", "build it", "looks good" about a pending proposal, THIS completes the build — the card UI is optional, their word is enough.
   [ACTION:{{"type":"reject_module_spec","spec_id":"<id>","reason":"<their words>"}}]  — declines a pending proposal ("no", "not like that", "skip the rewards part").
     — The build chain is: intake → propose_module_from_intake → practitioner's yes/no → accept_module_spec or reject_module_spec. You OWN the whole chain in conversation; never leave a proposal hanging after they've answered.
+
+ACTIONS — CLIENT FORMS (BUILD → "Client Forms"; the public questionnaire a new client fills in):
+  [ACTION:{{"type":"create_client_form","name":"New Client Questionnaire","form_type":"intake","fields":[{{"label":"Your Name","type":"text","required":true}},{{"label":"Email","type":"email","required":true}},{{"label":"Phone","type":"phone"}},{{"label":"What brought you in?","type":"textarea","required":true}},{{"label":"How did you hear about us?","type":"select","options":["Referral","Google","Instagram","Walk-in"]}}],"confirmation_message":"Thanks — I'll be in touch within a day."}}]
+    — YOU CAN BUILD CLIENT FORMS. Never say you can't, and never offer to queue a build request for one. This action IS the capability.
+    — Tells: "make me an intake form", "I need a form for new clients", "a questionnaire before their first session", "a form on my site so people can enquire", "a connect card", "an application form".
+    — field types: text | email | phone | textarea | select | checkbox | date | number. A select needs "options". "required":true only for what you genuinely cannot start without — every extra required question costs submissions.
+    — form_type: general | intake | discovery | consultation | connect_card | volunteer | application | feedback | waitlist | quote. Pick the closest; it only labels the lead.
+    — The name question is added and kept required automatically — the submit door rejects a submission without it, so don't fight this and don't ask about it.
+    — DESIGN THE FORM FROM WHAT YOU KNOW. Use their vertical, their offerings and the conversation to draft the actual questions, then show them the list and offer changes. Do NOT interrogate them field by field.
+    — WHAT HAPPENS ON SUBMIT (say this once, plainly, not as jargon): a contact is created or matched, the lead is scored, and a reply is drafted into Approvals for them to read. The form also appears on their composed site automatically and carries an embed snippet for any other page.
+  [ACTION:{{"type":"create_client_form","name":"Rental Request","fields":[...],"link_module":"Equipment Rentals"}}]  — link_module wires every submission to ALSO file a row in that custom solution (by name, slug or id). Use it whenever the form feeds something they already track. If no such solution exists yet, build it first (propose_module_from_intake / ensure_module), then create the form.
+  [ACTION:{{"type":"update_client_form","form_id":"<uuid-or-form-name>","add_fields":[{{"label":"Budget","type":"select","options":["<$1k","$1-5k","$5k+"]}}],"remove_fields":["Phone"],"confirmation_message":"...","is_active":false}}]  — rename with "new_name", replace the whole question list with "fields", wire or unwire a solution with "link_module" / "unlink_module":true, switch the form off with "is_active":false. Say which questions changed.
+  [ACTION:{{"type":"list_client_forms"}}]  — every form with its question count and how many submissions it has actually taken. Use it before editing (to get the right form) and when they ask "what forms do I have?" or "is my form working?". Add "include_inactive":true to show switched-off ones.
 
 ACTIONS — TASKS + NOTES + ACTIVITY:
   [ACTION:{{"type":"create_task","title":"Call Deacon Harris back","due_date":"2026-04-24","priority":"high","contact_id":"<uuid-optional>"}}]
