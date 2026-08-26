@@ -1481,82 +1481,76 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         return {}
     biz = biz_rows[0]
 
-    try:
-        foundation_block = await foundation_agent.chief_context_block(biz_id)
-    except Exception as _e:
-        foundation_block = ""
-
-    try:
-        # business_profile_agent.chief_context_block is sync — run it off
-        # the event loop so its httpx calls don't block the Chief gather.
-        business_profile_block = await asyncio.to_thread(bp_chief_context_block, biz_id)
-    except Exception as _e:
-        business_profile_block = ""
-
-    # LGS Phase 2/4: fold the maturity stage + active growth objectives into the
-    # business-profile block (single carrier — flows through the existing
-    # ctx['business_profile_block'] → _format → prompt). Both sync + soft-fail.
-    try:
-        import maturity_engine
-        _mat_block = await asyncio.to_thread(maturity_engine.maturity_context_block, biz_id)
-        if _mat_block:
-            business_profile_block = (business_profile_block + "\n\n" + _mat_block).strip()
-    except Exception as _e:
-        pass
-    try:
-        import growth_objective_agent
-        _growth_block = await asyncio.to_thread(growth_objective_agent.growth_context_block, biz_id)
-        if _growth_block:
-            business_profile_block = (business_profile_block + "\n\n" + _growth_block).strip()
-    except Exception as _e:
-        pass
-
-    try:
-        # Raw profile row — used by the JIT capture detector to read
-        # proactive_capture_enabled and brand_voice. Sync httpx fetch
-        # via asyncio.to_thread to avoid blocking the gather.
-        business_profile_raw = await asyncio.to_thread(business_profile_agent.get_profile, biz_id) or {}
-    except Exception as _e:
-        business_profile_raw = {}
-
-    # Practitioner profile (Build 3) — keyed on owner_id, not business_id.
+    # ── Wave 2 (latency round 4, 2026-08-26) ─────────────────────────
+    # These context blocks had become TEN SEQUENTIAL awaits — one
+    # Supabase round trip after another, 2-4s of the context leg every
+    # turn. That is the exact serial-reads class the 8/14 fix (#584)
+    # cured in wave 1, regrown BEHIND it as new blocks accreted one
+    # try/except at a time. Every one depends only on biz_id or
+    # owner_id (which wave 1's business row supplies), so they run as
+    # ONE gather. Each keeps its own fail-open fallback — a block that
+    # errors degrades to empty exactly as it always did, never the turn.
+    #
+    # The semantic memory match rides in the same wave — and moves OFF
+    # the event loop while it's at it: chief_memory_semantic.match does
+    # a SYNCHRONOUS OpenAI embedding call (httpx.post) that was running
+    # directly on the loop every turn, blocking the whole process —
+    # including other requests' SSE streams — for the length of an
+    # external API round trip.
     owner_id_for_pp = (biz or {}).get("owner_id")
-    try:
-        practitioner_block = await asyncio.to_thread(pp_chief_context_block, owner_id_for_pp) if owner_id_for_pp else ""
-    except Exception as _e:
-        practitioner_block = ""
-    try:
-        practitioner_profile_raw = (
-            await asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id_for_pp)
-            if owner_id_for_pp else {}
-        ) or {}
-    except Exception as _e:
-        practitioner_profile_raw = {}
 
-    # Brand Engine (Build: Brand Engine v1) — bundle context block.
-    try:
-        brand_block = await asyncio.to_thread(brand_engine_chief_context_block, biz_id)
-    except Exception as _e:
-        brand_block = ""
+    async def _soft(awaitable, fallback):
+        try:
+            v = await awaitable
+            return fallback if v is None else v
+        except Exception:
+            return fallback
 
-    # Voice Depth (Pass 2.5b) — practitioner-level voice samples / rules /
-    # greeting / sign-off / pending edit observations. Keys on owner_id
-    # because voice depth follows the human across all their businesses.
-    try:
-        voice_block = (
-            await asyncio.to_thread(voice_chief_context_block, owner_id_for_pp)
-            if owner_id_for_pp else ""
-        )
-    except Exception as _e:
-        voice_block = ""
+    async def _const(v):
+        return v
 
-    # Standing playbook (2026-07-13) — the distilled per-business brief
-    # (chief_playbook.py). Sync httpx read, off the event loop. Fail-open.
-    try:
-        import chief_playbook
-        playbook_block = await asyncio.to_thread(chief_playbook.context_block, biz_id)
-    except Exception as _e:
-        playbook_block = ""
+    def _lazy_sync(modname: str, fnname: str, *args):
+        """Import + call inside the worker thread, so a missing module
+        degrades to the block's fallback exactly like the old inline
+        try/except import did."""
+        import importlib
+        mod = importlib.import_module(modname)
+        return getattr(mod, fnname)(*args)
+
+    (foundation_block, business_profile_block, _mat_block, _growth_block,
+     business_profile_raw, practitioner_block, practitioner_profile_raw,
+     brand_block, voice_block, playbook_block, _semantic_hits) = await asyncio.gather(
+        _soft(foundation_agent.chief_context_block(biz_id), ""),
+        _soft(asyncio.to_thread(bp_chief_context_block, biz_id), ""),
+        # LGS Phase 2/4 — maturity + growth objectives fold into the
+        # business-profile block after the wave (single carrier).
+        _soft(asyncio.to_thread(_lazy_sync, "maturity_engine",
+                                "maturity_context_block", biz_id), ""),
+        _soft(asyncio.to_thread(_lazy_sync, "growth_objective_agent",
+                                "growth_context_block", biz_id), ""),
+        # Raw profile row — the JIT capture detector reads
+        # proactive_capture_enabled and brand_voice from it.
+        _soft(asyncio.to_thread(business_profile_agent.get_profile, biz_id), {}),
+        # Practitioner-keyed blocks (Build 3 / Pass 2.5b) — owner_id,
+        # because they follow the human across all their businesses.
+        _soft(asyncio.to_thread(pp_chief_context_block, owner_id_for_pp)
+              if owner_id_for_pp else _const(""), ""),
+        _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id_for_pp)
+              if owner_id_for_pp else _const({}), {}),
+        _soft(asyncio.to_thread(brand_engine_chief_context_block, biz_id), ""),
+        _soft(asyncio.to_thread(voice_chief_context_block, owner_id_for_pp)
+              if owner_id_for_pp else _const(""), ""),
+        # Standing playbook (2026-07-13) — the distilled per-business brief.
+        _soft(asyncio.to_thread(_lazy_sync, "chief_playbook",
+                                "context_block", biz_id), ""),
+        _soft(asyncio.to_thread(_lazy_sync, "chief_memory_semantic",
+                                "match", biz_id, query_text)
+              if query_text else _const([]), []),
+    )
+    if _mat_block:
+        business_profile_block = (business_profile_block + "\n\n" + _mat_block).strip()
+    if _growth_block:
+        business_profile_block = (business_profile_block + "\n\n" + _growth_block).strip()
 
     # Module entry counts — one query per module (parallel)
     module_entries_tasks = [
@@ -1589,28 +1583,27 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     # Semantic memory recall (2026-07-13): union the meaning-matched
     # memories into the pool so _blend_memories ranks them alongside the
     # importance/recency set. Fail-open — no matches just means today's
-    # behavior. Dedup by id.
+    # behavior. Dedup by id. The match itself ran in wave 2 above (off
+    # the event loop, in parallel with the profile blocks).
     mem_pool = list(memories or [])
-    if query_text:
-        try:
-            import chief_memory_semantic
-            have = {str(m.get("id")) for m in mem_pool}
-            for hit in chief_memory_semantic.match(biz_id, query_text):
-                hid = str(hit.get("id"))
-                if hid and hid not in have:
-                    have.add(hid)
-                    mem_pool.append({
-                        "id": hit.get("id"),
-                        "category": hit.get("category"),
-                        "content": hit.get("content"),
-                        "importance": hit.get("importance") or 5,
-                        "source": "ai_inferred",
-                        "created_at": now.isoformat(),
-                        "last_referenced_at": None,
-                        "_semantic": round(float(hit.get("similarity") or 0), 3),
-                    })
-        except Exception:
-            pass
+    try:
+        have = {str(m.get("id")) for m in mem_pool}
+        for hit in (_semantic_hits or []):
+            hid = str(hit.get("id"))
+            if hid and hid not in have:
+                have.add(hid)
+                mem_pool.append({
+                    "id": hit.get("id"),
+                    "category": hit.get("category"),
+                    "content": hit.get("content"),
+                    "importance": hit.get("importance") or 5,
+                    "source": "ai_inferred",
+                    "created_at": now.isoformat(),
+                    "last_referenced_at": None,
+                    "_semantic": round(float(hit.get("similarity") or 0), 3),
+                })
+    except Exception:
+        pass
 
     return {
         "business": biz,
