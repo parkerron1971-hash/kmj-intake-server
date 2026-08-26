@@ -243,6 +243,17 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "create_module_entry":           _w("A", "creates a module row"),
     "update_module_entry":           _w("A", "edits a module row"),
     "ensure_module":                 _w("A", "creates a module if absent"),
+    # Class A: a form is INERT until the practitioner embeds it, and the
+    # off switch (is_active) is part of update. Nothing is sent, nothing
+    # reaches a client, and submissions already captured live in events +
+    # contacts and survive any edit to the form that collected them.
+    "create_client_form":            _w("A", "writes ONE intake_forms row — a public "
+                                             "questionnaire that captures nothing until it "
+                                             "is embedded, and deactivates in one edit"),
+    "update_client_form":            _w("A", "edits one intake_forms row the business owns: "
+                                             "name, questions, thank-you message, module "
+                                             "wiring, on/off. Captured submissions untouched"),
+    "list_client_forms":             _r("lists the business's own forms with a submission tally"),
     # Class A because it is ADDITIVE ONLY — a field can be removed again
     # and no data is touched. The verb deliberately cannot rename, retype
     # or delete a field: those do not destroy module_entries.data (it is

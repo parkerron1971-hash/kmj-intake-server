@@ -253,6 +253,15 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
               "limit": {"type": "integer", "minimum": 1, "maximum": 100,
                         "description": "Max rows to return. Default 20."}},
              ["module"])),
+    "list_client_forms": (
+        "The public forms a new client fills in on this business's site or "
+        "links, with how many submissions each has actually taken. Answers "
+        "\"is my intake form working?\" — a form with zero submissions is "
+        "either unembedded or asking the wrong thing.",
+        _obj({"include_inactive": {
+            "type": "boolean",
+            "description": "Include forms that have been switched off. "
+                           "Default false."}})),
     "list_offerings": (
         "The services or packages this business sells, with prices.",
         _NO_ARGS),
@@ -558,6 +567,16 @@ HANDOFFS: Dict[str, _Handoff] = {
         text=lambda p: f"Chief can draft a follow-up to {_contact_name(p)}.",
         where="Operate › Contacts",
         when=_gone_quiet),
+
+    # A business with no client form has no front door: the composed site
+    # advertises forms it does not have, and every enquiry arrives as an
+    # email somebody has to retype. That is work, and it is the one this
+    # read is most likely to find.
+    "list_client_forms": _Handoff(
+        verb="create_client_form",
+        text="Chief can build a client form and put it on the site.",
+        where="Build › Client Forms",
+        when=lambda p: _num(_sig(p).get("active")) == 0),
 
     "draft_purchase_order": _Handoff(
         verb="send_purchase_order",
