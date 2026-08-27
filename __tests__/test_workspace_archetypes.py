@@ -312,3 +312,36 @@ def test_every_business_type_classifies_to_a_savable_archetype():
         assert archetype in allowed, (
             f"{vertical} classifies to {archetype!r}, which the database "
             f"would reject — the write would fail silently")
+
+
+def test_only_one_place_writes_the_archetype_column():
+    """One write path, so there is no second place to forget.
+
+    There were two `_persist` functions — one in the router, one in the
+    Chief actions module — doing the same PATCH. That duplication is how
+    the silent-write bug survived: the archetype CHECK rejected two
+    presets, sb_clients swallowed the 4xx, and both copies ignored the
+    return value. Fixing either one alone would have left the other, and
+    the other was the one Chief actually calls.
+    """
+    import pathlib
+    import re
+
+    writers = []
+    for path in pathlib.Path(".").glob("workspace_*.py"):
+        writers += [(path.name, i) for i, line in
+                    enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+                    if "workspace_archetype" in line and "sb_patch" in line]
+    for path in [pathlib.Path("chief_workspace_actions.py"),
+                 pathlib.Path("workspace_composer_router.py")]:
+        text = path.read_text(encoding="utf-8")
+        # A PATCH whose body sets workspace_archetype, however it is spelled.
+        for m in re.finditer(r"sb_patch_as_service\((.{0,400}?)\)\n", text, re.S):
+            if "workspace_archetype" in m.group(1):
+                writers.append((path.name, text[:m.start()].count("\n") + 1))
+
+    assert len(writers) == 1, (
+        "workspace_archetype is written in more than one place: "
+        f"{writers} — collapse them onto composer._persist, which is the "
+        "only one that proves the write landed")
+    assert writers[0][0] == "workspace_composer_router.py", writers

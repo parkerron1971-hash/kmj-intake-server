@@ -29,6 +29,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from fastapi import HTTPException
+
 import sb_clients
 import workspace_archetypes
 import workspace_layout_validator as validator
@@ -69,21 +71,37 @@ def _profile(business_id: str) -> Dict[str, Any]:
 
 def _persist(business_id: str, archetype: str, stored_terms: Dict[str, Any]
              ) -> Dict[str, Any]:
-    """Build, validate, then write. The validator runs before the row is
-    touched — a layout that cannot render must never reach the column the
-    renderer reads."""
+    """Build the layout, then hand the WRITE to the composer's `_persist`,
+    which validates, writes, and proves the write actually landed.
+
+    This function used to duplicate that logic line for line, and the
+    duplicate is exactly how the silent-write bug survived as long as it
+    did: the archetype CHECK rejected `therapist` and `nonprofit`,
+    `sb_clients` swallowed the 4xx and returned None, and BOTH copies
+    ignored it. Fixing one would have left this one — the copy Chief
+    actually calls — still telling practitioners their choice was saved
+    when it was not.
+
+    One write path now. There is no second place to forget.
+
+    Chief catches whatever a handler raises and turns it into a visible
+    failure line, so raising here is the right move: the practitioner
+    learns their choice did not stick, instead of being quietly asked to
+    choose again on every load.
+    """
     import workspace_composer_router as composer
 
     layout = composer.build_layout(archetype, stored_terms)
-    validator.assert_valid(layout, business_id=business_id)
-    sb_clients.sb_patch_as_service(
-        f"/business_profiles?business_id=eq.{business_id}",
-        {
-            "workspace_archetype": archetype,
-            "workspace_layout": layout,
-            "workspace_terminology": layout.get("terminology") or {},
-        },
-    )
+    try:
+        composer._persist(business_id, archetype, layout)
+    except HTTPException as exc:
+        # Re-worded because Chief renders this straight to the
+        # practitioner, and "500:" is not a sentence anyone should read.
+        raise RuntimeError(
+            "I could not save that workspace, so nothing was changed. "
+            "This has been logged — I would rather tell you than let you "
+            "think it worked."
+        ) from exc
     return layout
 
 
