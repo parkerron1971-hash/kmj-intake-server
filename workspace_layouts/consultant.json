@@ -3,6 +3,7 @@
   "archetype": "consultant",
   "label": "Consultant / Coach",
   "vertical": "consultant",
+  "identity": "consultant",
   "rationale": "A consultant's book is a handful of engagements, each sitting at a stage — scoping, in delivery, awaiting sign-off. The risk is never a missed hour, it is an engagement quietly parked at the same stage for five weeks. So the workspace opens on a docket like a law firm's, but sorted by stage rather than by deadline, so a column that has stopped moving is visible as a column. Underneath, the retainer hours drawn down, because that is the number that decides whether this month was profitable.",
   "suppressed": [
     {
@@ -219,40 +220,6 @@
     "schedule": {
       "value": "The book",
       "origin": "preset"
-    }
-  },
-  "theme": {
-    "display_font": "\"IBM Plex Serif\", Georgia, serif",
-    "accent_name": "purple",
-    "palette": {
-      "ground": "#ffffff",
-      "surface": "#f9fafb",
-      "raised": "#f3f4f6",
-      "hover": "#e5e7eb",
-      "ink": "#111827",
-      "muted": "#4b5563",
-      "faint": "#9ca3af",
-      "border": "rgba(0,0,0,0.10)",
-      "border_subtle": "rgba(0,0,0,0.05)",
-      "accent": "#7c3aed",
-      "accent2": "#8b5cf6",
-      "field": "#F7F4FF",
-      "field2": "#ECE5FF"
-    },
-    "dark": {
-      "ground": "#09090b",
-      "surface": "#0f0f11",
-      "raised": "#18181b",
-      "hover": "#27272a",
-      "ink": "#fafafa",
-      "muted": "#a1a1aa",
-      "faint": "#71717a",
-      "border": "rgba(255,255,255,0.10)",
-      "border_subtle": "rgba(255,255,255,0.06)",
-      "accent": "#a78bfa",
-      "accent2": "#8b5cf6",
-      "field": "#141022",
-      "field2": "#201936"
     }
   },
   "room": {

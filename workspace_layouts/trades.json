@@ -3,6 +3,7 @@
   "archetype": "trades",
   "label": "Trades / Home Services",
   "vertical": "contractor",
+  "identity": "contractor",
   "rationale": "A trades business sells crew-hours against addresses, and the thing that quietly destroys a day is not a missed job — it is forty minutes of driving between two jobs nobody sequenced. So the workspace opens on the same one-day timeline a salon uses, but the lanes are crews rather than chairs and the gaps are read as travel, not as idle time. Beneath it sits money owed, because trades work is the one shape here that takes a deposit up front and carries a balance to the end.",
   "suppressed": [
     {
@@ -231,40 +232,6 @@
     "schedule": {
       "value": "Dispatch",
       "origin": "preset"
-    }
-  },
-  "theme": {
-    "display_font": "Oswald, \"Arial Narrow\", sans-serif",
-    "accent_name": "amber",
-    "palette": {
-      "ground": "#ffffff",
-      "surface": "#f9fafb",
-      "raised": "#f3f4f6",
-      "hover": "#e5e7eb",
-      "ink": "#111827",
-      "muted": "#4b5563",
-      "faint": "#9ca3af",
-      "border": "rgba(0,0,0,0.10)",
-      "border_subtle": "rgba(0,0,0,0.05)",
-      "accent": "#b45309",
-      "accent2": "#d97706",
-      "field": "#FFFBEE",
-      "field2": "#FCF0D2"
-    },
-    "dark": {
-      "ground": "#09090b",
-      "surface": "#0f0f11",
-      "raised": "#18181b",
-      "hover": "#27272a",
-      "ink": "#fafafa",
-      "muted": "#a1a1aa",
-      "faint": "#71717a",
-      "border": "rgba(255,255,255,0.10)",
-      "border_subtle": "rgba(255,255,255,0.06)",
-      "accent": "#eab308",
-      "accent2": "#f59e0b",
-      "field": "#171308",
-      "field2": "#261C0C"
     }
   },
   "room": {

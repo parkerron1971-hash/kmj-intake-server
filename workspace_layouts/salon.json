@@ -3,6 +3,7 @@
   "archetype": "salon",
   "label": "Salon / Barber",
   "vertical": "personal_services",
+  "identity": "personal_services",
   "rationale": "For a salon the day IS the product. What gets sold is a block of time on the floor, and the only question that matters before noon is where the holes are. So the workspace opens on ONE day, undivided, with the hours running down the side — not a list of bookings, because a list cannot show you a ninety-minute gap at 2pm, and not a lane per stylist, because nothing in this system stores a named member of staff. Everything else is subordinate to the floor.",
   "suppressed": [
     {
@@ -175,40 +176,6 @@
     "schedule": {
       "value": "The floor",
       "origin": "preset"
-    }
-  },
-  "theme": {
-    "display_font": "\"Playfair Display\", Georgia, serif",
-    "accent_name": "orange",
-    "palette": {
-      "ground": "#ffffff",
-      "surface": "#f9fafb",
-      "raised": "#f3f4f6",
-      "hover": "#e5e7eb",
-      "ink": "#111827",
-      "muted": "#4b5563",
-      "faint": "#9ca3af",
-      "border": "rgba(0,0,0,0.10)",
-      "border_subtle": "rgba(0,0,0,0.05)",
-      "accent": "#ea580c",
-      "accent2": "#f97316",
-      "field": "#FFF7F1",
-      "field2": "#FFEADC"
-    },
-    "dark": {
-      "ground": "#09090b",
-      "surface": "#0f0f11",
-      "raised": "#18181b",
-      "hover": "#27272a",
-      "ink": "#fafafa",
-      "muted": "#a1a1aa",
-      "faint": "#71717a",
-      "border": "rgba(255,255,255,0.10)",
-      "border_subtle": "rgba(255,255,255,0.06)",
-      "accent": "#ff6b35",
-      "accent2": "#f7931e",
-      "field": "#1B100B",
-      "field2": "#2C1710"
     }
   },
   "room": {

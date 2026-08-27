@@ -36,6 +36,32 @@ def _load(archetype: str) -> Dict[str, Any]:
         return json.load(fh)
 
 
+def _attach_identity(layout: Dict[str, Any]) -> None:
+    """Resolve the preset's `identity` reference into the real thing.
+
+    The preset names an identity; it does not carry one. Each used to
+    hold a thirteen-key palette of which NINE keys were byte-identical
+    across all seven, and the four that moved disagreed with the desk
+    for every single vertical — a law firm was gold on one screen and
+    blue on the other.
+
+    Resolving here rather than storing means the two can no longer
+    drift: there is one definition, in workspace_identity.py, and both
+    the desk and the composer read it.
+    """
+    import workspace_identity
+
+    key = layout.get("identity")
+    ident = workspace_identity.IDENTITIES.get(key) if key else None
+    if not ident:
+        # Not fatal. A layout renders without an identity — it simply
+        # wears the practitioner's own design, which is exactly what two
+        # of the seven do on purpose.
+        return
+    layout["identity"] = dict(ident, key=key)
+    layout["identity_tokens"] = workspace_identity.tokens(layout["archetype"])
+
+
 def get_preset(archetype: str, *, validate: bool = True) -> Dict[str, Any]:
     """One preset, deep-copied.
 
@@ -49,6 +75,7 @@ def get_preset(archetype: str, *, validate: bool = True) -> Dict[str, Any]:
         )
     if key not in _cache:
         layout = _load(key)
+        _attach_identity(layout)
         if validate:
             # Imported here, not at module scope: the validator imports the
             # registry and the catalog, and a cycle through this package

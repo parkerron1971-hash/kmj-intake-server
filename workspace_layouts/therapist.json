@@ -3,6 +3,7 @@
   "archetype": "therapist",
   "label": "Therapist / Counsellor",
   "vertical": "therapist",
+  "identity": "therapist",
   "rationale": "A private practice runs on a standing weekly hour. The same client, the same slot, week after week — so the working surface is the week, not the day and not a deadline list. What breaks a practice is not a bad week, it is the slow erosion of a caseload: a client who moves a session, then moves it again, then stops. Underneath the week sits exactly that, and beneath both sit the two numbers that decide whether the practice is viable — how much of the caseload is actually held, and how much of the booked hour survives to being paid for.",
   "suppressed": [
     {
@@ -16,12 +17,6 @@
     {
       "primitive": "ledger",
       "reason": "Superbills and insurance remittance are real and they are their own surface. A running balance next to a caseload reads as though clients are accounts, which is the wrong frame on the one screen that opens every morning."
-    }
-  ],
-  "refused": [
-    {
-      "what": "Anything clinical",
-      "reason": "Session content, progress notes and clinical detail are refused outright — not hidden, refused. Storing them would make this platform a business associate under HIPAA, which requires a signed agreement with every downstream processor that could touch the data. That posture does not exist yet, so the vertical ships narrow and useful: scheduling, billing and admin, which carry no protected health information beyond the contact record any business already keeps. Enforced in vertical_scope.py at the two seams where modules are created, not merely discouraged in a prompt."
     }
   ],
   "surfaces": [
@@ -205,40 +200,6 @@
       "origin": "preset"
     }
   },
-  "theme": {
-    "display_font": "\"Cormorant Garamond\", Georgia, serif",
-    "accent_name": "indigo",
-    "palette": {
-      "ground": "#ffffff",
-      "surface": "#f9fafb",
-      "raised": "#f3f4f6",
-      "hover": "#e5e7eb",
-      "ink": "#111827",
-      "muted": "#4b5563",
-      "faint": "#9ca3af",
-      "border": "rgba(0,0,0,0.10)",
-      "border_subtle": "rgba(0,0,0,0.05)",
-      "accent": "#4f46e5",
-      "accent2": "#6366f1",
-      "field": "#F3F4FF",
-      "field2": "#E7E9FF"
-    },
-    "dark": {
-      "ground": "#09090b",
-      "surface": "#0f0f11",
-      "raised": "#18181b",
-      "hover": "#27272a",
-      "ink": "#fafafa",
-      "muted": "#a1a1aa",
-      "faint": "#71717a",
-      "border": "rgba(255,255,255,0.10)",
-      "border_subtle": "rgba(255,255,255,0.06)",
-      "accent": "#818cf8",
-      "accent2": "#a5b4fc",
-      "field": "#101021",
-      "field2": "#1B1C38"
-    }
-  },
   "room": {
     "eyebrow": "The week",
     "meta": {
@@ -246,5 +207,11 @@
       "drifting_clients": "6 not seen recently",
       "practice_health": "measured against the profession"
     }
-  }
+  },
+  "refused": [
+    {
+      "what": "Anything clinical",
+      "reason": "Session content, progress notes and clinical detail are refused outright — not hidden, refused. Storing them would make this platform a business associate under HIPAA, which requires a signed agreement with every downstream processor that could touch the data. That posture does not exist yet, so the vertical ships narrow and useful: scheduling, billing and admin, which carry no protected health information beyond the contact record any business already keeps. Enforced in vertical_scope.py at the two seams where modules are created, not merely discouraged in a prompt."
+    }
+  ]
 }

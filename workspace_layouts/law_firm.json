@@ -3,6 +3,7 @@
   "archetype": "law_firm",
   "label": "Law Firm",
   "vertical": "lawyer",
+  "identity": "lawyer",
   "rationale": "A law firm does not run on a clock, it runs on a calendar of consequences. What is due in four days outranks what is happening at four o'clock, and a missed filing is not a gap you can fill later. So the workspace opens on a docket ordered by days remaining, with the number right-aligned so the eye can run down the column and stop at whatever is too small. There is deliberately no timeline anywhere on this layout.",
   "suppressed": [
     {
@@ -219,40 +220,6 @@
     "schedule": {
       "value": "Docket",
       "origin": "preset"
-    }
-  },
-  "theme": {
-    "display_font": "\"Libre Baskerville\", \"Times New Roman\", serif",
-    "accent_name": "blue",
-    "palette": {
-      "ground": "#ffffff",
-      "surface": "#f9fafb",
-      "raised": "#f3f4f6",
-      "hover": "#e5e7eb",
-      "ink": "#111827",
-      "muted": "#4b5563",
-      "faint": "#9ca3af",
-      "border": "rgba(0,0,0,0.10)",
-      "border_subtle": "rgba(0,0,0,0.05)",
-      "accent": "#2563eb",
-      "accent2": "#3b82f6",
-      "field": "#F1F6FF",
-      "field2": "#E1EBFF"
-    },
-    "dark": {
-      "ground": "#09090b",
-      "surface": "#0f0f11",
-      "raised": "#18181b",
-      "hover": "#27272a",
-      "ink": "#fafafa",
-      "muted": "#a1a1aa",
-      "faint": "#71717a",
-      "border": "rgba(255,255,255,0.10)",
-      "border_subtle": "rgba(255,255,255,0.06)",
-      "accent": "#3b82f6",
-      "accent2": "#60a5fa",
-      "field": "#0A101F",
-      "field2": "#111A31"
     }
   },
   "room": {
