@@ -61,7 +61,14 @@ RESIDUAL = [h for h in UNGUARDED
 # never true of them — the webhooks are in twilio_sms.py. Lowered
 # rather than left, because six units of new slack is how a ratchet
 # stops ratcheting.
-MAX_UNGUARDED_TOTAL = 46
+# 46 -> 44 (2026-08-26, billing audit): booking_series' two handlers
+# stopped being false positives. They always called
+# _require_member_writer -> require_role; the sweep could see through
+# neither the function-local import nor the aliased _HTTPException,
+# and the module had been parked on PUBLIC_BY_DESIGN to quieten it.
+# Both blind spots are fixed, so the entry is gone and the two
+# handlers now resolve as what they are: guarded.
+MAX_UNGUARDED_TOTAL = 44
 MAX_UNGUARDED_RESIDUAL = 0
 
 
