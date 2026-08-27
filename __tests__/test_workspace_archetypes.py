@@ -247,3 +247,68 @@ def test_a_built_layout_still_validates(archetype):
     layout = build_layout(archetype, stored)
     result = validator.validate_layout(layout, business_id="biz-1")
     assert result.ok, result.errors
+
+
+# ─── the constraint must know every preset ───────────────────────────
+
+def test_the_db_constraint_lists_exactly_the_presets_that_exist():
+    """The archetype CHECK and workspace_layouts/ must never disagree.
+
+    They did, and it was invisible. The constraint allowed five values
+    while seven presets shipped, so `therapist` and `nonprofit` passed
+    the app-layer validator and were then rejected by Postgres with
+    23514 -- and sb_clients returns None on 4xx, so the rejection never
+    reached the practitioner OR the app. A therapist chose their
+    workspace, got a success, and nothing was saved. Every load asked
+    again.
+
+    Widening the constraint by hand is exactly what was forgotten the
+    first time, so this test reads the SQL rather than trusting anyone
+    to remember.
+    """
+    import pathlib
+    import re
+
+    sql = pathlib.Path("supabase/APPLY-2026-08-27-workspace-archetype-widen.sql").read_text(
+        encoding="utf-8")
+    body = sql.split("workspace_archetype IN (", 1)[1].split(")", 1)[0]
+    allowed = set(re.findall(r"'([a-z_]+)'", body))
+
+    assert allowed == set(workspace_layouts.ARCHETYPES), (
+        "the archetype CHECK and the preset folder disagree — "
+        f"only in SQL: {sorted(allowed - set(workspace_layouts.ARCHETYPES))}, "
+        f"only on disk: {sorted(set(workspace_layouts.ARCHETYPES) - allowed)}"
+    )
+
+
+def test_every_business_type_classifies_to_a_savable_archetype():
+    """Classification that cannot be persisted is worse than none.
+
+    Walks the real `businesses.type` values through the classifier and
+    asserts each lands on a preset the database will actually accept.
+    """
+    import pathlib
+    import re
+
+    sql = pathlib.Path("supabase/APPLY-2026-08-27-workspace-archetype-widen.sql").read_text(
+        encoding="utf-8")
+    body = sql.split("workspace_archetype IN (", 1)[1].split(")", 1)[0]
+    allowed = set(re.findall(r"'([a-z_]+)'", body))
+
+    # Every DISTINCT businesses.type present in production on 2026-08-27,
+    # read off the live table rather than imagined. `nonprofit` is in
+    # there, which is why the too-narrow CHECK was not hypothetical.
+    # `therapist` and `contractor` are not live yet but ship as presets,
+    # and the two unregistered strings prove the fallback also lands
+    # somewhere savable.
+    for vertical in ["agency", "coach", "consultant", "course_creator",
+                     "creative", "custom", "ecommerce", "lawyer", "ministry",
+                     "nonprofit", "personal_services", "saas",
+                     "service_provider", "therapist", "contractor",
+                     "barbershop", "food_truck"]:
+        archetype = wa.classify({"vertical": vertical})["archetype"]
+        assert archetype in workspace_layouts.ARCHETYPES, (
+            f"{vertical} classifies to {archetype!r}, which has no preset")
+        assert archetype in allowed, (
+            f"{vertical} classifies to {archetype!r}, which the database "
+            f"would reject — the write would fail silently")

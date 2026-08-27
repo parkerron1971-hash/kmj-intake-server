@@ -47,6 +47,7 @@ SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = '<table>';
 | File | What | Status |
 |---|---|---|
 | `supabase/APPLY-2026-08-26-workspace-composer.sql` | Workspace composer phase one: `business_profiles.workspace_archetype` / `workspace_layout` / `workspace_terminology`, `sessions.assigned_to` + index, and the `business_metrics` view. | **applied 2026-08-26, verified** (3 columns, `assigned_to uuid`, index present, view returns 4 keys). Shipped BROKEN and was fixed before applying — see the note below. |
+| `supabase/APPLY-2026-08-27-workspace-archetype-widen.sql` | Widens the `business_profiles.workspace_archetype` CHECK from 5 values to the 7 presets that actually ship. | **applied 2026-08-27, verified** — constraint now lists all seven; a `therapist` and a `nonprofit` write both proved in a rollback transaction first. |
 | `supabase/benchmarks/APPLY-2026-08-27-bench-<vertical>.sql` ×7 + `supabase/APPLY-2026-08-27-bench-aggregate.sql` | The benchmark VALUES, split into one view per vertical plus a stable aggregate that unions them. Supersedes the single `APPLY-2026-08-27-workspace-benchmark-values.sql`. | **applied 2026-08-27, verified** — all 7 per-vertical views live, aggregate returns the same 14 rows with identical values to the monolithic view it replaced. |
 | ~~`supabase/APPLY-2026-08-27-workspace-benchmark-values.sql`~~ | The original single view. | applied 2026-08-26, **superseded 2026-08-27** by the split above. File removed. |
 | `supabase/APPLY-2026-08-19-dev-bridge.sql` | Dev Bridge: `dev_tasks` (Mission Control → developer-side task list, local + cloud lanes) and `dev_bridge_devices` (Solution Space pairing). Service-role only. | applied 2026-08-19, verified (both tables, RLS on) |
@@ -54,6 +55,25 @@ SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = '<table>';
 | `../solutionist-studio/supabase/APPLY-2026-08-11-blueprint-boards-sweep.sql` | kanban for every blueprint module whose status/stage select has ≥3 options (36 rows) | applied 2026-08-11, verified (32/57 rows carry a board; 76-row `module_inspect` sweep clean) |
 | `../solutionist-studio/supabase/APPLY-2026-08-11-lawyer-matters-board.sql` + `-board-default.sql` | lawyer/matters gets the kanban its `work_pipeline` archetype implied, and opens on it | applied 2026-08-11, verified |
 | `../solutionist-studio/supabase/APPLY-2026-08-11-matters-fixture-schema.sql` + `-mirrors-blueprint.sql` | the Vertical Test Lawyer fixture rendered a red panel (`schema` was `[]`); now mirrors the blueprint | applied 2026-08-11, verified |
+
+> **2026-08-27 — the archetype CHECK allowed five values while seven
+> presets shipped, and the mismatch was completely silent.** `therapist`
+> and `nonprofit` are real layouts chosen by a real classifier. The
+> app-layer validator accepted them — it checks
+> `workspace_layouts.ARCHETYPES`, which has seven — and Postgres then
+> rejected the write with 23514. But `sb_clients._sync_request` logs a
+> warning and returns `None` on any 4xx, and `_persist` ignored the
+> return value, so the practitioner got a success and nothing was saved.
+> The next page load asked them to choose again. Forever. `nonprofit` is
+> a live business type in this database, so this was not hypothetical.
+>
+> Two fixes, because widening the constraint alone would just wait to
+> happen again. `__tests__/test_workspace_archetypes.py` now PARSES the
+> migration and fails the build if its list disagrees with the preset
+> folder, and walks every `businesses.type` present in production through
+> the classifier to assert each lands somewhere savable. And `_persist`
+> now reads the row back and raises if the archetype did not land — a
+> write that cannot fail out loud is not a write, it is a hope.
 
 > **2026-08-27 — the benchmark view was split one-per-vertical, on purpose.**
 > Eight people are about to work on eight verticals at once. Appending

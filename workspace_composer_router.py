@@ -125,8 +125,21 @@ def build_layout(archetype: str, stored_terms: Optional[Dict[str, Any]] = None
 
 
 def _persist(business_id: str, archetype: str, layout: Dict[str, Any]) -> None:
-    """Validate, THEN write. Never the other way round — a layout that
-    cannot render must not be able to reach the column the renderer reads."""
+    """Validate, THEN write, THEN prove the write landed.
+
+    Validate before writing, never after — a layout that cannot render
+    must not be able to reach the column the renderer reads.
+
+    The read-back is not belt-and-braces. `sb_clients._sync_request` logs
+    a warning and returns None on any 4xx, and None is also what a
+    successful PATCH returns when there is no representation body, so the
+    return value cannot tell the two apart. That ambiguity already cost
+    us: the archetype CHECK allowed five values while seven presets
+    shipped, so a therapist choosing their workspace was rejected by
+    Postgres with 23514, told nothing, and asked to choose again on the
+    next load — forever. A write that cannot fail out loud is not a
+    write; it is a hope.
+    """
     validator.assert_valid(layout, business_id=business_id)
     _get_or_create_profile(business_id)
     sb_clients.sb_patch_as_service(
@@ -137,6 +150,22 @@ def _persist(business_id: str, archetype: str, layout: Dict[str, Any]) -> None:
             "workspace_terminology": layout.get("terminology") or {},
         },
     )
+
+    rows = sb_clients.sb_get_as_service(
+        f"/business_profiles?business_id=eq.{business_id}"
+        f"&select=workspace_archetype&limit=1"
+    ) or []
+    saved = (rows[0] or {}).get("workspace_archetype") if rows else None
+    if saved != archetype:
+        logger.error(
+            "workspace layout did not persist for %s: asked for %r, row holds %r",
+            business_id, archetype, saved,
+        )
+        raise HTTPException(
+            500,
+            "the workspace could not be saved — nothing was changed. "
+            "This has been logged.",
+        )
 
 
 # ─── read ────────────────────────────────────────────────────────────
