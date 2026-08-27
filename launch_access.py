@@ -351,6 +351,20 @@ def create_business(body: CreateBusinessBody,
                                       body.voice_profile or None, uid)
     except Exception as e:
         logger.warning(f"[access] seed schedule failed: {e}")
+    # Day one for everyone who never reaches Stripe. Comped, invited and
+    # grandfathered accounts have no subscription and so no `trialing`
+    # webhook ever fires — an arc that only opened from Stripe would skip
+    # exactly the people we hand-picked.
+    #
+    # For a self-serve signup this fires first (checkout comes minutes
+    # later, from the paywall) and the subscription then aligns the arc
+    # to the real trial start. Best-effort: a practitioner whose business
+    # was created must never see that fail because a side table did.
+    try:
+        import first_run_arc
+        first_run_arc.begin(row.get("id"), source="signup")
+    except Exception as e:
+        logger.warning(f"[access] first-run arc begin failed (non-fatal): {e}")
 
     # Growth arc Rung 2 — tell Meta a signup completed, after the
     # response. No-op unless the pixel + CAPI token are configured.
