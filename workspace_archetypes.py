@@ -64,6 +64,12 @@ VERTICAL_LEAN: Dict[str, Dict[str, float]] = {
     "psychologist":       {"therapist": 10.0},
     "charity":            {"nonprofit": 10.0},
     "foundation":         {"nonprofit": 8.0},
+    # An agency sells scoped engagements and bills against milestones,
+    # which is the consultant docket exactly. It was the most common live
+    # business type and had no lean at all — the comment above named it
+    # ("a creative agency runs engagements") before the key existed, so
+    # every agency fell past this map into keyword scoring.
+    "agency":             {"consultant": 10.0},
     "creative":           {"consultant": 7.0},
     "course_creator":     {"consultant": 6.0},
     "financial_educator": {"consultant": 6.0},
