@@ -18,6 +18,7 @@ session working the task can post its result.
 
 import hashlib
 import logging
+import ntpath
 import os
 import secrets
 from datetime import datetime, timezone
@@ -367,7 +368,10 @@ async def bridge_queue(authorization: Optional[str] = Header(None)):
         })
     tasks = []
     for t in rows:
-        name = os.path.basename((t.get("project_path") or "").rstrip("\\/")) or None
+        # ntpath, not os.path: these are Windows paths and this runs on Linux,
+        # where os.path.basename of a C: path is the whole string — which is
+        # how Solution Space once gained a project named by its full path.
+        name = ntpath.basename((t.get("project_path") or "").rstrip("\\/")) or None
         tasks.append({
             "id": t["id"],
             "title": t.get("title"),
