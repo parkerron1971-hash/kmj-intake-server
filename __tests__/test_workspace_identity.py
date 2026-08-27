@@ -113,3 +113,43 @@ def test_tokens_are_all_css_custom_properties():
     for a in I.ARCHETYPE_TO_IDENTITY:
         for k in I.tokens(a):
             assert k.startswith("--wk-"), f"{a}: {k} is not a custom property"
+
+
+# ─── the page itself ─────────────────────────────────────────────────
+
+def test_every_archetype_gets_its_own_page_architecture():
+    """The field whose absence made seven verticals look like one.
+
+    Architecture used to be DERIVED from whichever primitive led the
+    layout — and seven verticals share only three lead primitives, so
+    salon and trades were literally the same page and therapist and
+    ministry were the same page. No amount of padding or radius rescues
+    that; two businesses can both need a day-timeline and still need
+    completely different rooms around it.
+    """
+    seen = {}
+    for a in I.ARCHETYPE_TO_IDENTITY:
+        comp = I.for_archetype(a)["composition"]
+        assert comp not in seen, (
+            f"{a} and {seen[comp]} would render the same page ({comp})")
+        seen[comp] = a
+
+
+def test_every_composition_is_a_real_skeleton_not_a_variant():
+    """Each has to change the GRID, the hero and where Chief sits. A
+    composition that only changes one of the three is decoration with an
+    architectural name — which is precisely what stance was."""
+    for name, c in I.COMPOSITIONS.items():
+        assert c["grid"], name
+        assert c["hero"] in ("none", "quiet", "bar", "stacked", "wide"), name
+        assert c["chief"] in ("below", "left", "right"), name
+        assert len(c["why"]) > 60, f"{name} does not justify its architecture"
+
+
+def test_the_compositions_differ_in_more_than_name():
+    """If every page put Chief in the same place and wore the same hero,
+    they would be one page with seven labels."""
+    heroes = {c["hero"] for c in I.COMPOSITIONS.values()}
+    chiefs = {c["chief"] for c in I.COMPOSITIONS.values()}
+    assert len(heroes) >= 4, f"only {len(heroes)} hero treatments across seven pages"
+    assert len(chiefs) == 3, chiefs

@@ -96,6 +96,84 @@ TEXTURE = {
     "paper": "a soft vertical wash, like a printed order of service",
 }
 
+COMPOSITIONS = {
+    # THE PAGE ITSELF -- not decoration on a shared page.
+    #
+    # This is the field that was missing, and its absence is why seven
+    # verticals looked like one. Architecture used to be DERIVED from
+    # whichever primitive led the layout, and seven verticals share only
+    # three lead primitives: salon and trades were literally the same
+    # page, therapist and ministry were the same page. Padding and radius
+    # cannot rescue that. Two businesses can both need a day-timeline and
+    # still need completely different rooms around it.
+    #
+    # So a vertical CHOOSES its page. Each of these is a different
+    # skeleton -- different grid, different chrome, different hero,
+    # different place for Chief -- and the engine reads it like every
+    # other field.
+    "floor": {
+        "grid": "full-bleed, single working surface, secondaries as a "
+                "bottom strip",
+        "hero": "none",
+        "chief": "below",
+        "why": "Read standing up, mid-shift, from three feet away between "
+               "clients. Anything competing with the board is noise, "
+               "including a headline number.",
+    },
+    "console": {
+        "grid": "two columns -- working surface, and a live queue rail "
+                "that never scrolls away",
+        "hero": "bar",
+        "chief": "below",
+        "why": "A dispatcher has the phone in one hand. The board answers "
+               "'where is everyone' and the rail answers 'what still has "
+               "nobody' -- both have to be true at once or the job is two "
+               "screens.",
+    },
+    "retreat": {
+        "grid": "one centred column, one card at a time, wide margins",
+        "hero": "quiet",
+        "chief": "below",
+        "why": "Read alone between sessions by someone who has been "
+               "holding other people's difficulty all morning. A grid of "
+               "tiles is a demand. One column is a page.",
+    },
+    "almanac": {
+        "grid": "the week full width, then a ruled three-column programme",
+        "hero": "stacked",
+        "chief": "right",
+        "why": "A week that gets planned together and often printed. It "
+               "wants the manners of an order of service: columns, rules, "
+               "and a rhythm you can follow down the page.",
+    },
+    "pipeline": {
+        "grid": "stages across, scrolling sideways, stage rail pinned left",
+        "hero": "wide",
+        "chief": "below",
+        "why": "Capacity is a shape in TIME. Stacked vertically it reads "
+               "as a list of clients; laid across it reads as a full "
+               "month beside an empty one, which is the actual problem.",
+    },
+    "register": {
+        "grid": "dense ruled rows on a baseline, marginalia in the left "
+                "margin",
+        "hero": "stacked",
+        "chief": "left",
+        "why": "Obligations to funders are a ledger, and a ledger is read "
+               "by running a finger down a column. Cards would break the "
+               "alignment that makes that possible.",
+    },
+    "document": {
+        "grid": "a single reading measure, centred, generous leading",
+        "hero": "stacked",
+        "chief": "right",
+        "why": "A docket is a document of consequences, so it gets a "
+               "document's manners rather than a dashboard's. Full width "
+               "would turn a filing calendar into a spreadsheet.",
+    },
+}
+
+
 FIGURE = {
     # how the big numbers sit
     "light":   {"weight": "300", "track": "-.03em"},
@@ -104,16 +182,18 @@ FIGURE = {
 }
 
 
-def _id(*, mark: str, display: str, line: str,
+def _id(*, mark: str, display: str, line: str, composition: str,
         density: str, edge: str, rule: str, texture: str, figure: str,
         accent: Optional[Dict[str, str]] = None,
         accent2: Optional[Dict[str, str]] = None,
         why: str = "") -> Dict[str, Any]:
     assert display in FACES, display
+    assert composition in COMPOSITIONS, composition
     assert density in DENSITY and edge in EDGE, (density, edge)
     assert rule in RULE and texture in TEXTURE and figure in FIGURE
     return {
         "mark": mark, "display": display, "line": line,
+        "composition": composition,
         "accent": accent, "accent2": accent2,
         "density": density, "edge": edge, "rule": rule,
         "texture": texture, "figure": figure, "why": why,
@@ -129,6 +209,7 @@ IDENTITIES: Dict[str, Dict[str, Any]] = {
         # reads as a product that had not been told. The preset used to
         # impose #ff6b35 here.
         accent=None, accent2=None,
+        composition="floor",
         mark="Scissors", display="geometric",
         line="Look good. Feel amazing.",
         density="tight", edge="soft", rule="filled", texture="none",
@@ -143,6 +224,7 @@ IDENTITIES: Dict[str, Dict[str, Any]] = {
     "contractor": _id(
         accent={"dark": "#f59e0b", "light": "#9a6207"},
         accent2={"dark": "#fcd34d", "light": "#7c4f05"},
+        composition="console",
         mark="Wrench", display="grotesque",
         line="Let's build.",
         density="regular", edge="hard", rule="hairline", texture="hatch",
@@ -158,6 +240,7 @@ IDENTITIES: Dict[str, Dict[str, Any]] = {
     "therapist": _id(
         accent={"dark": "#5fbf9b", "light": "#1f7a5c"},
         accent2={"dark": "#8fe0c2", "light": "#155e45"},
+        composition="retreat",
         mark="Leaf", display="serif",
         line="You hold space. We handle the rest.",
         density="airy", edge="soft", rule="none", texture="none",
@@ -172,6 +255,7 @@ IDENTITIES: Dict[str, Dict[str, Any]] = {
     "ministry": _id(
         accent={"dark": "#e0a63c", "light": "#8f6412"},
         accent2={"dark": "#f6d488", "light": "#74510e"},
+        composition="almanac",
         mark="Church", display="serif",
         line="People first. Kingdom always.",
         density="airy", edge="soft", rule="hairline", texture="paper",
@@ -186,6 +270,7 @@ IDENTITIES: Dict[str, Dict[str, Any]] = {
     "consultant": _id(
         accent={"dark": "#22a4e0", "light": "#0f6c9c"},
         accent2={"dark": "#7dd3fc", "light": "#0b5478"},
+        composition="pipeline",
         mark="Compass", display="grotesque",
         line="Clarity first, then delivery.",
         density="regular", edge="even", rule="hairline", texture="grid",
@@ -199,6 +284,7 @@ IDENTITIES: Dict[str, Dict[str, Any]] = {
     "coach": _id(
         accent={"dark": "#a855f7", "light": "#7028c7"},
         accent2={"dark": "#d8b4fe", "light": "#5a1ea3"},
+        composition="register",
         mark="TrendingUp", display="grotesque",
         line="Impact is planned.",
         density="regular", edge="even", rule="filled", texture="none",
@@ -215,6 +301,7 @@ IDENTITIES: Dict[str, Dict[str, Any]] = {
         # brand it did not choose us to override. The preset imposed
         # #f472b6.
         accent=None, accent2=None,
+        composition="register",
         mark="HeartHandshake", display="grotesque",
         line="Mission first. Every gift accounted for.",
         density="regular", edge="even", rule="hairline", texture="none",
@@ -228,6 +315,7 @@ IDENTITIES: Dict[str, Dict[str, Any]] = {
     "lawyer": _id(
         accent={"dark": "#c9a227", "light": "#8a6a15"},
         accent2={"dark": "#e8c96a", "light": "#6d5310"},
+        composition="document",
         mark="Scale", display="serif",
         line="Justice is in the details.",
         density="airy", edge="even", rule="filled", texture="none",
