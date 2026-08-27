@@ -247,3 +247,101 @@ def test_a_built_layout_still_validates(archetype):
     layout = build_layout(archetype, stored)
     result = validator.validate_layout(layout, business_id="biz-1")
     assert result.ok, result.errors
+
+
+# ─── the constraint must know every preset ───────────────────────────
+
+def test_the_db_constraint_lists_exactly_the_presets_that_exist():
+    """The archetype CHECK and workspace_layouts/ must never disagree.
+
+    They did, and it was invisible. The constraint allowed five values
+    while seven presets shipped, so `therapist` and `nonprofit` passed
+    the app-layer validator and were then rejected by Postgres with
+    23514 -- and sb_clients returns None on 4xx, so the rejection never
+    reached the practitioner OR the app. A therapist chose their
+    workspace, got a success, and nothing was saved. Every load asked
+    again.
+
+    Widening the constraint by hand is exactly what was forgotten the
+    first time, so this test reads the SQL rather than trusting anyone
+    to remember.
+    """
+    import pathlib
+    import re
+
+    sql = pathlib.Path("supabase/APPLY-2026-08-27-workspace-archetype-widen.sql").read_text(
+        encoding="utf-8")
+    body = sql.split("workspace_archetype IN (", 1)[1].split(")", 1)[0]
+    allowed = set(re.findall(r"'([a-z_]+)'", body))
+
+    assert allowed == set(workspace_layouts.ARCHETYPES), (
+        "the archetype CHECK and the preset folder disagree — "
+        f"only in SQL: {sorted(allowed - set(workspace_layouts.ARCHETYPES))}, "
+        f"only on disk: {sorted(set(workspace_layouts.ARCHETYPES) - allowed)}"
+    )
+
+
+def test_every_business_type_classifies_to_a_savable_archetype():
+    """Classification that cannot be persisted is worse than none.
+
+    Walks the real `businesses.type` values through the classifier and
+    asserts each lands on a preset the database will actually accept.
+    """
+    import pathlib
+    import re
+
+    sql = pathlib.Path("supabase/APPLY-2026-08-27-workspace-archetype-widen.sql").read_text(
+        encoding="utf-8")
+    body = sql.split("workspace_archetype IN (", 1)[1].split(")", 1)[0]
+    allowed = set(re.findall(r"'([a-z_]+)'", body))
+
+    # Every DISTINCT businesses.type present in production on 2026-08-27,
+    # read off the live table rather than imagined. `nonprofit` is in
+    # there, which is why the too-narrow CHECK was not hypothetical.
+    # `therapist` and `contractor` are not live yet but ship as presets,
+    # and the two unregistered strings prove the fallback also lands
+    # somewhere savable.
+    for vertical in ["agency", "coach", "consultant", "course_creator",
+                     "creative", "custom", "ecommerce", "lawyer", "ministry",
+                     "nonprofit", "personal_services", "saas",
+                     "service_provider", "therapist", "contractor",
+                     "barbershop", "food_truck"]:
+        archetype = wa.classify({"vertical": vertical})["archetype"]
+        assert archetype in workspace_layouts.ARCHETYPES, (
+            f"{vertical} classifies to {archetype!r}, which has no preset")
+        assert archetype in allowed, (
+            f"{vertical} classifies to {archetype!r}, which the database "
+            f"would reject — the write would fail silently")
+
+
+def test_only_one_place_writes_the_archetype_column():
+    """One write path, so there is no second place to forget.
+
+    There were two `_persist` functions — one in the router, one in the
+    Chief actions module — doing the same PATCH. That duplication is how
+    the silent-write bug survived: the archetype CHECK rejected two
+    presets, sb_clients swallowed the 4xx, and both copies ignored the
+    return value. Fixing either one alone would have left the other, and
+    the other was the one Chief actually calls.
+    """
+    import pathlib
+    import re
+
+    writers = []
+    for path in pathlib.Path(".").glob("workspace_*.py"):
+        writers += [(path.name, i) for i, line in
+                    enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+                    if "workspace_archetype" in line and "sb_patch" in line]
+    for path in [pathlib.Path("chief_workspace_actions.py"),
+                 pathlib.Path("workspace_composer_router.py")]:
+        text = path.read_text(encoding="utf-8")
+        # A PATCH whose body sets workspace_archetype, however it is spelled.
+        for m in re.finditer(r"sb_patch_as_service\((.{0,400}?)\)\n", text, re.S):
+            if "workspace_archetype" in m.group(1):
+                writers.append((path.name, text[:m.start()].count("\n") + 1))
+
+    assert len(writers) == 1, (
+        "workspace_archetype is written in more than one place: "
+        f"{writers} — collapse them onto composer._persist, which is the "
+        "only one that proves the write landed")
+    assert writers[0][0] == "workspace_composer_router.py", writers

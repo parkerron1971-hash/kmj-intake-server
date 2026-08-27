@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "archetype": "law_firm",
+  "label": "Law Firm",
+  "vertical": "lawyer",
+  "identity": "lawyer",
+  "terminology": {
+    "client": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "clients": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "contact": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "contacts": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "project": {
+      "value": "Matter",
+      "origin": "preset"
+    },
+    "projects": {
+      "value": "Matters",
+      "origin": "preset"
+    },
+    "service": {
+      "value": "Matter",
+      "origin": "preset"
+    },
+    "services": {
+      "value": "Matters",
+      "origin": "preset"
+    },
+    "appointment": {
+      "value": "Consultation",
+      "origin": "preset"
+    },
+    "appointments": {
+      "value": "Consultations",
+      "origin": "preset"
+    },
+    "session": {
+      "value": "Consultation",
+      "origin": "preset"
+    },
+    "invoice": {
+      "value": "Invoice",
+      "origin": "preset"
+    },
+    "schedule": {
+      "value": "Docket",
+      "origin": "preset"
+    }
+  },
+  "rationale": "A firm that is not collecting does not have a deadline problem, it has a solvency problem, and the docket cannot say so. When collection sits far below its band the money leads: what is owed, how old it is, and whose it is. The filings do not disappear — they move down, because for this fortnight they are not the thing that decides whether the firm is still here.\n\nIt leads with a DOCKET rather than a ledger because a docket is what a firm already knows how to read, and a debt ordered by how long it has been outstanding is exactly that: an obligation with a number of days against it.",
+  "suppressed": [
+    {
+      "primitive": "timeline_day",
+      "reason": "A day is not the unit of a debt."
+    },
+    {
+      "primitive": "week_grid",
+      "reason": "Ageing is measured in months. Seven columns answer the wrong question at the wrong grain."
+    },
+    {
+      "primitive": "attention_queue",
+      "reason": "Held back deliberately. It would rank clients by silence, and a client who owes money AND has gone quiet is already on the ageing docket — twice would read as two problems."
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "owed",
+      "primitive": "priority_docket",
+      "role": "lead",
+      "title": "Owed, by age",
+      "rationale": "Every unpaid invoice with the number of days it has been outstanding against it, oldest first. Ageing is the argument: a total tells a firm nothing, but ninety days tells them who to ring this morning.",
+      "bindings": {
+        "rows": {
+          "source": "invoices",
+          "scope": "business",
+          "filter": {
+            "status": [
+              "sent",
+              "viewed",
+              "overdue"
+            ]
+          },
+          "fields": {
+            "id": "id",
+            "title": "invoice_number",
+            "metric_value": {
+              "column": "due_date",
+              "derive": "days_since"
+            },
+            "subtitle": "notes",
+            "owner": "category"
+          },
+          "order": "due_date.asc",
+          "limit": 40
+        }
+      },
+      "options": {
+        "sort": "urgency_days",
+        "metric_label": "Outstanding",
+        "metric_unit": "days",
+        "urgent_threshold_days": 90,
+        "numbered": true,
+        "banding": "horizon"
+      }
+    },
+    {
+      "id": "against_the_profession",
+      "primitive": "benchmark_panel",
+      "role": "secondary",
+      "title": "Against the profession",
+      "rationale": "Collection and lockup beside the bands they should be read against, because a firm cannot tell whether 39% is bad without being told what good is. This is the only arrangement of these surfaces where that number is seen before anything else.",
+      "bindings": {
+        "rows": {
+          "source": "business_benchmarks",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "collection",
+              "collection_lockup",
+              "realization",
+              "utilization"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "average": "average",
+            "target": "target",
+            "floor": "floor",
+            "scale_max": "scale_max",
+            "unit": "unit",
+            "direction": "direction",
+            "reading": "reading",
+            "source": "source"
+          },
+          "order": "key.asc",
+          "expect_items": 4
+        }
+      },
+      "options": {
+        "format": "percent",
+        "show_average": true
+      }
+    },
+    {
+      "id": "firm_position",
+      "primitive": "metric_row",
+      "role": "footer",
+      "title": "Position",
+      "rationale": "Three figures at rest at the bottom of the screen. Unbilled, work in progress, trust. Read on the way past, never acted on from here.",
+      "bindings": {
+        "metrics": {
+          "source": "business_metrics",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "unbilled_amount",
+              "wip_amount",
+              "trust_balance"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "unit": "unit",
+            "trend": "trend"
+          },
+          "order": "key.asc",
+          "expect_items": 3
+        }
+      },
+      "options": {
+        "format": "currency"
+      }
+    }
+  ],
+  "room": {
+    "eyebrow": "the money",
+    "meta": {
+      "owed": "oldest first",
+      "against_the_profession": "measured against the profession",
+      "firm_position": "unbilled and held"
+    }
+  }
+}

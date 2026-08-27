@@ -46,6 +46,7 @@ from pydantic import BaseModel
 
 import sb_clients
 import workspace_archetypes
+import workspace_layout_picker
 import workspace_field_catalog as field_catalog
 import workspace_layout_validator as validator
 import workspace_layouts
@@ -75,6 +76,7 @@ def _get_or_create_profile(business_id: str) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/business_profiles?business_id=eq.{business_id}"
         f"&select=business_id,workspace_archetype,workspace_layout,"
+        f"workspace_layout_variant,workspace_layout_variant_origin,"
         f"workspace_terminology&limit=1"
     ) or []
     if rows:
@@ -116,17 +118,36 @@ def merge_terminology(
     return merged
 
 
-def build_layout(archetype: str, stored_terms: Optional[Dict[str, Any]] = None
+def build_layout(archetype: str, stored_terms: Optional[Dict[str, Any]] = None,
+                 variant: Optional[str] = None,
                  ) -> Dict[str, Any]:
-    """A preset with the practitioner's terminology carried across."""
-    layout = workspace_layouts.get_preset(archetype)
+    """A preset with the practitioner's terminology carried across.
+
+    `variant` selects which layout of that archetype. Unknown falls back
+    to the default inside get_preset rather than raising — a stale
+    variant on a row must never be able to blank a home screen.
+    """
+    layout = workspace_layouts.get_preset(archetype, variant=variant)
     layout["terminology"] = merge_terminology(layout.get("terminology"), stored_terms)
     return layout
 
 
 def _persist(business_id: str, archetype: str, layout: Dict[str, Any]) -> None:
-    """Validate, THEN write. Never the other way round — a layout that
-    cannot render must not be able to reach the column the renderer reads."""
+    """Validate, THEN write, THEN prove the write landed.
+
+    Validate before writing, never after — a layout that cannot render
+    must not be able to reach the column the renderer reads.
+
+    The read-back is not belt-and-braces. `sb_clients._sync_request` logs
+    a warning and returns None on any 4xx, and None is also what a
+    successful PATCH returns when there is no representation body, so the
+    return value cannot tell the two apart. That ambiguity already cost
+    us: the archetype CHECK allowed five values while seven presets
+    shipped, so a therapist choosing their workspace was rejected by
+    Postgres with 23514, told nothing, and asked to choose again on the
+    next load — forever. A write that cannot fail out loud is not a
+    write; it is a hope.
+    """
     validator.assert_valid(layout, business_id=business_id)
     _get_or_create_profile(business_id)
     sb_clients.sb_patch_as_service(
@@ -137,6 +158,22 @@ def _persist(business_id: str, archetype: str, layout: Dict[str, Any]) -> None:
             "workspace_terminology": layout.get("terminology") or {},
         },
     )
+
+    rows = sb_clients.sb_get_as_service(
+        f"/business_profiles?business_id=eq.{business_id}"
+        f"&select=workspace_archetype&limit=1"
+    ) or []
+    saved = (rows[0] or {}).get("workspace_archetype") if rows else None
+    if saved != archetype:
+        logger.error(
+            "workspace layout did not persist for %s: asked for %r, row holds %r",
+            business_id, archetype, saved,
+        )
+        raise HTTPException(
+            500,
+            "the workspace could not be saved — nothing was changed. "
+            "This has been logged.",
+        )
 
 
 # ─── read ────────────────────────────────────────────────────────────
@@ -227,7 +264,21 @@ def get_home(
         decision = workspace_archetypes.classify({"vertical": biz.get("type")})
         archetype = decision["archetype"]
 
-    layout = build_layout(archetype, stored_terms)
+    # WHICH DESK, within that room. The archetype says a firm is a firm;
+    # it cannot say whether this firm is drowning in filings or has not
+    # been paid since June. That comes from its own benchmark values.
+    #
+    # A user_override is honoured here and never silently replaced — the
+    # pick still reports what it WOULD have chosen so the surface can
+    # offer the way back, which is the whole difference between an
+    # assistant and a thing that moves your furniture overnight.
+    pick = workspace_layout_picker.pick_for_business(
+        business_id, archetype, biz.get("type"),
+        stored={"variant": profile.get("workspace_layout_variant"),
+                "origin": profile.get("workspace_layout_variant_origin")},
+    )
+
+    layout = build_layout(archetype, stored_terms, variant=pick["variant"])
 
     # Validated before execution, every time. The row could have been
     # written by an older build, or by hand.
@@ -244,6 +295,15 @@ def get_home(
         "ok": True,
         "business_id": business_id,
         "archetype": archetype,
+        # WHICH desk, and why. `variant_reason` is written for the
+        # practitioner and Chief renders it above the workspace: a
+        # layout that changes without saying why is a product that
+        # moved somebody's furniture overnight.
+        "variant": pick["variant"],
+        "variant_origin": pick["origin"],
+        "variant_reason": pick["reason"],
+        "would_have_picked": pick["would_have_picked"],
+        "variants": pick["candidates"],
         "provisional": provisional,
         "layout": layout,
         "data": data,

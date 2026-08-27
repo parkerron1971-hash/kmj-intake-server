@@ -3,6 +3,7 @@
   "archetype": "nonprofit",
   "label": "Nonprofit",
   "vertical": "nonprofit",
+  "identity": "nonprofit",
   "rationale": "A nonprofit is the one shape here where the deadline and the relationship carry equal weight. A grant report filed late costs the next grant, so the working surface is a docket ordered by days remaining — the same shape a law firm needs, for the same reason. But underneath it sits something no law firm has: three out of four first-time donors never give a second time, and that leak is invisible in a total. So the docket leads, the lapsing donors sit beneath it, and the panel shows the retention rates the totals hide.",
   "suppressed": [
     {
@@ -196,40 +197,6 @@
     "schedule": {
       "value": "The calendar",
       "origin": "preset"
-    }
-  },
-  "theme": {
-    "display_font": "\"IBM Plex Serif\", Georgia, serif",
-    "accent_name": "pink",
-    "palette": {
-      "ground": "#ffffff",
-      "surface": "#f9fafb",
-      "raised": "#f3f4f6",
-      "hover": "#e5e7eb",
-      "ink": "#111827",
-      "muted": "#4b5563",
-      "faint": "#9ca3af",
-      "border": "rgba(0,0,0,0.10)",
-      "border_subtle": "rgba(0,0,0,0.05)",
-      "accent": "#be185d",
-      "accent2": "#db2777",
-      "field": "#FFF2F8",
-      "field2": "#FFE1EE"
-    },
-    "dark": {
-      "ground": "#09090b",
-      "surface": "#0f0f11",
-      "raised": "#18181b",
-      "hover": "#27272a",
-      "ink": "#fafafa",
-      "muted": "#a1a1aa",
-      "faint": "#71717a",
-      "border": "rgba(255,255,255,0.10)",
-      "border_subtle": "rgba(255,255,255,0.06)",
-      "accent": "#f472b6",
-      "accent2": "#f9a8d4",
-      "field": "#1B0B15",
-      "field2": "#2C1124"
     }
   },
   "room": {

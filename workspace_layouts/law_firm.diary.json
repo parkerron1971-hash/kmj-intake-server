@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "archetype": "law_firm",
+  "label": "Law Firm",
+  "vertical": "lawyer",
+  "identity": "lawyer",
+  "terminology": {
+    "client": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "clients": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "contact": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "contacts": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "project": {
+      "value": "Matter",
+      "origin": "preset"
+    },
+    "projects": {
+      "value": "Matters",
+      "origin": "preset"
+    },
+    "service": {
+      "value": "Matter",
+      "origin": "preset"
+    },
+    "services": {
+      "value": "Matters",
+      "origin": "preset"
+    },
+    "appointment": {
+      "value": "Consultation",
+      "origin": "preset"
+    },
+    "appointments": {
+      "value": "Consultations",
+      "origin": "preset"
+    },
+    "session": {
+      "value": "Consultation",
+      "origin": "preset"
+    },
+    "invoice": {
+      "value": "Invoice",
+      "origin": "preset"
+    },
+    "schedule": {
+      "value": "Docket",
+      "origin": "preset"
+    }
+  },
+  "rationale": "The one layout where a firm's DAY is the unit, and it earns that only under a specific condition: time is not being written down. Utilisation cannot be fixed next quarter — an hour that goes unrecorded today cannot be billed at all, ever, and no amount of chasing invoices recovers it. So when utilisation is below band the desk opens on the hours, and the GAPS are the message.",
+  "suppressed": [
+    {
+      "primitive": "week_grid",
+      "reason": "Too coarse. Time is lost in the twenty minutes between a call and writing it up, and seven columns cannot hold twenty minutes."
+    },
+    {
+      "primitive": "ledger",
+      "reason": "Billing is downstream of recording. Putting the ledger here would let a firm feel busy about the wrong half."
+    },
+    {
+      "primitive": "attention_queue",
+      "reason": "The queue ranks people; this layout ranks hours. Mixing the two would blunt both."
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "today",
+      "primitive": "timeline_day",
+      "role": "lead",
+      "title": "Today, recorded",
+      "rationale": "The working day with what has been written down laid on it, so the empty stretches read as what they are. Every unmarked gap is time that will not be billed unless somebody records it before they go home — and this is the only screen in the product that can say so while it is still true.",
+      "bindings": {
+        "events": {
+          "source": "sessions",
+          "scope": "business",
+          "filter": {
+            "status": [
+              "scheduled",
+              "completed"
+            ]
+          },
+          "fields": {
+            "id": "id",
+            "start": "scheduled_for",
+            "duration_minutes": "duration_minutes",
+            "title": "title",
+            "subtitle": "notes",
+            "state": "status"
+          },
+          "order": "scheduled_for.asc",
+          "limit": 60
+        }
+      },
+      "options": {
+        "day_start": 8,
+        "day_end": 18,
+        "gap_threshold_minutes": 30,
+        "show_gaps": true,
+        "show_now": true,
+        "gap_tone": "open",
+        "lane_noun": "Fee earner"
+      }
+    },
+    {
+      "id": "billable_share",
+      "primitive": "benchmark_panel",
+      "role": "secondary",
+      "title": "Billable share",
+      "rationale": "Utilisation and realisation together, because the pair is the argument: hours captured, then hours that survived to an invoice. Either one alone can look healthy while the other leaks.",
+      "bindings": {
+        "rows": {
+          "source": "business_benchmarks",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "utilization",
+              "realization"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "average": "average",
+            "target": "target",
+            "floor": "floor",
+            "scale_max": "scale_max",
+            "unit": "unit",
+            "direction": "direction",
+            "reading": "reading",
+            "source": "source"
+          },
+          "order": "key.asc",
+          "expect_items": 2
+        }
+      },
+      "options": {
+        "format": "percent",
+        "show_average": true
+      }
+    },
+    {
+      "id": "matter_docket",
+      "primitive": "priority_docket",
+      "role": "secondary",
+      "title": "Docket",
+      "rationale": "A register, not a reading column. Cut into deadline horizons — inside a week, inside a fortnight, this month, beyond — because the band answers how long you have got before a single number is read, and numbered because that is how the thing is actually spoken about. Item four is a sentence somebody says out loud.",
+      "bindings": {
+        "rows": {
+          "source": "module_entries",
+          "scope": "business",
+          "filter": {
+            "status": "active"
+          },
+          "fields": {
+            "id": "id",
+            "title": "data.matter_name",
+            "metric_value": {
+              "column": "data.next_deadline",
+              "derive": "days_until"
+            },
+            "subtitle": "data.client_name",
+            "owner": "data.responsible_attorney"
+          },
+          "order": "data.next_deadline.asc",
+          "limit": 40
+        }
+      },
+      "options": {
+        "sort": "urgency_days",
+        "metric_label": "Due in",
+        "metric_unit": "days",
+        "urgent_threshold_days": 7,
+        "numbered": true,
+        "banding": "horizon"
+      }
+    }
+  ],
+  "room": {
+    "eyebrow": "today’s hours",
+    "meta": {
+      "today": "8am – 6pm",
+      "billable_share": "measured against the profession",
+      "matter_docket": "still due"
+    }
+  }
+}

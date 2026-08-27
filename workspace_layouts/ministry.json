@@ -3,6 +3,7 @@
   "archetype": "ministry",
   "label": "Ministry / Church",
   "vertical": "ministry",
+  "identity": "ministry",
   "rationale": "A church's unit of time is the week, and it is not a flat week — Sunday carries most of the weight, Wednesday carries some, and the shape of that is information a list destroys. So the workspace opens on seven columns with gatherings placed where they fall, because a leader needs to see the rhythm and the empty days at the same time. Under it sits the thing a week grid cannot show: the person who came once and has not been contacted since.",
   "suppressed": [
     {
@@ -198,40 +199,6 @@
     "schedule": {
       "value": "The calendar",
       "origin": "preset"
-    }
-  },
-  "theme": {
-    "display_font": "\"Cormorant Garamond\", Georgia, serif",
-    "accent_name": "teal",
-    "palette": {
-      "ground": "#ffffff",
-      "surface": "#f9fafb",
-      "raised": "#f3f4f6",
-      "hover": "#e5e7eb",
-      "ink": "#111827",
-      "muted": "#4b5563",
-      "faint": "#9ca3af",
-      "border": "rgba(0,0,0,0.10)",
-      "border_subtle": "rgba(0,0,0,0.05)",
-      "accent": "#0d9488",
-      "accent2": "#14b8a6",
-      "field": "#EFFBF9",
-      "field2": "#DAF4F0"
-    },
-    "dark": {
-      "ground": "#09090b",
-      "surface": "#0f0f11",
-      "raised": "#18181b",
-      "hover": "#27272a",
-      "ink": "#fafafa",
-      "muted": "#a1a1aa",
-      "faint": "#71717a",
-      "border": "rgba(255,255,255,0.10)",
-      "border_subtle": "rgba(255,255,255,0.06)",
-      "accent": "#2dd4bf",
-      "accent2": "#14b8a6",
-      "field": "#07181B",
-      "field2": "#0E262B"
     }
   },
   "room": {

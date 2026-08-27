@@ -111,6 +111,7 @@ from chief_workspace_actions import (
     handle_choose_workspace,
     handle_rename_term,
     handle_switch_workspace,
+    handle_switch_layout,
 )
 # Texting SETUP — the keyword that routes inbound, and the switch on the
 # automated alerts. See chief_sms_actions module docstring.
@@ -12971,6 +12972,7 @@ async def handle_enqueue_job(client, biz, action) -> Dict:
 ACTION_HANDLERS = {
     "choose_workspace":       handle_choose_workspace,
     "switch_workspace":       handle_switch_workspace,
+    "switch_layout":          handle_switch_layout,
     "rename_term":            handle_rename_term,
     "create_growth_objective": handle_create_growth_objective,
     "enqueue_job":            handle_enqueue_job,
@@ -16342,6 +16344,12 @@ ACTIONS — THE WORKSPACE ITSELF (what their home screen is SHAPED like, and wha
     — `answers` is optional — their business type is read from the record either way. Pass whatever they've told you in this conversation; more words means a better fit.
     — AFTER IT RUNS, mirror the action's result wording. It already says what was chosen and why. Do not add your own reasoning on top and do not restate it differently.
   [ACTION:{{"type":"switch_workspace","archetype":"salon|trades|ministry|consultant|law_firm"}}]
+  [ACTION:{{"type":"switch_layout","variant":"docket|board|ledger|diary"}}]
+    The ARCHETYPE is which room they are in; the LAYOUT is what that
+    room leads with. You pick the layout yourself from their numbers —
+    only use this verb when they ASK for a different desk ("show me the
+    money one", "open on hours"). It marks their choice permanent and
+    you will not move it back on them.
     — The correction. "Actually we're more like a barbershop", "we don't work in appointments, we work in jobs", "put the week back". One tap, and anything they've renamed themselves is kept.
     — Offer this the moment they express doubt about the shape. Never make them ask twice, and never defend the original choice.
   [ACTION:{{"type":"rename_term","term":"project","value":"Case"}}]

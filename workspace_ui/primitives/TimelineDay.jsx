@@ -81,14 +81,66 @@ function gapsFor(events, dayStart, dayEnd, threshold) {
   return gaps;
 }
 
+/**
+ * Side-by-side columns for events that overlap in time.
+ *
+ * Standard calendar layout, and the important thing is that it needs NO
+ * knowledge of who owns an event: walk the events in clock order, break
+ * them into clusters of transitively-overlapping blocks, then greedily
+ * drop each into the first column whose previous occupant has already
+ * finished. The cluster's column count sets every member's width.
+ *
+ * This is what replaced chair lanes. A lane per stylist claimed to know
+ * whose hands were on the client, which this product does not record.
+ * Four blocks at 2pm claim only that four things are happening at 2pm —
+ * which is true, and is what a floor actually needs to see. Concurrency
+ * is a fact about the day; a name is a fact about staffing we do not
+ * have.
+ *
+ * Without this, dropping lanes drew seventeen appointments on top of one
+ * another in a single track.
+ */
+function packOverlaps(events) {
+  const placed = events
+    .map((event) => {
+      const at = toMinutes(event.start);
+      if (at == null) return null;
+      return { event, at, end: at + (Number(event.duration_minutes) || 0), col: 0, of: 1 };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.at - b.at || b.end - a.end);
+
+  let cluster = [];
+  let clusterEnd = -1;
+  let colEnds = [];
+
+  const flush = () => {
+    if (!cluster.length) return;
+    const cols = cluster.reduce((n, x) => Math.max(n, x.col + 1), 0);
+    cluster.forEach((x) => { x.of = cols; });
+    cluster = [];
+  };
+
+  placed.forEach((x) => {
+    if (x.at >= clusterEnd) { flush(); colEnds = []; }
+    let c = 0;
+    while (c < colEnds.length && colEnds[c] > x.at) c += 1;
+    x.col = c;
+    colEnds[c] = x.end;
+    clusterEnd = Math.max(clusterEnd, x.end);
+    cluster.push(x);
+  });
+  flush();
+  return placed;
+}
+
 /** One track's blocks — gaps and events together, in clock order. */
 function blocksFor(events, gaps) {
-  const blocks = [];
-  events.forEach((event) => {
-    const at = toMinutes(event.start);
-    if (at != null) blocks.push({ kind: 'event', at, event });
-  });
-  gaps.forEach((gap) => blocks.push({ kind: 'gap', at: gap.from, gap }));
+  const blocks = packOverlaps(events).map((x) => ({
+    kind: 'event', at: x.at, event: x.event, col: x.col, of: x.of,
+  }));
+  // A gap is never concurrent with anything, so it keeps the full width.
+  gaps.forEach((gap) => blocks.push({ kind: 'gap', at: gap.from, gap, col: 0, of: 1 }));
   return blocks.sort((a, b) => a.at - b.at);
 }
 
@@ -201,14 +253,24 @@ export default function TimelineDay({
                         </div>
                       );
                     }
-                    const { event, at } = block;
+                    const { event, at, col, of } = block;
                     const duration = Number(event.duration_minutes) || 0;
+                    // 1.5% of the track is left between neighbours so two
+                    // touching blocks read as two, not one wide one.
+                    const width = 100 / (of || 1);
+                    const gutter = of > 1 ? 1.5 : 0;
                     return (
                       <article
                         className="wsTimeline__event"
                         key={event.id}
                         data-state={event.state || 'scheduled'}
-                        style={{ top: `${pct(at)}%`, height: `${(duration / span) * 100}%` }}
+                        data-cols={of || 1}
+                        style={{
+                          top: `${pct(at)}%`,
+                          height: `${(duration / span) * 100}%`,
+                          left: `${col * width}%`,
+                          width: `${width - gutter}%`,
+                        }}
                       >
                         <span className="wsTimeline__eventTime">{label(at)}</span>
                         <h5>{event.title}</h5>
