@@ -187,3 +187,51 @@ def test_every_trigger_names_a_variant_that_exists():
             assert t["variant"] in known, (
                 f"{archetype}.{key} points at {t['variant']!r}, which does not exist")
             assert len(t["because"]) > 30, f"{archetype}.{key} does not explain itself"
+
+
+# ─── the pick endpoints ──────────────────────────────────────────────
+
+def test_clearing_the_variant_hands_the_choice_back():
+    """The override must not be a one-way door.
+
+    A practitioner who tried a desk once and could never get Chief to
+    resume deciding would be worse off than one who was never offered
+    the choice. `PUT /workspace/pick` with null clears both columns.
+    """
+    import workspace_composer_router as router
+    assert "variant" in router.SetVariantBody.model_fields
+    field = router.SetVariantBody.model_fields["variant"]
+    assert field.default is None, "variant must be optional — null is the way back"
+
+
+def test_the_pick_endpoints_are_owner_gated_like_everything_else():
+    import inspect
+
+    import workspace_composer_router as router
+    for fn in (router.get_pick, router.set_pick):
+        src = inspect.getsource(fn)
+        assert "_require_owner" in src, f"{fn.__name__} is not owner-gated"
+
+
+def test_setting_a_variant_verifies_its_own_write():
+    """sb_clients returns None on a 4xx AND on a successful write with no
+    body, so the return value cannot tell them apart. That ambiguity
+    swallowed two verticals' archetype writes once."""
+    import inspect
+
+    import workspace_composer_router as router
+    src = inspect.getsource(router.set_pick)
+    assert "sb_get_as_service" in src, "set_pick does not read its write back"
+    assert "did not persist" in src
+
+
+def test_an_unknown_variant_is_refused_rather_than_stored():
+    """A stale value already on a row degrades to the default, which is
+    right. A NEW one arriving over HTTP is a caller bug and should be
+    told so rather than written and quietly ignored forever."""
+    import inspect
+
+    import workspace_composer_router as router
+    src = inspect.getsource(router.set_pick)
+    assert "is_variant" in src
+    assert "400" in src
