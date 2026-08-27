@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "archetype": "salon",
+  "label": "Salon / Barber",
+  "vertical": "personal_services",
+  "rationale": "For a salon the day IS the product. What gets sold is a block of a named person's time in a named chair, and the only question that matters before noon is where the holes are. So the workspace opens on one day across chair lanes with the hours running down the side — not a list of bookings, because a list cannot show you a ninety-minute gap at 2pm. Everything else is subordinate to the floor.",
+  "suppressed": [
+    {
+      "primitive": "priority_docket",
+      "reason": "A docket ranks by days remaining. Nothing on a salon floor is measured in days — the unit is the fifteen-minute slot, and a deadline column would be blank on every row."
+    },
+    {
+      "primitive": "week_grid",
+      "reason": "The week is real but it is not where decisions happen. A stylist looking at seven columns cannot see the gap they could still fill this afternoon."
+    },
+    {
+      "primitive": "ledger",
+      "reason": "Salon money settles at the chair, same day, card present. There is no running balance to carry, so a ledger would show a column of zeros."
+    },
+    {
+      "primitive": "metric_row",
+      "reason": "Bare figures were the wrong answer here. Revenue on the opening screen tells a stylist nothing they can act on; rebooking rate against its band tells them exactly what to do at the chair. The benchmark panel replaced it."
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "floor_today",
+      "primitive": "timeline_day",
+      "role": "lead",
+      "title": "The floor today",
+      "rationale": "One day, undivided, with the hours down the side. NOT chair lanes: nothing in this system stores a named member of staff — there is no per-stylist calendar and no assignment — so a lane per person would promise a screen nobody built. Gaps over thirty minutes are called out in bookable minutes, because those are the only minutes anyone can still do something about.",
+      "bindings": {
+        "events": {
+          "source": "sessions",
+          "scope": "business",
+          "filter": {
+            "status": "scheduled"
+          },
+          "fields": {
+            "id": "id",
+            "start": "scheduled_for",
+            "duration_minutes": "duration_minutes",
+            "title": "title",
+            "subtitle": "notes",
+            "state": "status"
+          },
+          "order": "scheduled_for.asc",
+          "limit": 150
+        }
+      },
+      "options": {
+        "day_start": 9,
+        "day_end": 19,
+        "gap_threshold_minutes": 30,
+        "show_gaps": true,
+        "lane_noun": "Chair",
+        "show_now": true,
+        "gap_tone": "open"
+      }
+    },
+    {
+      "id": "rebook_lapsed",
+      "primitive": "attention_queue",
+      "role": "secondary",
+      "title": "Past their rebook",
+      "rationale": "A salon does not lose clients loudly. It loses them by a six-week cut quietly becoming a nine-week one, so the queue is ordered by how long it has been.",
+      "bindings": {
+        "items": {
+          "source": "contacts",
+          "scope": "business",
+          "filter": {
+            "status": "active"
+          },
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "age_days": {
+              "column": "last_interaction",
+              "derive": "days_since"
+            },
+            "subtitle": "phone"
+          },
+          "order": "last_interaction.asc",
+          "limit": 25
+        }
+      },
+      "options": {
+        "age_unit": "weeks",
+        "escalate_after_days": 56,
+        "max_visible": 8
+      }
+    },
+    {
+      "id": "floor_health",
+      "primitive": "benchmark_panel",
+      "role": "footer",
+      "title": "How the floor is really doing",
+      "rationale": "Rebooking is the number that decides whether this business compounds, and almost no booking system surfaces it — you have to dig it out of a report. Putting it on the home screen next to its band is the whole point of the panel.",
+      "bindings": {
+        "rows": {
+          "source": "business_benchmarks",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "rebooking_rate",
+              "chair_utilization",
+              "retail_attach",
+              "new_client_return"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "average": "average",
+            "target": "target",
+            "floor": "floor",
+            "scale_max": "scale_max",
+            "unit": "unit",
+            "direction": "direction",
+            "reading": "reading",
+            "source": "source"
+          },
+          "order": "key.asc",
+          "expect_items": 4
+        }
+      },
+      "options": {
+        "format": "percent",
+        "show_average": true
+      }
+    }
+  ],
+  "terminology": {
+    "client": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "clients": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "contact": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "contacts": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "appointment": {
+      "value": "Appointment",
+      "origin": "preset"
+    },
+    "appointments": {
+      "value": "Appointments",
+      "origin": "preset"
+    },
+    "project": {
+      "value": "Appointment",
+      "origin": "preset"
+    },
+    "service": {
+      "value": "Service",
+      "origin": "preset"
+    },
+    "services": {
+      "value": "Services",
+      "origin": "preset"
+    },
+    "session": {
+      "value": "Appointment",
+      "origin": "preset"
+    },
+    "schedule": {
+      "value": "The floor",
+      "origin": "preset"
+    }
+  },
+  "theme": {
+    "display_font": "\"Playfair Display\", Georgia, serif",
+    "accent_name": "orange",
+    "palette": {
+      "ground": "#ffffff",
+      "surface": "#f9fafb",
+      "raised": "#f3f4f6",
+      "hover": "#e5e7eb",
+      "ink": "#111827",
+      "muted": "#4b5563",
+      "faint": "#9ca3af",
+      "border": "rgba(0,0,0,0.10)",
+      "border_subtle": "rgba(0,0,0,0.05)",
+      "accent": "#ea580c",
+      "accent2": "#f97316",
+      "field": "#FFF7F1",
+      "field2": "#FFEADC"
+    },
+    "dark": {
+      "ground": "#09090b",
+      "surface": "#0f0f11",
+      "raised": "#18181b",
+      "hover": "#27272a",
+      "ink": "#fafafa",
+      "muted": "#a1a1aa",
+      "faint": "#71717a",
+      "border": "rgba(255,255,255,0.10)",
+      "border_subtle": "rgba(255,255,255,0.06)",
+      "accent": "#ff6b35",
+      "accent2": "#f7931e",
+      "field": "#1B100B",
+      "field2": "#2C1710"
+    }
+  },
+  "room": {
+    "eyebrow": "The floor",
+    "meta": {
+      "floor_today": "9am – 7pm · one floor",
+      "rebook_lapsed": "8 clients drifting",
+      "floor_health": "measured against the industry"
+    }
+  }
+}

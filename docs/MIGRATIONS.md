@@ -46,11 +46,56 @@ SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = '<table>';
 
 | File | What | Status |
 |---|---|---|
+| `supabase/APPLY-2026-08-26-workspace-composer.sql` | Workspace composer phase one: `business_profiles.workspace_archetype` / `workspace_layout` / `workspace_terminology`, `sessions.assigned_to` + index, and the `business_metrics` view. | **applied 2026-08-26, verified** (3 columns, `assigned_to uuid`, index present, view returns 4 keys). Shipped BROKEN and was fixed before applying — see the note below. |
+| `supabase/benchmarks/APPLY-2026-08-27-bench-<vertical>.sql` ×7 + `supabase/APPLY-2026-08-27-bench-aggregate.sql` | The benchmark VALUES, split into one view per vertical plus a stable aggregate that unions them. Supersedes the single `APPLY-2026-08-27-workspace-benchmark-values.sql`. | **applied 2026-08-27, verified** — all 7 per-vertical views live, aggregate returns the same 14 rows with identical values to the monolithic view it replaced. |
+| ~~`supabase/APPLY-2026-08-27-workspace-benchmark-values.sql`~~ | The original single view. | applied 2026-08-26, **superseded 2026-08-27** by the split above. File removed. |
 | `supabase/APPLY-2026-08-19-dev-bridge.sql` | Dev Bridge: `dev_tasks` (Mission Control → developer-side task list, local + cloud lanes) and `dev_bridge_devices` (Solution Space pairing). Service-role only. | applied 2026-08-19, verified (both tables, RLS on) |
 | `../solutionist-studio/supabase/APPLY-2026-07-14-nonprofit-blueprint.sql` | the 5 nonprofit blueprint rows (donors, programs, grants, events, volunteers) | **applied 2026-08-11 — four weeks late.** The file was written 07-14 and `vertical_registry` recorded the vertical as "first-class end-to-end", but the rows were never applied: `business_type_module_blueprint` held **zero** nonprofit rows, so a nonprofit signup was provisioned nothing. Found by counting the table against the seed files (62 declared, 57 present). Verified after applying: 62 = 62. |
 | `../solutionist-studio/supabase/APPLY-2026-08-11-blueprint-boards-sweep.sql` | kanban for every blueprint module whose status/stage select has ≥3 options (36 rows) | applied 2026-08-11, verified (32/57 rows carry a board; 76-row `module_inspect` sweep clean) |
 | `../solutionist-studio/supabase/APPLY-2026-08-11-lawyer-matters-board.sql` + `-board-default.sql` | lawyer/matters gets the kanban its `work_pipeline` archetype implied, and opens on it | applied 2026-08-11, verified |
 | `../solutionist-studio/supabase/APPLY-2026-08-11-matters-fixture-schema.sql` + `-mirrors-blueprint.sql` | the Vertical Test Lawyer fixture rendered a red panel (`schema` was `[]`); now mirrors the blueprint | applied 2026-08-11, verified |
+
+> **2026-08-27 — the benchmark view was split one-per-vertical, on purpose.**
+> Eight people are about to work on eight verticals at once. Appending
+> UNION arms to one shared view guarantees merge conflicts, and a conflict
+> resolved by guessing inside a SQL view puts one industry's number under
+> another industry's sentence. Each vertical now owns
+> `supabase/benchmarks/APPLY-*-bench-<vertical>.sql`; the aggregate unions
+> a fixed list of seven and changes only when a whole vertical is added.
+> Apply the seven per-vertical files before the aggregate — it depends on
+> all of them. Verified identical: same 14 rows, same values, before and
+> after.
+
+> **2026-08-26 — both workspace migrations were written against columns that
+> do not exist, and were caught by verifying before applying.** The first cut
+> read `invoices.amount_due_cents`, `line_items`, `subtotal_cents`,
+> `total_cents` and `amount_paid_cents`; the live table has `items`,
+> `subtotal`, `tax_amount` and `total` — numeric, in DOLLARS — and **no
+> paid-amount column at all**. It also filtered `invoices.status = 'open'`
+> (the check constraint allows draft|sent|viewed|paid|overdue|cancelled) and
+> `contacts.status` on `'first_time'` and `'donor'` (allowed: lead|active|
+> inactive|churned|vip). `CREATE VIEW` would have failed outright — and the
+> two `contacts.status` arms were *worse than a failure*, because they would
+> have SUCCEEDED and returned nothing forever: a ministry would have been
+> shown a guest-return rate of zero every Sunday.
+>
+> The `*_cents` names came from reading the CALLERS instead of the schema —
+> they are Stripe payload keys, and they appear in the Python over a hundred
+> times. `workspace_field_catalog.py` had inherited the same phantom columns
+> for `invoices`, `business_users` (`display_name`), `contractors` (`trade`,
+> `status`, `phone`) and `customer_balances` (`balance_cents`), and the trades
+> preset bound one of them.
+>
+> **The cheap guard is the one this doc already states, applied literally:**
+> query `information_schema.columns` for every table a migration touches
+> before writing a line of it, and dry-run the whole file inside a
+> transaction that ends in `ROLLBACK` before the one that ends in `COMMIT`.
+> Both were done here; both migrations then applied first time.
+>
+> One incidental finding worth keeping: **`business_users` has no name column
+> of any kind.** A seat carries an `invited_email` and a role, and the person
+> lives in auth. That is the schema-level confirmation of why the salon board
+> draws one undivided day rather than a lane per stylist.
 
 > **The lesson these four share:** writing a migration is not applying it, and a
 > closure note that cites a file has only checked that the file exists. The cheap

@@ -1,0 +1,243 @@
+{
+  "schema_version": 1,
+  "archetype": "nonprofit",
+  "label": "Nonprofit",
+  "vertical": "nonprofit",
+  "rationale": "A nonprofit is the one shape here where the deadline and the relationship carry equal weight. A grant report filed late costs the next grant, so the working surface is a docket ordered by days remaining — the same shape a law firm needs, for the same reason. But underneath it sits something no law firm has: three out of four first-time donors never give a second time, and that leak is invisible in a total. So the docket leads, the lapsing donors sit beneath it, and the panel shows the retention rates the totals hide.",
+  "suppressed": [
+    {
+      "primitive": "timeline_day",
+      "reason": "A nonprofit's Tuesday is meetings and grant writing. Hourly lanes would show a calendar, not the work, and the work is measured in reporting periods rather than hours."
+    },
+    {
+      "primitive": "week_grid",
+      "reason": "Programs run on a calendar and it is genuinely useful — just not here. Seven columns answer 'when', and the question that decides funding is 'how long until this is due'."
+    },
+    {
+      "primitive": "ledger",
+      "reason": "Restricted fund accounting is real, consequential and absolutely not a dashboard. A running balance beside a donor list invites someone to spend restricted money, which is the single most expensive mistake in the sector. It lives in the ledger surfaces where the restriction travels with the money."
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "obligations",
+      "primitive": "priority_docket",
+      "role": "lead",
+      "title": "What is owed, and when",
+      "rationale": "One card per funder, laid out as peers rather than stacked or sequenced. Obligations do not move from one funder to the next, so a column layout would assert a flow that does not exist — what these are is a set of relationships, each holding a few things you owe. Seeing two items under the same trust is the finding a date-sorted list cannot produce.",
+      "bindings": {
+        "rows": {
+          "source": "module_entries",
+          "scope": "business",
+          "filter": {
+            "status": "active"
+          },
+          "fields": {
+            "id": "id",
+            "title": "data.obligation_name",
+            "metric_value": {
+              "column": "data.due_on",
+              "derive": "days_until"
+            },
+            "owner": "data.owner",
+            "stage": "data.funder",
+            "subtitle": "data.obligation_type"
+          },
+          "order": "data.due_on.asc",
+          "limit": 40
+        }
+      },
+      "options": {
+        "sort": "stage",
+        "metric_label": "Due in",
+        "metric_unit": "days",
+        "stages": [
+          "Thornbury Family Trust",
+          "City of Marrickville",
+          "Ardleigh Foundation",
+          "Fitzhardinge estate",
+          "Board",
+          "Statutory"
+        ],
+        "stage_layout": "grid",
+        "urgent_threshold_days": 14
+      }
+    },
+    {
+      "id": "lapsing_donors",
+      "primitive": "attention_queue",
+      "role": "secondary",
+      "title": "Gave once, never again",
+      "rationale": "The largest and quietest loss in the sector. Three out of four first-time donors never give a second gift, and a total raised figure looks fine right up until the base has gone. Ordered by how long since the last gift.",
+      "bindings": {
+        "items": {
+          "source": "contacts",
+          "scope": "business",
+          "filter": {
+            "status": "donor"
+          },
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "age_days": {
+              "column": "last_interaction",
+              "derive": "days_since"
+            },
+            "subtitle": "source"
+          },
+          "order": "last_interaction.asc",
+          "limit": 25
+        }
+      },
+      "options": {
+        "age_unit": "days",
+        "escalate_after_days": 400,
+        "max_visible": 6
+      }
+    },
+    {
+      "id": "base_health",
+      "primitive": "benchmark_panel",
+      "role": "footer",
+      "title": "Is the base holding",
+      "rationale": "Total raised is the number everyone reports and the one that hides the most. These four are the base underneath it — whether donors come back, whether new ones ever give twice, and how much of the income is recurring, which is worth several times a one-off gift.",
+      "bindings": {
+        "rows": {
+          "source": "business_benchmarks",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "donor_retention",
+              "first_time_donor_retention",
+              "recurring_share",
+              "grants_on_time"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "average": "average",
+            "target": "target",
+            "floor": "floor",
+            "scale_max": "scale_max",
+            "unit": "unit",
+            "direction": "direction",
+            "reading": "reading",
+            "source": "source"
+          },
+          "order": "key.asc",
+          "expect_items": 4
+        }
+      },
+      "options": {
+        "format": "percent",
+        "show_average": true
+      }
+    }
+  ],
+  "terminology": {
+    "contact": {
+      "value": "Donor",
+      "origin": "preset"
+    },
+    "contacts": {
+      "value": "Donors",
+      "origin": "preset"
+    },
+    "customer": {
+      "value": "Donor",
+      "origin": "preset"
+    },
+    "customers": {
+      "value": "Donors",
+      "origin": "preset"
+    },
+    "donor": {
+      "value": "Donor",
+      "origin": "preset"
+    },
+    "donation": {
+      "value": "Gift",
+      "origin": "preset"
+    },
+    "project": {
+      "value": "Program",
+      "origin": "preset"
+    },
+    "projects": {
+      "value": "Programs",
+      "origin": "preset"
+    },
+    "service": {
+      "value": "Program",
+      "origin": "preset"
+    },
+    "services": {
+      "value": "Programs",
+      "origin": "preset"
+    },
+    "offering": {
+      "value": "Program",
+      "origin": "preset"
+    },
+    "payment": {
+      "value": "Gift",
+      "origin": "preset"
+    },
+    "appointment": {
+      "value": "Meeting",
+      "origin": "preset"
+    },
+    "appointments": {
+      "value": "Meetings",
+      "origin": "preset"
+    },
+    "schedule": {
+      "value": "The calendar",
+      "origin": "preset"
+    }
+  },
+  "theme": {
+    "display_font": "\"IBM Plex Serif\", Georgia, serif",
+    "accent_name": "pink",
+    "palette": {
+      "ground": "#ffffff",
+      "surface": "#f9fafb",
+      "raised": "#f3f4f6",
+      "hover": "#e5e7eb",
+      "ink": "#111827",
+      "muted": "#4b5563",
+      "faint": "#9ca3af",
+      "border": "rgba(0,0,0,0.10)",
+      "border_subtle": "rgba(0,0,0,0.05)",
+      "accent": "#be185d",
+      "accent2": "#db2777",
+      "field": "#FFF2F8",
+      "field2": "#FFE1EE"
+    },
+    "dark": {
+      "ground": "#09090b",
+      "surface": "#0f0f11",
+      "raised": "#18181b",
+      "hover": "#27272a",
+      "ink": "#fafafa",
+      "muted": "#a1a1aa",
+      "faint": "#71717a",
+      "border": "rgba(255,255,255,0.10)",
+      "border_subtle": "rgba(255,255,255,0.06)",
+      "accent": "#f472b6",
+      "accent2": "#f9a8d4",
+      "field": "#1B0B15",
+      "field2": "#2C1124"
+    }
+  },
+  "room": {
+    "eyebrow": "What we owe",
+    "meta": {
+      "obligations": "8 owed · 6 funders",
+      "lapsing_donors": "6 lapsed",
+      "base_health": "measured against the sector"
+    }
+  }
+}

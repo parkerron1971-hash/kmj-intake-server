@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "archetype": "consultant",
+  "label": "Consultant / Coach",
+  "vertical": "consultant",
+  "rationale": "A consultant's book is a handful of engagements, each sitting at a stage — scoping, in delivery, awaiting sign-off. The risk is never a missed hour, it is an engagement quietly parked at the same stage for five weeks. So the workspace opens on a docket like a law firm's, but sorted by stage rather than by deadline, so a column that has stopped moving is visible as a column. Underneath, the retainer hours drawn down, because that is the number that decides whether this month was profitable.",
+  "suppressed": [
+    {
+      "primitive": "timeline_day",
+      "reason": "Consulting time is not chair time. A day of hourly lanes would show three calls and six hours of unstructured work the calendar never sees, which flatters the day and tells you nothing."
+    },
+    {
+      "primitive": "week_grid",
+      "reason": "Same problem one grain out. The week is not the unit; the engagement is, and engagements run for months across a shifting set of days."
+    },
+    {
+      "primitive": "ledger",
+      "reason": "A consultant bills against a retainer, not a running balance. Draw-down is one figure in the metric row, and a debit-and-credit table would restate it at ten times the size."
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "engagement_board",
+      "primitive": "priority_docket",
+      "role": "lead",
+      "title": "Engagements",
+      "rationale": "The book laid out ACROSS its stages rather than stacked down the page. A consultant reads left to right — scoping, out, in delivery, awaiting sign-off — and a stage that has stopped moving is only visible as a column with four things parked in it. In a vertical stack that finding disappears.",
+      "bindings": {
+        "rows": {
+          "source": "module_entries",
+          "scope": "business",
+          "filter": {
+            "status": "active"
+          },
+          "fields": {
+            "id": "id",
+            "title": "data.engagement_name",
+            "metric_value": {
+              "column": "data.stage_entered_at",
+              "derive": "days_since"
+            },
+            "subtitle": "data.client_name",
+            "stage": "data.stage",
+            "owner": "data.lead_consultant"
+          },
+          "order": "data.stage_entered_at.asc",
+          "limit": 30
+        }
+      },
+      "options": {
+        "sort": "stage",
+        "metric_label": "At this stage",
+        "metric_unit": "days",
+        "stages": [
+          "Scoping",
+          "Proposal out",
+          "In delivery",
+          "Awaiting sign-off",
+          "Wrapping"
+        ],
+        "urgent_threshold_days": 21,
+        "stage_layout": "columns"
+      }
+    },
+    {
+      "id": "going_quiet",
+      "primitive": "attention_queue",
+      "role": "secondary",
+      "title": "Going quiet",
+      "rationale": "Retention risk never announces itself. It looks like replying later, skipping the homework, moving a session, getting vague about the goal. This is the consultant's version of the salon's rebooking leak, and it is only visible as an age-ranked list.",
+      "bindings": {
+        "items": {
+          "source": "contacts",
+          "scope": "business",
+          "filter": {
+            "status": "active"
+          },
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "age_days": {
+              "column": "last_interaction",
+              "derive": "days_since"
+            },
+            "subtitle": "source"
+          },
+          "order": "last_interaction.asc",
+          "limit": 25
+        }
+      },
+      "options": {
+        "age_unit": "days",
+        "escalate_after_days": 21,
+        "max_visible": 6
+      }
+    },
+    {
+      "id": "retainer_drawdown",
+      "primitive": "metric_row",
+      "role": "secondary",
+      "title": "Retainer",
+      "rationale": "Hours drawn against hours sold, and the work already done that has not been billed yet. Three figures in the same unit, no chart — this is a thing you check, not a thing you study.",
+      "bindings": {
+        "metrics": {
+          "source": "business_metrics",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "retainer_hours_drawn",
+              "retainer_hours_remaining",
+              "wip_amount"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "unit": "unit",
+            "trend": "trend"
+          },
+          "order": "key.asc",
+          "expect_items": 3
+        }
+      },
+      "options": {
+        "format": "duration"
+      }
+    },
+    {
+      "id": "book_health",
+      "primitive": "benchmark_panel",
+      "role": "footer",
+      "title": "Capacity and pipeline",
+      "rationale": "This is two businesses at once — delivery and pipeline — and the dashboard has to hold both. Forward-looking capacity is what makes it different from every other vertical here: you cannot decide what to take on from a number that only describes last month.",
+      "bindings": {
+        "rows": {
+          "source": "business_benchmarks",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "utilization_now",
+              "utilization_projected",
+              "proposal_win_rate",
+              "retainer_renewal"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "average": "average",
+            "target": "target",
+            "floor": "floor",
+            "scale_max": "scale_max",
+            "unit": "unit",
+            "direction": "direction",
+            "reading": "reading",
+            "source": "source"
+          },
+          "order": "key.asc",
+          "expect_items": 4
+        }
+      },
+      "options": {
+        "format": "percent",
+        "show_average": true
+      }
+    }
+  ],
+  "terminology": {
+    "client": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "clients": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "contact": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "contacts": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "project": {
+      "value": "Engagement",
+      "origin": "preset"
+    },
+    "projects": {
+      "value": "Engagements",
+      "origin": "preset"
+    },
+    "service": {
+      "value": "Engagement",
+      "origin": "preset"
+    },
+    "services": {
+      "value": "Engagements",
+      "origin": "preset"
+    },
+    "appointment": {
+      "value": "Session",
+      "origin": "preset"
+    },
+    "appointments": {
+      "value": "Sessions",
+      "origin": "preset"
+    },
+    "session": {
+      "value": "Session",
+      "origin": "preset"
+    },
+    "offering": {
+      "value": "Package",
+      "origin": "preset"
+    },
+    "schedule": {
+      "value": "The book",
+      "origin": "preset"
+    }
+  },
+  "theme": {
+    "display_font": "\"IBM Plex Serif\", Georgia, serif",
+    "accent_name": "purple",
+    "palette": {
+      "ground": "#ffffff",
+      "surface": "#f9fafb",
+      "raised": "#f3f4f6",
+      "hover": "#e5e7eb",
+      "ink": "#111827",
+      "muted": "#4b5563",
+      "faint": "#9ca3af",
+      "border": "rgba(0,0,0,0.10)",
+      "border_subtle": "rgba(0,0,0,0.05)",
+      "accent": "#7c3aed",
+      "accent2": "#8b5cf6",
+      "field": "#F7F4FF",
+      "field2": "#ECE5FF"
+    },
+    "dark": {
+      "ground": "#09090b",
+      "surface": "#0f0f11",
+      "raised": "#18181b",
+      "hover": "#27272a",
+      "ink": "#fafafa",
+      "muted": "#a1a1aa",
+      "faint": "#71717a",
+      "border": "rgba(255,255,255,0.10)",
+      "border_subtle": "rgba(255,255,255,0.06)",
+      "accent": "#a78bfa",
+      "accent2": "#8b5cf6",
+      "field": "#141022",
+      "field2": "#201936"
+    }
+  },
+  "room": {
+    "eyebrow": "The book",
+    "meta": {
+      "engagement_board": "7 live · 5 stages",
+      "going_quiet": "6 going quiet",
+      "retainer_drawdown": "this month",
+      "book_health": "measured against the profession"
+    }
+  }
+}

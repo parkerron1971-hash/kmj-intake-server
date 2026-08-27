@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "archetype": "ministry",
+  "label": "Ministry / Church",
+  "vertical": "ministry",
+  "rationale": "A church's unit of time is the week, and it is not a flat week — Sunday carries most of the weight, Wednesday carries some, and the shape of that is information a list destroys. So the workspace opens on seven columns with gatherings placed where they fall, because a leader needs to see the rhythm and the empty days at the same time. Under it sits the thing a week grid cannot show: the person who came once and has not been contacted since.",
+  "suppressed": [
+    {
+      "primitive": "timeline_day",
+      "reason": "A ministry's Tuesday is mostly empty and its Sunday is three services deep. One day of hourly lanes would be a wall of white space six days out of seven."
+    },
+    {
+      "primitive": "priority_docket",
+      "reason": "Ministry work is not deadline-shaped. Ranking a congregation by days-remaining would impose a legal frame on pastoral work, and the numbers would be arbitrary."
+    },
+    {
+      "primitive": "ledger",
+      "reason": "Giving is real money and it belongs in the giving surfaces where restricted funds can be handled honestly. A running balance next to a gathering calendar invites the wrong reading of both."
+    },
+    {
+      "primitive": "metric_row",
+      "reason": "An attendance total on the opening screen becomes the target, and totals hide the trend that matters — giving can be flat while participation falls, because a few large gifts mask disengagement. The benchmark panel shows the rates instead."
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "week_of_gatherings",
+      "primitive": "week_grid",
+      "role": "lead",
+      "title": "This week",
+      "rationale": "Seven columns, gatherings where they fall — but not seven EQUAL columns, because a church week has never been flat. Sunday is the anchor and takes the width to say so before a single event is read; the other six compress around it. The uneven shape is the point.",
+      "bindings": {
+        "week_of": {
+          "source": "sessions",
+          "scope": "business",
+          "fields": {
+            "date": "scheduled_for"
+          },
+          "order": "scheduled_for.asc"
+        },
+        "events": {
+          "source": "sessions",
+          "scope": "business",
+          "filter": {
+            "status": "scheduled"
+          },
+          "fields": {
+            "id": "id",
+            "date": {
+              "column": "scheduled_for",
+              "derive": "date_part"
+            },
+            "time": {
+              "column": "scheduled_for",
+              "derive": "time_part"
+            },
+            "title": "title",
+            "subtitle": "notes",
+            "kind": "session_type"
+          },
+          "order": "scheduled_for.asc",
+          "limit": 60
+        }
+      },
+      "options": {
+        "week_start": "sun",
+        "show_counts": true,
+        "count_noun": "expected",
+        "anchor_day": "sun"
+      }
+    },
+    {
+      "id": "first_time_guests",
+      "primitive": "attention_queue",
+      "role": "secondary",
+      "title": "Came once, nobody has called",
+      "rationale": "The gap a calendar cannot show. Sorted by how long they have been waiting, because the second week is when a first-time guest decides.",
+      "bindings": {
+        "items": {
+          "source": "contacts",
+          "scope": "business",
+          "filter": {
+            "status": "first_time"
+          },
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "age_days": {
+              "column": "created_at",
+              "derive": "days_since"
+            },
+            "subtitle": "source"
+          },
+          "order": "created_at.asc",
+          "limit": 20
+        }
+      },
+      "options": {
+        "age_unit": "days",
+        "escalate_after_days": 14,
+        "max_visible": 10
+      }
+    },
+    {
+      "id": "back_door",
+      "primitive": "benchmark_panel",
+      "role": "footer",
+      "title": "The back door",
+      "rationale": "A church counts the front door and almost never counts the back one. These four rows are the guest progression and the giving base — read together they say whether the problem is outreach or assimilation, which is a question no attendance total can answer.",
+      "bindings": {
+        "rows": {
+          "source": "business_benchmarks",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "first_time_return",
+              "second_time_return",
+              "third_time_stay",
+              "giving_participation"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "average": "average",
+            "target": "target",
+            "floor": "floor",
+            "scale_max": "scale_max",
+            "unit": "unit",
+            "direction": "direction",
+            "reading": "reading",
+            "source": "source"
+          },
+          "order": "key.asc",
+          "expect_items": 4
+        }
+      },
+      "options": {
+        "format": "percent",
+        "show_average": true
+      }
+    }
+  ],
+  "terminology": {
+    "contact": {
+      "value": "Guest",
+      "origin": "preset"
+    },
+    "contacts": {
+      "value": "Guests",
+      "origin": "preset"
+    },
+    "customer": {
+      "value": "Guest",
+      "origin": "preset"
+    },
+    "customers": {
+      "value": "Guests",
+      "origin": "preset"
+    },
+    "member": {
+      "value": "Member",
+      "origin": "preset"
+    },
+    "appointment": {
+      "value": "Gathering",
+      "origin": "preset"
+    },
+    "appointments": {
+      "value": "Gatherings",
+      "origin": "preset"
+    },
+    "session": {
+      "value": "Gathering",
+      "origin": "preset"
+    },
+    "sessions": {
+      "value": "Gatherings",
+      "origin": "preset"
+    },
+    "project": {
+      "value": "Ministry",
+      "origin": "preset"
+    },
+    "projects": {
+      "value": "Ministries",
+      "origin": "preset"
+    },
+    "service": {
+      "value": "Ministry",
+      "origin": "preset"
+    },
+    "payment": {
+      "value": "Gift",
+      "origin": "preset"
+    },
+    "schedule": {
+      "value": "The calendar",
+      "origin": "preset"
+    }
+  },
+  "theme": {
+    "display_font": "\"Cormorant Garamond\", Georgia, serif",
+    "accent_name": "teal",
+    "palette": {
+      "ground": "#ffffff",
+      "surface": "#f9fafb",
+      "raised": "#f3f4f6",
+      "hover": "#e5e7eb",
+      "ink": "#111827",
+      "muted": "#4b5563",
+      "faint": "#9ca3af",
+      "border": "rgba(0,0,0,0.10)",
+      "border_subtle": "rgba(0,0,0,0.05)",
+      "accent": "#0d9488",
+      "accent2": "#14b8a6",
+      "field": "#EFFBF9",
+      "field2": "#DAF4F0"
+    },
+    "dark": {
+      "ground": "#09090b",
+      "surface": "#0f0f11",
+      "raised": "#18181b",
+      "hover": "#27272a",
+      "ink": "#fafafa",
+      "muted": "#a1a1aa",
+      "faint": "#71717a",
+      "border": "rgba(255,255,255,0.10)",
+      "border_subtle": "rgba(255,255,255,0.06)",
+      "accent": "#2dd4bf",
+      "accent2": "#14b8a6",
+      "field": "#07181B",
+      "field2": "#0E262B"
+    }
+  },
+  "room": {
+    "eyebrow": "This week",
+    "meta": {
+      "week_of_gatherings": "Sunday anchors the week",
+      "first_time_guests": "6 waiting on a call",
+      "back_door": "measured against growing churches"
+    }
+  }
+}

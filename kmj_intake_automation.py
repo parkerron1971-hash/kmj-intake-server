@@ -64,6 +64,7 @@ from booking_page_router import router as booking_page_router
 from vertical_intelligence_router import router as vertical_intelligence_router
 # Phase VABI v1.5 — per-business terminology + intelligence overrides
 from terminology_overrides_router import router as terminology_overrides_router
+from workspace_composer_router import router as workspace_composer_router
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver
 from stripe_connect_router import router as stripe_connect_router
 # Phase D.4 PR 2 — Charges / Payouts / Customers read proxy
@@ -429,6 +430,9 @@ app.include_router(contractors_router)
 app.include_router(vertical_intelligence_router)
 # Phase VABI v1.5 — per-business overrides CRUD + Chief-driven generation
 app.include_router(terminology_overrides_router)
+# Workspace composer phase one — the registry, the five presets, the
+# classifier and the override. See docs/WORKSPACE_COMPOSER_SPEC.md.
+app.include_router(workspace_composer_router)
 app.include_router(chief_suggestions_router)
 app.include_router(business_profile_router)
 app.include_router(practitioner_profile_router)

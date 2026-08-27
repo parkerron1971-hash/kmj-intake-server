@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "archetype": "therapist",
+  "label": "Therapist / Counsellor",
+  "vertical": "therapist",
+  "rationale": "A private practice runs on a standing weekly hour. The same client, the same slot, week after week — so the working surface is the week, not the day and not a deadline list. What breaks a practice is not a bad week, it is the slow erosion of a caseload: a client who moves a session, then moves it again, then stops. Underneath the week sits exactly that, and beneath both sit the two numbers that decide whether the practice is viable — how much of the caseload is actually held, and how much of the booked hour survives to being paid for.",
+  "suppressed": [
+    {
+      "primitive": "timeline_day",
+      "reason": "A therapist's day is four or five hours in the same room. Hourly lanes would draw one column with five blocks in it, which is a calendar entry pretending to be a board."
+    },
+    {
+      "primitive": "priority_docket",
+      "reason": "Nothing in clinical work is ranked by days remaining. A docket would impose a deadline frame on a relationship, and every number in it would be invented."
+    },
+    {
+      "primitive": "ledger",
+      "reason": "Superbills and insurance remittance are real and they are their own surface. A running balance next to a caseload reads as though clients are accounts, which is the wrong frame on the one screen that opens every morning."
+    }
+  ],
+  "refused": [
+    {
+      "what": "Anything clinical",
+      "reason": "Session content, progress notes and clinical detail are refused outright — not hidden, refused. Storing them would make this platform a business associate under HIPAA, which requires a signed agreement with every downstream processor that could touch the data. That posture does not exist yet, so the vertical ships narrow and useful: scheduling, billing and admin, which carry no protected health information beyond the contact record any business already keeps. Enforced in vertical_scope.py at the two seams where modules are created, not merely discouraged in a prompt."
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "caseload_week",
+      "primitive": "week_grid",
+      "role": "lead",
+      "title": "This week",
+      "rationale": "The standing hour is the unit of a private practice, so the week is the working surface — Monday to Friday, with the weekend dimmed rather than drawn, because rendering Saturday at full strength implies an availability that is not offered. Seven columns show the recurring shape and, more usefully, the holes in it.",
+      "bindings": {
+        "week_of": {
+          "source": "sessions",
+          "scope": "business",
+          "fields": {
+            "date": "scheduled_for"
+          },
+          "order": "scheduled_for.asc"
+        },
+        "events": {
+          "source": "sessions",
+          "scope": "business",
+          "filter": {
+            "status": "scheduled"
+          },
+          "fields": {
+            "id": "id",
+            "date": {
+              "column": "scheduled_for",
+              "derive": "date_part"
+            },
+            "time": {
+              "column": "scheduled_for",
+              "derive": "time_part"
+            },
+            "title": "title",
+            "subtitle": "notes",
+            "kind": "session_type"
+          },
+          "order": "scheduled_for.asc",
+          "limit": 60
+        }
+      },
+      "options": {
+        "week_start": "mon",
+        "show_counts": false,
+        "count_noun": "booked",
+        "dim_days": [
+          "sat",
+          "sun"
+        ]
+      }
+    },
+    {
+      "id": "drifting_clients",
+      "primitive": "attention_queue",
+      "role": "secondary",
+      "title": "Haven't been seen",
+      "rationale": "A caseload does not end, it thins. Someone moves a session, then moves it again, then stops answering, and six weeks later a standing hour is gone and nobody decided anything. Ordered by how long it has been, because that is the only signal there is.",
+      "bindings": {
+        "items": {
+          "source": "contacts",
+          "scope": "business",
+          "filter": {
+            "status": "active"
+          },
+          "fields": {
+            "id": "id",
+            "title": "name",
+            "age_days": {
+              "column": "last_interaction",
+              "derive": "days_since"
+            },
+            "subtitle": "phone"
+          },
+          "order": "last_interaction.asc",
+          "limit": 20
+        }
+      },
+      "options": {
+        "age_unit": "weeks",
+        "escalate_after_days": 21,
+        "max_visible": 6
+      }
+    },
+    {
+      "id": "practice_health",
+      "primitive": "benchmark_panel",
+      "role": "footer",
+      "title": "Is the practice holding",
+      "rationale": "Two questions decide whether a private practice survives: is the caseload held, and does a booked hour actually get paid for. Retention and the no-show rate answer both, and neither is visible from a calendar.",
+      "bindings": {
+        "rows": {
+          "source": "business_benchmarks",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "client_retention",
+              "no_show_rate",
+              "caseload_utilization",
+              "booked_before_leaving"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "average": "average",
+            "target": "target",
+            "floor": "floor",
+            "scale_max": "scale_max",
+            "unit": "unit",
+            "direction": "direction",
+            "reading": "reading",
+            "source": "source"
+          },
+          "order": "key.asc",
+          "expect_items": 4
+        }
+      },
+      "options": {
+        "format": "percent",
+        "show_average": true
+      }
+    }
+  ],
+  "terminology": {
+    "contact": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "contacts": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "customer": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "client": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "project": {
+      "value": "Episode",
+      "origin": "preset"
+    },
+    "projects": {
+      "value": "Episodes",
+      "origin": "preset"
+    },
+    "service": {
+      "value": "Session",
+      "origin": "preset"
+    },
+    "services": {
+      "value": "Sessions",
+      "origin": "preset"
+    },
+    "appointment": {
+      "value": "Session",
+      "origin": "preset"
+    },
+    "appointments": {
+      "value": "Sessions",
+      "origin": "preset"
+    },
+    "session": {
+      "value": "Session",
+      "origin": "preset"
+    },
+    "sessions": {
+      "value": "Sessions",
+      "origin": "preset"
+    },
+    "invoice": {
+      "value": "Invoice",
+      "origin": "preset"
+    },
+    "schedule": {
+      "value": "The week",
+      "origin": "preset"
+    }
+  },
+  "theme": {
+    "display_font": "\"Cormorant Garamond\", Georgia, serif",
+    "accent_name": "indigo",
+    "palette": {
+      "ground": "#ffffff",
+      "surface": "#f9fafb",
+      "raised": "#f3f4f6",
+      "hover": "#e5e7eb",
+      "ink": "#111827",
+      "muted": "#4b5563",
+      "faint": "#9ca3af",
+      "border": "rgba(0,0,0,0.10)",
+      "border_subtle": "rgba(0,0,0,0.05)",
+      "accent": "#4f46e5",
+      "accent2": "#6366f1",
+      "field": "#F3F4FF",
+      "field2": "#E7E9FF"
+    },
+    "dark": {
+      "ground": "#09090b",
+      "surface": "#0f0f11",
+      "raised": "#18181b",
+      "hover": "#27272a",
+      "ink": "#fafafa",
+      "muted": "#a1a1aa",
+      "faint": "#71717a",
+      "border": "rgba(255,255,255,0.10)",
+      "border_subtle": "rgba(255,255,255,0.06)",
+      "accent": "#818cf8",
+      "accent2": "#a5b4fc",
+      "field": "#101021",
+      "field2": "#1B1C38"
+    }
+  },
+  "room": {
+    "eyebrow": "The week",
+    "meta": {
+      "caseload_week": "Mon – Fri · initials only",
+      "drifting_clients": "6 not seen recently",
+      "practice_health": "measured against the profession"
+    }
+  }
+}

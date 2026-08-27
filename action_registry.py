@@ -272,6 +272,20 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "add_testimonial":               _w("A", "adds a testimonial"),
     "update_business_profile_field": _w("A", "sets one profile field"),
 
+    # Workspace composer, phase one. All three write the same
+    # business_profiles row (archetype + validated layout + terminology)
+    # and nothing else — no send, no money, no outside world. Switching
+    # back is one further call, and the layout is rebuilt from a static
+    # preset rather than being edited in place, so a wrong choice is a
+    # tap away from right. Class A on those grounds.
+    "choose_workspace":    _w("A", "classifies the business and stores the matching layout "
+                                   "preset; re-runnable, and switch_workspace reverses it"),
+    "switch_workspace":    _w("A", "swaps the stored archetype for another of the five "
+                                   "presets; the previous one is a call away, and every "
+                                   "user_override terminology row is carried across"),
+    "rename_term":         _w("A", "sets what the practitioner calls one noun and stamps the "
+                                   "row user_override; passing null restores the preset word"),
+
     # Verified individually beyond the adopted set.
     "forget":               _w("A", "deactivates a memory (is_active flip), does not delete"),
     "delete_module_entry":  _w("A", "SOFT delete — flips status to 'deleted', row survives"),
