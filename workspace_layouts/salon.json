@@ -3,7 +3,7 @@
   "archetype": "salon",
   "label": "Salon / Barber",
   "vertical": "personal_services",
-  "rationale": "For a salon the day IS the product. What gets sold is a block of a named person's time in a named chair, and the only question that matters before noon is where the holes are. So the workspace opens on one day across chair lanes with the hours running down the side — not a list of bookings, because a list cannot show you a ninety-minute gap at 2pm. Everything else is subordinate to the floor.",
+  "rationale": "For a salon the day IS the product. What gets sold is a block of time on the floor, and the only question that matters before noon is where the holes are. So the workspace opens on ONE day, undivided, with the hours running down the side — not a list of bookings, because a list cannot show you a ninety-minute gap at 2pm, and not a lane per stylist, because nothing in this system stores a named member of staff. Everything else is subordinate to the floor.",
   "suppressed": [
     {
       "primitive": "priority_docket",
