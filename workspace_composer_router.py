@@ -444,6 +444,122 @@ def set_archetype(
     }
 
 
+# ─── which desk, read and set ────────────────────────────────────────
+#
+# `/workspace/home` also returns the pick, but it resolves every binding
+# on the way — that is the right shape for the composer's own surface
+# and the wrong shape for a desk that only wants to know which layout
+# Chief chose and why. These two are the light pair.
+
+
+@router.get("/pick")
+def get_pick(
+    business_id: str,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Which desk this business opens on, and why. No data resolved."""
+    biz = _require_owner(business_id, user)
+    profile = _get_or_create_profile(business_id)
+
+    archetype = profile.get("workspace_archetype")
+    if archetype not in workspace_layouts.ARCHETYPES:
+        archetype = workspace_archetypes.classify(
+            {"vertical": biz.get("type")})["archetype"]
+
+    pick = workspace_layout_picker.pick_for_business(
+        business_id, archetype, biz.get("type"),
+        stored={"variant": profile.get("workspace_layout_variant"),
+                "origin": profile.get("workspace_layout_variant_origin")},
+    )
+    return {
+        "ok": True,
+        "business_id": business_id,
+        "archetype": archetype,
+        "variant": pick["variant"],
+        "origin": pick["origin"],
+        "reason": pick["reason"],
+        "would_have_picked": pick["would_have_picked"],
+        "variants": pick["candidates"],
+    }
+
+
+class SetVariantBody(BaseModel):
+    business_id: str
+    # null hands the decision BACK to Chief. Without this the override is
+    # a one-way door, and a practitioner who tried a desk once would be
+    # stuck with it — which is a worse product than never offering the
+    # choice at all.
+    variant: Optional[str] = None
+
+
+@router.put("/pick")
+def set_pick(
+    body: SetVariantBody,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Choose a desk, or hand the choice back.
+
+    Writing a variant marks it `user_override`, which the picker will
+    never overrule — same contract as terminology, same reason. Writing
+    null clears both columns and Chief resumes deciding.
+    """
+    biz = _require_owner(body.business_id, user)
+    profile = _get_or_create_profile(body.business_id)
+
+    archetype = profile.get("workspace_archetype")
+    if archetype not in workspace_layouts.ARCHETYPES:
+        archetype = workspace_archetypes.classify(
+            {"vertical": biz.get("type")})["archetype"]
+
+    variant = (body.variant or "").strip().lower() or None
+    if variant and not workspace_layouts.is_variant(archetype, variant):
+        known = workspace_layouts.variants(archetype)
+        raise HTTPException(
+            400,
+            f"unknown layout {body.variant!r} for {archetype}; "
+            f"known: {', '.join(known) if known else 'this workspace has one layout'}",
+        )
+
+    sb_clients.sb_patch_as_service(
+        f"/business_profiles?business_id=eq.{body.business_id}",
+        {
+            "workspace_layout_variant": variant,
+            "workspace_layout_variant_origin": "user_override" if variant else None,
+        },
+    )
+
+    # Read back. sb_clients returns None on any 4xx AND on a successful
+    # write with no body, so the return value cannot tell them apart —
+    # that ambiguity silently swallowed two verticals' archetype writes
+    # once, and it is not being trusted here.
+    rows = sb_clients.sb_get_as_service(
+        f"/business_profiles?business_id=eq.{body.business_id}"
+        f"&select=workspace_layout_variant,workspace_layout_variant_origin&limit=1") or []
+    saved = (rows[0] or {}).get("workspace_layout_variant") if rows else None
+    if saved != variant:
+        logger.error("layout variant did not persist for %s: asked %r, row holds %r",
+                     body.business_id, variant, saved)
+        raise HTTPException(
+            500, "the layout could not be saved — nothing was changed. "
+                 "This has been logged.")
+
+    pick = workspace_layout_picker.pick_for_business(
+        body.business_id, archetype, biz.get("type"),
+        stored={"variant": saved,
+                "origin": (rows[0] or {}).get("workspace_layout_variant_origin")},
+    )
+    return {
+        "ok": True,
+        "business_id": body.business_id,
+        "archetype": archetype,
+        "variant": pick["variant"],
+        "origin": pick["origin"],
+        "reason": pick["reason"],
+        "would_have_picked": pick["would_have_picked"],
+        "variants": pick["candidates"],
+    }
+
+
 # ─── terminology override ────────────────────────────────────────────
 
 class TerminologyBody(BaseModel):
