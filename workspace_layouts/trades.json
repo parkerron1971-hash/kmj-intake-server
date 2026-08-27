@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "archetype": "trades",
+  "label": "Trades / Home Services",
+  "vertical": "contractor",
+  "rationale": "A trades business sells crew-hours against addresses, and the thing that quietly destroys a day is not a missed job — it is forty minutes of driving between two jobs nobody sequenced. So the workspace opens on the same one-day timeline a salon uses, but the lanes are crews rather than chairs and the gaps are read as travel, not as idle time. Beneath it sits money owed, because trades work is the one shape here that takes a deposit up front and carries a balance to the end.",
+  "suppressed": [
+    {
+      "primitive": "priority_docket",
+      "reason": "Jobs do have deadlines, but a crew cannot act on days-remaining at 7am. They can act on where the truck goes next, which is what the timeline answers."
+    },
+    {
+      "primitive": "week_grid",
+      "reason": "The week matters for scheduling and is the wrong surface for dispatch. Seven columns cannot show that the 10am and the 11:30 are twenty-two miles apart."
+    },
+    {
+      "primitive": "metric_row",
+      "reason": "Job margin and close rate are real numbers, and a bare row of them says nothing about whether they are good. They moved into the benchmark panel, where each sits against its industry band."
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "crew_day",
+      "primitive": "timeline_day",
+      "role": "lead",
+      "title": "Crews today",
+      "rationale": "Crew lanes with the hours down the side. Every gap over twenty minutes is flagged as travel rather than as free time, because on a dispatch board an open block is almost always the truck moving — and drive time is the cost nobody quotes for.",
+      "bindings": {
+        "lanes": {
+          "source": "contractors",
+          "scope": "business",
+          "filter": {
+            "status": "active"
+          },
+          "fields": {
+            "id": "id",
+            "label": "name",
+            "subtitle": "trade"
+          },
+          "order": "name.asc",
+          "limit": 10
+        },
+        "events": {
+          "source": "sessions",
+          "scope": "business",
+          "filter": {
+            "status": "scheduled"
+          },
+          "fields": {
+            "id": "id",
+            "lane_id": "assigned_to",
+            "start": "scheduled_for",
+            "duration_minutes": "duration_minutes",
+            "title": "title",
+            "subtitle": "notes",
+            "state": "status"
+          },
+          "order": "scheduled_for.asc",
+          "limit": 120
+        }
+      },
+      "options": {
+        "day_start": 7,
+        "day_end": 18,
+        "gap_threshold_minutes": 20,
+        "show_gaps": true,
+        "lane_noun": "Crew",
+        "gap_tone": "travel",
+        "show_now": true
+      }
+    },
+    {
+      "id": "unsold_estimates",
+      "primitive": "attention_queue",
+      "role": "secondary",
+      "title": "Quoted, never answered",
+      "rationale": "The biggest revenue item on a trades board is not on the board. Work already quoted and never followed up is the cheapest money in the business, and it outranks the ledger because the ledger only tells you about work you already won.",
+      "bindings": {
+        "items": {
+          "source": "module_entries",
+          "scope": "business",
+          "filter": {
+            "status": "quoted"
+          },
+          "fields": {
+            "id": "id",
+            "title": "data.job_name",
+            "age_days": {
+              "column": "data.quoted_at",
+              "derive": "days_since"
+            },
+            "subtitle": "data.site_address",
+            "action_label": "data.quote_total"
+          },
+          "order": "data.quoted_at.asc",
+          "limit": 25
+        }
+      },
+      "options": {
+        "age_unit": "days",
+        "escalate_after_days": 14,
+        "max_visible": 6
+      }
+    },
+    {
+      "id": "deposits_and_balances",
+      "primitive": "ledger",
+      "role": "footer",
+      "title": "Deposits and balances due",
+      "rationale": "Trades is the one archetype here that takes money before the work and the rest after it. Debits, credits and a running balance, because the question is always how much of this job is still outstanding.",
+      "bindings": {
+        "entries": {
+          "source": "ledger_entries",
+          "scope": "business",
+          "filter": {
+            "account_type": "asset"
+          },
+          "fields": {
+            "id": "id",
+            "date": "entry_date",
+            "description": "memo",
+            "debit": "debit",
+            "credit": "credit"
+          },
+          "order": "entry_date.desc",
+          "limit": 40
+        }
+      },
+      "options": {
+        "currency": "USD",
+        "max_visible": 10
+      }
+    },
+    {
+      "id": "trade_health",
+      "primitive": "benchmark_panel",
+      "role": "footer",
+      "title": "What the day is worth",
+      "rationale": "Four numbers decide whether a trades business makes money: whether the job gets fixed first time, whether paid hours are billable, whether quotes close, and whether customers are on a plan. Each one is worth more than the day's revenue figure.",
+      "bindings": {
+        "rows": {
+          "source": "business_benchmarks",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "first_time_fix",
+              "tech_utilization",
+              "estimate_close_rate",
+              "membership_attach"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "average": "average",
+            "target": "target",
+            "floor": "floor",
+            "scale_max": "scale_max",
+            "unit": "unit",
+            "direction": "direction",
+            "reading": "reading",
+            "source": "source"
+          },
+          "order": "key.asc",
+          "expect_items": 4
+        }
+      },
+      "options": {
+        "format": "percent",
+        "show_average": true
+      }
+    }
+  ],
+  "terminology": {
+    "customer": {
+      "value": "Customer",
+      "origin": "preset"
+    },
+    "customers": {
+      "value": "Customers",
+      "origin": "preset"
+    },
+    "contact": {
+      "value": "Customer",
+      "origin": "preset"
+    },
+    "contacts": {
+      "value": "Customers",
+      "origin": "preset"
+    },
+    "client": {
+      "value": "Customer",
+      "origin": "preset"
+    },
+    "project": {
+      "value": "Job",
+      "origin": "preset"
+    },
+    "projects": {
+      "value": "Jobs",
+      "origin": "preset"
+    },
+    "service": {
+      "value": "Job",
+      "origin": "preset"
+    },
+    "services": {
+      "value": "Jobs",
+      "origin": "preset"
+    },
+    "appointment": {
+      "value": "Visit",
+      "origin": "preset"
+    },
+    "appointments": {
+      "value": "Visits",
+      "origin": "preset"
+    },
+    "session": {
+      "value": "Visit",
+      "origin": "preset"
+    },
+    "invoice": {
+      "value": "Invoice",
+      "origin": "preset"
+    },
+    "offering": {
+      "value": "Service",
+      "origin": "preset"
+    },
+    "schedule": {
+      "value": "Dispatch",
+      "origin": "preset"
+    }
+  },
+  "theme": {
+    "display_font": "Oswald, \"Arial Narrow\", sans-serif",
+    "accent_name": "amber",
+    "palette": {
+      "ground": "#ffffff",
+      "surface": "#f9fafb",
+      "raised": "#f3f4f6",
+      "hover": "#e5e7eb",
+      "ink": "#111827",
+      "muted": "#4b5563",
+      "faint": "#9ca3af",
+      "border": "rgba(0,0,0,0.10)",
+      "border_subtle": "rgba(0,0,0,0.05)",
+      "accent": "#b45309",
+      "accent2": "#d97706",
+      "field": "#FFFBEE",
+      "field2": "#FCF0D2"
+    },
+    "dark": {
+      "ground": "#09090b",
+      "surface": "#0f0f11",
+      "raised": "#18181b",
+      "hover": "#27272a",
+      "ink": "#fafafa",
+      "muted": "#a1a1aa",
+      "faint": "#71717a",
+      "border": "rgba(255,255,255,0.10)",
+      "border_subtle": "rgba(255,255,255,0.06)",
+      "accent": "#eab308",
+      "accent2": "#f59e0b",
+      "field": "#171308",
+      "field2": "#261C0C"
+    }
+  },
+  "room": {
+    "eyebrow": "Dispatch",
+    "meta": {
+      "crew_day": "7am – 6pm · 3 crews out",
+      "unsold_estimates": "$50,230 quoted",
+      "deposits_and_balances": "asset accounts",
+      "trade_health": "measured against the industry"
+    }
+  }
+}

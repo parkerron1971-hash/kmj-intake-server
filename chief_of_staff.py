@@ -104,6 +104,14 @@ from chief_form_actions import (
     handle_list_client_forms,
     handle_update_client_form,
 )
+# Workspace composer phase one — Chief classifies the business into one of
+# five hand-authored workspaces, and the practitioner can override it in one
+# tap. See chief_workspace_actions + docs/WORKSPACE_COMPOSER_SPEC.md.
+from chief_workspace_actions import (
+    handle_choose_workspace,
+    handle_rename_term,
+    handle_switch_workspace,
+)
 # Texting SETUP — the keyword that routes inbound, and the switch on the
 # automated alerts. See chief_sms_actions module docstring.
 from chief_sms_actions import (
@@ -12961,6 +12969,9 @@ async def handle_enqueue_job(client, biz, action) -> Dict:
 
 
 ACTION_HANDLERS = {
+    "choose_workspace":       handle_choose_workspace,
+    "switch_workspace":       handle_switch_workspace,
+    "rename_term":            handle_rename_term,
     "create_growth_objective": handle_create_growth_objective,
     "enqueue_job":            handle_enqueue_job,
     "propose_module_from_intake": handle_propose_module_from_intake,
@@ -16323,6 +16334,22 @@ ACTIONS — CLIENT FORMS (BUILD → "Client Forms"; the public questionnaire a n
   [ACTION:{{"type":"create_client_form","name":"Rental Request","fields":[...],"link_module":"Equipment Rentals"}}]  — link_module wires every submission to ALSO file a row in that custom solution (by name, slug or id). Use it whenever the form feeds something they already track. If no such solution exists yet, build it first (propose_module_from_intake / ensure_module), then create the form.
   [ACTION:{{"type":"update_client_form","form_id":"<uuid-or-form-name>","add_fields":[{{"label":"Budget","type":"select","options":["<$1k","$1-5k","$5k+"]}}],"remove_fields":["Phone"],"confirmation_message":"...","is_active":false}}]  — rename with "new_name", replace the whole question list with "fields", wire or unwire a solution with "link_module" / "unlink_module":true, switch the form off with "is_active":false. Say which questions changed.
   [ACTION:{{"type":"list_client_forms"}}]  — every form with its question count and how many submissions it has actually taken. Use it before editing (to get the right form) and when they ask "what forms do I have?" or "is my form working?". Add "include_inactive":true to show switched-off ones.
+
+ACTIONS — THE WORKSPACE ITSELF (what their home screen is SHAPED like, and what things are called):
+  [ACTION:{{"type":"choose_workspace","answers":{{"what_you_do":"<their own words>","unit_of_work":"job|matter|appointment|engagement|gathering","schedules_against":"chairs|crews|deadlines|stages|rooms"}}}}]
+    — Sets their home screen up to match how the work actually runs. Five shapes exist: a day across chairs, a day across crews, a seven-day week, a list ranked by urgency, and a list grouped by stage. You pick; they correct.
+    — Tells: onboarding, "set up my dashboard", "my home screen doesn't match how I work", "this looks like a generic CRM".
+    — `answers` is optional — their business type is read from the record either way. Pass whatever they've told you in this conversation; more words means a better fit.
+    — AFTER IT RUNS, mirror the action's result wording. It already says what was chosen and why. Do not add your own reasoning on top and do not restate it differently.
+  [ACTION:{{"type":"switch_workspace","archetype":"salon|trades|ministry|consultant|law_firm"}}]
+    — The correction. "Actually we're more like a barbershop", "we don't work in appointments, we work in jobs", "put the week back". One tap, and anything they've renamed themselves is kept.
+    — Offer this the moment they express doubt about the shape. Never make them ask twice, and never defend the original choice.
+  [ACTION:{{"type":"rename_term","term":"project","value":"Case"}}]
+    — What they call a thing, everywhere in the app. `term` is one of: contact, contacts, client, clients, customer, customers, project, projects, service, services, appointment, appointments, session, sessions, invoice, offering, member, schedule.
+    — Tells: "we call them cases not matters", "stop calling them clients, they're guests", "a job, not a project".
+    — THIS IS PERMANENT. Once they've said what they call something, nothing overwrites it — not a re-setup, not switching shape. Say so once, plainly, so they know it stuck.
+    — Pass "value":null to put a word back to the default.
+  NEVER say "archetype", "preset", "layout schema", "primitive", "template" or "validator" to a practitioner. They asked for a workspace that fits their business; they are not configuring software. Describe what they will SEE — "your home screen opens on today across your chairs, with clients who are overdue a rebook underneath".
 
 ACTIONS — TASKS + NOTES + ACTIVITY:
   [ACTION:{{"type":"create_task","title":"Call Deacon Harris back","due_date":"2026-04-24","priority":"high","contact_id":"<uuid-optional>"}}]

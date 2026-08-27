@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "archetype": "law_firm",
+  "label": "Law Firm",
+  "vertical": "lawyer",
+  "rationale": "A law firm does not run on a clock, it runs on a calendar of consequences. What is due in four days outranks what is happening at four o'clock, and a missed filing is not a gap you can fill later. So the workspace opens on a docket ordered by days remaining, with the number right-aligned so the eye can run down the column and stop at whatever is too small. There is deliberately no timeline anywhere on this layout.",
+  "suppressed": [
+    {
+      "primitive": "timeline_day",
+      "reason": "The single most important removal. A lawyer's day is not the unit of work — a matter runs for eight months and touches the calendar six times. Leading with today's hours would bury the filing due Thursday under a lunch."
+    },
+    {
+      "primitive": "week_grid",
+      "reason": "Same objection at a coarser grain. Seven columns still answers 'when', and the docket's question is 'how long have I got'."
+    },
+    {
+      "primitive": "ledger",
+      "reason": "Trust accounting is real and it is not a dashboard. IOLTA reconciliation belongs in the ledger surfaces where it can be done properly, not summarised into five rows here."
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "matter_docket",
+      "primitive": "priority_docket",
+      "role": "lead",
+      "title": "Docket",
+      "rationale": "A register, not a reading column. Cut into deadline horizons — inside a week, inside a fortnight, this month, beyond — because the band answers how long you have got before a single number is read, and numbered because that is how the thing is actually spoken about. Item four is a sentence somebody says out loud.",
+      "bindings": {
+        "rows": {
+          "source": "module_entries",
+          "scope": "business",
+          "filter": {
+            "status": "active"
+          },
+          "fields": {
+            "id": "id",
+            "title": "data.matter_name",
+            "metric_value": {
+              "column": "data.next_deadline",
+              "derive": "days_until"
+            },
+            "subtitle": "data.client_name",
+            "owner": "data.responsible_attorney"
+          },
+          "order": "data.next_deadline.asc",
+          "limit": 40
+        }
+      },
+      "options": {
+        "sort": "urgency_days",
+        "metric_label": "Due in",
+        "metric_unit": "days",
+        "urgent_threshold_days": 7,
+        "numbered": true,
+        "banding": "horizon"
+      }
+    },
+    {
+      "id": "the_cascade",
+      "primitive": "benchmark_panel",
+      "role": "secondary",
+      "title": "Where the hours go",
+      "rationale": "An hour has to survive three things to become money: being recorded, being billed at close to full value, and being paid. These multiply, which is why they belong in one cascade rather than three gauges — at industry averages only about thirty per cent of working time ever reaches the bank.",
+      "bindings": {
+        "rows": {
+          "source": "business_benchmarks",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "utilization",
+              "realization",
+              "collection"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "average": "average",
+            "target": "target",
+            "floor": "floor",
+            "scale_max": "scale_max",
+            "unit": "unit",
+            "direction": "direction",
+            "reading": "reading",
+            "source": "source"
+          },
+          "order": "key.asc",
+          "expect_items": 3
+        }
+      },
+      "options": {
+        "format": "percent",
+        "show_average": true,
+        "cascade": true,
+        "cascade_label": "of working time reaches the bank"
+      }
+    },
+    {
+      "id": "firm_position",
+      "primitive": "metric_row",
+      "role": "footer",
+      "title": "Position",
+      "rationale": "Three figures at rest at the bottom of the screen. Unbilled, work in progress, trust. Read on the way past, never acted on from here.",
+      "bindings": {
+        "metrics": {
+          "source": "business_metrics",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "unbilled_amount",
+              "wip_amount",
+              "trust_balance"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "unit": "unit",
+            "trend": "trend"
+          },
+          "order": "key.asc",
+          "expect_items": 3
+        }
+      },
+      "options": {
+        "format": "currency"
+      }
+    },
+    {
+      "id": "lockup",
+      "primitive": "benchmark_panel",
+      "role": "footer",
+      "title": "What is stuck",
+      "rationale": "Lockup is the number a solo actually feels: how many days of annual revenue are sitting as work you have not billed, or invoices nobody has paid. Split in two because which half is stuck decides what you do on Monday.",
+      "bindings": {
+        "rows": {
+          "source": "business_benchmarks",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "realization_lockup",
+              "collection_lockup"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "average": "average",
+            "target": "target",
+            "floor": "floor",
+            "scale_max": "scale_max",
+            "unit": "unit",
+            "direction": "direction",
+            "reading": "reading",
+            "source": "source"
+          },
+          "order": "key.asc",
+          "expect_items": 2
+        }
+      },
+      "options": {
+        "format": "days",
+        "show_average": true
+      }
+    }
+  ],
+  "terminology": {
+    "client": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "clients": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "contact": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "contacts": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "project": {
+      "value": "Matter",
+      "origin": "preset"
+    },
+    "projects": {
+      "value": "Matters",
+      "origin": "preset"
+    },
+    "service": {
+      "value": "Matter",
+      "origin": "preset"
+    },
+    "services": {
+      "value": "Matters",
+      "origin": "preset"
+    },
+    "appointment": {
+      "value": "Consultation",
+      "origin": "preset"
+    },
+    "appointments": {
+      "value": "Consultations",
+      "origin": "preset"
+    },
+    "session": {
+      "value": "Consultation",
+      "origin": "preset"
+    },
+    "invoice": {
+      "value": "Invoice",
+      "origin": "preset"
+    },
+    "schedule": {
+      "value": "Docket",
+      "origin": "preset"
+    }
+  },
+  "theme": {
+    "display_font": "\"Libre Baskerville\", \"Times New Roman\", serif",
+    "accent_name": "blue",
+    "palette": {
+      "ground": "#ffffff",
+      "surface": "#f9fafb",
+      "raised": "#f3f4f6",
+      "hover": "#e5e7eb",
+      "ink": "#111827",
+      "muted": "#4b5563",
+      "faint": "#9ca3af",
+      "border": "rgba(0,0,0,0.10)",
+      "border_subtle": "rgba(0,0,0,0.05)",
+      "accent": "#2563eb",
+      "accent2": "#3b82f6",
+      "field": "#F1F6FF",
+      "field2": "#E1EBFF"
+    },
+    "dark": {
+      "ground": "#09090b",
+      "surface": "#0f0f11",
+      "raised": "#18181b",
+      "hover": "#27272a",
+      "ink": "#fafafa",
+      "muted": "#a1a1aa",
+      "faint": "#71717a",
+      "border": "rgba(255,255,255,0.10)",
+      "border_subtle": "rgba(255,255,255,0.06)",
+      "accent": "#3b82f6",
+      "accent2": "#60a5fa",
+      "field": "#0A101F",
+      "field2": "#111A31"
+    }
+  },
+  "room": {
+    "eyebrow": "The docket",
+    "meta": {
+      "matter_docket": "7 matters · 4 horizons",
+      "the_cascade": "hours to cash",
+      "firm_position": "at rest",
+      "lockup": "days of revenue stuck"
+    }
+  }
+}
