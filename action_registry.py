@@ -280,6 +280,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # tap away from right. Class A on those grounds.
     "choose_workspace":    _w("A", "classifies the business and stores the matching layout "
                                    "preset; re-runnable, and switch_workspace reverses it"),
+    "switch_layout":       _w("A", "opens the workspace on a different layout of the same archetype; marks the choice user_override so the picker never overrules it, and switch_layout reverses it"),
     "switch_workspace":    _w("A", "swaps the stored archetype for another of the five "
                                    "presets; the previous one is a call away, and every "
                                    "user_override terminology row is carried across"),

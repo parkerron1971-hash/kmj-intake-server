@@ -57,7 +57,8 @@ def _nav_workspace() -> Dict[str, Any]:
 def _profile(business_id: str) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/business_profiles?business_id=eq.{business_id}"
-        f"&select=business_id,workspace_archetype,workspace_terminology&limit=1"
+        f"&select=business_id,workspace_archetype,workspace_terminology,"
+        f"workspace_layout_variant,workspace_layout_variant_origin&limit=1"
     ) or []
     if rows:
         return rows[0]
@@ -281,6 +282,129 @@ async def handle_switch_workspace(client, biz, action) -> Dict[str, Any]:
 
 
 # ─── terminology ─────────────────────────────────────────────────────
+
+# ─── the desk, within the room ───────────────────────────────────────
+
+# What a practitioner actually says, mapped to what the layout is
+# called. Chief resolves the spoken form because "show me the money one"
+# is how somebody asks for this, and refusing it on a slug is a product
+# that has learned the wrong lesson from having slugs.
+_SPOKEN_VARIANT = {
+    "docket": ("docket", "deadlines", "dates", "filings", "diary of dates",
+               "what is due", "due"),
+    "board": ("board", "matters", "stages", "by stage", "matter board",
+              "pipeline", "kanban"),
+    "ledger": ("ledger", "money", "billing", "cash", "debt", "debtors",
+               "aged", "ageing", "aging", "collection", "who owes us"),
+    "diary": ("diary", "time", "hours", "timesheet", "day", "today",
+              "recording", "utilisation", "utilization"),
+}
+
+
+def _resolve_variant(archetype: str, raw: str) -> Optional[str]:
+    want = (raw or "").strip().lower()
+    if not want:
+        return None
+    known = workspace_layouts.variants(archetype)
+    if want in known:
+        return want
+    for variant, words in _SPOKEN_VARIANT.items():
+        if variant not in known:
+            continue
+        if any(w in want for w in words):
+            return variant
+    return None
+
+
+async def handle_switch_layout(client, biz, action) -> Dict[str, Any]:
+    """Open on a different desk, and keep it open.
+
+    action: {variant: str} — a slug or whatever the practitioner called it.
+
+    This writes `user_override`, which the picker will never overrule.
+    That is the whole contract: a practitioner who has chosen a desk has
+    told us something we could not compute, and re-deciding it for them
+    on Tuesday is forgetting rather than intelligence. Chief will still
+    SAY what it would have picked; it just will not act on it.
+    """
+    business_id = str(biz.get("id") or "")
+    if not business_id:
+        return _fail("switch_layout", "no business on record")
+
+    profile = _profile(business_id)
+    archetype = profile.get("workspace_archetype")
+    if archetype not in workspace_layouts.ARCHETYPES:
+        archetype = workspace_archetypes.classify(
+            {"vertical": biz.get("type")})["archetype"]
+
+    known = workspace_layouts.variants(archetype)
+    if not known:
+        return _fail(
+            "switch_layout",
+            "This workspace has one layout, so there is nothing to switch to.")
+
+    raw = (action.get("variant") or action.get("layout")
+           or action.get("to") or action.get("desk") or "")
+    variant = _resolve_variant(archetype, str(raw))
+    if not variant:
+        labels = ", ".join(known)
+        return _fail(
+            "switch_layout",
+            f"I'm not sure which desk you mean. I can open on any of these: {labels}.")
+
+    current = profile.get("workspace_layout_variant")         or workspace_layouts.default_variant(archetype)
+    if current == variant and profile.get("workspace_layout_variant_origin") == "user_override":
+        return {
+            "type": "switch_layout",
+            "result": f"You are already on the {variant} desk, and it is staying there.",
+            "label": f"Already on {variant}",
+            "nav": _nav_workspace(),
+        }
+
+    layout = _persist_variant(business_id, archetype, variant,
+                             profile.get("workspace_terminology") or {})
+
+    return {
+        "type": "switch_layout",
+        "result": (f"Opened on the {variant} desk. I will keep it there — "
+                   f"I won't move it back on you."),
+        "label": f"Workspace: {variant}",
+        "nav": _nav_workspace(),
+        "shape": _shape_line(layout),
+    }
+
+
+def _persist_variant(business_id: str, archetype: str, variant: str,
+                     stored_terms: Dict[str, Any]) -> Dict[str, Any]:
+    """Write the chosen desk AND mark it as the practitioner's own.
+
+    The origin is the load-bearing half. Without it the next automatic
+    pick would quietly replace the choice, and the practitioner would
+    learn that telling us things does not work.
+    """
+    import workspace_composer_router as composer
+
+    layout = composer.build_layout(archetype, stored_terms, variant=variant)
+    validator.assert_valid(layout, business_id=business_id)
+    sb_clients.sb_patch_as_service(
+        f"/business_profiles?business_id=eq.{business_id}",
+        {
+            "workspace_layout_variant": variant,
+            "workspace_layout_variant_origin": "user_override",
+        },
+    )
+    rows = sb_clients.sb_get_as_service(
+        f"/business_profiles?business_id=eq.{business_id}"
+        f"&select=workspace_layout_variant&limit=1") or []
+    saved = (rows[0] or {}).get("workspace_layout_variant") if rows else None
+    if saved != variant:
+        logger.error("layout variant did not persist for %s: asked %r, row holds %r",
+                     business_id, variant, saved)
+        raise RuntimeError(
+            "I could not save that desk, so nothing was changed. This has "
+            "been logged — I would rather tell you than let you think it worked.")
+    return layout
+
 
 async def handle_rename_term(client, biz, action) -> Dict[str, Any]:
     """Rename what something is called, permanently.
