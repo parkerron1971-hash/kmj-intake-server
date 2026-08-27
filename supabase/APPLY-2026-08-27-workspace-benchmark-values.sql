@@ -43,8 +43,12 @@
 --   third_time_stay        records a visit ordinal
 --   donor_retention        needs donors distinguishable from contacts
 --   giving_participation   needs a household denominator
---   trades + consultant    no source models jobs, estimates,
---                          memberships or proposals as rows yet
+--   trades                 no source models jobs, estimates or
+--                          memberships as rows yet
+--   proposal_win_rate      consultant/coach only; nothing models a
+--   retainer_renewal       proposal or a retainer term as a row
+--   utilization_projected  needs booked-forward commitments, which
+--                          sessions does not distinguish from history
 --
 -- Adding any of them is adding a UNION arm; nothing else changes,
 -- because the layout binds by key.
@@ -154,6 +158,27 @@ CREATE VIEW public.business_benchmark_values AS
 
     UNION ALL
 
+    -- ── consultant + coach ───────────────────────────────────────────
+    -- The SAME RATIO as `utilization` above, emitted under a second key
+    -- on purpose. Billable-over-recorded is one measurement, but the
+    -- industry norm for it is not one number: a lawyer's benchmark is
+    -- 38% average / 50% target, a consultant's is 70% / 78%. Feeding
+    -- both keys from one arm is what lets the band -- the editorial
+    -- half, in workspace_benchmarks.py -- decide which profession's
+    -- expectations this business is held to.
+    --
+    -- That split IS the design. One number, two honest readings.
+    SELECT
+        te.business_id,
+        'utilization_now'::text,
+        ROUND(100.0 * SUM(te.minutes) FILTER (WHERE te.billable IS TRUE)
+              / NULLIF(SUM(te.minutes), 0), 1)::numeric
+    FROM public.time_entries te
+    WHERE te.occurred_on >= (now() - interval '90 days')::date
+    GROUP BY te.business_id
+
+    UNION ALL
+
     -- Realisation: of the billable value recorded, the share NOT written
     -- off. Nothing stores an invoiced amount per time entry, so a
     -- billed-vs-recorded ratio is not available -- but write-offs are
@@ -191,6 +216,20 @@ CREATE VIEW public.business_benchmark_values AS
     -- Lockup, in days of collected revenue: how long the firm's own
     -- money sits with clients. Lower is better; the band says so, not
     -- this view.
+    --
+    -- GUARDED. The ratio explodes when almost nothing has been
+    -- collected: one real business here bills steadily, has collected
+    -- 1.9% of it, and the raw figure came out at 19,345 days -- fifty-
+    -- three years of lockup. That is arithmetically true and useless on
+    -- a screen; it reads as a broken number, and the practitioner stops
+    -- trusting the whole strip.
+    --
+    -- Past a year the quantity has stopped being a lockup measurement
+    -- and become a statement that the business is not collecting, which
+    -- the `collection` band already says, in plain language, with a
+    -- citation. So beyond that this reports NOTHING and the panel says
+    -- "not measured" -- one honest silence instead of two numbers where
+    -- the louder one is noise.
     SELECT
         i.business_id,
         'collection_lockup'::text,
@@ -198,7 +237,9 @@ CREATE VIEW public.business_benchmark_values AS
               / NULLIF(SUM(i.total) FILTER (WHERE i.status = 'paid'), 0), 0)::numeric
     FROM public.invoices i
     WHERE i.created_at >= now() - interval '365 days'
-    GROUP BY i.business_id;
+    GROUP BY i.business_id
+    HAVING ROUND(365.0 * SUM(i.total) FILTER (WHERE i.status IN ('sent', 'viewed', 'overdue'))
+                 / NULLIF(SUM(i.total) FILTER (WHERE i.status = 'paid'), 0), 0) <= 365;
 
 
 COMMENT ON VIEW public.business_benchmark_values IS
