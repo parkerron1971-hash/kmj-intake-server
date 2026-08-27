@@ -165,39 +165,73 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "data": "string",
     }, json_column="data", label="Module entries"),
 
+    # Read off the LIVE table on 2026-08-26, not off the other callers.
+    # The first cut of this entry claimed `customer_name`, `description`
+    # and four `*_cents` columns. None of them exist: money on this table
+    # is `subtotal` / `tax_amount` / `total`, numeric and in DOLLARS, and
+    # the line items live in `items`, not `line_items`. The `*_cents`
+    # names appear all over the Python because they are STRIPE payload
+    # keys, and reading the callers instead of the schema is how they got
+    # in here. There is no paid-amount column at all — `status = 'paid'`
+    # plus `paid_at` is the whole record of payment.
     "invoices": _src("invoices", {
         "id": "string",
         "business_id": "string",
-        "customer_name": "string",
-        "description": "string",
-        "status": "string",
+        "contact_id": "string",
+        "invoice_number": "string",
+        "status": "string",          # draft|sent|viewed|paid|overdue|cancelled
+        "category": "string",
         "currency": "string",
-        "subtotal_cents": "number",
-        "total_cents": "number",
-        "amount_due_cents": "number",
-        "amount_paid_cents": "number",
+        "subtotal": "number",
+        "tax_rate": "number",
+        "tax_amount": "number",
+        "total": "number",
+        "notes": "string",
         "due_date": "date",
         "paid_at": "timestamp",
+        "sent_at": "timestamp",
+        "viewed_at": "timestamp",
         "created_at": "timestamp",
-    }, label="Invoices"),
+        "items": "string",
+    }, json_column="items", label="Invoices"),
 
-    # Lanes. Staff seats for a salon floor; contractors for a crew board.
+    # Seats. NOT people — and this is the entry that proves it.
+    #
+    # There is NO name column on this table. Not `display_name`, which
+    # the first cut of this file claimed, and not anything else: a seat
+    # carries an invited_email and a role, and the human behind it lives
+    # in auth. That is the schema-level confirmation of why the salon
+    # board draws one undivided day instead of a lane per stylist — a
+    # staffed floor cannot be labelled from anything this product stores.
     "business_users": _src("business_users", {
         "id": "string",
         "business_id": "string",
         "user_id": "string",
-        "display_name": "string",
+        "invited_email": "string",
         "role": "string",
         "status": "string",
+        "default_rate": "number",
     }, label="Team seats"),
 
+    # Crew, and these ARE rows with names — which is why a trades board
+    # can still bind lanes when a salon cannot.
+    #
+    # `trade`, `status` and `phone` were claimed here and none exist.
+    # There is no specialty column at ALL: `default_category` looks like
+    # one and is not -- it is a Profit First bucket
+    # (tax|owner_pay|operating|savings|other), so binding it as a crew
+    # subtitle labels a person "operating". The state column is
+    # `onboarding_status` (invited|pending|active|restricted).
     "contractors": _src("contractors", {
         "id": "string",
         "business_id": "string",
         "name": "string",
-        "trade": "string",
-        "status": "string",
-        "phone": "string",
+        "email": "string",
+        "default_category": "string",
+        "onboarding_status": "string",
+        "is_1099_eligible": "bool",
+        "notes": "string",
+        "created_at": "timestamp",
     }, label="Contractors / crew"),
 
     # Immutable double-entry lines. Note there is no running-balance
@@ -254,12 +288,21 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "computed_at": "timestamp",
     }, label="Named figures"),
 
+    # Package / retainer balances. There is no `id` and no `*_cents`
+    # here: the table is keyed on (business, contact, kind) and `balance`
+    # is already in whole units of `unit` -- sessions, hours or currency,
+    # whichever the package was sold in.
     "customer_balances": _src("customer_balances", {
-        "id": "string",
         "business_id": "string",
         "contact_id": "string",
-        "balance_cents": "number",
-        "updated_at": "timestamp",
+        "kind": "string",
+        "unit": "string",
+        "currency": "string",
+        "balance": "number",
+        "granted": "number",
+        "consumed": "number",
+        "last_activity_at": "timestamp",
+        "next_expiry_at": "timestamp",
     }, label="Customer balances"),
 }
 

@@ -30,12 +30,11 @@
           "source": "contractors",
           "scope": "business",
           "filter": {
-            "status": "active"
+            "onboarding_status": "active"
           },
           "fields": {
             "id": "id",
-            "label": "name",
-            "subtitle": "trade"
+            "label": "name"
           },
           "order": "name.asc",
           "limit": 10

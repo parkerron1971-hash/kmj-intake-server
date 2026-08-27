@@ -83,18 +83,34 @@ CREATE INDEX IF NOT EXISTS idx_sessions_business_assigned
 
 CREATE OR REPLACE VIEW public.business_metrics AS
 
-    -- Invoiced but not paid. The lawyer's and consultant's "unbilled".
+    -- Billable work that has not reached an invoice yet. This is the
+    -- real "unbilled": time recorded, worth money, not yet sent.
+    --
+    -- The first cut of this arm read `invoices.amount_due_cents` where
+    -- `status IN ('draft','open')`. Three things were wrong with it and
+    -- each would have failed on its own: there is no `amount_due_cents`
+    -- column (money here is `subtotal`/`tax_amount`/`total`, numeric and
+    -- in DOLLARS), there is no `open` status (the check constraint allows
+    -- draft|sent|viewed|paid|overdue|cancelled), and an unsent invoice is
+    -- not what a lawyer means by unbilled anyway.
+    --
+    -- `time_entries` is the honest source and it already exists:
+    -- minutes x rate, billable, with no invoice attached.
     SELECT
-        i.business_id,
+        te.business_id,
         'unbilled_amount'::text                                 AS key,
         'Unbilled'::text                                        AS label,
-        (COALESCE(SUM(i.amount_due_cents), 0) / 100.0)::numeric  AS value,
-        MIN(i.currency)                                         AS unit,
+        ROUND(COALESCE(SUM((te.minutes / 60.0) * te.rate), 0), 2)::numeric
+                                                                AS value,
+        MIN(te.currency)                                        AS unit,
         NULL::text                                              AS trend,
         now()                                                   AS computed_at
-    FROM public.invoices i
-    WHERE i.status IN ('draft', 'open')
-    GROUP BY i.business_id
+    FROM public.time_entries te
+    WHERE te.billable IS TRUE
+      AND te.invoice_id IS NULL
+      AND te.status = 'unbilled'
+      AND te.rate IS NOT NULL
+    GROUP BY te.business_id
 
     UNION ALL
 

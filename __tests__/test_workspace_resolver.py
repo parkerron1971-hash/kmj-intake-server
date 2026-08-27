@@ -190,10 +190,15 @@ def test_days_until_is_negative_for_a_passed_date(monkeypatch):
 
 
 def test_cents_become_an_amount(monkeypatch):
-    _rows(monkeypatch, [{"id": "i1", "amount_due_cents": 4820000}])
-    rows = R._resolve_binding("rows", _binding(source="invoices", fields={
+    # Nothing in this schema stores cents -- invoices are numeric dollars
+    # and customer_balances counts whole units. The derivation still
+    # earns its place on a jsonb leaf: a module entry can carry a Stripe
+    # amount, and the catalog cannot type-check a practitioner-defined
+    # field, which is exactly when a declared derivation is worth having.
+    _rows(monkeypatch, [{"id": "m1", "data": {"amount_cents": 4820000}}])
+    rows = R._resolve_binding("rows", _binding(source="module_entries", fields={
         "id": "id",
-        "value": {"column": "amount_due_cents", "derive": "cents_to_amount"},
+        "value": {"column": "data.amount_cents", "derive": "cents_to_amount"},
     }), _spec(), TENANT)
     assert rows[0]["value"] == 48200.0
 

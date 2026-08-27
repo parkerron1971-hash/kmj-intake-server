@@ -6,16 +6,50 @@
 -- product asserts to a practitioner who may act on it, so it belongs in
 -- reviewed code rather than in rows anyone can edit into a false claim.
 --
--- This view therefore returns only (business_id, key, value). Every
--- arm computes one key from tables that already exist.
+-- This view therefore returns only (business_id, key, value).
 --
--- A key with no arm here simply has no value yet: the panel renders the
--- band with an empty figure, which reads as "not measured" and is the
--- honest state. Adding a metric is adding a UNION arm — nothing else
--- changes, because the layout binds by key.
+-- ── WHY THIS FILE WAS REWRITTEN ─────────────────────────────────────
 --
--- Supersedes the `business_benchmarks` relation named in the previous
--- migration's field catalog, which was never created. Idempotent.
+-- The first cut was written against columns that do not exist. It read
+-- `invoices.line_items`, `subtotal_cents`, `total_cents`,
+-- `amount_paid_cents` and `amount_due_cents`; the live table has
+-- `items`, `subtotal`, `tax_amount` and `total` — numeric, in DOLLARS —
+-- and NO paid-amount column at all. `status = 'paid'` plus `paid_at` is
+-- the entire record of payment. CREATE VIEW would have failed outright.
+--
+-- Two arms were worse than broken, because they would have SUCCEEDED
+-- and always returned nothing: they filtered `contacts.status` on
+-- 'first_time' and 'donor', and the check constraint on that column
+-- allows only lead|active|inactive|churned|vip. A ministry would have
+-- been shown a guest-return rate of zero forever.
+--
+-- The lesson, which docs/MIGRATIONS.md already states: the file set is
+-- not a faithful record of prod. These columns were verified against
+-- information_schema on 2026-08-26 before this file was written.
+--
+-- ── WHAT IS DELIBERATELY ABSENT ─────────────────────────────────────
+--
+-- A key with no arm has no value, and the panel renders its band with an
+-- empty figure reading "not measured". That is the honest state and it
+-- is why these are left out rather than approximated:
+--
+--   retail_attach          needs the shape of `invoices.items`, which is
+--                          practitioner-defined and not guaranteed to
+--                          carry a retail/service distinction
+--   chair_utilization      needs bookable floor hours; `availability`
+--                          stores a chair COUNT, not a staffed roster
+--   first_time_return      needs a first-visit marker on contacts;
+--   second_time_return     `status` has no such value and nothing else
+--   third_time_stay        records a visit ordinal
+--   donor_retention        needs donors distinguishable from contacts
+--   giving_participation   needs a household denominator
+--   trades + consultant    no source models jobs, estimates,
+--                          memberships or proposals as rows yet
+--
+-- Adding any of them is adding a UNION arm; nothing else changes,
+-- because the layout binds by key.
+--
+-- Idempotent. Safe to re-run.
 
 BEGIN;
 
@@ -34,21 +68,23 @@ CREATE VIEW public.business_benchmark_values AS
             WHERE EXISTS (
                 SELECT 1 FROM public.sessions n
                 WHERE n.business_id = s.business_id
-                  AND n.contact_id = s.contact_id
+                  AND n.contact_id  = s.contact_id
                   AND n.scheduled_for > s.scheduled_for
+                  AND n.status IN ('scheduled', 'completed')
             )
         ) / NULLIF(COUNT(*), 0), 1)::numeric AS value
     FROM public.sessions s
     WHERE s.contact_id IS NOT NULL
+      AND s.status = 'completed'
       AND s.scheduled_for >= now() - interval '90 days'
-      AND s.scheduled_for < now()
+      AND s.scheduled_for <  now()
     GROUP BY s.business_id
 
     UNION ALL
 
-    -- New clients who come back: contacts first seen 30-365 days ago
-    -- who have more than one session. The window excludes the very
-    -- recent, who have not had a fair chance to return yet.
+    -- New clients who came back: contacts first seen 30-365 days ago
+    -- with more than one session. The window excludes the very recent,
+    -- who have not had a fair chance to return yet.
     SELECT
         c.business_id,
         'new_client_return'::text,
@@ -57,7 +93,9 @@ CREATE VIEW public.business_benchmark_values AS
     FROM (
         SELECT ct.business_id, ct.id,
                (SELECT COUNT(*) FROM public.sessions s
-                 WHERE s.business_id = ct.business_id AND s.contact_id = ct.id) AS sessions
+                 WHERE s.business_id = ct.business_id
+                   AND s.contact_id  = ct.id
+                   AND s.status IN ('scheduled', 'completed')) AS sessions
         FROM public.contacts ct
         WHERE ct.created_at BETWEEN now() - interval '365 days'
                                AND now() - interval '30 days'
@@ -66,29 +104,9 @@ CREATE VIEW public.business_benchmark_values AS
 
     UNION ALL
 
-    -- Retail attach: retail revenue as a share of service revenue.
-    -- Both sides come off invoice line items, so a business that does
-    -- not itemise simply gets no row.
-    SELECT
-        i.business_id,
-        'retail_attach'::text,
-        ROUND(100.0 * SUM(CASE WHEN li ->> 'kind' = 'retail'
-                               THEN (li ->> 'unit_amount_cents')::numeric ELSE 0 END)
-              / NULLIF(SUM(CASE WHEN COALESCE(li ->> 'kind', 'service') <> 'retail'
-                                THEN (li ->> 'unit_amount_cents')::numeric ELSE 0 END), 0),
-              1)::numeric
-    FROM public.invoices i
-    CROSS JOIN LATERAL jsonb_array_elements(i.line_items) AS li
-    WHERE i.status = 'paid'
-      AND i.created_at >= now() - interval '90 days'
-      AND jsonb_typeof(i.line_items) = 'array'
-    GROUP BY i.business_id
-
-    UNION ALL
-
     -- ── therapist ────────────────────────────────────────────────────
-    -- Lower is better. Cancelled and no-show against everything booked
-    -- in the window.
+    -- Lower is better. The band carries that flag; this view does not
+    -- need to know.
     SELECT
         s.business_id,
         'no_show_rate'::text,
@@ -100,6 +118,9 @@ CREATE VIEW public.business_benchmark_values AS
 
     UNION ALL
 
+    -- Clients who reached eight sessions or more. Counted over active
+    -- contacts only, so a practice is not marked down for people who
+    -- finished well and closed.
     SELECT
         c.business_id,
         'client_retention'::text,
@@ -108,93 +129,86 @@ CREATE VIEW public.business_benchmark_values AS
     FROM (
         SELECT ct.business_id, ct.id,
                (SELECT COUNT(*) FROM public.sessions s
-                 WHERE s.business_id = ct.business_id AND s.contact_id = ct.id) AS sessions
+                 WHERE s.business_id = ct.business_id
+                   AND s.contact_id  = ct.id
+                   AND s.status = 'completed') AS sessions
         FROM public.contacts ct
-        WHERE ct.status = 'active'
+        WHERE ct.status IN ('active', 'vip')
     ) c
     GROUP BY c.business_id
 
     UNION ALL
 
-    -- ── ministry ─────────────────────────────────────────────────────
-    -- Guests marked first_time who were seen again afterwards.
+    -- ── law firm ─────────────────────────────────────────────────────
+    -- Utilisation: the share of recorded time that is billable. Both
+    -- halves come off time_entries, so the ratio is unit-free and does
+    -- not care whether a rate was ever set.
     SELECT
-        ct.business_id,
-        'first_time_return'::text,
-        ROUND(100.0 * COUNT(*) FILTER (
-            WHERE EXISTS (
-                SELECT 1 FROM public.sessions s
-                WHERE s.business_id = ct.business_id
-                  AND s.contact_id = ct.id
-                  AND s.scheduled_for > ct.created_at
-            )
-        ) / NULLIF(COUNT(*), 0), 1)::numeric
-    FROM public.contacts ct
-    WHERE ct.status = 'first_time'
-      AND ct.created_at >= now() - interval '365 days'
-    GROUP BY ct.business_id
+        te.business_id,
+        'utilization'::text,
+        ROUND(100.0 * SUM(te.minutes) FILTER (WHERE te.billable IS TRUE)
+              / NULLIF(SUM(te.minutes), 0), 1)::numeric
+    FROM public.time_entries te
+    WHERE te.occurred_on >= (now() - interval '180 days')::date
+    GROUP BY te.business_id
 
     UNION ALL
 
-    -- ── nonprofit ────────────────────────────────────────────────────
-    -- Donors who gave last year and gave again this year.
+    -- Realisation: of the billable value recorded, the share NOT written
+    -- off. Nothing stores an invoiced amount per time entry, so a
+    -- billed-vs-recorded ratio is not available -- but write-offs are
+    -- exactly the leak realisation is meant to expose, and they are
+    -- recorded, so this measures the real thing rather than a proxy.
     SELECT
-        ct.business_id,
-        'donor_retention'::text,
-        ROUND(100.0 * COUNT(*) FILTER (
-            WHERE ct.last_interaction >= now() - interval '365 days'
-        ) / NULLIF(COUNT(*), 0), 1)::numeric
-    FROM public.contacts ct
-    WHERE ct.status = 'donor'
-    GROUP BY ct.business_id
+        te.business_id,
+        'realization'::text,
+        ROUND(100.0 * SUM((te.minutes / 60.0) * te.rate)
+                      FILTER (WHERE te.status <> 'written_off')
+              / NULLIF(SUM((te.minutes / 60.0) * te.rate), 0), 1)::numeric
+    FROM public.time_entries te
+    WHERE te.billable IS TRUE
+      AND te.rate IS NOT NULL
+      AND te.occurred_on >= (now() - interval '180 days')::date
+    GROUP BY te.business_id
 
     UNION ALL
 
-    -- ── law firm + consultant ────────────────────────────────────────
-    -- Realisation: invoiced against recorded. Both halves are cents, so
-    -- the ratio is unit-free.
+    -- Collection: banked against billed. An invoice counts as billed
+    -- once it has left the building, so drafts and cancellations are out
+    -- of both halves.
     SELECT
         i.business_id,
-        'realization'::text,
-        ROUND(100.0 * SUM(i.total_cents)
-              / NULLIF(SUM(i.subtotal_cents), 0), 1)::numeric
+        'collection'::text,
+        ROUND(100.0 * SUM(i.total) FILTER (WHERE i.status = 'paid')
+              / NULLIF(SUM(i.total), 0), 1)::numeric
     FROM public.invoices i
-    WHERE i.status IN ('open', 'paid')
+    WHERE i.status IN ('sent', 'viewed', 'paid', 'overdue')
       AND i.created_at >= now() - interval '180 days'
     GROUP BY i.business_id
 
     UNION ALL
 
-    -- Collection: banked against billed.
-    SELECT
-        i.business_id,
-        'collection'::text,
-        ROUND(100.0 * SUM(i.amount_paid_cents)
-              / NULLIF(SUM(i.total_cents), 0), 1)::numeric
-    FROM public.invoices i
-    WHERE i.created_at >= now() - interval '180 days'
-    GROUP BY i.business_id
-
-    UNION ALL
-
-    -- Lockup, in days of annual revenue. Lower is better; the panel is
-    -- told so by the band's `direction`, not by this view.
+    -- Lockup, in days of collected revenue: how long the firm's own
+    -- money sits with clients. Lower is better; the band says so, not
+    -- this view.
     SELECT
         i.business_id,
         'collection_lockup'::text,
-        ROUND(365.0 * SUM(i.amount_due_cents) FILTER (WHERE i.status = 'open')
-              / NULLIF(SUM(i.amount_paid_cents), 0), 0)::numeric
+        ROUND(365.0 * SUM(i.total) FILTER (WHERE i.status IN ('sent', 'viewed', 'overdue'))
+              / NULLIF(SUM(i.total) FILTER (WHERE i.status = 'paid'), 0), 0)::numeric
     FROM public.invoices i
     WHERE i.created_at >= now() - interval '365 days'
     GROUP BY i.business_id;
 
 
 COMMENT ON VIEW public.business_benchmark_values IS
-    'Per-tenant VALUES for the benchmark panel — one row per (business, '
+    'Per-tenant VALUES for the benchmark panel - one row per (business, '
     'key). The bands they are read against (average, target, floor, '
     'reading, source) live in workspace_benchmarks.py, because a band is '
-    'an editorial claim with a citation and belongs in reviewed code. Add '
-    'a metric by adding a UNION arm; the layout binds by key.';
+    'an editorial claim with a citation and belongs in reviewed code. A '
+    'key with no arm here has no value, and the panel renders it as "not '
+    'measured" rather than guessing. Add a metric by adding a UNION arm; '
+    'the layout binds by key.';
 
 -- Inherits RLS from its base tables, so a business only ever sees its
 -- own rows. Server code reads it with the service-role key, and the
