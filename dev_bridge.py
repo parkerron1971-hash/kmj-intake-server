@@ -126,22 +126,30 @@ async def _require_device(c: httpx.AsyncClient, authorization: Optional[str]) ->
 # ─── The seeded brief ─────────────────────────────────────────────────
 
 def _compose_prompt(task: Dict[str, Any]) -> str:
-    """The text Solution Space pastes into the fresh Claude Code session:
-    the brief itself, plus how to file the finished-work report that shows
-    up in the Dev Desk."""
+    """The text Solution Space hands the fresh Claude Code session: the brief
+    itself, plus how the conversation with Kevin works while he is away —
+    his replies arrive in the session, and reports land in the Dev Desk."""
     body = (task.get("details") or "").strip() or task.get("title", "")
     report_url = f"{PUBLIC_BASE_URL}/dev-bridge/tasks/{task['id']}/report"
     return (
         f"{body}\n\n"
         "---\n"
-        "This task came from Mission Control's Dev Desk. When you finish, "
-        "file your report so Kevin sees the result in the Dev Desk:\n"
-        f"  POST {report_url}\n"
-        "  JSON body with three fields: key (given below), status "
-        "('done', or 'failed' with the reason, or 'working' for a progress "
-        "update on a long task), and note (a short plain-language summary of "
-        "what you did, where, and anything Kevin should check).\n"
-        f"  key: {task.get('report_key', '')}\n"
+        "This task came from Mission Control's Dev Desk. Kevin is most likely "
+        "away from this machine, so nobody is at the keyboard: work the task "
+        "through on your own, and talk to Kevin through the Dev Desk.\n\n"
+        "To report, POST to:\n"
+        f"  {report_url}\n"
+        "  JSON body with three fields: key (given below), status, and note.\n"
+        "  status is 'working' for a progress update or a question, 'done' "
+        "when finished, or 'failed' with the reason. note is a short "
+        "plain-language message to Kevin: what you did, where, and anything "
+        "he should check.\n"
+        f"  key: {task.get('report_key', '')}\n\n"
+        "If you need a decision from Kevin, post a 'working' report that asks "
+        "the question, then wait. His reply will arrive here as a new message "
+        "in this session, prefixed 'Kevin (from the Dev Desk)'. Always finish "
+        "with a 'done' or 'failed' report — a task without one reads as still "
+        "running.\n"
     )
 
 
@@ -326,6 +334,7 @@ async def pair_device(body: PairBody, _owner=Depends(require_owner)):
 class StatusBody(BaseModel):
     status: str
     note: Optional[str] = None
+    sender: Optional[str] = None  # 'device' (default) | 'session'
 
 
 class ReportBody(BaseModel):
@@ -345,6 +354,17 @@ async def bridge_queue(authorization: Optional[str] = Header(None)):
             "order": "created_at.asc",
             "limit": "5",
         })
+        # Kevin's replies on tasks a session is already working. The device
+        # types each one into that session and acks it; until the ack lands
+        # the note keeps coming back, so a crash between the two never loses
+        # a reply (the device de-duplicates by timestamp).
+        active = await _sb_get(c, "dev_tasks", {
+            "lane": "eq.local",
+            "status": f"in.({','.join(sorted(_ACTIVE_STATUSES))})",
+            "select": "id,title,project_path,notes",
+            "order": "updated_at.asc",
+            "limit": "20",
+        })
     tasks = []
     for t in rows:
         name = os.path.basename((t.get("project_path") or "").rstrip("\\/")) or None
@@ -357,10 +377,65 @@ async def bridge_queue(authorization: Optional[str] = Header(None)):
             "repo": t.get("repo"),
             "created_at": t.get("created_at"),
         })
-    return {"ok": True, "tasks": tasks}
+    followups = []
+    for t in active:
+        pending = _undelivered_replies(t)
+        if pending:
+            followups.append({
+                "task_id": t["id"],
+                "title": t.get("title"),
+                "project_path": t.get("project_path"),
+                "notes": pending,
+            })
+    return {"ok": True, "tasks": tasks, "followups": followups}
+
+
+# Statuses in which a session may still be at work on a task, and so can
+# still take a reply from Kevin.
+_ACTIVE_STATUSES = {"picked_up", "opened", "working"}
+_FINISHED_STATUSES = {"done", "failed", "cancelled"}
+
+
+def _undelivered_replies(task: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Kevin's notes on a task that no device has acked yet."""
+    out = []
+    for n in task.get("notes") or []:
+        if n.get("from") == "kevin" and not n.get("delivered_at") and n.get("at"):
+            out.append({"at": n["at"], "text": n.get("text") or ""})
+    return out
+
+
+class AckBody(BaseModel):
+    """Timestamps (the notes' `at`) the device has typed into the session."""
+    at: List[str]
+
+
+@router.post("/dev-bridge/tasks/{task_id}/notes/ack")
+async def bridge_ack_notes(task_id: str, body: AckBody,
+                           authorization: Optional[str] = Header(None)):
+    wanted = set(body.at or [])
+    if not wanted:
+        raise HTTPException(422, "at required")
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        await _require_device(c, authorization)
+        task = await _get_task(c, task_id)
+        notes = list(task.get("notes") or [])
+        acked = 0
+        for n in notes:
+            if n.get("from") == "kevin" and n.get("at") in wanted and not n.get("delivered_at"):
+                n["delivered_at"] = _now()
+                acked += 1
+        if acked:
+            await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"},
+                            {"notes": notes, "updated_at": _now()})
+    return {"ok": True, "acked": acked}
 
 
 _DEVICE_STATUSES = {"picked_up", "opened", "working", "failed"}
+# Who a device-lane note is shown as: the device itself (Solution Space
+# talking about what it did) or the session (the terminal's own output,
+# relayed so Kevin can read it from the Dev Desk).
+_DEVICE_SENDERS = {"device", "session"}
 
 
 @router.post("/dev-bridge/tasks/{task_id}/status")
@@ -369,17 +444,25 @@ async def bridge_status(task_id: str, body: StatusBody,
     status = (body.status or "").strip().lower()
     if status not in _DEVICE_STATUSES:
         raise HTTPException(422, f"status must be one of {sorted(_DEVICE_STATUSES)}")
+    sender = (body.sender or "device").strip().lower()
+    if sender not in _DEVICE_SENDERS:
+        raise HTTPException(422, f"sender must be one of {sorted(_DEVICE_SENDERS)}")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         await _require_device(c, authorization)
         task = await _get_task(c, task_id)
-        patch: Dict[str, Any] = {"status": status, "updated_at": _now()}
-        if status == "picked_up" and not task.get("picked_up_at"):
-            patch["picked_up_at"] = _now()
-        if status == "failed":
-            patch["finished_at"] = _now()
-        await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"}, patch)
+        # A session's relayed output can arrive after its own 'done' report;
+        # that must not flip a finished task back to 'working'. The note still
+        # lands — it is the final answer Kevin wants to read.
+        settled = task.get("status") in _FINISHED_STATUSES
+        if not (settled and status == "working"):
+            patch: Dict[str, Any] = {"status": status, "updated_at": _now()}
+            if status == "picked_up" and not task.get("picked_up_at"):
+                patch["picked_up_at"] = _now()
+            if status == "failed":
+                patch["finished_at"] = _now()
+            await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"}, patch)
         if body.note:
-            await _append_note(c, task, "device", body.note)
+            await _append_note(c, task, sender, body.note)
     return {"ok": True}
 
 
