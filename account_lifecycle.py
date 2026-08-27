@@ -173,6 +173,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "growth_objectives",
     "strategy_tracks",
     "business_tracks",
+    # The day-one arc. Cascades on business delete already; listing it is
+    # what makes it EXPORTABLE, which is the half a cascade cannot do.
+    "first_run_arc",
     "support_tickets",
     "workflows",
     "workflow_definitions",
