@@ -345,3 +345,56 @@ def test_only_one_place_writes_the_archetype_column():
         f"{writers} — collapse them onto composer._persist, which is the "
         "only one that proves the write landed")
     assert writers[0][0] == "workspace_composer_router.py", writers
+
+
+# ─── the live types, and the ones we deliberately refuse ──────────────
+# Every value `businesses.type` actually held in production on
+# 2026-08-27, with the archetype each is expected to lean at. This is a
+# census, not a wishlist: `agency` was the single most common live type
+# and carried no lean at all, so six real businesses scored on stray
+# keywords alone. A new type reaching production without a decision here
+# is exactly the drift this pins down.
+#
+# The frontend keeps the same census in `canonicalType`
+# (solutionist-studio: src/core/intelligence/verticalDesks.ts). Two repos,
+# one mapping — when you add a row here, add it there.
+LIVE_TYPES_LEAN = {
+    "agency": "consultant",
+    "creative": "consultant",
+    "course_creator": "consultant",
+    "service_provider": "consultant",
+    "coach": "consultant",
+    "consultant": "consultant",
+    "lawyer": "law_firm",
+    "personal_services": "salon",
+    "ministry": "ministry",
+    "nonprofit": "nonprofit",
+}
+
+# Refused on purpose. Each sells something no archetype reads: orders and
+# stock, or subscriptions and churn. `custom` names nothing at all. They
+# get the default WITH `confidence: none`, which is the honest answer —
+# handing someone a docket built for engagements would be worse than
+# admitting we do not know.
+DELIBERATELY_UNMAPPED = ("ecommerce", "saas", "custom")
+
+
+@pytest.mark.parametrize("declared,expected", sorted(LIVE_TYPES_LEAN.items()))
+def test_every_live_business_type_leans_somewhere(declared, expected):
+    lean = wa.VERTICAL_LEAN.get(declared)
+    direct = workspace_layouts.for_vertical(declared)
+    assert lean or direct, f"{declared!r} is stored in production with no archetype"
+    top = max(lean, key=lean.get) if lean else direct
+    assert top == expected
+    assert wa.classify({"type": declared})["archetype"] == expected
+
+
+@pytest.mark.parametrize("declared", DELIBERATELY_UNMAPPED)
+def test_a_refused_type_says_so_rather_than_guessing(declared):
+    """It still gets a workspace — it just does not claim to be sure."""
+    pick = wa.classify({"type": declared})
+    assert pick["archetype"] == wa.DEFAULT_ARCHETYPE
+    assert pick["confidence"] == "none", (
+        f"{declared!r} scored evidence it should not have — a refused type "
+        "that reports confidence is a wrong answer wearing a right one"
+    )

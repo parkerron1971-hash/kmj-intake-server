@@ -52,6 +52,33 @@ in your PR description as a request. The integrator makes shell changes
 once, for everyone, so that two agents cannot invent two different
 versions of the same primitive.
 
+## The type census — two repos, one mapping
+
+A vertical only ever reaches a practitioner if `businesses.type` resolves
+to it, and that resolution is written down **twice**:
+
+| Repo | Map | Resolves to |
+|---|---|---|
+| kmj-intake-server | `workspace_archetypes.VERTICAL_LEAN` | one of 7 archetypes |
+| solutionist-studio | `canonicalType()` in `verticalDesks.ts` | one of 8 desks |
+
+They drifted, and the cost was not theoretical: `agency` — the single most
+common live business type — was absent from both, so six real businesses
+resolved to no desk and fell through to the old dashboard, while three
+more types (`creative`, `course_creator`, `service_provider`) had a
+backend lean the frontend had never been told about. Seventeen of
+twenty-seven live businesses saw none of this work.
+
+**When you add a vertical, add its type to BOTH maps in the same pass.**
+`test_every_live_business_type_leans_somewhere` pins the backend half
+against a census of what production actually stores; the frontend has no
+runner, so its half is held by the comment beside the map. If a type
+belongs nowhere — `ecommerce`, `saas`, `custom` — refuse it explicitly and
+say why. A refused type gets the default archetype with
+`confidence: "none"`, which is the honest answer. Handing someone a desk
+built for a question they never asked is worse than handing them the
+dashboard they already knew.
+
 ## The four rules
 
 **1. Every band carries a citation.** A band is an editorial claim this
