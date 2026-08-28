@@ -126,6 +126,7 @@ HARD RULES (a validator checks each; violations cost a repair round):
 10. REVEAL SAFETY: if content starts hidden for a scroll reveal, the reveal must be scroll-position driven (on scroll, anything whose top has passed the reveal line becomes visible), so fast scrolling can NEVER leave a section invisible. Never rely on an IntersectionObserver alone. Honor prefers-reduced-motion by showing everything.
 11. INVENTORY-SHAPED LAYOUT: compose the gallery/grid to the number of images that actually exist. Two images get a two-image composition; never a grid with holes, never a repeated image as filler.
 11b. ART-DIRECTED DROP SLOTS: when the composition WANTS an image the inventory doesn't have (a hero portrait, a third gallery piece), author a placeholder the owner can fill: <div class="sx-drop" data-sx-slot="short_name">…</div> containing ONE line of shot direction in plain words ("You at the chair, mid-cut, warm light" — you are telling them what to photograph). Style: a dashed 1px frame in the accent color at low opacity, the design's crop and position already decided, so a dropped-in photo inherits your intention. Your CSS MUST include `.sx-drop{display:none}` and `body.sx-studio .sx-drop{display:flex;…}` — the public page never shows an empty frame; the owner's Studio reveals them. Never fake an image, never leave a hole: real, or an art-directed drop slot.
+11c. NO VISIBLE STAND-INS: a photo the inventory lacks is INVISIBLE to the visitor. Never author a "filled" or "art-directed" placeholder that reads as intentional — no tinted or textured box, no framed panel, no caption-only frame, no italic line describing the photograph that should be there. The hidden .sx-drop of 11b is the ONLY stand-in; its shot direction never appears outside it. HERO without a hero photo: a typographic hero — display type carries the composition and rule 15's presence is a ghost word or the signature motif, never an empty frame. WORK/GALLERY with fewer than two real photos: no photo grid at all — say what you make and how it feels in words, with drop slots the Studio reveals. A visitor must never be able to tell a photo is missing.
 12. ALIGNMENT LAW: photographic subjects fill their frames (cover-fit, deliberate crop anchor); edges align to the type they sit beside; nothing floats small inside an oversized border.
 13. HEAD + SHARE: a real <title>, a meta description written from the data, and og:title / og:description / og:image (the strongest image url from the data) so a shared link looks intentional.
 14. CONNECTED DOORS: the data's CONNECTED SYSTEMS block lists working doors the owner turned on (booking, store) with their exact urls — each appears on the page as a REAL link twice over: in the navigation, and as a devoted moment styled to the spec (a Book action, a shop section). Use the exact url given. Never invent a door the block doesn't carry; never render a dead placeholder for one it does.
@@ -314,6 +315,120 @@ def _store_has_products(ctx: Optional[Dict[str, Any]]) -> bool:
         return bool(data)
     except Exception:
         return False
+
+
+# ─── the stand-in law (2026-08-28, MaCnificent Hair Co) ──────────────
+# The first build for a business with no photos shipped its hero and
+# every gallery tile as a "filled art-directed placeholder": a tinted,
+# braid-textured box with an italic line describing the photograph that
+# should have been there. Rule 11b had said the public page never shows
+# an empty frame — the author obeyed the letter (its .sx-drop was hidden)
+# and wrote a SECOND, visible stand-in beside it. The eyes saw it ("an
+# empty caramel-tinted box containing only a caption") and the vision
+# repair could not conjure photographs. So: a deterministic law that
+# names the pattern, feeds the repair, and — because a stand-in is a
+# quality defect, not a lie — never sends the build to the fallback.
+
+_STANDIN_TAG_RE = re.compile(r"<(\w+)\b[^>]*\bclass=\"([^\"]*)\"[^>]*>",
+                             re.IGNORECASE)
+_STANDIN_TOKEN_RE = re.compile(
+    r"(?:^|[-_])(?:slot|placeholder|standin|stand-in|photo-?(?:frame|box))"
+    r"(?:[-_]|$)", re.IGNORECASE)
+_DROP_OPEN_RE = re.compile(r"<(\w+)\b[^>]*\bclass=\"[^\"]*\bsx-drop\b[^\"]*\"[^>]*>",
+                           re.IGNORECASE)
+_STANDIN_WORD_RE = re.compile(r"[A-Za-z']{4,}")
+
+
+def _drop_spans(html: str) -> List[Tuple[int, int]]:
+    """(start, end) of every .sx-drop element, nesting-aware."""
+    spans: List[Tuple[int, int]] = []
+    for m in _DROP_OPEN_RE.finditer(html):
+        tag = m.group(1).lower()
+        depth, pos = 1, m.end()
+        tag_re = re.compile(rf"</?{tag}\b", re.IGNORECASE)
+        while depth and pos < len(html):
+            n = tag_re.search(html, pos)
+            if not n:
+                pos = len(html)
+                break
+            depth += -1 if html[n.start() + 1] == "/" else 1
+            pos = n.end()
+        spans.append((m.start(), pos))
+    return spans
+
+
+def _in_spans(i: int, spans: List[Tuple[int, int]]) -> bool:
+    return any(a <= i < z for a, z in spans)
+
+
+def check_stand_ins(html: str) -> List[str]:
+    """Deterministic: visible stand-ins for missing photographs.
+    (1) any non-<img> element whose class names a slot / placeholder /
+        stand-in / photo-frame OUTSIDE a hidden .sx-drop;
+    (2) a CAPTION ECHO: the shot direction inside an .sx-drop repeated as
+        visible copy beside it (a description of a photo that is not
+        there). Each finding names the fix; the list is capped so the
+        repair prompt stays surgical."""
+    problems: List[str] = []
+    spans = _drop_spans(html)
+    seen_classes: List[str] = []
+    for m in _STANDIN_TAG_RE.finditer(html):
+        if m.group(1).lower() == "img" or _in_spans(m.start(), spans):
+            continue
+        tokens = m.group(2).split()
+        if "sx-drop" in tokens:
+            continue
+        hit = next((t for t in tokens if _STANDIN_TOKEN_RE.search(t)), None)
+        if hit and hit not in seen_classes:
+            seen_classes.append(hit)
+    if seen_classes:
+        problems.append(
+            "VISIBLE STAND-IN: elements classed "
+            + ", ".join(f"'{c}'" for c in seen_classes[:4])
+            + " are visible frames or captions standing in for photographs "
+              "the inventory does not have. A missing photo is INVISIBLE to "
+              "the visitor: remove these stand-ins (keep only the hidden "
+              ".sx-drop). If this is the hero, make the hero typographic — "
+              "display type plus a ghost word or the signature motif, no "
+              "frame. If a gallery has fewer than two real photos, compose "
+              "it without a photo grid.")
+    # caption echo
+    echoed = 0
+    for a, z in spans:
+        direction = _STANDIN_WORD_RE.findall(re.sub(r"<[^>]+>", " ", html[a:z]))
+        keys = {w.lower() for w in direction}
+        if len(keys) < 4:
+            continue
+        lo, hi = max(0, a - 2500), min(len(html), z + 2500)
+        outside = "".join(
+            html[i:j] for i, j in _outside_pieces(lo, hi, spans))
+        words = {w.lower() for w in
+                 _STANDIN_WORD_RE.findall(re.sub(r"<[^>]+>", " ", outside))}
+        if len(keys & words) >= max(4, int(len(keys) * 0.6)):
+            echoed += 1
+    if echoed:
+        problems.append(
+            f"CAPTION ECHO: {echoed} drop slot(s) have their shot direction "
+            "repeated as VISIBLE copy beside them — a description of a "
+            "photograph that is not on the page. Delete the visible copy; "
+            "the direction lives only inside the hidden .sx-drop.")
+    return problems
+
+
+def _outside_pieces(lo: int, hi: int,
+                    spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """[lo, hi) minus every drop span — the visible neighbourhood."""
+    pieces: List[Tuple[int, int]] = []
+    cur = lo
+    for a, z in sorted(spans):
+        if z <= lo or a >= hi:
+            continue
+        if a > cur:
+            pieces.append((cur, a))
+        cur = max(cur, z)
+    if cur < hi:
+        pieces.append((cur, hi))
+    return pieces
 
 
 def check_connected(html: str, real_data: str) -> List[str]:
@@ -664,6 +779,7 @@ _INSPECTOR = """You are the builder of this page inspecting your own rendered wo
 Measure against THE CHECKLIST (each item is a law, not a suggestion):
 - ALIGNMENT: photographic subjects fill their frames; nothing floats small inside an oversized border; edges line up with neighboring type; nothing overlaps, collides, or gets cut off.
 - COMPLETENESS: no blank/empty sections at any scroll stop (a section that never appeared = the reveal-skip bug). No grid holes, no dead space where content should be.
+- STAND-INS: no box, frame, tinted or textured panel standing in for a photograph, and no caption describing an image that is not there. A missing photo is invisible to the visitor — a hero without a photo is typographic, a gallery without photos is not a grid.
 - FILLED SPACE: the hero's off-axis half holds a designed presence, not bare ground beside the headline; no scroll stop shows a featureless band taller than half the viewport between sections.
 - CAPTION TRUTH: every caption/title visibly matches the artwork it sits under.
 - COPY GRAMMAR: no dash-spliced sentences visible in headings or body copy.
@@ -850,12 +966,18 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
 
     doc = _mechanical(doc)
     violations = _laws(doc)
-    if violations:
-        report["violations"] = violations
+    # THE SOFT TIER: stand-ins (11c) cost the same repair round as a law,
+    # but a stand-in is a quality defect, not an invented fact — it never
+    # sends a build to the fallback engine. Whatever survives the repair
+    # is reported (report["stand_ins"]) and handed to the eyes.
+    stand_ins = check_stand_ins(doc)
+    if violations or stand_ins:
+        report["violations"] = violations + stand_ins
         _progress(56, "Surgical repair")
         raw2 = _call(_SYSTEM,
                      build_user_prompt(spec_text, real_data,
-                                       violations=violations, prior_doc=doc),
+                                       violations=violations + stand_ins,
+                                       prior_doc=doc),
                      business_id)
         doc2 = _parse_doc(raw2 or "")
         if doc2:
@@ -864,16 +986,26 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
             if not v2:
                 report["repaired"] = True
                 doc = doc2
-            else:
+            elif violations:
                 report["fallbacks"].append({
                     "stage": "repair",
                     "detail": "still failing after one repair: "
                               + "; ".join(v2[:4])})
                 return {"html": None, "report": report}
-        else:
+            else:
+                report["fallbacks"].append({
+                    "stage": "repair",
+                    "detail": "stand-in repair broke a law — keeping the "
+                              "law-passing document"})
+        elif violations:
             report["fallbacks"].append({"stage": "repair",
                                         "detail": "repair unparseable"})
             return {"html": None, "report": report}
+        else:
+            report["fallbacks"].append({"stage": "repair",
+                                        "detail": "stand-in repair unparseable "
+                                                  "— keeping the document"})
+    report["stand_ins"] = check_stand_ins(doc)
 
     # THE EYES (Arc 2): the builder looks at its own rendered work and
     # gets ONE surgical pass to fix what it sees. Quality violations are
@@ -892,6 +1024,9 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                 seen = [f"SEEN IN THE RENDER ({v.get('where', 'page')}): "
                         f"{v.get('what')} — FIX: {v.get('fix', 'minimal edit')}"
                         for v in verdict["violations"]]
+                # a stand-in the surgical round left behind rides the
+                # vision repair too — the eyes' round is the last chance
+                seen += [f"STILL ON THE PAGE: {s}" for s in report["stand_ins"]]
                 raw3 = _call(_SYSTEM,
                              build_user_prompt(spec_text, real_data,
                                                violations=seen,
@@ -903,6 +1038,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                     if not _laws(doc3):
                         doc = doc3
                         report["vision"]["repaired"] = True
+                        report["stand_ins"] = check_stand_ins(doc)
                     else:
                         report["fallbacks"].append({
                             "stage": "vision-repair",
