@@ -90,6 +90,7 @@ OUTPUT — STRICT JSON, nothing else:
   "chips": ["up to 4 short tap-to-answer suggestions", "..."],        // optional
   "pair": {"key": "ground", "a": "Dark and moody", "b": "Light and airy"},  // optional, when asking a this-or-that
   "gallery": {"kind": "looks", "options": ["mural", "monograph", "ledger"]},  // optional, see THE GALLERIES
+  "ask": "photos",   // optional — the platform shows an upload card; ONLY when the context says NO PHOTOS YET, and only once
   "saves": [{"section": "story", "field": "voice", "value": "..."}],
   "stage": "world|story|taste|signature|truth|brief",
   "done": false,
@@ -106,6 +107,36 @@ NEVER write sentences spliced with dashes in reply or saves — use periods, com
 
 
 # ─── context assembly (what is already KNOWN — never re-ask) ─────────
+
+def _photo_context(settings: Dict[str, Any]) -> List[str]:
+    """THE PHOTO STATION (2026-08-28, build quality 2/6). MaCnificent Hair
+    Co sat through a whole session and the build went out with ZERO
+    photographs — the coach never knew, so it never asked, and the page
+    shipped tinted boxes describing photos that were not there. The
+    photo inventory the build will actually use is
+    settings.media_library.gallery (+ the brand mark); the coach reads
+    the same truth and asks ONCE, at the story stage, with an upload
+    card the platform renders ("ask": "photos")."""
+    st = settings if isinstance(settings, dict) else {}
+    gal = ((st.get("media_library") or {}).get("gallery")) or []
+    n = len([g for g in gal if isinstance(g, dict)
+             and str(g.get("url") or "").strip()
+             and g.get("show_on_website", True)])
+    bk = st.get("brand_kit") or {}
+    mark = bool(bk.get("logo_url") or (bk.get("assets") or {}).get("primary"))
+    out = [f"PHOTOS ON FILE: {n} (the build's entire photo inventory) — "
+           f"BRAND MARK: {'on file' if mark else 'none'}"]
+    if n == 0:
+        out.append(
+            "NO PHOTOS YET: the site will be built WITHOUT photographs (a "
+            "typographic page) unless they add some. ONCE, at the story "
+            "stage, ask for photos of their finished work and set "
+            "\"ask\": \"photos\" on that turn — the platform shows an upload "
+            "card, the photos land in their library, and the build uses "
+            "them. If they say not now, move on and never ask again this "
+            "session.")
+    return out
+
 
 def _known_context(business_id: str) -> str:
     parts: List[str] = []
@@ -127,6 +158,7 @@ def _known_context(business_id: str) -> str:
             if cols:
                 parts.append("BRAND COLORS ON FILE: "
                              + json.dumps(cols)[:200])
+            parts.extend(_photo_context(st))
             prefs = st.get("site_prefs") or {}
             if prefs:
                 parts.append("EARLIER STYLE ANSWERS (do not re-ask; "
@@ -258,6 +290,8 @@ def parse_turn(raw: str) -> Optional[Dict[str, Any]]:
     rb = out.get("reflect_back")
     out["reflect_back"] = [str(x)[:200] for x in rb[:12]] \
         if isinstance(rb, list) else []
+    out["ask"] = "photos" \
+        if str(out.get("ask") or "").strip().lower() == "photos" else None
     saves = out.get("saves")
     clean: List[Dict[str, Any]] = []
     for s in (saves if isinstance(saves, list) else []):
