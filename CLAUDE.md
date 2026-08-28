@@ -74,7 +74,14 @@ list with what breaks without each. The load-bearing ones:
 
 ## Conventions
 
-- End commit messages with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
+- End commit messages with `Co-Authored-By: Claude <model> <noreply@anthropic.com>`,
+  where `<model>` is the model that actually wrote the commit — e.g.
+  `Claude Fable 5`, `Claude Opus 5`. **Name your own model, never a
+  hardcoded one.** More than one agent works this repo at a time, and a
+  trailer that always said "Fable 5" attributed every session's work to
+  whichever agent happened to be named here first — which makes
+  authorship a lie precisely when parallel sessions make it worth
+  reading. (Matched to the same change in the frontend repo, FE #719.)
 - One PR per change; never stack PRs (Kevin merges fast — after a merge
   link is handed over, the branch is dead; follow-ups get a fresh branch).
   Always `git fetch` + check PR state before branching from / pushing to
