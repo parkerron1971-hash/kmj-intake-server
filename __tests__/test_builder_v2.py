@@ -288,3 +288,90 @@ def test_filled_space_rule_rides_builder_prompt_and_inspector():
     assert "FILLED SPACE" in v2._SYSTEM
     assert "transition-delay" in v2._SYSTEM
     assert "FILLED SPACE" in v2._INSPECTOR
+
+
+# ─── the stand-in law (2026-08-28, MaCnificent Hair Co) ──────────────
+
+_DROP = ('<div class="sx-drop" data-sx-slot="hero_braids">A full head of '
+         'medium box braids seen from behind, warm light</div>')
+
+
+def test_stand_in_law_flags_visible_frames_and_spares_hidden_drops():
+    """The first no-photo build shipped tinted 'slot-frame' boxes with an
+    italic 'slot-note' describing the photograph that was not there."""
+    bad = ('<section id="gallery"><div class="frame"><div class="slot-frame">'
+           '<p class="slot-note">Braids from behind, clean parts.</p></div>'
+           '</div>' + _DROP + '</section>')
+    found = v2.check_stand_ins(bad)
+    assert len(found) == 1 and "VISIBLE STAND-IN" in found[0]
+    assert "'slot-frame'" in found[0] and "'slot-note'" in found[0]
+    assert "typographic" in found[0]
+    # the hidden drop slot alone is the contract, not a violation — and
+    # a real <img> whose class happens to say "slot" is a real image
+    good = ('<section id="gallery"><img class="slot-img" src="https://x/a.jpg" '
+            'alt="braids">' + _DROP + '</section>')
+    assert v2.check_stand_ins(good) == []
+
+
+def test_stand_in_law_flags_a_caption_echo():
+    """The shot direction inside the hidden drop, repeated as visible
+    copy beside it, is a description of a photo that is not there."""
+    echo = ('<section id="top">' + _DROP + '<p class="lead">A full head of '
+            'medium box braids seen from behind in warm light.</p></section>')
+    found = v2.check_stand_ins(echo)
+    assert len(found) == 1 and "CAPTION ECHO" in found[0]
+    # different copy beside the drop is fine
+    fine = ('<section id="top">' + _DROP + '<p class="lead">Book your chair '
+            'and leave with a finish you will keep looking at.</p></section>')
+    assert v2.check_stand_ins(fine) == []
+
+
+def test_stand_in_rule_rides_prompt_and_inspector():
+    assert "NO VISIBLE STAND-INS" in v2._SYSTEM
+    assert "typographic hero" in v2._SYSTEM
+    assert "STAND-INS" in v2._INSPECTOR
+
+
+def _law_passing_doc(endpoint: str, extra: str = "") -> str:
+    return ("<!DOCTYPE html><html><head><title>Studio</title>"
+            '<meta name="description" content="A braiding studio by hand">'
+            '<meta property="og:title" content="Studio">'
+            '<meta property="og:description" content="A braiding studio">'
+            '<meta property="og:image" content="https://x/a.jpg">'
+            "<style>body{margin:0}</style></head><body>"
+            '<nav><a href="#top">Top</a></nav><main id="top"><h1>Braids worn '
+            "like their own kind of magnificent.</h1>" + extra + "</main>"
+            f'<form method="POST" action="{endpoint}"><input name="name">'
+            '<input name="email"><button>Send</button></form>'
+            "<footer>Studio</footer></body></html>")
+
+
+def test_stand_ins_cost_a_repair_but_never_the_fallback(monkeypatch):
+    """A stand-in is a quality defect, not an invented fact. It earns the
+    surgical round; if the author will not let go of it, the page still
+    ships — and the report says what is still on it."""
+    endpoint = "https://api.example/contact/biz-1"
+    standin = ('<div class="slot-frame"><p class="slot-note">Braids from '
+               "behind, clean parts.</p></div>")
+    calls = []
+
+    def _fake_call(system, user, business_id):
+        calls.append(user)
+        return _law_passing_doc(endpoint, standin)
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"] is not None                 # never the fallback
+    assert len(calls) == 2 and "SURGICAL REPAIR" in calls[1]
+    assert "VISIBLE STAND-IN" in calls[1]
+    assert out["report"]["stand_ins"] and "slot-frame" in out["report"]["stand_ins"][0]
+    assert not out["report"]["fallbacks"]
+    # …and a clean page reports an empty list, no repair round
+    calls.clear()
+    monkeypatch.setattr(v2, "_call",
+                        lambda s, u, b: _law_passing_doc(endpoint))
+    out2 = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out2["html"] and out2["report"]["stand_ins"] == []
