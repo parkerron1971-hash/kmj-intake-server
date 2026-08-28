@@ -5059,10 +5059,19 @@ def author_spec_work(business_id: str, notes: str = "", revise: bool = False,
 def get_design_spec(business_id: str,
                     session: UserSession = Depends(sb_clients.authed_request)
                     ) -> Dict[str, Any]:
-    """The current design spec document (draft or approved), or null."""
+    """The current design spec document (draft or approved), or null —
+    plus READINESS (build quality 5/6): what the next build will and
+    will not have, in plain lines, with revision chips. Read-only, no
+    model call; never fatal to the spec read."""
     _require_owner(business_id, session.user.id)
     import spec_author
-    return {"spec": spec_author.get_spec(business_id)}
+    readiness = None
+    try:
+        import build_readiness
+        readiness = build_readiness.spec_readiness(gather_context(business_id))
+    except Exception as e:
+        logger.info(f"[composer] readiness skipped: {e}")
+    return {"spec": spec_author.get_spec(business_id), "readiness": readiness}
 
 
 @router.post("/spec/author")
