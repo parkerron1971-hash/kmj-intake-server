@@ -261,6 +261,15 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
 
 _CONNECTED_LINE_RE = re.compile(
     r"^- (BOOKING|STORE): ON — .*?(https://\S+)", re.MULTILINE)
+_STORE_OFF_LINE_RE = re.compile(r"^- STORE: OFF\b", re.MULTILINE)
+# a link to a shop that is not there: /store or /shop as a path on any
+# origin (the author invents it on the site's own), or a bare #store
+_DEAD_STORE_HREF_RE = re.compile(
+    r"href\s*=\s*[\"'](?:https?://[^\"'/]+)?/(?:store|shop)(?:[/?#\"'])",
+    re.IGNORECASE)
+_STORE_SECTION_RE = re.compile(
+    r"<section\b[^>]*\b(?:id|class)\s*=\s*[\"'][^\"']*\b(?:store|shop)\b",
+    re.IGNORECASE)
 
 
 def connected_systems_block(business_id: str,
@@ -299,6 +308,15 @@ def connected_systems_block(business_id: str,
             and _store_has_products(ctx):
         lines.append(f"- STORE: ON — the shop moment links to "
                      f"{state['store_url']}")
+    elif state.get("store_url"):
+        # THE DEAD DOOR (2026-08-28, MaCnificent Hair Co): with no
+        # products the store line was simply absent, and the author
+        # invented "The shop — browse and order online" linking to
+        # /store on the site's own origin — a shop with nothing in it.
+        # Say OFF out loud; check_connected enforces it.
+        lines.append("- STORE: OFF — there is nothing in the shop yet. "
+                     "No shop section, no shop link, no /store url "
+                     "anywhere on the page.")
     if not lines:
         return ""
     return ("CONNECTED SYSTEMS (working doors the owner turned on — "
@@ -442,6 +460,16 @@ def check_connected(html: str, real_data: str) -> List[str]:
                 f"CONNECTED DOOR MISSING: {name} is ON but its url "
                 f"({url}) appears nowhere on the page — add it as a "
                 "real link in the nav and as a devoted moment.")
+    if _STORE_OFF_LINE_RE.search(real_data):
+        dead_links = len(_DEAD_STORE_HREF_RE.findall(html))
+        dead_sections = len(_STORE_SECTION_RE.findall(html))
+        if dead_links or dead_sections:
+            problems.append(
+                "DEAD DOOR: the shop is OFF (nothing in it yet) but the "
+                f"page carries {dead_links} shop link(s) and "
+                f"{dead_sections} shop section(s). Remove the shop "
+                "section and every link to /store or /shop; do not "
+                "replace them with a placeholder.")
     return problems
 
 
