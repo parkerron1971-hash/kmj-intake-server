@@ -86,7 +86,15 @@ THIN_BRIEF_MIN_SIGNALS = 3
 # signal WITH its evidence quotes — prime truncation suspect for the
 # full DRO JSON dying at the old 6000 cap (every build since the bridge
 # fell to minimal). Slimmer echo above + a taller cap below.
-DRO_MAX_TOKENS = 9000
+# THE CUT SENTENCE (2026-08-28, MaCnificent Hair Co): both full-DRO calls
+# returned EXACTLY 9000 output tokens — the cap — with the JSON cut mid-
+# "because", and the parse retry re-rolled straight into the same cap.
+# The build ran on the minimal brain (dro_mode=minimal) and the page
+# went out on a thin rationale. The audit fields (inventions, echo_plan,
+# exception_log) and richer signal echoes have grown the object since
+# the 9000 was set. Taller cap, and — below — a cut response is
+# CONTINUED from where it stopped, never re-rolled.
+DRO_MAX_TOKENS = 14000
 DRO_TEMPERATURE = 0.4                          # reasoning with creative latitude
 
 
@@ -236,6 +244,30 @@ def _parse_json(raw: str) -> Optional[Any]:
         return json.loads(_strip_code_fence(raw))
     except Exception:
         return None
+
+
+def _looks_truncated(raw: str) -> bool:
+    """A JSON object that started and never closed: the shape of a
+    response cut by the token cap (or a dropped stream) — as opposed to
+    prose, a refusal, or a fenced answer, which the parse retry handles."""
+    t = _strip_code_fence(raw or "").strip()
+    if not t.startswith("{") or t.endswith("}"):
+        return False
+    return t.count("{") > t.count("}")
+
+
+def _continue_cut_response(client, system: str, user: str, raw: str, *,
+                           business_id: str) -> str:
+    """Finish a cut response by prefilling the assistant turn with what
+    already came back — the model continues the object from the exact
+    character it stopped at. _call returns prefill + continuation when
+    the prefill was applied, or a fresh full answer when the model
+    rejected prefill (the 2026-07-24 fallback); either way the result is
+    a complete candidate. One call, same cap, no re-roll."""
+    partial = (raw or "").rstrip()          # a prefill may not end in whitespace
+    return _call(client, system, user, max_tokens=DRO_MAX_TOKENS,
+                 temperature=DRO_TEMPERATURE, business_id=business_id,
+                 task="dro", prefill=partial)
 
 
 # ─── Enums derived from the schema (validation target) ──────────────────
@@ -997,6 +1029,18 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
                            f"{business_id}: {last['detail']}")
             return None
         parsed = _parse_json(raw)
+        if not isinstance(parsed, dict) and _looks_truncated(raw):
+            # THE CUT SENTENCE: continue from where it stopped. A re-roll
+            # at the same cap dies at the same place (it did, twice).
+            try:
+                raw = _continue_cut_response(client, system, user + extra,
+                                             raw, business_id=business_id)
+                parsed = _parse_json(raw)
+                logger.info(f"[drl] DRO continued after a cut response for "
+                            f"{business_id}: parsed={isinstance(parsed, dict)}")
+            except Exception as e:
+                logger.warning(f"[drl] DRO continuation failed for "
+                               f"{business_id} ({type(e).__name__}): {e}")
         if isinstance(parsed, dict):
             _pop_audit_fields(parsed, business_id)
         if not isinstance(parsed, dict):
