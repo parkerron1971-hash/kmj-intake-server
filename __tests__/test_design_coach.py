@@ -213,3 +213,30 @@ def test_system_prompt_carries_the_standing_rules():
     # business plan — sensory questions only, business facts referenced.
     assert "NOT THE BUSINESS PLAN" in s
     assert "business-plan interview" in s
+
+
+
+# ─── THE PHOTO STATION (2026-08-28, build quality 2/6) ───────────────
+
+def test_photo_context_counts_the_inventory_the_build_will_use():
+    empty = dc._photo_context({"brand_kit": {}})
+    assert empty[0].startswith("PHOTOS ON FILE: 0")
+    assert "BRAND MARK: none" in empty[0]
+    assert any("NO PHOTOS YET" in line and '"ask": "photos"' in line
+               for line in empty)
+    full = dc._photo_context({
+        "brand_kit": {"logo_url": "https://x/mark.png"},
+        "media_library": {"gallery": [
+            {"url": "https://x/a.jpg"}, {"url": "https://x/b.jpg"},
+            {"url": "https://x/hidden.jpg", "show_on_website": False},
+            {"url": ""}, "legacy-string"]}})
+    assert full == ["PHOTOS ON FILE: 2 (the build's entire photo inventory) "
+                    "— BRAND MARK: on file"]
+    assert dc._photo_context(None)[0].startswith("PHOTOS ON FILE: 0")
+
+
+def test_parse_turn_passes_the_photo_ask_through_and_drops_junk():
+    assert dc.parse_turn(_turn(ask="photos"))["ask"] == "photos"
+    assert dc.parse_turn(_turn(ask="Photos "))["ask"] == "photos"
+    assert dc.parse_turn(_turn(ask="money"))["ask"] is None
+    assert dc.parse_turn(_turn())["ask"] is None
