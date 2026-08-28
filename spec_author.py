@@ -613,12 +613,20 @@ def apply_spec_overrides(html: str, spec_text: str) -> str:
         return html
 
 
-def _site_row(business_id: str):
+def _site_row(business_id: str, create: bool = False):
+    """create=True: a business with no row yet gets one before the
+    Blueprint is written (discovery.ensure_site_row — the dossier and
+    the spec share the row, and a July signup had none)."""
     import sb_clients
     rows = sb_clients.sb_get_as_service(
         f"/business_sites?business_id=eq.{business_id}"
         "&select=id,site_config&limit=1") or []
-    return rows[0] if rows else None
+    if rows:
+        return rows[0]
+    if not create:
+        return None
+    import discovery
+    return discovery.ensure_site_row(business_id)
 
 
 def get_spec(business_id: str) -> Optional[Dict[str, Any]]:
@@ -669,9 +677,11 @@ def save_spec(business_id: str, text: str,
     """Persist the spec document. Bumps revision when one exists.
 
     Raises SpecSaveFailed if the write does not land — see
-    _patch_site_config. Returns None only when there is no site row to
-    write to, which is a different (and harmless) condition."""
-    row = _site_row(business_id)
+    _patch_site_config. A business with no site row gets one here (it
+    was not harmless: the spec was authored, charged for, and returned
+    with nothing in the database). Returns None only when the row could
+    not be created either."""
+    row = _site_row(business_id, create=True)
     if not row:
         return None
     cfg = dict(row.get("site_config") or {})

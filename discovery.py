@@ -68,12 +68,54 @@ def _empty_dossier() -> Dict[str, Any]:
 
 # ─── persistence (site row pattern) ──────────────────────────────────
 
-def _site_row(business_id: str):
+def _site_row(business_id: str, create: bool = False):
+    """The site row that holds the dossier. With create=True a business
+    that has no row yet gets one — see ensure_site_row."""
     import sb_clients
     rows = sb_clients.sb_get_as_service(
         f"/business_sites?business_id=eq.{business_id}"
         "&select=id,site_config&limit=1") or []
-    return rows[0] if rows else None
+    if rows:
+        return rows[0]
+    return ensure_site_row(business_id) if create else None
+
+
+def ensure_site_row(business_id: str) -> Optional[Dict[str, Any]]:
+    """THE DOSSIER NEEDS A ROW (2026-08-28). Kevin sat with a practitioner
+    through a whole design session; the business (a July signup) had no
+    business_sites row, so save_dossier answered False on every turn and
+    the session's answers went nowhere — the coach kept talking off the
+    transcript in the request, finish_session "degraded" silently, and
+    there was nothing for the Blueprint to draft from. The row is the
+    site's address and the dossier's home; a first write creates it, the
+    way the composer's own _ensure_site_row does. Returns the row as
+    {id, site_config} or None when it cannot be created."""
+    import sb_clients
+    biz = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=id,name&limit=1") or []
+    if not biz:
+        return None
+    try:
+        from site_composer import _slugify
+        slug = _slugify(str(biz[0].get("name") or "") or "site")
+    except Exception:
+        slug = "site"
+    taken = sb_clients.sb_get_as_service(
+        f"/business_sites?slug=eq.{slug}&select=id&limit=1") or []
+    if taken:
+        slug = f"{slug}-{business_id[:6]}"
+    created = sb_clients.sb_post_as_service("/business_sites", {
+        "business_id": business_id, "slug": slug,
+        # nothing serves yet — the same state onboarding leaves a row in
+        "status": "booking_only", "html_content": None,
+        "site_config": {},
+    })
+    row = (created or [None])[0] if isinstance(created, list) else created
+    if not isinstance(row, dict) or not row.get("id"):
+        logger.warning(f"[discovery] could not create a site row for {business_id[:8]}")
+        return None
+    logger.info(f"[discovery] created site row {slug} for {business_id[:8]} (first write)")
+    return {"id": row["id"], "site_config": row.get("site_config") or {}}
 
 
 def get_dossier(business_id: str) -> Optional[Dict[str, Any]]:
@@ -86,7 +128,7 @@ def get_dossier(business_id: str) -> Optional[Dict[str, Any]]:
 
 def save_dossier(business_id: str, dossier: Dict[str, Any]) -> bool:
     import sb_clients
-    row = _site_row(business_id)
+    row = _site_row(business_id, create=True)
     if not row:
         return False
     cfg = dict(row.get("site_config") or {})

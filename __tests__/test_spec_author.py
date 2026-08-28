@@ -415,11 +415,39 @@ def test_save_spec_bumps_revision_when_the_write_lands(monkeypatch):
     assert fake.config["design_spec"]["text"] == "a fresh document"
 
 
-def test_save_spec_returns_none_without_a_site_row(monkeypatch):
-    """No site to attach to is a DIFFERENT condition from a failed
-    write — harmless, and must not raise."""
+def test_save_spec_creates_the_row_for_a_business_without_one(monkeypatch):
+    """THE DOSSIER NEEDS A ROW (2026-08-28). "No site to attach to" was
+    called harmless; it was not — the spec had been authored, charged
+    for, and returned with nothing in the database. A business with no
+    business_sites row gets one on the first write."""
+    import sb_clients
+    fake = _FakeSB(has_row=False)
+    _wire(monkeypatch, fake)
+    posted = []
+
+    def _get(path):
+        if path.startswith("/businesses?"):
+            return [{"id": "biz-1", "name": "MaCnificent Hair Co"}]
+        if path.startswith("/business_sites?business_id=") and posted:
+            return [{"id": "site-new", "site_config": {}}]
+        return []
+
+    def _post(path, body):
+        posted.append((path, body))
+        return [{"id": "site-new", **body}]
+
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", _get)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", _post)
+    saved = spec_author.save_spec("biz-1", "doc")
+    assert saved and saved["revision"] == 1
+    assert posted and posted[0][1]["slug"] == "macnificent-hair-co"
+    assert fake.patches and fake.patches[-1]["site_config"]["design_spec"]["text"] == "doc"
+
+
+def test_save_spec_returns_none_when_the_business_is_missing(monkeypatch):
+    """Only a business that does not exist has nowhere to write."""
     _wire(monkeypatch, _FakeSB(has_row=False))
-    assert spec_author.save_spec("biz-1", "doc") is None
+    assert spec_author.save_spec("ghost", "doc") is None
 
 
 def test_set_status_also_verifies_its_write(monkeypatch):
