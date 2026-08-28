@@ -51,7 +51,7 @@ def test_one_mind_checks_restate_the_two_module_rulers():
 def test_gate_grades_a_one_mind_page_with_its_own_ruler():
     """The same spec + document: the module ruler reports the hero
     missing (no module DOM id); the one-mind ruler does not."""
-    spec = [{"module": "hero", "variant": "split", "content": {}}]
+    spec = [{"module": "offerings", "variant": "cards", "content": {}}]
     html = ("<html><head><title>T</title></head><body>"
             '<section id="top"><h1>Braids</h1></section></body></html>')
     ctx = {"dna": {"typography": {"heading": "Anton", "body": "Barlow"}}}
@@ -63,7 +63,7 @@ def test_gate_grades_a_one_mind_page_with_its_own_ruler():
     # the module ruler looks for the hero's module DOM id and, not finding
     # it, either calls it missing or renders it to decide it was dropped —
     # either way it is grading a page it did not write
-    assert "hero" in by["sections_rendered"]["detail"]
+    assert "offerings" in by["sections_rendered"]["detail"]
     assert "one-mind" not in by["sections_rendered"]["detail"]
     assert by["fonts_embedded"]["ok"] is False
     by2 = {c["name"]: c for c in one_mind_report["checks"]}
