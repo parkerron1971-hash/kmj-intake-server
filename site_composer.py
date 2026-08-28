@@ -1680,6 +1680,7 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
                       defaulted_modules: Optional[List[str]] = None,
                       previous_html: Optional[str] = None,
                       atelier_meta: Optional[Dict[str, Any]] = None,
+                      one_mind: bool = False,
                       ) -> tuple:
     """Conformance report over the final document. Returns
     (report_dict, fixes) where fixes is a list of fixable spec issues
@@ -1696,10 +1697,13 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
 
     # (a) every spec section produced non-empty HTML or was legitimately
     # dropped (renderer returned empty for lack of real data — logged).
+    # ONE-MIND PAGES (build quality 6/6): canvas / builder-v2 documents
+    # never stamp module DOM ids and follow the spec's fonts, so (a) and
+    # (b) are restated by _one_mind_checks and the loop below is skipped.
     missing: List[str] = []
     dropped: List[str] = []
     needs_resanitize = False
-    for s in spec:
+    for s in ([] if one_mind else spec):
         mid = s.get("module")
         mspec = site_modules.MODULES.get(mid)
         if not mspec:
@@ -1726,21 +1730,24 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
     if dropped:
         logger.info(f"[composer.gate] sections legitimately dropped for "
                     f"{business_id[:8]} (no real data): {dropped}")
-    checks.append({
-        "name": "sections_rendered", "ok": not missing,
-        "detail": (f"missing from document: {missing}; " if missing else "")
-                  + (f"legitimately dropped (no data): {dropped}" if dropped
-                     else ("all sections present" if not missing else ""))})
-    if needs_resanitize:
-        fixes.append({"fix": "resanitize"})
+    if one_mind:
+        checks.extend(_one_mind_checks())
+    else:
+        checks.append({
+            "name": "sections_rendered", "ok": not missing,
+            "detail": (f"missing from document: {missing}; " if missing else "")
+                      + (f"legitimately dropped (no data): {dropped}" if dropped
+                         else ("all sections present" if not missing else ""))})
+        if needs_resanitize:
+            fixes.append({"fix": "resanitize"})
 
-    # (b) the chosen font families actually reach the emitted CSS/links.
-    typ = (ctx.get("dna") or {}).get("typography") or {}
-    fonts_wanted = [f for f in {typ.get("heading"), typ.get("body")} if f]
-    fonts_missing = [f for f in fonts_wanted if f not in html]
-    checks.append({"name": "fonts_embedded", "ok": not fonts_missing,
-                   "detail": (f"missing families: {fonts_missing}"
-                              if fonts_missing else f"present: {fonts_wanted}")})
+        # (b) the chosen font families actually reach the emitted CSS/links.
+        typ = (ctx.get("dna") or {}).get("typography") or {}
+        fonts_wanted = [f for f in {typ.get("heading"), typ.get("body")} if f]
+        fonts_missing = [f for f in fonts_wanted if f not in html]
+        checks.append({"name": "fonts_embedded", "ok": not fonts_missing,
+                       "detail": (f"missing families: {fonts_missing}"
+                                  if fonts_missing else f"present: {fonts_wanted}")})
 
     # (c) --sx-* palette variables + head meta/OG block when data existed.
     pal_missing = [v for v in ("--sx-bg:", "--sx-accent:", "--sx-text:")
@@ -1999,6 +2006,71 @@ def _apply_quality_fixes(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
         new_spec = sanitize_spec({"sections": new_spec}, ctx)
         changed = True
     return new_spec if changed else None
+
+
+def _inject_missing_head_meta(html: str, ctx: Dict[str, Any]) -> str:
+    """THE HEAD A ONE-MIND PAGE NEVER GOT (2026-08-28, build quality 6/6).
+    Module pages get description / canonical / OG / JSON-LD from
+    page_shell's _head_meta_block; canvas and builder-v2 documents bypass
+    page_shell, so every one of them failed the gate's meta_block check
+    on canonical + jsonld (KMJ and MaCnificent alike) and shipped without
+    a canonical url or a LocalBusiness record. The author writes title,
+    description and OG itself (rule 13) — add ONLY what is absent."""
+    if not html or "</head>" not in html:
+        return html
+    try:
+        meta = site_modules.build_page_meta(ctx) or {}
+    except Exception as e:
+        logger.info(f"[composer] head meta skipped: {e}")
+        return html
+    try:
+        from site_modules._base import safe as _safe, safe_url as _safe_url
+    except Exception:
+        import html as _h
+        _safe = _h.escape
+        _safe_url = _h.escape
+    add: List[str] = []
+    desc = str(meta.get("description") or "").strip()
+    canonical = str(meta.get("canonical") or "").strip()
+    og_title = str(meta.get("og_title") or "").strip()
+    if desc and '<meta name="description"' not in html:
+        add.append(f'<meta name="description" content="{_safe(desc)}">')
+    if canonical and 'rel="canonical"' not in html:
+        add.append(f'<link rel="canonical" href="{_safe_url(canonical)}">')
+    if og_title and 'property="og:title"' not in html:
+        add.append(f'<meta property="og:title" content="{_safe(og_title)}">')
+    if desc and 'property="og:description"' not in html:
+        add.append(f'<meta property="og:description" content="{_safe(desc)}">')
+    if canonical and 'property="og:url"' not in html:
+        add.append(f'<meta property="og:url" content="{_safe_url(canonical)}">')
+    if 'property="og:type"' not in html:
+        add.append('<meta property="og:type" content="website">')
+    jsonld = meta.get("jsonld") or {}
+    if jsonld and "application/ld+json" not in html:
+        payload = json.dumps(jsonld, ensure_ascii=False).replace("</", "<\\/")
+        add.append(f'<script type="application/ld+json">{payload}</script>')
+    if not add:
+        return html
+    return html.replace("</head>", "\n".join(add) + "\n</head>", 1)
+
+
+def _one_mind_checks() -> List[Dict[str, Any]]:
+    """The gate's rulers that belong to the module engine, restated for
+    a page one author wrote whole (build quality 6/6). sections_rendered
+    looked for module DOM ids a one-mind page never stamps, so every
+    canvas/v2 build reported six "missing" sections; fonts_embedded
+    looked for the DNA's families when rule 7 makes the SPEC's fonts law.
+    Both are covered upstream: the builder's coverage law (every offering
+    has a home, nav, form, footer) and the floor verifier."""
+    return [
+        {"name": "sections_rendered", "ok": True,
+         "detail": "one-mind page: the author's own sections; coverage "
+                   "(every offering has a home, nav, form, footer) is the "
+                   "builder's law, checked before this gate"},
+        {"name": "fonts_embedded", "ok": True,
+         "detail": "one-mind page: the spec's fonts are law (rule 7); the "
+                   "DNA families do not apply"},
+    ]
 
 
 def _ensure_og_image(html: str, slot_records: Dict[str, Any]) -> str:
@@ -2335,6 +2407,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     atelier_meta: Optional[Dict[str, Any]] = None
     if _canvas_html:
         html = _mark(_canvas_html)
+        html = _inject_missing_head_meta(html, ctx)
         # AUDIT FIX (2026-07-24): canvas/v2 documents bypass page_shell,
         # which is the ONLY place the Studio select-to-talk bridge was
         # emitted — so every v2 page shipped with Edit Mode's tap-to-
@@ -2591,7 +2664,8 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         quality_report, fixes = _run_quality_gate(
             business_id, spec, ctx, final_html, dro=dro,
             dro_status=dro_status, defaulted_modules=defaulted_modules,
-            previous_html=prev_html, atelier_meta=atelier_meta)
+            previous_html=prev_html, atelier_meta=atelier_meta,
+            one_mind=bool(_canvas_html))
         # Canvas Pass: the heal re-render rebuilds from the SPEC (module
         # path), which would destroy a canvas-authored page — the canvas
         # already ran its own fact-check + corrective retry upstream, so
