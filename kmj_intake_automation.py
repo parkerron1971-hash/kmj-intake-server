@@ -334,6 +334,12 @@ app.include_router(suppliers_router)
 # AI action on every tier, plus a per-business daily circuit breaker.
 from sourcing_router import router as sourcing_router
 app.include_router(sourcing_router)
+# THE GRANTS ARC, lane 1 - federal opportunities from Grants.gov. NOT
+# metered and not tier-gated: the API asks for no key, so there is
+# nothing to bill, and charging for a free search would teach a
+# practitioner that looking is expensive. Guarded by a rate limit only.
+from grants_router import router as grants_router
+app.include_router(grants_router)
 # Phase I.1 — Double-entry General Ledger (backfill + verify)
 from gl_router import router as gl_router
 app.include_router(gl_router)
