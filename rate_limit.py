@@ -54,6 +54,13 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # counts platform-only — and an unrated loop here still takes AI
     # offline for every tenant at once.
     "pulse": (int(os.environ.get("RL_PULSE_PER_HOUR", "10")), 3600),
+    # The federal grants lane. Costs us nothing — Grants.gov asks for no
+    # key — so this is not a ration and is generous enough that a
+    # practitioner refining a search never meets it. It exists because a
+    # retry loop on our side would hammer a public service in our name,
+    # and because the free lane is the one most likely to be called on a
+    # schedule later. Per business, per minute.
+    "grants_search": (int(os.environ.get("RL_GRANTS_SEARCH_PER_MIN", "30")), 60),
 }
 _DEFAULT = (60, 60)
 
