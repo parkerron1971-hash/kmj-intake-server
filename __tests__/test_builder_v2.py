@@ -375,3 +375,34 @@ def test_stand_ins_cost_a_repair_but_never_the_fallback(monkeypatch):
                         lambda s, u, b: _law_passing_doc(endpoint))
     out2 = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert out2["html"] and out2["report"]["stand_ins"] == []
+
+
+# ─── the dead shop door (2026-08-28, MaCnificent Hair Co) ────────────
+
+def test_store_off_is_said_out_loud_and_a_shop_on_the_page_is_a_violation(monkeypatch):
+    """With no products the store line was simply ABSENT from the
+    connected block, and the author invented "The shop — browse and
+    order online" linking to /store on the site's own origin."""
+    import offering_profiles
+    monkeypatch.setattr(offering_profiles, "business_state", lambda b: {
+        "booking_enabled": False, "booking_url": "",
+        "store_url": "https://macnificent-hair-co.mysolutionist.app/store"})
+    monkeypatch.setattr(v2, "_store_has_products", lambda ctx: False)
+    block = v2.connected_systems_block("biz-1", {})
+    assert "- STORE: OFF" in block and "/store" in block
+    page = ('<html><body><nav><a href="#store">Shop</a></nav>'
+            '<section id="store"><h2>The shop</h2><a href="https://'
+            'macnificent-hair-co.mysolutionist.app/store">Visit the shop</a>'
+            "</section></body></html>")
+    found = v2.check_connected(page, block)
+    assert len(found) == 1 and "DEAD DOOR" in found[0]
+    assert "1 shop link(s)" in found[0] and "1 shop section(s)" in found[0]
+    # a page that simply has no shop passes; a store that is ON keeps
+    # the existing MISSING-door law and never trips the dead-door one
+    assert v2.check_connected("<html><body>braids</body></html>", block) == []
+    monkeypatch.setattr(v2, "_store_has_products", lambda ctx: True)
+    on = v2.connected_systems_block("biz-1", {})
+    assert "- STORE: ON" in on
+    assert v2.check_connected(page, on) == []
+    assert any("MISSING" in p for p in
+               v2.check_connected("<html><body>braids</body></html>", on))
