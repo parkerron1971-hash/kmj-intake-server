@@ -355,7 +355,7 @@ def test_stand_ins_cost_a_repair_but_never_the_fallback(monkeypatch):
                "behind, clean parts.</p></div>")
     calls = []
 
-    def _fake_call(system, user, business_id):
+    def _fake_call(system, user, business_id, spend=None):
         calls.append(user)
         return _law_passing_doc(endpoint, standin)
 
@@ -372,7 +372,7 @@ def test_stand_ins_cost_a_repair_but_never_the_fallback(monkeypatch):
     # …and a clean page reports an empty list, no repair round
     calls.clear()
     monkeypatch.setattr(v2, "_call",
-                        lambda s, u, b: _law_passing_doc(endpoint))
+                        lambda s, u, b, spend=None: _law_passing_doc(endpoint))
     out2 = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert out2["html"] and out2["report"]["stand_ins"] == []
 
@@ -406,3 +406,123 @@ def test_store_off_is_said_out_loud_and_a_shop_on_the_page_is_a_violation(monkey
     assert v2.check_connected(page, on) == []
     assert any("MISSING" in p for p in
                v2.check_connected("<html><body>braids</body></html>", on))
+
+
+# ─── THE BUILDER LETS A PAGE FINISH (2026-08-29, the builder bench) ────
+
+class _Usage:
+    def __init__(self, i, o):
+        self.input_tokens, self.output_tokens = i, o
+
+
+class _Block:
+    type = "text"
+    def __init__(self, text):
+        self.text = text
+
+
+class _Msg:
+    def __init__(self, text, stop="end_turn", i=1000, o=500):
+        self.content = [_Block(text)]
+        self.stop_reason = stop
+        self.usage = _Usage(i, o)
+
+
+class _FakeStream:
+    """A scripted client: each messages.stream() call pops the next
+    (text, stop_reason) and records the messages it was given."""
+    def __init__(self, script):
+        self.script = list(script)
+        self.seen = []
+        outer = self
+
+        class _Messages:
+            def stream(_s, **kw):
+                outer.seen.append(kw)
+                text, stop = outer.script.pop(0)
+
+                class _Ctx:
+                    def __enter__(self_):
+                        return self_
+                    def __exit__(self_, *a):
+                        return False
+                    text_stream = iter([text])
+                    def get_final_message(self_):
+                        return _Msg(text, stop, i=1000, o=len(text) // 4)
+                return _Ctx()
+        self.messages = _Messages()
+
+
+def _ladder_passthrough(fn, model, task, business_id, max_tokens):
+    return fn(model, max_tokens, 60.0), model
+
+
+def test_call_streams_and_returns_the_text(monkeypatch):
+    fake = _FakeStream([("<!DOCTYPE html><html>whole</html>", "end_turn")])
+    monkeypatch.setattr(v2.llm_call, "sdk_client", lambda **k: fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    import model_ladder
+    monkeypatch.setattr(model_ladder, "call_with_ladder", _ladder_passthrough)
+    spend = v2.new_spend()
+    out = v2._call("sys", "user", "biz", spend=spend)
+    assert out == "<!DOCTYPE html><html>whole</html>"
+    assert len(fake.seen) == 1 and fake.seen[0]["messages"][0]["role"] == "user"
+    assert spend["calls"] == 1 and spend["output_tokens"] > 0 and spend["cost_cents"] > 0
+
+
+def test_a_cut_page_is_continued_not_rerolled(monkeypatch):
+    """Opus 5 and Fable 5 both came back at exactly max_tokens on the
+    bench: cut before </html>. The cut text rides back as an assistant
+    turn with a continue instruction — one more call, same model."""
+    fake = _FakeStream([("<!DOCTYPE html><html><body>half", "max_tokens"),
+                        (" the rest</body></html>", "end_turn")])
+    monkeypatch.setattr(v2.llm_call, "sdk_client", lambda **k: fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    import model_ladder
+    monkeypatch.setattr(model_ladder, "call_with_ladder", _ladder_passthrough)
+    spend = v2.new_spend()
+    out = v2._call("sys", "user", "biz", spend=spend)
+    assert out == "<!DOCTYPE html><html><body>half the rest</body></html>"
+    assert len(fake.seen) == 2
+    turns = fake.seen[1]["messages"]
+    assert [t["role"] for t in turns] == ["user", "assistant", "user"]
+    assert turns[1]["content"] == "<!DOCTYPE html><html><body>half"
+    assert "Continue EXACTLY" in turns[2]["content"]
+    assert spend["calls"] == 2
+
+
+def test_the_ceiling_and_the_budget_are_taller_than_the_cut(monkeypatch):
+    monkeypatch.delenv("BUILDER_V2_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("BUILDER_V2_OUTPUT_BUDGET", raising=False)
+    assert v2._max_tokens() >= 64000
+    assert v2._output_budget() >= v2._max_tokens()
+    import model_ladder
+    assert not model_ladder.supports_sampling("claude-opus-5")
+
+
+def test_budget_skips_the_repair_round_and_keeps_the_document(monkeypatch):
+    """A stand-in on the first draft would normally cost a repair round.
+    With the purse empty, the round is skipped, the document ships, and
+    the report says so — no second charge for nothing."""
+    endpoint = "https://api.example/contact/biz-1"
+    standin = ('<div class="slot-frame"><p class="slot-note">Braids from '
+               "behind, clean parts.</p></div>")
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        if spend is not None:
+            spend["calls"] += 1
+            spend["output_tokens"] += 10 ** 6      # one call empties the purse
+        return _law_passing_doc(endpoint, standin)
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"] is not None
+    assert len(calls) == 1                                # no repair call
+    assert out["report"]["spend"]["skipped"] == ["repair"]
+    assert any("budget reached" in f["detail"] for f in out["report"]["fallbacks"])
+    assert out["report"]["stand_ins"]                     # still reported
