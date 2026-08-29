@@ -1076,9 +1076,33 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
 
     real_data = assemble_real_data(ctx, business_id)
     _progress(48, "One mind builds the whole page")
-    raw = _call(_SYSTEM, build_user_prompt(spec_text, real_data), business_id,
-                spend=spend)
-    doc = _parse_doc(raw or "")
+    # THE BUILDER WITH TOOLS (2026-08-29): when the loop is on, the
+    # authoring step can look at the owner's images, pull whole sections
+    # of real data, read the vocabulary, and RENDER its own draft to see
+    # it and its laws before handing in. Everything below — armor, laws,
+    # the surgical repair, the eyes — is unchanged.
+    doc: Optional[str] = None
+    try:
+        import builder_loop
+        if builder_loop.enabled():
+            _progress(48, "The builder looks, renders, corrects")
+            looped = builder_loop.run_loop(spec_text, ctx, business_id, spend,
+                                           progress_cb=_progress)
+            report["loop"] = looped.get("report")
+            doc = looped.get("html")
+            if not doc:
+                report["fallbacks"].append({
+                    "stage": "loop",
+                    "detail": "the tool loop produced no document — one-pass author"})
+    except Exception as e:
+        logger.warning(f"[v2] tool loop crashed (non-fatal — one-pass author): "
+                       f"{type(e).__name__}: {e}")
+        report["fallbacks"].append({"stage": "loop",
+                                    "detail": f"{type(e).__name__}: {e}"})
+    if not doc:
+        raw = _call(_SYSTEM, build_user_prompt(spec_text, real_data), business_id,
+                    spend=spend)
+        doc = _parse_doc(raw or "")
     if not doc:
         report["fallbacks"].append({"stage": "author",
                                     "detail": "no parseable document"})
