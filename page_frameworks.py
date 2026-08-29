@@ -60,6 +60,42 @@ FRAMEWORKS: Dict[str, Dict[str, Any]] = {
                   "faq", "gallery", "cta", "contact"],
         "about_variant": "pull_quote",
     },
+    # THE WIDER SHELF (2026-08-29): five more skeletons, each an answer
+    # to evidence the five above could not place well.
+    "menu_first": {
+        "label": "Menu-first",
+        "why": "the menu is the pitch — services before the person",
+        "order": ["hero", "offerings", "gallery", "process", "testimonials",
+                  "about", "statband", "faq", "cta", "contact"],
+        "about_variant": "narrative",
+    },
+    "gathering": {
+        "label": "Gathering",
+        "why": "what we do together — impact, programs and stories before biography",
+        "order": ["hero", "statband", "process", "showcase", "testimonials",
+                  "about", "offerings", "faq", "cta", "contact"],
+        "about_variant": "pull_quote",
+    },
+    "proof_first": {
+        "label": "Proof-first",
+        "why": "they said it first — the words of clients open the page",
+        "order": ["hero", "testimonials", "offerings", "about", "process",
+                  "statband", "gallery", "faq", "cta", "contact"],
+        "about_variant": "portrait",
+    },
+    "manifesto": {
+        "label": "Manifesto",
+        "why": "one page, one argument — few assets, full conviction, nothing padded",
+        "order": ["hero", "about", "statband", "offerings", "cta", "contact"],
+        "about_variant": "pull_quote",
+    },
+    "lookbook": {
+        "label": "Lookbook",
+        "why": "the work and the goods, interleaved — see it, then buy it",
+        "order": ["hero", "gallery", "store", "about", "offerings", "showcase",
+                  "testimonials", "faq", "cta", "contact"],
+        "about_variant": "narrative",
+    },
     "story_arc": {
         "label": "Story Arc",
         "why": "problem → guide → plan → call: the classic narrative spine",
@@ -100,13 +136,33 @@ def select_framework(ctx: Dict[str, Any],
     btype = str((ctx.get("business") or {}).get("type") or "").lower()
     text = _dro_text(dro)
 
-    if len(products) >= 2:
+    offerings = ctx.get("offerings") or []
+    testimonials = ctx.get("testimonials") or []
+    # THE WIDER SHELF (2026-08-29): the new skeletons take their evidence
+    # first; the five older branches keep their order behind them.
+    if len(products) >= 2 and len(photos) >= 4:
+        key = "lookbook"
+    elif len(products) >= 2:
         key = "storefront"
+    elif any(w in btype for w in ("nonprofit", "church", "minist", "faith", "community")):
+        key = "gathering"
+    elif len(offerings) >= 4 and len(photos) < 6 and any(
+            w in btype for w in ("personal_service", "barber", "salon", "spa", "nail",
+                                 "beauty", "stylist", "lash", "brow", "massage")):
+        key = "menu_first"
+    elif len(testimonials) >= 3 and len(photos) < 4:
+        key = "proof_first"
     elif len(photos) >= 4 and (prefs.get("wants_gallery") is not False):
         key = "gallery_studio"
     elif any(w in text for w in ("editorial", "literar", "essay", "monolith",
                                  "long-form", "luxur")):
         key = "editorial_monolith"
+    elif len(photos) < 2 and len(offerings) <= 2 and not products and not has_portrait \
+            and not any(w in btype for w in ("coach", "consult", "law", "advisor", "therap")):
+        # a new business with almost nothing on file: one argument, no
+        # padding — before the type-string rule below can hand it a
+        # portrait skeleton it has no portrait for
+        key = "manifesto"
     elif has_portrait or any(w in btype for w in ("coach", "consult", "law",
                                                   "advisor", "therap")):
         key = "portrait_consultant"
