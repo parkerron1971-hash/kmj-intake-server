@@ -802,6 +802,18 @@ def _parse_doc(raw: str) -> Optional[str]:
 
 VISION_WALK_WIDTHS = (390, 1440)     # full walk: top / middle / bottom
 VISION_WIDE_WIDTH = 2560             # ultrawide: above the fold only
+# THE SETTLE (2026-08-29, the proof build): the walk teleports to a scroll
+# stop and shot after 700ms — inside the page's own staggered reveal
+# (transition-delay stepped by item index, as rule 15 asks). The eyes
+# then reported "an entire viewport is blank — reveal-skip bug" on a page
+# whose tiles were simply still fading in, and a vision repair would
+# have been paid for on a defect that did not exist. Wait for the
+# cascade.
+VISION_SETTLE_MS = 1600
+# THE INSPECTOR'S CAP: Opus 5 answered the checklist in more than 1200
+# tokens (it reasons inside its budget), came back cut mid-JSON, and the
+# eyes silently reported "did not run". Room to finish a six-item verdict.
+INSPECTOR_MAX_TOKENS = 4000
 
 
 def eyes_enabled() -> bool:
@@ -838,7 +850,7 @@ def _screenshot_walk(html: str) -> Optional[List[Tuple[str, bytes]]]:
                     names = ("top", "middle", "bottom")
                     for name, y in zip(names, stops):
                         page.evaluate(f"window.scrollTo(0, {y})")
-                        page.wait_for_timeout(700)   # reveals settle
+                        page.wait_for_timeout(VISION_SETTLE_MS)   # the cascade settles
                         shots.append((f"{width}px {name}",
                                       page.screenshot(type="jpeg",
                                                       quality=55)))
@@ -902,13 +914,19 @@ def _parse_inspector(raw: str) -> Optional[Dict[str, Any]]:
     return out
 
 
-def inspect_with_eyes(doc: str, spec_text: str,
-                      business_id: str) -> Optional[Dict[str, Any]]:
+def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
+                      why: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
     """Screenshot walk → one vision call → verdict dict, or None when
     the eyes can't run (no playwright / no key / unparseable) — never
-    fatal, never a second look."""
+    fatal, never a second look. `why` (2026-08-29) receives the reason
+    for a None, so the report never says "did not run" without saying
+    what closed them."""
+    def _why(reason: str) -> None:
+        if why is not None:
+            why["reason"] = reason
     shots = _screenshot_walk(doc)
     if not shots:
+        _why("no screenshots (playwright unavailable or the render failed)")
         return None
     try:
         import base64
@@ -916,6 +934,7 @@ def inspect_with_eyes(doc: str, spec_text: str,
         import model_ladder
         key = os.environ.get("ANTHROPIC_API_KEY")
         if not key:
+            _why("no ANTHROPIC_API_KEY")
             return None
         content: List[Dict[str, Any]] = [
             {"type": "text", "text": "THE APPROVED SPEC (what the page "
@@ -938,7 +957,7 @@ def inspect_with_eyes(doc: str, spec_text: str,
 
         msg, used_model = model_ladder.call_with_ladder(
             _do, model=_model(), task="builder_v2_eyes",
-            business_id=business_id, max_tokens=1200)
+            business_id=business_id, max_tokens=INSPECTOR_MAX_TOKENS)
         try:
             from api_usage_logger import log_api_usage_sync
             u = getattr(msg, "usage", None)
@@ -952,8 +971,16 @@ def inspect_with_eyes(doc: str, spec_text: str,
             pass
         raw = "".join(b.text for b in msg.content
                       if getattr(b, "type", None) == "text")
-        return _parse_inspector(raw)
+        verdict = _parse_inspector(raw)
+        if verdict is None:
+            stop = getattr(msg, "stop_reason", None)
+            _why(f"unparseable verdict (stop_reason={stop}, {len(raw)} chars)"
+                 + (" — the reply hit the inspector's cap" if stop == "max_tokens" else ""))
+            logger.warning(f"[v2:eyes] verdict unparseable for {business_id[:8]}: "
+                           f"stop={stop} head={raw[:80]!r}")
+        return verdict
     except Exception as e:
+        _why(f"{type(e).__name__}: {e}")
         logger.warning(f"[v2:eyes] inspection failed (non-fatal): "
                        f"{type(e).__name__}: {e}")
         return None
@@ -1191,7 +1218,10 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     report["vision"] = {"ran": False, "verdict": None, "violations": []}
     if eyes_enabled():
         _progress(62, "The builder inspects its own work")
-        verdict = inspect_with_eyes(doc, spec_text, business_id)
+        why: Dict[str, str] = {}
+        verdict = inspect_with_eyes(doc, spec_text, business_id, why=why)
+        if not verdict and why.get("reason"):
+            report["vision"]["reason"] = why["reason"]
         if verdict:
             report["vision"]["ran"] = True
             report["vision"]["verdict"] = verdict.get("verdict")

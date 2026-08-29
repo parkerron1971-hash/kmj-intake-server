@@ -526,3 +526,60 @@ def test_budget_skips_the_repair_round_and_keeps_the_document(monkeypatch):
     assert out["report"]["spend"]["skipped"] == ["repair"]
     assert any("budget reached" in f["detail"] for f in out["report"]["fallbacks"])
     assert out["report"]["stand_ins"]                     # still reported
+
+
+# ─── THE EYES SAY WHY THEY CLOSED (2026-08-29, the proof build) ───────
+
+def test_eyes_record_why_when_the_verdict_is_cut(monkeypatch):
+    """On Opus 5 the inspector's reply hit its 1200-token cap mid-JSON and
+    the eyes silently reported 'did not run'. The cap is taller now, and a
+    None always carries its reason onto the report."""
+    assert v2.INSPECTOR_MAX_TOKENS >= 4000
+    assert v2.VISION_SETTLE_MS >= 1500
+    monkeypatch.setattr(v2, "_screenshot_walk", lambda html: [("1440px top", b"jpeg")])
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+
+    class _U:
+        input_tokens, output_tokens = 10, 4000
+
+    class _B:
+        type = "text"
+        text = '{"verdict":"repair","violations":[{"where":"hero","what":"cut mid'
+
+    class _M:
+        content = [_B()]
+        stop_reason = "max_tokens"
+        usage = _U()
+
+    class _Client:
+        class messages:
+            @staticmethod
+            def create(**kw):
+                assert kw["max_tokens"] == v2.INSPECTOR_MAX_TOKENS
+                return _M()
+
+    monkeypatch.setattr(v2.llm_call, "sdk_client", lambda **k: _Client())
+    import model_ladder
+    monkeypatch.setattr(model_ladder, "call_with_ladder",
+                        lambda fn, model, task, business_id, max_tokens: (fn(model, max_tokens, 60.0), model))
+    why = {}
+    assert v2.inspect_with_eyes("<html></html>", "SPEC", "biz", why=why) is None
+    assert "max_tokens" in why["reason"] and "cap" in why["reason"]
+
+
+def test_run_carries_the_eyes_reason_onto_the_report(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    monkeypatch.setattr(v2, "_call", lambda s, u, b, spend=None: _law_passing_doc(endpoint))
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: True)
+
+    def _closed(doc, spec, biz, why=None):
+        if why is not None:
+            why["reason"] = "no screenshots (playwright unavailable or the render failed)"
+        return None
+
+    monkeypatch.setattr(v2, "inspect_with_eyes", _closed)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"] and out["report"]["vision"]["ran"] is False
+    assert "no screenshots" in out["report"]["vision"]["reason"]
