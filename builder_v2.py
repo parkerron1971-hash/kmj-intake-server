@@ -314,6 +314,14 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
     block = connected_systems_block(business_id, ctx)
     if block:
         parts.append(block)
+    # ONE SET OF FACTS (2026-08-29): the same block the Director read, so
+    # a founding year the Blueprint states is traceable here and the
+    # truth law never deletes a true sentence again.
+    try:
+        import site_facts
+        parts.append(site_facts.facts_block(site_facts.build_facts(ctx, business_id)))
+    except Exception as e:
+        logger.info(f"[v2] facts block skipped: {e}")
     return "\n\n".join(parts)
 
 
@@ -678,6 +686,26 @@ def check_truth(html: str, real_data: str) -> List[str]:
         if len(problems) >= 6:
             break
     return problems
+
+
+_FACTS_FOUNDED_RE = re.compile(r"^- Founded: (\d{4}) \((\d+) years in business\)", re.MULTILINE)
+_FACTS_NO_YEAR_RE = re.compile(r"^- Founded: NOT ON FILE", re.MULTILINE)
+
+
+def check_tenure(html: str, real_data: str) -> List[str]:
+    """'N years' on the page is a claim the 3+-digit trace cannot see.
+    It must match the years on file in THE FACTS; with no founding year
+    on file it is invented. Silent when the data carries no facts block
+    at all (older callers)."""
+    m = _FACTS_FOUNDED_RE.search(real_data or "")
+    if m:
+        facts = {"years_in_business": int(m.group(2))}
+    elif _FACTS_NO_YEAR_RE.search(real_data or ""):
+        facts = {"years_in_business": None}
+    else:
+        return []
+    import site_facts
+    return site_facts.tenure_claims(_visible_text(html), facts)
 
 
 def check_coverage(html: str, real_data: str) -> List[str]:
@@ -1150,7 +1178,8 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         # armor_violations reads the drops _mechanical just recorded for
         # this same doc — a dropped script must fail the law gate loudly
         # (silently shipping it is the 2026-07-25 blank-sections bug).
-        return (check_truth(d, real_data) + check_coverage(d, real_data)
+        return (check_truth(d, real_data) + check_tenure(d, real_data)
+                + check_coverage(d, real_data)
                 + check_grammar(d) + check_head(d) + check_interactions(d)
                 + check_connected(d, real_data)
                 + armor_violations(
