@@ -177,6 +177,7 @@ class ToolBox:
         armored, dropped = v2.armor_scripts(doc, allowed_fetch=self.endpoint)
         armored, stripped = v2.armor_external(armored)
         laws = (v2.check_truth(armored, self.real_data)
+                + v2.check_tenure(armored, self.real_data)
                 + v2.check_coverage(armored, self.real_data)
                 + v2.check_grammar(armored) + v2.check_head(armored)
                 + v2.check_interactions(armored)

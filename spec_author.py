@@ -90,6 +90,9 @@ A vague brief gets filled with the median of the internet. Your spec leaves NO d
 - Decide the interactions: what moves, when, and what every hover/click does. One signature interaction maximum; name it.
 - Decide the mobile behavior in one line per non-obvious section.
 
+THE FACTS LAW (2026-08-29 — the standing rule that stops a true sentence being deleted):
+Every year, number, count, price, stat and link you write comes from THE FACTS block below, verbatim. A fact that block says is NOT ON FILE is unknown: you do not estimate it, round it, or imply it — no "since 2022", no "4 years", no "hundreds of clients", no 5-star anything unless THE FACTS carries it. Decidedness is about design and words, never about facts you were not given. Doors (booking, shop) use the exact urls in THE FACTS; a door not listed does not exist on this page.
+
 {MOVES_VOCABULARY}
 MICRO-DELIGHT is a floor, not a move: every interactive element answers its hover with something small and intentional (a lift, a fill, an underline drawing itself) — 21st-century pages feel alive at the fingertips.
 Motion discipline is unchanged and absolute: ONE signature motion moment per page, scroll reveals scroll-position driven, prefers-reduced-motion shows everything instantly.
@@ -233,7 +236,8 @@ def _inventory_digest(ctx: Dict[str, Any],
 
 def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
                       prior_spec: str = "", feedback: str = "",
-                      inventory: str = "", discovery: str = "") -> str:
+                      inventory: str = "", discovery: str = "",
+                      facts: str = "") -> str:
     """Pure prompt assembly (testable, no IO). `dossier` is the canvas
     brief — everything the system knows, already compiled; `inventory`
     is the itemized asset list the coverage law binds to; `discovery`
@@ -261,6 +265,13 @@ def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
             "== THE INVENTORY (every real asset — the coverage law applies "
             "to each item; every one gets a home on the page) ==",
             inventory.strip(),
+            "",
+        ]
+    if facts.strip():
+        parts += [
+            "== THE FACTS (the only years, numbers, counts, prices and links "
+            "you may write — THE FACTS LAW applies) ==",
+            facts.strip(),
             "",
         ]
     parts += [
@@ -497,8 +508,15 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
         disc = _disc.dossier_digest(_dd)
     except Exception as e:
         logger.info(f"[spec] discovery digest skipped: {e}")
+    facts_text = ""
+    try:
+        import site_facts
+        facts_text = site_facts.facts_block(site_facts.build_facts(ctx, business_id))
+    except Exception as e:
+        logger.info(f"[spec] facts block skipped: {e}")
     user = build_user_prompt(dossier, spec_plan, prior_spec, feedback,
-                             inventory=inventory, discovery=disc)
+                             inventory=inventory, discovery=disc,
+                             facts=facts_text)
     marks = _brand_mark_urls(ctx, business_id)
     work = [u for u in _image_urls(ctx) if u not in marks]
     text = (_call_llm(_SYSTEM, user, business_id,
