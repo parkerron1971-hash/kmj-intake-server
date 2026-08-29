@@ -54,7 +54,19 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("builder_v2")
 
-V2_MAX_TOKENS_DEFAULT = 28000
+# THE CEILING (2026-08-29, the builder bench). Opus 5 and Fable 5 both
+# returned EXACTLY 28,000 output tokens on KMJ's Blueprint — the cap —
+# cut before </html>, unparseable, and the build fell to the module
+# engine after paying for the whole thing. The 5-family spends part of
+# its budget thinking; the same page finished whole under 64k with a
+# streaming call. 4.8's pages ran 20-22k and are untouched by this.
+V2_MAX_TOKENS_DEFAULT = 64000
+# THE HARD BUDGET: output tokens one build may spend across every call
+# (author, continuation, repair, vision repair). When the next call
+# would cross it, the build keeps the best document it has and the
+# report says which round was skipped — never a re-roll into the same
+# wall, never a second charge for nothing.
+V2_OUTPUT_BUDGET_DEFAULT = 120000
 V2_TEMPERATURE = 0.8
 DOC_MAX_BYTES = 300 * 1024
 
@@ -105,6 +117,52 @@ def _max_tokens() -> int:
                              or V2_MAX_TOKENS_DEFAULT))
     except ValueError:
         return V2_MAX_TOKENS_DEFAULT
+
+
+def _output_budget() -> int:
+    try:
+        return max(_max_tokens(), int(os.environ.get("BUILDER_V2_OUTPUT_BUDGET")
+                                      or V2_OUTPUT_BUDGET_DEFAULT))
+    except ValueError:
+        return V2_OUTPUT_BUDGET_DEFAULT
+
+
+def new_spend() -> Dict[str, Any]:
+    """The build's running receipt: every model call this build made,
+    in one place, so the budget is a number and the report can say
+    what a page cost. cost_cents comes from api_usage_logger's price
+    table (the one that also writes the api_usage row)."""
+    return {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+            "cost_cents": 0.0, "skipped": []}
+
+
+def _record_spend(spend: Optional[Dict[str, Any]], model: str,
+                  usage: Any) -> None:
+    if spend is None:
+        return
+    i = int(getattr(usage, "input_tokens", 0) or 0)
+    o = int(getattr(usage, "output_tokens", 0) or 0)
+    spend["calls"] += 1
+    spend["input_tokens"] += i
+    spend["output_tokens"] += o
+    try:
+        from api_usage_logger import _compute_cost_cents
+        spend["cost_cents"] = round(spend["cost_cents"]
+                                    + _compute_cost_cents(model, i, o, 0, 0), 4)
+    except Exception:
+        pass
+
+
+def _budget_left(spend: Optional[Dict[str, Any]]) -> bool:
+    if spend is None:
+        return True
+    return spend["output_tokens"] < _output_budget()
+
+
+CONTINUE_PROMPT = ("Your document was cut off by the output limit. Continue "
+                   "EXACTLY from the last character you wrote — no preamble, "
+                   "no repetition of anything already written, no code fence — "
+                   "until the document ends with </html>.")
 
 
 # ─── the prompt (model-portable: plain instructions, no syntax) ──────
@@ -903,7 +961,24 @@ def inspect_with_eyes(doc: str, spec_text: str,
 
 # ─── the run ─────────────────────────────────────────────────────────
 
-def _call(system: str, user: str, business_id: str) -> Optional[str]:
+def _stream_message(client, *, model: str, max_tokens: int, system: str,
+                    messages: List[Dict[str, Any]], timeout: float,
+                    sampling: Dict[str, Any]):
+    """One STREAMING generation, returned as the final Message (same
+    shape the non-streaming call returned, so the ladder, the usage log
+    and the text join are untouched). Streaming is what lets a five-
+    minute page finish: a non-streaming request is a single HTTP
+    response the connection must hold open for the whole generation."""
+    with client.messages.stream(model=model, max_tokens=max_tokens,
+                                system=system, messages=messages,
+                                timeout=timeout, **sampling) as s:
+        for _ in s.text_stream:
+            pass
+        return s.get_final_message()
+
+
+def _call(system: str, user: str, business_id: str,
+          spend: Optional[Dict[str, Any]] = None) -> Optional[str]:
     try:
         from anthropic import Anthropic
         import model_ladder
@@ -916,17 +991,18 @@ def _call(system: str, user: str, business_id: str) -> Optional[str]:
         # the first attempt real room — a slow masterpiece beats a fast
         # miniature.
         client = llm_call.sdk_client(key=key, timeout=900.0, max_retries=1)
+        turns: List[Dict[str, Any]] = [{"role": "user", "content": user}]
 
         def _do(model: str, max_tokens: int, timeout: float):
-            return client.messages.create(
-                model=model, max_tokens=max_tokens, system=system,
-                messages=[{"role": "user", "content": user}],
-                timeout=max(timeout, 900.0),
-                **model_ladder.sampling_kwargs(model, V2_TEMPERATURE))
+            return _stream_message(
+                client, model=model, max_tokens=max_tokens, system=system,
+                messages=turns, timeout=max(timeout, 900.0),
+                sampling=model_ladder.sampling_kwargs(model, V2_TEMPERATURE))
 
         msg, used_model = model_ladder.call_with_ladder(
             _do, model=_model(), task="builder_v2",
             business_id=business_id, max_tokens=_max_tokens())
+        _record_spend(spend, used_model or "", getattr(msg, "usage", None))
         try:
             from api_usage_logger import log_api_usage_sync
             u = getattr(msg, "usage", None)
@@ -937,8 +1013,43 @@ def _call(system: str, user: str, business_id: str) -> Optional[str]:
                 business_id=business_id, task_type="builder_v2")
         except Exception:
             pass
-        return "".join(b.text for b in msg.content
+        text = "".join(b.text for b in msg.content
                        if getattr(b, "type", None) == "text")
+        # THE CUT SENTENCE: a response that hit the cap is CONTINUED from
+        # its last character — one more turn, same model — never re-rolled
+        # into the same wall. (An assistant turn followed by a user turn
+        # is an ordinary conversation, accepted by every model family;
+        # assistant-prefill is not.)
+        if getattr(msg, "stop_reason", None) == "max_tokens" and text.strip() \
+                and _budget_left(spend):
+            logger.warning(f"[v2] {used_model} hit max_tokens — continuing "
+                           f"the document, not re-rolling it")
+            turns = [{"role": "user", "content": user},
+                     {"role": "assistant", "content": text},
+                     {"role": "user", "content": CONTINUE_PROMPT}]
+            try:
+                more = _stream_message(
+                    client, model=used_model or _model(), max_tokens=_max_tokens(),
+                    system=system, messages=turns, timeout=900.0,
+                    sampling=model_ladder.sampling_kwargs(used_model or _model(),
+                                                          V2_TEMPERATURE))
+                _record_spend(spend, used_model or "", getattr(more, "usage", None))
+                try:
+                    from api_usage_logger import log_api_usage_sync
+                    u2 = getattr(more, "usage", None)
+                    log_api_usage_sync(
+                        endpoint="/composer/builder-v2", model=used_model or "",
+                        input_tokens=getattr(u2, "input_tokens", 0) or 0,
+                        output_tokens=getattr(u2, "output_tokens", 0) or 0,
+                        business_id=business_id, task_type="builder_v2_continue")
+                except Exception:
+                    pass
+                text += "".join(b.text for b in more.content
+                                if getattr(b, "type", None) == "text")
+            except Exception as e:
+                logger.warning(f"[v2] continuation failed ({type(e).__name__}: {e}) "
+                               "— keeping the cut document")
+        return text
     except Exception as e:
         logger.error(f"[v2] build call failed on every rung: "
                      f"{type(e).__name__}: {e}")
@@ -952,7 +1063,9 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     via the bridge). The report always returns — loud failures."""
     report: Dict[str, Any] = {"engine": "builder_v2", "model": _model(),
                               "mechanical": {}, "violations": [],
-                              "repaired": False, "fallbacks": []}
+                              "repaired": False, "fallbacks": [],
+                              "spend": new_spend()}
+    spend = report["spend"]
 
     def _progress(pct: int, stage: str):
         try:
@@ -963,7 +1076,8 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
 
     real_data = assemble_real_data(ctx, business_id)
     _progress(48, "One mind builds the whole page")
-    raw = _call(_SYSTEM, build_user_prompt(spec_text, real_data), business_id)
+    raw = _call(_SYSTEM, build_user_prompt(spec_text, real_data), business_id,
+                spend=spend)
     doc = _parse_doc(raw or "")
     if not doc:
         report["fallbacks"].append({"stage": "author",
@@ -999,14 +1113,25 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     # sends a build to the fallback engine. Whatever survives the repair
     # is reported (report["stand_ins"]) and handed to the eyes.
     stand_ins = check_stand_ins(doc)
-    if violations or stand_ins:
+    if (violations or stand_ins) and not _budget_left(spend):
+        # THE HARD BUDGET: no repair round left in the purse. Stand-ins
+        # ride the report; hard laws still cannot ship (below).
+        spend["skipped"].append("repair")
+        report["violations"] = violations + stand_ins
+        report["fallbacks"].append({
+            "stage": "repair",
+            "detail": f"output budget reached ({spend['output_tokens']} tokens) "
+                      "— repair round skipped"})
+        if violations:
+            return {"html": None, "report": report}
+    elif violations or stand_ins:
         report["violations"] = violations + stand_ins
         _progress(56, "Surgical repair")
         raw2 = _call(_SYSTEM,
                      build_user_prompt(spec_text, real_data,
                                        violations=violations + stand_ins,
                                        prior_doc=doc),
-                     business_id)
+                     business_id, spend=spend)
         doc2 = _parse_doc(raw2 or "")
         if doc2:
             doc2 = _mechanical(doc2)
@@ -1047,7 +1172,12 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
             report["vision"]["ran"] = True
             report["vision"]["verdict"] = verdict.get("verdict")
             report["vision"]["violations"] = verdict.get("violations", [])
-            if verdict.get("verdict") == "repair":
+            if verdict.get("verdict") == "repair" and not _budget_left(spend):
+                spend["skipped"].append("vision-repair")
+                report["fallbacks"].append({
+                    "stage": "vision-repair",
+                    "detail": "output budget reached — keeping the law-passing document"})
+            elif verdict.get("verdict") == "repair":
                 _progress(68, "Vision repair: fixing what the eyes found")
                 seen = [f"SEEN IN THE RENDER ({v.get('where', 'page')}): "
                         f"{v.get('what')} — FIX: {v.get('fix', 'minimal edit')}"
@@ -1059,7 +1189,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                              build_user_prompt(spec_text, real_data,
                                                violations=seen,
                                                prior_doc=doc),
-                             business_id)
+                             business_id, spend=spend)
                 doc3 = _parse_doc(raw3 or "")
                 if doc3:
                     doc3 = _mechanical(doc3)
