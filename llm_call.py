@@ -80,7 +80,8 @@ logger = logging.getLogger(__name__)
 # meter for themselves, and a drift test recomputes this set from source
 # so it cannot quietly rot.
 _SELF_METERING = frozenset({
-    "ai_proxy", "atelier", "builder_v2", "canvas", "chief_action_reasoner",
+    "ai_proxy", "atelier", "builder_loop", "builder_v2", "canvas",
+    "chief_action_reasoner",
     "chief_insights", "chief_llm", "chief_of_staff", "chief_playbook",
     "design_coach", "design_intent", "doc_intelligence_router",
     "doc_templates_router", "passes", "platform_console", "site_composer",
