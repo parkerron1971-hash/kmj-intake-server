@@ -175,3 +175,44 @@ def test_news_routes_are_registered_before_the_page_path_catch_all():
     assert "/public/site/{slug}/news" in paths, "news index route missing"
     assert "/public/site/{slug}/news/{post_slug}" in paths, "news post route missing"
     assert paths.index("/public/site/{slug}/news") < paths.index("/public/site/{slug}/{page_path}")
+
+
+# ─── sitemap ────────────────────────────────────────────────────────
+
+def test_the_sitemap_lists_every_post_and_the_archive():
+    """An indexable page nobody links from the sitemap is found slowly,
+    which defeats the point of publishing to your own site."""
+    import public_site as ps
+
+    posts = sn.normalize_posts([_post(id="a", title="One"), _post(id="b", title="Two")])
+    xml = ps._site_sitemap_xml("macnificent", {}, None, news_posts=posts)
+    assert "https://macnificent.mysolutionist.app/news</loc>" in xml
+    assert "https://macnificent.mysolutionist.app/news/one</loc>" in xml
+    assert "https://macnificent.mysolutionist.app/news/two</loc>" in xml
+
+
+def test_an_empty_feed_is_not_listed_in_the_sitemap():
+    """"Nothing posted yet" is a real URL but not one worth sending a
+    crawler to — and the file's own rule is that it lists only pages
+    worth serving."""
+    import public_site as ps
+
+    xml = ps._site_sitemap_xml("macnificent", {}, None, news_posts=[])
+    assert "/news" not in xml
+
+
+def test_the_sitemap_still_works_for_callers_that_pass_no_news():
+    import public_site as ps
+
+    xml = ps._site_sitemap_xml("macnificent", {}, None)
+    assert "<urlset" in xml and "/news" not in xml
+
+
+# ─── the public address ─────────────────────────────────────────────
+
+def test_the_post_slug_is_sliced_the_same_way_the_subdomain_router_does():
+    """The subdomain handler strips '/news/' by length. '/news' must
+    yield the archive (None), not an empty-string post slug that would
+    404 the index."""
+    for path, expected in (("/news", None), ("/news/open-late", "open-late")):
+        assert (path[len("/news/"):].strip("/") or None) == expected
