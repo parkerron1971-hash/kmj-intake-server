@@ -123,6 +123,7 @@ def _brand_head_meta_tags(business_id: str) -> str:
     return "\n    ".join(parts)
 
 import httpx
+import site_news
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from auth_supabase import require_user, AuthedUser
 from business_access import business_access
@@ -1559,6 +1560,80 @@ async def get_site_data(slug: str):
             "sections": sections,
             "forms": linked_forms,
         }
+
+
+async def _news_context(client: httpx.AsyncClient, slug: str):
+    """Everything both news routes need: the posts, who they belong to,
+    and the address the public actually reaches them at."""
+    sites = await _sb(client,
+        f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
+        f"&select=business_id,site_config")
+    if not sites:
+        raise HTTPException(404, "Site not found")
+    biz_id = sites[0].get("business_id")
+    custom_domain = (sites[0].get("site_config") or {}).get("custom_domain")
+
+    name, settings = "", {}
+    if biz_id:
+        rows = await _sb(client, f"/businesses?id=eq.{biz_id}&select=name,settings&limit=1")
+        if rows:
+            name = rows[0].get("name") or ""
+            settings = rows[0].get("settings") or {}
+
+    website_content = settings.get("website_content") or {}
+    brand_kit = settings.get("brand_kit") or {}
+    brand = (brand_kit.get("primary_color") or "").strip() if isinstance(brand_kit, dict) else ""
+    if not (brand.startswith("#") and len(brand) in (4, 7)):
+        brand = "#222222"
+
+    return (
+        site_news.normalize_posts(website_content.get("news")),
+        name,
+        _public_origin(slug, custom_domain),
+        brand,
+    )
+
+
+# Both news routes are registered BEFORE the {page_path} catch-all below.
+# FastAPI matches in registration order, so declaring them after it would
+# hand '/news' to the catch-all, which finds no generated page by that id
+# and silently serves the home page instead — a 200 on the wrong content,
+# which is the shape of bug that survives testing because nothing errors.
+@router.get("/public/site/{slug}/news")
+async def get_site_news_index(slug: str):
+    """The archive page. Indexable, and the one marketing surface no
+    platform can revoke — see site_news.py for why it exists."""
+    if not _check_rate(slug):
+        raise HTTPException(429, "Rate limit exceeded")
+    async with httpx.AsyncClient() as client:
+        posts, name, origin, brand = await _news_context(client, slug)
+    return HTMLResponse(
+        content=site_news.render_listing_page(
+            posts, business_name=name, origin=origin, brand=brand),
+        status_code=200, media_type="text/html",
+        headers={"X-Solutionist-Source": "site-news"})
+
+
+@router.get("/public/site/{slug}/news/{post_slug}")
+async def get_site_news_post(slug: str, post_slug: str):
+    """One post at its own stable URL, carrying its own title, meta
+    description, canonical and Article schema. The stable URL is the
+    entire point: it is still earning search traffic long after the
+    social post that pointed at it has scrolled away."""
+    if not _check_rate(slug):
+        raise HTTPException(429, "Rate limit exceeded")
+    async with httpx.AsyncClient() as client:
+        posts, name, origin, brand = await _news_context(client, slug)
+    post = site_news.find_post(posts, post_slug)
+    if not post:
+        # A real 404. Serving the index here would return 200 for every
+        # typo and invite search to index endless duplicates of it.
+        raise HTTPException(404, "Post not found")
+    return HTMLResponse(
+        content=site_news.render_post_page(
+            post, business_name=name, origin=origin, brand=brand),
+        status_code=200, media_type="text/html",
+        headers={"X-Solutionist-Source": "site-news"})
 
 
 @router.get("/public/site/{slug}/{page_path}")
