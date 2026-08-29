@@ -360,6 +360,85 @@ LANGUAGES: Dict[str, Dict[str, Any]] = {
 .sx-lang-hearth .sxm-contact { background: var(--sx-surface); border-radius: 24px 24px 0 0; }
 """,
     },
+    "glass": {
+        "label": "Glass",
+        "source": "distilled 2026-08-29 from a reference Kevin brought (the wider shelf, second pass)",
+        "believes": 'Show the thing: the screenshot is the proof, the copy is the caption, the glow is the only warmth.',
+        "sings": 'software and apps, platforms and systems, agencies that sell a system, course creators with a real product screen, anything with a Download or Start-trial button; modern or bold tastes',
+        "fails": 'no product to screenshot, personal services and the chair, ministry warmth, handmade or classic tastes, owners who asked for paper',
+        "brief": ("GLASS LANGUAGE — execute these instincts: (1) NEAR-BLACK GROUND end to end (never grey); panels are a shade lighter with a 1px hairline at low alpha, corners 10–12px. (2) THE PRODUCT IS THE PORTRAIT: the first real screenshot (or the offer rendered as a screen) sits in a soft-edged frame, cut off at the fold, with one large glow wash behind it in the accent at low alpha — that wash and the one button are the only colour on the page. (3) GEOMETRIC DISPLAY at big scale, weight 600–700, tracking tight (−0.03em); body a plain sans; headlines centred on a 1200px measure. (4) ONE BLUE BUTTON: exactly one filled button per screen; every other control is a white pill or a ghost outline. (5) PROOF AS A MARQUEE: logos, names or numbers run in one quiet band; stats are stated flat, no monuments. (6) Photos are rare and dark-graded; the accent never sits on them."),
+        "pairing_hint": "geometric grotesque product launch",
+        "standard": "modern_grotesque",
+        "css": """
+/* ── GLASS floor — near-black, one glow, the product as the portrait ─ */
+.sx-lang-glass .sxm-section h2 { letter-spacing: -0.03em; font-weight: 700; text-align: center; }
+.sx-lang-glass .sxm-accent-word { font-style: normal; color: var(--sx-accent); box-shadow: none; }
+.sx-lang-glass .sxm-statband { background:
+    radial-gradient(48rem 20rem at 50% 0%, color-mix(in srgb, var(--sx-accent) 26%, transparent), transparent 62%),
+    var(--sx-bg); border-top: 1px solid color-mix(in srgb, #fff 8%, transparent); }
+.sx-lang-glass .sxm-statband .sxm-stat-value { font-weight: 700; letter-spacing: -0.02em; }
+.sx-lang-glass .sxm-gal-board { border-radius: 12px; border: 1px solid color-mix(in srgb, #fff 10%, transparent);
+  box-shadow: 0 -24px 80px color-mix(in srgb, var(--sx-accent) 22%, transparent); }
+.sx-lang-glass .sxm-cta-section, .sx-lang-glass .sxm-ctaed { background:
+    radial-gradient(40rem 18rem at 50% 100%, color-mix(in srgb, var(--sx-accent) 20%, transparent), transparent 60%),
+    var(--sx-bg); }
+.sx-lang-glass .sxm-ctaed .sxm-cta { background: var(--sx-accent); color: #fff; border-radius: 8px; }
+.sx-lang-glass .sxm-interstitial { background: var(--sx-bg); border-top: 1px solid color-mix(in srgb, #fff 8%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, #fff 8%, transparent); }
+.sx-lang-glass .sxm-contact { background: var(--sx-surface); border-radius: 12px; }
+""",
+    },
+    "runway": {
+        "label": "Runway",
+        "source": "distilled 2026-08-29 from a reference Kevin brought (the wider shelf, second pass)",
+        "believes": 'The maker is the brand: face first, work second, black and white so the work carries all the colour.',
+        "sings": 'designers and branding studios, stylists and creators with personality, photographers who are the face of the work, package sellers (tiers, pay-later); bold tastes; a real portrait or reel of the owner',
+        "fails": "owners who won't show their face, advisory and clinical work, congregations, quiet or classic tastes, businesses whose photos are not their own work",
+        "brief": ("RUNWAY LANGUAGE — execute these instincts: (1) NO ACCENT COLOUR: the palette is black, white and one grey; the brand's colour lives only inside the work photos, never on the page. (2) THE OWNER WALKS IN: the hero is the practitioner in motion — the portrait run full-bleed and softly blurred behind a light-weight headline (weight 300–400) with one star glyph; the CTA is a white pill with an arrow. (3) ARC SEAMS: sections meet on curves, not straight lines — a black band with a rounded top over the grey, a grey band with a rounded top over the black; no diagonal, no hairline. (4) THE WORK IN FRAMES: portfolio pieces sit inside device frames (phone, laptop, card) on a horizontal strip the visitor scrolls sideways. (5) ONE MARQUEE OF THE OFFER: a single black ribbon repeats the deal (packages, pay-later, booking) in small caps. (6) Section titles are uppercase, wide-tracked and centred; body copy is short and confident."),
+        "pairing_hint": "light geometric sans monochrome studio",
+        "standard": "expressive_display",
+        "css": """
+/* ── RUNWAY floor — black, white, one grey; arcs; the owner first ── */
+.sx-lang-runway .sxm-section h2 { text-transform: uppercase; letter-spacing: 0.08em; text-align: center; font-weight: 700; }
+.sx-lang-runway .sxm-accent-word { font-style: normal; color: var(--sx-text); box-shadow: none; opacity: .85; }
+.sx-lang-runway .sxm-statband { background: #000; color: #fff; border-radius: 50% 50% 0 0 / 18% 18% 0 0; }
+.sx-lang-runway .sxm-statband .sxm-stat-value { color: #fff; font-weight: 300; letter-spacing: -0.02em; }
+.sx-lang-runway .sxm-statband .sxm-stat-label { color: #bdbdbd; text-transform: uppercase; letter-spacing: 0.12em; }
+.sx-lang-runway .sxm-gal-board { border-radius: 16px; background: #fff; box-shadow: 0 18px 50px rgba(0,0,0,.35); }
+.sx-lang-runway .sxm-cta-section, .sx-lang-runway .sxm-ctaed { background: #000; border-radius: 50% 50% 0 0 / 14% 14% 0 0; }
+.sx-lang-runway .sxm-cta-section h2, .sx-lang-runway .sxm-ctaed h2,
+.sx-lang-runway .sxm-cta-section p, .sx-lang-runway .sxm-ctaed p { color: #fff !important; }
+.sx-lang-runway .sxm-ctaed .sxm-cta { background: #fff; color: #000; border-radius: 999px; }
+.sx-lang-runway .sxm-interstitial { background: #000; color: #fff; text-transform: uppercase; letter-spacing: 0.14em; }
+.sx-lang-runway .sxm-contact { background: #4a4a4a; color: #fff; border-radius: 50% 50% 0 0 / 12% 12% 0 0; }
+""",
+    },
+    "arena": {
+        "label": "Arena",
+        "source": "distilled 2026-08-29 from a reference Kevin brought (the wider shelf, second pass)",
+        "believes": 'A house this size speaks in capitals: one voice, one warm colour, and the calendar is the heartbeat.',
+        "sings": 'large churches and ministries, conferences and tours, event-driven organisations, athletic programs and gyms with a schedule, schools; bold tastes; plenty of event photos and a service-times or address line',
+        "fails": 'small warm congregations (that is Hearth), one-person practices, quiet or classic tastes, businesses with no photos or no calendar',
+        "brief": ("ARENA LANGUAGE — execute these instincts: (1) TWO GROUNDS ONLY: a near-black (#121212-class) page with one light-grey photo panel per screen; no colour washes. (2) WIDE CAPS: the display is a wide, heavy uppercase face at monumental scale over a plain Helvetica-class body; every section title carries a ghost watermark of its own category word behind it (ABOUT US behind WHO WE ARE) in the ground colour one step lighter. (3) ONE WARM COLOUR: an orange-class accent for links, one underline and the one highlight — never a filled button. (4) SQUARE EVERYTHING: zero border radius; buttons are ghost outlines in uppercase; photo panels are hard rectangles. (5) DIAGONAL SEAMS: sections meet on a diagonal cut (a clip-path polygon), the one shape the page repeats. (6) THE CALENDAR BEATS: an info bar of service times / address runs under the hero and events sit in a three-up card row above the fold of the second screen; stats are gatherings, campuses, years — stated flat."),
+        "pairing_hint": "wide heavy uppercase institutional",
+        "standard": "bold_statement",
+        "css": """
+/* ── ARENA floor — two grounds, wide caps, one orange, diagonals ──── */
+.sx-lang-arena .sxm-section h2 { text-transform: uppercase; letter-spacing: 0.02em; font-weight: 900; text-align: center; }
+.sx-lang-arena .sxm-accent-word { font-style: normal; color: var(--sx-accent); box-shadow: none; text-decoration: underline; text-underline-offset: .12em; }
+.sx-lang-arena .sxm-statband { background: #d9d9d9; color: #121212; border-radius: 0;
+  clip-path: polygon(0 0, 100% 6%, 100% 100%, 0 94%); padding-block: 5rem; }
+.sx-lang-arena .sxm-statband .sxm-stat-value { color: #121212; font-weight: 900; text-transform: uppercase; letter-spacing: 0.02em; }
+.sx-lang-arena .sxm-statband .sxm-stat-label { color: #3a3a3a; text-transform: uppercase; letter-spacing: 0.1em; }
+.sx-lang-arena .sxm-gal-board { border-radius: 0; }
+.sx-lang-arena .sxm-cta-section, .sx-lang-arena .sxm-ctaed { background: #121212; border-radius: 0; }
+.sx-lang-arena .sxm-cta-section h2, .sx-lang-arena .sxm-ctaed h2,
+.sx-lang-arena .sxm-cta-section p, .sx-lang-arena .sxm-ctaed p { color: #fff !important; }
+.sx-lang-arena .sxm-ctaed .sxm-cta { background: transparent; color: #fff; border: 1px solid #fff; border-radius: 0; text-transform: uppercase; letter-spacing: 0.08em; }
+.sx-lang-arena .sxm-interstitial { background: #121212; color: #fff; text-transform: uppercase; letter-spacing: 0.1em; border-top: 1px solid #2c2c2c; border-bottom: 1px solid #2c2c2c; }
+.sx-lang-arena .sxm-contact { background: #121212; color: #fff; border-radius: 0; clip-path: polygon(0 8%, 100% 0, 100% 100%, 0 100%); }
+""",
+    },
     "ledger": {
         "label": "Ledger",
         "source": "distilled 2026-07-22 from the Kimi noir-gold reference "
@@ -447,6 +526,26 @@ def rubric_select(ctx: Dict[str, Any]) -> Tuple[Optional[str], str]:
     # THE WIDER SHELF (2026-08-29): five more languages, each chosen on
     # evidence that already exists in the context — never a type string
     # alone (the 2026-07-22 lesson still holds).
+    # REFERENCES DISTILLED (2026-08-29, second pass): three more, each on
+    # evidence that already exists — a trade word AND a taste AND a
+    # photo count together, never the type string alone. Both bold
+    # languages here also need a modern/geometric voice: bold + photos
+    # with no voice stays mural (the 2026-07-22 loudness rule).
+    if any(w in btype for w in ("church", "minist", "conference", "athlet",
+                                "school", "academy", "tour")) \
+            and boldness in ("bold", "loud") and photos >= 4 \
+            and tp in ("modern", "geometric", "minimal"):
+        return "arena", (f"rubric: type={btype[:24]!r}, boldness={boldness}, {photos} photos "
+                         f"type_personality={tp} — a house that asked to speak in capitals")
+    if any(w in btype for w in ("software", "saas", "platform", "tech", "startup")) \
+            and (boldness in ("bold", "loud") or tp in ("modern", "geometric")):
+        return "glass", (f"rubric: type={btype[:24]!r}, boldness={boldness or 'n/a'}, "
+                         f"type_personality={tp or 'n/a'} — a product that wants to be shown")
+    if any(w in btype for w in ("design", "brand", "stylist", "creator", "graphic", "media")) \
+            and boldness in ("bold", "loud") and photos >= 3 \
+            and tp in ("modern", "geometric", "minimal"):
+        return "runway", (f"rubric: type={btype[:24]!r}, boldness={boldness}, {photos} photos "
+                          f"type_personality={tp} — the maker is the brand, in black and white")
     if (boldness in ("bold", "loud") or tp in ("statement", "condensed")) and any(
             w in btype for w in ("barber", "tattoo", "fitness", "gym", "street",
                                  "night", "ecommerce", "apparel", "sneaker")):

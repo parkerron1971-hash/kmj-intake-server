@@ -8,11 +8,13 @@ import design_languages as dl
 import page_frameworks as pf
 
 
-NEW_LANGS = ("broadsheet", "signal", "atelier", "neon", "hearth")
+NEW_LANGS = ("broadsheet", "signal", "atelier", "neon", "hearth",
+             # distilled from Kevin's references (second pass)
+             "glass", "runway", "arena")
 
 
 def test_every_new_language_is_a_complete_entry_the_brain_can_argue_for():
-    assert len(dl.LANGUAGES) == 8
+    assert len(dl.LANGUAGES) == 11
     sheets = dl.character_sheets()
     for k in NEW_LANGS:
         e = dl.LANGUAGES[k]
@@ -41,6 +43,19 @@ def test_language_rubric_reaches_every_new_language_on_evidence():
     assert dl.rubric_select(_ctx("nonprofit", photos=3))[0] == "hearth"
     assert dl.rubric_select(_ctx("agency", photos=1, type_personality="modern"))[0] == "signal"
     assert dl.rubric_select(_ctx("consultant", photos=1, offerings=5, type_personality="editorial"))[0] == "broadsheet"
+    # the three distilled from references: a trade word AND taste/photos
+    assert dl.rubric_select(_ctx("church", photos=6, boldness="bold", type_personality="modern"))[0] == "arena"
+    assert dl.rubric_select(_ctx("software", photos=0, type_personality="modern"))[0] == "glass"
+    assert dl.rubric_select(_ctx("saas", photos=0, boldness="bold"))[0] == "glass"
+    assert dl.rubric_select(_ctx("brand_studio", photos=4, boldness="bold", type_personality="geometric"))[0] == "runway"
+    # ...and the type word alone does not reach them
+    assert dl.rubric_select(_ctx("church", photos=6))[0] == "hearth"
+    assert dl.rubric_select(_ctx("church", photos=1, boldness="bold", type_personality="modern"))[0] == "mural"
+    # bold + photos with no voice stays mural (the 2026-07-22 loudness rule)
+    assert dl.rubric_select(_ctx("church", photos=6, boldness="bold"))[0] == "mural"
+    assert dl.rubric_select(_ctx("brand_studio", photos=5, boldness="loud"))[0] == "mural"
+    assert dl.rubric_select(_ctx("software", photos=0))[0] is None
+    assert dl.rubric_select(_ctx("brand_studio", photos=5))[0] == "monograph"
     # the old evidence still lands where it did
     assert dl.rubric_select(_ctx("consultant", photos=0, boldness="loud"))[0] == "mural"
     assert dl.rubric_select(_ctx("design_studio", photos=5))[0] == "monograph"
@@ -78,11 +93,14 @@ def test_the_coach_offers_the_new_cards_and_only_real_keys():
     out = dc.parse_turn('{"reply": "Which feels like you?", "stage": "taste", "done": false,'
                         ' "gallery": {"kind": "looks", "options": ["hearth", "neon", "nope"]}}')
     assert out["gallery"] == {"kind": "looks", "options": ["hearth", "neon"]}
+    out = dc.parse_turn('{"reply": "Or one of these?", "stage": "taste", "done": false,'
+                        ' "gallery": {"kind": "looks", "options": ["glass", "runway", "arena", "nope"]}}')
+    assert out["gallery"] == {"kind": "looks", "options": ["glass", "runway", "arena"]}
     out = dc.parse_turn('{"reply": "Which shape?", "stage": "taste", "done": false,'
                         ' "gallery": {"kind": "layouts", "options": ["monument", "letter", "corridor"]}}')
     assert out["gallery"]["options"] == ["monument", "letter", "corridor"]
     out = dc.parse_turn('{"reply": "How should it move?", "stage": "taste", "done": false,'
                         ' "gallery": {"kind": "motion", "options": ["marquee", "unfold"]}}')
     assert out["gallery"]["options"] == ["marquee", "unfold"]
-    for word in ("broadsheet", "atelier", "monument", "corridor", "letter", "marquee", "unfold"):
+    for word in ("broadsheet", "atelier", "glass", "runway", "arena", "monument", "corridor", "letter", "marquee", "unfold"):
         assert word in dc.SYSTEM if hasattr(dc, "SYSTEM") else word in dc._SYSTEM

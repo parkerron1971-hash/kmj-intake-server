@@ -97,7 +97,7 @@ OUTPUT — STRICT JSON, nothing else:
   "reflect_back": ["6-10 short vivid lines summarizing the session"]   // ONLY with stage "brief"
 }
 THE GALLERIES (show, then ask — the Claude Design pattern): when the conversation reaches a LOOK, LAYOUT, or MOTION choice, set "gallery" instead of "pair" — the platform renders each option as a small designed card in the option's own style, tinted with their brand color, and their tap arrives as an ordinary message. Use ONLY these kinds and keys:
-- kind "looks" (the design language — the platform shows each as a full page design): mural (loud street energy: paint texture, hand-made brush-stroke headlines, bold color that leaves a mark), ledger (light corporate clarity: serif confidence, clean structured calm, credibility), monograph (dark luxury: gold-embossed detail, monogram elegance, private-label feel), broadsheet (a page you read: paper ground, columns, one printer's red), signal (one grid, one flat colour, everything numbered), atelier (a quiet gallery: bone ground, wide mats, thin serif), neon (night ground, one colour that glows, condensed caps, a marquee), hearth (deep warm ground, soft corners, people in the light).
+- kind "looks" (the design language — the platform shows each as a full page design): mural (loud street energy: paint texture, hand-made brush-stroke headlines, bold color that leaves a mark), ledger (light corporate clarity: serif confidence, clean structured calm, credibility), monograph (dark luxury: gold-embossed detail, monogram elegance, private-label feel), broadsheet (a page you read: paper ground, columns, one printer's red), signal (one grid, one flat colour, everything numbered), atelier (a quiet gallery: bone ground, wide mats, thin serif), neon (night ground, one colour that glows, condensed caps, a marquee), hearth (deep warm ground, soft corners, people in the light), glass (near-black, the product screenshot in a glowing frame, one blue button), runway (black and white only: the owner walks in first, the work in device frames, arc-cut seams), arena (two grounds, wide heavy caps with ghost watermarks, one orange, diagonal seams, the calendar up front).
 - kind "layouts" (the hero's shape): split-stage (copy one side, portrait the other), poster (one full-bleed statement), editorial (a magazine column with a lead image), exhibition (the work itself leads, gallery-first), monument (the name at monumental scale, the work small beneath), corridor (a short headline over a filmstrip of the work), letter (a typed letter to the visitor — no image, the voice is the hero).
 - kind "motion" (how the page moves): kinetic-hero (the headline arrives line by masked line), the-thread (one drawn line walks the page and lights each section), depth (layers drift at different speeds as you scroll), quiet (almost still; one soft reveal), marquee (one band of the promise scrolls forever, everything else still), unfold (each section unfolds like paper as you reach it, once).
 Offer 2-4 keys per gallery, chosen for THIS business — never all of them.
@@ -279,7 +279,8 @@ def parse_turn(raw: str) -> Optional[Dict[str, Any]]:
     g = out.get("gallery")
     _G_KINDS = {
         "looks": {"mural", "monograph", "ledger",
-                  "broadsheet", "signal", "atelier", "neon", "hearth"},
+                  "broadsheet", "signal", "atelier", "neon", "hearth",
+                  "glass", "runway", "arena"},
         "layouts": {"split-stage", "poster", "editorial", "exhibition",
                     "monument", "corridor", "letter"},
         "motion": {"kinetic-hero", "the-thread", "depth", "quiet",
