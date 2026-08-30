@@ -545,7 +545,7 @@ def test_every_agreement_carries_the_back_page():
         body = _min_body(tid)
         assert "GENERAL TERMS" in body, tid
         assert "Entire agreement" in body and "Severability" in body, tid
-        # e-sign validity is load-bearing: execution runs through BoldSign
+        # e-sign validity is load-bearing: execution runs through DocuSeal
         assert "electronic signatures" in body, tid
         # the signature block stays last
         assert body.count("By: ___") == 2 and "ACCEPTED AND AGREED" in body, tid

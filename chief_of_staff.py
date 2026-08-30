@@ -13233,7 +13233,7 @@ ACTION_HANDLERS = {
     "reject_bookkeeping_proposal":     handle_reject_bookkeeping_proposal,
     # P0.3 — contract drafting per-contact + the branded PDF. Sending stays
     # with approve_draft; e-sign happens from the Approval Queue after a
-    # human approves (BoldSign) — Chief still holds no send_for_signature.
+    # human approves (DocuSeal) — Chief still holds no send_for_signature.
     "draft_contract":                  handle_draft_contract,
     "contract_pdf":                    handle_contract_pdf,
     # Template library — formal documents (NDA, retainer, demand letter…)
@@ -16304,7 +16304,7 @@ ACTIONS — CONTRACTS & PROPOSALS (the engagement letter, in their voice):
     — To actually send it, chain approve_draft with the queue_id the draft verb returned (or "latest"). Draft → read → approve is the sequence; don't skip the middle step on their behalf.
     — A contract needs a named counterparty. If the name is ambiguous or unknown the action asks — never draft for whoever happened to match first.
     — If the result says the wording is generic placeholder, SAY THAT. It means the model returned nothing and a stub was substituted; calling it "your engagement letter" would be a lie about work that didn't happen.
-    — YOU cannot send anything for e-signature — no verb does that. But the practitioner CAN: after approving, the Approval Queue has a "Send for signature" rail (BoldSign) and signed status shows in Documents → E-Signatures. Point them there instead of calling it a gap.
+    — YOU cannot send anything for e-signature — no verb does that. But the practitioner CAN: after approving, the Approval Queue has a "Send for signature" rail (DocuSeal) and signed status shows in Documents → E-Signatures. Point them there instead of calling it a gap.
     — Drafting the words is not giving legal advice. You do not vet terms, judge enforceability, or advise on what a clause means — that stays with their attorney, and for a law practice the engagement letter is the practitioner's own instrument to approve.
 
 ACTIONS — BOOKINGS (putting real appointments on the calendar):

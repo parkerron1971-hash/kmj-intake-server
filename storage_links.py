@@ -20,13 +20,18 @@ never reached storage at all.
 
 A signed URL is the delivery mechanism a private bucket wants. It is
 minted with the service role, it carries its own authorisation, and it
-expires — which means it works in the three places an authenticated
+expires — which means it works in the two places an authenticated
 `fetch` does not:
 
   * `window.open` / `<a href>`, which send no Authorization header
   * an unauthenticated `fetch()` for the bytes, so the browser gets a
     real download instead of opening a viewer tab
-  * BoldSign's servers, which fetch the PDF from us by URL
+
+There used to be a third: BoldSign's servers, which fetched the PDF
+from us by URL. The DocuSeal switch (2026-08-30) removed it — that
+adapter posts the bytes inline, so a signed link is no longer minted
+for a third party at all. Worth knowing if the last two reasons ever
+go away, because then so does this module.
 
 This module is the one place that knows how. Nothing here composes a
 `/object/public/` URL, and nothing here should.
