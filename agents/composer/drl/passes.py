@@ -129,6 +129,11 @@ def _set_fail(out: Optional[Dict[str, str]], stage: str, detail: str) -> None:
 # task → the ladder's timeout family ('signals' streams less than a DRO).
 _TASK_FAMILY = {"signals": "signals"}   # everything else = "dro"
 
+# Models that 400 on assistant prefill, remembered per process — the
+# 2026-07-24 fallback retried bare on EVERY call, so each rationale paid
+# a doomed round trip first (10+ per build in the 2026-08-29 ledger).
+_PREFILL_REJECTED: set = set()
+
 
 def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
           temperature: float, business_id: str, task: str,
@@ -163,7 +168,7 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
         # the practitioner's approved spec never reached an author.
         # Reactive, model-agnostic: try prefilled, retry bare on that
         # specific 400. Never let a shape optimization kill the brain.
-        use_prefill = bool(prefill)
+        use_prefill = bool(prefill) and model not in _PREFILL_REJECTED
         try:
             msg = client.messages.create(
                 model=model, max_tokens=max_tokens,
@@ -177,8 +182,9 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
             return msg
         except Exception as e:
             if use_prefill and "prefill" in str(e).lower():
+                _PREFILL_REJECTED.add(model)
                 logger.warning(f"[drl] {model} rejects assistant prefill "
-                               f"— retrying bare (task={task})")
+                               f"— retrying bare (task={task}); remembered")
                 msg = client.messages.create(
                     model=model, max_tokens=max_tokens,
                     system=system,
@@ -212,7 +218,7 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
             msg = site_llm.create_message(
                 model=_drl_model(), max_tokens=max_tokens,
                 temperature=temperature, system=system, user_content=user,
-                timeout=model_ladder.timeout_for(family, _drl_model()) + 120.0,
+                timeout=model_ladder.timeout_for(family, _drl_model(), max_tokens) + 120.0,
                 task=f"drl/{task}")
             used_model = getattr(msg, "model", "moonshot")
         except Exception as _ms_err:
