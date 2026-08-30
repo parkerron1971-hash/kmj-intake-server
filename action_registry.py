@@ -516,6 +516,14 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                     "AND bulk — the worst combination in the registry", bulk=True),
     "publish_post":         _w("C", "publishes to Facebook/Instagram via Meta. There is an unpublish, "
                                     "but a post that was seen cannot be unseen"),
+    "publish_to_site":      _w("C", "publishes to the practitioner's OWN news page. Still C: it is "
+                                    "public the moment it lands, and search may index it before "
+                                    "anyone reads it twice. It is the one publishing verb the "
+                                    "owner's autonomy dial may exempt from per-post approval "
+                                    "(site_publish.GOVERNS) — because it is their domain, their "
+                                    "server, nobody else's terms, and removing the post removes "
+                                    "the page. That reasoning does not reach publish_post and the "
+                                    "allow-list is written so it cannot be made to"),
     "create_booking":       _w("C", "creates the appointment AND emails the client a confirmation "
                                     "(send_confirmation defaults true). The send is what makes this "
                                     "C while cancel/reschedule are A"),

@@ -85,6 +85,10 @@ class ApproveBody(BaseModel):
     recurrence: Optional[str] = None      # daily | weekdays | weekly
 
 
+class AutonomyBody(BaseModel):
+    value: str                            # approve_all | auto_site
+
+
 # ─── Routes ──────────────────────────────────────────────────────────
 
 @router.get("/{business_id}/posts/pending")
@@ -196,6 +200,36 @@ def approve(business_id: str, post_id: str, body: ApproveBody,
             "page_name": page.get("page_name"),
             "scheduled_for": run_at.isoformat() if run_at else None,
             "scheduled_id": scheduled_id}
+
+
+@router.get("/{business_id}/autonomy")
+def get_autonomy(business_id: str, user: AuthedUser = Depends(require_user)):
+    """The dial, and — deliberately — what it cannot reach.
+
+    `social_always_approved` is returned as a fact, not a setting. A
+    reader of this endpoint should not have to infer from an absence
+    that Facebook has no automatic mode; absence is how people conclude
+    a switch simply hasn't shipped yet.
+    """
+    import site_publish
+    biz = _own_business(business_id, user)
+    return {"ok": True,
+            "value": site_publish.setting(biz.get("settings") or {}),
+            "values": list(site_publish.VALUES),
+            "social_always_approved": True}
+
+
+@router.post("/{business_id}/autonomy")
+def set_autonomy(business_id: str, body: AutonomyBody,
+                 user: AuthedUser = Depends(require_user)):
+    import site_publish
+    if body.value not in site_publish.VALUES:
+        raise HTTPException(400, f"value must be one of {', '.join(site_publish.VALUES)}")
+    biz = _own_business(business_id, user)
+    settings = {**(biz.get("settings") or {}), site_publish.SETTING_KEY: body.value}
+    sb_clients.sb_patch_as_service(f"/businesses?id=eq.{business_id}",
+                                   {"settings": settings})
+    return {"ok": True, "value": body.value, "social_always_approved": True}
 
 
 @router.post("/{business_id}/posts/{post_id}/unapprove")

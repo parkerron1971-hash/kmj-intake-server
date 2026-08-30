@@ -7813,6 +7813,100 @@ async def handle_publish_post(client, biz, action) -> Dict:
     }
 
 
+async def handle_publish_to_site(client, biz, action) -> Dict:
+    """Publish a planned post to the business's OWN news feed.
+
+    The destination nobody can revoke: their domain, our server, no
+    third party's terms, no audience pushed at, and removing the post
+    removes the page. That is what makes this the one publishing verb
+    the autonomy dial may speak for — see site_publish.py.
+
+    Action shape:
+      {"type":"publish_to_site", "post_id":"post-..."}   # or post_title
+    """
+    import site_news
+    import site_publish
+
+    biz_id = biz["id"]
+    _, settings = await _fetch_business_settings(client, biz_id)
+    cal = settings.get("content_calendar") if isinstance(settings.get("content_calendar"), dict) else {}
+    planned = list(cal.get("planned_posts") or [])
+    posted_list = list(cal.get("posted") or [])
+    if not planned:
+        return _fail("publish_to_site", "no planned posts to publish")
+
+    post_id = (action.get("post_id") or "").strip()
+    title_raw = (action.get("post_title") or "").strip().lower()
+    idx = -1
+    if post_id:
+        idx = next((i for i, p in enumerate(planned) if p.get("id") == post_id), -1)
+    if idx < 0 and title_raw:
+        idx = next((i for i, p in enumerate(planned)
+                    if (p.get("title") or "").strip().lower() == title_raw), -1)
+    if idx < 0:
+        return _fail("publish_to_site",
+                     f"could not find planned post matching {post_id or title_raw or '(none)'}")
+    post = planned[idx]
+
+    title = (post.get("title") or "").strip()
+    body = (post.get("body") or "").strip()
+    if not title or not body:
+        # site_news.normalize_posts drops anything missing either, so a
+        # half-filled post would publish to a page that renders nothing.
+        return _fail("publish_to_site", "a post needs both a headline and a body to go on the site")
+
+    # ── The unattended gate ──
+    # Same rule as publish_post, with the one exemption the owner can
+    # turn on for their own website. exempt_from_approval checks the
+    # verb as well as the dial, so this cannot be reached by passing a
+    # social verb through the same door.
+    if action.get("_unattended") and not site_publish.exempt_from_approval(
+            "publish_to_site", settings):
+        import post_approval
+        held = post_approval.refusal(post, page_id="", to_instagram=False)
+        if held:
+            return _fail("publish_to_site", held)
+
+    website_content = settings.get("website_content") if isinstance(settings.get("website_content"), dict) else {}
+    news = list(website_content.get("news") or [])
+    entry = {
+        "id": f"news-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+        "title": title,
+        "body": body,
+        "image_url": post.get("image_url") or None,
+        "published_at": datetime.now(timezone.utc).isoformat(),
+        "slug": site_news.slugify(title),
+    }
+    news.insert(0, entry)
+
+    posted_post = {**post, "status": "posted",
+                   "posted_date": datetime.now(timezone.utc).date().isoformat()}
+    planned.pop(idx)
+    posted_list.append(posted_post)
+
+    next_settings = {
+        **settings,
+        "website_content": {**website_content, "news": news},
+        "content_calendar": {**cal, "planned_posts": planned, "posted": posted_list},
+    }
+    try:
+        await _sb(client, "PATCH", f"/businesses?id=eq.{biz_id}", {"settings": next_settings})
+    except Exception as e:
+        return _fail("publish_to_site", f"could not save the post: {e}")
+
+    return {
+        "type": "publish_to_site",
+        "result": f"published '{title}' to the news page on your own site",
+        "label": f"🌐 Published to your site: {title[:70]}",
+        "ok": True,
+        "nav": _nav("grow", "content"),
+        "frontend_event": {
+            "name": "solutionist-business-refetch",
+            "detail": {"reason": "site_news_published", "post_id": post.get("id")},
+        },
+    }
+
+
 async def handle_capture_idea(client, biz, action) -> Dict:
     """Drop a half-formed content idea into the Idea Inbox. Lighter
     than plan_content — no scheduled date or platform required, just
@@ -13033,6 +13127,7 @@ ACTION_HANDLERS = {
     "plan_content":           handle_plan_content,
     "capture_idea":           handle_capture_idea,
     "publish_post":           handle_publish_post,
+    "publish_to_site":        handle_publish_to_site,
     "run_agent":             handle_run_agent,
     "create_module_entry":   handle_create_module_entry,
     "update_module_entry":   handle_update_module_entry,
@@ -16556,8 +16651,11 @@ ACTIONS — GROW (goals + content + growth objectives):
   [ACTION:{{"type":"capture_idea","title":"5 lessons from the launch","notes":"focus on what we'd do differently","pillar_name":"Building in Public"}}]
   [ACTION:{{"type":"publish_post","post_title":"Why we raised pricing","to_instagram":false}}]
   [ACTION:{{"type":"publish_post","post_id":"post-1234567890","page_name":"KMJ Creative Solutions","to_instagram":true}}]
+  [ACTION:{{"type":"publish_to_site","post_title":"Why we raised pricing"}}]
+  [ACTION:{{"type":"publish_to_site","post_id":"post-1234567890"}}]
     — CONTENT WRITING + SCHEDULING: when the practitioner says "draft a post about X", "write me a LinkedIn post about Y", or "schedule a post for Friday about Z" → use plan_content and INCLUDE the drafted `body` text directly in the action. Don't just chat the draft — emit it as the post body so the post lands ready to ship. The frontend opens the new post in edit mode automatically.
     — PUBLISHING (FB / IG): when the practitioner says "publish my Friday post to Facebook", "post that to FB now", "send the launch post to Instagram" → use publish_post. Resolves by post_id (preferred) or post_title (fuzzy match). For multiple connected pages, you MUST include page_name. For Instagram, set to_instagram=true (the post must have an image_url already saved). If you don't know which post they mean and there's ambiguity, ASK first before publishing — publishing is irreversible.
+    — PUBLISHING (THEIR OWN SITE): when the practitioner says "put that on my website", "publish it to my news page", "post it somewhere I control" → use publish_to_site. It puts the post on the news page of their own site, at its own web address, and needs no connected account and nobody's approval. Prefer it when they want something to LAST — a social post scrolls away in a day, a page on their own site keeps earning. It is still public the moment it lands, so the same rule applies: if you are not sure which post they mean, ASK before publishing.
     — IDEAS VS POSTS: when the practitioner says "I have an idea about X", "capture this thought", "remind me to write about Y someday" → use capture_idea (lighter, no date or platform required). When they say "schedule a post" / "draft a post" / "plan one for Friday" → use plan_content (committed to the calendar).
     — PILLARS: posts can be tagged to a pillar via `pillar_id` (when you have it from CONTEXT) or `pillar_name` (fuzzy match, case-insensitive). When the practitioner mentions a pillar by name in their request, include it. When they don't but you can tell which pillar fits, infer it — don't ask.
     — REMINDERS: plan_content accepts an optional reminders array — same shape as create_goal's reminders. Use this when the practitioner explicitly asks for a reminder ("set a reminder the day before").
