@@ -6899,15 +6899,27 @@ async def _platform_page_or_site(request: Request, render):
 
 async def _platform_news_posts() -> List[Dict[str, Any]]:
     """Normalized, newest-first posts for mysolutionist.app/news, or []
-    when the platform row has none yet."""
+    when the platform row has none yet.
+
+    Reads with the SERVICE role, not `_sb`. RLS on businesses calls
+    is_business_member, which the anon role may not execute, so an anon
+    read of this row fails with 42501 — and `_sb` turns any 4xx into
+    None. This shipped that way once: the archive 404ed with a published
+    post sitting in the row, and the 404 was indistinguishable from
+    "nothing posted yet", so nothing looked broken.
+
+    The select asks for the news array alone rather than `settings`.
+    Bypassing RLS is worth doing narrowly: that blob also holds the
+    platform's Stripe state, and none of it belongs in a request that
+    only renders posts.
+    """
     async with httpx.AsyncClient() as client:
-        rows = await _sb(client,
-            "/businesses?settings->>platform_books=eq.true&select=settings&limit=1")
+        rows = await _sb_service(client,
+            "/businesses?settings->>platform_books=eq.true"
+            "&select=news:settings->website_content->news&limit=1")
     if not rows:
         return []
-    settings = rows[0].get("settings") or {}
-    website_content = settings.get("website_content") or {}
-    return site_news.normalize_posts(website_content.get("news"))
+    return site_news.normalize_posts(rows[0].get("news"))
 
 
 async def _render_platform_news_index() -> str:
