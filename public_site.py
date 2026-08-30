@@ -123,6 +123,7 @@ def _brand_head_meta_tags(business_id: str) -> str:
     return "\n    ".join(parts)
 
 import httpx
+import site_news
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from auth_supabase import require_user, AuthedUser
 from business_access import business_access
@@ -393,11 +394,12 @@ def _site_robots_txt(slug: str, custom_domain: Optional[str] = None) -> str:
 
 
 def _site_sitemap_xml(slug: str, cfg: Dict[str, Any],
-                      custom_domain: Optional[str] = None) -> str:
+                      custom_domain: Optional[str] = None,
+                      news_posts: Optional[List[Dict[str, Any]]] = None) -> str:
     """Sitemap listing every page this site actually serves — home, any
-    generated secondary pages, and the live transactional doors. Only
-    real URLs: a sitemap that lists a page which 404s is worse than no
-    sitemap at all."""
+    generated secondary pages, the live transactional doors, and the
+    news feed. Only real URLs: a sitemap that lists a page which 404s is
+    worse than no sitemap at all."""
     origin = _public_origin(slug, custom_domain)
     urls: List[str] = [origin + "/"]
 
@@ -406,6 +408,14 @@ def _site_sitemap_xml(slug: str, cfg: Dict[str, Any],
         for path, page_id in _SITE_PAGE_PATHS.items():
             if (pages.get(page_id) or "").strip():
                 urls.append(origin + path)
+
+    # News, listed only once something has been written — an archive
+    # page reading "nothing posted yet" is a real URL but not one worth
+    # sending a crawler to, and every post is its own indexable page.
+    for post in (news_posts or []):
+        urls.append(f"{origin}/news/{post['slug']}")
+    if news_posts:
+        urls.insert(1, origin + "/news")
 
     # Transactional doors, listed only when actually live.
     try:
@@ -1559,6 +1569,90 @@ async def get_site_data(slug: str):
             "sections": sections,
             "forms": linked_forms,
         }
+
+
+async def _news_identity(client: httpx.AsyncClient, biz_id: Optional[str]):
+    """(posts, business name, brand colour) for one business.
+
+    Shared by the /public/site/... preview routes and the public
+    subdomain handler, so the two addresses can never drift into
+    rendering different things from the same data.
+    """
+    name, settings = "", {}
+    if biz_id:
+        rows = await _sb(client, f"/businesses?id=eq.{biz_id}&select=name,settings&limit=1")
+        if rows:
+            name = rows[0].get("name") or ""
+            settings = rows[0].get("settings") or {}
+
+    website_content = settings.get("website_content") or {}
+    brand_kit = settings.get("brand_kit") or {}
+    brand = (brand_kit.get("primary_color") or "").strip() if isinstance(brand_kit, dict) else ""
+    if not (brand.startswith("#") and len(brand) in (4, 7)):
+        brand = "#222222"
+    return site_news.normalize_posts(website_content.get("news")), name, brand
+
+
+def _news_response(posts, name: str, origin: str, brand: str,
+                   post_slug: Optional[str] = None) -> HTMLResponse:
+    """Render the archive, or one post. An unknown post is a real 404 —
+    serving the index instead would return 200 for every typo and invite
+    search to index endless duplicates of it."""
+    if post_slug:
+        post = site_news.find_post(posts, post_slug)
+        if not post:
+            raise HTTPException(404, "Post not found")
+        html = site_news.render_post_page(
+            post, business_name=name, origin=origin, brand=brand)
+    else:
+        html = site_news.render_listing_page(
+            posts, business_name=name, origin=origin, brand=brand)
+    return HTMLResponse(content=html, status_code=200, media_type="text/html",
+                        headers={"X-Solutionist-Source": "site-news"})
+
+
+async def _news_site_row(client: httpx.AsyncClient, slug: str):
+    sites = await _sb(client,
+        f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
+        f"&select=business_id,site_config")
+    if not sites:
+        raise HTTPException(404, "Site not found")
+    return sites[0].get("business_id"), (sites[0].get("site_config") or {}).get("custom_domain")
+
+
+# Both news routes are registered BEFORE the {page_path} catch-all below.
+# FastAPI matches in registration order, so declaring them after it would
+# hand '/news' to the catch-all, which finds no generated page by that id
+# and silently serves the home page instead — a 200 on the wrong content,
+# which is the shape of bug that survives testing because nothing errors.
+#
+# These are the PREVIEW addresses. The one the public and Google actually
+# use is slug.mysolutionist.app/news, handled in the subdomain router
+# further down; both go through _news_identity + _news_response.
+@router.get("/public/site/{slug}/news")
+async def get_site_news_index(slug: str):
+    """The archive page. Indexable, and the one marketing surface no
+    platform can revoke — see site_news.py for why it exists."""
+    if not _check_rate(slug):
+        raise HTTPException(429, "Rate limit exceeded")
+    async with httpx.AsyncClient() as client:
+        biz_id, custom_domain = await _news_site_row(client, slug)
+        posts, name, brand = await _news_identity(client, biz_id)
+    return _news_response(posts, name, _public_origin(slug, custom_domain), brand)
+
+
+@router.get("/public/site/{slug}/news/{post_slug}")
+async def get_site_news_post(slug: str, post_slug: str):
+    """One post at its own stable URL, carrying its own title, meta
+    description, canonical and Article schema. The stable URL is the
+    entire point: it is still earning search traffic long after the
+    social post that pointed at it has scrolled away."""
+    if not _check_rate(slug):
+        raise HTTPException(429, "Rate limit exceeded")
+    async with httpx.AsyncClient() as client:
+        biz_id, custom_domain = await _news_site_row(client, slug)
+        posts, name, brand = await _news_identity(client, biz_id)
+    return _news_response(posts, name, _public_origin(slug, custom_domain), brand, post_slug)
 
 
 @router.get("/public/site/{slug}/{page_path}")
@@ -6280,10 +6374,27 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
             return PlainTextResponse(_site_robots_txt(slug, _cd),
                                      headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
         if normalized_path == "/sitemap.xml":
+            _news_posts, _, _ = await _news_identity(client, biz_id)
             return Response(
-                content=_site_sitemap_xml(slug, {**_cfg, "_business_id": biz_id}, _cd),
+                content=_site_sitemap_xml(slug, {**_cfg, "_business_id": biz_id}, _cd,
+                                          news_posts=_news_posts),
                 media_type="application/xml",
                 headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+
+        # ─── The news feed, at the address the public actually uses ──
+        # The /public/site/{slug}/news routes are the preview pair; THIS
+        # is what slug.mysolutionist.app/news resolves to, and what the
+        # canonical tags on those pages point at. Without this branch
+        # the clean-path whitelist below would 404 every news URL the
+        # feature emits — the pages would exist and be unreachable.
+        if normalized_path == "/news" or normalized_path.startswith("/news/"):
+            _posts, _name, _brand = await _news_identity(client, biz_id)
+            _post_slug = normalized_path[len("/news/"):].strip("/") or None
+            if _post_slug and not site_news.find_post(_posts, _post_slug):
+                # The site's own branded 404, not a bare exception — a
+                # visitor who mistypes a post URL is still on their site.
+                return _not_found_page(slug, _name, _brand, _cd)
+            return _news_response(_posts, _name, _public_origin(slug, _cd), _brand, _post_slug)
 
         if _use_smart_sites(site) and biz_id:
             # Fetch products to pass into the home page renderer.
