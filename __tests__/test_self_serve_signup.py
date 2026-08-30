@@ -55,6 +55,18 @@ def test_no_page_still_says_beta(path):
         assert phrase not in html, f"{path} still says {phrase!r}"
 
 
+def test_the_share_card_does_not_say_beta_either():
+    """These tests scanned the PAGES only, so the claim survived for
+    months in the one place with the widest reach: the og:image is
+    rendered from this file and shown on every share of every page,
+    including from surfaces that never render page HTML at all."""
+    import pathlib
+    card = (pathlib.Path(__file__).resolve().parent.parent
+            / "static" / "brand" / "solutionist-og-card.html")
+    src = card.read_text(encoding="utf-8")
+    assert "beta" not in src.lower(), "the share card still carries beta language"
+
+
 @pytest.mark.parametrize("path", sorted(PAGES))
 def test_every_page_has_a_door_to_the_trial(path):
     """Not one page may be a dead end: whatever a visitor is reading,

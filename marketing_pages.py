@@ -532,13 +532,13 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 <link rel="canonical" href="https://mysolutionist.app{path}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="The Solutionist System">
-<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=3">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=4">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="{og_title}">
 <meta name="twitter:description" content="{description}">
-<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=3">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=4">
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="apple-touch-icon" href="/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
