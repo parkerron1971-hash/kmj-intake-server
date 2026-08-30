@@ -10,7 +10,16 @@ error, on any model, without losing the prefill benefit elsewhere.
 """
 from unittest import mock
 
+import pytest
+
 import agents.composer.drl.passes as passes
+
+
+@pytest.fixture(autouse=True)
+def _fresh_prefill_memory(monkeypatch):
+    # the rejection is remembered per model per process (2026-08-29);
+    # every test here starts with nothing remembered
+    monkeypatch.setattr(passes, "_PREFILL_REJECTED", set())
 
 
 class _Block:

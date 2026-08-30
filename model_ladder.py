@@ -109,11 +109,32 @@ def _is_slow_family(model: str) -> bool:
     return any(k in m for k in _SLOW_FAMILY_MARKERS)
 
 
-def timeout_for(task: str, model: str) -> float:
-    """Per-call ceiling scaled by task output budget AND model family.
-    Opus: signals 120s / DRO 240s / atelier 240s. Sonnet: 75/120/120."""
+# THE CEILING FOLLOWS THE OUTPUT (2026-08-29). A per-call timeout has to
+# fit the tokens it asks for. Sonnet 5 streams ~40 tok/s: a 14k-token DRO
+# needs ~350s, and the 120s "fast family" ceiling timed out EVERY
+# rationale; the -35% retry then hit its own cap mid-JSON, and the
+# api_usage ledger showed every DRO at exactly 9,100 output tokens
+# (14000 x 0.65) — paid for, unparseable, and the reason builds fell to
+# minimal mode. The family ceiling stays as the FLOOR; the output size
+# raises it: max_tokens / 30 tok/s + 30s of connect-and-first-token.
+_MIN_TOKENS_PER_SECOND = 30.0
+_CEILING_OVERHEAD_S = 30.0
+
+
+def timeout_for(task: str, model: str, max_tokens: Optional[int] = None) -> float:
+    """Per-call ceiling: the family floor (Opus: signals 120s / DRO 240s /
+    atelier 240s; Sonnet: 75/120/120) raised to what `max_tokens` needs at
+    a conservative streaming rate. Callers that know their output budget
+    pass it; the bare form keeps the old floors."""
     fast, slow = _TIMEOUTS.get(task, _DEFAULT_TIMEOUTS)
-    return slow if _is_slow_family(model) else fast
+    floor = slow if _is_slow_family(model) else fast
+    try:
+        n = int(max_tokens or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return floor
+    return max(floor, n / _MIN_TOKENS_PER_SECOND + _CEILING_OVERHEAD_S)
 
 
 def supports_sampling(model: str) -> bool:
@@ -217,10 +238,10 @@ def call_with_ladder(do_call: Callable[..., Any], *, model: str, task: str,
                               to_model=FALLBACK_MODEL,
                               reason=f"{why}: {type(orig).__name__}: {orig}")
         return (do_call(model=FALLBACK_MODEL, max_tokens=tokens,
-                        timeout=timeout_for(task, FALLBACK_MODEL)),
+                        timeout=timeout_for(task, FALLBACK_MODEL, tokens)),
                 FALLBACK_MODEL)
 
-    primary_timeout = timeout_for(task, model)
+    primary_timeout = timeout_for(task, model, max_tokens)
     try:
         return do_call(model=model, max_tokens=max_tokens,
                        timeout=primary_timeout), model
@@ -236,7 +257,7 @@ def call_with_ladder(do_call: Callable[..., Any], *, model: str, task: str,
                 f"max_tokens={reduced} (-35%)")
             try:
                 return do_call(model=model, max_tokens=reduced,
-                               timeout=primary_timeout), model
+                               timeout=timeout_for(task, model, reduced)), model
             except Exception as e2:
                 if not (is_timeout_error(e2)
                         or is_model_unavailable_error(e2)):
