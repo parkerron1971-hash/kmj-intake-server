@@ -2993,6 +2993,13 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         # powers the "why your site looks this way" view — served by
         # GET /composer/rationale, rendered by DesignRationalePanel.tsx.
         cfg["design_rationale_id"] = dro_id
+    # TWO DIRECTIONS + A JUDGE — the verdict is visible on the site row
+    # too (which stance won, why, and what the loser was), not only
+    # inside the persisted rationale.
+    _dirs = ((dro.get("meta") or {}).get("directions")
+             if isinstance(dro, dict) else None)
+    if isinstance(_dirs, dict) and _dirs:
+        cfg["dro_directions"] = _dirs
     # Arc 8 — persist which sections went bespoke + the validated
     # fragments themselves (html/css keyed by module) so shuffle/refresh/
     # override re-renders reuse them without an LLM call. A full
@@ -3850,10 +3857,22 @@ def compose_site(business_id: str, brief_notes: str = "",
             try:
                 from agents.composer.drl.passes import produce_dro
                 intake = _assemble_intake_text(ctx)
+                # TWO DIRECTIONS + A JUDGE: the judge reads THE FACTS the
+                # Director and the truth law read (site_facts) — built only
+                # when the switch is on, so 'off' costs no extra reads.
+                _facts_text = ""
+                try:
+                    import directions_judge as _dj
+                    if _dj.enabled():
+                        import site_facts as _sf
+                        _facts_text = _sf.facts_block(_sf.build_facts(ctx, business_id))
+                except Exception as _fe:
+                    logger.info(f"[composer] facts for the judge skipped: {_fe}")
                 dro, dro_failure = produce_dro(
                     business_id, intake, reference_analysis=ref_analysis,
                     creative=creative,
-                    owner_direction=_owner_direction_evidence(ctx))
+                    owner_direction=_owner_direction_evidence(ctx),
+                    facts_text=_facts_text)
                 if dro is None:
                     # One retry — cheap insurance against a transient LLM/parse
                     # hiccup before accepting a rationale-less compose.
@@ -3862,7 +3881,8 @@ def compose_site(business_id: str, brief_notes: str = "",
                     dro, dro_failure = produce_dro(
                         business_id, intake, reference_analysis=ref_analysis,
                         creative=creative,
-                        owner_direction=_owner_direction_evidence(ctx))
+                        owner_direction=_owner_direction_evidence(ctx),
+                        facts_text=_facts_text)
                 if dro:
                     dro_id = dro.get("id")
                     dro_failure = None

@@ -1175,10 +1175,74 @@ def persist_dro(business_id: str, dro: Dict[str, Any]) -> Optional[str]:
 
 
 # ─── Orchestrator ────────────────────────────────────────────────────────
+def _author_directions(business_id: str, signals: List[Dict[str, Any]],
+                       recent: List[Dict[str, Any]], *,
+                       reference_analysis: Optional[List[Dict[str, Any]]],
+                       creative: Optional[Dict[str, Any]],
+                       failure_out: Dict[str, str],
+                       owner_direction: Optional[Dict[str, Any]],
+                       facts_text: str = "") -> Optional[Dict[str, Any]]:
+    """TWO DIRECTIONS + A JUDGE (2026-08-29, builder bench step 5). Off
+    (DRO_DIRECTIONS unset) → exactly the single author_dro call this
+    replaced. On → candidate A (concept-literal, today's default) and
+    candidate B (the stance the owner's energy argues for), B authored
+    with A in its cohort so the existing collision check keeps them
+    apart; then directions_judge picks on the acceptance test. Any
+    failure past A keeps A — a judged build can never fail harder than
+    a single-direction build. The verdict rides the winner's meta."""
+    import directions_judge as dj
+    if not dj.enabled():
+        return author_dro(business_id, signals, recent,
+                          reference_analysis=reference_analysis,
+                          creative=creative, failure_out=failure_out,
+                          owner_direction=owner_direction)
+    a_key, b_key = dj.pick_pair(signals, owner_direction)
+    st = dj.stances()
+    a = author_dro(business_id, signals, recent,
+                   reference_analysis=reference_analysis, creative=creative,
+                   failure_out=failure_out, owner_direction=owner_direction,
+                   stance=st.get(a_key))
+    if a is None:
+        return None
+    try:
+        b = author_dro(business_id, signals, [a] + list(recent),
+                       reference_analysis=reference_analysis, creative=creative,
+                       failure_out={}, owner_direction=owner_direction,
+                       stance=st.get(b_key))
+    except Exception as e:                       # pragma: no cover — belt
+        logger.warning(f"[directions] candidate B raised for {business_id[:8]}: {e}")
+        b = None
+    if b is None:
+        logger.info(f"[directions] second candidate ({b_key}) failed for "
+                    f"{business_id[:8]} — keeping {a_key}")
+        a.setdefault("meta", {})["directions"] = {
+            "candidates": [{"stance": a_key}],
+            "judge": {"winner": a_key, "by": "default",
+                      "because": f"second candidate ({b_key}) did not author"}}
+        return a
+    try:
+        verdict = dj.judge(business_id, signals, [(a_key, a), (b_key, b)],
+                           facts_text=facts_text, owner_direction=owner_direction,
+                           recent_signatures=[distinctiveness_signature(r) for r in recent])
+    except Exception as e:                       # pragma: no cover — belt
+        verdict = {"winner": 0, "by": "default", "because": "judge raised",
+                   "loser_weakness": "", "detail": f"{type(e).__name__}: {e}"[:200]}
+    if int(verdict.get("winner") or 0) == 1:
+        winner, loser, w_key, l_key = b, a, b_key, a_key
+    else:
+        winner, loser, w_key, l_key = a, b, a_key, b_key
+    dj.record(winner, loser, w_key, l_key, verdict)
+    logger.info(f"[directions] {business_id[:8]}: A={a_key} B={b_key} → "
+                f"{w_key} by {verdict.get('by')}: "
+                f"{str(verdict.get('because') or '')[:160]}")
+    return winner
+
+
 def produce_dro(business_id: str, transcript: str,
                 reference_analysis: Optional[List[Dict[str, Any]]] = None,
                 creative: Optional[Dict[str, Any]] = None,
                 owner_direction: Optional[Dict[str, Any]] = None,
+                facts_text: str = "",
                 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
     """Full pass: detect signals → fetch recent → author DRO (with
     distinctiveness) → persist. Returns (dro, failure): the DRO (with `id`
@@ -1237,10 +1301,11 @@ def produce_dro(business_id: str, transcript: str,
             if isinstance(s.get("confidence"), (int, float))
             and sig.is_consumable(s["confidence"]))
         recent = fetch_recent_dros(business_id)
-        dro = author_dro(business_id, signals, recent,
-                         reference_analysis=reference_analysis,
-                         creative=creative, failure_out=auth_fail,
-                         owner_direction=owner_direction)
+        dro = _author_directions(business_id, signals, recent,
+                                 reference_analysis=reference_analysis,
+                                 creative=creative, failure_out=auth_fail,
+                                 owner_direction=owner_direction,
+                                 facts_text=facts_text)
         if dro is None:
             failure = {
                 "stage": auth_fail.get("stage") or "authoring",
