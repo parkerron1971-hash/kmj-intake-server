@@ -64,9 +64,13 @@
   .brand img{width:52px;height:52px;object-fit:contain;display:block;}
   .brand b{font-family:'Inter Tight',sans-serif;font-size:27px;font-weight:600;
     color:var(--text-primary);letter-spacing:-.012em;}
-  .beta{font-size:14px;font-weight:600;letter-spacing:.17em;text-transform:uppercase;
-    color:var(--accent);border:1px solid rgba(46,125,255,.42);
-    background:rgba(46,125,255,.10);border-radius:999px;padding:11px 22px;}
+  /* A pill in the top-right corner used to announce a closed early
+     access period. It was removed with its markup below: signups have
+     been open and self-serve since 2026-08-24, and this card is the
+     og:image on every share of the site, so it was telling every
+     visitor the door was shut. The rule is deleted rather than left
+     orphaned, and the word itself is kept out of this file so the test
+     that guards it means something. */
 
   .mid{position:relative;z-index:2;margin-top:auto;margin-bottom:auto;}
   h1{font-family:'Inter Tight',sans-serif;font-size:88px;font-weight:700;
@@ -97,7 +101,6 @@
       <img src="solutionist-mark.png" alt="">
       <b>The Solutionist System</b>
     </div>
-    <span class="beta">Private Beta</span>
   </div>
 
   <div class="mid">
