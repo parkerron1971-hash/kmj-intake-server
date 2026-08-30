@@ -16,13 +16,80 @@ Every exemplar is a DRO the brain can learn a MOVE from. This pins:
     the nearest for its own signal set.
 """
 import json
-import os
-
-import jsonschema
 
 from agents.composer import drl
 from agents.composer.drl import passes, signals as sig
 import design_languages as dl
+
+try:                      # CI has no jsonschema — the walker below is the contract
+    import jsonschema     # pragma: no cover
+except ImportError:       # pragma: no cover
+    jsonschema = None
+
+
+_TYPES = {"object": dict, "array": list, "string": str, "integer": int,
+          "number": (int, float), "boolean": bool}
+
+
+def _walk(node, value, path="$"):
+    """The subset of JSON Schema that schema.json actually uses — required,
+    properties, enum, const, type, maxLength, minimum/maximum, items —
+    raised as one AssertionError naming the path. No dependency."""
+    if "const" in node:
+        assert value == node["const"], f"{path}: {value!r} != const {node['const']!r}"
+    if "enum" in node:
+        assert value in node["enum"], f"{path}: {value!r} not in {node['enum']}"
+    t = node.get("type")
+    if t:
+        py = _TYPES[t]
+        ok = isinstance(value, py) and not (t in ("integer", "number") and isinstance(value, bool))
+        assert ok, f"{path}: expected {t}, got {type(value).__name__}"
+    if isinstance(value, str) and "maxLength" in node:
+        assert len(value) <= node["maxLength"], f"{path}: {len(value)} > maxLength {node['maxLength']}"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in node:
+            assert value >= node["minimum"], f"{path}: {value} < {node['minimum']}"
+        if "maximum" in node:
+            assert value <= node["maximum"], f"{path}: {value} > {node['maximum']}"
+    if isinstance(value, dict):
+        for req in node.get("required", []):
+            assert req in value, f"{path}: missing required {req!r}"
+        for k, sub in node.get("properties", {}).items():
+            if k in value:
+                _walk(sub, value[k], f"{path}.{k}")
+    if isinstance(value, list) and "items" in node:
+        for i, item in enumerate(value):
+            _walk(node["items"], item, f"{path}[{i}]")
+
+
+def validate_against_schema(record, schema):
+    _walk(schema, record)
+    if jsonschema is not None:
+        jsonschema.validate(record, schema)
+
+
+def test_the_walker_is_a_real_alarm():
+    """Rehearsal inside the test: a record that breaks the schema must
+    trip the walker (a passing validator is what a broken one looks like)."""
+    schema = drl.load_schema()
+    good = json.loads(json.dumps(drl.load_exemplars()[0]))
+    validate_against_schema(good, schema)
+    bad = json.loads(json.dumps(good))
+    bad["decisions"]["palette"]["base"] = "hot_pink"
+    try:
+        _walk(schema, bad)
+    except AssertionError as e:
+        assert "palette.base" in str(e)
+    else:
+        raise AssertionError("walker accepted an out-of-enum palette.base")
+    bad = json.loads(json.dumps(good))
+    del bad["summary_for_practitioner"]
+    try:
+        _walk(schema, bad)
+    except AssertionError as e:
+        assert "summary_for_practitioner" in str(e)
+    else:
+        raise AssertionError("walker accepted a record missing a required key")
 
 
 NEW = ("e8_broadsheet", "e9_signal", "e10_atelier", "e11_neon", "e12_hearth",
@@ -40,7 +107,7 @@ def test_fifteen_records_each_valid_two_ways():
         assert k in lib
     schema = drl.load_schema()
     for k, e in lib.items():
-        jsonschema.validate(e, schema)                       # the contract
+        validate_against_schema(e, schema)                   # the contract
         assert passes._validate_dro(json.loads(json.dumps(e))) == [], k   # the runtime
         assert e["business_id"].startswith("exemplar:"), k
         assert e["narrative"] and e["summary_for_practitioner"], k
