@@ -6,7 +6,7 @@ WHY THIS EXISTS
   doc_audit.py has been running on every generated document for a
   while, and stopping nothing. `blocking_count()` had no callers. The
   three doors a document leaves through — approve-and-send, the branded
-  PDF, and BoldSign e-signature — never audited at all, and a body
+  PDF, and DocuSeal e-signature — never audited at all, and a body
   edited by hand on the way through the approval queue was never looked
   at a second time.
 

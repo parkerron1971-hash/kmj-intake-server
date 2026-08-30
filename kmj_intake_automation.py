@@ -351,9 +351,9 @@ app.include_router(quickbooks_connect_router)
 # Rails Arc 4 — the unified audit log (append-only; reads owner-gated)
 from audit_log import router as audit_router
 app.include_router(audit_router)
-# Rails demand-driven — e-sign via BoldSign (proposal → signature → payment)
-from boldsign_router import router as boldsign_router
-app.include_router(boldsign_router)
+# Rails demand-driven — e-sign via DocuSeal (proposal → signature → payment)
+from docuseal_router import router as docuseal_router
+app.include_router(docuseal_router)
 # Rails demand-driven — receipt capture (Chief reads the photo)
 from receipts_router import router as receipts_router
 app.include_router(receipts_router)

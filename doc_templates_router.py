@@ -13,7 +13,7 @@ The surface behind "New Document" in the Documents room:
                                    action_type='document') so the
                                    EXISTING chain executes it: review →
                                    edit → approve/send → branded PDF →
-                                   BoldSign e-sign → contract_signed on
+                                   DocuSeal e-sign → contract_signed on
                                    the spine. This router produces
                                    paper; it deliberately owns no
                                    sending machinery.

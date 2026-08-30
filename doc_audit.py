@@ -24,7 +24,7 @@ DETERMINISTIC ONLY, AND THAT IS THE POINT
 
   MISSPELLINGS RANK LAST, deliberately, and are the smallest thing this
   does. A general dictionary on a legal document is a false-positive
-  engine: it flags every client surname, every trade term, "BoldSign",
+  engine: it flags every client surname, every trade term, "DocuSeal",
   "SF-424", "NOFO" — and cheerfully passes "Deluth". So the spelling
   rule is a CURATED list of the confusions that actually occur in this
   kind of paper, and nothing else.

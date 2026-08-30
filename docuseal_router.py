@@ -1,29 +1,37 @@
 """
-boldsign_router.py — Rails demand-driven arc — e-sign, adapter #1.
+docuseal_router.py — Rails demand-driven arc — e-sign, adapter #2.
 
-The ruling: connect, don't build. Legally valid signatures carry
-ESIGN Act compliance, audit trails, and tamper-evidence — BoldSign
-owns that engine. We own the chain that makes it matter: proposal →
+The ruling stands: connect, don't build. Legally valid signatures carry
+ESIGN Act compliance, audit trails, and tamper-evidence — DocuSeal owns
+that engine. We own the chain that makes it matter: proposal →
 signature → payment, without the moment ever leaving the system.
 
-Surface (all owner-gated):
+WHY THIS REPLACED BOLDSIGN (2026-08-30). Cost and shape. BoldSign's
+Enterprise API tier starts around $30/mo; DocuSeal Cloud Pro is $20 a
+seat with unlimited signature requests and webhooks included. The
+switch was cheap because the seam was already here — adapter #1 kept
+everything provider-specific inside six functions, and this file
+changes those six. The completion chain below (status → spine event →
+audit row → two emails) is untouched, which is the whole point of
+having had a seam.
+
+Surface (all owner-gated, and IDENTICAL to adapter #1 — the frontend
+never learned which provider was behind it and did not have to change):
   POST /esign/send            — send a PDF (by URL — the contract
                                 agent's pdf_url) to one signer.
-                                BoldSign emails them; nothing embedded
+                                DocuSeal emails them; nothing embedded
                                 in v1.
   GET  /esign/list?biz=       — the business's sent documents.
-  POST /esign/{id}/refresh    — pull live status from BoldSign; a
+  POST /esign/{id}/refresh    — pull live status from DocuSeal; a
                                 newly-completed document emits
-                                contract_signed on the event spine
-                                (the catalog entry that waited a month
-                                for a real emitter).
-  POST /esign/webhook         — BoldSign calls this when a document is
+                                contract_signed on the event spine.
+  POST /esign/webhook         — DocuSeal calls this when a document is
                                 signed, declined, or expires. PUBLIC by
                                 necessity (the provider has no login),
                                 so it authenticates two ways: the
-                                X-BoldSign-Signature HMAC, and looking
+                                X-Docuseal-Signature HMAC, and looking
                                 the document up on OUR side — a payload
-                                naming an unknown document is ignored,
+                                naming an unknown submission is ignored,
                                 never inserted.
 
 WHY A WEBHOOK AND NOT JUST REFRESH. Refresh only tells the truth when
@@ -33,16 +41,42 @@ depends on it never went. The webhook makes completion an event that
 happens TO the system rather than one it has to go and check for; the
 refresh endpoint stays as the manual fallback for a missed delivery.
 
-Env: BOLDSIGN_API_KEY (Railway, validated live 7/30). Trial now,
-free-sandbox later — the key is the only coupling.
+WHAT WE STORE AS document_id IS DOCUSEAL'S **SUBMISSION** ID. Said
+plainly here because DocuSeal hands out two integer id sequences —
+submissions and submitters — and they collide freely. A webhook body
+carries both. Reading the wrong one looks up a document that either
+does not exist or, worse, belongs to somebody else's agreement. See
+_document_id_from_webhook, which branches on event_type rather than
+hunting for the first thing that looks like an id.
 
-v1 placement honesty: the signature field lands at the bottom of page
-one (BoldSign requires at least one field per signer; our generated
-proposal PDFs carry no text tags). Good enough for real agreements;
-per-template placement is the day-two refinement.
+ONE THING THAT GOT BETTER. BoldSign fetched the PDF from us BY URL, so
+every send minted a signed storage link and handed it to a third
+party's servers. DocuSeal takes the bytes inline (base64), and we were
+already downloading them to hand over anyway — so the signed URL now
+never leaves our network at all.
+
+Env: DOCUSEAL_API_KEY (Railway). DOCUSEAL_API_BASE optionally points at
+the EU host or a self-hosted instance. DOCUSEAL_WEBHOOK_SECRET is the
+whsec_... value from the webhook's Security → HMAC tab.
+
+v1 placement honesty, carried over unchanged: the signature field lands
+at the bottom of page one (a signer needs at least one field, and our
+generated proposal PDFs carry no DocuSeal text tags). Good enough for
+real agreements; per-template placement is the day-two refinement.
+
+COORDINATES ARE PIXELS, PAGE IS 1-INDEXED. The page index is documented
+("Starts from 1"); the units are not, and DocuSeal's own pages say both
+"exact pixel coordinates" and, elsewhere, imply 0-1 fractions. Pixels
+is the safe reading to ship on, because the two guesses fail in very
+different ways: pixel values handed to a fraction API are wildly
+out of range and fail LOUDLY on the first send, while fractions handed
+to a pixel API silently park a sub-pixel box in a corner and produce a
+document that looks fine until someone tries to sign it. Verified on
+the first live send; see SIGNATURE_AREA.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -59,28 +93,48 @@ from pydantic import BaseModel
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
-logger = logging.getLogger("boldsign_router")
+logger = logging.getLogger("docuseal_router")
 
 router = APIRouter(prefix="/esign", tags=["esign"])
 
-BOLDSIGN_BASE = "https://api.boldsign.com"
+DOCUSEAL_BASE = (os.environ.get("DOCUSEAL_API_BASE")
+                 or "https://api.docuseal.com").rstrip("/")
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 
-# BoldSign document status → our vocabulary.
+# DocuSeal submission status → our vocabulary. Our words did not change
+# when the provider did, which is why nothing downstream (the panel's
+# status colours, the spine, the FE) needed touching.
+#
+# There is no DocuSeal equivalent of "revoked" — cancelling a submission
+# archives it rather than moving it to a status of its own. The word
+# stays in our vocabulary because rows written under adapter #1 still
+# carry it; nothing emits it any more.
 _STATUS_MAP = {
-    "inprogress": "sent",
+    "pending": "sent",
     "completed": "completed",
     "declined": "declined",
     "expired": "expired",
-    "revoked": "revoked",
 }
+
+# Bottom of page one, matching adapter #1's geometry exactly so the
+# switch is invisible on the paper. Page is 1-indexed per the spec.
+SIGNATURE_AREA = {"x": 60, "y": 700, "w": 220, "h": 50, "page": 1}
+
+# What we stamp on rows we write, and the only provider we can ask
+# about a document. One constant so the insert and the refresh guard
+# can never disagree about which adapter is current.
+PROVIDER = "docuseal"
 
 
 def _api_key() -> str:
-    key = (os.environ.get("BOLDSIGN_API_KEY") or "").strip()
+    key = (os.environ.get("DOCUSEAL_API_KEY") or "").strip()
     if not key:
-        raise HTTPException(503, "e-sign isn't configured (BOLDSIGN_API_KEY missing)")
+        raise HTTPException(503, "e-sign isn't configured (DOCUSEAL_API_KEY missing)")
     return key
+
+
+def _auth_headers() -> Dict[str, str]:
+    return {"X-Auth-Token": _api_key()}
 
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
@@ -94,13 +148,39 @@ def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
 
 
 def map_provider_status(raw: Optional[str]) -> Optional[str]:
-    """BoldSign's status string → ours; None when unrecognized (keep
+    """DocuSeal's status string → ours; None when unrecognized (keep
     the stored status rather than guessing)."""
     return _STATUS_MAP.get((raw or "").strip().lower())
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def submission_id_from_send(data: Any) -> str:
+    """The submission id out of a POST /submissions/pdf response.
+
+    Two shapes are in the wild — the submission object, and a bare list
+    of the submitters it created — and both carry the submission id
+    unambiguously (a submitter row names its `submission_id`). Reading
+    whichever is in front of us costs four lines and removes a whole
+    class of "it worked in the sandbox" surprise.
+
+    Deliberately does NOT fall back to a submitter's own `id`: that is
+    a different sequence and would give us a plausible-looking number
+    that matches the wrong document forever."""
+    if isinstance(data, list):
+        for row in data:
+            if isinstance(row, dict) and row.get("submission_id"):
+                return str(row["submission_id"])
+        return ""
+    if isinstance(data, dict):
+        if data.get("id"):
+            return str(data["id"])
+        for row in (data.get("submitters") or []):
+            if isinstance(row, dict) and row.get("submission_id"):
+                return str(row["submission_id"])
+    return ""
 
 
 class SendBody(BaseModel):
@@ -125,7 +205,7 @@ class SendBody(BaseModel):
 async def esign_send(body: SendBody,
                      user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz = _owner(body.business_id, user)
-    key = _api_key()
+    headers = _auth_headers()
     email = (body.signer_email or "").strip().lower()
     if "@" not in email:
         raise HTTPException(400, "signer_email required")
@@ -153,38 +233,50 @@ async def esign_send(body: SendBody,
         if pdf.status_code >= 400 or not pdf.content:
             raise HTTPException(400, "couldn't fetch the PDF to send")
 
-        # BoldSign /v1/document/send — multipart; one signer, one
-        # signature field at the bottom of page 1 (v1 honesty above).
-        form = {
-            "Title": title,
-            "Message": (body.message or f"{biz.get('name') or 'We'} sent this for your signature.")[:500],
-            "Signers[0][Name]": (body.signer_name or email.split("@")[0])[:100],
-            "Signers[0][EmailAddress]": email,
-            "Signers[0][SignerType]": "Signer",
-            "Signers[0][FormFields][0][FieldType]": "Signature",
-            "Signers[0][FormFields][0][PageNumber]": "1",
-            "Signers[0][FormFields][0][IsRequired]": "true",
-            "Signers[0][FormFields][0][Bounds][X]": "60",
-            "Signers[0][FormFields][0][Bounds][Y]": "700",
-            "Signers[0][FormFields][0][Bounds][Width]": "220",
-            "Signers[0][FormFields][0][Bounds][Height]": "50",
+        # DocuSeal /submissions/pdf — a one-off submission, no template
+        # left behind in the account. One signer, one signature field at
+        # the bottom of page 1 (v1 honesty above).
+        payload = {
+            "name": title,
+            "send_email": True,
+            "message": {
+                "subject": f"{biz.get('name') or 'We'} sent you {title} to sign",
+                "body": (body.message
+                         or f"{biz.get('name') or 'We'} sent this for your signature.")[:500],
+            },
+            "documents": [{
+                "name": f"{title[:60]}.pdf",
+                "file": base64.b64encode(pdf.content).decode(),
+                "fields": [{
+                    "name": "Signature",
+                    "type": "signature",
+                    "role": "Signer",
+                    "required": True,
+                    "areas": [dict(SIGNATURE_AREA)],
+                }],
+            }],
+            "submitters": [{
+                "name": (body.signer_name or email.split("@")[0])[:100],
+                "email": email,
+                "role": "Signer",
+            }],
         }
-        r = await c.post(
-            f"{BOLDSIGN_BASE}/v1/document/send",
-            headers={"X-API-KEY": key},
-            data=form,
-            files={"Files": (f"{title[:60]}.pdf", pdf.content, "application/pdf")},
-        )
+        r = await c.post(f"{DOCUSEAL_BASE}/submissions/pdf",
+                         headers=headers, json=payload)
     if r.status_code >= 400:
         logger.error(f"[esign] send failed {r.status_code}: {r.text[:400]}")
         raise HTTPException(502, f"e-sign send failed: {r.text[:200]}")
-    doc_id = (r.json() or {}).get("documentId") or ""
+
+    try:
+        doc_id = submission_id_from_send(r.json())
+    except ValueError:
+        doc_id = ""
     if not doc_id:
-        raise HTTPException(502, "e-sign provider returned no document id")
+        raise HTTPException(502, "e-sign provider returned no submission id")
 
     inserted = sb_clients.sb_post_as_service("/esign_documents", {
         "business_id": body.business_id,
-        "provider": "boldsign",
+        "provider": PROVIDER,
         "document_id": doc_id,
         "title": title,
         "signer_name": (body.signer_name or "")[:100],
@@ -259,19 +351,47 @@ async def _owner_email(owner_id: str) -> Optional[str]:
 async def _signed_pdf_b64(document_id: str) -> Optional[str]:
     """The executed copy, base64 for a Resend attachment.
 
-    Best-effort: a confirmation that arrives without the PDF still tells
-    both sides the thing is done, so a download failure downgrades the
-    email rather than cancelling it."""
+    DocuSeal exposes `combined_document_url` on a completed submission —
+    the signed PDF with the audit log bound in, which is a slightly
+    better artefact to put in someone's inbox than the bare document
+    adapter #1 attached. Falls back to the per-document list when the
+    combined file is not built yet.
+
+    Best-effort throughout: a confirmation that arrives without the PDF
+    still tells both sides the thing is done, so a download failure
+    downgrades the email rather than cancelling it."""
+    if not document_id:
+        return None
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-            r = await c.get(f"{BOLDSIGN_BASE}/v1/document/download",
-                            headers={"X-API-KEY": _api_key()},
-                            params={"documentId": document_id})
-        if r.status_code >= 400 or not r.content:
-            logger.warning(f"[esign] download failed {r.status_code} for {document_id}")
+            r = await c.get(f"{DOCUSEAL_BASE}/submissions/{document_id}",
+                            headers=_auth_headers())
+            if r.status_code >= 400:
+                logger.warning(f"[esign] submission read failed {r.status_code} "
+                               f"for {document_id}")
+                return None
+            body = r.json() or {}
+            url = body.get("combined_document_url")
+            if not url:
+                docs = await c.get(
+                    f"{DOCUSEAL_BASE}/submissions/{document_id}/documents",
+                    headers=_auth_headers())
+                if docs.status_code < 400:
+                    for d in ((docs.json() or {}).get("documents") or []):
+                        if isinstance(d, dict) and d.get("url"):
+                            url = d["url"]
+                            break
+            if not url:
+                logger.warning(f"[esign] no signed file url for {document_id}")
+                return None
+
+            # The file URL is pre-signed storage, not an API route — it
+            # takes no auth header and must not be sent one.
+            f = await c.get(url)
+        if f.status_code >= 400 or not f.content:
+            logger.warning(f"[esign] download failed {f.status_code} for {document_id}")
             return None
-        import base64
-        return base64.b64encode(r.content).decode()
+        return base64.b64encode(f.content).decode()
     except Exception as e:
         logger.warning(f"[esign] download raised for {document_id}: {e}")
         return None
@@ -388,13 +508,12 @@ async def _apply_status(doc: Dict[str, Any], biz: Dict[str, Any],
 
 
 async def _live_status(document_id: str) -> Optional[str]:
-    """Ask BoldSign what the document's status actually is."""
+    """Ask DocuSeal what the submission's status actually is."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        r = await c.get(f"{BOLDSIGN_BASE}/v1/document/properties",
-                        headers={"X-API-KEY": _api_key()},
-                        params={"documentId": document_id})
+        r = await c.get(f"{DOCUSEAL_BASE}/submissions/{document_id}",
+                        headers=_auth_headers())
     if r.status_code >= 400:
-        logger.warning(f"[esign] properties failed {r.status_code}: {r.text[:200]}")
+        logger.warning(f"[esign] submission read failed {r.status_code}: {r.text[:200]}")
         return None
     return map_provider_status((r.json() or {}).get("status"))
 
@@ -412,6 +531,21 @@ async def esign_refresh(esign_id: str, biz: str,
         raise HTTPException(404, "document not found")
     doc = rows[0]
 
+    # A row written by a retired adapter carries THAT provider's id, and
+    # DocuSeal has never heard of it. Asking anyway 404s, which this
+    # endpoint would dress up as "couldn't reach the e-sign provider" —
+    # a frightening and completely wrong thing to say about a provider
+    # that is fine. Answer honestly instead and leave the stored status
+    # alone: it is the last status that was ever true for this document.
+    provider = (doc.get("provider") or PROVIDER).strip().lower()
+    if provider != PROVIDER:
+        logger.info(f"[esign] refresh skipped: {esign_id} belongs to {provider}")
+        return {"ok": True, "status": doc.get("status"), "changed": False,
+                "retired_provider": provider,
+                "note": (f"This document was sent with {provider}, which the "
+                         f"system no longer uses. The status shown is the last "
+                         f"one recorded for it.")}
+
     new_status = await _live_status(doc["document_id"])
     if new_status is None:
         raise HTTPException(502, "couldn't reach the e-sign provider")
@@ -422,71 +556,85 @@ async def esign_refresh(esign_id: str, biz: str,
 
 # ── Webhook signature ────────────────────────────────────────────────
 #
-# BoldSign signs each delivery:
+# DocuSeal signs each delivery:
 #
-#   X-BoldSign-Signature: t=1668693823, s0=<hex>, s1=<hex>
+#   X-Docuseal-Signature: <unix timestamp>.<hex hmac>
 #
-# where each signature is HMAC-SHA256 over the literal string
-# "{t}.{raw body bytes}" keyed by the signing secret from the webhook's
-# dashboard page. s1 appears only while a rotated key is still valid, so
-# a match against EITHER is a pass.
+# where the HMAC is SHA-256 over the literal string "{t}.{raw body
+# bytes}", keyed by the whsec_... value from the webhook's Security →
+# HMAC tab. That is the same construction BoldSign used, in a different
+# wrapper, so the hardened verifier from adapter #1 survives with only
+# its parser swapped.
 #
 # THE RAW BODY IS THE MESSAGE. Re-serialising the parsed JSON changes
 # whitespace and key order and the signature stops matching, which is
 # why the handler below takes a Request and reads bytes rather than
 # letting FastAPI hand it a dict.
 #
+# WE ALSO ACCEPT A PLAIN SHARED SECRET, and that is not sloppiness.
+# DocuSeal offers two mutually exclusive ways to secure a webhook: the
+# HMAC above, and a custom secret header whose value is the secret
+# itself. A practitioner who configures the second one on a verifier
+# that only understands the first gets every genuine delivery rejected
+# and no error anywhere — which is precisely the silent-conditional-drop
+# bug the signature test file was written to catch, re-introduced from
+# the other side. Both are checked in constant time.
+#
 # ON THE TIMESTAMP. The documented advice is to reject deliveries older
 # than five minutes, to stop replay. We log a stale timestamp and carry
 # on instead, deliberately: a replay here is already inert. The handler
 # does not believe the payload — it re-reads the real status from
-# BoldSign and _apply_status is idempotent — so replaying a genuine
-# "Signed" delivery either re-applies a status the row already has (a
-# no-op) or is contradicted by the provider. Rejecting on age would buy
-# nothing and would silently drop a legitimate late retry, which is the
-# failure that actually costs a confirmation email.
+# DocuSeal and _apply_status is idempotent — so replaying a genuine
+# "form.completed" delivery either re-applies a status the row already
+# has (a no-op) or is contradicted by the provider. Rejecting on age
+# would buy nothing and would silently drop a legitimate late retry,
+# which is the failure that actually costs a confirmation email.
 
-SIGNATURE_HEADER = "X-BoldSign-Signature"
+SIGNATURE_HEADER = "X-Docuseal-Signature"
 STALE_AFTER_SECONDS = 300
 
 
 def _parse_signature_header(raw_header: str) -> tuple:
-    """-> (timestamp:str|None, [signatures]) from 't=..., s0=..., s1=...'"""
-    ts = None
-    sigs = []
-    for part in (raw_header or "").split(","):
-        piece = part.strip()
-        if not piece or "=" not in piece:
-            continue
-        k, _, v = piece.partition("=")
-        k = k.strip().lower()
-        v = v.strip()
-        if k == "t":
-            ts = v
-        elif k.startswith("s") and v:
-            sigs.append(v)
-    return ts, sigs
+    """-> (timestamp:str|None, signature:str|None) from '<t>.<hex>'.
+
+    A header with no '.' is the shared-secret form and carries no
+    timestamp; it comes back as (None, <the whole value>) and the
+    verifier compares it against the secret directly."""
+    header = (raw_header or "").strip()
+    if not header:
+        return None, None
+    ts, sep, sig = header.partition(".")
+    if not sep:
+        return None, header
+    ts, sig = ts.strip(), sig.strip()
+    return (ts or None), (sig or None)
 
 
 def verify_webhook_signature(raw_body: bytes, header: str, secret: str) -> bool:
-    """True when the delivery really came from BoldSign.
+    """True when the delivery really came from DocuSeal.
 
     Constant-time throughout: a comparison that returns early leaks the
     signature one byte at a time."""
     if not secret:
         return True                      # unconfigured — see the handler
-    ts, sigs = _parse_signature_header(header)
-    if not ts or not sigs:
+    ts, sig = _parse_signature_header(header)
+    if not sig:
+        return False
+
+    # Shared-secret form: the header value IS the secret. Compared
+    # against the WHOLE raw header rather than the parsed half, because
+    # a secret that happens to contain a '.' would otherwise be split by
+    # the parser and could never match — which is this file's own bug
+    # class (a guard whose condition is never true) re-introduced one
+    # layer down.
+    if hmac.compare_digest(secret, (header or "").strip()):
+        return True
+    if ts is None:
         return False
 
     signed = ts.encode() + b"." + raw_body
     expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
-
-    ok = False
-    for candidate in sigs:               # every one, no early return
-        if hmac.compare_digest(expected, candidate.strip().lower()):
-            ok = True
-    return ok
+    return hmac.compare_digest(expected, sig.lower())
 
 
 def _timestamp_age(header: str) -> Optional[int]:
@@ -497,18 +645,58 @@ def _timestamp_age(header: str) -> Optional[int]:
         return None
 
 
+def _document_id_from_webhook(payload: Dict[str, Any]) -> str:
+    """The SUBMISSION id out of a delivery, chosen by event type.
+
+    This is the sharpest edge in the whole adapter. DocuSeal sends two
+    families of event:
+
+      form.*        — the data object is a SUBMITTER. Its `id` is a
+                      submitter id, and the submission is nested at
+                      data.submission.id.
+      submission.*  — the data object IS the submission, so data.id is
+                      the one we want.
+
+    Both ids are plain integers from separate sequences, so submitter 42
+    and submission 42 both exist and neither looks wrong. Grabbing "the
+    first field called id" therefore does not fail loudly — it quietly
+    reads a number that matches some other business's agreement or
+    nothing at all, forever. Branching on event_type is the only honest
+    way to tell them apart, so that is what this does; anything it
+    cannot classify falls through to the explicit submission fields and
+    never to a bare `id`."""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    event = str(payload.get("event_type") or payload.get("event") or "").strip().lower()
+
+    submission = data.get("submission") if isinstance(data.get("submission"), dict) else {}
+
+    if event.startswith("submission."):
+        candidate = data.get("id")
+    elif event.startswith("form."):
+        candidate = submission.get("id")
+    else:
+        # Unknown event family: only ever trust fields that name a
+        # submission explicitly.
+        candidate = submission.get("id") or data.get("submission_id")
+
+    if not candidate:
+        candidate = submission.get("id") or data.get("submission_id")
+
+    return str(candidate).strip() if candidate is not None else ""
+
+
 @router.post("/webhook")
 async def esign_webhook(request: Request) -> Dict[str, Any]:
-    """BoldSign tells us a document moved. PUBLIC by necessity.
+    """DocuSeal tells us a submission moved. PUBLIC by necessity.
 
     TWO INDEPENDENT CHECKS, and the second is the one that matters.
 
-    First, the X-BoldSign-Signature HMAC, when BOLDSIGN_WEBHOOK_SECRET
-    is configured. That proves the delivery came from BoldSign.
+    First, the X-Docuseal-Signature HMAC, when DOCUSEAL_WEBHOOK_SECRET
+    is configured. That proves the delivery came from DocuSeal.
 
     Second, and regardless of the first: THE PAYLOAD IS NEVER BELIEVED.
-    The only field read from it is a document id, which is looked up in
-    OUR table, and the status comes from asking BoldSign directly. So
+    The only field read from it is a submission id, which is looked up
+    in OUR table, and the status comes from asking DocuSeal directly. So
     the webhook is a NUDGE TO GO CHECK, not a source of truth. Even with
     no secret set, the worst an anonymous caller achieves is making us
     re-poll a document we already own — a rate-limit question, not a
@@ -521,7 +709,7 @@ async def esign_webhook(request: Request) -> Dict[str, Any]:
     is a fact to log, not a failure to advertise."""
     raw_body = await request.body()
     sig_header = request.headers.get(SIGNATURE_HEADER, "")
-    secret = (os.environ.get("BOLDSIGN_WEBHOOK_SECRET") or "").strip()
+    secret = (os.environ.get("DOCUSEAL_WEBHOOK_SECRET") or "").strip()
 
     if secret:
         if not verify_webhook_signature(raw_body, sig_header, secret):
@@ -532,7 +720,7 @@ async def esign_webhook(request: Request) -> Dict[str, Any]:
             # Logged, not rejected — see the note above the verifier.
             logger.info(f"[esign] webhook signature is {age}s old (replay is inert here)")
     else:
-        logger.info("[esign] webhook unsigned — BOLDSIGN_WEBHOOK_SECRET not set")
+        logger.info("[esign] webhook unsigned — DOCUSEAL_WEBHOOK_SECRET not set")
 
     try:
         payload = json.loads(raw_body or b"{}")
@@ -542,27 +730,15 @@ async def esign_webhook(request: Request) -> Dict[str, Any]:
         logger.info("[esign] webhook body was not JSON — ignored")
         return {"ok": True, "ignored": "bad_json"}
 
-    # BoldSign nests the id differently across event shapes; take the
-    # first one that looks like an id rather than pinning one path.
-    data = payload.get("data") or {}
-    document = payload.get("document") or {}
-    doc_obj = data.get("documentId") or data.get("document") or {}
-    document_id = (
-        payload.get("documentId")
-        or data.get("documentId")
-        or (document.get("documentId") if isinstance(document, dict) else None)
-        or (doc_obj.get("documentId") if isinstance(doc_obj, dict) else None)
-        or ""
-    )
-    document_id = str(document_id).strip()
+    document_id = _document_id_from_webhook(payload)
     if not document_id:
-        logger.info("[esign] webhook with no document id — ignored")
+        logger.info("[esign] webhook with no submission id — ignored")
         return {"ok": True, "ignored": "no_document_id"}
 
     rows = sb_clients.sb_get_as_service(
         f"/esign_documents?document_id=eq.{document_id}&select=*&limit=1") or []
     if not rows:
-        logger.info(f"[esign] webhook for unknown document {document_id} — ignored")
+        logger.info(f"[esign] webhook for unknown submission {document_id} — ignored")
         return {"ok": True, "ignored": "unknown_document"}
     doc = rows[0]
 
