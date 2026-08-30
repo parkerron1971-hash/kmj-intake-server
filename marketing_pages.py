@@ -622,6 +622,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       <a href="/compare">Compare</a>
       <a href="/faq">FAQ</a>
       <a href="/about">About</a>
+      <a href="/news">News</a>
       <a href="/start">Start free trial</a>
       <a href="/get-started">Talk to us</a>
       <a href="{app_url}">Log in</a>
@@ -5926,9 +5927,36 @@ _NEWS_CTA = """
 
 
 def render_news_index(posts: List[Dict[str, Any]]) -> str:
-    """The archive. Callers must not reach here with an empty list — an
-    empty archive is a thin page with a real URL, so public_site 404s it
-    instead and the sitemap never advertises it."""
+    """The archive.
+
+    Empty is a real state and it renders, because the footer links here
+    from every page and a link that 404s is a dead end. It carries
+    `noindex` instead: the reason the empty archive used to 404 was to
+    keep a thin page out of search, and noindex says that directly
+    rather than by withholding the page from people too. The sitemap
+    still omits /news until a post exists.
+    """
+    if not posts:
+        body = """
+    <section class="section">
+      <div class="nw-wrap">
+        <div class="page-hero">
+          <span class="eyebrow">News</span>
+          <h1>Nothing here yet</h1>
+        </div>
+        <p class="nw-sum" style="text-align:center;">
+          Product news will show up here as it ships.
+        </p>
+      </div>
+    </section>
+    """
+        return _render_shell(
+            title="News",
+            description="Product news from the Solutionist System.",
+            content_html=body, path="/news", extra_css=NEWS_CSS,
+            head_extra='<meta name="robots" content="noindex">',
+        )
+
     items = []
     for post in posts:
         date_html = ""
