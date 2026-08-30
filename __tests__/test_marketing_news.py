@@ -18,6 +18,7 @@ What these pin:
 """
 from __future__ import annotations
 
+import asyncio
 import pathlib
 import sys
 
@@ -105,6 +106,55 @@ def test_paragraph_helper_leaves_styling_to_the_caller():
     # helper carries none while the practitioner shell still gets one.
     assert site_news.paragraphs("one") == "<p>one</p>"
     assert 'style="margin:0 0 18px;"' in site_news._paragraphs("one")
+
+
+# ─── The read itself ──────────────────────────────────────────────────
+# Every routing test below monkeypatches _platform_news_posts, which is
+# exactly why the first version shipped broken: nothing exercised the
+# query. It used the anon reader, RLS on businesses calls
+# is_business_member which anon may not execute, the read failed 42501,
+# and _sb turns any 4xx into None — so the archive 404ed with a
+# published post in the row, looking identical to "nothing posted yet".
+
+def test_platform_news_reads_with_the_service_role(monkeypatch):
+    seen = {"anon": 0, "service": []}
+
+    async def fake_anon(client, path):
+        seen["anon"] += 1
+        return None
+
+    async def fake_service(client, path):
+        seen["service"].append(path)
+        return [{"news": [{"title": "Hello", "body": "Words.",
+                           "published_at": "2026-08-30T00:00:00Z"}]}]
+
+    monkeypatch.setattr(public_site, "_sb", fake_anon)
+    monkeypatch.setattr(public_site, "_sb_service", fake_service)
+
+    posts = asyncio.run(public_site._platform_news_posts())
+
+    assert seen["anon"] == 0, "the anon reader cannot see this row at all"
+    assert len(seen["service"]) == 1
+    assert [p["title"] for p in posts] == ["Hello"]
+
+
+def test_platform_news_asks_only_for_the_posts(monkeypatch):
+    """Bypassing RLS is worth doing narrowly. The same settings blob
+    holds the platform's Stripe state, and a select of the whole thing
+    would drag it into a request that only renders posts."""
+    captured = {}
+
+    async def fake_service(client, path):
+        captured["path"] = path
+        return []
+
+    monkeypatch.setattr(public_site, "_sb_service", fake_service)
+    asyncio.run(public_site._platform_news_posts())
+
+    path = captured["path"]
+    assert "platform_books" in path, "must select the platform's own row"
+    assert "settings->website_content->news" in path
+    assert "select=settings&" not in path and not path.endswith("select=settings")
 
 
 # ─── Routing ──────────────────────────────────────────────────────────
