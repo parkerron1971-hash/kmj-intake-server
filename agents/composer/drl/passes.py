@@ -63,7 +63,7 @@ def _drl_model() -> str:
 # Arc 7 quality floor: 1800 truncated the signal JSON on rich intakes —
 # a parse failure silently returned [] and the DRO authored blind while
 # still reporting dro_status='applied'. Roomy cap + parse-retry below.
-SIGNAL_MAX_TOKENS = 3200
+SIGNAL_MAX_TOKENS = 6000      # 5-family hidden reasoning counts (2026-08-29)
 SIGNAL_TEMPERATURE = 0.2                       # extraction — low/deterministic
 # Arc 7: how much intake material the signal pass reads. The owner's
 # freshest evidence leads the transcript (site_composer._assemble_intake_text
@@ -94,7 +94,15 @@ THIN_BRIEF_MIN_SIGNALS = 3
 # exception_log) and richer signal echoes have grown the object since
 # the 9000 was set. Taller cap, and — below — a cut response is
 # CONTINUED from where it stopped, never re-rolled.
-DRO_MAX_TOKENS = 14000
+# THE RATIONALE STREAMS (2026-08-29). On the 5-family, output tokens
+# include hidden reasoning: a run-3 DRO came back at EXACTLY 14,000
+# tokens with 5,390 visible characters — the JSON cut before halfway
+# (run 2: 8,235 tokens for 10,900 chars, 9,100 for 2,914). 14k was never
+# the rationale's budget, it was the reasoning's. The call streams now
+# (the SDK refuses a non-streaming request that could run past ten
+# minutes), so the cap can be what a whole rationale needs; you pay
+# only for what is generated.
+DRO_MAX_TOKENS = 32000
 DRO_TEMPERATURE = 0.4                          # reasoning with creative latitude
 
 
@@ -158,6 +166,18 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
         _messages.append({"role": "assistant", "content": prefill})
     _prefill_applied = {"v": False}
 
+    def _stream_final(**kw):
+        """One STREAMING generation returned as the final Message — the
+        same shape the non-streaming call returned, so the ladder, the
+        usage log and the text join are untouched (the builder's idiom,
+        BE#740). A non-streaming request is one HTTP response held open
+        for the whole generation; the SDK caps that at ten minutes of
+        expected output, which a 32k cap exceeds."""
+        with client.messages.stream(**kw) as _s:
+            for _ in _s.text_stream:
+                pass
+            return _s.get_final_message()
+
     def _do(model: str, max_tokens: int, timeout: float):
         # PREFILL FALLBACK (2026-07-24, the silent-brain killer): newer
         # model families 400 on assistant prefill ("This model does not
@@ -170,7 +190,7 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
         # specific 400. Never let a shape optimization kill the brain.
         use_prefill = bool(prefill) and model not in _PREFILL_REJECTED
         try:
-            msg = client.messages.create(
+            msg = _stream_final(
                 model=model, max_tokens=max_tokens,
                 system=system,
                 messages=_messages if use_prefill
@@ -185,7 +205,7 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
                 _PREFILL_REJECTED.add(model)
                 logger.warning(f"[drl] {model} rejects assistant prefill "
                                f"— retrying bare (task={task}); remembered")
-                msg = client.messages.create(
+                msg = _stream_final(
                     model=model, max_tokens=max_tokens,
                     system=system,
                     messages=[{"role": "user", "content": user}],
