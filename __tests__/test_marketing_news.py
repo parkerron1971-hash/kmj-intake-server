@@ -159,11 +159,38 @@ def test_platform_news_asks_only_for_the_posts(monkeypatch):
 
 # ─── Routing ──────────────────────────────────────────────────────────
 
-def test_empty_archive_404s_rather_than_serving_a_thin_page(client, monkeypatch):
+def test_empty_archive_renders_noindex_rather_than_404ing(client, monkeypatch):
+    """It used to 404 to keep a thin page out of search. The footer now
+    links here from every page, so a 404 would be a dead end — noindex
+    says the same thing to a crawler without withholding the page from
+    a person who followed the link."""
     async def _none():
         return []
     monkeypatch.setattr(public_site, "_platform_news_posts", _none)
-    assert _apex(client, "/news").status_code == 404
+    r = _apex(client, "/news")
+    assert r.status_code == 200
+    assert '<meta name="robots" content="noindex">' in r.text
+
+
+def test_a_real_archive_is_indexable(client, monkeypatch, posts):
+    """The noindex belongs to the empty state alone — leaving it on once
+    posts exist would quietly delist the whole point of the feature."""
+    async def _posts():
+        return posts
+    monkeypatch.setattr(public_site, "_platform_news_posts", _posts)
+    r = _apex(client, "/news")
+    assert r.status_code == 200
+    assert "noindex" not in r.text
+
+
+def test_every_page_links_to_the_news_archive(client, monkeypatch):
+    """The footer link is unconditional, which is only safe because the
+    empty archive resolves. These two facts have to move together."""
+    async def _none():
+        return []
+    monkeypatch.setattr(public_site, "_platform_news_posts", _none)
+    for path in ("/features", "/about", "/news"):
+        assert '<a href="/news">News</a>' in _apex(client, path).text, path
 
 
 def test_archive_serves_once_there_is_something_to_read(client, monkeypatch, posts):

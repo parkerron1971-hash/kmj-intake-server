@@ -6923,13 +6923,13 @@ async def _platform_news_posts() -> List[Dict[str, Any]]:
 
 
 async def _render_platform_news_index() -> str:
-    """An empty archive is a thin page with a real URL, so it 404s until
-    there is something to read — and the sitemap only lists it when the
-    same condition holds, so the two can never disagree."""
-    posts = await _platform_news_posts()
-    if not posts:
-        raise HTTPException(404, "No news yet")
-    return marketing_pages.render_news_index(posts)
+    """The empty archive renders rather than 404ing: the footer links
+    here from every page now, and a link that 404s is a dead end. The
+    thin page the 404 was avoiding is handled by `noindex` on that
+    state instead — which keeps it out of search without withholding it
+    from people. The sitemap still omits /news until a post exists, so
+    nothing advertises an empty archive to a crawler."""
+    return marketing_pages.render_news_index(await _platform_news_posts())
 
 
 async def _render_platform_news_post(post_slug: str) -> str:
