@@ -75,7 +75,7 @@ _MIN_REDUCED_TOKENS = 256
 
 # task → (fast-family ceiling, slow-family ceiling), seconds.
 #   "signals" — DRL signal detection (SIGNAL_MAX_TOKENS≈3200)
-#   "dro"     — DRO authoring incl. minimal mode (DRO_MAX_TOKENS≈6000)
+#   "dro"     — DRO authoring incl. minimal mode (DRO_MAX_TOKENS=32000, streamed)
 #   "atelier" — bespoke section authoring (ATELIER_MAX_TOKENS≈8000)
 #   "spec"    — page-spec/copy composition (SPEC_MAX_TOKENS=4000)
 # Slow-family (Opus/Fable) ceilings are ~2x: Opus streams ~2-3x slower

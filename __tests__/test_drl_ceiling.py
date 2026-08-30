@@ -14,7 +14,7 @@ import pytest
 
 import model_ladder
 import agents.composer.drl.passes as passes
-from __tests__.test_dro_prefill_fallback import _PrefillRejectingClient, _Msg
+from __tests__.test_dro_prefill_fallback import _PrefillRejectingClient, _Msg, _FakeStream
 
 
 @pytest.fixture(autouse=True)
@@ -92,6 +92,9 @@ def test_prefill_rejection_is_remembered_per_model():
                 def create(_s, **kw):
                     _s.o.calls.append(kw)
                     return _Msg('"x": 1}')
+
+                def stream(_s, **kw):
+                    return _FakeStream(_s.create(**kw))
             self.messages = _M(self)
     acc = _Accepting()
     with mock.patch.object(passes.model_ladder, "call_with_ladder", _passthrough), \

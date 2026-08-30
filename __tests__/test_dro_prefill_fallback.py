@@ -36,6 +36,26 @@ class _Msg:
         self.usage = None
 
 
+class _FakeStream:
+    """What client.messages.stream returns: a context manager whose
+    text_stream yields the text and whose get_final_message is the
+    Message (the DRL call streams since 2026-08-29)."""
+
+    def __init__(self, msg):
+        self._msg = msg
+        self.text_stream = iter([b.text for b in msg.content])
+        self.drained = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get_final_message(self):
+        return self._msg
+
+
 class _PrefillRejectingClient:
     """First call with an assistant turn raises the live 400; a bare
     user-only conversation succeeds."""
@@ -56,6 +76,9 @@ class _PrefillRejectingClient:
                         "assistant message prefill. The conversation must "
                         "end with a user message.")
                 return _Msg('{"ok":true}')
+
+            def stream(_s, **kw):
+                return _FakeStream(_s.create(**kw))
 
         self.messages = _Messages(self)
 
@@ -86,6 +109,9 @@ def test_prefill_still_applied_when_model_accepts_it():
             class _Messages:
                 def create(_s, **kw):
                     return _Msg(',"rest":1}')
+
+                def stream(_s, **kw):
+                    return _FakeStream(_s.create(**kw))
             self.messages = _Messages()
 
     with mock.patch.object(passes.model_ladder, "call_with_ladder",
