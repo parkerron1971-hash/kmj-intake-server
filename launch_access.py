@@ -600,8 +600,14 @@ def billing_readiness(_owner=Depends(require_owner)) -> Dict[str, Any]:
 
     tiers_env = {p: bool((os.environ.get(f"STRIPE_PRICE_ID_{p.upper()}") or "").strip())
                  for p in feature_gates.PLANS}
-    overage_env = {p: bool((os.environ.get(f"STRIPE_PRICE_ID_{p.upper()}_OVERAGE") or "").strip())
-                   for p in feature_gates.PLANS}
+    # No STRIPE_PRICE_ID_*_OVERAGE check here, deliberately (2026-08-29).
+    # Pricing v2 retired postpaid overage on 2026-07-12: usage past the
+    # allowance draws down PREPAID credits (credit_ledger), and
+    # usage_metering.report_overage_to_stripe() is a permanent no-op so
+    # nothing ever reaches a Stripe metered item -- that would
+    # double-charge. Those env vars SHOULD be absent, so asserting on
+    # them pinned ready_to_flip to False forever and told the owner to
+    # go add config that would be wrong to add.
     would_break = []
     if unsubscribed:
         would_break.append(f"{len(unsubscribed)} active business(es) with no plan and a "
@@ -609,9 +615,6 @@ def billing_readiness(_owner=Depends(require_owner)) -> Dict[str, Any]:
     if not all(tiers_env.values()):
         would_break.append("Subscription price ids missing: "
                            + ", ".join(p for p, v in tiers_env.items() if not v))
-    if not all(overage_env.values()):
-        would_break.append("Overage (metered) price ids missing: "
-                           + ", ".join(p for p, v in overage_env.items() if not v))
     if not os.environ.get("STRIPE_WEBHOOK_SECRET"):
         would_break.append("STRIPE_WEBHOOK_SECRET not set — subscription state won't sync.")
 
@@ -623,7 +626,7 @@ def billing_readiness(_owner=Depends(require_owner)) -> Dict[str, Any]:
         "subscribers_by_tier": by_plan,
         "unsubscribed_non_grandfathered_businesses": len(unsubscribed),
         "weighted_usage_this_month_platform": weighted,
-        "stripe_env": {"tiers": tiers_env, "overage": overage_env,
+        "stripe_env": {"tiers": tiers_env,
                        "webhook_secret": bool(os.environ.get("STRIPE_WEBHOOK_SECRET"))},
         "preflight_issues": would_break,
         "ready_to_flip": not would_break,
