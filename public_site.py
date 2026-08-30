@@ -25,6 +25,7 @@ will wire the helpers into every page footer.
 
 import asyncio
 import html as _html
+import inspect
 import json
 import logging
 import os
@@ -6613,6 +6614,7 @@ from legal_content import (
     render_privacy_html, render_data_deletion_html,
     render_terms_html, render_help_html,
 )
+import marketing_pages
 from marketing_pages import (
     render_features, render_compare, render_faq, render_about, render_get_started,
     render_download, APP_URL as MARKETING_APP_URL,
@@ -6846,9 +6848,12 @@ async def static_widget_embed():
 # the platform's page; on a practitioner subdomain or custom domain it
 # belongs to their site (their real page, or their branded 404).
 
-async def _platform_page_or_site(request: Request, render):
-    """Serve a platform marketing/legal page ONLY on a platform host.
-    On a site host, hand the same path to that site's renderer."""
+async def _site_response_or_none(request: Request):
+    """The site half of the rule above: this path's response when the
+    host belongs to a practitioner, or None when it belongs to the
+    platform. Split out so robots.txt and sitemap.xml can apply exactly
+    the same host rule while answering with something that is not HTML.
+    """
     host = public_host(request)
     path = "/" + (request.url.path or "").lstrip("/")
 
@@ -6862,11 +6867,122 @@ async def _platform_page_or_site(request: Request, render):
         is_known_base = any(host == base or host.endswith(f".{base}")
                             for base in BASE_DOMAINS)
         if not is_known_base and "." in host:
-            result = await _serve_site_by_custom_domain(host, path)
-            if result:
-                return result
+            return await _serve_site_by_custom_domain(host, path)
+    return None
 
-    return HTMLResponse(content=render(), media_type="text/html")
+
+async def _platform_page_or_site(request: Request, render):
+    """Serve a platform marketing/legal page ONLY on a platform host.
+    On a site host, hand the same path to that site's renderer.
+
+    `render` is normally a plain function returning HTML. The news pages
+    need a database read first, so an async one is awaited instead — and
+    only AFTER the host check, so a practitioner request never pays for
+    a query against the platform's own row.
+    """
+    site = await _site_response_or_none(request)
+    if site is not None:
+        return site
+
+    html = render()
+    if inspect.isawaitable(html):
+        html = await html
+    return HTMLResponse(content=html, media_type="text/html")
+
+
+# ─── The platform's own news feed ─────────────────────────────────────
+# Stored on the business row that stands for the platform itself
+# (settings.platform_books), in the same website_content.news field a
+# practitioner's feed reads. See the NEWS section of marketing_pages.py
+# for why this renders in the marketing shell rather than on a
+# practitioner subdomain.
+
+async def _platform_news_posts() -> List[Dict[str, Any]]:
+    """Normalized, newest-first posts for mysolutionist.app/news, or []
+    when the platform row has none yet."""
+    async with httpx.AsyncClient() as client:
+        rows = await _sb(client,
+            "/businesses?settings->>platform_books=eq.true&select=settings&limit=1")
+    if not rows:
+        return []
+    settings = rows[0].get("settings") or {}
+    website_content = settings.get("website_content") or {}
+    return site_news.normalize_posts(website_content.get("news"))
+
+
+async def _render_platform_news_index() -> str:
+    """An empty archive is a thin page with a real URL, so it 404s until
+    there is something to read — and the sitemap only lists it when the
+    same condition holds, so the two can never disagree."""
+    posts = await _platform_news_posts()
+    if not posts:
+        raise HTTPException(404, "No news yet")
+    return marketing_pages.render_news_index(posts)
+
+
+async def _render_platform_news_post(post_slug: str) -> str:
+    posts = await _platform_news_posts()
+    post = site_news.find_post(posts, post_slug)
+    if not post:
+        raise HTTPException(404, "Post not found")
+    return marketing_pages.render_news_post(post)
+
+
+@router.get("/news", include_in_schema=False)
+async def public_news_index(request: Request):
+    return await _platform_page_or_site(request, _render_platform_news_index)
+
+
+@router.get("/news/{post_slug}", include_in_schema=False)
+async def public_news_post(request: Request, post_slug: str):
+    return await _platform_page_or_site(
+        request, lambda: _render_platform_news_post(post_slug))
+
+
+# ─── robots.txt + sitemap.xml, for the apex ───────────────────────────
+# Practitioner sites have had both since the findability bundle; the
+# platform's own domain had neither — /robots.txt and /sitemap.xml both
+# answered 404 on mysolutionist.app. Every marketing page listed here is
+# one that already exists and returns 200; /news is listed only when it
+# does, because a sitemap advertising a 404 is worse than no sitemap.
+
+_MARKETING_SITEMAP_PATHS = [
+    ("/", "1.0"), ("/features", "0.8"), ("/compare", "0.8"),
+    ("/faq", "0.6"), ("/about", "0.6"), ("/get-started", "0.7"),
+    ("/download", "0.5"), ("/privacy", "0.3"), ("/terms", "0.3"),
+]
+
+
+@router.get("/robots.txt", include_in_schema=False)
+async def public_robots(request: Request):
+    site = await _site_response_or_none(request)
+    if site is not None:
+        return site
+    body = ("User-agent: *\nAllow: /\n"
+            "Disallow: /start\nDisallow: /login\n\n"
+            "Sitemap: https://mysolutionist.app/sitemap.xml\n")
+    return PlainTextResponse(body)
+
+
+@router.get("/sitemap.xml", include_in_schema=False)
+async def public_sitemap(request: Request):
+    site = await _site_response_or_none(request)
+    if site is not None:
+        return site
+    origin = "https://mysolutionist.app"
+    entries = [(origin + p, pri) for p, pri in _MARKETING_SITEMAP_PATHS]
+    posts = await _platform_news_posts()
+    if posts:
+        entries.append((origin + "/news", "0.7"))
+        entries.extend((f"{origin}/news/{p['slug']}", "0.6") for p in posts)
+    urls = "".join(
+        f"<url><loc>{_html.escape(loc, quote=False)}</loc>"
+        f"<priority>{pri}</priority></url>"
+        for loc, pri in entries)
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>'
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+           f"{urls}</urlset>")
+    return Response(content=xml, media_type="application/xml")
 
 
 # Marketing routes

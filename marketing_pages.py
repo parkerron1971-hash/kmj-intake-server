@@ -25,13 +25,14 @@ import html as _html
 import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr
 
 import platform_addresses
+import site_news
 
 # Kept as the bounce-guard fallback only — see platform_addresses. Nothing
 # should print this directly; call _public_contact_email() instead.
@@ -528,6 +529,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 <meta property="og:title" content="{og_title}">
 <meta property="og:description" content="{description}">
 <meta property="og:url" content="https://mysolutionist.app{path}">
+<link rel="canonical" href="https://mysolutionist.app{path}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="The Solutionist System">
 <meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=3">
@@ -543,6 +545,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>{shared_css}{extra_css}</style>
+{head_extra}
 {pixel_script}
 </head>
 <body>
@@ -848,13 +851,18 @@ def _pixel_script() -> str:
 
 
 def _render_shell(*, title: str, description: str, content_html: str, path: str = "/",
-                  active: str = "", extra_css: str = "", extra_scripts: str = "") -> str:
+                  active: str = "", extra_css: str = "", extra_scripts: str = "",
+                  head_extra: str = "") -> str:
     """Render any page in the shared shell. `active` keys into the nav
     to mark the current page. Only about/features/compare still light a
     nav dot — faq, help and download moved to the footer when the bar was
     cut to four links, and Pricing is an in-page anchor with no active
     state of its own. The unused keys stay in the map so every existing
-    caller keeps working."""
+    caller keeps working.
+
+    `head_extra` is raw markup for <head> — the news pages use it for
+    Article schema. It is NOT escaped, so nothing derived from a post's
+    text may be passed through it unescaped."""
     active_map = {
         "ax_home":        "is-active" if path == "/"            else "",
         "ax_features":    "is-active" if active == "features"    else "",
@@ -879,6 +887,7 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
         extra_scripts=extra_scripts,
         app_url=APP_URL,
         pixel_script=_pixel_script(),
+        head_extra=head_extra,
         **active_map,
     )))
 
@@ -5849,6 +5858,159 @@ def render_get_started() -> str:
         description="Start your free trial of the Solutionist System, or ask us a question first. Self-serve: no application and no waiting list.",
         content_html=body, path="/get-started", active="get_started",
         extra_css=extra_css, extra_scripts=extra_scripts + GS_SWITCHER_SCRIPT,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# NEWS — the platform's own feed, on the platform's own domain
+# ══════════════════════════════════════════════════════════════════════
+#
+# site_news.py already renders a news feed for a PRACTITIONER's site, in
+# that practitioner's shell. This is the same data shape rendered in the
+# marketing shell instead, because the two live at different addresses
+# and only one of them is the domain every CTA on this site points at.
+#
+# Publishing to `the-solutionist-system.mysolutionist.app/news` would put
+# the company's own launch writing on a bare subdomain with no inbound
+# links, while the apex holds whatever authority the site has earned.
+# Same renderer, wrong address — so the renderer is what gets reused and
+# the shell is what changes.
+#
+# Storage is the platform business's settings.website_content.news — the
+# same field the practitioner feed reads, on the row that already stands
+# for the platform itself (settings.platform_books). Deliberately NOT a
+# business_sites row: pointing one's custom_domain at mysolutionist.app
+# would hand the apex to the practitioner site-server and take the
+# marketing site down.
+
+NEWS_CSS = """
+      .nw-wrap{max-width:760px;margin:0 auto;padding:0 24px;}
+      .nw-list{list-style:none;margin:44px 0 0;padding:0;
+        border-top:1px solid var(--border);}
+      .nw-item{padding:30px 0;border-bottom:1px solid var(--border);}
+      .nw-date{font-size:11px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;
+        color:var(--text-dim);margin:0 0 10px;}
+      .nw-item h2{font-family:var(--font-heading);font-size:23px;line-height:1.3;margin:0 0 10px;
+        letter-spacing:-0.01em;}
+      .nw-item h2 a{transition:color .15s;}
+      .nw-item h2 a:hover{color:var(--accent);}
+      .nw-sum{color:var(--text-secondary);font-size:15px;margin:0;}
+      .nw-post h1{font-family:var(--font-heading);font-size:34px;line-height:1.2;
+        letter-spacing:-0.02em;margin:14px 0 18px;}
+      .nw-body{color:var(--text-secondary);font-size:16.5px;line-height:1.75;
+        margin-top:26px;}
+      .nw-body p{margin:0 0 20px;}
+      .nw-img{border-radius:12px;border:1px solid var(--border);margin:26px 0 0;}
+      .nw-back{display:inline-block;margin-top:38px;font-size:13.5px;color:var(--text-muted);
+        transition:color .15s;}
+      .nw-back:hover{color:var(--accent);}
+      .nw-cta{margin:56px 0 0;padding:28px;border-radius:14px;border:1px solid var(--border);
+        background:var(--surface);text-align:center;}
+      .nw-cta p{color:var(--text-secondary);font-size:15px;margin:0 0 16px;}
+      @media (max-width:640px){
+        .nw-post h1{font-size:27px;}
+        .nw-item h2{font-size:20px;}
+        .nw-body{font-size:16px;}
+        .nw-wrap{padding:0 18px;}
+      }
+"""
+
+_NEWS_CTA = """
+      <div class="nw-cta">
+        <p>The Solutionist System runs the whole business from one place &mdash;
+           bookings, clients, invoices, and a chief of staff that never acts
+           without your approval.</p>
+        <a class="btn-primary" href="/start">Start your free trial &rarr;</a>
+      </div>
+"""
+
+
+def render_news_index(posts: List[Dict[str, Any]]) -> str:
+    """The archive. Callers must not reach here with an empty list — an
+    empty archive is a thin page with a real URL, so public_site 404s it
+    instead and the sitemap never advertises it."""
+    items = []
+    for post in posts:
+        date_html = ""
+        when = site_news.display_date(post.get("published_at"))
+        if when:
+            date_html = f'<p class="nw-date">{_html.escape(when)}</p>'
+        items.append(
+            '<li class="nw-item">'
+            f'{date_html}'
+            f'<h2><a href="/news/{_html.escape(post["slug"])}">'
+            f'{_html.escape(post["title"])}</a></h2>'
+            f'<p class="nw-sum">{_html.escape(site_news.summarize(post["body"]))}</p>'
+            '</li>'
+        )
+
+    body = f"""
+    <section class="section">
+      <div class="nw-wrap">
+        <div class="page-hero">
+          <span class="eyebrow">News</span>
+          <h1>What we shipped, and why</h1>
+        </div>
+        <ul class="nw-list">{''.join(items)}</ul>
+      </div>
+    </section>
+    """
+    return _render_shell(
+        title="News",
+        description="Product news from the Solutionist System — what shipped, what changed, and what it means for the people running a business on it.",
+        content_html=body, path="/news", extra_css=NEWS_CSS,
+    )
+
+
+def render_news_post(post: Dict[str, Any]) -> str:
+    """One post at its own address. The stable URL is the whole point:
+    it keeps earning long after a social post has scrolled away."""
+    url = f"https://mysolutionist.app/news/{post['slug']}"
+    when = site_news.display_date(post.get("published_at"))
+    date_html = f'<p class="nw-date">{_html.escape(when)}</p>' if when else ""
+
+    image_html = ""
+    if post.get("image_url"):
+        image_html = (f'<img class="nw-img" src="{_html.escape(post["image_url"])}" '
+                      f'alt="" loading="lazy" />')
+
+    schema = {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": post["title"][:110],
+        "description": site_news.summarize(post["body"]),
+        "mainEntityOfPage": {"@type": "WebPage", "@id": url},
+        "url": url,
+        "publisher": {"@type": "Organization", "name": SITE_NAME,
+                      "url": "https://mysolutionist.app"},
+        "author": {"@type": "Organization", "name": SITE_NAME},
+    }
+    if post.get("published_at"):
+        schema["datePublished"] = post["published_at"].isoformat()
+    if post.get("image_url"):
+        schema["image"] = post["image_url"]
+    # json.dumps escapes nothing HTML-significant except via ensure_ascii;
+    # close the one sequence that could break out of the script element.
+    schema_json = json.dumps(schema).replace("<", "\\u003c")
+    head_extra = f'<script type="application/ld+json">{schema_json}</script>'
+
+    body = f"""
+    <section class="section">
+      <div class="nw-wrap nw-post">
+        {date_html}
+        <h1>{_html.escape(post['title'])}</h1>
+        {image_html}
+        <div class="nw-body">{site_news.paragraphs(post['body'])}</div>
+        {_NEWS_CTA}
+        <a class="nw-back" href="/news">&larr; All news</a>
+      </div>
+    </section>
+    """
+    return _render_shell(
+        title=post["title"],
+        description=site_news.summarize(post["body"]),
+        content_html=body, path=f"/news/{post['slug']}", extra_css=NEWS_CSS,
+        head_extra=head_extra,
     )
 
 

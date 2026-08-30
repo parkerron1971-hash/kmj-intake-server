@@ -162,14 +162,32 @@ def summarize(body: str, limit: int = _SUMMARY_CHARS) -> str:
     return flat[:limit].rsplit(" ", 1)[0].rstrip(",.;:") + "…"
 
 
-def _paragraphs(body: str) -> str:
-    """The practitioner's line breaks, preserved as paragraphs. Their
-    text is escaped first — we render their words, not their markup."""
+def paragraphs(body: str, style: str = "") -> str:
+    """The author's line breaks, preserved as paragraphs. Their text is
+    escaped first — we render their words, not their markup.
+
+    `style` is empty by default because the other caller (the marketing
+    site) brings its own stylesheet, and an inline style would silently
+    beat it. The practitioner shell has no stylesheet for these, so it
+    passes one in."""
+    attr = f' style="{style}"' if style else ""
     blocks = [b.strip() for b in re.split(r"\n\s*\n", str(body or "")) if b.strip()]
     return "".join(
-        '<p style="margin:0 0 18px;">' + _esc(b).replace("\n", "<br />") + "</p>"
+        f"<p{attr}>" + _esc(b).replace("\n", "<br />") + "</p>"
         for b in blocks
     )
+
+
+def _paragraphs(body: str) -> str:
+    """The practitioner-shell form: same markup, with the inline margin
+    that shell has always relied on."""
+    return paragraphs(body, "margin:0 0 18px;")
+
+
+def display_date(when: Optional[datetime]) -> str:
+    """Public form of _display_date — the marketing site renders the
+    same dates in its own shell (marketing_pages.render_news_index)."""
+    return _display_date(when)
 
 
 def _page_shell(title: str, description: str, canonical: str, brand: str,
