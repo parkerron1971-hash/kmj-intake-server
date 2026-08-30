@@ -160,7 +160,7 @@ def test_judge_prompt_carries_the_acceptance_test_inputs():
     assert "CANDIDATE A (stance: concept-literal; shares 8/8" in user  # measured vs cohort
     assert "CANDIDATE B (stance: tension-led; shares" in user
     assert "shows the thing" in user and "quiet gallery" in user         # both summaries
-    assert "evidence" not in user.split("CANDIDATE A")[1]                # trimmed DROs
+    assert '"evidence":' not in user.split("CANDIDATE A")[1]             # trimmed DROs (no signal rows)
     for word in ("FIRST FIVE SECONDS", "MATERIAL TRUTH", "OWNER'S DIRECTION", "ONE ORGANIZING IDEA"):
         assert word in dj._SYSTEM
 
