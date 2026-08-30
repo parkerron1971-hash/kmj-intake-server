@@ -387,6 +387,10 @@ from entity_groups_router import router as entity_groups_router
 app.include_router(entity_groups_router)
 from launch_access import router as launch_access_router
 app.include_router(launch_access_router)
+# Approving a post, and scheduling what was approved — the door that
+# satisfies the unattended gate in post_approval.py.
+from content_approval import router as content_approval_router
+app.include_router(content_approval_router)
 # Arc 25 - practitioner referral loop (codes + attribution + rewards)
 from referrals import router as referrals_router
 app.include_router(referrals_router)

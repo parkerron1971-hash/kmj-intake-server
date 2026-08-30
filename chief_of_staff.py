@@ -7714,6 +7714,26 @@ async def handle_publish_post(client, biz, action) -> Dict:
     ig_user_id = page.get("ig_user_id")
     image_url = post.get("image_url") or None
 
+    # ── The unattended gate ──────────────────────────────────────────
+    # Checked AFTER the Page is resolved, because an approval names a
+    # Page and there is nothing to compare against until this run has
+    # picked one.
+    #
+    # `_unattended` is set by chief_scheduler on every run it makes, and
+    # is overwritten there rather than read from the stored payload — a
+    # schedule that could claim to be prompted would be a schedule that
+    # approves itself.
+    #
+    # The prompted path never reaches this. A practitioner asking for
+    # the post IS the approval, and this must not stand between them and
+    # their own work.
+    if action.get("_unattended"):
+        import post_approval
+        held = post_approval.refusal(post, page_id=page.get("page_id") or "",
+                                     to_instagram=to_instagram)
+        if held:
+            return _fail("publish_post", held)
+
     if to_instagram and not ig_user_id:
         return _fail("publish_post", "Instagram not linked to that Page — link IG Business account first")
     if to_instagram and not image_url:
