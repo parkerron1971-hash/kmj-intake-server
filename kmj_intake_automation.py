@@ -1230,31 +1230,48 @@ async def startup():
                           "interval", hours=24, id="feed2_distill")
     except Exception as e:
         print(f"   [warn] feed2 distillation job not scheduled: {e}")
-    # Feed 1 → rows. Projects the vertical_intelligence profiles into
-    # vertical_knowledge so seeded knowledge lives where Feed 2's does.
-    # Weekly and diff-first: it writes only what is genuinely new, so the
-    # steady state costs one cheap read per vertical and no embeddings.
-    # Scheduled rather than manual because "remember to run the seeder
-    # after editing a profile" is the kind of step that gets forgotten
-    # exactly once and then stays wrong. Kill switch: VERTICAL_KNOWLEDGE=off.
+    # Feed 1 and Feed 1b → rows. Both project Python source-of-truth into
+    # vertical_knowledge; both are diff-first, so the steady state is one
+    # cheap read per vertical and no embeddings.
+    #
+    # CRON, NOT INTERVAL — and that is the whole point of this block.
+    #
+    # An interval job's first run is now+interval and the clock restarts
+    # with the process. stagger_long_interval_first_runs() exists to fix
+    # exactly that, and it does: it hands every long-interval job an
+    # explicit next_run_time at boot. But the slots are
+    # STAGGER_SLOT_MINUTES apart and CUMULATIVE, so a job late in the
+    # registration order gets ~20-25 minutes, not two. On 2026-08-31 the
+    # worker armed twelve jobs; vertical_curate was eleventh, came due at
+    # 11:16:32, and a merge redeployed the worker at 11:16:09 — twenty
+    # three seconds early. Its sibling vertical_seed, one slot and two
+    # minutes ahead, fired and wrote its rows. The stagger did not fail;
+    # it shrank the starvation window from 168h to ~24min, which is still
+    # shorter than the gap between merges on a busy afternoon.
+    #
+    # A cron trigger has a real wall-clock time, so a redeploy does not
+    # reset it — and stagger_long_interval_first_runs deliberately skips
+    # cron jobs for that reason. DAILY rather than weekly because the job
+    # is nearly free when there is nothing new, and because a weekly
+    # cadence means an edit to a profile or playbook can sit a week before
+    # it reaches Chief. Offset by ten minutes so the two never contend.
+    #
+    # Kill switch (both): VERTICAL_KNOWLEDGE=off.
     try:
         import vertical_knowledge as _vk
         scheduler.add_job(g("vertical_seed", _vk.seed_tick),
-                          "interval", hours=168, id="vertical_seed")
+                          "cron", hour=4, minute=10, id="vertical_seed")
     except Exception as e:
         print(f"   [warn] vertical seed job not scheduled: {e}")
-    # Feed 1b → rows. Projects vertical_playbook (how each trade actually
-    # works) in as source='curated'. Unlike the seed rows above, these are
-    # RETRIEVED — build_vertical_learned_block reads curated + learned — so
-    # this tick is the step that makes an edit to the playbook reach Chief.
-    # Weekly and diff-first for the same reason as the seeder: upsert embeds
-    # before it writes, so a blind re-run would pay for every embedding to
-    # produce nothing. Kill switch: VERTICAL_KNOWLEDGE=off (shared with the
-    # store it writes to — one switch turns the whole shelf off).
+    # Feed 1b differs from the seeder in one way that matters: these rows
+    # are RETRIEVED. build_vertical_learned_block reads curated + learned,
+    # so this tick is the step that makes an edit to vertical_playbook
+    # actually reach Chief — which is why it is the one that must not be
+    # starved.
     try:
         import vertical_playbook as _vpb
         scheduler.add_job(g("vertical_curate", _vpb.curate_tick),
-                          "interval", hours=168, id="vertical_curate")
+                          "cron", hour=4, minute=20, id="vertical_curate")
     except Exception as e:
         print(f"   [warn] vertical curate job not scheduled: {e}")
     # One calendar (2026-07-10) — mirror bookings into sessions so the

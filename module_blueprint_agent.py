@@ -103,12 +103,31 @@ def _sb_post(path: str, body: Any) -> Optional[Any]:
 # ──────────────────────────────────────────────────────────────
 
 def get_blueprint(business_type: str) -> List[Dict[str, Any]]:
-    """All blueprint rows for a business type, ordered by sort_order."""
+    """All blueprint rows for a business type, ordered by sort_order.
+
+    Resolves ALIASES first. The table is keyed canonically, so the raw
+    lookup this replaces returned zero rows for every alias — and zero
+    rows is indistinguishable from "this vertical has no blueprint":
+    `provision_modules` creates nothing and reports success, so a business
+    stamped 'agency', 'church' or 'coaching' got an empty workspace with
+    no error raised anywhere. 'agency' was the most common type in the
+    live businesses table.
+
+    Fixed here rather than by adding duplicate rows per alias: the alias
+    set grows, and a data copy per synonym drifts the moment one side is
+    edited."""
     if not business_type:
         return []
+    try:
+        import vertical_registry
+        key = vertical_registry.resolve(business_type)
+    except Exception:
+        # Registry unavailable — fall back to the raw string rather than
+        # returning nothing. A canonical type still provisions correctly.
+        key = (business_type or "").strip().lower()
     rows = _sb_get(
         f"/business_type_module_blueprint"
-        f"?business_type=eq.{business_type}&order=sort_order.asc"
+        f"?business_type=eq.{key}&order=sort_order.asc"
     )
     return rows if isinstance(rows, list) else []
 
