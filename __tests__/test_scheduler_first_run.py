@@ -115,3 +115,66 @@ class TestTheRealRegistration:
     def test_threshold_sits_between_the_two_populations(self):
         """Above the frequent drains, below the daily reports."""
         assert 5 < kia.STAGGER_THRESHOLD_MINUTES <= 60
+
+
+class TestCronJobsAreImmuneToTheDeployReset:
+    """The stagger shrinks the starvation window; it does not close it.
+
+    Slots are STAGGER_SLOT_MINUTES apart and CUMULATIVE, so a job late in
+    the registration order gets ~20-25 minutes rather than two. On
+    2026-08-31 the production worker armed twelve jobs; `vertical_curate`
+    was eleventh, came due at 11:16:32, and a merge redeployed the worker
+    at 11:16:09 — twenty-three seconds early. Its sibling `vertical_seed`,
+    one slot ahead, fired and wrote its rows.
+
+    A cron trigger carries a real wall-clock time, so a redeploy cannot
+    reset it. These tests pin the two halves of that: the stagger leaves
+    cron jobs alone, and the two projection jobs are actually cron.
+    """
+
+    def test_the_stagger_does_not_touch_a_cron_job(self, sched):
+        """A pending job has no next_run_time until something sets one, so
+        the assertion is that the stagger neither reports the cron job nor
+        gives it one — the wall-clock trigger keeps owning the schedule."""
+        from apscheduler.triggers.cron import CronTrigger
+
+        sched.add_job(_noop, CronTrigger(hour=4, minute=20), id="nightly")
+        _add(sched, "weekly_interval", hours=168)
+
+        moved = kia.stagger_long_interval_first_runs(sched, now=NOW)
+
+        assert "nightly" not in moved
+        assert "weekly_interval" in moved, "the control job must still be moved"
+        nightly = sched.get_job("nightly")
+        assert isinstance(nightly.trigger, CronTrigger)
+        assert getattr(nightly, "next_run_time", None) is None, (
+            "the stagger gave a cron job a next_run_time, which would "
+            "override the wall-clock time that makes it deploy-proof")
+
+    def test_a_late_slot_interval_job_really_does_wait_20_plus_minutes(self, sched):
+        """The number that made this worth changing. Twelve long-interval
+        jobs put the eleventh over twenty minutes out — long enough for a
+        merge to land on top of it."""
+        for i in range(12):
+            _add(sched, f"job{i}", hours=168)
+        kia.stagger_long_interval_first_runs(sched, now=NOW)
+        eleventh = sched.get_job("job10").next_run_time
+        assert (eleventh - NOW) >= timedelta(minutes=20), (
+            f"eleventh slot is only {(eleventh - NOW)} out — if the slot "
+            f"width changed, the reasoning in the vertical_seed/"
+            f"vertical_curate comment needs revisiting")
+
+    def test_the_two_projection_jobs_are_registered_as_cron(self):
+        """A tripwire, not a proof: if someone converts these back to an
+        interval trigger, the deploy-reset starvation comes back and the
+        symptom is silence — the rows simply never appear, which is
+        indistinguishable from nothing new to write."""
+        import inspect
+        src = inspect.getsource(kia.startup)
+        for job_id in ("vertical_seed", "vertical_curate"):
+            assert f'id="{job_id}"' in src, f"{job_id} is not registered"
+            # The add_job call for this id must say "cron", not "interval".
+            call_start = src.rindex("scheduler.add_job", 0, src.index(f'id="{job_id}"'))
+            call = src[call_start:src.index(f'id="{job_id}"')]
+            assert '"cron"' in call, f"{job_id} is not a cron job"
+            assert '"interval"' not in call, f"{job_id} is back on an interval trigger"
