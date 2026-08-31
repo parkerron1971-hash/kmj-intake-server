@@ -17,8 +17,11 @@ Endpoints:
     every data-override-target found in the currently-rendered preview
     HTML. Used by the inline-edit UI to discover what's editable.
 
-Owner gating: NONE (matches single-tenant-anon pattern across
-slot_system, voice_depth, public_site).
+Owner gating: `business_access` on path-scoped routes, `assert_access`
+when the business id arrives in the body (`POST /chief/override`).
+Reads are `viewer`; writes are `admin`. Same ranks as brand_engine
+and the slot router — a member can see the live copy, only admin/owner
+can change it.
 
 Registration: BEFORE public_site_router in kmj_intake_automation.py
 (public_site_router defines the catch-all `/{path:path}` and must
@@ -34,6 +37,7 @@ from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import UserSession
+from business_access import assert_access, business_access
 
 from agents.override_system import override_storage
 from agents.override_system.override_resolver import find_override_targets
@@ -61,7 +65,7 @@ class UpsertOverrideRequest(BaseModel):
 def list_overrides_for_business(
     business_id: str,
     override_type: Optional[str] = None,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("viewer")),
 ) -> Dict[str, Any]:
     """Return every override for `business_id`, optionally filtered by
     type via ?override_type=text. Ordered by override_type, target_path.
@@ -83,7 +87,7 @@ def get_one_override(
     business_id: str,
     override_type: str,
     target_path: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("viewer")),
 ) -> Dict[str, Any]:
     """Return a single override by (business_id, type, path). 404 if
     no such row. `target_path` uses `:path` so dotted/slashed paths
@@ -107,7 +111,7 @@ def get_one_override(
 @router.post("/override")
 def upsert_override(
     req: UpsertOverrideRequest,
-    _: UserSession = Depends(sb_clients.authed_request),
+    session: UserSession = Depends(sb_clients.authed_request),
 ) -> Dict[str, Any]:
     """Insert or update an override on the (business_id, override_type,
     target_path) UNIQUE constraint.
@@ -119,7 +123,11 @@ def upsert_override(
 
     color_role and slot_image upserts persist but are NO-OPs at render
     in PART 1 (see override_resolver.py). They land in the table so
-    PART 3 / future passes can read them once the resolvers are wired."""
+    PART 3 / future passes can read them once the resolvers are wired.
+
+    business_id is in the body, so the FastAPI dependency cannot see it.
+    assert_access is the same gate as business_access("admin")."""
+    assert_access(req.business_id, session.user, "admin")
     # Arc 4 "Trust & Polish" — reconciliation groundwork: text overrides
     # need original_value (the composer copy the edit replaced) so a
     # future recompose can tell "this override still targets the same
@@ -211,7 +219,7 @@ def upsert_override(
 def delete_one_override(
     business_id: str,
     override_id: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> Dict[str, Any]:
     """Revert by deleting an override row. business_id is scoped into
     the DELETE WHERE clause so callers can't accidentally delete an
@@ -236,7 +244,7 @@ def delete_override_by_path(
     business_id: str,
     override_type: str,
     target_path: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> Dict[str, Any]:
     """Revert by (business_id, override_type, target_path). Canonical
     'revert this edit' path for the inline-edit UI — no need to look up
@@ -267,7 +275,7 @@ def delete_override_by_path(
 @router.get("/override/_diag/targets/{business_id}/preview")
 def diag_list_targets_in_preview(
     business_id: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("viewer")),
 ) -> Dict[str, Any]:
     """Enumerate every data-override-target element currently present
     in the persisted preview HTML for `business_id`. Returns the tag
