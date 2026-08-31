@@ -24,8 +24,10 @@ from fastapi import APIRouter
 
 from vertical_intelligence import (
     get_profile,
+    is_mapped,
     list_known_verticals,
 )
+import vertical_registry
 from vertical_terminology import BASE_TERMS, VERTICAL_TERMS
 import sb_clients
 
@@ -83,7 +85,13 @@ def get_vertical(
             business_type = biz_type or profile_type
 
     profile = get_profile(business_type)
-    bt = (business_type or "").lower().strip()
+    # Canonical key for every map lookup below. `get_profile` resolves
+    # aliases itself, but this local `bt` was the RAW string and drove the
+    # terminology lookup and `is_known` — so a business stamped with any
+    # alias got its vertical's voice and offerings alongside the BASE
+    # dictionary and is_known=False. See the is_known comment below for
+    # what that second half actually cost.
+    bt = vertical_registry.resolve(business_type)
     vertical_terms = VERTICAL_TERMS.get(bt) or {}
     effective_terms = {**BASE_TERMS, **vertical_terms, **overrides_terms}
 
@@ -120,11 +128,24 @@ def get_vertical(
         "business_type": bt or "(unset)",
         # Path C Phase 1e — surface which value won the fallback chain
         # so the frontend can render diagnostic data attributes / log
-        # the resolution. Equals 'business_type' but explicit + safer
-        # for callers that want the unresolved input separately.
-        "resolved_business_type": bt or None,
+        # the resolution. This answers "which INPUT won" (businesses.type
+        # vs business_profiles.business_type vs the passed-in value), which
+        # is a different question from "which vertical is it" — so it keeps
+        # reporting the raw winner and `canonical_vertical` below carries
+        # the resolved key.
+        "resolved_business_type": business_type or None,
+        "canonical_vertical": bt or None,
         "business_id": business_id,
-        "is_known": bt in set(list_known_verticals()),
+        # is_known was `bt in list_known_verticals()` on the RAW string, and
+        # the profile keys are canonical-only — so every registry alias came
+        # back False. That was not cosmetic: BusinessProfileReview does
+        #     if (!isKnown || questions.length === 0) return null;
+        # so the whole vertical onboarding-questions section silently did
+        # not render for a business stamped 'agency', 'church', 'attorney'
+        # or 'plumber' — while the questions it would have shown were
+        # sitting in the same response payload. 'agency' was the most
+        # common type in the live table.
+        "is_known": is_mapped(business_type),
         "voice": profile.get("voice"),
         "onboarding_questions": onboarding_questions,
         "offering_suggestions": offering_suggestions,
