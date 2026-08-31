@@ -840,8 +840,17 @@ def get_module_suggestions(business_type: Optional[str]) -> List[Dict[str, Any]]
 
 # ─── Phase G — Chief bookkeeping intelligence (per-archetype) ─────────
 # Kept as a side map (not woven into each VerticalProfile) so existing
-# profile consumers are untouched. Generic baseline + a few self-employed
-# verticals that have distinct bookkeeping framing.
+# profile consumers are untouched. Generic baseline + one entry per
+# canonical vertical that has distinct bookkeeping framing — which is all
+# of them except 'custom', where the vertical itself is still unknown.
+#
+# SCOPE: this is CATEGORISATION framing — which bucket a transaction
+# belongs in, and what a practitioner in this trade routinely gets wrong.
+# It is read by chief_bookkeeping when Chief proposes how to book
+# something. It is not tax advice and must not grow into it: anything
+# genuinely jurisdiction- or circumstance-dependent (a housing allowance,
+# a nexus question) names the boundary and points at the practitioner's
+# accountant rather than answering for them.
 _BOOKKEEPING_GENERIC: Dict[str, Any] = {
     "category_note": "",
     "nudges": ["Set aside for taxes as money comes in."],
@@ -870,6 +879,81 @@ BOOKKEEPING_BY_VERTICAL: Dict[str, Dict[str, Any]] = {
         "category_note": "Course and coaching revenue vs. affiliate/sponsorship income may be taxed differently.",
         "nudges": ["Quarterly estimated taxes apply to self-employment income."],
     },
+    # ── Added 2026-08-30. The five above shipped with Phase G and the
+    # other nine verticals fell to _BOOKKEEPING_GENERIC — a single line
+    # ("Set aside for taxes as money comes in") for a contractor holding
+    # customer deposits, a church holding designated gifts and a nonprofit
+    # holding restricted grants alike. Each entry below names the ONE
+    # miscategorisation that vertical actually makes, because Chief reads
+    # this when it proposes how to book a transaction.
+    "contractor": {
+        "category_note": "A deposit taken before work starts is money owed until the job is "
+                         "done, not revenue on the day it lands. Keep materials apart from "
+                         "labor — job costing and, in most states, sales tax both turn on "
+                         "the split.",
+        "nudges": ["Subcontractors paid $600+ across the year need a 1099.",
+                   "Quarterly estimated taxes apply to self-employment income."],
+    },
+    "personal_services": {
+        "category_note": "Tips belong to whoever earned them and are not shop revenue. Keep "
+                         "retail product sales apart from service revenue — product is "
+                         "typically sales-taxable where the service is not.",
+        "nudges": ["Booth rent collected from stylists is rental income, not service revenue.",
+                   "Quarterly estimated taxes apply to self-employment income."],
+    },
+    "fitness_wellness": {
+        "category_note": "Memberships and class packs are paid up front but earned over time "
+                         "— the unused balance is sessions still owed, not revenue yet.",
+        "nudges": ["Retail (supplements, gear) is usually taxed differently from service revenue.",
+                   "Quarterly estimated taxes apply to self-employment income."],
+    },
+    "course_creator": {
+        "category_note": "A sale is earned when the refund window closes, not when the payment "
+                         "lands. Record the GROSS and the platform or affiliate fee separately "
+                         "— netting them hides the fee and understates revenue.",
+        "nudges": ["Digital products can trigger sales tax or VAT where the BUYER is, not where you are.",
+                   "Affiliates paid $600+ across the year need a 1099."],
+    },
+    "service_provider": {
+        # service_provider is the deliberate generic baseline for VOICE
+        # (see vertical_registry.KNOWN_GAPS) — that ruling is about tone,
+        # not about money. Deposits and pass-through expenses are concrete
+        # and get mis-booked the same way whatever the trade.
+        "category_note": "Deposits and retainers are work owed until delivered. Reimbursed "
+                         "expenses pass through — they are not income you keep.",
+        "nudges": ["Contractors you pay $600+ across the year need a 1099.",
+                   "Quarterly estimated taxes apply to self-employment income."],
+    },
+    "therapist": {
+        # Money only. Clinical records stay out of scope (vertical_scope);
+        # nothing here reads, stores or infers session content, and a
+        # no-show fee is a billing fact, not a clinical one.
+        "category_note": "Private pay and insurance reimbursement behave differently — a claim "
+                         "paid months later still belongs to the date of service. Track the two "
+                         "apart, and sliding-scale discounts as a reduction rather than a write-off.",
+        "nudges": ["No-show and late-cancellation fees are taxable revenue.",
+                   "Quarterly estimated taxes apply to self-employment income."],
+    },
+    "ministry": {
+        "category_note": "A designated gift is restricted — given for a stated purpose, it "
+                         "cannot fund general operations. Track designated apart from "
+                         "undesignated giving; the distinction is the books' whole job here.",
+        "nudges": ["A gift of $250+ needs a written acknowledgment before the giver files.",
+                   "A minister's housing allowance is treated differently from salary — "
+                   "worth confirming with your accountant."],
+    },
+    "nonprofit": {
+        "category_note": "Restricted funds carry the donor's conditions with them and are not "
+                         "available for general operating until released. Grant money usually "
+                         "arrives with reporting attached — book it so the report is possible.",
+        "nudges": ["A gift of $250+ needs a written acknowledgment before the donor files.",
+                   "Form 990 is due the 15th day of the 5th month after your fiscal year ends."],
+    },
+    # 'custom' is deliberately absent. vertical_registry.KNOWN_GAPS marks it
+    # "intentionally GENERIC — triggers Chief interactive discovery": the
+    # whole point is that the system does not yet know what the business
+    # does, so inventing a bookkeeping note for it would be inventing the
+    # vertical. It stays on _BOOKKEEPING_GENERIC until discovery names one.
 }
 
 

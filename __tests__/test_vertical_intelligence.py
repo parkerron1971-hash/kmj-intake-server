@@ -129,8 +129,11 @@ def test_bookkeeping_resolves_aliases_too():
     assert "trust" in get_bookkeeping("attorney")["category_note"].lower()
     assert get_bookkeeping("agency") == get_bookkeeping("creative")
     assert get_bookkeeping("coaching") == get_bookkeeping("coach")
-    # A vertical with no entry still gets the baseline, not a KeyError.
-    assert get_bookkeeping("plumber") == _BOOKKEEPING_GENERIC
+    assert get_bookkeeping("plumber") == get_bookkeeping("contractor")
+    # A type with no entry still gets the baseline, not a KeyError.
+    # 'florist' resolves to 'custom', the one vertical left deliberately
+    # without bookkeeping framing.
+    assert get_bookkeeping("florist") == _BOOKKEEPING_GENERIC
     assert get_bookkeeping(None) == _BOOKKEEPING_GENERIC
 
 
@@ -294,3 +297,72 @@ def test_build_context_block_under_token_budget():
     for vertical in list_known_verticals():
         block = build_vertical_context_block({"type": vertical})
         assert len(block) < 1500, f"{vertical} block is {len(block)} chars"
+
+
+# ─── Bookkeeping coverage ───────────────────────────────────────────
+
+
+def test_every_vertical_has_bookkeeping_framing_except_custom():
+    """Nine of fourteen verticals used to fall to _BOOKKEEPING_GENERIC.
+
+    That single line — "Set aside for taxes as money comes in" — was what
+    Chief had to go on when booking a contractor's customer deposit, a
+    church's designated gift and a nonprofit's restricted grant. All three
+    are money the business holds and does not own, and all three were
+    bookable as revenue with nothing in the prompt saying otherwise.
+
+    'custom' is the deliberate exception: the registry marks it
+    "intentionally GENERIC — triggers Chief interactive discovery", so
+    writing it a bookkeeping note would mean inventing the vertical."""
+    import vertical_registry as reg
+    from vertical_intelligence import BOOKKEEPING_BY_VERTICAL, get_bookkeeping
+
+    missing = [v for v in reg.canonical_keys()
+               if v != "custom" and v not in BOOKKEEPING_BY_VERTICAL]
+    assert not missing, f"verticals with no bookkeeping framing: {missing}"
+
+    assert "custom" not in BOOKKEEPING_BY_VERTICAL
+    assert get_bookkeeping("custom")["category_note"] == ""
+
+    for vertical, entry in BOOKKEEPING_BY_VERTICAL.items():
+        assert entry.get("category_note"), f"{vertical} has an empty note"
+        assert entry.get("nudges"), f"{vertical} has no nudges"
+
+
+def test_restricted_fund_verticals_say_the_money_is_not_available():
+    """The specific error each of these exists to prevent: treating money
+    held under someone else's conditions as spendable revenue."""
+    from vertical_intelligence import get_bookkeeping
+
+    assert "restricted" in get_bookkeeping("nonprofit")["category_note"].lower()
+    assert "designated" in get_bookkeeping("ministry")["category_note"].lower()
+    assert "trust" in get_bookkeeping("lawyer")["category_note"].lower()
+    # A deposit is the same shape of error in a trade.
+    assert "deposit" in get_bookkeeping("contractor")["category_note"].lower()
+
+
+def test_therapist_bookkeeping_stays_out_of_clinical_scope():
+    """The therapist vertical launched with clinical records out of scope
+    (vertical_scope.py). Bookkeeping framing is admin and billing, and has
+    to stay that way — a note that reached for session content would put
+    the narrowed launch's whole premise in the prompt."""
+    from vertical_intelligence import get_bookkeeping
+
+    entry = get_bookkeeping("therapist")
+    blob = (entry["category_note"] + " " + " ".join(entry["nudges"])).lower()
+    for forbidden in ("diagnosis", "progress note", "clinical note",
+                      "session content", "treatment plan", "symptom"):
+        assert forbidden not in blob, (
+            f"therapist bookkeeping framing must not mention '{forbidden}'")
+
+
+def test_bookkeeping_framing_does_not_pose_as_tax_advice():
+    """Jurisdiction- and circumstance-dependent claims point at the
+    practitioner's accountant instead of answering for them. The module
+    comment says so; this asserts the one entry most likely to drift."""
+    from vertical_intelligence import get_bookkeeping
+
+    ministry = " ".join(get_bookkeeping("ministry")["nudges"]).lower()
+    assert "housing allowance" in ministry
+    assert "accountant" in ministry, (
+        "the housing-allowance nudge must defer, not rule")
