@@ -328,6 +328,52 @@ PLAYBOOK: Dict[str, List[Dict[str, str]]] = {
          "content": "Tax season and January are the two windows where demand for financial "
                     "education spikes."},
     ],
+    "ecommerce": [
+        {"kind": KIND_PLAYBOOK,
+         "content": "Carts are abandoned at the shipping cost far more often than at the "
+                    "product. The same number shown early reads as the price; shown at "
+                    "checkout it reads as a surprise."},
+        {"kind": KIND_PLAYBOOK,
+         "content": "A stock-out costs more than the missed sale — the customer finds whoever "
+                    "does have it and often stays there. Reorder against lead time, not "
+                    "against zero."},
+        {"kind": KIND_PLAYBOOK,
+         "content": "Returns are a cost of selling online, not a failure. A return policy that "
+                    "is hard to find raises support load and chargebacks more than it prevents "
+                    "returns."},
+        {"kind": KIND_SIGNAL,
+         "content": "Watch the share of orders from returning customers, not order count alone. "
+                    "A store growing only on first-time buyers is re-buying its revenue every "
+                    "month."},
+        {"kind": KIND_OBJECTION,
+         "content": "Shoppers compare the delivered price, not the listed one. A listing that "
+                    "is cheaper until checkout loses to the one that was honest up front."},
+        {"kind": KIND_SEASON,
+         "content": "Q4 dominates and the run-up starts well before it. January is returns and "
+                    "support volume rather than sales."},
+    ],
+    "saas": [
+        {"kind": KIND_PLAYBOOK,
+         "content": "Churn is decided in the first weeks, not at renewal. An account that never "
+                    "reached the thing it signed up to do has already gone; the cancellation is "
+                    "the paperwork catching up."},
+        {"kind": KIND_PLAYBOOK,
+         "content": "Usage leads and billing lags. An account whose logins stopped is a renewal "
+                    "that has already failed, and the invoice is the last place it shows."},
+        {"kind": KIND_PLAYBOOK,
+         "content": "Annual plans smooth cash and hide churn — a customer who stopped using it "
+                    "in month two still reads as revenue until the renewal that never comes."},
+        {"kind": KIND_SIGNAL,
+         "content": "Net revenue retention — expansion from existing accounts minus what "
+                    "churned — answers whether the business grows without new logos. A signup "
+                    "count cannot answer that."},
+        {"kind": KIND_OBJECTION,
+         "content": "Prospects compare feature lists and buy on the one job they came to do. A "
+                    "demo that tours the product loses to one that does that job."},
+        {"kind": KIND_SEASON,
+         "content": "Enterprise buying follows budget cycles and stalls over holidays. "
+                    "Self-serve signups spike in January and September."},
+    ],
     "service_provider": [
         {"kind": KIND_PLAYBOOK,
          "content": "A quote that isn't followed up loses to whoever did. Most of this work is "

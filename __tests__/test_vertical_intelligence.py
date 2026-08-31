@@ -366,3 +366,86 @@ def test_bookkeeping_framing_does_not_pose_as_tax_advice():
     assert "housing allowance" in ministry
     assert "accountant" in ministry, (
         "the housing-allowance nudge must defer, not rule")
+
+
+# ─── ecommerce + saas (added 2026-08-31) ────────────────────────────
+
+
+def test_registry_has_no_duplicate_aliases():
+    """`alias_to_canonical()` flattens every alias into ONE dict, so the same
+    string listed under two verticals does not collide loudly — the second
+    silently wins by iteration order, and one vertical quietly starts
+    answering for the other's businesses.
+
+    Nothing else asserts this, and the alias table is where it is easiest to
+    add a plausible-sounding synonym that another vertical already claims."""
+    import collections
+    import vertical_registry as reg
+
+    seen = collections.defaultdict(list)
+    for key, meta in reg.CANONICAL.items():
+        seen[key].append(key)
+        for alias in meta.get("aliases", []):
+            seen[alias].append(key)
+    dupes = {a: owners for a, owners in seen.items() if len(owners) > 1}
+    assert not dupes, f"alias claimed by more than one vertical: {dupes}"
+
+
+def test_ecommerce_and_saas_are_first_class():
+    """Both types have existed in business_type_archetypes for a long time,
+    so a business could be STAMPED 'ecommerce' or 'saas' — there was just
+    nothing behind the stamp. They now resolve to real profiles rather than
+    the catch-all."""
+    from vertical_intelligence import get_bookkeeping
+    import vertical_playbook as vpb
+    import vertical_terminology as vt
+
+    for vertical in ("ecommerce", "saas"):
+        assert is_mapped(vertical)
+        assert get_profile(vertical) is VERTICAL_INTELLIGENCE[vertical]
+        assert get_profile(vertical) is not GENERIC
+        assert get_profile(vertical) is not VERTICAL_INTELLIGENCE["custom"]
+        assert vt.terms_for(vertical), f"{vertical} has no terminology"
+        assert get_bookkeeping(vertical)["category_note"]
+        assert vpb.PLAYBOOK[vertical]
+
+    # Their aliases reach them too.
+    assert get_profile("online_store") is VERTICAL_INTELLIGENCE["ecommerce"]
+    assert get_profile("dropshipping") is VERTICAL_INTELLIGENCE["ecommerce"]
+    assert get_profile("micro_saas") is VERTICAL_INTELLIGENCE["saas"]
+    assert get_profile("software") is VERTICAL_INTELLIGENCE["saas"]
+
+
+def test_ecommerce_and_saas_speak_their_own_nouns():
+    """The distinguishing vocabulary — a store sells Products, a SaaS sells
+    Plans. Both keep BASE 'Customer', which is already correct for them, so
+    the override maps stay minimal."""
+    import vertical_terminology as vt
+
+    assert vt.get_term("ecommerce", "service") == "Product"
+    assert vt.get_term("ecommerce", "offerings") == "Products"
+    assert vt.get_term("ecommerce", "project") == "Order"
+    assert vt.get_term("ecommerce", "customer") == "Customer"
+
+    assert vt.get_term("saas", "service") == "Plan"
+    assert vt.get_term("saas", "offerings") == "Plans"
+    assert vt.get_term("saas", "contact") == "Account"
+    assert vt.get_term("saas", "project") == "Subscription"
+
+    # A store does not book anything; bending 'appointment' to "Order" would
+    # put that word in front of scheduling UI, so it stays at BASE.
+    assert vt.get_term("ecommerce", "appointment") == vt.BASE_TERMS["appointment"]
+
+
+def test_the_money_shape_each_one_gets_wrong():
+    """The single miscategorisation each vertical's bookkeeping entry exists
+    to prevent: a store booking collected sales tax as revenue, and a SaaS
+    booking a year's cash as a month's revenue."""
+    from vertical_intelligence import get_bookkeeping
+
+    store = get_bookkeeping("ecommerce")["category_note"].lower()
+    assert "sales tax" in store and "not revenue" in store
+
+    saas = get_bookkeeping("saas")["category_note"].lower()
+    assert "deferred revenue" in saas
+    assert "annual" in saas

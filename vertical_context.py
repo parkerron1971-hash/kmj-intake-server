@@ -259,6 +259,16 @@ def _vertical_specific_reminders(bt: str, profile: Dict[str, Any]) -> list:
         return [
             "Scope + deliverables + milestones",
         ]
+    if bt == "ecommerce":
+        return [
+            "Sales tax collected is held for the state, not revenue",
+            "Stock and shipping windows are promises — give a window, never a date",
+        ]
+    if bt == "saas":
+        return [
+            "An annual plan is cash now, revenue across twelve months",
+            "Usage leads, billing lags — a signup without usage is not a customer",
+        ]
     if bt == "creative":
         return [
             "Scope clarifies revisions + timeline",

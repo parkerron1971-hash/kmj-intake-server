@@ -144,6 +144,14 @@ PROPOSAL_FRAMING: Dict[str, str] = {
                           "partnership serves the congregation",
     "nonprofit":          "a program partnership proposal with mission alignment, "
                           "impact metrics, and reporting commitments",
+    "ecommerce":          "TERMS OF SALE — what is being sold, price and taxes, "
+                          "shipping window, and the returns and refunds policy. "
+                          "For a wholesale or custom order, purchase terms with "
+                          "quantities, lead time and payment schedule",
+    "saas":               "a SUBSCRIPTION AGREEMENT — plan and price, billing "
+                          "period and renewal, cancellation, service levels if "
+                          "any are promised, and what happens to the customer's "
+                          "data when they leave",
     "custom":             _GENERIC_FRAMING,
 }
 
@@ -186,6 +194,15 @@ PROPOSAL_GUIDANCE: Dict[str, str] = {
                           "alignment. Pastoral, never salesy.",
     "nonprofit":          "Mission alignment, community impact, collaboration, "
                           "and how impact will be reported.",
+    "ecommerce":          "Transactional and short. Shipping WINDOWS, never "
+                          "guaranteed dates — the carrier owns the date. Say who "
+                          "pays return shipping and what condition a return has "
+                          "to come back in. Wholesale is a different document "
+                          "from a consumer sale; be clear which this is.",
+    "saas":               "Plain subscription terms. What renews, when, and how "
+                          "to stop it. Say what happens to the customer's data "
+                          "after cancellation. Never write a roadmap item into "
+                          "the agreement as a promise.",
     "custom":             "Professional and clear. Scope, terms, next steps.",
 }
 

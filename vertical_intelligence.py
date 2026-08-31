@@ -750,6 +750,145 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
              "headline": "Track superbills issued so clients can file with their insurer."},
         ],
     }),
+    # Selling products, not time. The unit is an ORDER that has to be
+    # picked, packed and shipped — stock runs out, a carrier owns the
+    # delivery date, and sales tax is collected for a state rather than
+    # earned. No service vertical above models any of that.
+    "ecommerce": VerticalProfile({
+        "voice": {
+            "register": "practical, product-forward, logistics-aware",
+            "formality": "plain",
+            "hallmarks": [
+                "uses 'Customer' and 'Product' — an order, never a booking",
+                "treats stock, shipping and returns as first-class, not afterthoughts",
+                "separates what SOLD from what SHIPPED",
+                "quotes the delivered price, not the list price",
+            ],
+            "taboo": [
+                "promising a delivery date the carrier controls",
+                "treating a return as a failure rather than a cost of selling online",
+                "calling collected sales tax revenue",
+            ],
+        },
+        "onboarding_questions": [
+            {"id": "sales_channels", "prompt": "Where do you sell?", "kind": "multiselect",
+             "options": ["own_site", "marketplace", "social", "in_person", "wholesale"]},
+            {"id": "fulfillment_model", "prompt": "Who ships your orders?", "kind": "select",
+             "options": ["self_ship", "third_party_logistics", "dropship",
+                         "print_on_demand", "digital_only"]},
+            {"id": "catalog_size", "prompt": "Roughly how many products do you sell?", "kind": "select",
+             "options": ["under_10", "10_to_50", "50_to_500", "over_500"]},
+            {"id": "inventory_tracking", "prompt": "Do you track stock levels?", "kind": "boolean"},
+        ],
+        "offering_suggestions": [
+            {"name": "Core Product", "price": 35, "duration_min": 0,
+             "description": "Your best seller — the one most customers arrive for."},
+            {"name": "Bundle", "price": 90, "duration_min": 0,
+             "description": "Two or more products sold together, priced better than separately."},
+            {"name": "Subscription / Refill", "price": 25, "duration_min": 0,
+             "description": "A consumable customers re-order on a schedule."},
+            {"name": "Digital Download", "price": 15, "duration_min": 0,
+             "description": "A file customers get instantly — no stock, no shipping."},
+        ],
+        "invoice_line_templates": [
+            {"description": "Product sale", "kind": "quantity", "hint": "unit price × quantity"},
+            {"description": "Shipping", "kind": "flat"},
+            {"description": "Sales tax", "kind": "flat",
+             "hint": "Collected on behalf of the state — not revenue."},
+            {"description": "Discount / promo", "kind": "flat"},
+            {"description": "Restocking fee", "kind": "flat"},
+        ],
+        "email_voice": {
+            "booking_confirmation": {
+                "tone_note": "Order-focused and short. Confirm what was bought, when it ships "
+                             "and how to reach a human. Give a shipping WINDOW, never a "
+                             "guaranteed date.",
+            },
+        },
+        "empty_state_nudges": {
+            "bookings": "No orders yet. Add your first product so there's something to buy.",
+            "customers": "No customers yet. They'll appear here as orders come in.",
+            "invoices": "No invoices yet. Most stores get paid at checkout — invoices are for wholesale and custom orders.",
+            "offerings": "No products yet. Add your best seller first; the rest can follow.",
+        },
+        "module_suggestions": [
+            {"slug": "orders", "archetype": "work_pipeline",
+             "headline": "Track orders from paid through packed to delivered."},
+            {"slug": "products", "archetype": "fallback_generic",
+             "headline": "Your catalog, with the stock level beside each item."},
+            {"slug": "returns", "archetype": "work_pipeline",
+             "headline": "Log returns so you can see what comes back, and why."},
+        ],
+    }),
+    # Recurring revenue. The money is subscribed rather than sold once, so
+    # an annual plan is cash today and revenue spread across a year, and
+    # churn is decided weeks before the renewal that reveals it.
+    "saas": VerticalProfile({
+        "voice": {
+            "register": "clear, product-led, retention-aware",
+            "formality": "plain",
+            "hallmarks": [
+                "uses 'Customer' and 'Plan' — a subscription, never a project",
+                "distinguishes trial, active, past-due and churned",
+                "treats recurring revenue as the number that matters",
+                "reads usage as the leading indicator and billing as the lagging one",
+            ],
+            "taboo": [
+                "quoting a signup count without the retention behind it",
+                "committing to a roadmap date",
+                "counting an annual payment as one month's revenue",
+            ],
+        },
+        "onboarding_questions": [
+            {"id": "pricing_model", "prompt": "How do you charge?", "kind": "multiselect",
+             "options": ["monthly", "annual", "per_seat", "usage_based", "one_time"]},
+            {"id": "trial_model", "prompt": "How do people try it before paying?", "kind": "select",
+             "options": ["free_trial", "freemium", "demo_only", "paid_only"]},
+            {"id": "target_customer", "prompt": "Who is it for?", "kind": "select",
+             "options": ["consumers", "small_business", "mid_market", "enterprise"]},
+            {"id": "self_serve", "prompt": "Can someone sign up and pay without talking to you?",
+             "kind": "boolean"},
+        ],
+        "offering_suggestions": [
+            {"name": "Starter Plan", "price": 29, "duration_min": 0,
+             "description": "Monthly entry plan — the smallest thing worth paying for."},
+            {"name": "Pro Plan", "price": 99, "duration_min": 0,
+             "description": "Monthly plan for customers using it seriously."},
+            {"name": "Annual Plan", "price": 990, "duration_min": 0,
+             "description": "A year paid up front, usually below twelve months at the monthly rate."},
+            {"name": "Onboarding & Setup", "price": 500, "duration_min": 60,
+             "description": "One-off implementation help for larger accounts."},
+        ],
+        "invoice_line_templates": [
+            {"description": "Subscription — monthly", "kind": "flat"},
+            {"description": "Subscription — annual", "kind": "flat",
+             "hint": "Paid up front, earned across twelve months."},
+            {"description": "Additional seats", "kind": "quantity", "hint": "seat price × seats"},
+            {"description": "Usage / overage", "kind": "quantity"},
+            {"description": "Onboarding & setup", "kind": "flat"},
+            {"description": "Proration credit", "kind": "flat"},
+        ],
+        "email_voice": {
+            "booking_confirmation": {
+                "tone_note": "Direct and short. Confirm the plan, the amount and the next "
+                             "renewal date. No marketing language in a billing email.",
+            },
+        },
+        "empty_state_nudges": {
+            "bookings": "No demos booked yet. Add a demo or onboarding call so prospects can pick a time.",
+            "customers": "No customers yet. They'll appear here as accounts sign up.",
+            "invoices": "No invoices yet. Subscriptions usually bill themselves — invoices are for annual and enterprise deals.",
+            "offerings": "No plans yet. Add an entry plan and one step up; two is enough to start.",
+        },
+        "module_suggestions": [
+            {"slug": "accounts", "archetype": "work_pipeline",
+             "headline": "Track accounts through trial, active, past-due and churned."},
+            {"slug": "demos", "archetype": "booking_calendar",
+             "headline": "Let prospects book a demo without emailing you first."},
+            {"slug": "feature-requests", "archetype": "fallback_generic",
+             "headline": "Capture what customers ask for, and who asked."},
+        ],
+    }),
     "service_provider": GENERIC,
     "custom": GENERIC,
 }
@@ -948,6 +1087,23 @@ BOOKKEEPING_BY_VERTICAL: Dict[str, Dict[str, Any]] = {
                          "arrives with reporting attached — book it so the report is possible.",
         "nudges": ["A gift of $250+ needs a written acknowledgment before the donor files.",
                    "Form 990 is due the 15th day of the 5th month after your fiscal year ends."],
+    },
+    "ecommerce": {
+        "category_note": "Sales tax collected is money held for the state, not revenue. Cost "
+                         "of goods belongs against the sale it funded, and inventory bought is "
+                         "not an expense until it sells. Shipping charged to the customer is "
+                         "revenue; shipping you pay is a cost — netting them hides the margin.",
+        "nudges": ["Marketplace and processor fees come out of gross — record the gross, then the fee.",
+                   "Sales tax registration depends on where your BUYERS are, not only where you are."],
+    },
+    "saas": {
+        "category_note": "An annual plan is cash today and revenue earned across twelve months "
+                         "— the unearned remainder is deferred revenue, not profit. Refunds and "
+                         "prorations reduce the period they belong to, not the one they are "
+                         "processed in.",
+        "nudges": ["Processor fees come out of gross — record the gross, then the fee.",
+                   "Whether software is sales-taxable varies by state and by how it is delivered "
+                   "— worth confirming with your accountant."],
     },
     # 'custom' is deliberately absent. vertical_registry.KNOWN_GAPS marks it
     # "intentionally GENERIC — triggers Chief interactive discovery": the
