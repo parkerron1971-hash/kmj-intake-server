@@ -1243,6 +1243,20 @@ async def startup():
                           "interval", hours=168, id="vertical_seed")
     except Exception as e:
         print(f"   [warn] vertical seed job not scheduled: {e}")
+    # Feed 1b → rows. Projects vertical_playbook (how each trade actually
+    # works) in as source='curated'. Unlike the seed rows above, these are
+    # RETRIEVED — build_vertical_learned_block reads curated + learned — so
+    # this tick is the step that makes an edit to the playbook reach Chief.
+    # Weekly and diff-first for the same reason as the seeder: upsert embeds
+    # before it writes, so a blind re-run would pay for every embedding to
+    # produce nothing. Kill switch: VERTICAL_KNOWLEDGE=off (shared with the
+    # store it writes to — one switch turns the whole shelf off).
+    try:
+        import vertical_playbook as _vpb
+        scheduler.add_job(g("vertical_curate", _vpb.curate_tick),
+                          "interval", hours=168, id="vertical_curate")
+    except Exception as e:
+        print(f"   [warn] vertical curate job not scheduled: {e}")
     # One calendar (2026-07-10) — mirror bookings into sessions so the
     # calendar, Chief's context, and SMS reminders all see them.
     # Kill switch: BOOKING_SESSION_SYNC=off.
