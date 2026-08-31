@@ -875,9 +875,13 @@ BOOKKEEPING_BY_VERTICAL: Dict[str, Dict[str, Any]] = {
 
 def get_bookkeeping(business_type: Optional[str]) -> Dict[str, Any]:
     """Per-archetype bookkeeping framing for Chief's context. Always returns
-    a valid dict (generic baseline)."""
-    bt = (business_type or "").lower().strip()
-    return BOOKKEEPING_BY_VERTICAL.get(bt) or _BOOKKEEPING_GENERIC
+    a valid dict (generic baseline).
+
+    Alias-resolved like the rest: 'attorney' has to reach the lawyer entry,
+    or a firm gets the generic "set aside for taxes" line instead of the one
+    telling it not to book trust-account movement as revenue."""
+    key = _registry().resolve(business_type)
+    return BOOKKEEPING_BY_VERTICAL.get(key) or _BOOKKEEPING_GENERIC
 
 
 def list_known_verticals() -> List[str]:

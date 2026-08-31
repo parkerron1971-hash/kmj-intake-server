@@ -119,6 +119,21 @@ def test_terminology_resolves_aliases_too():
     assert vt.get_term("florist", "customer") == vt.BASE_TERMS["customer"]
 
 
+def test_bookkeeping_resolves_aliases_too():
+    """A firm stamped 'attorney' needs the IOLTA line, not the generic
+    'set aside for taxes' one — booking trust-account movement as revenue
+    is the specific mistake the lawyer entry exists to prevent."""
+    from vertical_intelligence import get_bookkeeping, _BOOKKEEPING_GENERIC
+
+    assert get_bookkeeping("attorney") == get_bookkeeping("lawyer")
+    assert "trust" in get_bookkeeping("attorney")["category_note"].lower()
+    assert get_bookkeeping("agency") == get_bookkeeping("creative")
+    assert get_bookkeeping("coaching") == get_bookkeeping("coach")
+    # A vertical with no entry still gets the baseline, not a KeyError.
+    assert get_bookkeeping("plumber") == _BOOKKEEPING_GENERIC
+    assert get_bookkeeping(None) == _BOOKKEEPING_GENERIC
+
+
 def test_get_profile_case_insensitive():
     assert get_profile("LAWYER") is get_profile("lawyer")
     assert get_profile(" Coach ") is get_profile("coach")
