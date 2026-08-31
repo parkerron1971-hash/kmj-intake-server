@@ -317,6 +317,35 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "offering":     "Package",
         "offerings":    "Packages",
     },
+    # Products, not time. `customer` already reads "Customer" in BASE and is
+    # exactly right here, so it is NOT repeated — this map holds only what
+    # DIFFERS, and restating a base term is how two maps drift apart.
+    # `appointment`/`booking` are left alone deliberately: a store does not
+    # book anything, and bending them to "Order" would put that word in
+    # front of scheduling UI, where it reads as nonsense.
+    "ecommerce": {
+        "contact":      "Customer",
+        "contacts":     "Customers",
+        "service":      "Product",
+        "services":     "Products",
+        "offering":     "Product",
+        "offerings":    "Products",
+        "project":      "Order",
+        "projects":     "Orders",
+    },
+    # Subscriptions. `contact` becomes Account because the thing a SaaS
+    # business holds a relationship with is the account, which is often
+    # several people rather than one.
+    "saas": {
+        "contact":      "Account",
+        "contacts":     "Accounts",
+        "service":      "Plan",
+        "services":     "Plans",
+        "offering":     "Plan",
+        "offerings":    "Plans",
+        "project":      "Subscription",
+        "projects":     "Subscriptions",
+    },
 }
 
 

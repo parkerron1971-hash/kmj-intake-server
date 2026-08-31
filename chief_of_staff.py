@@ -324,6 +324,8 @@ CHIEF_ARCHETYPE_LABELS: Dict[str, str] = {
     "contractor": "Contractor",
     "financial_educator": "Financial educator",
     "personal_services": "Personal services",
+    "ecommerce": "E-commerce / online store",
+    "saas": "SaaS / software",
 }
 CHIEF_ARCHETYPE_SHIFTS: Dict[str, str] = {
     "lawyer": (
@@ -401,6 +403,19 @@ CHIEF_ARCHETYPE_SHIFTS: Dict[str, str] = {
         "Think in regulars, walk-ins, and plain pricing. Beneath a scheduling or pricing ask "
         "is usually throughput or no-shows — build for keeping the chair full. Talk about "
         "price and time plainly; stay practical, never formal."
+    ),
+    "ecommerce": (
+        "Think in orders, stock and shipping. Beneath a sales question is usually a "
+        "fulfilment or inventory one — what sold is not what shipped, and a stock-out "
+        "costs the next order too. Give shipping WINDOWS, never dates the carrier "
+        "controls, and treat returns as a cost of selling rather than a failure. "
+        "Collected sales tax is money held for the state, not revenue."
+    ),
+    "saas": (
+        "Think in subscriptions and retention. Beneath a growth question is usually a "
+        "churn one — usage leads and billing lags, so an account that has gone quiet "
+        "has already decided. An annual plan is cash today and revenue across a year. "
+        "Never commit to a roadmap date."
     ),
 }
 CHIEF_ARCHETYPE_FALLBACK = (
@@ -545,6 +560,22 @@ TEAM_PERSONAS = {
         "payment": {"label": "Enrollments", "description": "tracks course payments and plans"},
         "module": {"label": "Student Tracker", "description": "manages cohorts, attendance, and materials"},
         "growth": {"label": "Program Advisor", "description": "analyzes enrollment and completion trends"},
+    },
+    "ecommerce": {
+        "nurture": {"label": "Customer Follow-up", "description": "follows up on carts left behind and past buyers"},
+        "session_prep": {"label": "Order Prep", "description": "gets you ready for the day's picking and packing"},
+        "contract": {"label": "Terms of Sale", "description": "drafts sale, wholesale, and returns terms"},
+        "payment": {"label": "Payments & Refunds", "description": "tracks payouts, refunds, and chargebacks"},
+        "module": {"label": "Store Tracker", "description": "manages orders, stock levels, and returns"},
+        "growth": {"label": "Store Advisor", "description": "spots repeat buyers, slow stock, and what keeps coming back"},
+    },
+    "saas": {
+        "nurture": {"label": "Account Outreach", "description": "follows up with trials and accounts that have gone quiet"},
+        "session_prep": {"label": "Demo Prep", "description": "gets you ready for demos and renewal calls"},
+        "contract": {"label": "Subscription Terms", "description": "drafts plan, renewal, and cancellation terms"},
+        "payment": {"label": "Subscriptions", "description": "tracks renewals, failed charges, and past-due accounts"},
+        "module": {"label": "Account Tracker", "description": "manages accounts, onboarding, and feature requests"},
+        "growth": {"label": "Retention Advisor", "description": "spots churn risk and expansion before the renewal does"},
     },
     # ── Pre-registry business types (resolve to "custom"; raw-key only) ──
     "real_estate": {
