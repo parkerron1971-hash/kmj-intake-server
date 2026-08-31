@@ -320,23 +320,33 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
 }
 
 
+def terms_for(business_type: Optional[str]) -> Dict[str, str]:
+    """The override block for a vertical, resolving ALIASES first.
+
+    VERTICAL_TERMS is keyed canonically, so the raw-string lookup this
+    replaces returned {} for every alias — a business stamped 'church' got
+    the BASE dictionary while a 'ministry' two rows over got 'Member'. The
+    frontend fixed the same bug in verticalCanonical.ts; this keeps the
+    backend's copy of the dictionary agreeing with it."""
+    import vertical_registry
+    return VERTICAL_TERMS.get(vertical_registry.resolve(business_type)) or {}
+
+
 def get_term(business_type: Optional[str], key: str) -> str:
     """Resolve a terminology key for a given vertical.
 
-    business_type: the businesses.type value (None / unknown ok).
+    business_type: the businesses.type value (None / unknown / an alias ok).
     key: a BASE_TERMS key. Unknown keys return the key itself
          (defensive — caller bug, not data bug).
 
     Falls back through:
-      VERTICAL_TERMS[business_type].get(key)  →
-      BASE_TERMS.get(key)                     →
-      key                                     (defensive)
+      VERTICAL_TERMS[canonical(business_type)].get(key)  →
+      BASE_TERMS.get(key)                                →
+      key                                                (defensive)
     """
     if not key:
         return ""
-    bt = (business_type or "").lower().strip()
-    vertical = VERTICAL_TERMS.get(bt) or {}
-    return vertical.get(key) or BASE_TERMS.get(key) or key
+    return terms_for(business_type).get(key) or BASE_TERMS.get(key) or key
 
 
 def apply_substitutions(template: str, business_type: Optional[str]) -> str:

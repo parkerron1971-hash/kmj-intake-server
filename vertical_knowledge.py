@@ -60,6 +60,22 @@ def _enabled() -> bool:
     return (os.environ.get("VERTICAL_KNOWLEDGE") or "on").strip().lower() != "off"
 
 
+def _key(vertical: str) -> str:
+    """Canonical storage key for a vertical.
+
+    Rows are written under canonical keys — `seed_tick` iterates
+    `registry.canonical_keys()` and the distiller groups by
+    `alias_to_canonical()`. So a read keyed on a raw alias searches a
+    partition that by construction holds nothing: a business stamped
+    'church' asked for vertical='church' and got zero rows back, while
+    everything it should have matched sat under 'ministry'. Failing open
+    made that indistinguishable from "nothing learned yet", which is why it
+    survived. Normalising on the way IN as well keeps a future writer from
+    creating the alias-keyed partition this read used to look for."""
+    import vertical_registry
+    return vertical_registry.resolve(vertical)
+
+
 # ─── writes ──────────────────────────────────────────────────────────
 
 def upsert(vertical: str, kind: str, content: str, *,
@@ -74,9 +90,11 @@ def upsert(vertical: str, kind: str, content: str, *,
     Returns True only on a confirmed write, so callers can count honestly."""
     if not _enabled():
         return False
-    vertical = (vertical or "").strip().lower()
+    if not (vertical or "").strip():
+        return False
+    vertical = _key(vertical)
     content = (content or "").strip()
-    if not vertical or not content:
+    if not content:
         return False
 
     row: Dict[str, Any] = {
@@ -126,9 +144,9 @@ def match(vertical: str, query_text: str, *,
     vertical. Empty list on any failure."""
     if not _enabled():
         return []
-    vertical = (vertical or "").strip().lower()
-    if not vertical or not (query_text or "").strip():
+    if not (vertical or "").strip() or not (query_text or "").strip():
         return []
+    vertical = _key(vertical)
     emb = chief_memory_semantic.embed(query_text)
     if not emb:
         return []
@@ -159,7 +177,7 @@ def list_for_vertical(vertical: str, *, source: Optional[str] = None,
     for anyone auditing what Feed 2 has decided."""
     if not _enabled():
         return []
-    q = (f"/vertical_knowledge?vertical=eq.{(vertical or '').strip().lower()}"
+    q = (f"/vertical_knowledge?vertical=eq.{_key(vertical)}"
          f"&is_active=eq.true&limit={limit}"
          f"&select=id,kind,content,source,confidence,evidence_count,created_at")
     if source:

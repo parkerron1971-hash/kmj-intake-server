@@ -758,11 +758,51 @@ VERTICAL_INTELLIGENCE: Dict[str, VerticalProfile] = {
 # ─── Public helpers ─────────────────────────────────────────────────
 
 
+def _registry():
+    """Imported lazily, not at the module header.
+
+    vertical_registry imports vertical_family, and this module is imported
+    by vertical_context, vertical_knowledge and the router. Keeping the
+    import inside the call means nothing here depends on import ORDER — a
+    cycle introduced later surfaces as an honest ImportError at call time
+    rather than as a half-initialised module handing back empty dicts."""
+    import vertical_registry
+    return vertical_registry
+
+
 def get_profile(business_type: Optional[str]) -> VerticalProfile:
     """Resolve a vertical to its full profile. Always returns a valid
-    profile (falls back to GENERIC). Case-insensitive + trim."""
-    bt = (business_type or "").lower().strip()
-    return VERTICAL_INTELLIGENCE.get(bt) or GENERIC
+    profile (falls back to GENERIC). Case-insensitive + trim.
+
+    Goes through `vertical_registry.resolve()`, so every ALIAS the registry
+    recognises lands on its vertical's profile. This was a raw dict lookup,
+    and the keys here are canonical-only — so `businesses.type` values like
+    'agency', 'church', 'attorney' and 'plumber', which the registry maps
+    to creative / ministry / lawyer / contractor, all fell through to
+    GENERIC. Not hypothetical strings: 'agency' was the single most common
+    type in the live table, and every one of those businesses got a generic
+    Chief while its own screens read the vertical dictionary. A church read
+    'Member' on screen and Chief was told 'customer=Customer' in the same
+    breath. The frontend hit the identical bug and fixed it in
+    verticalCanonical.ts; this is the backend half.
+
+    A type the registry does NOT recognise still resolves to 'custom',
+    which is itself a profile — deliberately the generic catch-all. Use
+    `is_mapped()` when you need to tell "explicitly mapped" from "fell
+    back", because `get_profile` alone can no longer answer that."""
+    key = _registry().resolve(business_type)
+    return VERTICAL_INTELLIGENCE.get(key) or GENERIC
+
+
+def is_mapped(business_type: Optional[str]) -> bool:
+    """True when this type is a canonical key or a registry alias — i.e.
+    the profile it gets is genuinely ITS profile rather than the fallback.
+
+    'custom' and its aliases count as mapped: landing on the catch-all
+    because you asked for the catch-all is not the same as landing there
+    because nothing recognised you."""
+    bt = (business_type or "").lower().strip().replace("-", "_").replace(" ", "_")
+    return bt in _registry().alias_to_canonical()
 
 
 def get_voice(business_type: Optional[str]) -> Dict[str, Any]:
@@ -835,9 +875,13 @@ BOOKKEEPING_BY_VERTICAL: Dict[str, Dict[str, Any]] = {
 
 def get_bookkeeping(business_type: Optional[str]) -> Dict[str, Any]:
     """Per-archetype bookkeeping framing for Chief's context. Always returns
-    a valid dict (generic baseline)."""
-    bt = (business_type or "").lower().strip()
-    return BOOKKEEPING_BY_VERTICAL.get(bt) or _BOOKKEEPING_GENERIC
+    a valid dict (generic baseline).
+
+    Alias-resolved like the rest: 'attorney' has to reach the lawyer entry,
+    or a firm gets the generic "set aside for taxes" line instead of the one
+    telling it not to book trust-account movement as revenue."""
+    key = _registry().resolve(business_type)
+    return BOOKKEEPING_BY_VERTICAL.get(key) or _BOOKKEEPING_GENERIC
 
 
 def list_known_verticals() -> List[str]:

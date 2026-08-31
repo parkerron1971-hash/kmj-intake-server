@@ -28,6 +28,7 @@ from vertical_intelligence import (
     get_voice,
     get_offering_suggestions,
     get_invoice_line_templates,
+    is_mapped,
     list_known_verticals,
 )
 from vertical_terminology import VERTICAL_TERMS, BASE_TERMS
@@ -41,8 +42,18 @@ def build_vertical_context_block(business: Optional[Dict[str, Any]]) -> str:
     Always returns a non-empty string — callers can append unconditionally.
     """
     business_type = (business or {}).get("type")
-    bt = (business_type or "").lower().strip()
-    is_known = bt in VERTICAL_INTELLIGENCE_KEYS
+    # Resolve ALIASES once, here, and use the canonical key for every
+    # lookup below. `businesses.type` legitimately holds alias strings —
+    # 'agency', 'church', 'plumber' — because several surfaces still write
+    # them; keyed raw, all three read the generic block while the
+    # practitioner's own screens read the vertical dictionary.
+    import vertical_registry
+    bt = vertical_registry.resolve(business_type)
+    # "Mapped" is a different question from "which profile" now that
+    # resolve() answers 'custom' for anything unrecognised: an unknown type
+    # still GETS the custom profile, and labelling that block as though it
+    # were a deliberate match would be a lie the prompt tells Chief.
+    is_known = is_mapped(business_type)
     profile = get_profile(bt)
     voice = get_voice(bt)
 
@@ -150,6 +161,9 @@ def build_vertical_learned_block(business: Optional[Dict[str, Any]],
         bt = ((business or {}).get("type") or "").lower().strip()
         if not bt or not (query_text or "").strip():
             return ""
+        # vk.match canonicalises the key itself, so an alias-typed business
+        # ('church', 'agency') reaches its vertical's partition instead of
+        # querying one that by construction holds nothing.
         import vertical_knowledge as vk
         rows = vk.match(bt, query_text, limit=LEARNED_MAX_ITEMS)
         if not rows:

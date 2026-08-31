@@ -15,6 +15,7 @@ from vertical_intelligence import (
     get_onboarding_questions,
     get_profile,
     get_voice,
+    is_mapped,
     list_known_verticals,
 )
 from vertical_context import build_vertical_context_block
@@ -38,10 +39,99 @@ def test_get_profile_known_vertical():
 
 
 def test_get_profile_unknown_vertical_falls_back():
-    assert get_profile("florist") is GENERIC
-    assert get_profile(None) is GENERIC
-    assert get_profile("") is GENERIC
-    assert get_profile("  agency  ") is GENERIC   # not in v1 dictionary
+    # 'florist' is in no alias list, so it resolves to 'custom' — which is
+    # itself the deliberate catch-all profile, not GENERIC-the-object.
+    assert get_profile("florist") is VERTICAL_INTELLIGENCE["custom"]
+    assert get_profile(None) is VERTICAL_INTELLIGENCE["custom"]
+    assert get_profile("") is VERTICAL_INTELLIGENCE["custom"]
+    # ...and it is not MAPPED, which is the distinction the context block's
+    # "(generic — vertical not explicitly mapped)" label rests on.
+    assert not is_mapped("florist")
+    assert not is_mapped(None)
+
+
+def test_get_profile_resolves_registry_aliases():
+    """The bug this file used to assert as correct.
+
+    The old line here was `assert get_profile("  agency  ") is GENERIC` with
+    the comment "not in v1 dictionary". That was true when it was written
+    and stopped being true the moment vertical_registry listed 'agency' as
+    an alias of 'creative' — but the test kept passing, so it pinned the
+    stale side of the drift instead of catching it. 'agency' was the most
+    common businesses.type in the live table at the time; every one of
+    those businesses was getting a generic Chief.
+
+    Assert the CONTRACT — every alias the registry recognises reaches its
+    vertical's profile — rather than any one string, so the next alias
+    added to the registry is covered without editing this test."""
+    import vertical_registry as reg
+
+    for alias, canonical in reg.alias_to_canonical().items():
+        assert get_profile(alias) is VERTICAL_INTELLIGENCE[canonical], (
+            f"alias '{alias}' should resolve to the '{canonical}' profile")
+        assert is_mapped(alias), f"alias '{alias}' should count as mapped"
+
+    # The specific strings the live table actually held, spelled out so a
+    # regression names the business that would break.
+    assert get_profile("agency") is VERTICAL_INTELLIGENCE["creative"]
+    assert get_profile("church") is VERTICAL_INTELLIGENCE["ministry"]
+    assert get_profile("attorney") is VERTICAL_INTELLIGENCE["lawyer"]
+    assert get_profile("plumber") is VERTICAL_INTELLIGENCE["contractor"]
+    assert get_profile("therapy") is VERTICAL_INTELLIGENCE["therapist"]
+
+
+def test_alias_gets_the_same_prompt_block_as_its_canonical():
+    """The bug's actual cost was in the prompt, so assert it there too.
+
+    A church read 'Member' on its own screens while Chief was told
+    'customer=Customer' in the same request. Same business, two
+    vocabularies, and only one of them visible to the practitioner."""
+    import vertical_registry as reg
+
+    def knowledge(bt):
+        # Everything EXCEPT the "Business type:" line, which correctly
+        # echoes the stored string — Chief seeing "Business type: coaching"
+        # is truthful. It is the vocabulary, voice and reminders under it
+        # that have to be the canonical vertical's.
+        return [ln for ln in build_vertical_context_block({"type": bt}).split("\n")
+                if not ln.startswith("Business type:")]
+
+    for alias, canonical in reg.alias_to_canonical().items():
+        if alias == canonical:
+            continue
+        assert knowledge(alias) == knowledge(canonical), (
+            f"'{alias}' gets different knowledge than '{canonical}'")
+
+    church = build_vertical_context_block({"type": "church"})
+    assert "customer=Member" in church
+    assert "generic" not in church.split("\n")[0]
+
+
+def test_terminology_resolves_aliases_too():
+    """vertical_terminology was keyed raw the same way; the dictionary and
+    the profile have to agree or the prompt contradicts itself."""
+    import vertical_terminology as vt
+
+    assert vt.get_term("church", "customer") == vt.get_term("ministry", "customer")
+    assert vt.get_term("agency", "customer") == vt.get_term("creative", "customer")
+    assert vt.get_term("plumber", "service") == vt.get_term("contractor", "service")
+    # Unrecognised types still fall through to the base dictionary.
+    assert vt.get_term("florist", "customer") == vt.BASE_TERMS["customer"]
+
+
+def test_bookkeeping_resolves_aliases_too():
+    """A firm stamped 'attorney' needs the IOLTA line, not the generic
+    'set aside for taxes' one — booking trust-account movement as revenue
+    is the specific mistake the lawyer entry exists to prevent."""
+    from vertical_intelligence import get_bookkeeping, _BOOKKEEPING_GENERIC
+
+    assert get_bookkeeping("attorney") == get_bookkeeping("lawyer")
+    assert "trust" in get_bookkeeping("attorney")["category_note"].lower()
+    assert get_bookkeeping("agency") == get_bookkeeping("creative")
+    assert get_bookkeeping("coaching") == get_bookkeeping("coach")
+    # A vertical with no entry still gets the baseline, not a KeyError.
+    assert get_bookkeeping("plumber") == _BOOKKEEPING_GENERIC
+    assert get_bookkeeping(None) == _BOOKKEEPING_GENERIC
 
 
 def test_get_profile_case_insensitive():
