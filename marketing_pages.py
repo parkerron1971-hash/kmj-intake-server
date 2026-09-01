@@ -628,6 +628,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       <a href="{app_url}">Log in</a>
       <a href="/download">Get the app</a>
       <a href="/help">Help</a>
+      <a href="{app_url}/status.html">Status</a>
       <a href="/privacy">Privacy</a>
       <a href="/data-deletion">Data Deletion</a>
       <a href="/terms">Terms</a>
