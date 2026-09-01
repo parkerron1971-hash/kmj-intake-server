@@ -43,6 +43,7 @@ from typing import Any, Dict, Optional
 import httpx
 from fastapi import HTTPException, Request
 
+import billing_context
 import sb_clients
 
 logger = logging.getLogger("customer_token")
@@ -214,6 +215,33 @@ def require_customer_token_dep(
     ) or []
     if not rows:
         raise HTTPException(status_code=403, detail="customer revoked")
+
+    # Step 3b — WHOSE BILL THE AI SPEND ON THIS REQUEST LANDS ON.
+    #
+    # Until this line, billing_context.set_current() was called in four
+    # places and not one of them was a client path. So any paid model
+    # call reached through a client credential logged api_usage with
+    # business_id NULL — and spend_guard is explicit about what that
+    # means: unattributed spend "counts toward the platform ceiling
+    # only; it cannot trip anyone's per-tenant one."
+    #
+    # That is the exact failure the two-ceiling design exists to
+    # prevent. The per-business ceiling stops a runaway tenant and
+    # leaves everyone else working; the platform ceiling going down
+    # takes Chief out for every paying practitioner at once. A
+    # client-facing surface whose spend the per-tenant guard structurally
+    # cannot see is a hole straight through the middle of that, and it
+    # is open today — the booking widgets already run.
+    #
+    # Placed AFTER step 3 and never before, matching business_access:
+    # bookkeeping follows authorization, it does not grant it. A caller
+    # who is refused at step 1, 2 or 3 must not be able to name the
+    # tenant a later api_usage row is attributed to.
+    #
+    # Non-fatal by construction — set_current swallows its own errors,
+    # because attribution failing must never fail the work being
+    # attributed.
+    billing_context.set_current(str(business_id))
 
     # Step 4
     return CustomerContext(

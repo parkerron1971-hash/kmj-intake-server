@@ -89,9 +89,32 @@ PROVISION_MAX_STAGE = "launching"
 # the caller rather than chosen by a request. Same choice sb_clients
 # already makes for every other server-side agent.
 #
-# NOTE: business_profile_agent.py still uses the anon key for the pattern
-# this file copied. Whether its tables are anon-writable was NOT checked
-# here — worth a look, separately.
+# CORRECTION to the note this replaces, which said business_profile_agent
+# "still uses the anon key". It does not, and that claim was wrong.
+#
+# business_profile_agent has already been migrated: its _sb_get delegates
+# to sb_clients.sb_get_current_context (user JWT when bound, service-role
+# fallback for server-initiated paths), and its helper reads
+# SUPABASE_SERVICE_ROLE_KEY. Verified against production — bpa.get_profile()
+# returns the same row the service role sees.
+#
+# THE TRAP, because it cost a wrong conclusion: the function there is still
+# NAMED `_sb_anon()` and returns the SERVICE ROLE key. The name is a
+# leftover from that migration. Grepping for SUPABASE_ANON or for _sb_anon
+# tells you nothing about which credential a file actually uses — read the
+# body.
+#
+# So this file was a copy taken BEFORE that migration and left stranded,
+# which is exactly why it was the one still broken.
+#
+# STILL UNVERIFIED, and deliberately not claimed either way: refine.py,
+# practitioner_profile_agent.py and voice_depth_agent.py each define
+# _sb_anon() returning a genuine SUPABASE_ANON, and write to
+# site_chat_history / practitioner_profiles — both of which have RLS on
+# with `authenticated`-only policies, the same shape that refused this
+# module. Both tables DO hold rows, so something writes them successfully;
+# whether it is these agents or a JWT-bearing router was not established.
+# Worth a write probe before assuming either way.
 
 def _sb_url() -> str:
     return sb_clients.sb_url()
