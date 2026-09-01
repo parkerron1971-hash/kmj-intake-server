@@ -160,8 +160,35 @@ def provision_modules(
     Phase 2: when max_stage is None (the normal call), the ceiling is the
     business's COMPUTED maturity stage (maturity_engine) rather than a flat
     'launching' — so a business that has grown into operating/scaling gets its
-    operating-stage core modules too, while a brand-new business stays
-    conservative. Callers may still pass an explicit max_stage to override.
+    operating-stage core modules too. Callers may still pass an explicit
+    max_stage to override.
+
+    THE CEILING IS FLOORED AT PROVISION_MAX_STAGE, and that is not a
+    belt-and-braces nicety — without it this function could never provision
+    anything at signup:
+
+        a new business has 0 modules and 0 entries
+        -> maturity_engine's 'launching' band needs module_count >= 1 AND
+           entry_count >= 1, so derive_stage returns 'idea'
+        -> every one of the 66 core blueprint rows is maturity_stage
+           'launching'
+        -> _stage_le('launching', 'idea') is False for all of them
+        -> nothing is created, an empty report is returned, and NOTHING
+           ERRORS
+
+    A brand-new business needed at least one module to reach the stage that
+    permits it to be given its first module. Eleven of the twelve most
+    recently created businesses had zero modules because of it — across
+    creative, personal_services, service_provider, ministry, lawyer and
+    coach, every one of which had blueprint rows waiting.
+
+    The giveaway that this was a bug and not a design: the except branch
+    below already fell back to PROVISION_MAX_STAGE, so a maturity lookup
+    that FAILED provisioned more than one that succeeded.
+
+    The gate keeps its real purpose — the 11 'operating' and 'scaling' rows
+    still wait for a business to grow into them. It just no longer holds
+    back the launching set it was never meant to block.
 
     Idempotent and per-module non-fatal. Returns a small report:
         {"created": [...slugs], "skipped": [...slugs], "failed": [...slugs]}
@@ -176,6 +203,14 @@ def provision_modules(
             max_stage = maturity_engine.get_maturity_stage(business_id)
         except Exception as e:
             logger.warning(f"maturity lookup failed, falling back to {PROVISION_MAX_STAGE}: {e}")
+            max_stage = PROVISION_MAX_STAGE
+        # Floor it. A computed stage BELOW the provisioning floor means the
+        # business has not done anything yet — which is exactly when it needs
+        # its starting modules, not when it should be denied them.
+        if not _stage_le(PROVISION_MAX_STAGE, max_stage):
+            logger.info(
+                f"maturity stage {max_stage!r} is below the provisioning floor; "
+                f"using {PROVISION_MAX_STAGE!r} so the core set can land")
             max_stage = PROVISION_MAX_STAGE
 
     blueprint = get_blueprint(business_type or "custom")
